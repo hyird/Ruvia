@@ -39,7 +39,11 @@ std::optional<static_file_representation> select_static_file_representation(cons
 
     auto available = http_response_coding_candidates::identity_only();
     static constexpr std::size_t inline_path_capacity = 256;
-    std::array<char, inline_path_capacity> inline_path{};
+    std::array<char, inline_path_capacity> inline_path;
+    const bool use_inline_path = relative.size() + 4U <= inline_path.size();
+    if (use_inline_path && !relative.empty()) {
+        std::memcpy(inline_path.data(), relative.data(), relative.size());
+    }
     std::pmr::string variant_path(resource);
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         auto& candidate = candidates[i];
@@ -49,10 +53,7 @@ std::optional<static_file_representation> select_static_file_representation(cons
         const auto suffix = detail::static_precompression_sidecars[i].suffix_;
         const std::size_t total_size = relative.size() + suffix.size();
         std::string_view lookup_path;
-        if (total_size <= inline_path.size()) {
-            if (!relative.empty()) {
-                std::memcpy(inline_path.data(), relative.data(), relative.size());
-            }
+        if (use_inline_path) {
             std::memcpy(inline_path.data() + relative.size(), suffix.data(), suffix.size());
             lookup_path = std::string_view(inline_path.data(), total_size);
         } else {

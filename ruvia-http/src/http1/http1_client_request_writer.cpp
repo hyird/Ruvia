@@ -16,6 +16,7 @@
 #include "client/http1_client_request_headers.h"
 #include "client/http_origin_view.h"
 #include "field/http_expect_token.h"
+#include "parser/http_header_descriptor_storage.h"
 #include "parser/http_request_target.h"
 #include "util/http_wire_sink.h"
 
@@ -478,31 +479,17 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
                 http1_client_request_prepare_error::invalid_upgrade);
         }
     }
-    static constexpr std::size_t inline_field_capacity = 16;
-    const std::size_t total_fields = headers.size() + 3U;
-    std::array<http_header_view, inline_field_capacity> inline_fields{};
-    std::pmr::vector<http_header_view> heap_fields(resource_);
-    std::span<const http_header_view> all_fields{};
-    if (total_fields <= inline_fields.size()) {
-        std::size_t index = 0;
-        for (const auto& field : headers) {
-            inline_fields[index++] = field;
-        }
-        inline_fields[index++] =
-            http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option};
-        inline_fields[index++] = http_header_view{"Upgrade", "connect-udp"};
-        inline_fields[index++] = http_header_view{"Host", origin.host()};
-        all_fields = std::span<const http_header_view>(inline_fields.data(), total_fields);
-    } else {
-        heap_fields.reserve(total_fields);
-        heap_fields.insert(heap_fields.end(), headers.begin(), headers.end());
-        heap_fields.emplace_back(
-            detail::http_connection_field_name, detail::http_connection_upgrade_option);
-        heap_fields.emplace_back("Upgrade", "connect-udp");
-        heap_fields.emplace_back("Host", origin.host());
-        all_fields = heap_fields;
+    detail::http_header_descriptor_storage<http_header_view> staged_fields(resource_);
+    staged_fields.reserve(headers.size() + 3U);
+    for (const auto& field : headers) {
+        staged_fields.append(field);
     }
-    const auto emitted_headers = all_fields.first(total_fields - 1U);
+    staged_fields.append(
+        http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
+    staged_fields.append(http_header_view{"Upgrade", "connect-udp"});
+    staged_fields.append(http_header_view{"Host", origin.host()});
+    const auto all_fields = staged_fields.view();
+    const auto emitted_headers = all_fields.first(all_fields.size() - 1U);
     return prepare_request(origin, "GET", known_method, target.view(), emitted_headers,
         http_client_request_content_view::none(), head_buffer, policy, resource_, nullptr, all_fields);
 }

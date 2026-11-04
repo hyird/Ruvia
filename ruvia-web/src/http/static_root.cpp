@@ -128,7 +128,7 @@ namespace {
     const detail::static_root_state& state_value, const detail::static_root_entry& identity,
     std::string_view suffix) {
     static constexpr std::size_t inline_path_capacity = 256;
-    std::array<char, inline_path_capacity> inline_path{};
+    std::array<char, inline_path_capacity> inline_path;
     std::pmr::string variant_path(process_resource());
     const std::size_t total_size = identity.relative_path_.size() + suffix.size();
     std::string_view lookup_path;

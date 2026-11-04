@@ -13,6 +13,7 @@
 #include <string>
 #include <utility>
 
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/web/detail/db/db_sql_scan.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
@@ -173,20 +174,8 @@ struct sql_token final {
            byte == '_' || byte == '$' || byte >= 0x80;
 }
 
-[[nodiscard]] constexpr bool sql_keyword(std::string_view word, std::string_view keyword) noexcept {
-    if (word.size() != keyword.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < word.size(); ++index) {
-        auto byte = word[index];
-        if (byte >= 'A' && byte <= 'Z') {
-            byte = static_cast<char>(byte - 'A' + 'a');
-        }
-        if (byte != keyword[index]) {
-            return false;
-        }
-    }
-    return true;
+[[nodiscard]] bool sql_keyword(std::string_view word, std::string_view keyword) noexcept {
+    return http_ascii_equals_ignore_case(word, keyword);
 }
 
 // Reads the token at `index` and moves past it. Whitespace and comments only

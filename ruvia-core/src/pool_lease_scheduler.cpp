@@ -47,10 +47,10 @@ public:
         worker_handle worker_;
         detail::pool_waiter_queue queue_;
 
-        void request_cancellation(std::uint64_t waiter_id) {
+        void request_cancellation(pool_lease_acquire& waiter, std::uint64_t waiter_id) {
             if (worker_.is_current()) {
                 std::coroutine_handle<> continuation;
-                if (!queue_.commit_cancellation(waiter_id, continuation) || !continuation) {
+                if (!queue_.commit_cancellation(waiter, continuation) || !continuation) {
                     return;
                 }
                 worker_.defer_resume(continuation);
@@ -238,11 +238,8 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     }
 
     if (!result_.has_value() && stop_token_.stoppable()) {
-        stop_token_.register_callback(
-            stop_registration_, [waiter_state, waiter_id] { waiter_state->request_cancellation(waiter_id); });
-        if (stop_token_.stop_requested()) {
-            (void)waiter_state->queue_.cancel(waiter_id);
-        }
+        stop_token_.register_callback(stop_registration_,
+            [waiter_state, waiter = this, waiter_id] { waiter_state->request_cancellation(*waiter, waiter_id); });
     }
     if (result_.has_value()) {
         cancel_registrations();

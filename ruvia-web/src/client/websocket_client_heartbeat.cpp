@@ -22,11 +22,11 @@ std::chrono::milliseconds websocket_client_state::heartbeat_delay(std::int64_t n
     };
     std::int64_t delay_value = 1;
     const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_);
-    if (pong != nullptr && write_phase_ == write_phase_type::idle) {
+    if (pong != nullptr && !write_lane_.write_in_progress()) {
         delay_value = remaining(pong->sent_at_ms(), config_.lifecycle_.heartbeat_.pong_timeout_->count());
     } else if (!std::holds_alternative<websocket_awaiting_peer_close>(liveness_state_)) {
         delay_value = remaining(last_active_ms_, config_.lifecycle_.heartbeat_.ping_interval_->count());
-        if (write_phase_ != write_phase_type::idle) {
+        if (write_lane_.write_in_progress()) {
             // The write holding the lane (an application message or the Ping
             // itself) has the Pong timeout on top of the Ping interval before
             // it counts as stalled.
@@ -67,7 +67,7 @@ void websocket_client_state::touch_activity() noexcept {
 // the Pong restarts; an open one simply has its timer re-armed to its deadline.
 void websocket_client_state::resume_pong_deadline() noexcept {
     const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_);
-    if (pong == nullptr || !protocol_open() || !read_active_ || write_phase_ != write_phase_type::idle) {
+    if (pong == nullptr || !protocol_open() || !read_active_ || write_lane_.write_in_progress()) {
         return;
     }
     const auto now = steady_now_ms();
@@ -90,7 +90,7 @@ bool websocket_client_state::heartbeat_ping_due() noexcept {
     // Pong, so the Pong window counts only then; resume_pong_deadline()
     // restarts an expired window when polling becomes possible again.
     const auto decision = evaluate_websocket_liveness(options, require_protocol().liveness_mode(), liveness_state_,
-        write_phase_ != write_phase_type::idle, read_active_ && write_phase_ == write_phase_type::idle,
+        write_lane_.write_in_progress(), read_active_ && !write_lane_.write_in_progress(),
         last_active_ms_, now);
     if (decision == websocket_liveness_decision::send_ping) {
         return true;
@@ -99,7 +99,7 @@ bool websocket_client_state::heartbeat_ping_due() noexcept {
         retire(client_abort_reason::timeout);
         return false;
     }
-    if (!read_active_ && write_phase_ == write_phase_type::idle &&
+    if (!read_active_ && !write_lane_.write_in_progress() &&
         std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
         // Nothing can observe the Pong: no timer until a read begins.
         return false;
@@ -137,7 +137,7 @@ task<void> websocket_client_state::heartbeat() {
         // again once the write lane is idle.
         co_await wait_for_write_idle(write_wait_type::writer);
         if (protocol_open() && heartbeat_ping_due()) {
-            write_guard_type write_guard(*this, write_phase_type::heartbeat);
+            write_guard_type write_guard(*this);
             const auto challenge = ++heartbeat_sequence_;
             liveness_state_ = websocket_sending_ping(challenge);
             const auto payload_value = websocket_heartbeat_payload(challenge);

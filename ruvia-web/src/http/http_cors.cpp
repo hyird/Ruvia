@@ -51,6 +51,10 @@ void add_vary_tokens(http_response& response, const std::string_view* tokens, st
     }
 }
 
+[[nodiscard]] bool is_valid_cors_origin(std::string_view origin) noexcept {
+    return origin == "null" || ::ruvia::is_valid_http_serialized_origin(origin);
+}
+
 // Validate Origin, Access-Control-Request-Method and the complete
 // Access-Control-Request-Headers list in one pass over the request fields.
 struct cors_request_fields final {
@@ -59,16 +63,41 @@ struct cors_request_fields final {
     std::size_t request_header_names_size_{0};
 };
 
-[[nodiscard]] std::optional<cors_request_fields> scan_cors_request_fields(const http_request& request) {
-    cors_request_fields result{
-        .origin_ = request.header("Origin"),
-        .requested_method_ = request.header("Access-Control-Request-Method"),
-    };
-    if (!request.header("Access-Control-Request-Headers").has_value()) {
+[[nodiscard]] std::optional<cors_request_fields> scan_cors_request_fields(
+    const http_request& request, bool options) {
+    cors_request_fields result{};
+    // CORS is an application policy, not message framing. Opaque or malformed
+    // metadata may reach the handler but must not generate cross-origin grants.
+    // Never select one origin from a multi-origin value for a CORS decision.
+    if (!options) {
+        for (const auto& field : request.headers()) {
+            if (!http_ascii_equals_ignore_case(field.name(), "Origin")) {
+                continue;
+            }
+            if (result.origin_.has_value() || !is_valid_cors_origin(field.value())) {
+                return std::nullopt;
+            }
+            result.origin_ = field.value();
+        }
         return result;
     }
     bool first_header_name = true;
     for (const auto& field : request.headers()) {
+        if (http_ascii_equals_ignore_case(field.name(), "Origin")) {
+            if (result.origin_.has_value() || !is_valid_cors_origin(field.value())) {
+                return std::nullopt;
+            }
+            result.origin_ = field.value();
+            continue;
+        }
+        if (http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Method")) {
+            if (result.requested_method_.has_value() ||
+                !is_valid_http_method_token(field.value())) {
+                return std::nullopt;
+            }
+            result.requested_method_ = field.value();
+            continue;
+        }
         if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
             continue;
         }
@@ -179,8 +208,7 @@ void validate_cors_config(const cors_config& config) {
             break;
         case cors_origin_mode::exact:
         case cors_origin_mode::credentialed_exact:
-            if (origin_value != "null" &&
-                !::ruvia::is_valid_http_serialized_origin(origin_value)) {
+            if (!is_valid_cors_origin(origin_value)) {
                 throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
             }
             break;
@@ -242,27 +270,17 @@ cors_options make_cors_options(const cors_config& config, std::pmr::memory_resou
 }
 
 void apply_cors_headers(const http_request& request, http_response& response, const cors_options& cors) {
-    const auto request_fields = scan_cors_request_fields(request);
+    const bool options = request.known_method() == http_known_method::options;
+    const auto request_fields = scan_cors_request_fields(request, options);
     if (!request_fields) {
         return;
     }
-    const auto& origin_field = request_fields->origin_;
-    const auto origin = origin_field.value_or(std::string_view{});
-    // CORS is an application policy, not message framing. Opaque or malformed
-    // metadata may reach the handler but must not generate cross-origin grants.
-    // Never select one origin from a multi-origin value for a CORS decision.
-    if (origin_field && origin != "null" && !::ruvia::is_valid_http_serialized_origin(origin)) {
-        return;
-    }
+    const auto origin = request_fields->origin_.value_or(std::string_view{});
     const auto& requested_method = request_fields->requested_method_;
-    if (requested_method && !is_valid_http_method_token(*requested_method)) {
-        return;
-    }
     const auto request_header_names_size = request_fields->request_header_names_size_;
     const bool wildcard_origin = cors.origin_mode_ == cors_origin_mode::any;
     std::array<std::string_view, 3> vary_tokens{};
     std::size_t vary_token_count = 0;
-    const bool options = request.known_method() == http_known_method::options;
     if (options) {
         vary_tokens[vary_token_count++] = "Origin";
         vary_tokens[vary_token_count++] = "Access-Control-Request-Method";

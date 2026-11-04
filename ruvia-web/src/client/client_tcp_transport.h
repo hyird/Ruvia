@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -96,9 +97,10 @@ struct client_tcp_endpoint final {
 class client_tcp_transport final {
 public:
     client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_handle& worker_value,
-        client_tcp_endpoint endpoint, client_wire_counters& counters);
+        client_tcp_endpoint endpoint, client_wire_counters& counters,
+        std::pmr::memory_resource* resource = nullptr);
     client_tcp_transport(asio::io_context&, asio::ssl::context&, worker_handle&&, client_tcp_endpoint,
-        client_wire_counters&) = delete;
+        client_wire_counters&, std::pmr::memory_resource* = nullptr) = delete;
     ~client_tcp_transport();
     client_tcp_transport(const client_tcp_transport&) = delete;
     client_tcp_transport& operator=(const client_tcp_transport&) = delete;
@@ -182,6 +184,7 @@ private:
     client_tcp_endpoint endpoint_;
     client_wire_counters& counters_;
     client_host_resolver resolver_;
+    std::pmr::memory_resource* pool_resource_;
     asio::ssl::stream<client_tls_socket> stream_;
     lane_deadline read_;
     lane_deadline write_;

@@ -59,6 +59,39 @@ struct context_access final {
         return context_value.request_;
     }
 
+    [[nodiscard]] static const context_request_body_source& request_body_source(
+        const context& context_value) noexcept {
+        return context_value.request_body_source();
+    }
+
+    [[nodiscard]] static const context_services& services(const context& context_value) noexcept {
+        return context_value.services();
+    }
+
+    [[nodiscard]] static std::optional<std::string_view> decoded_body(
+        const context& context_value) noexcept {
+        if (!context_value.body_decoded_) {
+            return std::nullopt;
+        }
+        return std::string_view(*context_value.request_storage_->decoded_body_);
+    }
+
+    [[nodiscard]] static bool body_identity(const context& context_value) noexcept {
+        return context_value.body_identity_;
+    }
+
+    static void mark_body_identity(const context& context_value) noexcept {
+        context_value.body_identity_ = true;
+    }
+
+    [[nodiscard]] static std::string_view store_decoded_body(
+        const context& context_value, std::pmr::string&& decoded_content) {
+        auto& decoded = context_value.decoded_body();
+        decoded = std::move(decoded_content);
+        context_value.body_decoded_ = true;
+        return std::string_view(decoded);
+    }
+
     [[nodiscard]] static detail::rate_limiter* rate_limiter(context& context_value) noexcept {
         return context_value.services().rate_limiter();
     }

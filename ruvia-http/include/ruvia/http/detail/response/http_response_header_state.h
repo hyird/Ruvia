@@ -10,6 +10,11 @@ struct http_response_header_state_access final {
     [[nodiscard]] static std::uint32_t known_bits(const http_response_headers& headers) noexcept {
         return headers.known_header_bits_;
     }
+
+    [[nodiscard]] static std::string_view known_header_value(
+        const http_response_headers& headers, std::uint32_t bit) noexcept {
+        return headers.known_header_value(bit);
+    }
 };
 
 struct http_response_header_access final {
@@ -62,6 +67,16 @@ struct http_response_header_access final {
 [[nodiscard]] inline bool response_has_known_header(
     const http_response& response, std::uint32_t bit) noexcept {
     return response_has_known_header(response.headers(), bit);
+}
+
+[[nodiscard]] inline std::string_view response_known_header_value(
+    const http_response_headers& headers, std::uint32_t bit) noexcept {
+    return http_response_header_state_access::known_header_value(headers, bit);
+}
+
+[[nodiscard]] inline std::string_view response_known_header_value(
+    const http_response& response, std::uint32_t bit) noexcept {
+    return response_known_header_value(response.headers(), bit);
 }
 
 }  // namespace ruvia::detail

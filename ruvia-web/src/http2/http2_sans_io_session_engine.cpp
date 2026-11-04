@@ -46,7 +46,6 @@
 #include "server/http_upgrade_route.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_session.h"
-#include "websocket/websocket_response_headers.h"
 
 namespace ruvia::detail {
 namespace {
@@ -55,6 +54,17 @@ constexpr std::size_t http2_request_arena_stack_bytes = request_arena_initial_by
 // Product limit on a server drain's wait for the PING round trip before the
 // final GOAWAY (also capped at half of server_config::drain_timeout_).
 constexpr std::chrono::milliseconds http2_drain_round_trip_bound{std::chrono::seconds(1)};
+
+struct response_output_target final {
+    ::ruvia::http2_connection& connection_;
+    worker_signal& writer_;
+    std::uint32_t stream_id_;
+};
+
+struct push_target final {
+    http2_sans_io_session_engine& owner_;
+    std::uint32_t stream_id_;
+};
 
 request_memory& emplace_http2_request_memory(std::optional<request_memory>& storage,
     worker_memory& memory, std::span<std::byte> initial_buffer) {
@@ -102,6 +112,7 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
       session_(std::move(session_value)),
       inbound_buffers_(*session_.options().inbound_budget_,
           session_.options().server_.max_inbound_buffer_bytes_per_connection_),
+      base_services_(session_.services().with_inbound_buffer_pool(inbound_buffers_)),
       remote_address_(session_.services().get_conn_info().remote().address()),
       connection_(ruvia::http2_connection::server({.resource_ = worker_value.resource()})),
       write_signal_(session_.services().worker()),
@@ -116,6 +127,7 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
               .resource_ = worker_value.resource()}) {
     // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
     // multiplexed session, not an unadmitted HTTP/1 request-head read.
+    base_services_.bind_routes(routes_);
     set_inactivity_phase();
     session_.scanner_entry().register_periodic_check(drain_registration_, this, [](void*, std::int64_t) noexcept {}, [](void* target) noexcept { static_cast<http2_sans_io_session_engine*>(target)->request_drain(); });
 }
@@ -179,14 +191,6 @@ bool http2_sans_io_session_engine::connection_failed() const noexcept {
 
 bool http2_sans_io_session_engine::terminated() const noexcept {
     return termination_.terminated();
-}
-
-bool http2_sans_io_session_engine::header_block_in_progress() const noexcept {
-    return connection_.header_block_in_progress();
-}
-
-std::size_t http2_sans_io_session_engine::active_runtime_count() const noexcept {
-    return stream_runtimes_.size();
 }
 
 bool http2_sans_io_session_engine::drain_finished() const noexcept {
@@ -448,6 +452,15 @@ struct http2_sans_io_session_engine::websocket_upgrade_commit final {
             submitted_handshake->compression(), submitted_handshake->subprotocol(), context_value.pool());
     }
 };
+task<http_response> http2_sans_io_session_engine::respond_body_failure(const http_request& request,
+    request_memory& request_memory_value, http_request_body_failure failure,
+    const context_services& request_services, http_response_tail& tail) {
+    tail.disable_response_coding();
+    return respond_http_request_rejection(routes_, request, request_memory_value,
+        http_request_rejection::error(copy_http_protocol_error_info(
+            request_memory_value.resource(), http_request_body_protocol_error(failure))),
+        request_services);
+}
 
 task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
     struct stream_cleanup_guard final {
@@ -467,7 +480,6 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
     try {
         const auto request_start = std::chrono::steady_clock::now();
         const auto& options = session_.options();
-        const auto base_services = session_.services().with_inbound_buffer_pool(inbound_buffers_);
 
         std::array<std::byte, http2_request_arena_stack_bytes> arena_block;
         std::optional<request_memory> request_memory_storage;
@@ -496,11 +508,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         http_request request = request_head->build_request(request_memory_value.resource(),
             buffered_body == nullptr ? std::string_view{} : buffered_body->bytes());
         http_response response(request_memory_value.resource());
-        struct response_output_target {
-            ::ruvia::http2_connection& connection_;
-            worker_signal& writer_;
-            std::uint32_t stream_id_;
-        } output_target{connection_, write_signal_, stream_id};
+        response_output_target output_target{connection_, write_signal_, stream_id};
         http_interim_response_output interim_output(worker_resource(), &output_target, [](void* raw, const http_interim_response_head& head) -> task<void> {
             auto& target = *static_cast<response_output_target*>(raw);
             const auto status = target.connection_.submit_interim_response_head(target.stream_id_, head);
@@ -521,17 +529,15 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                 throw std::invalid_argument("HTTP/2 ALTSVC advertisement rejected");
             }
             target.writer_.notify(); });
-        struct push_target {
-            http2_sans_io_session_engine& owner_;
-            std::uint32_t stream_id_;
-        } push_target_value{*this, stream_id};
+        push_target push_target_value{*this, stream_id};
         http_push_output push_output(&push_target_value, [](void* raw, http_push_request_view promised_request) -> bool {
             auto& target = *static_cast<push_target*>(raw);
             return target.owner_.push_request(target.stream_id_, promised_request);
         });
         const auto& resolution = selected_route->resolution();
         const auto expectation_plan = request_head->expectation_plan(http_unsupported_expectation_policy::reject);
-        auto admission_services = base_services.with_request_channels({
+        auto admission_services = base_services_;
+        admission_services.bind_request_channels({
             .interim_output_ = &interim_output,
             .connection_advertisements_ = &advertisements,
             .push_output_ = &push_output,
@@ -569,11 +575,8 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             body_failure.has_value() &&
             admission.endpoint() != http_request_endpoint::rejection) {
             body_failure_handled = true;
-            admission.tail().disable_response_coding();
-            response = co_await respond_http_request_rejection(routes_, request, request_memory_value,
-                http_request_rejection::error(copy_http_protocol_error_info(
-                    request_memory_value.resource(), http_request_body_protocol_error(*body_failure))),
-                request_services);
+            response = co_await respond_body_failure(
+                request, request_memory_value, *body_failure, request_services, admission.tail());
         } else {
             switch (admission.endpoint()) {
                 case http_request_endpoint::rejection:
@@ -691,7 +694,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     std::exception_ptr dispatch_exception;
                     try {
                         auto context_value = make_route_context(
-                            request_memory_value, request, *resolved, dispatch_services.with_routes(routes_));
+                            request_memory_value, request, *resolved, dispatch_services);
                         std::exception_ptr exception;
                         try {
                             response = co_await routes_.invoke_route(*resolved, context_value);
@@ -726,11 +729,8 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         if (const auto& body_failure = stream_runtime->body_failure();
             body_failure.has_value() && !body_failure_handled) {
             body_failure_handled = true;
-            admission.tail().disable_response_coding();
-            response = co_await respond_http_request_rejection(routes_, request, request_memory_value,
-                http_request_rejection::error(copy_http_protocol_error_info(
-                    request_memory_value.resource(), http_request_body_protocol_error(*body_failure))),
-                request_services);
+            response = co_await respond_body_failure(
+                request, request_memory_value, *body_failure, request_services, admission.tail());
         }
 
         auto first_preparation = admission.tail().prepare(response, options, request_services.worker());
@@ -739,11 +739,8 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         if (const auto& body_failure = stream_runtime->body_failure();
             body_failure.has_value() && !body_failure_handled) {
             body_failure_handled = true;
-            admission.tail().disable_response_coding();
-            response = co_await respond_http_request_rejection(routes_, request, request_memory_value,
-                http_request_rejection::error(copy_http_protocol_error_info(
-                    request_memory_value.resource(), http_request_body_protocol_error(*body_failure))),
-                request_services);
+            response = co_await respond_body_failure(
+                request, request_memory_value, *body_failure, request_services, admission.tail());
             first_preparation = admission.tail().prepare(response, options, request_services.worker());
             preparation = first_preparation.ready() != nullptr
                               ? *first_preparation.ready()

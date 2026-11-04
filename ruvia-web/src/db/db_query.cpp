@@ -319,10 +319,8 @@ namespace {
 }
 
 [[nodiscard]] std::size_t push_tree_value(db_expr_tree& tree, const db_value& value) {
-    db_query_node node_value(db_node_kind::value, tree.resource_);
-    auto owned = clone_db_value_for_resource(value, tree.resource_);
-    std::destroy_at(&node_value.value_);
-    std::construct_at(&node_value.value_, std::move(owned));
+    db_query_node node_value(
+        db_node_kind::value, clone_db_value_for_resource(value, tree.resource_), tree.resource_);
     return push_tree_node(tree, std::move(node_value));
 }
 
@@ -1441,10 +1439,8 @@ db_expression db_query::star(std::string_view table_value) {
     return push_node(std::move(node_value));
 }
 db_expression db_query::value(const db_value& value) {
-    auto node_value = make_node(db_node_kind::value);
-    auto owned = detail::clone_db_value_for_resource(value, resource());
-    std::destroy_at(&node_value.value_);
-    std::construct_at(&node_value.value_, std::move(owned));
+    detail::db_query_node node_value(detail::db_node_kind::value,
+        detail::clone_db_value_for_resource(value, resource()), resource());
     return push_node(std::move(node_value));
 }
 db_expression db_query::null_value() {

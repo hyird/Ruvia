@@ -16,26 +16,6 @@ constexpr std::string_view content_security_policy_name = "Content-Security-Poli
 constexpr std::string_view referrer_policy_name = "Referrer-Policy";
 constexpr std::string_view permissions_policy_name = "Permissions-Policy";
 
-void assign_prefixed_security_header(
-    std::pmr::string& target, std::string_view name, std::string_view value) {
-    if (value.empty()) {
-        return;
-    }
-    target.reserve(name.size() + value.size());
-    target.append(name);
-    target.append(value);
-}
-
-[[nodiscard]] std::string_view prefixed_security_header_name(
-    std::string_view stored, std::size_t name_size, std::string_view fallback) noexcept {
-    return stored.size() > name_size ? stored.substr(0, name_size) : fallback;
-}
-
-[[nodiscard]] std::string_view prefixed_security_header_value(
-    std::string_view stored, std::size_t name_size) noexcept {
-    return stored.size() > name_size ? stored.substr(name_size) : std::string_view{};
-}
-
 [[nodiscard]] bool emits_default_security_header(default_security_header_policy policy) {
     switch (policy) {
         case default_security_header_policy::emit_default:
@@ -153,18 +133,9 @@ void apply_security_headers_to(context& target, const security_headers_policy& p
         set_header("X-XSS-Protection", "0", true);
     }
 
-    set_header(prefixed_security_header_name(policy.content_security_policy_,
-                   content_security_policy_name.size(), content_security_policy_name),
-        prefixed_security_header_value(
-            policy.content_security_policy_, content_security_policy_name.size()),
-        true);
-    set_header(prefixed_security_header_name(
-                   policy.referrer_policy_, referrer_policy_name.size(), referrer_policy_name),
-        prefixed_security_header_value(policy.referrer_policy_, referrer_policy_name.size()), true);
-    set_header(prefixed_security_header_name(policy.permissions_policy_,
-                   permissions_policy_name.size(), permissions_policy_name),
-        prefixed_security_header_value(policy.permissions_policy_, permissions_policy_name.size()),
-        true);
+    set_header(content_security_policy_name, policy.content_security_policy_, true);
+    set_header(referrer_policy_name, policy.referrer_policy_, true);
+    set_header(permissions_policy_name, policy.permissions_policy_, true);
 
     for (const auto& header : custom_headers) {
         const auto field = custom_header_view(header);
@@ -186,12 +157,9 @@ security_headers_middleware::security_headers_middleware(
     emit_strict_transport_security_ = flags.emit_strict_transport_security_;
     emit_disabled_xss_protection_ = flags.emit_disabled_xss_protection_;
     replace_existing_ = flags.replace_existing_;
-    assign_prefixed_security_header(content_security_policy_, content_security_policy_name,
-        source_value.content_security_policy_);
-    assign_prefixed_security_header(
-        referrer_policy_, referrer_policy_name, source_value.referrer_policy_);
-    assign_prefixed_security_header(
-        permissions_policy_, permissions_policy_name, source_value.permissions_policy_);
+    content_security_policy_.assign(source_value.content_security_policy_);
+    referrer_policy_.assign(source_value.referrer_policy_);
+    permissions_policy_.assign(source_value.permissions_policy_);
     custom_headers_.reserve(source_value.custom_headers_.size());
     for (const auto& header : source_value.custom_headers_) {
         custom_headers_.emplace_back(header.name_, header.value_, resource);

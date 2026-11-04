@@ -56,12 +56,11 @@ namespace {
 }  // namespace
 
 multipart_boundary_parse_result parse_multipart_boundary(std::string_view content_type_value) {
-    const auto media_end = content_type_value.find(';');
-    const auto media_type = http_trim_ows(
-        media_end == std::string_view::npos ? content_type_value : content_type_value.substr(0, media_end));
-    if (!http_ascii_equals_ignore_case(media_type, "multipart/form-data")) {
+    if (!http_ascii_equals_ignore_case(
+            detail::http_header_token_before_parameters(content_type_value), "multipart/form-data")) {
         return multipart_boundary_parse_result::make_not_applicable();
     }
+    const auto media_end = content_type_value.find(';');
     if (media_end == std::string_view::npos) {
         return multipart_boundary_parse_result::make_failure();
     }

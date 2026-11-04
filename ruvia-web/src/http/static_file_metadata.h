@@ -117,24 +117,6 @@ template <typename char_value_type>
     return {};
 }
 
-template <typename char_value_type>
-[[nodiscard]] inline bool static_file_extension_equals(
-    std::basic_string_view<char_value_type> extension, std::string_view expected) noexcept {
-    if (extension.size() != expected.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < expected.size(); ++i) {
-        auto c = extension[i];
-        if (c >= static_cast<char_value_type>('A') && c <= static_cast<char_value_type>('Z')) {
-            c = static_cast<char_value_type>(c + static_cast<char_value_type>('a' - 'A'));
-        }
-        if (c != static_cast<char_value_type>(expected[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 [[nodiscard]] inline std::pmr::string lower_static_file_extension_from_utf8(
     std::string_view utf8_path, std::pmr::memory_resource* resource) {
     const auto source_value = static_file_extension(utf8_path);
@@ -152,106 +134,94 @@ template <typename char_value_type>
     }
     return extension;
 }
-
-[[nodiscard]] inline std::pmr::string lower_static_file_extension(
-    const std::filesystem::path& path, std::pmr::memory_resource* resource) {
-    const auto utf8_name = static_file_utf8_string(path.filename(), resource);
-    return lower_static_file_extension_from_utf8(utf8_name, resource);
-}
-
-template <typename char_value_type>
-[[nodiscard]] inline std::string_view guess_static_file_content_type_from_path_view(
-    std::basic_string_view<char_value_type> path) noexcept {
-    const auto extension = static_file_extension(path);
-    switch (extension.size()) {
+[[nodiscard]] inline std::string_view guess_static_file_content_type_from_extension(
+    std::string_view lower_extension) noexcept {
+    switch (lower_extension.size()) {
         case 3U:
-            if (static_file_extension_equals(extension, ".js")) {
+            if (lower_extension == ".js") {
                 return "text/javascript; charset=utf-8";
             }
             break;
         case 4U:
-            if (static_file_extension_equals(extension, ".htm")) {
+            if (lower_extension == ".htm") {
                 return "text/html; charset=utf-8";
             }
-            if (static_file_extension_equals(extension, ".css")) {
+            if (lower_extension == ".css") {
                 return "text/css; charset=utf-8";
             }
-            if (static_file_extension_equals(extension, ".mjs")) {
+            if (lower_extension == ".mjs") {
                 return "text/javascript; charset=utf-8";
             }
-            if (static_file_extension_equals(extension, ".txt") ||
-                static_file_extension_equals(extension, ".log")) {
+            if (lower_extension == ".txt" || lower_extension == ".log") {
                 return "text/plain; charset=utf-8";
             }
-            if (static_file_extension_equals(extension, ".png")) {
+            if (lower_extension == ".png") {
                 return "image/png";
             }
-            if (static_file_extension_equals(extension, ".jpg")) {
+            if (lower_extension == ".jpg") {
                 return "image/jpeg";
             }
-            if (static_file_extension_equals(extension, ".gif")) {
+            if (lower_extension == ".gif") {
                 return "image/gif";
             }
-            if (static_file_extension_equals(extension, ".svg")) {
+            if (lower_extension == ".svg") {
                 return "image/svg+xml";
             }
-            if (static_file_extension_equals(extension, ".bmp")) {
+            if (lower_extension == ".bmp") {
                 return "image/bmp";
             }
-            if (static_file_extension_equals(extension, ".ico") ||
-                static_file_extension_equals(extension, ".cur")) {
+            if (lower_extension == ".ico" || lower_extension == ".cur") {
                 return "image/vnd.microsoft.icon";
             }
-            if (static_file_extension_equals(extension, ".ttf")) {
+            if (lower_extension == ".ttf") {
                 return "font/ttf";
             }
-            if (static_file_extension_equals(extension, ".otf")) {
+            if (lower_extension == ".otf") {
                 return "font/otf";
             }
-            if (static_file_extension_equals(extension, ".eot")) {
+            if (lower_extension == ".eot") {
                 return "application/vnd.ms-fontobject";
             }
-            if (static_file_extension_equals(extension, ".xml") ||
-                static_file_extension_equals(extension, ".xsl")) {
+            if (lower_extension == ".xml" || lower_extension == ".xsl") {
                 return "text/xml; charset=utf-8";
             }
-            if (static_file_extension_equals(extension, ".map")) {
+            if (lower_extension == ".map") {
                 return "application/json; charset=utf-8";
             }
             break;
         case 5U:
-            if (static_file_extension_equals(extension, ".html")) {
+            if (lower_extension == ".html") {
                 return "text/html; charset=utf-8";
             }
-            if (static_file_extension_equals(extension, ".json")) {
+            if (lower_extension == ".json") {
                 return "application/json; charset=utf-8";
             }
-            if (static_file_extension_equals(extension, ".jpeg")) {
+            if (lower_extension == ".jpeg") {
                 return "image/jpeg";
             }
-            if (static_file_extension_equals(extension, ".wasm")) {
+            if (lower_extension == ".wasm") {
                 return "application/wasm";
             }
-            if (static_file_extension_equals(extension, ".apng")) {
+            if (lower_extension == ".apng") {
                 return "image/apng";
             }
-            if (static_file_extension_equals(extension, ".avif")) {
+            if (lower_extension == ".avif") {
                 return "image/avif";
             }
-            if (static_file_extension_equals(extension, ".webp")) {
+            if (lower_extension == ".webp") {
                 return "image/webp";
             }
-            if (static_file_extension_equals(extension, ".woff")) {
+            if (lower_extension == ".woff") {
                 return "font/woff";
             }
             break;
         case 6U:
-            if (static_file_extension_equals(extension, ".woff2")) {
+            if (lower_extension == ".woff2") {
                 return "font/woff2";
             }
             break;
         case 12U:
-            if (static_file_extension_equals(extension, ".webmanifest")) {
+            if (lower_extension == ".webmanifest") {
                 return "application/manifest+json; charset=utf-8";
             }
             break;
@@ -259,6 +229,29 @@ template <typename char_value_type>
             break;
     }
     return "application/octet-stream";
+}
+
+template <typename char_value_type>
+[[nodiscard]] inline std::string_view guess_static_file_content_type_from_path_view(
+    std::basic_string_view<char_value_type> path) noexcept {
+    const auto extension = static_file_extension(path);
+    std::array<char, 12> lower;
+    if (extension.size() < 3U || extension.size() > lower.size()) {
+        return "application/octet-stream";
+    }
+    for (std::size_t i = 0; i < extension.size(); ++i) {
+        const auto c = extension[i];
+        if (c < static_cast<char_value_type>(0) || c > static_cast<char_value_type>(0x7f)) {
+            return "application/octet-stream";
+        }
+        auto out = static_cast<char>(c);
+        if (out >= 'A' && out <= 'Z') {
+            out = static_cast<char>(out + ('a' - 'A'));
+        }
+        lower[i] = out;
+    }
+    return guess_static_file_content_type_from_extension(
+        std::string_view(lower.data(), extension.size()));
 }
 
 [[nodiscard]] inline std::string_view guess_static_file_content_type(

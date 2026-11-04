@@ -17,11 +17,7 @@
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool http_is_form_data_disposition(std::string_view disposition) noexcept {
-    const auto value = http_trim_ows(disposition);
-    const auto semicolon = value.find(';');
-    const auto type =
-        http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
-    return http_ascii_equals_ignore_case(type, "form-data");
+    return http_ascii_equals_ignore_case(http_header_token_before_parameters(disposition), "form-data");
 }
 
 class http_multipart_part_header_parse_result;

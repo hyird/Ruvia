@@ -212,19 +212,12 @@ std::optional<http_client_advertisement> http_client_advertisement_queue::next()
     pending_.pop_front();
     return advertisement;
 }
-void http_client_advertisement_queue::clear() noexcept {
-    require_current();
-    pending_.clear();
-}
 void http_client_advertisement_queue::retire() noexcept {
     require_current();
     pending_.clear();
     if (auto* memory = std::exchange(memory_, nullptr)) {
         memory->retire();
     }
-}
-std::size_t http_client_advertisement_queue::retained_bytes() const noexcept {
-    return memory_ == nullptr ? 0 : memory_->retained_bytes();
 }
 
 }  // namespace ruvia::detail

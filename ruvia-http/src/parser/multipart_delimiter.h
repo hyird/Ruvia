@@ -20,6 +20,10 @@ class http_multipart_delimiter_result;
 [[nodiscard]] inline http_multipart_delimiter_result http_match_multipart_delimiter_line(
     std::string_view input, const multipart_boundary& boundary, bool input_finished,
     std::size_t& padding_cursor) noexcept;
+[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_delimiter_from_cursor(
+    std::string_view input, const multipart_boundary& boundary, bool input_finished,
+    bool check_leading_dash, std::size_t rebase_crlf_offset,
+    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept;
 [[nodiscard]] inline http_multipart_delimiter_result http_find_initial_multipart_delimiter(
     std::string_view input, const multipart_boundary& boundary, bool input_finished,
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept;
@@ -134,6 +138,9 @@ public:
 private:
     friend http_multipart_delimiter_result http_match_multipart_delimiter_line(
         std::string_view, const multipart_boundary&, bool, std::size_t&) noexcept;
+    friend http_multipart_delimiter_result http_find_multipart_delimiter_from_cursor(
+        std::string_view, const multipart_boundary&, bool, bool, std::size_t,
+        std::size_t&, std::size_t&) noexcept;
     friend http_multipart_delimiter_result http_find_initial_multipart_delimiter(
         std::string_view, const multipart_boundary&, bool, std::size_t&, std::size_t&) noexcept;
     friend http_multipart_delimiter_result http_find_multipart_body_delimiter(
@@ -260,10 +267,11 @@ private:
 // Cursors belong to one retained input prefix and must be reset after consume.
 // Searches keep at most the three-byte delimiter prefix overlap; a candidate's
 // transport padding resumes at its last inspected byte.
-[[nodiscard]] inline http_multipart_delimiter_result http_find_initial_multipart_delimiter(
+[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_delimiter_from_cursor(
     std::string_view input, const multipart_boundary& boundary, bool input_finished,
+    bool check_leading_dash, std::size_t rebase_crlf_offset,
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
-    if (search_cursor == 0 && !input.empty() && input.front() == '-') {
+    if (check_leading_dash && search_cursor == 0 && !input.empty() && input.front() == '-') {
         auto match = http_match_multipart_delimiter_line(input, boundary, input_finished, padding_cursor);
         if (match.no_match() == nullptr) {
             return match;
@@ -279,16 +287,27 @@ private:
             continue;
         }
         search_cursor = prefix;
-        return match.rebased(prefix + 2);
+        return match.rebased(prefix + rebase_crlf_offset);
     }
     search_cursor = input.size() > 3 ? input.size() - 3 : 0;
+    return http_multipart_delimiter_result::make_no_match();
+}
+
+[[nodiscard]] inline http_multipart_delimiter_result http_find_initial_multipart_delimiter(
+    std::string_view input, const multipart_boundary& boundary, bool input_finished,
+    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
+    auto match = http_find_multipart_delimiter_from_cursor(
+        input, boundary, input_finished, true, 2, search_cursor, padding_cursor);
+    if (match.no_match() == nullptr) {
+        return match;
+    }
     // The CRLF belongs to the preamble, but the first marker byte may still
     // become a delimiter. Keep it out of the preamble quota until the next
     // byte resolves the candidate or EOF makes the prefix incomplete.
     if (!input_finished && input.ends_with("\r\n-")) {
         return http_multipart_delimiter_result::make_need_input(input.size() - 1);
     }
-    return http_multipart_delimiter_result::make_no_match();
+    return match;
 }
 
 // RFC 2046 section 5.1.1: body-part = MIME-part-headers [CRLF *OCTET], so a part
@@ -298,26 +317,8 @@ private:
 [[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_body_delimiter(
     std::string_view input, const multipart_boundary& boundary, bool input_finished, bool at_body_start,
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
-    if (at_body_start && search_cursor == 0 && !input.empty() && input.front() == '-') {
-        auto match = http_match_multipart_delimiter_line(input, boundary, input_finished, padding_cursor);
-        if (match.no_match() == nullptr) {
-            return match;
-        }
-        padding_cursor = 0;
-    }
-    for (auto prefix = input.find("\r\n--", search_cursor); prefix != std::string_view::npos;
-        prefix = input.find("\r\n--", prefix + 1)) {
-        auto match = http_match_multipart_delimiter_line(
-            input.substr(prefix + 2), boundary, input_finished, padding_cursor);
-        if (match.no_match() != nullptr) {
-            padding_cursor = 0;
-            continue;
-        }
-        search_cursor = prefix;
-        return match.rebased(prefix);
-    }
-    search_cursor = input.size() > 3 ? input.size() - 3 : 0;
-    return http_multipart_delimiter_result::make_no_match();
+    return http_find_multipart_delimiter_from_cursor(
+        input, boundary, input_finished, at_body_start, 0, search_cursor, padding_cursor);
 }
 
 }  // namespace ruvia::detail

@@ -2,7 +2,6 @@
 
 #include <optional>
 #include <string_view>
-#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -22,23 +21,12 @@ public:
 
     template <typename value_type, typename validator_type>
     void validate(model_field_state state_value, const std::optional<value_type>& value,
-        const model_path& path, validator_type& validator_value) const {
+        [[maybe_unused]] const model_path& path, [[maybe_unused]] validator_type& validator_value) const {
         if (state_value != model_field_state::parsed || !value) {
             return;
         }
-        validate_present(*value, path, validator_value);
+        (validate_rule(*value, path, validator_value, rule_types{}), ...);
     }
-
-private:
-    template <typename value_type, typename validator_type>
-    void validate_present(const value_type& value, const model_path& path, validator_type& validator_value) const {
-        std::apply(
-            [&value, &path, &validator_value](
-                const auto&... rules) { (validate_rule(value, path, validator_value, rules), ...); },
-            rules_);
-    }
-
-    std::tuple<rule_types...> rules_{};
 };
 
 }  // namespace ruvia::detail::model

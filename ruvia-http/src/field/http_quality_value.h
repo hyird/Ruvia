@@ -64,15 +64,6 @@ namespace ruvia::detail {
     return parsed_value < 0 ? 0 : parsed_value;
 }
 
-[[nodiscard]] inline std::string_view http_header_token_before_parameters(
-    std::string_view value) noexcept {
-    const auto semicolon = value.find(';');
-    return http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
-}
-
-template <http_temporary_owning_char_string value_type>
-std::string_view http_header_token_before_parameters(value_type&&) = delete;
-
 inline void http_accumulate_accepted_quality(int candidate_value, int& accumulated) noexcept {
     if (candidate_value > accumulated) {
         accumulated = candidate_value;

@@ -44,6 +44,13 @@ public:
         }
     }
 
+    void reserve(std::size_t requested_capacity) {
+        if (requested_capacity <= capacity_) {
+            return;
+        }
+        reallocate(requested_capacity);
+    }
+
     void append(field_type field) {
         if (size_ == capacity_) {
             grow();
@@ -70,6 +77,14 @@ private:
             throw std::length_error("too many HTTP header descriptors");
         }
         const auto next_capacity = capacity_ <= maximum / 2 ? capacity_ * 2 : maximum;
+        reallocate(next_capacity);
+    }
+
+    void reallocate(std::size_t next_capacity) {
+        constexpr auto maximum = std::numeric_limits<std::size_t>::max() / sizeof(field_type);
+        if (next_capacity > maximum) {
+            throw std::length_error("too many HTTP header descriptors");
+        }
         std::pmr::polymorphic_allocator<field_type> allocator(resource_);
         auto* next = allocator.allocate(next_capacity);
         // Trivial descriptors cannot throw while copying. Publish only after

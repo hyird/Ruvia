@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <memory_resource>
 #include <string>
@@ -133,40 +134,17 @@ private:
           received_cookies_(source_value.received_cookies_),
           user_agent_(user_agent_view(source_value), resource),
           cookies_(resource) {
-        std::size_t unique_cookies = 0;
-        for (std::size_t i = 0; i < source_value.cookies_.size(); ++i) {
-            const auto name = source_value.cookies_[i].name();
-            bool seen = false;
-            for (std::size_t k = 0; k < i; ++k) {
-                if (source_value.cookies_[k].name() == name) {
-                    seen = true;
-                    break;
+        cookies_.reserve(source_value.cookies_.size());
+        for (const auto& cookie : source_value.cookies_) {
+            if constexpr (std::same_as<source_type, http_client_config>) {
+                const auto existing = std::ranges::find_if(cookies_,
+                    [name = cookie.name()](const http_header& entry) { return entry.name() == name; });
+                if (existing != cookies_.end()) {
+                    *existing = http_header(cookie.name(), cookie.value(), resource);
+                    continue;
                 }
             }
-            if (!seen) {
-                ++unique_cookies;
-            }
-        }
-        cookies_.reserve(unique_cookies);
-        for (std::size_t i = 0; i < source_value.cookies_.size(); ++i) {
-            const auto name = source_value.cookies_[i].name();
-            bool seen = false;
-            for (std::size_t k = 0; k < i; ++k) {
-                if (source_value.cookies_[k].name() == name) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (seen) {
-                continue;
-            }
-            auto value = source_value.cookies_[i].value();
-            for (std::size_t j = i + 1; j < source_value.cookies_.size(); ++j) {
-                if (source_value.cookies_[j].name() == name) {
-                    value = source_value.cookies_[j].value();
-                }
-            }
-            cookies_.emplace_back(name, value, resource);
+            cookies_.emplace_back(cookie.name(), cookie.value(), resource);
         }
     }
 };

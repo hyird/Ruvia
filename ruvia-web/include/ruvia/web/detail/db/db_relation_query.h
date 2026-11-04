@@ -126,36 +126,17 @@ public:
             found = true;
             validate_db_relation<entity_type, relation_type>();
             using mapping_type = db_relation_mapping<entity_type, relation_type>;
-            using target_type = typename relation_type::target_entity_type;
-            db_expression predicate;
             if constexpr (mapping_type::through_join_table) {
                 std::pmr::string junction(query.resource());
                 junction.reserve(alias.size() + 9U);
                 junction.append(alias);
                 junction.append("_junction");
-                for_each_descriptor<typename mapping_type::source_columns_type>([&]<typename column_type, std::size_t> {
-                    conjunction(query, predicate,
-                        query.binary(query.column(column_type::referenced.view(), source_alias),
-                            db_binary_operator::equal, query.column(column_type::local.view(), junction)));
-                });
-                query.join(join, mapping_type::table_name(), predicate, junction);
-                predicate = {};
-                for_each_descriptor<typename mapping_type::target_columns_type>([&]<typename column_type, std::size_t> {
-                    conjunction(query, predicate,
-                        query.binary(query.column(column_type::local.view(), junction),
-                            db_binary_operator::equal, query.column(column_type::referenced.view(), alias)));
-                });
+                append_relation_joins<entity_type, relation_type>(
+                    query, source_alias, alias, junction, join, condition);
             } else {
-                for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename column_type, std::size_t> {
-                    conjunction(query, predicate,
-                        query.binary(query.column(column_type::local.view(), source_alias),
-                            db_binary_operator::equal, query.column(column_type::referenced.view(), alias)));
-                });
+                append_relation_joins<entity_type, relation_type>(
+                    query, source_alias, alias, {}, join, condition);
             }
-            if (!condition.empty()) {
-                conjunction(query, predicate, query.import_expression(condition));
-            }
-            query.join(join, target_type::table_name(), predicate, alias);
         });
         if (!found) {
             throw std::invalid_argument("unknown database entity relation");
@@ -213,11 +194,44 @@ private:
     static void conjunction(db_query& query, db_expression& predicate, db_expression term);
 
     template <typename entity_type, typename relation_type>
+    static void append_relation_joins(db_query& query, std::string_view source_alias,
+        std::string_view target_alias, std::string_view junction_alias, db_join_type join,
+        db_expression extra_condition) {
+        using mapping_type = db_relation_mapping<entity_type, relation_type>;
+        using target_type = typename relation_type::target_entity_type;
+        db_expression predicate;
+        if constexpr (mapping_type::through_join_table) {
+            for_each_descriptor<typename mapping_type::source_columns_type>([&]<typename column_type, std::size_t> {
+                conjunction(query, predicate,
+                    query.binary(query.column(column_type::referenced.view(), source_alias),
+                        db_binary_operator::equal, query.column(column_type::local.view(), junction_alias)));
+            });
+            query.join(join, mapping_type::table_name(), predicate, junction_alias);
+            predicate = {};
+            for_each_descriptor<typename mapping_type::target_columns_type>([&]<typename column_type, std::size_t> {
+                conjunction(query, predicate,
+                    query.binary(query.column(column_type::local.view(), junction_alias),
+                        db_binary_operator::equal, query.column(column_type::referenced.view(), target_alias)));
+            });
+        } else {
+            (void)junction_alias;
+            for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename column_type, std::size_t> {
+                conjunction(query, predicate,
+                    query.binary(query.column(column_type::local.view(), source_alias),
+                        db_binary_operator::equal, query.column(column_type::referenced.view(), target_alias)));
+            });
+        }
+        if (!extra_condition.empty()) {
+            conjunction(query, predicate, query.import_expression(extra_condition));
+        }
+        query.join(join, target_type::table_name(), predicate, target_alias);
+    }
+
+    template <typename entity_type, typename relation_type>
     void append_join(db_query& query, std::string_view source_alias, node_type& node_value,
         std::string_view reserved_alias, db_expression extra_condition) {
         using mapping_type = db_relation_mapping<entity_type, relation_type>;
         using target_type = typename relation_type::target_entity_type;
-        db_expression predicate;
         if constexpr (mapping_type::through_join_table) {
             auto junction = unique_alias(query, node_value.alias_);
             // A terminal user alias is reserved even while constructing an
@@ -225,23 +239,13 @@ private:
             if (junction == reserved_alias) {
                 junction = unique_alias(query, reserved_alias);
             }
-            for_each_descriptor<typename mapping_type::source_columns_type>([&]<typename column_type, std::size_t> {
-                conjunction(query, predicate, query.binary(query.column(column_type::referenced.view(), source_alias), db_binary_operator::equal, query.column(column_type::local.view(), junction)));
-            });
-            query.join(node_value.join_, mapping_type::table_name(), predicate, junction);
-            predicate = {};
-            for_each_descriptor<typename mapping_type::target_columns_type>([&]<typename column_type, std::size_t> {
-                conjunction(query, predicate, query.binary(query.column(column_type::local.view(), junction), db_binary_operator::equal, query.column(column_type::referenced.view(), node_value.alias_)));
-            });
+            append_relation_joins<entity_type, relation_type>(
+                query, source_alias, node_value.alias_, junction, node_value.join_, extra_condition);
         } else {
-            for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename column_type, std::size_t> {
-                conjunction(query, predicate, query.binary(query.column(column_type::local.view(), source_alias), db_binary_operator::equal, query.column(column_type::referenced.view(), node_value.alias_)));
-            });
+            (void)reserved_alias;
+            append_relation_joins<entity_type, relation_type>(
+                query, source_alias, node_value.alias_, {}, node_value.join_, extra_condition);
         }
-        if (!extra_condition.empty()) {
-            conjunction(query, predicate, query.import_expression(extra_condition));
-        }
-        query.join(node_value.join_, target_type::table_name(), predicate, node_value.alias_);
         node_value.columns_.reserve(std::tuple_size_v<typename target_type::columns_type>);
         for_each_descriptor<typename target_type::columns_type>([&]<typename column_type, std::size_t> {
             auto name = unique_projection(query);

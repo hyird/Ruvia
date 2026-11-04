@@ -56,11 +56,12 @@ public:
 
     http1_response_output(stream_type& stream, http_response_head_buffer& output,
         http1_deferred_access_log& deferred_access, const access_log_sink& access_log,
-        connection_scanner::entry& progress) noexcept
+        std::string_view remote_address, connection_scanner::entry& progress) noexcept
         : stream_(&stream),
           output_(&output),
           deferred_access_(&deferred_access),
           access_log_(&access_log),
+          remote_address_(remote_address),
           progress_(&progress) {}
 
     http1_response_output(const http1_response_output&) = delete;
@@ -139,7 +140,7 @@ public:
     // Reports the held-back responses whose heads were written, empties the
     // output and returns the write's outcome.
     [[nodiscard]] written_type complete() noexcept {
-        deferred_access_->complete(*access_log_, written_.bytes_);
+        deferred_access_->complete(*access_log_, remote_address_, written_.bytes_);
         output_->reset();
         body_ = {};
         return written_;
@@ -167,6 +168,7 @@ private:
     http_response_head_buffer* output_;
     http1_deferred_access_log* deferred_access_;
     const access_log_sink* access_log_;
+    std::string_view remote_address_;
     connection_scanner::entry* progress_;
     std::string_view body_;
     written_type written_;

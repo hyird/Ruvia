@@ -11,40 +11,14 @@
 
 namespace ruvia::detail {
 
-void websocket_client_state::finish_write(write_phase_type phase) noexcept {
-    if (write_phase_ != phase) {
-        std::terminate();
-    }
-    write_phase_ = write_phase_type::idle;
-    write_signal_.notify();
+void websocket_client_state::finish_write() noexcept {
+    write_lane_.finish();
     resume_pong_deadline();
 }
 
 task<void> websocket_client_state::wait_for_write_idle(write_wait_type type) {
-    const bool reader = type == write_wait_type::reader;
-    try {
-        for (;;) {
-            throw_if_aborted();
-            if (write_phase_ == write_phase_type::idle && (reader || !reader_waiting_)) {
-                if (reader) {
-                    // The caller claims the lane before any writer resumes.
-                    reader_waiting_ = false;
-                }
-                co_return;
-            }
-            if (reader) {
-                reader_waiting_ = true;
-            }
-            co_await write_signal_.wait();
-        }
-    } catch (...) {
-        if (reader) {
-            // Writers held back for this reader re-check the idle lane.
-            reader_waiting_ = false;
-            write_signal_.notify();
-        }
-        throw;
-    }
+    return write_lane_.wait_for_idle(
+        type == write_wait_type::reader, [this] { throw_if_aborted(); });
 }
 
 task<void> websocket_client_state::write_transport(std::string_view bytes_value) {
@@ -52,7 +26,7 @@ task<void> websocket_client_state::write_transport(std::string_view bytes_value)
         worker_timer_registration timer;
         arm(timer, config_.write_timeout_, client_abort_reason::timeout);
         co_await http2_->write(bytes_value);
-        disarm(timer);
+        timer.cancel();
         throw_if_aborted();
         touch_activity();
         co_return;
@@ -102,7 +76,7 @@ task<void> websocket_client_state::flush_output() {
 task<void> websocket_client_state::throw_protocol_error_after_flush(std::string_view message) {
     co_await wait_for_write_idle(write_wait_type::reader);
     try {
-        write_guard_type write_guard(*this, write_phase_type::application);
+        write_guard_type write_guard(*this);
         co_await flush_output();
     } catch (const websocket_client_error& error) {
         if (error.code() != websocket_client_error::code_type::io_error &&
@@ -136,7 +110,7 @@ task<void> websocket_client_state::run_write(websocket_opcode opcode, std::pmr::
     operation_guard_type operation(*this, options);
     co_await wait_for_write_idle(write_wait_type::writer);
     lifecycle_.require_ready();
-    write_guard_type write_guard(*this, write_phase_type::application);
+    write_guard_type write_guard(*this);
     const auto submitted = require_protocol().submit_frame(opcode, payload_value, send_options.compress_);
     switch (submitted) {
         case websocket_frame_submit_status::accepted:

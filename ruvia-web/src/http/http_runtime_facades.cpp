@@ -12,6 +12,7 @@
 #include "ruvia/web/websocket.h"
 
 #include "context/context_capabilities.h"
+#include "http/inline_http_header_views.h"
 #include "util/operation_lane_lease.h"
 #include "util/pmr_owned_storage.h"
 
@@ -35,23 +36,8 @@ ruvia::task<void> end_owned(void* target,
     std::pmr::vector<ruvia::http_header> fields,
     bool& output_active) {
     auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
-    constexpr std::size_t inline_trailer_capacity = 8;
-    std::array<ruvia::http_header_view, inline_trailer_capacity> inline_views;
-    std::pmr::vector<ruvia::http_header_view> overflow_views(fields.get_allocator());
-    std::span<const ruvia::http_header_view> views;
-    if (fields.size() <= inline_views.size()) {
-        for (std::size_t i = 0; i < fields.size(); ++i) {
-            inline_views[i] = ruvia::http_header_view{fields[i].name(), fields[i].value()};
-        }
-        views = std::span<const ruvia::http_header_view>(inline_views.data(), fields.size());
-    } else {
-        overflow_views.reserve(fields.size());
-        for (const auto& field : fields) {
-            overflow_views.emplace_back(field.name(), field.value());
-        }
-        views = overflow_views;
-    }
-    co_await end(target, views);
+    const ruvia::detail::inline_http_header_views views(fields, fields.get_allocator().resource());
+    co_await end(target, views.view());
 }
 
 ruvia::task<std::optional<ruvia::websocket_message>> read_websocket(void* target,

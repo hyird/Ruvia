@@ -1,7 +1,6 @@
 #include "ruvia/http/http_response.h"
 
 #include <array>
-#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -108,11 +107,6 @@ http_response_body_plan plan_http_response_body(
         !connect_tunnel && body_allowed);
 }
 
-namespace {
-
-inline constexpr std::size_t inline_weak_etag_capacity = 128;
-
-}  // namespace
 http_response::http_response(std::pmr::memory_resource* resource)
     : http_response(detail::http_resolved_pmr_resource_tag{},
           detail::http_pmr_resource_or_default(resource)) {}
@@ -245,28 +239,10 @@ void http_response::apply_encoded_representation(
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
     const auto current_etag = headers_.known_header_value(detail::response_header_etag);
-    std::array<char, inline_weak_etag_capacity> inline_weak_etag;
-    std::pmr::string heap_weak_etag(memory_resource());
-    std::string_view weak_etag{};
-    if (detail::http_is_strong_etag(current_etag)) {
-        const std::size_t total_size = current_etag.size() + 2U;
-        if (total_size <= inline_weak_etag.size()) {
-            inline_weak_etag[0] = 'W';
-            inline_weak_etag[1] = '/';
-            std::memcpy(inline_weak_etag.data() + 2, current_etag.data(), current_etag.size());
-            weak_etag = std::string_view(inline_weak_etag.data(), total_size);
-        } else {
-            heap_weak_etag.reserve(total_size);
-            heap_weak_etag.append("W/");
-            heap_weak_etag.append(current_etag.data(), current_etag.size());
-            weak_etag = heap_weak_etag;
-        }
-    }
-
     http_response_headers::descriptor_stage update(headers_);
     update.stage("Content-Encoding", content_encoding, detail::response_header_content_encoding);
-    if (!weak_etag.empty()) {
-        update.stage("ETag", weak_etag, detail::response_header_etag);
+    if (detail::http_is_strong_etag(current_etag)) {
+        update.stage_weak_etag(current_etag);
     }
     std::array<char, http_max_unsigned_decimal_size> length_digits;
     if (body != nullptr) {

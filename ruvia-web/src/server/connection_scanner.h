@@ -11,6 +11,7 @@
 
 #include <asio/ip/tcp.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 
@@ -227,7 +228,7 @@ private:
     friend class guard;
     friend struct impl_type;
     static void detach_entry(entry& entry) noexcept;
-    std::unique_ptr<impl_type> impl_;
+    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
 };
 
 struct connection_scanner::impl_type final {

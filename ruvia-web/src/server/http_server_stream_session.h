@@ -82,7 +82,7 @@ struct http1_connection_session final {
     stream_type& stream_;
     connection_scanner::entry& scanner_entry_;
     // The connection's route services, bound to its inbound buffer budget.
-    const context_services& route_services_;
+    context_services& route_services_;
     inbound_buffer_resource& inbound_buffers_;
     http1_request_sequence& request_sequence_;
     const http_request_admission_policy& admission_policy_;
@@ -139,6 +139,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     inbound_buffer_resource connection_buffers(
         *options_.inbound_budget_, options_.server_.max_inbound_buffer_bytes_per_connection_);
     base_route_services = base_route_services.with_inbound_buffer_pool(connection_buffers);
+    base_route_services.bind_routes(routes_);
     http1_request_sequence request_sequence(options_.server_.max_requests_per_connection_, state_);
     http1_connection_session<stream_type> session{
         .listener_ = listener_value,
@@ -221,7 +222,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
     auto& connection_buffers = session.inbound_buffers_;
     auto& request_sequence = session.request_sequence_;
     const auto& routes_value = routes_;
-    const auto& base_route_services = session.route_services_;
+    auto& base_route_services = session.route_services_;
     const auto& admission_policy = session.admission_policy_;
     const auto& file_output = session.file_output_;
     const auto remote_address = session.remote_address_;
@@ -234,7 +235,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         // Pipelined responses held back for one coalesced write. Bound to the
         // work set, which keeps any held output until it is written.
         http1_response_output<stream_type> response_output(
-            stream, response_head, work_set.deferred_access_, options_.access_log_, scanner_entry);
+            stream, response_head, work_set.deferred_access_, options_.access_log_, remote_address, scanner_entry);
 
         request_memory request_memory_value(memory_, work_set.arena_block_);
         // Work-set storage outlives this arena. Release its descriptor block
@@ -252,8 +253,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         // it; a suffix still in the read buffer is compacted in place instead.
         std::pmr::string pipeline_stash(request_memory_value.resource());
         http1_interim_response_sink interim_sink(stream, parsed_value.request_, memory_.resource(), response_output);
-        const auto request_services =
-            base_route_services.with_interim_output(interim_sink.output());
+        base_route_services.bind_interim_output(interim_sink.output());
         std::optional<http_request_admission> admission;
         std::optional<http1_session_request_completion> request_completion;
         // Rejections that close the connection funnel through one co_await
@@ -332,7 +332,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         .expectation_ = &expectation_plan,
                         .start_ = request_start,
                     },
-                    admission_policy, request_services));
+                    admission_policy, base_route_services));
 
                 if (const auto* redirect = listener_value.redirect()) {
                     if (admission->endpoint() == http_request_endpoint::rejection) {
@@ -461,16 +461,20 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         }
                     }
 
-                    const auto route_services =
-                        has_body ? body_state.with_loader(admission->services()) : admission->services();
+                    std::optional<context_services> body_route_services;
+                    if (has_body) {
+                        body_route_services.emplace(body_state.with_loader(admission->services()));
+                    }
+                    const auto& route_services =
+                        body_route_services ? *body_route_services : admission->services();
                     std::exception_ptr dispatch_exception;
                     try {
                         // Keep the context in this existing frame rather than
                         // allocating a dispatch coroutine for a matched route.
                         // It must die before body completion hands off the
                         // pipeline and before the request arena.
-                        auto context_value = make_route_context(request_memory_value,
-                            parsed_value.request_, *resolved, route_services.with_routes(routes_value));
+                        auto context_value = make_route_context(
+                            request_memory_value, parsed_value.request_, *resolved, route_services);
                         std::exception_ptr exception;
                         try {
                             response = co_await routes_value.invoke_route(*resolved, context_value);
@@ -577,7 +581,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             }
             response = co_await respond_http_request_rejection(routes_value, parsed_value.request_,
                 request_memory_value, *closing_rejection,
-                admission ? admission->services() : request_services);
+                admission ? admission->services() : base_route_services);
             request_completion.emplace(close_with_framework_response(response, parsed_value.connection_plan_));
         }
 
@@ -597,7 +601,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             // Preparation may still run handler-side work (error recovery,
             // offloaded compression); it stays timed as idle. Only the socket
             // writes below run as `writing` (write_remaining() sets it).
-            const auto& services = admission ? admission->services() : request_services;
+            const auto& services = admission ? admission->services() : base_route_services;
             std::optional<http1_buffered_response_plan> planned_response;
             std::optional<http1_response_write_start> started_write;
             bool file_response = false;

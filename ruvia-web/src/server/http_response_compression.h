@@ -60,16 +60,19 @@ enum class http_response_compression_status : std::uint8_t {
 
 [[nodiscard]] inline bool http_response_custom_coding_accepted(
     const http_request* request, std::string_view coding) noexcept {
-    if (request == nullptr || !request->header("Accept-Encoding").has_value()) {
+    if (request == nullptr) {
         return true;
     }
+    bool saw_header = false;
     http_accepted_encoding_quality quality;
     for (const auto& header : request->headers()) {
-        if (http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
+        if (header.name().size() == 15U &&
+            http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
+            saw_header = true;
             quality.update(header.value(), coding);
         }
     }
-    return quality.accepts(false);
+    return !saw_header || quality.accepts(false);
 }
 
 // Response negotiation inspects every coding in application-supplied

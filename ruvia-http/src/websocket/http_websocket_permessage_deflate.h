@@ -64,7 +64,7 @@ public:
                 deflater_.reset();
                 return false;
             }
-        } else if (!send_takeover_ && deflateReset(&deflater_->native()) != Z_OK) {
+        } else if (!send_takeover_ && !deflater_->reset()) {
             deflater_->rethrow_allocation_failure();
             return false;
         }
@@ -84,7 +84,7 @@ public:
                 inflater_.reset();
                 return websocket_inflate_result::error;
             }
-        } else if (!receive_takeover_ && inflateReset(&inflater_->native()) != Z_OK) {
+        } else if (!receive_takeover_ && !inflater_->reset()) {
             inflater_->rethrow_allocation_failure();
             return websocket_inflate_result::error;
         }
@@ -96,7 +96,7 @@ public:
     // legal even when the receiver retains its prior dictionary (RFC 7692).
     // The shared codecs already reset after every message.
     void discard_compression() {
-        if (deflater_ != nullptr && deflateReset(&deflater_->native()) != Z_OK) {
+        if (deflater_ != nullptr && !deflater_->reset()) {
             deflater_->rethrow_allocation_failure();
             throw std::runtime_error("failed to reset discarded WebSocket compression");
         }

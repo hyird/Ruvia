@@ -17,10 +17,6 @@ enum class http2_sans_io_session_phase : std::uint8_t {
 // can invoke completion inline; completion remains true before reader stopping.
 class http2_sans_io_session_lifecycle final {
 public:
-    [[nodiscard]] http2_sans_io_session_phase phase() const noexcept {
-        return phase_;
-    }
-
     [[nodiscard]] bool write_failed() const noexcept {
         return phase_ == http2_sans_io_session_phase::write_failed ||
                phase_ == http2_sans_io_session_phase::stopping_after_write_failure;

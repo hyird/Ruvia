@@ -158,10 +158,7 @@ http_response context::text(static_text body) {
 response_stream_writer& context::stream_text() {
     auto& writer = stream();
     if (!response_output().committed()) {
-        draft().header("Content-Type", "text/plain; charset=UTF-8");
-        if (!response_state().draft().header("X-Content-Type-Options")) {
-            draft().header("X-Content-Type-Options", "nosniff");
-        }
+        mark_plain_text(response_state().draft());
     }
     return writer;
 }

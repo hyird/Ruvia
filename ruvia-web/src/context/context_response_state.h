@@ -64,15 +64,6 @@ public:
         }
     }
 
-    [[nodiscard]] http_response take_draft() {
-        if (!draft_) {
-            return http_response(resource_);
-        }
-        auto response = std::move(*draft_);
-        draft_.reset();
-        return response;
-    }
-
     void finalize(http_response&& response) {
         final_.emplace(std::move(response));
     }

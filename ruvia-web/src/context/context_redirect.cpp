@@ -66,7 +66,7 @@ http_response context::redirect(redirect_response_options options) {
     apply_response_state(response, status_code);
     std::pmr::string encoded_location(pool());
     response.header("Location", percent_encode_uri_reference(location, encoded_location));
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 

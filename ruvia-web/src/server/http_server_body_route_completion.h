@@ -61,7 +61,8 @@ struct http_lazy_buffered_body_route_state final {
 
 template <typename stream_type>
 inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_state<stream_type>& state_value,
-    http1_route_dispatch<stream_type> d, protocol_byte_limit body_limit_value, std::string_view body_and_pipeline) {
+    const http1_route_dispatch<stream_type>& d, protocol_byte_limit body_limit_value,
+    std::string_view body_and_pipeline) {
     auto* resource = &d.inbound_buffer_pool_;
     // Every HTTP/1 request's services carry its session's interim lane.
     state_value.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(resource), resource,
@@ -71,8 +72,9 @@ inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_
 
 template <typename stream_type>
 [[nodiscard]] inline std::exception_ptr try_prepare_http_lazy_buffered_body_route(
-    http_lazy_buffered_body_route_state<stream_type>& state_value, http1_route_dispatch<stream_type> d,
-    protocol_byte_limit body_limit_value, std::string_view body_and_pipeline) {
+    http_lazy_buffered_body_route_state<stream_type>& state_value,
+    const http1_route_dispatch<stream_type>& d, protocol_byte_limit body_limit_value,
+    std::string_view body_and_pipeline) {
     try {
         prepare_http_lazy_buffered_body_route(state_value, d, body_limit_value, body_and_pipeline);
         return nullptr;

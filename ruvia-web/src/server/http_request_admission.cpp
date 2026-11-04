@@ -134,6 +134,9 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         http_response_tail(request, coding_policy, remote_address, client_address, input.start_), services);
     admission.services_.bind_conn_info(connection);
     admission.services_.bind_response_coding(input.coding_);
+    if (resolved != nullptr) {
+        admission.services_.bind_route_body_limit(resolved->route().max_request_body_bytes());
+    }
     admission.resolved_ = resolved;
     admission.coding_availability_ = policy.coding_availability_;
     const auto* endpoint = resolved != nullptr ? &resolved->route().endpoint() : nullptr;

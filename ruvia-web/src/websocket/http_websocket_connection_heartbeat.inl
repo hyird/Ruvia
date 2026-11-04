@@ -23,7 +23,7 @@ namespace ruvia::detail {
 
 template <typename stream_type>
 bool server_websocket_connection<stream_type>::pong_observable() const noexcept {
-    return write_phase_ == write_phase_type::idle && read_phase_ == read_phase_type::active;
+    return !write_lane_.write_in_progress() && read_phase_ == read_phase_type::active;
 }
 
 // The Pong wait is measured only while the reader can poll it. Restarting the
@@ -38,18 +38,15 @@ void server_websocket_connection<stream_type>::restart_pong_window(std::int64_t 
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::finish_write(write_phase_type phase) noexcept {
-    if (write_phase_ != phase) {
-        std::terminate();
-    }
-    write_phase_ = write_phase_type::idle;
+void server_websocket_connection<stream_type>::finish_write() noexcept {
+    write_lane_.release();
     if (std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
         restart_pong_window(steady_now_ms());
     }
     if (going_away_pending_) {
         start_going_away();
     }
-    background_write_signal_.notify();
+    write_lane_.notify();
 }
 
 template <typename stream_type>
@@ -59,25 +56,25 @@ void server_websocket_connection<stream_type>::start_going_away() noexcept {
         going_away_pending_ = false;
         return;
     }
-    if (write_phase_ != write_phase_type::idle || reader_waiting_) {
+    if (write_lane_.blocked_for_writer()) {
         // The lane owner or reserved reader's finish_write() starts the close.
         going_away_pending_ = true;
         return;
     }
     going_away_pending_ = false;
-    write_phase_ = write_phase_type::going_away;
+    write_lane_.begin();
     try {
         asio::co_spawn(executor(), ruvia::as_awaitable(write_going_away_close()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
-        finish_write(write_phase_type::going_away);
+        finish_write();
         fail_background(std::current_exception());
     }
 }
 
 template <typename stream_type>
 task<void> server_websocket_connection<stream_type>::write_going_away_close() {
-    write_guard_type write_guard(*this, write_phase_type::going_away, write_claim_type::adopt);
+    write_guard_type write_guard(*this, write_claim_type::adopt);
     try {
         // The session may have closed or failed before this coroutine ran.
         if (protocol_.submit_close(websocket_close_status::going_away, {}) != websocket_close_submit_status::accepted) {
@@ -98,7 +95,7 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
         restart_pong_window(now);
     }
     switch (evaluate_websocket_liveness(lifecycle_options_, protocol_.liveness_mode(), liveness_state_,
-        write_phase_ != write_phase_type::idle, observable, scanner_entry_.last_active_ms(), now)) {
+        write_lane_.write_in_progress(), observable, scanner_entry_.last_active_ms(), now)) {
         case websocket_liveness_decision::idle:
             return;
         case websocket_liveness_decision::abort_transport:
@@ -108,19 +105,19 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
         case websocket_liveness_decision::send_ping:
             break;
     }
-    if (reader_waiting_) {
+    if (write_lane_.reader_waiting()) {
         // Let an already blocked reader poll its buffered control frames
         // before a scanner heartbeat claims the next message boundary.
         return;
     }
 
     liveness_state_ = websocket_sending_ping(++heartbeat_sequence_);
-    write_phase_ = write_phase_type::heartbeat;
+    write_lane_.begin();
     try {
         asio::co_spawn(executor(), ruvia::as_awaitable(write_heartbeat_ping()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
-        finish_write(write_phase_type::heartbeat);
+        finish_write();
         fail_background(std::current_exception());
         return;
     }
@@ -128,7 +125,7 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
 
 template <typename stream_type>
 task<void> server_websocket_connection<stream_type>::write_heartbeat_ping() {
-    write_guard_type write_guard(*this, write_phase_type::heartbeat, write_claim_type::adopt);
+    write_guard_type write_guard(*this, write_claim_type::adopt);
     try {
         const auto* sending = std::get_if<websocket_sending_ping>(&liveness_state_);
         if (sending == nullptr) {

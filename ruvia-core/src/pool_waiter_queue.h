@@ -80,6 +80,18 @@ public:
     // Commit cancellation while still inside a stop callback, but let the
     // caller resume the coroutine only after that callback has returned.
     [[nodiscard]] bool commit_cancellation(
+        pool_lease_acquire& waiter, std::coroutine_handle<>& continuation) noexcept {
+        continuation = {};
+        if (!waiter.queued_) {
+            return false;
+        }
+        remove(waiter);
+        waiter.complete(worker_wait_status::cancelled);
+        continuation = waiter.take_continuation();
+        return true;
+    }
+
+    [[nodiscard]] bool commit_cancellation(
         std::uint64_t id, std::coroutine_handle<>& continuation) noexcept {
         continuation = {};
         auto* waiter = find(id);
@@ -123,18 +135,6 @@ public:
     }
 
 private:
-    [[nodiscard]] bool commit_cancellation(
-        pool_lease_acquire& waiter, std::coroutine_handle<>& continuation) noexcept {
-        continuation = {};
-        if (!waiter.queued_) {
-            return false;
-        }
-        remove(waiter);
-        waiter.complete(worker_wait_status::cancelled);
-        continuation = waiter.take_continuation();
-        return true;
-    }
-
     [[nodiscard]] pool_lease_acquire* find(std::uint64_t id) const noexcept {
         auto* waiter = head_;
         while (waiter != nullptr) {

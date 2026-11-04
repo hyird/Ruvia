@@ -103,7 +103,7 @@ public:
         http_status_code status, const request_io_metrics& io_metrics = {});
     // Reports every kept response whose head lies within the first `written`
     // output bytes (in output order), then forgets all of them.
-    void complete(const access_log_sink& access_log, std::size_t written) noexcept;
+    void complete(const access_log_sink& access_log, std::string_view remote_address, std::size_t written) noexcept;
     // Forgets every kept response and releases grown storage.
     void reset() noexcept;
 
@@ -113,7 +113,6 @@ private:
         std::size_t text_begin_;
         std::size_t method_bytes_;
         std::size_t path_bytes_;
-        std::size_t remote_address_bytes_;
         std::size_t client_address_bytes_;
         std::chrono::steady_clock::time_point start_;
         request_io_metrics io_metrics_{};

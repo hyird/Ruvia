@@ -7,6 +7,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
+#include "ruvia/web/detail/model/model_input.h"
 #include "ruvia/web/detail/model/parse/form_parser.h"
 
 namespace ruvia::detail {
@@ -40,6 +41,18 @@ template <typename fields_type, typename visitor_type>
         }
     }
     return true;
+}
+
+template <typename visitor_type>
+[[nodiscard]] bool visit_model_input_form_fields(const model_input& input, visitor_type&& visitor) {
+    if (input.kind() == model_input_kind::form_fields) {
+        const auto* const fields_value = input.fields();
+        return fields_value == nullptr
+                   ? true
+                   : visit_decoded_form_fields(*fields_value, std::forward<visitor_type>(visitor));
+    }
+    return visit_form_object_fields(
+        resolved_pmr_resource_tag{}, input.view(), input.resource(), std::forward<visitor_type>(visitor));
 }
 
 }  // namespace ruvia::detail

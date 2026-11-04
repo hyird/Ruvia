@@ -49,9 +49,9 @@ enum class cleartext_http2_dispatch_result : std::uint8_t {
 // Entry point for a direct HTTP/2 connection (TLS ALPN h2, or a cleartext client
 // preface). Runs the sans-I/O session and reports how its transport should close.
 template <typename stream_type>
-task<http_connection_close> run_http2_server_session(
+[[nodiscard]] task<http_connection_close> run_http2_server_session(
     http2_server_session_setup<stream_type> setup, std::string_view initial_bytes = {}) {
-    co_return co_await run_http2_sans_io_session(setup.stream_, setup.routes_, setup.memory_,
+    return run_http2_sans_io_session(setup.stream_, setup.routes_, setup.memory_,
         http2_sans_io_session_context(std::move(setup.services_), setup.options_, setup.scanner_entry_),
         initial_bytes);
 }

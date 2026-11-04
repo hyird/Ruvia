@@ -77,26 +77,21 @@ private:
 
     static constexpr std::string_view client_name{"WebSocket"};
 
-    enum class write_phase_type : std::uint8_t { idle,
-        application,
-        heartbeat };
-
     enum class write_wait_type : std::uint8_t { writer,
         reader };
 
     class write_guard_type final {
     public:
-        write_guard_type(websocket_client_state& state_value, write_phase_type phase)
-            : state_(state_value),
-              phase_(phase) {
-            if (state_.write_phase_ != write_phase_type::idle) {
+        explicit write_guard_type(websocket_client_state& state_value)
+            : state_(state_value) {
+            if (state_.write_lane_.write_in_progress()) {
                 throw std::logic_error("concurrent WebSocket client writes are not supported");
             }
-            state_.write_phase_ = phase_;
+            state_.write_lane_.begin();
         }
 
         ~write_guard_type() {
-            state_.finish_write(phase_);
+            state_.finish_write();
         }
 
         write_guard_type(const write_guard_type&) = delete;
@@ -104,7 +99,6 @@ private:
 
     private:
         websocket_client_state& state_;
-        write_phase_type phase_;
     };
 
     [[nodiscard]] static operation_lane_lease claim_activity(bool& active, const char* message) {
@@ -166,7 +160,7 @@ private:
     [[nodiscard]] websocket_client_error transport_error(const client_transport_result& result) const;
     // Retires the client and throws the error describing a failed transport result.
     [[noreturn]] void throw_transport_failure(const client_transport_result& result);
-    void finish_write(write_phase_type phase) noexcept;
+    void finish_write() noexcept;
     // A waiting reader goes first: a writer that finishes and writes again
     // would otherwise retake the lane before the reader's deferred wake-up.
     [[nodiscard]] task<void> wait_for_write_idle(write_wait_type type);
@@ -191,7 +185,6 @@ private:
     [[nodiscard]] task<void> write_transport(std::string_view bytes);
     void arm(worker_timer_registration& timer, std::optional<std::chrono::milliseconds> timeout,
         client_abort_reason reason);
-    void disarm(worker_timer_registration& timer) noexcept;
     [[nodiscard]] static bool generate_mask(void*, websocket_mask_key_type& key) noexcept;
 
     event_loop loop_;
@@ -204,23 +197,19 @@ private:
     worker_timer_registration connect_timer_;
     worker_timer_registration heartbeat_timer_;
     worker_timer_registration close_handshake_timer_;
-    worker_signal write_signal_;
+    websocket_write_lane write_lane_;
     // Opening-handshake response bytes, then the transport read buffer of the
     // single input reader (read_active_).
     http_io_buffer input_;
     std::optional<ruvia::websocket_connection> protocol_;
     std::optional<websocket_http2_transport> http2_;
     std::pmr::string selected_subprotocol_;
-    std::optional<std::uint16_t> peer_close_code_{};
-    std::array<char, 123> peer_close_reason_{};
-    std::uint8_t peer_close_reason_size_{0};
+    websocket_peer_close_info peer_close_{};
     websocket_compression negotiated_compression_{};
     client_abort_reason abort_reason_{client_abort_reason::none};
     bool read_active_{false};
     bool write_active_{false};
     bool close_active_{false};
-    write_phase_type write_phase_{write_phase_type::idle};
-    bool reader_waiting_{false};
     websocket_liveness_state_type liveness_state_{websocket_liveness_idle{}};
     std::uint64_t heartbeat_sequence_{0};
     std::int64_t last_active_ms_{0};

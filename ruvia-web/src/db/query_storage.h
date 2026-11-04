@@ -106,6 +106,15 @@ struct db_query_node final {
           named_(resource),
           orders_(resource),
           type_(resource) {}
+    db_query_node(db_node_kind kind, db_value&& value, std::pmr::memory_resource* resource)
+        : kind_(kind),
+          value_(std::move(value)),
+          text_(resource),
+          qualifier_(resource),
+          args_(resource),
+          named_(resource),
+          orders_(resource),
+          type_(resource) {}
     db_query_node(const db_query_node& source_value, std::pmr::memory_resource* resource)
         : kind_(source_value.kind_),
           value_(clone_db_value_for_resource(source_value.value_, resource)),

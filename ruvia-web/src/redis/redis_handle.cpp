@@ -124,16 +124,15 @@ task<redis_value> redis_handle::command(std::span<const std::string_view> args) 
         throw std::invalid_argument(
             "raw blocking redis command requires a stop_token or finite operation timeout");
     }
-    return scoped(detail::execute_owned_redis_command(
-        executor(selected_pool), detail::own_redis_args(args, resource_), resource_));
+    return scoped(executor(selected_pool).execute(detail::own_redis_args(args, resource_), resource_));
 }
 
 task<redis_value> redis_handle::command_owned(std::pmr::vector<std::pmr::string>&& args) const {
     registration_.require_active();
     if (args.get_allocator().resource() == resource_) {
-        return detail::execute_owned_redis_command(executor(), std::move(args), resource_);
+        return executor().execute(std::move(args), resource_);
     }
-    return detail::execute_owned_redis_command(executor(),
+    return executor().execute(
         std::pmr::vector<std::pmr::string>(args.begin(), args.end(), resource_), resource_);
 }
 

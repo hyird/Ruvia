@@ -178,6 +178,10 @@ public:
             co_return;
         }
         const auto limit = client_->response_.state_->tunnel_->config_.max_chunk_bytes_;
+        if (bytes_value.size() <= limit) {
+            co_await client_->write_owned(std::move(bytes_value));
+            co_return;
+        }
         std::string_view remaining = bytes_value;
         while (!remaining.empty()) {
             const auto chunk = remaining.substr(0, limit);

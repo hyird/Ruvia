@@ -111,6 +111,56 @@ struct is_optional<std::optional<t_type>> : std::true_type {
     using value_type = t_type;
 };
 
+template <typename value_type>
+consteval bool entity_type_has_resource() noexcept {
+    if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::pmr::string> ||
+                  is_pmr_vector<value_type>::value) {
+        return true;
+    } else if constexpr (is_optional<value_type>::value) {
+        return entity_type_has_resource<typename is_optional<value_type>::value_type>();
+    } else {
+        return false;
+    }
+}
+
+template <typename value_type>
+[[nodiscard]] bool entity_value_uses_resource(
+    const value_type& value, const std::pmr::memory_resource* resource) noexcept {
+    if constexpr (std::is_same_v<value_type, string>) {
+        return value.resource() == resource;
+    } else if constexpr (std::is_same_v<value_type, std::pmr::string>) {
+        return value.get_allocator().resource() == resource;
+    } else if constexpr (is_optional<value_type>::value) {
+        return !value || entity_value_uses_resource(*value, resource);
+    } else if constexpr (is_pmr_vector<value_type>::value) {
+        if (value.get_allocator().resource() != resource) {
+            return false;
+        }
+        using element_type = typename is_pmr_vector<value_type>::value_type;
+        if constexpr (entity_type_has_resource<element_type>()) {
+            for (const auto& item : value) {
+                if (!entity_value_uses_resource(item, resource)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    } else {
+        return true;
+    }
+}
+
+template <typename range_type, typename element_type>
+consteval bool is_exact_element_range() noexcept {
+    using decayed_type = std::remove_cvref_t<range_type>;
+    if constexpr (requires { typename decayed_type::value_type; }) {
+        return std::is_same_v<typename decayed_type::value_type, element_type>;
+    } else {
+        return std::is_same_v<
+            std::remove_cvref_t<decltype(*std::declval<range_type&>().begin())>, element_type>;
+    }
+}
+
 template <typename t_type, typename v_type>
 void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource* resource) {
     constexpr bool movable_rvalue =
@@ -166,15 +216,15 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         }
     } else if constexpr (is_pmr_vector<t_type>::value) {
         using element_type = typename is_pmr_vector<t_type>::value_type;
-        if constexpr (std::is_arithmetic_v<element_type> &&
-                      std::is_same_v<element_type, std::remove_cvref_t<decltype(*value.begin())>>) {
-            if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, t_type>) {
-                if (value.get_allocator().resource() == resource) {
-                    t_type owned(std::move(value));
-                    commit_entity_value(out, std::move(owned));
-                    return;
-                }
+        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, t_type>) {
+            if (entity_value_uses_resource(value, resource)) {
+                t_type owned(std::move(value));
+                commit_entity_value(out, std::move(owned));
+                return;
             }
+        }
+        if constexpr (std::is_arithmetic_v<element_type> &&
+                      is_exact_element_range<v_type, element_type>()) {
             t_type owned(value.begin(), value.end(), resource);
             commit_entity_value(out, std::move(owned));
         } else if constexpr (std::is_same_v<element_type, std::pmr::string>) {

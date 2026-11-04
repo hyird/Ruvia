@@ -156,10 +156,8 @@ private:
         http2_stream& stream, const http_client_output_queue* upload = nullptr);
     [[nodiscard]] task<void> wait_for_http2_send_window(
         http2_stream& stream, const http_client_output_queue* upload = nullptr);
-    [[nodiscard]] task<bool> send_http2_output_chunk(
-        http2_stream& stream, http_client_output_queue& upload);
-    [[nodiscard]] task<void> send_http2_buffered_request_body(
-        http2_stream& stream, std::string_view body);
+    [[nodiscard]] task<bool> send_http2_request_data(http2_stream& stream, std::string_view bytes,
+        http2_end_stream end_stream, const http_client_output_queue* upload = nullptr);
     [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream,
         http_client_output_queue& upload);
     [[nodiscard]] task<void> wait_for_http2_session_stop(

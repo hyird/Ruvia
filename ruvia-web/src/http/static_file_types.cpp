@@ -82,13 +82,13 @@ bool file_type_allowed(std::string_view extension, const static_root_config_stor
     return std::ranges::binary_search(config.file_type_extensions_, value);
 }
 
-std::pmr::string content_type_for(const std::filesystem::path& path, std::string_view extension,
+std::pmr::string content_type_for(const std::filesystem::path&, std::string_view extension,
     const static_root_config_storage& config, std::pmr::memory_resource* resource) {
     if (const auto* const mime = find_static_mime_type(config.mime_types_, extension); mime != nullptr) {
         return std::pmr::string(mime->content_type_, resource);
     }
 
-    const auto guessed = detail::guess_static_file_content_type(path);
+    const auto guessed = detail::guess_static_file_content_type_from_extension(extension);
     if (guessed != std::string_view("application/octet-stream") ||
         config.default_content_type_.empty()) {
         return std::pmr::string(guessed, resource);

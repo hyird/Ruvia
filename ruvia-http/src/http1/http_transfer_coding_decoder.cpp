@@ -5,11 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <stdexcept>
-#include <vector>
 
+#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "coding/http_zlib_stream.h"
@@ -96,7 +95,7 @@ http_transfer_coding_decode_result transfer_coding_decoder::decode(
                            ? output(consumed, std::string_view(output_buffer.data(), produced))
                            : need_input(consumed);
             }
-            if (inflateReset(&stream_.native()) != Z_OK) {
+            if (!stream_.reset()) {
                 return fail_decoder(consumed);
             }
             state_.emplace<active>();
@@ -235,53 +234,25 @@ struct transfer_coding_stage final {
     bool complete_{false};
 };
 
-// Stable, exact-sized stage storage. The constructed prefix is recorded before
-// starting the next stage, so failure at any zlib allocation is handled by RAII.
-struct transfer_stages_deleter final {
-    std::pmr::memory_resource* resource_;
-    std::size_t capacity_;
-    std::size_t constructed_{0};
-    void operator()(transfer_coding_stage* stages) const noexcept {
-        std::destroy_n(stages, constructed_);
-        std::pmr::polymorphic_allocator<transfer_coding_stage>(resource_)
-            .deallocate(stages, capacity_);
-    }
-};
-
-using transfer_stages_owner = std::unique_ptr<transfer_coding_stage, transfer_stages_deleter>;
-
-[[nodiscard]] transfer_stages_owner make_transfer_stages(
-    std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
-    protocol_byte_limit decoded_limit) {
-    if (codings.empty() || codings.size() > max_transfer_codings) {
-        throw std::invalid_argument("invalid transfer-coding stack length");
-    }
-    std::pmr::polymorphic_allocator<transfer_coding_stage> allocator(resource);
-    transfer_stages_owner owner_value(allocator.allocate(codings.size()), {resource, codings.size()});
-    for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
-        auto& count = owner_value.get_deleter().constructed_;
-        std::construct_at(owner_value.get() + count, *coding, resource, decoded_limit);
-        ++count;
-    }
-    return owner_value;
-}
-
 }  // namespace
 
 struct http_transfer_coding_stack_decoder::impl_type final {
     impl_type(std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
         protocol_byte_limit decoded_limit)
         : resource_(detail::http_pmr_resource_or_default(resource)),
-          stage_storage_(make_transfer_stages(codings, this->resource_, decoded_limit)),
-          stages_(stage_storage_.get(), codings.size()),
-          buffers_(codings.size() - 1, this->resource_) {}
+          stage_count_(codings.size()) {
+        std::size_t index = 0;
+        for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
+            stages_[index++].emplace(*coding, resource_, decoded_limit);
+        }
+    }
 
     std::pmr::memory_resource* resource_;
-    transfer_stages_owner stage_storage_;
-    std::span<transfer_coding_stage> stages_;
+    std::array<std::optional<transfer_coding_stage>, max_transfer_codings> stages_{};
+    std::size_t stage_count_{0};
     // Only inter-stage edges own scratch. The final stage writes directly to
-    // the caller's buffer, so a one-coding sequence has no internal scratch.
-    std::pmr::vector<transfer_coding_scratch_buffer> buffers_;
+    // the caller's buffer, so a one-coding sequence uses no internal scratch.
+    std::array<transfer_coding_scratch_buffer, max_transfer_codings - 1> buffers_;
     std::optional<http_transfer_coding_decode_error> failure_;
     bool decoder_failed_{false};
 };
@@ -289,14 +260,18 @@ struct http_transfer_coding_stack_decoder::impl_type final {
 http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(
     std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
     protocol_byte_limit decoded_limit) {
+    if (codings.empty() || codings.size() > max_transfer_codings) {
+        throw std::invalid_argument("invalid transfer-coding stack length");
+    }
     auto* memory = detail::http_pmr_resource_or_default(resource);
-    std::pmr::polymorphic_allocator<impl_type> allocator(memory);
-    impl_ = allocator.new_object<impl_type>(codings, memory, decoded_limit);
+    impl_ = detail::construct_http_pmr_object<impl_type>(
+        detail::http_resolved_pmr_resource_tag{}, memory, codings, memory, decoded_limit);
 }
 
 http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
     if (impl_ != nullptr) {
-        std::pmr::polymorphic_allocator<impl_type>(impl_->resource_).delete_object(impl_);
+        detail::destroy_http_pmr_object(
+            detail::http_resolved_pmr_resource_tag{}, impl_, impl_->resource_);
     }
 }
 
@@ -320,16 +295,16 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
     std::size_t wire_consumed = 0;
     for (;;) {
         bool progressed = false;
-        for (std::size_t index = 0; index < impl_->stages_.size(); ++index) {
-            auto& stage = impl_->stages_[index];
-            if (index + 1 < impl_->stages_.size() && stage.begin_ != stage.end_) {
+        for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+            auto& stage = *impl_->stages_[index];
+            if (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_) {
                 continue;
             }
             std::string_view layer_input;
             if (index == 0) {
                 layer_input = input.substr(wire_consumed);
             } else {
-                auto& previous = impl_->stages_[index - 1];
+                auto& previous = *impl_->stages_[index - 1];
                 layer_input = std::string_view(
                     impl_->buffers_[index - 1].bytes_.data() + previous.begin_,
                     previous.end_ - previous.begin_);
@@ -341,7 +316,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
                 }
                 continue;
             }
-            const auto output = index + 1 == impl_->stages_.size()
+            const auto output = index + 1 == impl_->stage_count_
                                     ? output_buffer
                                     : std::span<char>(impl_->buffers_[index].bytes_);
             const auto decoded = stage.decoder_.decode(layer_input, output);
@@ -349,7 +324,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
             if (index == 0) {
                 wire_consumed += consumed;
             } else {
-                auto& previous = impl_->stages_[index - 1];
+                auto& previous = *impl_->stages_[index - 1];
                 previous.begin_ += consumed;
                 if (previous.begin_ == previous.end_) {
                     previous.begin_ = 0;
@@ -359,7 +334,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
             progressed = progressed || consumed != 0;
             if (const auto* bytes = decoded.output()) {
                 progressed = true;
-                if (index + 1 == impl_->stages_.size()) {
+                if (index + 1 == impl_->stage_count_) {
                     return http_transfer_coding_decode_result(
                         http_transfer_coding_decode_output_view(wire_consumed, bytes->bytes()));
                 }
@@ -383,10 +358,10 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
 
         bool all_complete = true;
         bool pending = false;
-        for (std::size_t index = 0; index < impl_->stages_.size(); ++index) {
-            const auto& stage = impl_->stages_[index];
+        for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+            const auto& stage = *impl_->stages_[index];
             all_complete = all_complete && stage.complete_;
-            pending = pending || (index + 1 < impl_->stages_.size() && stage.begin_ != stage.end_);
+            pending = pending || (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_);
         }
         if (all_complete && !pending) {
             return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(wire_consumed));
@@ -405,10 +380,10 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
         return http_transfer_coding_decode_result(
             http_transfer_coding_decode_failure(0, *impl_->failure_));
     }
-    const bool wire_received_input = impl_->stages_[0].decoder_.received_input();
-    for (std::size_t index = 0; index < impl_->stages_.size(); ++index) {
-        auto& stage = impl_->stages_[index];
-        if (index + 1 < impl_->stages_.size() && stage.begin_ != stage.end_) {
+    const bool wire_received_input = impl_->stages_[0]->decoder_.received_input();
+    for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+        auto& stage = *impl_->stages_[index];
+        if (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_) {
             return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(0));
         }
         if (stage.complete_) {

@@ -27,12 +27,6 @@ enum class http_accept_token_match : int {
     exact = 2,
 };
 
-// The member text with its parameters stripped: "en-GB;q=0.5" -> "en-GB".
-[[nodiscard]] inline std::string_view http_accept_token_value(std::string_view item) noexcept {
-    const auto semicolon = item.find(';');
-    return http_trim_ows(semicolon == std::string_view::npos ? item : item.substr(0, semicolon));
-}
-
 // RFC 4647 section 3.3.1 basic filtering: a language range matches a tag that
 // equals it or extends it at a subtag boundary, so "en" matches "en-US" but
 // never "english". Only Accept-Language uses this; charsets match exactly or by
@@ -60,7 +54,7 @@ inline void http_accumulate_token_acceptance(std::string_view accept, std::strin
     bool prefix_matching, int& best_specificity, int& best_quality) noexcept {
     http_visit_comma_separated_quoted(accept,
         [offered, prefix_matching, &best_specificity, &best_quality](std::string_view item) noexcept {
-            const auto range = http_accept_token_value(item);
+            const auto range = http_header_token_before_parameters(item);
             const auto match = http_accept_token_matches(range, offered, prefix_matching);
             if (match == http_accept_token_match::none) {
                 return true;

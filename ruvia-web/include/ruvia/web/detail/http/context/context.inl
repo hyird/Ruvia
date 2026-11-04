@@ -82,57 +82,70 @@ inline std::optional<bool> context_request::param(std::string_view name) const {
     return *parsed_value;
 }
 
-template <typename t_type>
-task<std::optional<t_type>> context_request::json_if() const {
-    static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
-    const auto run = [](const context* context_value) -> task<std::optional<t_type>> {
-        if (!detail::content_type_matches(
-                context_value->request_.header("Content-Type").value_or(std::string_view{}),
-                "application/json")) {
-            co_return std::nullopt;
-        }
-        const auto request_body = co_await context_value->req().text();
-        auto* const resource = context_value->arena();
-        auto parsed_value =
-            detail::model_parse_access::parse_json_borrowed_partial<t_type>(request_body, resource);
+namespace detail {
+
+template <validation_target target, typename model_type>
+[[nodiscard]] model_type parse_request_body_model(
+    std::string_view raw_body, std::pmr::memory_resource* arena) {
+    if constexpr (target == validation_target::json) {
+        auto parsed_value = detail::model_parse_access::parse_json_borrowed_partial<model_type>(raw_body, arena);
         if (!parsed_value) {
             // Once Content-Type selects JSON, malformed JSON is a 400 rather than
             // an absent optional format. This keeps json_if<T>() from turning an
             // explicitly JSON request into a successful fallback.
             detail::throw_invalid_json_body();
         }
-        validator validator_value;
-        detail::model_validation_access::validate_model(*parsed_value, validator_value);
-        std::move(validator_value).throw_if_invalid();
-        co_return std::move(*parsed_value);
-    };
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
-}
-
-template <typename t_type>
-task<std::optional<t_type>> context_request::form_if() const {
-    static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
-    const auto run = [](const context* context_value) -> task<std::optional<t_type>> {
-        if (!detail::content_type_matches(
-                context_value->request_.header("Content-Type").value_or(std::string_view{}),
-                "application/x-www-form-urlencoded")) {
-            co_return std::nullopt;
-        }
-        const auto request_body = co_await context_value->req().text();
-        auto* const resource = context_value->arena();
-        auto parsed_value =
-            detail::model_parse_access::parse_form_borrowed_partial<t_type>(request_body, resource);
+        return std::move(*parsed_value);
+    } else if constexpr (target == validation_target::form) {
+        auto parsed_value = detail::model_parse_access::parse_form_borrowed_partial<model_type>(raw_body, arena);
         if (!parsed_value) {
             // The selected form media type makes a malformed body a client error;
             // nullopt is reserved for a different Content-Type.
             detail::throw_invalid_form_body();
         }
-        validator validator_value;
-        detail::model_validation_access::validate_model(*parsed_value, validator_value);
-        std::move(validator_value).throw_if_invalid();
-        co_return std::move(*parsed_value);
-    };
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
+        return std::move(*parsed_value);
+    } else {
+        static_assert(always_false<model_type>, "unsupported request body validation target");
+    }
+}
+
+template <validation_target target, typename model_type>
+[[nodiscard]] model_type parse_and_validate_request_model(
+    std::string_view raw_body, std::pmr::memory_resource* arena) {
+    auto model = parse_request_body_model<target, model_type>(raw_body, arena);
+    validator validator_value;
+    detail::model_validation_access::validate_model(model, validator_value);
+    std::move(validator_value).throw_if_invalid();
+    return model;
+}
+
+template <validation_target target, typename model_type>
+[[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(const context& context_value) {
+    constexpr std::string_view expected_content_type =
+        target == validation_target::json ? "application/json" : "application/x-www-form-urlencoded";
+    if (!detail::content_type_matches(
+            context_value.req().header("Content-Type").value_or(std::string_view{}),
+            expected_content_type)) {
+        co_return std::nullopt;
+    }
+    const auto request_body = co_await context_value.req().text();
+    co_return parse_and_validate_request_model<target, model_type>(request_body, context_value.arena());
+}
+
+}  // namespace detail
+
+template <typename t_type>
+task<std::optional<t_type>> context_request::json_if() const {
+    static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
+    return ::ruvia::make_scoped_operation(
+        context_->operation_scope_, detail::parse_optional_request_model<validation_target::json, t_type>(*context_));
+}
+
+template <typename t_type>
+task<std::optional<t_type>> context_request::form_if() const {
+    static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
+    return ::ruvia::make_scoped_operation(
+        context_->operation_scope_, detail::parse_optional_request_model<validation_target::form, t_type>(*context_));
 }
 
 template <typename t_type>
@@ -192,48 +205,30 @@ template <validation_target target, typename body_type>
 
 template <validation_target target, typename body_type>
 task<void> model_validation_middleware<target, body_type>::handle(context& c, next& next_value) {
+    std::optional<body_type> parsed_body;
     if constexpr (target == validation_target::json) {
         if (!detail::content_type_matches(
                 c.req().header("Content-Type").value_or(std::string_view{}), "application/json")) {
             detail::throw_invalid_json_content_type();
         }
         const auto raw_json = co_await c.req().text();
-        auto parsed_value =
-            detail::model_parse_access::parse_json_borrowed_partial<body_type>(raw_json, c.arena());
-        if (!parsed_value) {
-            detail::throw_invalid_json_body();
-        }
-        body_type body = std::move(*parsed_value);
-        validator validator_value;
-        validate(body, validator_value);
-        std::move(validator_value).throw_if_invalid();
-        auto binding = detail::bind_validated_model(c, body);
-        co_await next_value();
+        parsed_body.emplace(parse_request_body_model<target, body_type>(raw_json, c.arena()));
     } else if constexpr (target == validation_target::form) {
         if (!detail::content_type_matches(c.req().header("Content-Type").value_or(std::string_view{}),
                 "application/x-www-form-urlencoded")) {
             detail::throw_invalid_form_content_type();
         }
         const auto request_body = co_await c.req().text();
-        auto parsed_value =
-            detail::model_parse_access::parse_form_borrowed_partial<body_type>(request_body, c.arena());
-        if (!parsed_value) {
-            detail::throw_invalid_form_body();
-        }
-        body_type body = std::move(*parsed_value);
-        validator validator_value;
-        validate(body, validator_value);
-        std::move(validator_value).throw_if_invalid();
-        auto binding = detail::bind_validated_model(c, body);
-        co_await next_value();
+        parsed_body.emplace(parse_request_body_model<target, body_type>(request_body, c.arena()));
     } else {
-        body_type body = parse_validated_fields<target, body_type>(c);
-        validator validator_value;
-        validate(body, validator_value);
-        std::move(validator_value).throw_if_invalid();
-        auto binding = detail::bind_validated_model(c, body);
-        co_await next_value();
+        parsed_body.emplace(parse_validated_fields<target, body_type>(c));
     }
+    auto& body = *parsed_body;
+    validator validator_value;
+    validate(body, validator_value);
+    std::move(validator_value).throw_if_invalid();
+    auto binding = detail::bind_validated_model(c, body);
+    co_await next_value();
 }
 
 }  // namespace ruvia::detail

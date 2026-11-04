@@ -31,7 +31,7 @@ task<void> websocket_client_state::connect() {
     } catch (...) {
         failure = std::current_exception();
     }
-    disarm(connect_timer_);
+    connect_timer_.cancel();
     if (failure == nullptr) {
         co_return;
     }
@@ -50,12 +50,9 @@ task<void> websocket_client_state::establish() {
     if (!connected.ok()) {
         throw_transport_failure(connected);
     }
-    if (transport_.secure()) {
-        const auto alpn = transport_.alpn();
-        if ((http2 && alpn != "h2") || (!http2 && !alpn.empty() && alpn != "http/1.1")) {
-            throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
-                "upstream did not negotiate the requested HTTP protocol for WebSocket");
-        }
+    if (transport_.secure() && (http2 ? transport_.alpn() != "h2" : !transport_.alpn_allows_http11())) {
+        throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
+            "upstream did not negotiate the requested HTTP protocol for WebSocket");
     }
     if (http2) {
         http2_.emplace(*this, worker_, memory_.resource());

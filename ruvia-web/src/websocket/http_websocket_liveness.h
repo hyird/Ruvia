@@ -1,11 +1,18 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <variant>
 
+#include "ruvia/core/task.h"
+#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/websocket.h"
 
@@ -140,5 +147,112 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
     }
     return websocket_liveness_decision::send_ping;
 }
+
+class websocket_peer_close_info final {
+public:
+    void record(const websocket_close_event& close_event) noexcept {
+        code_ = close_event.close_code();
+        const auto reason_value = close_event.reason();
+        const auto count = (std::min)(reason_value.size(), reason_.size());
+        if (count != 0) {
+            std::char_traits<char>::copy(reason_.data(), reason_value.data(), count);
+        }
+        reason_size_ = static_cast<std::uint8_t>(count);
+    }
+
+    [[nodiscard]] std::optional<std::uint16_t> code() const noexcept {
+        return code_;
+    }
+
+    [[nodiscard]] std::string_view reason() const noexcept {
+        return {reason_.data(), reason_size_};
+    }
+
+private:
+    std::optional<std::uint16_t> code_{};
+    std::array<char, 123> reason_{};
+    std::uint8_t reason_size_{0};
+};
+
+class websocket_write_lane final {
+public:
+    explicit websocket_write_lane(const worker_handle& worker_value)
+        : signal_(worker_value) {}
+    websocket_write_lane(worker_handle&&) = delete;
+
+    [[nodiscard]] bool write_in_progress() const noexcept {
+        return write_in_progress_;
+    }
+
+    [[nodiscard]] bool reader_waiting() const noexcept {
+        return reader_waiting_;
+    }
+
+    [[nodiscard]] bool blocked_for_writer() const noexcept {
+        return write_in_progress_ || reader_waiting_;
+    }
+
+    void begin() noexcept {
+        if (write_in_progress_) {
+            std::terminate();
+        }
+        write_in_progress_ = true;
+    }
+
+    void release() noexcept {
+        if (!write_in_progress_) {
+            std::terminate();
+        }
+        write_in_progress_ = false;
+    }
+
+    void finish() noexcept {
+        release();
+        signal_.notify();
+    }
+
+    void notify() noexcept {
+        signal_.notify();
+    }
+
+    [[nodiscard]] worker_signal::wait_operation wait() {
+        return signal_.wait();
+    }
+
+    template <typename check_type>
+    [[nodiscard]] task<void> wait_for_idle(bool for_reader, check_type check) {
+        try {
+            for (;;) {
+                check();
+                if (!write_in_progress_ && (for_reader || !reader_waiting_)) {
+                    if (for_reader) {
+                        // The caller claims the lane before any writer resumes.
+                        reader_waiting_ = false;
+                    }
+                    co_return;
+                }
+                if (for_reader) {
+                    reader_waiting_ = true;
+                }
+                co_await signal_.wait();
+            }
+        } catch (...) {
+            if (for_reader) {
+                reader_waiting_ = false;
+                signal_.notify();
+            }
+            throw;
+        }
+    }
+
+    [[nodiscard]] task<void> wait_for_idle(bool for_reader) {
+        return wait_for_idle(for_reader, []() noexcept {});
+    }
+
+private:
+    bool write_in_progress_{false};
+    bool reader_waiting_{false};
+    worker_signal signal_;
+};
 
 }  // namespace ruvia::detail

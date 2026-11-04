@@ -59,23 +59,35 @@ public:
         if (completed_bytes != nullptr) {
             *completed_bytes = 0;
         }
-        while (!bytes_value.empty()) {
-            const auto chunk = bytes_value.substr(0, 4096);
-            const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
-                asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
-            });
-            if (completed_bytes != nullptr) {
-                *completed_bytes += result_value.result();
+        if constexpr (!requires { stream_.next_layer(); }) {
+            if (!bytes_value.empty()) {
+                const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(stream_, asio::buffer(bytes_value), std::move(handler));
+                });
+                if (completed_bytes != nullptr) {
+                    *completed_bytes = result_value.result();
+                }
+                if (result_value.error_code()) {
+                    co_return result_value.error_code();
+                }
             }
-            if (result_value.error_code()) {
-                co_return result_value.error_code();
-            }
-            if constexpr (requires { stream_.next_layer(); }) {
+        } else {
+            while (!bytes_value.empty()) {
+                const auto chunk = bytes_value.substr(0, 4096);
+                const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
+                });
+                if (completed_bytes != nullptr) {
+                    *completed_bytes += result_value.result();
+                }
+                if (result_value.error_code()) {
+                    co_return result_value.error_code();
+                }
                 if (const auto error = co_await tls_output_->flush()) {
                     co_return error;
                 }
+                bytes_value.remove_prefix(chunk.size());
             }
-            bytes_value.remove_prefix(chunk.size());
         }
         if (end == http_stream_end::end) {
             if constexpr (requires { stream_.next_layer(); }) {

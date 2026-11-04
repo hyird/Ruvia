@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -133,6 +132,10 @@ struct redis_predicate_node final {
         : kind_(kind),
           literal_(resource),
           operands_(resource) {}
+    redis_predicate_node(redis_literal&& value, std::pmr::memory_resource* resource)
+        : kind_(kind_type::literal),
+          literal_(std::move(value)),
+          operands_(resource) {}
     redis_predicate_node(const redis_predicate_node& other, std::pmr::memory_resource* resource, std::size_t offset = 0)
         : kind_(other.kind_),
           binary_(other.binary_),
@@ -184,12 +187,9 @@ struct redis_predicate_storage final {
     }
     template <redis_predicate_argument value_type>
     std::size_t add_value(value_type&& value) {
-        const auto index = add(redis_predicate_node::kind_type::literal);
-        // Reconstruct only after the owning value has been successfully created.
         redis_literal literal(std::forward<value_type>(value), resource_);
-        std::destroy_at(&nodes_[index].literal_);
-        std::construct_at(&nodes_[index].literal_, std::move(literal));
-        return index;
+        nodes_.emplace_back(std::move(literal), resource_);
+        return nodes_.size() - 1;
     }
 };
 

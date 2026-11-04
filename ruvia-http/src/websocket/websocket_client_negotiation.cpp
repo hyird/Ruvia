@@ -100,6 +100,36 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
 }
 }  // namespace
 namespace {
+inline constexpr std::string_view version_storage = "sec-websocket-version13";
+inline constexpr std::string_view protocol_header_name = "sec-websocket-protocol";
+inline constexpr std::string_view extensions_header_name = "sec-websocket-extensions";
+
+[[nodiscard]] const std::string_view* static_deflate_extension_storage(
+    const websocket_client_deflate_offer& deflate) noexcept {
+    const auto& offer = deflate.compression_;
+    if (!offer.enabled_ || offer.server_max_window_bits_.has_value() || offer.client_max_window_bits_.has_value()) {
+        return nullptr;
+    }
+    static constexpr std::array<std::string_view, 8> table{
+        "sec-websocket-extensionspermessage-deflate",
+        "sec-websocket-extensionspermessage-deflate; client_max_window_bits",
+        "sec-websocket-extensionspermessage-deflate; client_no_context_takeover",
+        "sec-websocket-extensionspermessage-deflate; client_no_context_takeover; "
+        "client_max_window_bits",
+        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover",
+        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover; "
+        "client_max_window_bits",
+        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover; "
+        "client_no_context_takeover",
+        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover; "
+        "client_no_context_takeover; client_max_window_bits",
+    };
+    const std::size_t index = (offer.server_no_context_takeover_ ? 4U : 0U) |
+                              (offer.client_no_context_takeover_ ? 2U : 0U) |
+                              (deflate.offer_client_max_window_bits_ ? 1U : 0U);
+    return &table[index];
+}
+
 template <class protocol_type, class field_type>
 void validate_and_visit_config(const websocket_client_negotiation_config_view& config,
     protocol_type&& protocol, field_type&& field) {
@@ -144,39 +174,20 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
         append("Sec-WebSocket-Protocol", {}, joined_bytes);
     }
     if (offer.enabled_) {
-        const detail::websocket_compression_extension encoded(offer);
-        constexpr std::size_t client_window_bits_suffix_bytes = sizeof("; client_max_window_bits") - 1;
-        const std::size_t offer_bytes = encoded.view().size() +
-                                        ((config.deflate_.offer_client_max_window_bits_ && !offer.client_max_window_bits_)
-                                                ? client_window_bits_suffix_bytes
-                                                : 0);
-        append("Sec-WebSocket-Extensions", encoded.view(), offer_bytes);
+        if (const auto* const static_ext = static_deflate_extension_storage(config.deflate_)) {
+            append("Sec-WebSocket-Extensions", *static_ext,
+                static_ext->size() - extensions_header_name.size());
+        } else {
+            const detail::websocket_compression_extension encoded(offer);
+            constexpr std::size_t client_window_bits_suffix_bytes = sizeof("; client_max_window_bits") - 1;
+            const std::size_t offer_bytes =
+                encoded.view().size() +
+                ((config.deflate_.offer_client_max_window_bits_ && !offer.client_max_window_bits_)
+                        ? client_window_bits_suffix_bytes
+                        : 0);
+            append("Sec-WebSocket-Extensions", encoded.view(), offer_bytes);
+        }
     }
-}
-[[nodiscard]] std::optional<std::string_view> static_deflate_extension_storage(
-    const websocket_client_deflate_offer& deflate) noexcept {
-    const auto& offer = deflate.compression_;
-    if (!offer.enabled_ || offer.server_max_window_bits_.has_value() || offer.client_max_window_bits_.has_value()) {
-        return std::nullopt;
-    }
-    static constexpr std::array<std::string_view, 8> table{
-        "sec-websocket-extensionspermessage-deflate",
-        "sec-websocket-extensionspermessage-deflate; client_max_window_bits",
-        "sec-websocket-extensionspermessage-deflate; client_no_context_takeover",
-        "sec-websocket-extensionspermessage-deflate; client_no_context_takeover; "
-        "client_max_window_bits",
-        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover",
-        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover; "
-        "client_max_window_bits",
-        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover; "
-        "client_no_context_takeover",
-        "sec-websocket-extensionspermessage-deflate; server_no_context_takeover; "
-        "client_no_context_takeover; client_max_window_bits",
-    };
-    const std::size_t index = (offer.server_no_context_takeover_ ? 4U : 0U) |
-                              (offer.client_no_context_takeover_ ? 2U : 0U) |
-                              (deflate.offer_client_max_window_bits_ ? 1U : 0U);
-    return table[index];
 }
 }  // namespace
 void websocket_client_negotiation::validate_configuration(websocket_client_negotiation_config_view config) {
@@ -187,9 +198,6 @@ websocket_client_negotiation::websocket_client_negotiation(
     : resource_(resource ? resource : std::pmr::get_default_resource()),
       deflate_(config.deflate_) {
     auto* const memory = resource_;
-    static constexpr std::string_view version_storage = "sec-websocket-version13";
-    static constexpr std::string_view protocol_header_name = "sec-websocket-protocol";
-    static constexpr std::string_view extensions_header_name = "sec-websocket-extensions";
     validate_and_visit_config(
         config, [](std::string_view) {},
         [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
@@ -228,7 +236,7 @@ websocket_client_negotiation::websocket_client_negotiation(
                     joined.append(protocol_view);
                 }
                 fields_[field_count_++] = http_header(protocol_header_name, joined, memory);
-            } else if (const auto static_ext = static_deflate_extension_storage(config.deflate_)) {
+            } else if (const auto* const static_ext = static_deflate_extension_storage(config.deflate_)) {
                 fields_[field_count_++] = http_header(static_ext->data(),
                     extensions_header_name.size(),
                     static_ext->size() - extensions_header_name.size());

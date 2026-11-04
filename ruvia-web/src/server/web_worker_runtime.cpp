@@ -49,8 +49,9 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .precompressed_static_files_ = options_.compression_.has_value(),
           }),
       connections_(io_context_, runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_),
-      web_worker_dispatch_(std::make_shared<web_worker_dispatch>(
-          runtime_, memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
+      web_worker_dispatch_(std::allocate_shared<web_worker_dispatch>(
+          std::pmr::polymorphic_allocator<web_worker_dispatch>(process_resource()), runtime_,
+          memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_budget_ = &inbound_budget_;
     options_.codecs_ = &codecs_;
     runtime_.configure({

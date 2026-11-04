@@ -142,6 +142,10 @@ public:
         return services;
     }
 
+    void bind_route_body_limit(std::size_t limit) noexcept {
+        request_services_.route_body_limit_ = limit;
+    }
+
     [[nodiscard]] request_io_metrics* io_metrics() const noexcept {
         return request_services_.io_metrics_;
     }
@@ -150,6 +154,10 @@ public:
         auto services = *this;
         services.request_services_.io_metrics_ = metrics;
         return services;
+    }
+
+    void bind_io_metrics(request_io_metrics* metrics) noexcept {
+        request_services_.io_metrics_ = metrics;
     }
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
@@ -174,6 +182,11 @@ public:
         return services;
     }
     context_services with_routes(route_table&&) const = delete;
+
+    void bind_routes(const route_table& routes_value) noexcept {
+        worker_services_.routes_ = &routes_value;
+    }
+    void bind_routes(route_table&&) = delete;
 
     [[nodiscard]] constexpr const context_request_body_source& request_body_source() const noexcept {
         return request_services_.body_source_;
@@ -227,6 +240,14 @@ public:
         return with_request_channels(channels);
     }
 
+    void bind_request_channels(const context_request_channels& channels) noexcept {
+        request_services_.channels_ = channels;
+    }
+
+    void bind_interim_output(http_interim_response_output& output) noexcept {
+        request_services_.channels_.interim_output_ = &output;
+    }
+
     [[nodiscard]] constexpr context_response_output& response_output() noexcept {
         return request_services_.response_output_;
     }
@@ -239,6 +260,10 @@ public:
         auto services = *this;
         services.request_services_.response_output_ = context_response_output::response_stream(value);
         return services;
+    }
+
+    void bind_response_stream(response_stream_writer& value) noexcept {
+        request_services_.response_output_ = context_response_output::response_stream(value);
     }
 
     [[nodiscard]] std::size_t dispatch_depth() const noexcept {

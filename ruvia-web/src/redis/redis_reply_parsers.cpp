@@ -48,7 +48,6 @@ double parse_redis_double(std::string_view value, std::string_view context_value
 
 std::pmr::vector<redis_key_value> parse_redis_key_value_array(
     redis_value&& value, std::pmr::memory_resource* resource, std::string_view context_value) {
-    throw_if_redis_error(value);
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);
@@ -65,7 +64,6 @@ std::pmr::vector<redis_key_value> parse_redis_key_value_array(
 
 std::pmr::vector<redis_scored_value> parse_redis_scored_array(
     redis_value&& value, std::pmr::memory_resource* resource) {
-    throw_if_redis_error(value);
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, "unexpected redis scored array reply");
@@ -83,7 +81,6 @@ std::pmr::vector<redis_scored_value> parse_redis_scored_array(
 
 std::pmr::vector<std::pmr::string> parse_redis_string_array(
     redis_value&& value, std::pmr::memory_resource* resource) {
-    throw_if_redis_error(value);
     const auto items = redis_value_array(value);
     std::pmr::vector<std::pmr::string> output(resource);
     output.reserve(items.size());
@@ -103,7 +100,6 @@ namespace {
 template <typename result_type, typename payload_parser_type>
 [[nodiscard]] result_type parse_redis_scan_envelope(redis_value&& value, result_type result_value,
     std::string_view context_value, payload_parser_type parse_payload) {
-    throw_if_redis_error(value);
     const auto root = redis_value_array(value);
     if (root.size() != 2) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);

@@ -250,24 +250,25 @@ public:
 
     http_request_admission(const http_request_admission& other) noexcept
         : tail_(other.tail_),
-          services_(other.services_.with_io_metrics(
-              other.services_.io_metrics() == &other.tail_.io_metrics()
-                  ? &tail_.io_metrics()
-                  : other.services_.io_metrics())),
+          services_(other.services_),
           rejection_(other.rejection_),
           resolved_(other.resolved_),
           body_limit_(other.body_limit_),
           coding_availability_(other.coding_availability_),
           endpoint_(other.endpoint_),
-          udp_tunnel_(other.udp_tunnel_) {}
+          udp_tunnel_(other.udp_tunnel_) {
+        if (services_.io_metrics() == &other.tail_.io_metrics()) {
+            services_.bind_io_metrics(&tail_.io_metrics());
+        }
+    }
 
     http_request_admission& operator=(const http_request_admission& other) noexcept {
         if (this != &other) {
             tail_ = other.tail_;
-            services_ = other.services_.with_io_metrics(
-                other.services_.io_metrics() == &other.tail_.io_metrics()
-                    ? &tail_.io_metrics()
-                    : other.services_.io_metrics());
+            services_ = other.services_;
+            if (services_.io_metrics() == &other.tail_.io_metrics()) {
+                services_.bind_io_metrics(&tail_.io_metrics());
+            }
             rejection_ = other.rejection_;
             resolved_ = other.resolved_;
             body_limit_ = other.body_limit_;
@@ -280,24 +281,25 @@ public:
 
     http_request_admission(http_request_admission&& other) noexcept
         : tail_(std::move(other.tail_)),
-          services_(other.services_.with_io_metrics(
-              other.services_.io_metrics() == &other.tail_.io_metrics()
-                  ? &tail_.io_metrics()
-                  : other.services_.io_metrics())),
+          services_(other.services_),
           rejection_(std::move(other.rejection_)),
           resolved_(other.resolved_),
           body_limit_(other.body_limit_),
           coding_availability_(other.coding_availability_),
           endpoint_(other.endpoint_),
-          udp_tunnel_(other.udp_tunnel_) {}
+          udp_tunnel_(other.udp_tunnel_) {
+        if (services_.io_metrics() == &other.tail_.io_metrics()) {
+            services_.bind_io_metrics(&tail_.io_metrics());
+        }
+    }
 
     http_request_admission& operator=(http_request_admission&& other) noexcept {
         if (this != &other) {
             tail_ = std::move(other.tail_);
-            services_ = other.services_.with_io_metrics(
-                other.services_.io_metrics() == &other.tail_.io_metrics()
-                    ? &tail_.io_metrics()
-                    : other.services_.io_metrics());
+            services_ = other.services_;
+            if (services_.io_metrics() == &other.tail_.io_metrics()) {
+                services_.bind_io_metrics(&tail_.io_metrics());
+            }
             rejection_ = std::move(other.rejection_);
             resolved_ = other.resolved_;
             body_limit_ = other.body_limit_;
@@ -314,8 +316,11 @@ private:
 
     http_request_admission(http_response_tail tail, const context_services& services) noexcept
         : tail_(tail),
-          services_(services.with_io_metrics(
-              services.io_metrics() != nullptr ? services.io_metrics() : &tail_.io_metrics())) {}
+          services_(services) {
+        if (services_.io_metrics() == nullptr) {
+            services_.bind_io_metrics(&tail_.io_metrics());
+        }
+    }
     http_response_tail tail_;
     context_services services_;
     std::optional<http_request_rejection> rejection_;

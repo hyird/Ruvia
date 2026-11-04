@@ -28,6 +28,12 @@ inline void append_model_binary(std::pmr::string& output, const bytes& value) {
 [[nodiscard]] inline std::optional<bytes> decode_model_binary(
     std::string_view encoded, std::pmr::memory_resource* resource) {
     auto* const output_resource = pmr_resource_or_default(resource);
+    if (encoded.empty()) {
+        return bytes({.resource_ = output_resource});
+    }
+    if (encoded.size() % 4 != 0) {
+        return std::nullopt;
+    }
     std::pmr::vector<std::uint8_t> decoded(http_base64_decoded_size_bound(encoded.size()), output_resource);
     const auto decoded_size = http_base64_decode(
         encoded, decoded, http_base64_charset::standard, http_base64_padding::required);

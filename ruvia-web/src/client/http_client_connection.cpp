@@ -55,7 +55,7 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
 
 http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index)
     : transport_(pool.io_context(), pool.tls_context(), pool.worker(), http_client_endpoint(pool.config()),
-          pool.wire_counters()),
+          pool.wire_counters(), pool.resource()),
       read_buffer_(pool.resource()),
       write_buffer_(pool.resource()),
       http2_(*this, transport_, pool.tasks(), pool.worker(), pool.config().write_timeout_, pool.resource()),

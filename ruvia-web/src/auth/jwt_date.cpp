@@ -280,6 +280,45 @@ struct clock_parts final {
     return {output.data(), prefix + digits.size()};
 }
 
+[[nodiscard]] decimal_view format_clock_decimal(std::span<char, 40> buffer, clock_parts parts) noexcept {
+    if (parts.seconds_ == 0 && parts.fraction_ == 0) {
+        return {};
+    }
+    if (parts.seconds_ == 0) {
+        int order = 0;
+        auto fraction = parts.fraction_;
+        auto divisor = ticks_per_second / 10;
+        while (fraction < divisor) {
+            --order;
+            divisor /= 10;
+        }
+        std::size_t size = 0;
+        for (; fraction != 0; divisor /= 10) {
+            buffer[size++] = static_cast<char>('0' + fraction / divisor);
+            fraction %= divisor;
+        }
+        return {{buffer.data(), size}, size, order, parts.negative_};
+    }
+    const auto seconds_digits = http_format_unsigned(
+        std::span<char, http_max_unsigned_decimal_size>{buffer.data(), http_max_unsigned_decimal_size},
+        parts.seconds_);
+    const int order = static_cast<int>(seconds_digits.size());
+    auto size = seconds_digits.size();
+    if (parts.fraction_ == 0) {
+        while (buffer[size - 1] == '0') {
+            --size;
+        }
+        return {{buffer.data(), size}, size, order, parts.negative_};
+    }
+    buffer[size++] = '.';
+    auto fraction = parts.fraction_;
+    for (auto divisor = ticks_per_second / 10; fraction != 0; divisor /= 10) {
+        buffer[size++] = static_cast<char>('0' + fraction / divisor);
+        fraction %= divisor;
+    }
+    return {{buffer.data(), size}, size - 1, order, parts.negative_};
+}
+
 }  // namespace
 
 jwt_numeric_date::jwt_numeric_date(std::string_view text, std::pmr::memory_resource* resource)
@@ -334,18 +373,9 @@ bool jwt_is_numeric_date(std::string_view text) noexcept {
 }
 
 std::strong_ordering jwt_compare_numeric_date(std::string_view date, clock_type::time_point now, std::chrono::seconds offset) noexcept {
-    const auto parts = offset_clock(now, offset);
     std::array<char, 40> buffer;
-    auto size = format_seconds(std::span<char, 21>{buffer.data(), 21}, parts.seconds_, parts.negative_).size();
-    if (parts.fraction_ != 0) {
-        buffer[size++] = '.';
-        auto fraction = parts.fraction_;
-        for (auto divisor = ticks_per_second / 10; divisor != 0; divisor /= 10) {
-            buffer[size++] = static_cast<char>('0' + fraction / divisor);
-            fraction %= divisor;
-        }
-    }
-    return compare_decimal(normalize_decimal(*scan_decimal(date)), normalize_decimal(*scan_decimal({buffer.data(), size})));
+    return compare_decimal(
+        normalize_decimal(*scan_decimal(date)), format_clock_decimal(buffer, offset_clock(now, offset)));
 }
 
 std::string_view jwt_signing_date(std::span<char, 21> output, clock_type::time_point now, std::chrono::seconds offset) noexcept {

@@ -35,17 +35,13 @@ struct response_head_flags {
 inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-Encoding: chunked\r\n";
 
 [[nodiscard]] std::optional<std::uint64_t> explicit_content_length(const http_response& response) {
-    // A ok parse_field always populates the state's value, and a Content-Length
-    // that fails to parse throws below, so the accumulated optional already
-    // encodes presence: empty means no Content-Length line was seen.
+    if (!response_has_known_header(response, response_header_content_length)) {
+        return std::nullopt;
+    }
     http_content_length_state state;
-    for (const auto& header : response.headers()) {
-        if (http_response_header_access::known_bit(header) != response_header_content_length) {
-            continue;
-        }
-        if (state.parse_field(header.value()) != http_content_length_parse_status::ok) {
-            throw http1_response_head_error("invalid explicit HTTP response Content-Length");
-        }
+    if (state.parse_field(response_known_header_value(response, response_header_content_length)) !=
+        http_content_length_parse_status::ok) {
+        throw http1_response_head_error("invalid explicit HTTP response Content-Length");
     }
     return state.value();
 }

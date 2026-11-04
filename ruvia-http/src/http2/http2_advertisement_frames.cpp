@@ -49,7 +49,7 @@ std::pmr::vector<char> make_http2_frame(http2_frame_type type, std::uint32_t str
 std::variant<http_origin_advertisement, error_type> decode_http_origin_advertisement(std::span<const char> payload_value,
     std::pmr::memory_resource* resource) {
     resource = resource ? resource : std::pmr::get_default_resource();
-    std::size_t valid_count = 0;
+    std::size_t candidate_count = 0;
     for (auto scan = payload_value; !scan.empty();) {
         if (scan.size() < length_prefix_bytes) {
             return error_type::malformed_payload;
@@ -59,13 +59,11 @@ std::variant<http_origin_advertisement, error_type> decode_http_origin_advertise
         if (size > scan.size()) {
             return error_type::malformed_payload;
         }
-        if (is_valid_http_serialized_origin(std::string_view(scan.data(), size))) {
-            ++valid_count;
-        }
+        ++candidate_count;
         scan = scan.subspan(size);
     }
     http_origin_advertisement result(resource);
-    result.origins_.reserve(valid_count);
+    result.origins_.reserve(candidate_count);
     while (!payload_value.empty()) {
         const auto size = length(payload_value);
         payload_value = payload_value.subspan(length_prefix_bytes);

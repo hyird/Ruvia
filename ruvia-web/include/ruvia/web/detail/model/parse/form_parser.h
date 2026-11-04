@@ -67,51 +67,56 @@ template <typename number_type>
 
 template <typename t_type>
 [[nodiscard]] std::optional<t_type> parse_form_value(resolved_pmr_resource_tag, std::string_view input,
-    form_value_encoding encoding, std::pmr::memory_resource* resource, model_string_storage string_storage) {
+    form_value_encoding encoding, [[maybe_unused]] std::pmr::memory_resource* resource,
+    [[maybe_unused]] model_string_storage string_storage) {
     using field_type = std::remove_cvref_t<t_type>;
 
-    std::pmr::string decoded_storage(resource);
-    auto decoded = input;
-    if (encoding == form_value_encoding::url_encoded) {
-        const auto decoded_value = ruvia::decode_url_component(input, decoded_storage, url_decode_mode::form);
-        if (!decoded_value.has_value()) {
+    if constexpr (std::is_same_v<field_type, std::string_view>) {
+        if (encoding == form_value_encoding::url_encoded &&
+            ruvia::has_url_encoding(input, url_decode_mode::form)) {
             return std::nullopt;
         }
-        decoded = *decoded_value;
-    }
-
-    if constexpr (is_ruvia_string<field_type>) {
-        if (decoded.data() == input.data()) {
-            if (string_storage == model_string_storage::owned) {
-                return field_type(decoded, ::ruvia::model_options{.resource_ = resource});
-            }
-            return model_value_factory::make_string(decoded, resource);
-        }
-        field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
-        value.assign_owned(std::move(decoded_storage));
-        return value;
-    } else if constexpr (std::is_same_v<field_type, std::string_view>) {
-        if (decoded.data() != input.data()) {
-            return std::nullopt;
-        }
-        return decoded;
-    } else if constexpr (is_ruvia_scalar<field_type>) {
-        using scalar_type = model_scalar_value_type<field_type>;
-        if constexpr (std::is_same_v<scalar_type, bool>) {
-            const auto parsed_value = parse_form_bool(decoded);
-            if (!parsed_value.has_value()) {
-                return std::nullopt;
-            }
-            return field_type(*parsed_value);
-        } else {
-            const auto parsed_value = parse_form_number<scalar_type>(decoded);
-            if (!parsed_value.has_value()) {
-                return std::nullopt;
-            }
-            return field_type(*parsed_value);
-        }
+        return input;
     } else {
-        return std::nullopt;
+        std::pmr::string decoded_storage(resource);
+        auto decoded = input;
+        if (encoding == form_value_encoding::url_encoded) {
+            const auto decoded_value =
+                ruvia::decode_url_component(input, decoded_storage, url_decode_mode::form);
+            if (!decoded_value.has_value()) {
+                return std::nullopt;
+            }
+            decoded = *decoded_value;
+        }
+
+        if constexpr (is_ruvia_string<field_type>) {
+            if (decoded.data() == input.data()) {
+                if (string_storage == model_string_storage::owned) {
+                    return field_type(decoded, ::ruvia::model_options{.resource_ = resource});
+                }
+                return model_value_factory::make_string(decoded, resource);
+            }
+            field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
+            value.assign_owned(std::move(decoded_storage));
+            return value;
+        } else if constexpr (is_ruvia_scalar<field_type>) {
+            using scalar_type = model_scalar_value_type<field_type>;
+            if constexpr (std::is_same_v<scalar_type, bool>) {
+                const auto parsed_value = parse_form_bool(decoded);
+                if (!parsed_value.has_value()) {
+                    return std::nullopt;
+                }
+                return field_type(*parsed_value);
+            } else {
+                const auto parsed_value = parse_form_number<scalar_type>(decoded);
+                if (!parsed_value.has_value()) {
+                    return std::nullopt;
+                }
+                return field_type(*parsed_value);
+            }
+        } else {
+            return std::nullopt;
+        }
     }
 }
 

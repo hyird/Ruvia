@@ -218,7 +218,8 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
 
 template <typename e_type, typename c_type>
 void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory_resource* resource) {
-    if (!field.value()) {
+    const auto raw = field.value();
+    if (!raw) {
         if constexpr (c_type::options.nullable_) {
             entity.template set_null<c_type::name>();
             return;
@@ -227,10 +228,15 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
                 db_conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
         }
     }
-    using t_type = typename c_type::value_type;
-    auto value = entity_value_slot<t_type>::make_value(resource);
-    decode_db_field(field, value, resource);
-    entity.template set<c_type::name>(std::move(value));
+    using value_type = typename c_type::value_type;
+    if constexpr (std::is_same_v<value_type, std::pmr::string> || std::is_same_v<value_type, string>) {
+        (void)resource;
+        entity.template set<c_type::name>(*raw);
+    } else {
+        auto value = entity_value_slot<value_type>::make_value(resource);
+        decode_db_field(field, value, resource);
+        entity.template set<c_type::name>(std::move(value));
+    }
 }
 
 template <typename e_type>

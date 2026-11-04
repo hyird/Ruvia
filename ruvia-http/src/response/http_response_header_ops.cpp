@@ -174,10 +174,10 @@ void http_response_headers::transfer_from(
         const auto value = header_value.value();
         if (known_bit == detail::response_header_set_cookie) {
             if (mode == http_response_header_transfer::assign && !removed_cookies) {
-                staged.remove_header("Set-Cookie");
+                (void)staged.remove_header_validated("Set-Cookie", detail::response_header_set_cookie);
                 removed_cookies = true;
             }
-            staged.header(name, value, {.mode_ = http_response_header_mode::append});
+            staged.upsert_set_cookie_header_validated(value);
         } else if (detail::http_response_header_access::append(header_value)) {
             const auto matches_header = [&](const http_response_header& candidate) noexcept {
                 const auto candidate_known_bit =
@@ -211,20 +211,20 @@ void http_response_headers::transfer_from(
                 return count;
             }();
             if (existing_count < occurrence_through) {
-                staged.header(name, value, {.mode_ = http_response_header_mode::append});
+                staged.append_header_validated(name, value, known_bit);
             }
         } else if (mode == http_response_header_transfer::merge) {
             if (staged.find_header_for_read(name, known_bit) == nullptr) {
                 if (!header_value.owned_) {
                     staged.set_static_header(header_value);
                 } else {
-                    staged.header(name, value);
+                    staged.set_header_validated(name, value, known_bit);
                 }
             }
         } else if (!header_value.owned_) {
             staged.set_static_header(header_value);
         } else {
-            staged.header(name, value);
+            staged.set_header_validated(name, value, known_bit);
         }
     }
     commit(std::move(staged));

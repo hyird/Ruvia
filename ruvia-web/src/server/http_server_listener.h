@@ -84,7 +84,7 @@ struct http_server_listener_definition final {
 }
 
 using sni_context_store_type = std::pmr::vector<asio::ssl::context>;
-using sni_context_lookup_type = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;
+using sni_context_lookup_type = std::pmr::vector<std::pair<std::string_view, asio::ssl::context*>>;
 
 class http_server_session_config final {
 public:

@@ -54,10 +54,10 @@ void websocket_client_state::close_now() noexcept {
         transport_.abort(abort_reason_);
         transport_.close();
     }
-    disarm(connect_timer_);
-    disarm(heartbeat_timer_);
-    disarm(close_handshake_timer_);
-    write_signal_.notify();
+    connect_timer_.cancel();
+    heartbeat_timer_.cancel();
+    close_handshake_timer_.cancel();
+    write_lane_.notify();
     liveness_state_ = websocket_liveness_idle{};
     if (protocol_) {
         (void)protocol_->abort();
@@ -96,7 +96,7 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
     {
         co_await wait_for_write_idle(write_wait_type::writer);
         lifecycle_.require_ready();
-        write_guard_type write_guard(*this, write_phase_type::application);
+        write_guard_type write_guard(*this);
         const auto submitted = require_protocol().submit_close(options.code_, reason);
         if (submitted != websocket_close_submit_status::accepted) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,

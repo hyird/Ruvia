@@ -44,7 +44,7 @@ void worker_timer_registration::unregister(bool notify) noexcept {
         slot_state->active_generation_.load(std::memory_order_acquire) != generation) {
         return;
     }
-    if (!notify) {
+    if (!notify && detail::current_worker_dispatcher() != dispatcher) {
         auto expected = generation;
         if (!const_cast<detail::timer_slot*>(slot_state)->active_generation_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
             return;

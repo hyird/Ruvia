@@ -286,14 +286,14 @@ void append_presence(std::pmr::string& output, std::string_view field) {
 
 // `field IS NULL` / `field IS NOT NULL` through the presence shadow.
 void append_null_comparison(std::pmr::string& output, std::string_view field,
-    redis_binary_operator operation, std::string_view unsupported) {
+    redis_binary_operator operation, const char* unsupported) {
     if (operation == redis_binary_operator::equal) {
         output.push_back('-');
         append_presence(output, field);
     } else if (operation == redis_binary_operator::not_equal) {
         append_presence(output, field);
     } else {
-        throw std::invalid_argument(std::string(unsupported));
+        throw std::invalid_argument(unsupported);
     }
 }
 

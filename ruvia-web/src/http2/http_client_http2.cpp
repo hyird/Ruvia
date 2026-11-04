@@ -15,6 +15,7 @@
 #include "client/http_client_response_decoding.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
+#include "http/inline_http_header_views.h"
 
 namespace ruvia::detail {
 
@@ -115,20 +116,13 @@ void http_client_connection::consume_http2_data(
         return;
     }
     auto& state_value = *stream->state_;
-    const auto limit = pool_.config().max_response_bytes_;
-    const auto retained = state_value.buffered_.size() - state_value.offset_ + state_value.pending_.size();
-    if (state_value.collect_all_ && bytes_value.size() > limit - std::min(retained, limit)) {
-        // Complete collection failed before any encoded bytes were exposed.
-        // Retaining the now-unusable prefix only holds response-budget memory.
-        state_value.discard_response_body();
-        stream->error_ = http_client_error::code_type::response_too_large;
-        http2_.submit_reset(stream_id);
-        stream->signal_.notify();
-        return;
-    }
     try {
-        state_value.pending_.append(bytes_value);
-        state_value.data_signal_.notify();
+        if (!state_value.append_received_body(bytes_value, pool_.config().max_response_bytes_)) {
+            stream->error_ = http_client_error::code_type::response_too_large;
+            http2_.submit_reset(stream_id);
+            stream->signal_.notify();
+            return;
+        }
     } catch (...) {
         fail_http2_stream(*stream, std::current_exception(), true);
         return;
@@ -484,7 +478,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 state_value.stream_id_ = stream.stream_id_;
                 if (request.has_body() && !request.body().empty()) {
                     stream.request_body_pending_ = true;
-                    co_await send_http2_buffered_request_body(stream, request.body());
+                    (void)co_await send_http2_request_data(stream, request.body(), http2_end_stream::end_stream);
                     stream.request_body_pending_ = false;
                 } else {
                     http2_.wake_writer();
@@ -573,43 +567,6 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/2 request retry exhausted");
 }
 
-task<void> http_client_connection::send_http2_buffered_request_body(
-    http2_stream& stream, std::string_view body) {
-    // Keep the unsent suffix in the request and admit one frame-sized payload
-    // until its encoded output has reached the socket.
-    constexpr std::size_t submit_bytes = http2_default_max_frame_size;
-    auto& connection = http2_.connection();
-    std::size_t offset = 0;
-    while (offset < body.size() && !stream.failed() && !stream.retryable_) {
-        http2_data_submit_result submitted{};
-        try {
-            submitted = connection.submit_data(
-                stream.stream_id_, body.substr(offset), http2_end_stream::end_stream, submit_bytes);
-        } catch (...) {
-            stream.error_ = http_client_error::code_type::protocol_error;
-            http2_.submit_reset(stream.stream_id_);
-            co_return;
-        }
-        offset += submitted.consumed_bytes_;
-        http2_.wake_writer();
-        if (submitted.status_ == http2_data_submit_status::expectation_pending) {
-            co_await stream.signal_.wait();
-            continue;
-        }
-        if (submitted.status_ == http2_data_submit_status::closed) {
-            if (!stream.complete_) {
-                stream.error_ = http_client_error::code_type::protocol_error;
-                http2_.submit_reset(stream.stream_id_);
-            }
-            co_return;
-        }
-        co_await wait_for_http2_output(stream);
-        if (submitted.status_ == http2_data_submit_status::backpressured) {
-            co_await wait_for_http2_send_window(stream);
-        }
-    }
-}
-
 task<void> http_client_connection::wait_for_http2_output(
     http2_stream& stream, const http_client_output_queue* upload) {
     auto& connection = http2_.connection();
@@ -633,25 +590,30 @@ task<void> http_client_connection::wait_for_http2_send_window(
     }
 }
 
-task<bool> http_client_connection::send_http2_output_chunk(
-    http2_stream& stream, http_client_output_queue& upload) {
-    // Keep one frame-sized copy in the sans-I/O/session output while the queue
-    // retains the caller's whole chunk until every slice reaches the transport.
+task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
+    std::string_view bytes, http2_end_stream end_stream, const http_client_output_queue* upload) {
+    // Keep one frame-sized copy in the sans-I/O/session output while the caller
+    // or upload queue retains the unsent suffix until it reaches the transport.
     constexpr std::size_t submit_bytes = http2_default_max_frame_size;
+    const auto reject_error = upload != nullptr ? http_client_error::code_type::invalid_request
+                                                : http_client_error::code_type::protocol_error;
     auto& connection = http2_.connection();
     std::size_t offset = 0;
-    while (offset < upload.chunk_.size() && !stream.failed() && !stream.retryable_ && !upload.stopped_) {
+    while (offset < bytes.size() && !stream.failed() && !stream.retryable_ &&
+           (upload == nullptr || !upload->stopped_)) {
         http2_data_submit_result submitted{};
         try {
             submitted = connection.submit_data(
-                stream.stream_id_, std::string_view(upload.chunk_).substr(offset),
-                http2_end_stream::keep_open, submit_bytes);
-        } catch (const std::invalid_argument&) {
-            stream.error_ = http_client_error::code_type::invalid_request;
+                stream.stream_id_, bytes.substr(offset), end_stream, submit_bytes);
+        } catch (const std::logic_error&) {
+            stream.error_ = reject_error;
             http2_.submit_reset(stream.stream_id_);
             co_return false;
-        } catch (const std::logic_error&) {
-            stream.error_ = http_client_error::code_type::invalid_request;
+        } catch (...) {
+            if (upload != nullptr) {
+                throw;
+            }
+            stream.error_ = reject_error;
             http2_.submit_reset(stream.stream_id_);
             co_return false;
         }
@@ -662,16 +624,19 @@ task<bool> http_client_connection::send_http2_output_chunk(
             continue;
         }
         if (submitted.status_ == http2_data_submit_status::closed) {
-            stream.error_ = http_client_error::code_type::invalid_request;
-            http2_.submit_reset(stream.stream_id_);
+            if (upload != nullptr || !stream.complete_) {
+                stream.error_ = reject_error;
+                http2_.submit_reset(stream.stream_id_);
+            }
             co_return false;
         }
-        co_await wait_for_http2_output(stream, &upload);
+        co_await wait_for_http2_output(stream, upload);
         if (submitted.status_ == http2_data_submit_status::backpressured) {
-            co_await wait_for_http2_send_window(stream, &upload);
+            co_await wait_for_http2_send_window(stream, upload);
         }
     }
-    co_return offset == upload.chunk_.size() && !stream.failed() && !stream.retryable_ && !upload.stopped_;
+    co_return offset == bytes.size() && !stream.failed() && !stream.retryable_ &&
+        (upload == nullptr || !upload->stopped_);
 }
 
 task<void> http_client_connection::stream_http2_upload(
@@ -717,7 +682,7 @@ task<void> http_client_connection::stream_http2_upload(
             break;
         }
         if (upload.chunk_ready_) {
-            if (co_await send_http2_output_chunk(stream, upload)) {
+            if (co_await send_http2_request_data(stream, upload.chunk_, http2_end_stream::keep_open, &upload)) {
                 upload.acknowledge_chunk();
             }
         } else if (upload.end_requested_) {
@@ -727,26 +692,9 @@ task<void> http_client_connection::stream_http2_upload(
                     const auto finished = connection.submit_data(stream.stream_id_, {}, http2_end_stream::end_stream, 0);
                     finish_accepted = finished.status_ == http2_data_submit_status::complete;
                 } else {
-                    constexpr std::size_t inline_trailer_capacity = 8;
-                    std::array<http_header_view, inline_trailer_capacity> inline_trailers;
-                    std::pmr::vector<http_header_view> overflow_trailers(state_value.resource_);
-                    std::span<const http_header_view> trailers;
-                    const auto& upload_trailers = request.upload()->trailers_;
-                    if (upload_trailers.size() <= inline_trailers.size()) {
-                        for (std::size_t i = 0; i < upload_trailers.size(); ++i) {
-                            inline_trailers[i] = http_header_view{
-                                upload_trailers[i].name(), upload_trailers[i].value()};
-                        }
-                        trailers = std::span<const http_header_view>(
-                            inline_trailers.data(), upload_trailers.size());
-                    } else {
-                        overflow_trailers.reserve(upload_trailers.size());
-                        for (const auto& field : upload_trailers) {
-                            overflow_trailers.emplace_back(field.name(), field.value());
-                        }
-                        trailers = overflow_trailers;
-                    }
-                    const auto finished = connection.finish_request(stream.stream_id_, trailers);
+                    const inline_http_header_views trailers(
+                        request.upload()->trailers_, state_value.resource_);
+                    const auto finished = connection.finish_request(stream.stream_id_, trailers.view());
                     finish_accepted = finished == http2_finish_status::accepted;
                 }
             } catch (const std::invalid_argument&) {

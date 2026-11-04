@@ -48,7 +48,7 @@ task<websocket_event> websocket_client_state::poll_protocol_event(
         std::optional<websocket_event> event;
         {
             co_await wait_for_write_idle(write_wait_type::reader);
-            write_guard_type write_guard(*this, write_phase_type::application);
+            write_guard_type write_guard(*this);
             event = require_protocol().next_event();
             if (event.has_value() && event->ping() != nullptr) {
                 co_await flush_output();
@@ -81,7 +81,7 @@ task<websocket_event> websocket_client_state::poll_protocol_event(
                 record_peer_close(*close_event);
             }
             co_await wait_for_write_idle(write_wait_type::reader);
-            write_guard_type write_guard(*this, write_phase_type::application);
+            write_guard_type write_guard(*this);
             co_await flush_output();
         }
         co_return *event;
@@ -95,7 +95,7 @@ task<void> websocket_client_state::await_peer_transport_end() {
     // Section 7.1.1 lets the client close first when the server does not
     // within a reasonable time. Either way the close handshake has completed,
     // so neither that timeout nor a failing transport fails the operation.
-    disarm(close_handshake_timer_);
+    close_handshake_timer_.cancel();
     if (config_.lifecycle_.close_handshake_timeout_.has_value()) {
         (void)worker_.schedule_timer(close_handshake_timer_,
             worker_timer_deadline_after(*config_.lifecycle_.close_handshake_timeout_),
@@ -121,7 +121,7 @@ task<void> websocket_client_state::await_peer_transport_end() {
             input_.commit(count);
         }
     } catch (const websocket_client_error&) {
-        disarm(close_handshake_timer_);
+        close_handshake_timer_.cancel();
         if (abort_reason_ == client_abort_reason::cancelled ||
             abort_reason_ == client_abort_reason::timeout) {
             throw;
@@ -133,7 +133,7 @@ task<void> websocket_client_state::await_peer_transport_end() {
     arm(close_handshake_timer_, config_.lifecycle_.close_handshake_timeout_, client_abort_reason::closing);
     try {
         co_await wait_for_write_idle(write_wait_type::reader);
-        write_guard_type write_guard(*this, write_phase_type::application);
+        write_guard_type write_guard(*this);
         // Plans end_transport: finishes an HTTP/2 stream and retires the client.
         co_await flush_output();
     } catch (const websocket_client_error&) {
@@ -151,7 +151,7 @@ task<std::size_t> websocket_client_state::read_transport(
         worker_timer_registration timer;
         arm(timer, configured_timeout, client_abort_reason::timeout);
         const auto count = co_await http2_->read(output);
-        disarm(timer);
+        timer.cancel();
         throw_if_aborted();
         if (count != 0) {
             touch_activity();

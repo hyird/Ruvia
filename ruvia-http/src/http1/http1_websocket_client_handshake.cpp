@@ -10,6 +10,7 @@
 #include "ruvia/http/websocket_client_negotiation.h"
 
 #include "client/http1_client_request_headers.h"
+#include "parser/http_header_descriptor_storage.h"
 #include "websocket/http_websocket_accept_key.h"
 
 namespace ruvia {
@@ -56,43 +57,22 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
 prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
     std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
     std::span<const http_header> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource) {
-    static constexpr std::size_t inline_header_capacity = 16;
     const auto negotiation_fields = negotiation.request_fields();
-    const std::size_t total_headers = headers.size() + 3U + negotiation_fields.size();
-    std::array<http_header_view, inline_header_capacity> inline_headers{};
-    std::pmr::vector<http_header_view> heap_headers(resource);
-    std::span<const http_header_view> active_headers{};
-    if (total_headers <= inline_headers.size()) {
-        std::size_t index = 0;
-        for (const auto& header : headers) {
-            inline_headers[index++] = http_header_view{header.name(), header.value()};
-        }
-        inline_headers[index++] = http_header_view{"Upgrade", "websocket"};
-        inline_headers[index++] =
-            http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option};
-        inline_headers[index++] =
-            http_header_view{"Sec-WebSocket-Key", std::string_view(encoded_key.data(), encoded_key.size())};
-        for (const auto& field : negotiation_fields) {
-            inline_headers[index++] = http_header_view{field.name(), field.value()};
-        }
-        active_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
-    } else {
-        heap_headers.reserve(total_headers);
-        for (const auto& header : headers) {
-            heap_headers.emplace_back(header.name(), header.value());
-        }
-        heap_headers.emplace_back("Upgrade", "websocket");
-        heap_headers.emplace_back(
-            detail::http_connection_field_name, detail::http_connection_upgrade_option);
-        heap_headers.emplace_back(
-            "Sec-WebSocket-Key", std::string_view(encoded_key.data(), encoded_key.size()));
-        for (const auto& field : negotiation_fields) {
-            heap_headers.emplace_back(field.name(), field.value());
-        }
-        active_headers = heap_headers;
+    detail::http_header_descriptor_storage<http_header_view> staged_headers(resource);
+    staged_headers.reserve(headers.size() + 3U + negotiation_fields.size());
+    for (const auto& header : headers) {
+        staged_headers.append(http_header_view{header.name(), header.value()});
+    }
+    staged_headers.append(http_header_view{"Upgrade", "websocket"});
+    staged_headers.append(
+        http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
+    staged_headers.append(
+        http_header_view{"Sec-WebSocket-Key", std::string_view(encoded_key.data(), encoded_key.size())});
+    for (const auto& field : negotiation_fields) {
+        staged_headers.append(http_header_view{field.name(), field.value()});
     }
     return http1_client_request_writer(resource)
-        .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = active_headers}, head_buffer);
+        .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = staged_headers.view()}, head_buffer);
 }
 
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>

@@ -33,8 +33,8 @@ websocket_client_state::websocket_client_state(event_loop loop, const websocket_
               .tls_ = config_.scheme_ == websocket_scheme::wss ? &config_.tls_ : nullptr,
               .tcp_ = config_.tcp_,
               .alpn_ = config.protocol_ == websocket_client_protocol::http2 ? client_alpn::http2 : client_alpn::http11},
-          wire_counters_),
-      write_signal_(worker_),
+          wire_counters_, memory_.resource()),
+      write_lane_(worker_),
       input_(memory_.allocator<char>()),
       selected_subprotocol_(memory_.allocator<char>()),
       heartbeat_tasks_(worker_, {.resource_ = memory_.resource()}),
@@ -80,10 +80,6 @@ void websocket_client_state::arm(worker_timer_registration& timer,
             retire(reason);
         }
     });
-}
-
-void websocket_client_state::disarm(worker_timer_registration& timer) noexcept {
-    timer.cancel();
 }
 
 websocket_client_error websocket_client_state::abort_error(client_abort_reason reason) {
@@ -179,24 +175,18 @@ std::optional<std::uint16_t> websocket_client_state::peer_close_code() const noe
     if (!worker_.is_current()) {
         std::terminate();
     }
-    return peer_close_code_;
+    return peer_close_.code();
 }
 
 std::string_view websocket_client_state::peer_close_reason() const noexcept {
     if (!worker_.is_current()) {
         std::terminate();
     }
-    return {peer_close_reason_.data(), peer_close_reason_size_};
+    return peer_close_.reason();
 }
 
 void websocket_client_state::record_peer_close(const websocket_close_event& close_event) noexcept {
-    peer_close_code_ = close_event.close_code();
-    const auto reason = close_event.reason();
-    const auto count = (std::min)(reason.size(), peer_close_reason_.size());
-    if (count != 0) {
-        std::char_traits<char>::copy(peer_close_reason_.data(), reason.data(), count);
-    }
-    peer_close_reason_size_ = static_cast<std::uint8_t>(count);
+    peer_close_.record(close_event);
 }
 
 }  // namespace ruvia::detail

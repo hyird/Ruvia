@@ -51,9 +51,13 @@ namespace {
     const auto phrase = http_reason_phrase(error.status());
     const auto title = phrase.empty() ? std::string_view("HTTP Error") : phrase;
     const auto issues = error.validation_issues();
-    std::size_t reserve_size = 72U + title.size() + error.message().size() + error.code().size();
+    std::size_t reserve_size = 66U + detail::json_string_size_hint(title) +
+                               detail::json_string_size_hint(error.message()) +
+                               detail::json_string_size_hint(error.code());
     for (const auto& issue : issues) {
-        reserve_size += 36U + issue.field().size() + issue.code().size() + issue.message().size();
+        reserve_size += 30U + detail::json_string_size_hint(issue.field()) +
+                        detail::json_string_size_hint(issue.code()) +
+                        detail::json_string_size_hint(issue.message());
     }
     std::pmr::string out(resource);
     out.reserve(reserve_size);

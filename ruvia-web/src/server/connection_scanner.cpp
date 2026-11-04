@@ -176,7 +176,8 @@ connection_scanner::impl_type::impl_type(
     connection_scanner* owner_value, worker_handle worker_value, connection_scanner_options options)
     : owner_(owner_value),
       worker_(require_scanner_worker(std::move(worker_value))),
-      timer_state_(std::make_shared<timer_state_type>(this)),
+      timer_state_(std::allocate_shared<timer_state_type>(
+          std::pmr::polymorphic_allocator<timer_state_type>(process_resource()), this)),
       options_(std::move(options)),
       cached_now_ms_(steady_now_ms()) {
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
@@ -204,7 +205,7 @@ bool connection_scanner::impl_type::retire() noexcept {
 }
 
 connection_scanner::connection_scanner(worker_handle worker_value, connection_scanner_options options)
-    : impl_(std::make_unique<impl_type>(this, std::move(worker_value), std::move(options))) {}
+    : impl_(make_pmr_object<impl_type>(process_resource(), this, std::move(worker_value), std::move(options))) {}
 connection_scanner::~connection_scanner() noexcept {
     if (impl_->retire()) {
         // The scan running further up this stack frees the impl.
@@ -328,7 +329,7 @@ void connection_scanner::impl_type::schedule() {
         scanner->scanning_ = false;
         if (scanner->release_after_scan_) {
             // A callback destroyed the scanner; its teardown already ran.
-            delete scanner;
+            destroy_pmr_object(scanner, process_resource());
             return;
         }
         // Never during an exchange or a burst: only after a whole interval

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -13,11 +14,11 @@
 namespace ruvia::detail {
 
 [[nodiscard]] inline std::pmr::string redis_entity_storage_prefix(
-    std::string_view prefix, std::pmr::memory_resource* resource) {
+    std::string_view prefix, std::pmr::memory_resource* resource, std::size_t extra_capacity = 0) {
     resource = pmr_resource_or_default(resource);
     constexpr std::string_view root = "ruvia:orm:";
     std::pmr::string result(resource);
-    result.reserve(root.size() + prefix.size() * 2U + 1U);
+    result.reserve(root.size() + prefix.size() * 2U + 1U + extra_capacity);
     result.append(root);
     http_append_lower_hex(result, prefix);
     result.push_back(':');
@@ -29,13 +30,7 @@ namespace ruvia::detail {
     if (id.empty()) {
         throw std::invalid_argument("Redis entity ID must not be empty");
     }
-    resource = pmr_resource_or_default(resource);
-    constexpr std::string_view root = "ruvia:orm:";
-    std::pmr::string key(resource);
-    key.reserve(root.size() + prefix.size() * 2U + 1U + id.size());
-    key.append(root);
-    http_append_lower_hex(key, prefix);
-    key.push_back(':');
+    auto key = redis_entity_storage_prefix(prefix, resource, id.size());
     key.append(id.data(), id.size());
     return key;
 }
@@ -57,6 +52,24 @@ namespace ruvia::detail {
         }
     }
     return true;
+}
+
+template <typename entity_type>
+[[nodiscard]] std::optional<std::string_view> try_redis_entity_id(
+    const entity_type& entity, std::span<char, redis_scalar_scratch_size> scratch) {
+    validate_redis_entity<entity_type>();
+    std::optional<std::string_view> id;
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        if constexpr (column_type::options.primary_key_) {
+            if (entity.template is_set<column_type::name>() && !entity.template is_null<column_type::name>()) {
+                const auto encoded = encode_redis_scalar(entity.template get<column_type::name>(), scratch);
+                if (!encoded.empty()) {
+                    id = encoded;
+                }
+            }
+        }
+    });
+    return id;
 }
 
 template <typename entity_type>

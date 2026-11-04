@@ -40,10 +40,10 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                     // RFC 6455 sections 5.5.1/5.5.2: poll() may queue an
                     // automatic Close/Pong. Reserve the next message boundary
                     // and retain the lane through that control output flush.
-                    if (write_phase_ != write_phase_type::idle) {
+                    if (write_lane_.write_in_progress()) {
                         co_await wait_for_write_idle(write_wait_type::reader);
                     }
-                    write_guard_type write_guard(*this, write_phase_type::application);
+                    write_guard_type write_guard(*this);
                     event = protocol_.next_event();
                     if (event.has_value()) {
                         if (event->ping() != nullptr) {
@@ -62,10 +62,10 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                         // EOF is an abnormal websocket close when no peer Close was
                         // received. The core discards unsent WS output and plans the
                         // transport end.
-                        if (write_phase_ != write_phase_type::idle) {
+                        if (write_lane_.write_in_progress()) {
                             co_await wait_for_write_idle(write_wait_type::reader);
                         }
-                        write_guard_type write_guard(*this, write_phase_type::application);
+                        write_guard_type write_guard(*this);
                         protocol_.notify_transport_eof();
                         co_await flush_protocol_output_now();
                         close_stream();

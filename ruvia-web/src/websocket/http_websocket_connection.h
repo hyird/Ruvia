@@ -56,7 +56,7 @@ public:
               return protocol_options;
           }()),
           subprotocol_(subprotocol_value),
-          background_write_signal_(worker_value),
+          write_lane_(worker_value),
           reader_done_signal_(worker_value) {
         buffer_.append(initial_bytes);
         scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk,
@@ -98,11 +98,11 @@ public:
     }
 
     [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept {
-        return peer_close_code_;
+        return peer_close_.code();
     }
 
     [[nodiscard]] std::string_view peer_close_reason() const noexcept {
-        return {peer_close_reason_.data(), peer_close_reason_size_};
+        return peer_close_.reason();
     }
 
     void require_current_worker() const noexcept {
@@ -119,13 +119,6 @@ public:
     }
 
 private:
-    enum class write_phase_type : std::uint8_t {
-        idle,
-        application,
-        heartbeat,
-        going_away,
-    };
-
     enum class write_claim_type : std::uint8_t {
         acquire,
         adopt,
@@ -144,25 +137,21 @@ private:
 
     class write_guard_type final {
     public:
-        write_guard_type(server_websocket_connection& connection, write_phase_type phase,
+        explicit write_guard_type(server_websocket_connection& connection,
             write_claim_type claim = write_claim_type::acquire)
-            : connection_(connection),
-              phase_(phase) {
-            if (phase_ == write_phase_type::idle) {
-                std::terminate();
-            }
+            : connection_(connection) {
             if (claim == write_claim_type::acquire) {
-                if (connection_.write_phase_ != write_phase_type::idle) {
+                if (connection_.write_lane_.write_in_progress()) {
                     throw std::logic_error("concurrent websocket writes are not supported");
                 }
-                connection_.write_phase_ = phase_;
-            } else if (connection_.write_phase_ != phase_) {
+                connection_.write_lane_.begin();
+            } else if (!connection_.write_lane_.write_in_progress()) {
                 std::terminate();
             }
         }
 
         ~write_guard_type() {
-            connection_.finish_write(phase_);
+            connection_.finish_write();
         }
 
         write_guard_type(const write_guard_type&) = delete;
@@ -170,7 +159,6 @@ private:
 
     private:
         server_websocket_connection& connection_;
-        write_phase_type phase_;
     };
 
     class write_operation_lease_type final {
@@ -282,7 +270,7 @@ private:
         server_websocket_connection* connection_;
     };
 
-    void finish_write(write_phase_type phase) noexcept;
+    void finish_write() noexcept;
     [[nodiscard]] bool pong_observable() const noexcept;
     void restart_pong_window(std::int64_t now) noexcept;
     void heartbeat_tick(std::int64_t now) noexcept;
@@ -319,17 +307,11 @@ private:
     // Aborts the transport and retains the first background write failure.
     void fail_background(std::exception_ptr failure) noexcept;
     void record_peer_close(const websocket_close_event& close_event) noexcept {
-        peer_close_code_ = close_event.close_code();
-        const auto reason = close_event.reason();
-        const auto count = (std::min)(reason.size(), peer_close_reason_.size());
-        if (count != 0) {
-            std::char_traits<char>::copy(peer_close_reason_.data(), reason.data(), count);
-        }
-        peer_close_reason_size_ = static_cast<std::uint8_t>(count);
+        peer_close_.record(close_event);
     }
     void notify_write_idle() noexcept;
     [[nodiscard]] bool has_operations_to_drain() const noexcept {
-        return read_phase_ != read_phase_type::idle || write_active_ || write_phase_ != write_phase_type::idle;
+        return read_phase_ != read_phase_type::idle || write_active_ || write_lane_.write_in_progress();
     }
 
     stream_argument_type stream_;
@@ -339,14 +321,10 @@ private:
     http_io_buffer buffer_;
     websocket_connection protocol_;
     std::string_view subprotocol_{};
-    std::optional<std::uint16_t> peer_close_code_{};
-    std::array<char, 123> peer_close_reason_{};
-    std::uint8_t peer_close_reason_size_{0};
-    worker_signal background_write_signal_;
+    websocket_peer_close_info peer_close_{};
+    websocket_write_lane write_lane_;
     worker_signal reader_done_signal_;
-    write_phase_type write_phase_{write_phase_type::idle};
     bool write_active_{false};
-    bool reader_waiting_{false};
     read_phase_type read_phase_{read_phase_type::idle};
     websocket_liveness_state_type liveness_state_{websocket_liveness_idle{}};
     bool going_away_pending_{false};

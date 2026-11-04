@@ -39,6 +39,7 @@
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
 #include "http/http_socket_tunnel_transport.h"
+#include "http/inline_http_header_views.h"
 #include "http/tls_tunnel_output.h"
 
 namespace ruvia::detail {
@@ -133,37 +134,18 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
 void publish_body_progress(http_client_response_state& state_value,
     const http1_client_response_body_decoder::result_type& decoded, std::size_t max_response_bytes) {
     if (const auto* body = decoded.output()) {
-        const auto bytes_value = body->bytes();
-        const auto retained = state_value.buffered_.size() - state_value.offset_ + state_value.pending_.size();
-        if (state_value.collect_all_ &&
-            bytes_value.size() > max_response_bytes - std::min(retained, max_response_bytes)) {
-            // The encoded body was never exposed and can no longer produce a
-            // valid collected result. Release its storage with the failure.
-            state_value.discard_response_body();
+        if (!state_value.append_received_body(body->bytes(), max_response_bytes)) {
             throw http_client_error(
                 http_client_error::code_type::response_too_large, "HTTP response exceeds configured byte limit");
         }
-        // The consumer's last borrowed view lives in buffered, not pending.
-        // Appending producer output must never relocate that view.
-        state_value.pending_.append(bytes_value);
-        state_value.data_signal_.notify();
     } else if (const auto* trailers = decoded.trailers()) {
-        std::size_t retained_count = 0;
         const auto ok = visit_http_response_trailers(
-            trailers->bytes(), [&retained_count](std::string_view, std::string_view) noexcept {
-                ++retained_count;
+            trailers->bytes(), [&](std::string_view name, std::string_view value) {
+                state_value.trailers_.emplace_back(name, value, state_value.resource_);
                 return true;
             });
         if (!ok) {
             throw std::logic_error("HTTP decoder published invalid response trailers");
-        }
-        if (retained_count != 0) {
-            state_value.trailers_.reserve(state_value.trailers_.size() + retained_count);
-            (void)visit_http_response_trailers(
-                trailers->bytes(), [&](std::string_view name, std::string_view value) {
-                    state_value.trailers_.emplace_back(name, value, state_value.resource_);
-                    return true;
-                });
         }
     } else if (const auto* failure = decoded.protocol_failure()) {
         throw http_client_error(http_client_error::code_type::protocol_error,
@@ -504,6 +486,11 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
     const bool secure = connection_.transport_.secure();
     auto& stream = connection_.transport_.stream();
     try {
+        std::optional<http_socket_tunnel_transport<asio::ssl::stream<client_tls_socket>>> tls_transport;
+        if (tls != nullptr) {
+            tls_transport.emplace(stream, tls);
+        }
+        http_socket_tunnel_transport plain_transport(stream.next_layer().socket(), nullptr);
         while (!output.ended_ && !output.stopped_) {
             if (!output.chunk_ready_ && !output.end_requested_) {
                 co_await output.data_.wait();
@@ -522,14 +509,9 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                                                                               : http_stream_end::keep_open;
             const auto bytes_value = output.chunk_ready_ ? std::string_view(output.chunk_) : std::string_view{};
             std::size_t completed_bytes = 0;
-            std::error_code error;
-            if (tls != nullptr) {
-                http_socket_tunnel_transport transport(stream, tls);
-                error = co_await transport.write_bytes(bytes_value, ending, &completed_bytes);
-            } else {
-                http_socket_tunnel_transport transport(stream.next_layer().socket(), nullptr);
-                error = co_await transport.write_bytes(bytes_value, ending, &completed_bytes);
-            }
+            const auto error = tls_transport.has_value()
+                                   ? co_await tls_transport->write_bytes(bytes_value, ending, &completed_bytes)
+                                   : co_await plain_transport.write_bytes(bytes_value, ending, &completed_bytes);
             pool_.wire_counters().sent_ += completed_bytes;
             write_timer.cancel();
             connection_.throw_if_aborted();
@@ -678,27 +660,12 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 upload.output_.acknowledge_chunk();
                 continue;
             }
-            constexpr std::size_t inline_trailer_capacity = 8;
-            std::array<http_header_view, inline_trailer_capacity> inline_trailers;
-            std::pmr::vector<http_header_view> overflow_trailers(state_value.resource_);
             auto section_budget = http_trailer_section_budget();
             (void)section_budget.add(http1_last_chunk_prefix.size());
-            std::span<const http_header_view> trailers;
-            if (upload.trailers_.size() <= inline_trailers.size()) {
-                for (std::size_t i = 0; i < upload.trailers_.size(); ++i) {
-                    const auto& field = upload.trailers_[i];
-                    inline_trailers[i] = http_header_view{field.name(), field.value()};
-                    (void)section_budget.add_field(field.name(), field.value());
-                }
-                trailers = std::span<const http_header_view>(inline_trailers.data(), upload.trailers_.size());
-            } else {
-                overflow_trailers.reserve(upload.trailers_.size());
-                for (const auto& field : upload.trailers_) {
-                    overflow_trailers.emplace_back(field.name(), field.value());
-                    (void)section_budget.add_field(field.name(), field.value());
-                }
-                trailers = overflow_trailers;
+            for (const auto& field : upload.trailers_) {
+                (void)section_budget.add_field(field.name(), field.value());
             }
+            const inline_http_header_views trailers(upload.trailers_, state_value.resource_);
             // Keep the last-chunk line and small trailer sections in this
             // operation; larger trailer sections allocate only their exact wire size.
             constexpr std::size_t inline_ending_bytes = 256;
@@ -708,7 +675,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             const auto finish_buffer = required_bytes <= inline_ending.size()
                                            ? std::span<char>(inline_ending.data(), required_bytes)
                                            : scratch.prepare(required_bytes);
-            const auto ending = writer.plan_finish(finish_buffer, trailers);
+            const auto ending = writer.plan_finish(finish_buffer, trailers.view());
             if (ending.index() != 0) {
                 throw http_client_error(
                     http_client_error::code_type::invalid_request, "HTTP upload trailer or final length rejected");

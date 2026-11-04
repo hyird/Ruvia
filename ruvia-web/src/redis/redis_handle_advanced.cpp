@@ -47,22 +47,19 @@ namespace {
 
 task<redis_scan_result> execute_redis_scan(detail::redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto value =
-        co_await detail::execute_owned_redis_command(std::move(executor), std::move(args), resource);
+    auto value = co_await executor.execute(std::move(args), resource);
     co_return detail::parse_redis_scan_result(std::move(value), resource);
 }
 
 task<redis_hash_scan_result> execute_redis_hash_scan(detail::redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto value =
-        co_await detail::execute_owned_redis_command(std::move(executor), std::move(args), resource);
+    auto value = co_await executor.execute(std::move(args), resource);
     co_return detail::parse_redis_hash_scan_result(std::move(value), resource);
 }
 
 task<redis_z_scan_result> execute_redis_z_scan(detail::redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto value =
-        co_await detail::execute_owned_redis_command(std::move(executor), std::move(args), resource);
+    auto value = co_await executor.execute(std::move(args), resource);
     co_return detail::parse_redis_z_scan_result(std::move(value), resource);
 }
 
@@ -131,15 +128,15 @@ task<redis_z_scan_result> redis_handle::zscan(
 task<redis_value> redis_handle::eval(std::string_view script,
     std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
-    return scoped(detail::execute_owned_redis_command(
-        executor(), detail::redis_eval_args("EVAL", script, keys, args, resource_), resource_));
+    return scoped(executor().execute(
+        detail::redis_eval_args("EVAL", script, keys, args, resource_), resource_));
 }
 
 task<redis_value> redis_handle::eval_sha(std::string_view sha1,
     std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
-    return scoped(detail::execute_owned_redis_command(
-        executor(), detail::redis_eval_args("EVALSHA", sha1, keys, args, resource_), resource_));
+    return scoped(executor().execute(
+        detail::redis_eval_args("EVALSHA", sha1, keys, args, resource_), resource_));
 }
 
 task<std::pmr::string> redis_handle::script_load(std::string_view script) const {

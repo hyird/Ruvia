@@ -50,7 +50,6 @@ public:
     std::optional<request_query_cache> query_;
     std::optional<request_name_value_list> cookies_;
     std::optional<request_field_cache> route_params_;
-    bool query_invalid_{false};
     bool route_params_invalid_{false};
     bool route_params_unencoded_{false};
 };

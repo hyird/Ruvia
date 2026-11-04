@@ -61,8 +61,6 @@ public:
 
     [[nodiscard]] bool connection_failed() const noexcept;
     [[nodiscard]] bool terminated() const noexcept;
-    [[nodiscard]] bool header_block_in_progress() const noexcept;
-    [[nodiscard]] std::size_t active_runtime_count() const noexcept;
     // The drain completed: the final GOAWAY was written and either every stream
     // ended, or a timeout's drain reached its bound with the write side idle and
     // the remaining streams were cancelled.
@@ -94,6 +92,9 @@ private:
     void on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept;
     [[nodiscard]] bool push_request(std::uint32_t associated_stream_id, http_push_request_view request);
     [[nodiscard]] task<void> dispatch_one(std::uint32_t stream_id);
+    [[nodiscard]] task<http_response> respond_body_failure(const http_request& request,
+        request_memory& request_memory_value, http_request_body_failure failure,
+        const context_services& request_services, http_response_tail& tail);
     [[nodiscard]] bool admit_stream(std::uint32_t stream_id);
     void remove_stream_runtime(std::uint32_t stream_id) noexcept;
     void request_drain() noexcept;
@@ -109,6 +110,7 @@ private:
     worker_memory& worker_;
     http2_sans_io_session_context session_;
     inbound_buffer_resource inbound_buffers_;
+    context_services base_services_;
     std::string_view remote_address_;
     ruvia::http2_connection connection_;
     worker_signal write_signal_;

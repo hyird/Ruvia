@@ -45,15 +45,6 @@ public:
         : queued_chunk_(pmr_resource_or_default(resource)),
           active_chunk_(pmr_resource_or_default(resource)) {}
 
-    void enqueue(std::string_view data) {
-        if (data.empty()) {
-            return;
-        }
-        const auto before = queued_chunk_.size();
-        queued_chunk_.append(data.data(), data.size());
-        queued_bytes_ += queued_chunk_.size() - before;
-    }
-
     void enqueue(std::string_view data, http2_received_data_credit&& credit) {
         if (data.empty()) {
             return;
@@ -94,10 +85,6 @@ public:
 
     [[nodiscard]] bool empty() const noexcept {
         return queued_chunk_.empty();
-    }
-
-    [[nodiscard]] std::size_t queued_bytes() const noexcept {
-        return queued_bytes_;
     }
 
     // The message-end event for this body has been delivered. The core's own

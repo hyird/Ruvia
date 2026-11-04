@@ -48,10 +48,10 @@ task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcod
     {
         write_operation_lease_type active_write(std::move(write_lease));
         static_cast<void>(active_write);
-        if (write_phase_ != write_phase_type::idle || reader_waiting_) {
+        if (write_lane_.blocked_for_writer()) {
             co_await wait_for_write_idle(write_wait_type::writer);
         }
-        write_guard_type write_guard(*this, write_phase_type::application);
+        write_guard_type write_guard(*this);
         // The caller keeps the payload alive until this write completes, so an
         // uncompressed frame is gathered from it instead of being copied.
         borrowed_frame_guard_type borrowed_frame(*this, opcode, payload_value, compress);
@@ -77,13 +77,13 @@ task<void> server_websocket_connection<stream_type>::close_owned(::ruvia::websoc
     {
         write_operation_lease_type active_write(std::move(write_lease));
         static_cast<void>(active_write);
-        if (write_phase_ != write_phase_type::idle || reader_waiting_) {
+        if (write_lane_.blocked_for_writer()) {
             co_await wait_for_write_idle(write_wait_type::writer);
         }
         const auto reason = options.reason_.view();
         bool flush_output = false;
         {
-            write_guard_type write_guard(*this, write_phase_type::application);
+            write_guard_type write_guard(*this);
             switch (protocol_.submit_close(options.code_, reason)) {
                 case websocket_close_submit_status::accepted:
                     // The deadline covers the Close write too: a peer that stops
@@ -135,46 +135,25 @@ task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
     // as heartbeat writes can outlive the scanner callback, so both phases are
     // part of the same structured drain. Force a transport abort when active
     // I/O remains even if the protocol already committed its normal close.
-    const bool has_active_io = read_phase_ == read_phase_type::active || write_phase_ != write_phase_type::idle;
+    const bool has_active_io = read_phase_ == read_phase_type::active || write_lane_.write_in_progress();
     abort_transport(has_active_io);
     while (has_operations_to_drain()) {
         if (read_phase_ != read_phase_type::idle) {
             co_await reader_done_signal_.wait();
         } else {
-            co_await background_write_signal_.wait();
+            co_await write_lane_.wait();
         }
     }
 }
 
 template <typename stream_type>
 task<void> server_websocket_connection<stream_type>::wait_for_write_idle(write_wait_type type) {
-    const bool reader = type == write_wait_type::reader;
-    try {
-        while (write_phase_ != write_phase_type::idle || (!reader && reader_waiting_)) {
-            if (reader) {
-                // finish_write() wakes through worker_signal, so a sequential
-                // writer can resume inline before this reader gets its turn.
-                reader_waiting_ = true;
-            }
-            co_await background_write_signal_.wait();
-        }
-        if (reader) {
-            // The caller polls and flushes control output under a write guard
-            // before yielding; releasing that guard wakes held-back writers.
-            reader_waiting_ = false;
-        }
-    } catch (...) {
-        if (reader) {
-            reader_waiting_ = false;
-            notify_write_idle();
-        }
-        throw;
-    }
+    return write_lane_.wait_for_idle(type == write_wait_type::reader);
 }
 
 template <typename stream_type>
 void server_websocket_connection<stream_type>::notify_write_idle() noexcept {
-    background_write_signal_.notify();
+    write_lane_.notify();
 }
 
 template <typename stream_type>

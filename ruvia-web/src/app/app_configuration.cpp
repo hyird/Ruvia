@@ -28,15 +28,28 @@ void append_prefix_handler(handlers_type& handlers, std::string_view prefix, han
         std::pmr::string(normalized, handlers.get_allocator().resource()), std::move(handler));
 }
 
-template <typename view_type, typename handlers_type>
-[[nodiscard]] std::pmr::vector<view_type> prefix_handler_views(
-    const handlers_type& handlers, std::pmr::memory_resource* resource) {
+template <typename view_type, typename handlers_type, typename setter_type>
+void apply_prefix_handlers(
+    const handlers_type& handlers, std::pmr::memory_resource* resource, setter_type&& setter) {
+    if (handlers.empty()) {
+        return;
+    }
+    static constexpr std::size_t inline_capacity = 8;
+    if (handlers.size() <= inline_capacity) {
+        std::array<view_type, inline_capacity> inline_views{};
+        for (std::size_t i = 0; i < handlers.size(); ++i) {
+            inline_views[i] = {
+                std::string_view(handlers[i].first), callback_access::ref(handlers[i].second)};
+        }
+        setter(std::span<const view_type>(inline_views.data(), handlers.size()));
+        return;
+    }
     std::pmr::vector<view_type> views(resource);
     views.reserve(handlers.size());
     for (const auto& [prefix, handler] : handlers) {
         views.push_back({std::string_view(prefix), callback_access::ref(handler)});
     }
-    return views;
+    setter(std::span<const view_type>(views));
 }
 
 }  // namespace
@@ -111,40 +124,14 @@ void app_configuration::apply(
     auto* resource = pmr_resource_or_default(temporary_resource);
     routes_value.set_error_handler(callback_access::ref(error_handler_));
     routes_value.set_not_found_handler(callback_access::ref(not_found_handler_));
-    if (!prefix_error_handlers_.empty()) {
-        static constexpr std::size_t inline_capacity = 8;
-        if (prefix_error_handlers_.size() <= inline_capacity) {
-            std::array<http_prefix_error_handler, inline_capacity> inline_views{};
-            for (std::size_t i = 0; i < prefix_error_handlers_.size(); ++i) {
-                inline_views[i] = {
-                    std::string_view(prefix_error_handlers_[i].first),
-                    callback_access::ref(prefix_error_handlers_[i].second)};
-            }
-            routes_value.set_prefix_error_handlers(
-                std::span<const http_prefix_error_handler>(inline_views.data(), prefix_error_handlers_.size()));
-        } else {
-            const auto views =
-                prefix_handler_views<http_prefix_error_handler>(prefix_error_handlers_, resource);
+    apply_prefix_handlers<http_prefix_error_handler>(
+        prefix_error_handlers_, resource, [&routes_value](std::span<const http_prefix_error_handler> views) {
             routes_value.set_prefix_error_handlers(views);
-        }
-    }
-    if (!prefix_not_found_handlers_.empty()) {
-        static constexpr std::size_t inline_capacity = 8;
-        if (prefix_not_found_handlers_.size() <= inline_capacity) {
-            std::array<http_prefix_not_found_handler, inline_capacity> inline_views{};
-            for (std::size_t i = 0; i < prefix_not_found_handlers_.size(); ++i) {
-                inline_views[i] = {
-                    std::string_view(prefix_not_found_handlers_[i].first),
-                    callback_access::ref(prefix_not_found_handlers_[i].second)};
-            }
-            routes_value.set_prefix_not_found_handlers(std::span<const http_prefix_not_found_handler>(
-                inline_views.data(), prefix_not_found_handlers_.size()));
-        } else {
-            const auto views = prefix_handler_views<http_prefix_not_found_handler>(
-                prefix_not_found_handlers_, resource);
+        });
+    apply_prefix_handlers<http_prefix_not_found_handler>(prefix_not_found_handlers_, resource,
+        [&routes_value](std::span<const http_prefix_not_found_handler> views) {
             routes_value.set_prefix_not_found_handlers(views);
-        }
-    }
+        });
     if (!middlewares_.empty()) {
         static constexpr std::size_t inline_capacity = 16;
         if (middlewares_.size() <= inline_capacity) {

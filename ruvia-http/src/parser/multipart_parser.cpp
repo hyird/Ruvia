@@ -231,156 +231,164 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
     // RFC 2046 section 5.1.1: the first boundary may be preceded by a preamble that
     // is ignored. Skip it once, reusing the buffered parser's boundary finder so
     // the streaming and buffered paths accept exactly the same bodies.
-    for (;;) {
-        if (first_boundary_) {
-            const auto delimiter =
-                detail::http_find_initial_multipart_delimiter(buffer_view(), boundary_, input_.eof(),
-                    delimiter_scan_offset_, delimiter_padding_offset_);
-            if (delimiter.invalid()) {
-                return multipart_parse_error::invalid_delimiter;
-            }
-            if (delimiter.no_match() != nullptr) {
-                if (buffer_view().size() > max_multipart_preamble_bytes) {
-                    return multipart_parse_error::preamble_too_large;
-                }
-                return step_progress_type::need_input;
-            }
-            if (const auto* need_input = delimiter.need_input()) {
-                const auto buffer_bytes = buffer_view().size();
-                if (need_input->offset() > max_multipart_preamble_bytes) {
-                    return multipart_parse_error::preamble_too_large;
-                }
-                if (buffer_bytes - need_input->offset() > max_multipart_delimiter_line_bytes) {
-                    return multipart_parse_error::delimiter_line_too_large;
-                }
-                return step_progress_type::need_input;
-            }
-            const auto* part = delimiter.part();
-            const auto* close = delimiter.close();
-            const auto preamble_bytes = part != nullptr ? part->offset() : close->offset();
-            if (preamble_bytes > max_multipart_preamble_bytes) {
+    if (first_boundary_) {
+        const auto delimiter =
+            detail::http_find_initial_multipart_delimiter(buffer_view(), boundary_, input_.eof(),
+                delimiter_scan_offset_, delimiter_padding_offset_);
+        if (delimiter.invalid()) {
+            return multipart_parse_error::invalid_delimiter;
+        }
+        if (delimiter.no_match() != nullptr) {
+            if (buffer_view().size() > max_multipart_preamble_bytes) {
                 return multipart_parse_error::preamble_too_large;
             }
-            consume(preamble_bytes);
-            first_boundary_ = false;
-        } else if (buffer_view().starts_with("\r\n")) {
-            consume(2);
+            return step_progress_type::need_input;
         }
-
-        const auto delimiter =
-            detail::http_match_multipart_delimiter_line(buffer_view(), boundary_, input_.eof(),
-                delimiter_padding_offset_);
-        if (delimiter.need_input() != nullptr) {
-            if (buffer_view().size() > max_multipart_delimiter_line_bytes) {
+        if (const auto* need_input = delimiter.need_input()) {
+            const auto buffer_bytes = buffer_view().size();
+            if (need_input->offset() > max_multipart_preamble_bytes) {
+                return multipart_parse_error::preamble_too_large;
+            }
+            if (buffer_bytes - need_input->offset() > max_multipart_delimiter_line_bytes) {
                 return multipart_parse_error::delimiter_line_too_large;
             }
             return step_progress_type::need_input;
         }
-        if (const auto* part = delimiter.part()) {
-            if (part->line_bytes() > max_multipart_delimiter_line_bytes) {
-                return multipart_parse_error::delimiter_line_too_large;
-            }
-            consume(part->line_bytes());
+        const auto* part = delimiter.part();
+        const auto* close = delimiter.close();
+        const auto preamble_bytes = part != nullptr ? part->offset() : close->offset();
+        if (preamble_bytes > max_multipart_preamble_bytes) {
+            return multipart_parse_error::preamble_too_large;
+        }
+        const auto line_bytes = part != nullptr ? part->line_bytes() : close->line_bytes();
+        if (line_bytes > max_multipart_delimiter_line_bytes) {
+            return multipart_parse_error::delimiter_line_too_large;
+        }
+        consume(preamble_bytes + line_bytes);
+        first_boundary_ = false;
+        if (part != nullptr) {
             state_ = progress_state_type::headers;
             return step_progress_type::continue_value;
         }
-        if (const auto* close = delimiter.close()) {
-            if (close->line_bytes() > max_multipart_delimiter_line_bytes) {
-                return multipart_parse_error::delimiter_line_too_large;
-            }
-            consume(close->line_bytes());
-            state_ = progress_state_type::done;
-            return step_progress_type::done;
-        }
-        return multipart_parse_error::invalid_delimiter;
+        state_ = progress_state_type::done;
+        return step_progress_type::done;
     }
+
+    if (buffer_view().starts_with("\r\n")) {
+        consume(2);
+    }
+
+    const auto delimiter =
+        detail::http_match_multipart_delimiter_line(buffer_view(), boundary_, input_.eof(),
+            delimiter_padding_offset_);
+    if (delimiter.need_input() != nullptr) {
+        if (buffer_view().size() > max_multipart_delimiter_line_bytes) {
+            return multipart_parse_error::delimiter_line_too_large;
+        }
+        return step_progress_type::need_input;
+    }
+    if (const auto* part = delimiter.part()) {
+        if (part->line_bytes() > max_multipart_delimiter_line_bytes) {
+            return multipart_parse_error::delimiter_line_too_large;
+        }
+        consume(part->line_bytes());
+        state_ = progress_state_type::headers;
+        return step_progress_type::continue_value;
+    }
+    if (const auto* close = delimiter.close()) {
+        if (close->line_bytes() > max_multipart_delimiter_line_bytes) {
+            return multipart_parse_error::delimiter_line_too_large;
+        }
+        consume(close->line_bytes());
+        state_ = progress_state_type::done;
+        return step_progress_type::done;
+    }
+    return multipart_parse_error::invalid_delimiter;
 }
 
 multipart_parser::step_result_type multipart_parser::process_headers() {
     // Cap on a single part's header block, mirroring the 64KB request-header limit.
-    for (;;) {
-        const auto buffer = buffer_view();
-        const auto headers_end = buffer.find("\r\n\r\n", header_scan_offset_);
-        if (headers_end == std::string_view::npos) {
-            header_scan_offset_ = buffer.size() > 3 ? buffer.size() - 3 : 0;
-            if (buffer.size() > max_multipart_header_bytes) {
-                return multipart_parse_error::part_headers_too_large;
-            }
-            return step_progress_type::need_input;
-        }
-        // Include the terminating CRLF CRLF in the same byte cap. Checking only
-        // the incomplete path allowed an oversized but already-terminated block
-        // delivered in one feed() to bypass the limit entirely.
-        if (headers_end > max_multipart_header_bytes - 4) {
+    const auto buffer = buffer_view();
+    const auto headers_end = buffer.find("\r\n\r\n", header_scan_offset_);
+    if (headers_end == std::string_view::npos) {
+        header_scan_offset_ = buffer.size() > 3 ? buffer.size() - 3 : 0;
+        if (buffer.size() > max_multipart_header_bytes) {
             return multipart_parse_error::part_headers_too_large;
         }
-
-        if (remaining_parts_ == 0) {
-            return multipart_parse_error::too_many_parts;
-        }
-        if (headers_end + 4 > remaining_metadata_bytes_) {
-            return multipart_parse_error::metadata_too_large;
-        }
-        auto headers = buffer.substr(0, headers_end);
-        const auto first_fold = detail::find_field_line_fold(headers);
-        const bool unfolded = first_fold != std::string_view::npos;
-        if (unfolded) {
-            detail::copy_unfolded_field_lines(
-                headers, first_fold, detail::field_line_folding_policy::mime, current_headers_);
-            headers = current_headers_;
-        }
-        const auto parsed_headers = detail::http_parse_multipart_part_headers(headers);
-        if (const auto* failure = parsed_headers.failure()) {
-            return failure->parse_error();
-        }
-        const auto* part_headers = parsed_headers.headers();
-
-        const bool borrowed_headers = input_.borrowed() != nullptr && !unfolded;
-        current_name_.clear();
-        current_name_view_ = {};
-        current_name_owned_ = false;
-        if (borrowed_headers && part_headers->name().find('\\') == std::string_view::npos) {
-            current_name_view_ = part_headers->name();
-        } else {
-            detail::http_append_decoded_quoted_pairs(current_name_, part_headers->name());
-            current_name_view_ = current_name_;
-            current_name_owned_ = true;
-        }
-        current_filename_.clear();
-        current_filename_view_ = {};
-        current_filename_owned_ = false;
-        current_filename_present_ = part_headers->has_filename();
-        if (current_filename_present_ && !part_headers->filename().empty()) {
-            if (borrowed_headers && part_headers->filename().find('\\') == std::string_view::npos) {
-                current_filename_view_ = part_headers->filename();
-            } else {
-                detail::http_append_decoded_quoted_pairs(
-                    current_filename_, part_headers->filename());
-                current_filename_view_ = current_filename_;
-                current_filename_owned_ = true;
-            }
-        }
-        current_content_type_.clear();
-        current_content_type_view_ = {};
-        current_content_type_owned_ = false;
-        if (!part_headers->content_type().empty()) {
-            if (borrowed_headers || unfolded) {
-                current_content_type_view_ = part_headers->content_type();
-                current_content_type_owned_ = unfolded;
-            } else {
-                current_content_type_.assign(
-                    part_headers->content_type().data(), part_headers->content_type().size());
-                current_content_type_view_ = current_content_type_;
-                current_content_type_owned_ = true;
-            }
-        }
-        --remaining_parts_;
-        remaining_metadata_bytes_ -= headers_end + 4;
-        consume(headers_end + 4);
-        next_chunk_is_first_ = true;
-        state_ = progress_state_type::body;
-        return step_progress_type::continue_value;
+        return step_progress_type::need_input;
     }
+    // Include the terminating CRLF CRLF in the same byte cap. Checking only
+    // the incomplete path allowed an oversized but already-terminated block
+    // delivered in one feed() to bypass the limit entirely.
+    if (headers_end > max_multipart_header_bytes - 4) {
+        return multipart_parse_error::part_headers_too_large;
+    }
+
+    if (remaining_parts_ == 0) {
+        return multipart_parse_error::too_many_parts;
+    }
+    if (headers_end + 4 > remaining_metadata_bytes_) {
+        return multipart_parse_error::metadata_too_large;
+    }
+    auto headers = buffer.substr(0, headers_end);
+    const auto first_fold = detail::find_field_line_fold(headers);
+    const bool unfolded = first_fold != std::string_view::npos;
+    if (unfolded) {
+        detail::copy_unfolded_field_lines(
+            headers, first_fold, detail::field_line_folding_policy::mime, current_headers_);
+        headers = current_headers_;
+    }
+    const auto parsed_headers = detail::http_parse_multipart_part_headers(headers);
+    if (const auto* failure = parsed_headers.failure()) {
+        return failure->parse_error();
+    }
+    const auto* part_headers = parsed_headers.headers();
+
+    const bool borrowed_headers = input_.borrowed() != nullptr && !unfolded;
+    current_name_.clear();
+    current_name_view_ = {};
+    current_name_owned_ = false;
+    if (borrowed_headers && part_headers->name().find('\\') == std::string_view::npos) {
+        current_name_view_ = part_headers->name();
+    } else {
+        detail::http_append_decoded_quoted_pairs(current_name_, part_headers->name());
+        current_name_view_ = current_name_;
+        current_name_owned_ = true;
+    }
+    current_filename_.clear();
+    current_filename_view_ = {};
+    current_filename_owned_ = false;
+    current_filename_present_ = part_headers->has_filename();
+    if (current_filename_present_ && !part_headers->filename().empty()) {
+        if (borrowed_headers && part_headers->filename().find('\\') == std::string_view::npos) {
+            current_filename_view_ = part_headers->filename();
+        } else {
+            detail::http_append_decoded_quoted_pairs(
+                current_filename_, part_headers->filename());
+            current_filename_view_ = current_filename_;
+            current_filename_owned_ = true;
+        }
+    }
+    current_content_type_.clear();
+    current_content_type_view_ = {};
+    current_content_type_owned_ = false;
+    if (!part_headers->content_type().empty()) {
+        if (borrowed_headers || unfolded) {
+            current_content_type_view_ = part_headers->content_type();
+            current_content_type_owned_ = unfolded;
+        } else {
+            current_content_type_.assign(
+                part_headers->content_type().data(), part_headers->content_type().size());
+            current_content_type_view_ = current_content_type_;
+            current_content_type_owned_ = true;
+        }
+    }
+    --remaining_parts_;
+    remaining_metadata_bytes_ -= headers_end + 4;
+    consume(headers_end + 4);
+    next_chunk_is_first_ = true;
+    state_ = progress_state_type::body;
+    return step_progress_type::continue_value;
 }
 
 multipart_stream_part multipart_parser::make_part(std::string_view body, bool part_end) {
@@ -395,51 +403,49 @@ multipart_stream_part multipart_parser::make_part(std::string_view body, bool pa
 }
 
 multipart_poll_result multipart_parser::read_body_chunk() {
-    for (;;) {
-        const auto buffer = buffer_view();
-        const auto delimiter =
-            detail::http_find_multipart_body_delimiter(buffer, boundary_, input_.eof(), next_chunk_is_first_,
-                delimiter_scan_offset_, delimiter_padding_offset_);
-        if (delimiter.invalid()) {
-            return fail(multipart_parse_error::invalid_delimiter);
+    const auto buffer = buffer_view();
+    const auto delimiter =
+        detail::http_find_multipart_body_delimiter(buffer, boundary_, input_.eof(), next_chunk_is_first_,
+            delimiter_scan_offset_, delimiter_padding_offset_);
+    if (delimiter.invalid()) {
+        return fail(multipart_parse_error::invalid_delimiter);
+    }
+    const auto* part_delimiter = delimiter.part();
+    const auto* close_delimiter = delimiter.close();
+    if (part_delimiter != nullptr || close_delimiter != nullptr) {
+        const auto delimiter_line_bytes =
+            part_delimiter != nullptr ? part_delimiter->line_bytes() : close_delimiter->line_bytes();
+        if (delimiter_line_bytes > max_multipart_delimiter_line_bytes) {
+            return fail(multipart_parse_error::delimiter_line_too_large);
         }
-        const auto* part_delimiter = delimiter.part();
-        const auto* close_delimiter = delimiter.close();
-        if (part_delimiter != nullptr || close_delimiter != nullptr) {
-            const auto delimiter_line_bytes =
-                part_delimiter != nullptr ? part_delimiter->line_bytes() : close_delimiter->line_bytes();
-            if (delimiter_line_bytes > max_multipart_delimiter_line_bytes) {
-                return fail(multipart_parse_error::delimiter_line_too_large);
-            }
-            const auto delimiter_offset =
-                part_delimiter != nullptr ? part_delimiter->offset() : close_delimiter->offset();
-            auto part = make_part(buffer.substr(0, delimiter_offset), true);
-            pending_erase_bytes_ = delimiter_offset;
-            state_ = progress_state_type::boundary;
+        const auto delimiter_offset =
+            part_delimiter != nullptr ? part_delimiter->offset() : close_delimiter->offset();
+        auto part = make_part(buffer.substr(0, delimiter_offset), true);
+        pending_erase_bytes_ = delimiter_offset;
+        state_ = progress_state_type::boundary;
+        return multipart_poll_result::make_part(part);
+    }
+    if (const auto* need_input = delimiter.need_input()) {
+        if (buffer.size() - need_input->offset() > max_multipart_delimiter_line_bytes + 2) {
+            return fail(multipart_parse_error::delimiter_line_too_large);
+        }
+        if (need_input->offset() > 0) {
+            auto part = make_part(buffer.substr(0, need_input->offset()), false);
+            pending_erase_bytes_ = need_input->offset();
             return multipart_poll_result::make_part(part);
         }
-        if (const auto* need_input = delimiter.need_input()) {
-            if (buffer.size() - need_input->offset() > max_multipart_delimiter_line_bytes + 2) {
-                return fail(multipart_parse_error::delimiter_line_too_large);
-            }
-            if (need_input->offset() > 0) {
-                auto part = make_part(buffer.substr(0, need_input->offset()), false);
-                pending_erase_bytes_ = need_input->offset();
-                return multipart_poll_result::make_part(part);
-            }
-            return multipart_poll_result::make_need_input();
-        }
-
-        const auto keep_tail = boundary_.value().size() + 8;
-        if (!input_.eof() && buffer.size() > keep_tail) {
-            const auto bytes_value = buffer.size() - keep_tail;
-            auto part = make_part(buffer.substr(0, bytes_value), false);
-            pending_erase_bytes_ = bytes_value;
-            return multipart_poll_result::make_part(part);
-        }
-
         return multipart_poll_result::make_need_input();
     }
+
+    const auto keep_tail = boundary_.value().size() + 8;
+    if (!input_.eof() && buffer.size() > keep_tail) {
+        const auto bytes_value = buffer.size() - keep_tail;
+        auto part = make_part(buffer.substr(0, bytes_value), false);
+        pending_erase_bytes_ = bytes_value;
+        return multipart_poll_result::make_part(part);
+    }
+
+    return multipart_poll_result::make_need_input();
 }
 
 }  // namespace ruvia

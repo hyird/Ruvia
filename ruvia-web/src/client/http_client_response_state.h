@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -74,6 +75,18 @@ public:
     void discard_response_body() noexcept;
     void discard_failed_encoded_response() noexcept;
     void release_consumed_body_prefix();
+    [[nodiscard]] bool append_received_body(std::string_view bytes_value, std::size_t max_response_bytes) {
+        const auto retained = buffered_.size() - offset_ + pending_.size();
+        if (collect_all_ && bytes_value.size() > max_response_bytes - (std::min)(retained, max_response_bytes)) {
+            discard_response_body();
+            return false;
+        }
+        // The consumer's last borrowed view lives in buffered, not pending.
+        // Appending producer output must never relocate that view.
+        pending_.append(bytes_value);
+        data_signal_.notify();
+        return true;
+    }
 
     // One retention path: consume response-owned fields or copy borrowed fields.
     // Owned fields must already use this response's resource.

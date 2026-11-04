@@ -26,12 +26,10 @@ public:
     [[nodiscard]] bool retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins);
     [[nodiscard]] bool retain(std::size_t slot, const http_alternative_service_advertisement& service);
     [[nodiscard]] std::optional<http_client_advertisement> next();
-    void clear() noexcept;
     void retire() noexcept;
     [[nodiscard]] std::size_t dropped() const noexcept {
         return dropped_;
     }
-    [[nodiscard]] std::size_t retained_bytes() const noexcept;
 
 private:
     void require_current() const noexcept;

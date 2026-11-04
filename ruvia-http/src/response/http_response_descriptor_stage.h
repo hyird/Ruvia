@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string_view>
 
 #include "ruvia/http/http_response.h"
@@ -32,6 +33,16 @@ public:
         const auto builtin = make_static_header(name, value, known_bit);
         prepared_[count_] = builtin ? *builtin : owner_.make_owned_header(name, value, known_bit);
         ++count_;
+    }
+
+    void stage_weak_etag(std::string_view strong_etag) {
+        auto prepared = owner_.make_uninitialized_header(
+            "ETag", strong_etag.size() + 2U, detail::response_header_etag);
+        auto* const out = detail::http_response_header_access::value_begin(prepared);
+        out[0] = 'W';
+        out[1] = '/';
+        std::memcpy(out + 2, strong_etag.data(), strong_etag.size());
+        prepared_[count_++] = prepared;
     }
 
     // Reserve a table slot for every staged field the block lacks, so publish
