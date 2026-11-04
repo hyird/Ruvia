@@ -14,6 +14,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "field/http_request_field_validation.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_accept_key.h"
 #include "websocket/http_websocket_permessage_deflate.h"
@@ -51,9 +52,9 @@ namespace {
             name.size() >= sec_websocket_prefix.size() &&
             http_ascii_equals_ignore_case(
                 name.substr(0, sec_websocket_prefix.size()), sec_websocket_prefix);
-        if (http_field_name_in(name, http_connection_specific_fields) ||
-            http_field_name_in(name, http_message_framing_fields) ||
-            kind == request_header_kind::trailer || kind == request_header_kind::te ||
+        if ((kind != request_header_kind::host &&
+                kind != request_header_kind::expect &&
+                is_protocol_managed_request_field(kind, name)) ||
             is_sec_websocket) {
             throw std::invalid_argument("WebSocket handshake controls this response header");
         }

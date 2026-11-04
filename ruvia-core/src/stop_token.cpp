@@ -117,6 +117,9 @@ namespace {
 }
 
 [[nodiscard]] std::size_t extra_parent_count(std::span<const stop_token> parents) noexcept {
+    if (parents.size() <= 2) {
+        return 0;
+    }
     std::size_t count = 0;
     for (std::size_t index = 0; index != parents.size(); ++index) {
         if (parents[index].stop_requested()) {
@@ -132,6 +135,7 @@ namespace {
 stop_group::stop_group(std::span<const stop_token> parents)
     : extra_parents_(extra_parent_count(parents), process_resource()) {
     std::size_t count = 0;
+    std::array<std::size_t, 2> first_two_indices{};
     for (std::size_t index = 0; index != parents.size(); ++index) {
         if (parents[index].stop_requested()) {
             output_ = parents[index];
@@ -139,6 +143,9 @@ stop_group::stop_group(std::span<const stop_token> parents)
         }
         if (unique_parent(parents, index)) {
             output_ = parents[index];
+            if (count < first_two_indices.size()) {
+                first_two_indices[count] = index;
+            }
             ++count;
         }
     }
@@ -147,18 +154,23 @@ stop_group::stop_group(std::span<const stop_token> parents)
     }
     source_.emplace();
     output_ = source_->token();
-    std::size_t slot = 0;
-    for (std::size_t index = 0; index != parents.size(); ++index) {
-        if (!unique_parent(parents, index)) {
-            continue;
-        }
-        auto& registration = slot < parents_.size() ? parents_[slot] : extra_parents_[slot - parents_.size()];
-        // Capture the state, never this: downstream callbacks may destroy the
-        // group, including the parent registration currently invoking us.
-        parents[index].register_callback(registration, [state = output_.state_] {
+    // Capture the state, never this: downstream callbacks may destroy the
+    // group, including the parent registration currently invoking us.
+    const auto register_parent = [this](const stop_token& parent, stop_registration& registration) {
+        parent.register_callback(registration, [state = output_.state_] {
             state->request_stop();
         });
-        ++slot;
+    };
+    register_parent(parents[first_two_indices[0]], parents_[0]);
+    register_parent(parents[first_two_indices[1]], parents_[1]);
+    if (count == 2) {
+        return;
+    }
+    std::size_t extra_slot = 0;
+    for (std::size_t index = first_two_indices[1] + 1; index != parents.size(); ++index) {
+        if (unique_parent(parents, index)) {
+            register_parent(parents[index], extra_parents_[extra_slot++]);
+        }
     }
 }
 

@@ -5,6 +5,7 @@
 #include <type_traits>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
@@ -58,15 +59,29 @@ private:
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
-        switch (parse_http_response_control_field(
-            classify_request_header(header.name()), header.value(), connection_options, upgrade_protocols)) {
-            case http_response_control_field_status::invalid_connection:
-                throw http1_response_head_error("invalid HTTP Connection header");
-            case http_response_control_field_status::invalid_upgrade:
-                throw http1_response_head_error("invalid HTTP Upgrade header");
-            case http_response_control_field_status::te_forbidden:
-                throw http1_response_head_error("TE is not a response field");
-            case http_response_control_field_status::ok:
+        switch (http_response_header_access::known_bit(header)) {
+            case 0:
+                switch (parse_http_response_control_field(
+                    classify_request_header(header.name()), header.value(), connection_options, upgrade_protocols)) {
+                    case http_response_control_field_status::invalid_connection:
+                        throw http1_response_head_error("invalid HTTP Connection header");
+                    case http_response_control_field_status::invalid_upgrade:
+                        throw http1_response_head_error("invalid HTTP Upgrade header");
+                    case http_response_control_field_status::te_forbidden:
+                        throw http1_response_head_error("TE is not a response field");
+                    case http_response_control_field_status::ok:
+                        break;
+                }
+                break;
+            case response_header_connection:
+                if (connection_options.parse_field(header.value(), http_connection_field_role::sender) !=
+                    http_field_list_parse_status::ok) {
+                    throw http1_response_head_error("invalid HTTP Connection header");
+                }
+                break;
+            case response_header_content_length:
+            case response_header_transfer_encoding:
+            default:
                 break;
         }
     }
@@ -89,7 +104,14 @@ http2_final_response_control_plan(const http_response& response) noexcept {
     if (status_code == http_status::upgrade_required) {
         return http2_final_response_control_plan_error::upgrade_unavailable;
     }
+    if (response_has_known_header(
+            response, response_header_connection | response_header_transfer_encoding)) {
+        return http2_final_response_control_plan_error::connection_specific_field_forbidden;
+    }
     for (const auto& header : response.headers()) {
+        if (http_response_header_access::known_bit(header) != 0) {
+            continue;
+        }
         if (is_forbidden_http_binary_response_field(header.name())) {
             return http2_final_response_control_plan_error::connection_specific_field_forbidden;
         }

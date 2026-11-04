@@ -780,37 +780,13 @@ void db_schema::drop_function(std::string_view name, std::span<const db_type_def
 }
 void db_schema::lock_table(std::string_view table_value, db_table_lock_mode mode, bool nowait) {
     require_postgresql();
+    const auto mode_name = detail::table_lock_mode_name(mode);
     std::pmr::string sql(resource_);
     sql.reserve(48U + table_value.size());
     sql += "LOCK TABLE ";
     append_db_qualified_identifier(sql, table_value, driver_);
     sql += " IN ";
-    switch (mode) {
-        case db_table_lock_mode::access_share:
-            sql += "ACCESS SHARE";
-            break;
-        case db_table_lock_mode::row_share:
-            sql += "ROW SHARE";
-            break;
-        case db_table_lock_mode::row_exclusive:
-            sql += "ROW EXCLUSIVE";
-            break;
-        case db_table_lock_mode::share_update_exclusive:
-            sql += "SHARE UPDATE EXCLUSIVE";
-            break;
-        case db_table_lock_mode::share:
-            sql += "SHARE";
-            break;
-        case db_table_lock_mode::share_row_exclusive:
-            sql += "SHARE ROW EXCLUSIVE";
-            break;
-        case db_table_lock_mode::exclusive:
-            sql += "EXCLUSIVE";
-            break;
-        case db_table_lock_mode::access_exclusive:
-            sql += "ACCESS EXCLUSIVE";
-            break;
-    }
+    sql += mode_name;
     sql += " MODE";
     if (nowait) {
         sql += " NOWAIT";
@@ -971,19 +947,35 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
             for (const auto& s : statements_) {
                 body_size += s.sql_.size() + 1U;
             }
-            std::pmr::string body(resource_);
-            body.reserve(body_size);
-            body.append(" BEGIN ");
-            for (const auto& s : statements_) {
-                body.append(s.sql_);
-                body.push_back(';');
+            std::string_view delimiter = "$ruvia$";
+            std::array<char, 32> delimiter_buf;
+            const auto contains_delimiter = [&](std::string_view candidate) noexcept {
+                return std::ranges::any_of(statements_, [&](const auto& s) {
+                    return s.sql_.find(candidate) != std::string::npos;
+                });
+            };
+            for (std::uint64_t suffix = 1; contains_delimiter(delimiter); ++suffix) {
+                std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
+                std::array<char, http_max_unsigned_decimal_size> digits;
+                const auto formatted = http_format_unsigned(digits, suffix);
+                std::size_t length = 6;
+                formatted.copy(delimiter_buf.data() + length, formatted.size());
+                length += formatted.size();
+                delimiter_buf[length++] = '$';
+                delimiter = std::string_view(delimiter_buf.data(), length);
             }
-            body += " END ";
-            std::pmr::string sql(resource_);
-            sql.reserve(3U + body.size() + 18U);
+            std::string sql;
+            sql.reserve(3U + delimiter.size() * 2U + body_size);
             sql += "DO ";
-            detail::append_db_dollar_body(sql, body);
-            out.emplace_back(db_migration_options{std::string(id), std::string(sql), db_migration_atomicity::transactional});
+            sql.append(delimiter);
+            sql.append(" BEGIN ");
+            for (const auto& s : statements_) {
+                sql.append(s.sql_);
+                sql.push_back(';');
+            }
+            sql.append(" END ");
+            sql.append(delimiter);
+            out.emplace_back(db_migration_options{std::string(id), std::move(sql), db_migration_atomicity::transactional});
         }
     } else {
         out.reserve(statements_.size());

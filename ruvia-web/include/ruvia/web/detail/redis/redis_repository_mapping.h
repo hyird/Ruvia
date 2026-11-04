@@ -36,12 +36,14 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
             }
             continue;
         }
+        bool matched = false;
         for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
-            if (name == field_type::name.view()) {
+            if (!matched && name == field_type::name.view()) {
                 if (values[index].has_value()) {
                     throw redis_error(redis_error::code_type::protocol_error, "duplicate entity field");
                 }
                 values[index] = value;
+                matched = true;
             }
         });
     }

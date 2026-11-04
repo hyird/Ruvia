@@ -58,4 +58,6 @@ private:
     http_field_list_role role, request_field_state& state,
     http_request_field_source source = http_request_field_source::generated) noexcept;
 
+[[nodiscard]] bool is_protocol_managed_request_field(
+    request_header_kind kind, std::string_view name) noexcept;
 }  // namespace ruvia::detail

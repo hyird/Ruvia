@@ -175,12 +175,16 @@ public:
     }
 
     void apply_default(std::pmr::memory_resource* resource) {
-        if (state_ != detail::model_field_state::missing) {
-            return;
+        if constexpr (options_type::has_default) {
+            if (state_ != detail::model_field_state::missing) {
+                return;
+            }
+            options_type::apply_default([this, resource]<typename input_type>(input_type&& value) {
+                this->assign(std::forward<input_type>(value), resource);
+            });
+        } else {
+            (void)resource;
         }
-        options_type::apply_default([this, resource]<typename input_type>(input_type&& value) {
-            this->assign(std::forward<input_type>(value), resource);
-        });
     }
 
     [[nodiscard]] constexpr bool emit_null() const noexcept {

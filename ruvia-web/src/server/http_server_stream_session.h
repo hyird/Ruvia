@@ -440,25 +440,29 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 // dedicated coroutine here would cost one frame allocation
                 // per request.
                 {
-                    const auto body_and_pipeline = http_body_and_pipeline(*request_head, buffer_view);
-
-                    // The body reader/loader setup can throw (e.g. constructing a
-                    // transfer-coding decoder for a bad Transfer-Encoding), so it
-                    // stays guarded. The dispatch turns any handler or routing
-                    // failure into a response, so it sits outside the guard; the
-                    // one exception it lets through is an inbound_transport_error
-                    // (an interim head or 100 Continue the peer never received),
-                    // which ends the connection through the session's caller.
+                    const bool has_body = parsed_value.body_plan_.requires_consumption();
                     http_lazy_buffered_body_route_state<stream_type> body_state;
-                    if (const auto body_setup_exception = try_prepare_http_lazy_buffered_body_route(
-                            body_state, route_dispatch, admission->body_limit(), body_and_pipeline)) {
-                        request_completion.emplace(co_await complete_failed_http_route(scanner_entry,
-                            body_setup_exception, parsed_value, routes_value, request_memory_value,
-                            admission->services(), response));
-                        break;
+                    if (has_body) {
+                        const auto body_and_pipeline = http_body_and_pipeline(*request_head, buffer_view);
+
+                        // The body reader/loader setup can throw (e.g. constructing a
+                        // transfer-coding decoder for a bad Transfer-Encoding), so it
+                        // stays guarded. The dispatch turns any handler or routing
+                        // failure into a response, so it sits outside the guard; the
+                        // one exception it lets through is an inbound_transport_error
+                        // (an interim head or 100 Continue the peer never received),
+                        // which ends the connection through the session's caller.
+                        if (const auto body_setup_exception = try_prepare_http_lazy_buffered_body_route(
+                                body_state, route_dispatch, admission->body_limit(), body_and_pipeline)) {
+                            request_completion.emplace(co_await complete_failed_http_route(scanner_entry,
+                                body_setup_exception, parsed_value, routes_value, request_memory_value,
+                                admission->services(), response));
+                            break;
+                        }
                     }
 
-                    const auto route_services = body_state.with_loader(admission->services());
+                    const auto route_services =
+                        has_body ? body_state.with_loader(admission->services()) : admission->services();
                     std::exception_ptr dispatch_exception;
                     try {
                         // Keep the context in this existing frame rather than
@@ -490,9 +494,15 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                             parsed_value.request_, request_memory_value, dispatch_exception, route_services);
                     }
 
-                    request_completion.emplace(complete_successful_http_body_route(scanner_entry,
-                        response, parsed_value.connection_plan_, request_sequence,
-                        buffer_view.size(), pipeline_stash, body_state));
+                    if (has_body) {
+                        request_completion.emplace(complete_successful_http_body_route(scanner_entry,
+                            response, parsed_value.connection_plan_, request_sequence,
+                            buffer_view.size(), pipeline_stash, body_state));
+                    } else {
+                        scanner_entry.touch();
+                        request_completion.emplace(finalize_buffered_route_response(
+                            response, parsed_value.connection_plan_, request_sequence, request_head->header_bytes()));
+                    }
                     break;
                 }
             }

@@ -476,6 +476,10 @@ db_expression db_owned_expression::import_into(db_query& target, std::string_vie
                 require_name(source_qualifier, true);
                 require_name(target_qualifier, true);
             }
+            target_storage.nodes_.reserve(target_storage.nodes_.size() + tree_->nodes_.size());
+            if (!tree_->queries_.empty()) {
+                target_storage.queries_.reserve(target_storage.queries_.size() + tree_->queries_.size());
+            }
             qualified_expression_importer importer(
                 tree_->nodes_, tree_->queries_, target_storage, source_qualifier, target_qualifier);
             return db_expression(&target_storage, importer.import_node(tree_->root_, 0));
@@ -1022,8 +1026,10 @@ db_owned_expression db_owned_expression::make_collate(
 
 db_owned_expression db_owned_expression::make_binary(
     const db_owned_expression& lhs, db_binary_operator op, const db_owned_expression& rhs) {
+    const auto lhs_nodes = (lhs.kind_ == leaf_kind::tree && lhs.tree_ != nullptr) ? lhs.tree_->nodes_.size() : 1U;
+    const auto rhs_nodes = (rhs.kind_ == leaf_kind::tree && rhs.tree_ != nullptr) ? rhs.tree_->nodes_.size() : 1U;
     auto tree = allocate_tree();
-    tree->nodes_.reserve(3U);
+    tree->nodes_.reserve(lhs_nodes + rhs_nodes + 1U);
     const auto left_idx = lhs.append_to_tree(*tree);
     const auto right_idx = rhs.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::binary, tree->resource_);
@@ -1037,6 +1043,8 @@ db_owned_expression db_owned_expression::make_binary(
 db_owned_expression db_owned_expression::make_binary(
     db_owned_expression&& lhs, db_binary_operator op, const db_owned_expression& rhs) {
     if (&lhs != &rhs && lhs.kind_ == leaf_kind::tree && lhs.tree_ != nullptr) {
+        const auto rhs_nodes = (rhs.kind_ == leaf_kind::tree && rhs.tree_ != nullptr) ? rhs.tree_->nodes_.size() : 1U;
+        lhs.tree_->nodes_.reserve(lhs.tree_->nodes_.size() + rhs_nodes + 1U);
         const auto left_idx = lhs.tree_->root_;
         const auto right_idx = rhs.append_to_tree(*lhs.tree_);
         db_query_node node_value(db_node_kind::binary, lhs.tree_->resource_);
@@ -1052,8 +1060,10 @@ db_owned_expression db_owned_expression::make_binary(
 
 db_owned_expression db_owned_expression::make_unary(
     db_unary_operator op, const db_owned_expression& operand) {
+    const auto operand_nodes =
+        (operand.kind_ == leaf_kind::tree && operand.tree_ != nullptr) ? operand.tree_->nodes_.size() : 1U;
     auto tree = allocate_tree();
-    tree->nodes_.reserve(2U);
+    tree->nodes_.reserve(operand_nodes + 1U);
     const auto op_idx = operand.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::unary, tree->resource_);
     node_value.left_ = op_idx;

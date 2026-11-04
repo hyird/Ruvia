@@ -57,7 +57,7 @@ using http1_client_response_planning_result_type =
 // the final empty line. Response obs-fold has already been unfolded.
 [[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
     std::string_view head_section, const http1_client_exchange_state& exchange_state,
-    std::pmr::memory_resource* resource);
+    std::pmr::memory_resource* resource, std::size_t first_line_end = std::string_view::npos);
 
 // Decide the response plan a parsed head implies for this request.
 [[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(

@@ -1,5 +1,6 @@
 #include "ruvia/http/cookies.h"
 
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -106,6 +107,19 @@ char* write_cookie_request_pair(char* out, std::string_view name, std::string_vi
     const std::string_view written(out, cookie_request_pair_size(name, value));
     if (detail::http_text_overlaps(name, written) || detail::http_text_overlaps(value, written)) {
         // Consume the inputs before any output byte overwrites them.
+        std::array<char, 256> stack_snapshot;
+        if (value.size() <= stack_snapshot.size() &&
+            name.size() <= stack_snapshot.size() - value.size()) {
+            if (!name.empty()) {
+                std::memcpy(stack_snapshot.data(), name.data(), name.size());
+            }
+            if (!value.empty()) {
+                std::memcpy(stack_snapshot.data() + name.size(), value.data(), value.size());
+            }
+            return write_cookie_request_pair(out,
+                std::string_view(stack_snapshot.data(), name.size()),
+                std::string_view(stack_snapshot.data() + name.size(), value.size()));
+        }
         const std::pmr::string snapshot_name(name);
         const std::pmr::string snapshot_value(value);
         return write_cookie_request_pair(out, snapshot_name, snapshot_value);

@@ -42,7 +42,7 @@ struct context_access final {
         response.content_type(http_content_type::application_json);
         response.static_body(json_body);
         context_value.apply_response_state(response, std::nullopt);
-        static_cast<void>(context_value.response_state().take_draft());
+        context_value.response_state().reset_draft();
         return response;
     }
 
@@ -80,7 +80,7 @@ struct context_access final {
         return context_value.response_state().policy();
     }
     static void discard_draft(context& context_value) {
-        static_cast<void>(context_value.response_state().take_draft());
+        context_value.response_state().reset_draft();
     }
     static void apply_response_policy(context& context_value, http_response& response) {
         context_value.response_state().apply_policy(response);
@@ -93,7 +93,7 @@ struct context_access final {
 
     // The status the handler set; a file response sends it for the full body.
     [[nodiscard]] static http_status_code response_status(const context& context_value) noexcept {
-        return context_value.response_state().draft().status();
+        return context_value.response_state().draft_status();
     }
 
     static void apply_response_state(context& context_value, http_response& response,

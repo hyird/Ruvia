@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "ruvia/http/hpack.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
 #include "field/http_expect_token.h"
@@ -202,8 +203,7 @@ http2_connection::submit_regular_request_head(std::string_view method,
                                                         : http_request_content_indication::no_content;
     http2_end_stream end_stream = http2_end_stream::keep_open;
     // Only the formatted prefix is exposed; an omitted length keeps an empty view.
-    std::array<char, 20> length_buffer;
-    std::size_t length_bytes = 0;
+    std::array<char, http_max_unsigned_decimal_size> length_buffer;
     if (without_content) {
         end_stream = http2_end_stream::end_stream;
     } else if (known_length_content != nullptr) {
@@ -213,19 +213,9 @@ http2_connection::submit_regular_request_head(std::string_view method,
     const auto known_method = classify_http_method(method);
     const auto default_port = http_uri_scheme_default_port(scheme);
     const bool emit_length = expected_length && method != "TRACE";
-    if (emit_length) {
-        // 20 bytes always hold the canonical decimal form of uint64_t. Do this
-        // before mutating stream/HPACK state so every rejection is transactional.
-        if (const auto [end, ec] = std::to_chars(length_buffer.data(),
-                length_buffer.data() + length_buffer.size(), *expected_length);
-            ec == std::errc{}) {
-            length_bytes = static_cast<std::size_t>(end - length_buffer.data());
-        } else {
-            return http2_request_head_submit_error::invalid_message;
-        }
-    }
-
-    const auto content_length_value = std::string_view(length_buffer.data(), length_bytes);
+    const auto content_length_value = emit_length
+                                          ? http_format_unsigned(length_buffer, *expected_length)
+                                          : std::string_view{};
     // Validate the entire semantic head and decoded-size budget before touching
     // HPACK storage, outbound bytes, stream metadata, or lifecycle state.
     if (!http2_is_valid_outbound_regular_request_head(method, known_method, scheme, default_port,

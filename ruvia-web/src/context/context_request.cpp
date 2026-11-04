@@ -155,11 +155,11 @@ void ensure_request_query(const context& context_value, const http_request& requ
     cache.emplace(std::move(storage), std::move(query));
 }
 
-[[nodiscard]] bool verify_unencoded_route_params(const std::string_view* param_names,
+[[nodiscard]] std::size_t verify_unencoded_route_params(const std::string_view* param_names,
     const std::string_view* param_values, std::size_t param_count,
     detail::context_request_storage& request_storage) {
     if (request_storage.route_params_unencoded_) {
-        return true;
+        return 0;
     }
     if (request_storage.route_params_invalid_) {
         detail::throw_invalid_param();
@@ -180,9 +180,8 @@ void ensure_request_query(const context& context_value, const http_request& requ
     }
     if (decoded_count == 0) {
         request_storage.route_params_unencoded_ = true;
-        return true;
     }
-    return false;
+    return decoded_count;
 }
 
 void ensure_route_params(const context& context_value, const std::string_view* param_names,
@@ -195,14 +194,8 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     // Route names and unencoded captures already borrow stable route/request
     // storage. Own only decoded values. Invalid percent-escapes fail in decode
     // rather than in a separate pre-scan of the same captures.
-    const bool all_unencoded =
+    const std::size_t decoded_count =
         verify_unencoded_route_params(param_names, param_values, param_count, request_storage);
-    std::size_t decoded_count = 0;
-    if (!all_unencoded) {
-        for (std::size_t i = 0; i < param_count; ++i) {
-            decoded_count += has_url_encoding(param_values[i], url_decode_mode::percent);
-        }
-    }
     std::pmr::vector<std::pmr::string> storage(context_value.arena());
     auto params = detail::request_name_value_list_access::make(context_value.arena());
     if (decoded_count != 0) {
@@ -211,7 +204,7 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     detail::request_name_value_list_access::reserve(params, param_count);
     for (std::size_t i = 0; i < param_count; ++i) {
         auto value = param_values[i];
-        if (!all_unencoded) {
+        if (decoded_count != 0 && has_url_encoding(value, url_decode_mode::percent)) {
             std::pmr::string decoded(context_value.arena());
             const auto decoded_value = decode_url_component(value, decoded, url_decode_mode::percent);
             if (!decoded_value) {
@@ -366,11 +359,14 @@ std::optional<std::string_view> context_request::cookie(std::string_view name) c
 }
 
 const request_name_value_list& context_request::cookie_fields() const {
+    auto& cache = context_->request_storage().cookies_;
+    if (cache) {
+        return *cache;
+    }
     if (!context_->request_.header("Cookie").has_value()) {
         return empty_request_fields();
     }
-    auto& cache = context_->request_storage().cookies_;
-    if (!cache) {
+    {
         auto cookies = detail::request_name_value_list_access::make(context_->arena());
         std::size_t cookie_count = 0;
         std::size_t cookie_header_count = 0;
@@ -430,7 +426,7 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
         return storage.route_params_->fields_.get(name);
     }
     if (verify_unencoded_route_params(
-            context_->param_names_, context_->param_values_, context_->param_count_, storage)) {
+            context_->param_names_, context_->param_values_, context_->param_count_, storage) == 0) {
         for (std::size_t i = context_->param_count_; i > 0; --i) {
             if (context_->param_names_[i - 1] == name) {
                 return context_->param_values_[i - 1];
@@ -451,9 +447,6 @@ std::optional<std::string_view> context_request::negotiate(
     const bool media_type = field == negotiable_field::media_type;
     const bool encoding = field == negotiable_field::encoding;
     const auto header_name = negotiation_header_name(field);
-    if ((media_type || encoding) && !context_->request_.header(header_name).has_value()) {
-        return supported.front();
-    }
     // Only Accept-Language needs prefix matching in the generic token parser.
     const auto token_mode = field == negotiable_field::language
                                 ? http_accept_token_match_mode::language_prefix
@@ -462,7 +455,7 @@ std::optional<std::string_view> context_request::negotiate(
     static constexpr std::size_t inline_value_capacity = 8;
     std::array<std::string_view, inline_value_capacity> inline_values{};
     std::size_t matching_count = 0;
-    bool saw_header = media_type || encoding;
+    bool saw_header = false;
     const auto headers = context_->request_.headers();
     for (const auto& header_field : headers) {
         if (!http_ascii_equals_ignore_case(header_field.name(), header_name)) {

@@ -319,7 +319,8 @@ template <typename t_type>
 [[nodiscard]] auto make_one_shot(worker_handle worker_value, one_shot_options options = {}) {
     auto state_value = detail::make_worker_bound_state<detail::one_shot_state<t_type>>(
         pmr_resource_or_default(options.resource_), std::move(worker_value));
-    return std::pair(one_shot_completion<t_type>(state_value), one_shot_receiver<t_type>(state_value));
+    one_shot_completion<t_type> completion(state_value);
+    return std::pair(std::move(completion), one_shot_receiver<t_type>(std::move(state_value)));
 }
 
 }  // namespace ruvia

@@ -353,9 +353,11 @@ private:
 class db_query_compiler final {
 public:
     db_query_compiler(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode)
-        : output_(driver, resource, mode) {}
+        : output_(driver, resource, mode),
+          mode_(mode) {}
 
     query_sql_writer output_;
+    db_parameter_mode mode_;
 
     void expression(db_expression value) {
         if (value.empty()) {
@@ -671,9 +673,50 @@ private:
         }
         return true;
     }
+    [[nodiscard]] static bool contains_bound_value(
+        const db_query_storage& s, std::size_t index, std::size_t depth = 0) noexcept {
+        if (index >= s.nodes_.size() || depth > 256) {
+            return false;
+        }
+        const auto& n = s.nodes_[index];
+        switch (n.kind_) {
+            case db_node_kind::column:
+            case db_node_kind::star:
+            case db_node_kind::default_value:
+            case db_node_kind::excluded:
+                return false;
+            case db_node_kind::value:
+                return db_value_access::type(n.value_) != db_value_type::null;
+            default:
+                break;
+        }
+        if (contains_bound_value(s, n.left_, depth + 1) ||
+            contains_bound_value(s, n.right_, depth + 1)) {
+            return true;
+        }
+        for (const auto arg : n.args_) {
+            if (contains_bound_value(s, arg, depth + 1)) {
+                return true;
+            }
+        }
+        for (const auto& named : n.named_) {
+            if (contains_bound_value(s, named.expression_, depth + 1)) {
+                return true;
+            }
+        }
+        for (const auto& order : n.orders_) {
+            if (contains_bound_value(s, order.expression_, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
     static std::size_t group_expression(const db_query_storage& s, std::size_t index) {
+        if (!contains_bound_value(s, index)) {
+            return index;
+        }
         for (const auto group : s.groups_) {
-            if (!same_expression(s, group, index)) {
+            if (!contains_bound_value(s, group) || !same_expression(s, group, index)) {
                 continue;
             }
             for (auto projection : s.projections_) {
@@ -692,7 +735,7 @@ private:
     void expr(const db_query_storage& s, std::size_t index, std::size_t depth, bool aliases = false,
         pg_parameter_cast cast = pg_parameter_cast::context) {
         require_depth(depth);
-        if (output_.pg() && !s.groups_.empty()) {
+        if (output_.pg() && mode_ == db_parameter_mode::bound && !s.groups_.empty()) {
             index = group_expression(s, index);
         }
         const auto& n = s.nodes_.at(index);

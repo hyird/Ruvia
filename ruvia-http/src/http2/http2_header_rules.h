@@ -65,6 +65,6 @@ inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
 // is malformed even when its value is exactly "trailers".
 [[nodiscard]] inline bool http2_is_valid_decoded_response_header(
     std::string_view name, std::string_view value) noexcept {
-    return http2_is_valid_regular_header(name, value) && !is_forbidden_http_binary_response_field(name);
+    return http2_is_valid_regular_header(name, value) && name != "te";
 }
 }  // namespace ruvia::detail

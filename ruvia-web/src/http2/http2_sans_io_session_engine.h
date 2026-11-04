@@ -93,7 +93,6 @@ private:
     void on_message_end(const http2_message_end_event& message_end);
     void on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept;
     [[nodiscard]] bool push_request(std::uint32_t associated_stream_id, http_push_request_view request);
-    [[nodiscard]] task<void> dispatch_one_inner(std::uint32_t stream_id);
     [[nodiscard]] task<void> dispatch_one(std::uint32_t stream_id);
     [[nodiscard]] bool admit_stream(std::uint32_t stream_id);
     void remove_stream_runtime(std::uint32_t stream_id) noexcept;

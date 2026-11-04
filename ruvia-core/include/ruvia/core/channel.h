@@ -439,7 +439,8 @@ template <typename t_type>
     auto* resolved = pmr_resource_or_default(options.resource_);
     auto state_value = detail::make_worker_bound_state<detail::channel_state<t_type>>(
         resolved, std::move(worker_value), options.capacity_, resolved);
-    return std::pair(channel_sender<t_type>(state_value), channel_receiver<t_type>(state_value));
+    channel_sender<t_type> sender(state_value);
+    return std::pair(std::move(sender), channel_receiver<t_type>(std::move(state_value)));
 }
 
 template <typename t_type>

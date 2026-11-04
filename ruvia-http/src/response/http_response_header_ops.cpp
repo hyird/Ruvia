@@ -179,10 +179,20 @@ void http_response_headers::transfer_from(
             }
             staged.header(name, value, {.mode_ = http_response_header_mode::append});
         } else if (detail::http_response_header_access::append(header_value)) {
+            const auto matches_header = [&](const http_response_header& candidate) noexcept {
+                const auto candidate_known_bit =
+                    detail::http_response_header_access::known_bit(candidate);
+                const bool same_name =
+                    known_bit != 0
+                        ? candidate_known_bit == known_bit
+                        : (candidate_known_bit == 0 &&
+                              http_ascii_equals_ignore_case(candidate.name(), name));
+                return same_name && candidate.value() == value;
+            };
             const auto occurrence_through = [&] {
                 std::size_t count = 0;
                 for (const auto& candidate : source) {
-                    if (http_ascii_equals_ignore_case(candidate.name(), name) && candidate.value() == value) {
+                    if (matches_header(candidate)) {
                         ++count;
                     }
                     if (&candidate == &header_value) {
@@ -194,7 +204,7 @@ void http_response_headers::transfer_from(
             const auto existing_count = [&] {
                 std::size_t count = 0;
                 for (const auto& candidate : std::as_const(staged)) {
-                    if (http_ascii_equals_ignore_case(candidate.name(), name) && candidate.value() == value) {
+                    if (matches_header(candidate)) {
                         ++count;
                     }
                 }
@@ -204,7 +214,7 @@ void http_response_headers::transfer_from(
                 staged.header(name, value, {.mode_ = http_response_header_mode::append});
             }
         } else if (mode == http_response_header_transfer::merge) {
-            if (!staged.header(name)) {
+            if (staged.find_header_for_read(name, known_bit) == nullptr) {
                 if (!header_value.owned_) {
                     staged.set_static_header(header_value);
                 } else {

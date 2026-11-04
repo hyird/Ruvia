@@ -100,7 +100,7 @@ http_response context::body(std::string_view body) {
     http_response response(arena());
     response.body(body);
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -108,7 +108,7 @@ http_response context::body_owned(std::pmr::string&& body) {
     http_response response(arena());
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -116,7 +116,7 @@ http_response context::body(std::span<const std::byte> body) {
     http_response response(arena());
     response.body(byte_body_view(body));
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -124,7 +124,7 @@ http_response context::body(static_text body) {
     http_response response(arena());
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -133,7 +133,7 @@ http_response context::text(std::string_view body) {
     mark_plain_text(response);
     response.body(body);
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -142,7 +142,7 @@ http_response context::text_owned(std::pmr::string&& body) {
     mark_plain_text(response);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -151,7 +151,7 @@ http_response context::text(static_text body) {
     mark_plain_text(response);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -171,7 +171,7 @@ http_response context::json_serialized(std::pmr::string& body) {
     response.content_type(http_content_type::application_json);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -180,7 +180,7 @@ http_response context::html(std::string_view body) {
     response.content_type(http_content_type::text_html_utf8);
     response.body(body);
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -189,7 +189,7 @@ http_response context::html_owned(std::pmr::string&& body) {
     response.content_type(http_content_type::text_html_utf8);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -198,7 +198,7 @@ http_response context::html(static_text body) {
     response.content_type(http_content_type::text_html_utf8);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -234,7 +234,7 @@ http_response context::streaming_head() {
     http_response response(arena());
     apply_response_state(response, std::nullopt);
     response_state().apply_policy(response);
-    static_cast<void>(response_state().take_draft());
+    response_state().reset_draft();
     return response;
 }
 
@@ -255,6 +255,12 @@ context& context::set_stable_response_header(std::string_view name, std::string_
 
 void context::apply_response_state(
     http_response& response, std::optional<http_status_code> status_code) {
+    if (!response_state().has_draft()) {
+        if (status_code.has_value()) {
+            response.status(*status_code);
+        }
+        return;
+    }
     const auto& metadata = response_state().draft();
     response.status(status_code.value_or(metadata.status()));
     if (!metadata.headers().empty()) {

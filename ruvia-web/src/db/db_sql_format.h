@@ -11,6 +11,7 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"
+#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/detail/db/db_utils.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 #include "ruvia/web/detail/json/json_byte_scan.h"
@@ -171,6 +172,28 @@ inline void append_db_dollar_body(std::pmr::string& output, std::string_view bod
     output.append(delimiter);
     output.append(body);
     output.append(delimiter);
+}
+
+[[nodiscard]] inline std::string_view table_lock_mode_name(db_table_lock_mode mode) {
+    switch (mode) {
+        case db_table_lock_mode::access_share:
+            return "ACCESS SHARE";
+        case db_table_lock_mode::row_share:
+            return "ROW SHARE";
+        case db_table_lock_mode::row_exclusive:
+            return "ROW EXCLUSIVE";
+        case db_table_lock_mode::share_update_exclusive:
+            return "SHARE UPDATE EXCLUSIVE";
+        case db_table_lock_mode::share:
+            return "SHARE";
+        case db_table_lock_mode::share_row_exclusive:
+            return "SHARE ROW EXCLUSIVE";
+        case db_table_lock_mode::exclusive:
+            return "EXCLUSIVE";
+        case db_table_lock_mode::access_exclusive:
+            return "ACCESS EXCLUSIVE";
+    }
+    throw std::invalid_argument("unknown table lock mode");
 }
 
 inline void append_db_type_name(std::pmr::string& output, db_data_type type,

@@ -8,31 +8,31 @@
 
 namespace ruvia {
 
-namespace {
+namespace detail {
 
-[[nodiscard]] bool is_protocol_managed_request_field(detail::request_header_kind kind, std::string_view name) noexcept {
+bool is_protocol_managed_request_field(request_header_kind kind, std::string_view name) noexcept {
     switch (kind) {
-        case detail::request_header_kind::host:
-        case detail::request_header_kind::content_length:
-        case detail::request_header_kind::transfer_encoding:
-        case detail::request_header_kind::trailer:
-        case detail::request_header_kind::expect:
-        case detail::request_header_kind::connection:
-        case detail::request_header_kind::te:
-        case detail::request_header_kind::upgrade:
+        case request_header_kind::host:
+        case request_header_kind::content_length:
+        case request_header_kind::transfer_encoding:
+        case request_header_kind::trailer:
+        case request_header_kind::expect:
+        case request_header_kind::connection:
+        case request_header_kind::te:
+        case request_header_kind::upgrade:
             return true;
-        case detail::request_header_kind::other:
+        case request_header_kind::other:
             // Keep-Alive and Proxy-Connection have no request identity.
-            return detail::http_field_name_in(name, detail::http_connection_specific_fields);
+            return is_forbidden_http_binary_connection_field(name);
         default:
             return false;
     }
 }
 
-}  // namespace
+}  // namespace detail
 
 bool is_http_protocol_managed_request_field(std::string_view name) noexcept {
-    return is_protocol_managed_request_field(detail::classify_request_header(name), name);
+    return detail::is_protocol_managed_request_field(detail::classify_request_header(name), name);
 }
 
 bool is_valid_http_request_application_field(std::string_view name, std::string_view value) noexcept {
@@ -40,7 +40,7 @@ bool is_valid_http_request_application_field(std::string_view name, std::string_
         return false;
     }
     const auto kind = detail::classify_request_header(name);
-    if (is_protocol_managed_request_field(kind, name)) {
+    if (detail::is_protocol_managed_request_field(kind, name)) {
         return false;
     }
     // TE 是唯一按 HTTP 版本区分的请求字段语义，已由托管字段边界排除。

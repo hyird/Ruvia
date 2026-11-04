@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -51,9 +52,15 @@ public:
             std::terminate();
         }
         using std::swap;
-        swap(inline_storage_, other.inline_storage_);
+        const auto inline_bytes = std::max(using_overflow_storage_ ? std::size_t{0} : storage_size_,
+            other.using_overflow_storage_ ? std::size_t{0} : other.storage_size_);
+        std::swap_ranges(inline_storage_.begin(), inline_storage_.begin() + inline_bytes,
+            other.inline_storage_.begin());
         overflow_storage_.swap(other.overflow_storage_);
-        swap(inline_fields_, other.inline_fields_);
+        const auto inline_field_count =
+            std::min<std::size_t>(std::max(count_, other.count_), inline_header_fields);
+        std::swap_ranges(inline_fields_.begin(), inline_fields_.begin() + inline_field_count,
+            other.inline_fields_.begin());
         overflow_fields_.swap(other.overflow_fields_);
         swap(storage_size_, other.storage_size_);
         swap(count_, other.count_);
@@ -170,9 +177,9 @@ private:
         using_overflow_storage_ = true;
     }
 
-    std::array<char, inline_header_storage_bytes> inline_storage_{};
+    std::array<char, inline_header_storage_bytes> inline_storage_;
     std::pmr::string overflow_storage_;
-    std::array<header_field_type, inline_header_fields> inline_fields_{};
+    std::array<header_field_type, inline_header_fields> inline_fields_;
     std::pmr::vector<header_field_type> overflow_fields_;
     std::size_t storage_size_{0};
     std::uint16_t count_{0};

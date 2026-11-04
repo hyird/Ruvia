@@ -162,19 +162,16 @@ struct request_head_write_plan final {
 }
 
 [[nodiscard]] std::pmr::string own_offered_upgrade_protocols(
-    std::span<const http_header_view> headers, std::pmr::memory_resource* resource) {
-    std::size_t total_size = 0;
-    for (const auto& header : headers) {
-        if (!http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
-            continue;
-        }
-        if (total_size != 0) {
-            ++total_size;
-        }
-        total_size += header.value().size();
+    std::span<const http_header_view> headers, const request_header_facts& facts,
+    std::pmr::memory_resource* resource) {
+    if (facts.upgrade_field_count_ == 0) {
+        return std::pmr::string(resource);
+    }
+    if (facts.upgrade_field_count_ == 1) {
+        return std::pmr::string(facts.first_upgrade_value_, resource);
     }
     std::pmr::string result(resource);
-    result.reserve(total_size);
+    result.reserve(facts.upgrade_value_bytes_);
     for (const auto& header : headers) {
         if (!http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
             continue;
@@ -323,7 +320,7 @@ struct request_head_write_plan final {
     // fixed-size value. Own it before mutating the caller's output buffer so an
     // allocation failure leaves request preparation transactional.
     auto offered_upgrade_protocols = header_facts.upgrade_protocols_.has_protocol()
-                                         ? own_offered_upgrade_protocols(headers, resource)
+                                         ? own_offered_upgrade_protocols(headers, header_facts, resource)
                                          : std::pmr::string(resource);
 
     const auto content_state = expect_continue

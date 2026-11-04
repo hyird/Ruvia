@@ -23,8 +23,10 @@ struct model_validation_access final {
                 valid = false;
                 return;
             }
-            if (const auto& value = slot.value(); value && !value_structure_valid(*value)) {
-                valid = false;
+            if constexpr (contains_model<typename slot_type::value_type>()) {
+                if (const auto& value = slot.value(); value && !value_structure_valid(*value)) {
+                    valid = false;
+                }
             }
         });
         return valid;
@@ -64,7 +66,7 @@ struct model_validation_access final {
             return structure_valid(value);
         } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
             using element_type = typename t_type::value_type;
-            if constexpr (is_model<element_type> || is_ruvia_array<element_type> || is_ruvia_boxed_array<element_type>) {
+            if constexpr (contains_model<element_type>()) {
                 for (const auto& element : value) {
                     if (!value_structure_valid(element)) {
                         return false;
@@ -104,7 +106,9 @@ private:
                         break;
                 }
 
-                validate_value_structure(*slot.value(), path, sink);
+                if constexpr (contains_model<typename slot_type::value_type>()) {
+                    validate_value_structure(*slot.value(), path, sink);
+                }
             });
     }
 
@@ -114,13 +118,18 @@ private:
         model::visit_model_fields(
             model_value, model::model_access::schema<model_type>(), [&](const auto& descriptor, const auto& slot) {
                 using descriptor_type = std::remove_cvref_t<decltype(descriptor)>;
-                const model::model_path path(prefix, slot.wire_name());
-                typename descriptor_type::rules_type{}.validate(slot.state(), slot.value(), path, sink);
-
-                if (slot.state() != model_field_state::parsed || !slot.value()) {
-                    return;
+                using value_type = typename descriptor_type::value_type;
+                if constexpr (descriptor_type::has_field_rules || contains_model<value_type>()) {
+                    const model::model_path path(prefix, slot.wire_name());
+                    if constexpr (descriptor_type::has_field_rules) {
+                        typename descriptor_type::rules_type{}.validate(slot.state(), slot.value(), path, sink);
+                    }
+                    if constexpr (contains_model<value_type>()) {
+                        if (slot.state() == model_field_state::parsed && slot.value()) {
+                            validate_nested_field_rules(*slot.value(), path, sink);
+                        }
+                    }
                 }
-                validate_nested_field_rules(*slot.value(), path, sink);
             });
     }
 
@@ -132,7 +141,7 @@ private:
             validate_structure(value, path, sink);
         } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
             using element_type = typename t_type::value_type;
-            if constexpr (is_model<element_type> || is_ruvia_array<element_type> || is_ruvia_boxed_array<element_type>) {
+            if constexpr (contains_model<element_type>()) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     const model::model_path item_path(path, index++);
@@ -150,7 +159,7 @@ private:
             validate_field_rules(value, path, sink);
         } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
             using element_type = typename t_type::value_type;
-            if constexpr (is_model<element_type> || is_ruvia_array<element_type> || is_ruvia_boxed_array<element_type>) {
+            if constexpr (contains_model<element_type>()) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     const model::model_path item_path(path, index++);

@@ -32,12 +32,8 @@ namespace {
     if (!response.status().is_successful() || body.size() != 0 || body.file().has_value()) {
         return false;
     }
-    for (const auto& header : response.headers()) {
-        if (http_field_name_in(header.name(), http_message_framing_fields)) {
-            return false;
-        }
-    }
-    return true;
+    return !response_has_known_header(
+        response, response_header_content_length | response_header_transfer_encoding);
 }
 
 }  // namespace

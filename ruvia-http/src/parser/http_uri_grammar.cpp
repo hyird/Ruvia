@@ -252,4 +252,31 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
            });
 }
 
+[[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 253) {
+        return false;
+    }
+    std::size_t label_length = 0;
+    bool label_ends_with_alnum = false;
+    for (const char c : name) {
+        const auto byte = static_cast<unsigned char>(c);
+        const bool alnum = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+                           (byte >= '0' && byte <= '9');
+        if (c == '.') {
+            if (label_length == 0 || !label_ends_with_alnum) {
+                return false;
+            }
+            label_length = 0;
+            label_ends_with_alnum = false;
+            continue;
+        }
+        if ((!alnum && c != '-') || label_length == 63 || (label_length == 0 && !alnum)) {
+            return false;
+        }
+        ++label_length;
+        label_ends_with_alnum = alnum;
+    }
+    return label_length != 0 && label_ends_with_alnum;
+}
+
 }  // namespace ruvia::detail

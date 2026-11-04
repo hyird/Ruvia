@@ -67,17 +67,16 @@ public:
     }
 
 private:
-    // Reads into the reused window, whose capacity is allocated by the first
-    // read only; the next read overwrites it.
     [[nodiscard]] task<bool> read_some() {
+        if (!pending_.empty()) {
+            read_buffer_ = std::exchange(pending_, std::pmr::string(&inbound_));
+            co_return true;
+        }
         read_buffer_.clear();
-        return transport_.read_more(read_buffer_);
+        co_return co_await transport_.read_more(read_buffer_);
     }
     static task<std::optional<std::pmr::string>> read_thunk(void* raw) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
-        if (!owner_value.pending_.empty()) {
-            co_return std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_));
-        }
         if (!(co_await owner_value.read_some())) {
             owner_value.receive_ended_ = true;
             co_return std::nullopt;

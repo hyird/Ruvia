@@ -172,16 +172,19 @@ void worker_dispatcher::release_abandoned_node(std::size_t index) noexcept {
     // reconcile higher-level work, and must run unlocked before idle callbacks.
     auto abandoned = std::move(nodes_[index].task_);
     idle_callbacks_type callbacks{process_resource()};
+    bool all_pending_released = false;
     {
         std::lock_guard lock(mutex_);
         nodes_[index].next_ = free_head_;
         free_head_ = index;
-        --pending_count_;
+        all_pending_released = (--pending_count_ == 0);
         callbacks = take_idle_callbacks_locked();
     }
     abandoned = nullptr;
     notify_idle(std::move(callbacks));
-    pending_changed_.notify_all();
+    if (all_pending_released) {
+        pending_changed_.notify_all();
+    }
 }
 
 void worker_dispatcher::defer(move_only_function<void()> task_value) {
@@ -572,14 +575,17 @@ void worker_dispatcher::drain() {
             pending_count_ -= batch_count;
             active_count_ += batch_count;
         }
-        callbacks = take_idle_callbacks_locked();
+        if (abandon || batch_count == 0) {
+            callbacks = take_idle_callbacks_locked();
+        }
     }
-    notify_idle(std::move(callbacks));
     if (abandon) {
+        notify_idle(std::move(callbacks));
         abandon_queued();
         return;
     }
     if (batch_count == 0) {
+        notify_idle(std::move(callbacks));
         return;
     }
 

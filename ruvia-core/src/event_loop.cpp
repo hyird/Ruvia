@@ -483,22 +483,34 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
     if (!task_value) {
         throw std::invalid_argument("event loop cleanup must be callable");
     }
-    if (!state_) {
-        return false;
-    }
-    auto lease_value = state_->retirement_.try_acquire(state_, false);
-    if (!lease_value) {
+    if (!state_ || !state_->retirement_.try_begin_cleanup()) {
         return false;
     }
     struct cleanup_control final {
-        // Destroy inputs and the retirement lease before releasing the context
-        // owner. Do not rely on lambda capture member destruction order.
+        // Destroy inputs and finish the retirement gate before releasing the
+        // context owner. Do not rely on lambda capture member destruction order.
         std::shared_ptr<detail::event_loop_state> state_;
-        std::shared_ptr<void> lease_;
         move_only_function<void()> task_;
+
+        cleanup_control(std::shared_ptr<detail::event_loop_state> state_value,
+            move_only_function<void()> task_input) noexcept
+            : state_(std::move(state_value)),
+              task_(std::move(task_input)) {}
+        cleanup_control(const cleanup_control&) = delete;
+        cleanup_control& operator=(const cleanup_control&) = delete;
+        cleanup_control(cleanup_control&& other) noexcept
+            : state_(std::move(other.state_)),
+              task_(std::move(other.task_)) {}
+        cleanup_control& operator=(cleanup_control&&) = delete;
+        ~cleanup_control() {
+            if (state_) {
+                task_ = nullptr;
+                state_->retirement_.finish();
+            }
+        }
     };
     return detail::worker_handle_access::defer_if_attached(state_->runtime_.handle(),
-        [control = cleanup_control{state_, std::move(lease_value), std::move(task_value)}]() mutable { control.task_(); });
+        [control = cleanup_control(state_, std::move(task_value))]() mutable { control.task_(); });
 }
 
 event_loop_stop_registration event_loop::register_stop_callback(

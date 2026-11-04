@@ -40,12 +40,15 @@ void worker_timer_registration::unregister(bool notify) noexcept {
     const auto* slot_state = std::exchange(slot_state_, nullptr);
     const auto slot = std::exchange(slot_, 0);
     const auto generation = std::exchange(generation_, 0);
-    if (dispatcher == nullptr) {
+    if (dispatcher == nullptr || slot_state == nullptr ||
+        slot_state->active_generation_.load(std::memory_order_acquire) != generation) {
         return;
     }
-    if (!notify && slot_state != nullptr) {
+    if (!notify) {
         auto expected = generation;
-        (void)const_cast<detail::timer_slot*>(slot_state)->active_generation_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel, std::memory_order_relaxed);
+        if (!const_cast<detail::timer_slot*>(slot_state)->active_generation_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return;
+        }
     }
     dispatcher->request_timer_cancellation(slot, generation, notify);
 }
@@ -409,10 +412,10 @@ move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_
     auto& slot = timer_slots_[slot_index];
     slot.occupied_ = false;
     slot.cancel_requested_ = false;
-    slot.active_generation_.store(0, std::memory_order_release);
     auto completion = std::move(slot.completion_);
     slot.next_free_ = free_timer_slot_;
     free_timer_slot_ = slot_index;
+    slot.active_generation_.store(0, std::memory_order_release);
     return completion;
 }
 

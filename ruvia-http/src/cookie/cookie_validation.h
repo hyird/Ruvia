@@ -13,6 +13,8 @@
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
+#include "parser/http_uri_grammar.h"
+
 namespace ruvia::detail {
 
 // RFC 6265bis section 5.6 storage limits. The sender rejects anything the
@@ -35,39 +37,11 @@ inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
 }
 
 [[nodiscard]] inline bool is_valid_cookie_domain(std::string_view value) noexcept {
-    if (value.empty()) {
-        return true;
-    }
-
     // RFC 6265bis domain-value is an RFC 1034 subdomain as relaxed by RFC 1123:
     // ASCII LDH labels, each at most 63 octets, with a letter or digit at both
     // ends. The root separators consume the remaining two octets of DNS's
     // 255-octet wire limit, so an unqualified textual name is at most 253.
-    if (value.size() > 253) {
-        return false;
-    }
-
-    std::size_t label_length = 0;
-    bool label_ends_with_alnum = false;
-    for (const auto c : value) {
-        const auto byte = static_cast<unsigned char>(c);
-        const bool alnum = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
-                           (byte >= '0' && byte <= '9');
-        if (c == '.') {
-            if (label_length == 0 || !label_ends_with_alnum) {
-                return false;
-            }
-            label_length = 0;
-            label_ends_with_alnum = false;
-            continue;
-        }
-        if ((!alnum && c != '-') || label_length == 63 || (label_length == 0 && !alnum)) {
-            return false;
-        }
-        ++label_length;
-        label_ends_with_alnum = alnum;
-    }
-    return label_length != 0 && label_ends_with_alnum;
+    return value.empty() || is_valid_dns_domain_name(value);
 }
 
 [[nodiscard]] inline std::string_view cookie_priority_token(cookie_priority priority) noexcept {

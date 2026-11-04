@@ -134,7 +134,8 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
             head_section = *unfolded_head;
         }
     }
-    auto parsed_head = detail::parse_http1_client_response_head_fields(head_section, exchange_state_, resource_);
+    auto parsed_head = detail::parse_http1_client_response_head_fields(
+        head_section, exchange_state_, resource_, status_line_end);
     if ((parsed_head.index() != 0)) {
         return fail(std::get<1>(parsed_head));
     }

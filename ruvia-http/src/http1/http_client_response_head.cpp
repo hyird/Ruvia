@@ -84,8 +84,10 @@ http1_client_parsed_response_head::http1_client_parsed_response_head(
 
 http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
     std::string_view head_section, const http1_client_exchange_state& exchange_state,
-    std::pmr::memory_resource* resource) {
-    const auto first_line_end = head_section.find("\r\n");
+    std::pmr::memory_resource* resource, std::size_t first_line_end) {
+    if (first_line_end > head_section.size()) {
+        first_line_end = head_section.find("\r\n");
+    }
     const auto first_line = head_section.substr(0, first_line_end);
     const auto status_line = parse_status_line(first_line);
     if ((status_line.index() != 0)) {

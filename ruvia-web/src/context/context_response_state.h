@@ -13,17 +13,23 @@ namespace ruvia::detail {
 // consumes the draft; selecting or replacing a response never merges metadata.
 class context_response_state final {
 public:
-    explicit context_response_state(std::pmr::memory_resource* resource)
-        : resource_(resource),
-          draft_(resource),
-          policy_(resource),
-          defaults_(resource) {}
+    explicit context_response_state(std::pmr::memory_resource* resource) noexcept
+        : resource_(resource) {}
 
-    [[nodiscard]] http_response& draft() noexcept {
-        return draft_;
+    [[nodiscard]] bool has_draft() const noexcept {
+        return draft_.has_value();
     }
-    [[nodiscard]] const http_response& draft() const noexcept {
-        return draft_;
+    [[nodiscard]] http_status_code draft_status() const noexcept {
+        return draft_ ? draft_->status() : http_status::ok;
+    }
+    void reset_draft() noexcept {
+        draft_.reset();
+    }
+    [[nodiscard]] http_response& draft() {
+        if (!draft_) {
+            draft_.emplace(resource_);
+        }
+        return *draft_;
     }
     [[nodiscard]] http_response* final() noexcept {
         return final_ ? &*final_ : nullptr;
@@ -31,21 +37,27 @@ public:
     [[nodiscard]] const http_response* final() const noexcept {
         return final_ ? &*final_ : nullptr;
     }
-    [[nodiscard]] http_response& policy() noexcept {
-        return policy_;
+    [[nodiscard]] http_response& policy() {
+        if (!policy_) {
+            policy_.emplace(resource_);
+        }
+        return *policy_;
     }
-    [[nodiscard]] http_response& defaults() noexcept {
-        return defaults_;
+    [[nodiscard]] http_response& defaults() {
+        if (!defaults_) {
+            defaults_.emplace(resource_);
+        }
+        return *defaults_;
     }
     void policy_status(http_status_code status) {
         policy_status_ = status;
     }
     void apply_policy(http_response& response) const {
-        if (!defaults_.headers().empty()) {
-            response.transfer_headers_from(defaults_, http_response_header_transfer::merge);
+        if (defaults_ && !defaults_->headers().empty()) {
+            response.transfer_headers_from(*defaults_, http_response_header_transfer::merge);
         }
-        if (!policy_.headers().empty()) {
-            response.transfer_headers_from(policy_, http_response_header_transfer::apply);
+        if (policy_ && !policy_->headers().empty()) {
+            response.transfer_headers_from(*policy_, http_response_header_transfer::apply);
         }
         if (policy_status_) {
             response.status(*policy_status_);
@@ -53,8 +65,11 @@ public:
     }
 
     [[nodiscard]] http_response take_draft() {
-        auto response = std::move(draft_);
-        draft_ = http_response(resource_);
+        if (!draft_) {
+            return http_response(resource_);
+        }
+        auto response = std::move(*draft_);
+        draft_.reset();
         return response;
     }
 
@@ -71,9 +86,9 @@ public:
 
 private:
     std::pmr::memory_resource* resource_;
-    http_response draft_;
-    http_response policy_;
-    http_response defaults_;
+    std::optional<http_response> draft_;
+    std::optional<http_response> policy_;
+    std::optional<http_response> defaults_;
     std::optional<http_status_code> policy_status_;
     std::optional<http_response> final_;
 };

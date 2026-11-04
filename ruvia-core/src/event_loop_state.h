@@ -43,6 +43,15 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool try_begin_cleanup() noexcept {
+        const std::lock_guard lock(mutex_);
+        if (finalized_) {
+            return false;
+        }
+        ++pending_;
+        return true;
+    }
+
     void begin() noexcept {
         if (!try_begin()) {
             std::terminate();

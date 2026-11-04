@@ -630,6 +630,7 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
     }
     std::pmr::string query(resource);
     if (const auto* predicate = redis_predicate_access::storage(options.where_)) {
+        query.reserve(predicate->nodes_.size() * 24U);
         compiler.append_predicate(query, *predicate);
     } else {
         query = "*";

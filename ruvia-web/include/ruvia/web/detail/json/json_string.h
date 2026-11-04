@@ -161,12 +161,9 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
     }
 }
 
-// Returns the complete decoded string or no value for malformed escape/UTF-8
-// input. Mutable caller storage is intentionally not accepted: a failure must
-// never expose the prefix produced before the malformed byte sequence.
-[[nodiscard]] inline std::optional<std::pmr::string> decode_json_string(
-    std::string_view input, std::pmr::memory_resource* resource) {
-    std::pmr::string output(pmr_resource_or_default(resource));
+[[nodiscard]] inline bool decode_json_string_into(
+    std::string_view input, std::pmr::string& output) {
+    output.clear();
     output.reserve(input.size());
     std::size_t chunk_begin = 0;
     std::size_t i = 0;
@@ -175,14 +172,16 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
         if (c != '\\') {
             const auto uc = static_cast<unsigned char>(c);
             if (uc < 0x20) {
-                return std::nullopt;
+                output.clear();
+                return false;
             }
             if (uc >= 0x80) {
                 // RFC 8259 §8.1 requires JSON to be UTF-8: ill-formed input is
                 // rejected rather than passed through verbatim.
                 const auto sequence = scan_json_utf8_sequence(input, i);
                 if (!sequence.well_formed_) {
-                    return std::nullopt;
+                    output.clear();
+                    return false;
                 }
                 i += sequence.length_;
                 continue;
@@ -192,7 +191,8 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
         }
 
         if (i + 1 >= input.size()) {
-            return std::nullopt;
+            output.clear();
+            return false;
         }
         if (i > chunk_begin) {
             output.append(input.data() + chunk_begin, i - chunk_begin);
@@ -222,32 +222,49 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
             case 'u': {
                 std::uint32_t code_point = 0;
                 if (!read_json_hex4(input.substr(i + 1), code_point)) {
-                    return std::nullopt;
+                    output.clear();
+                    return false;
                 }
                 i += 4;
                 if (is_json_high_surrogate(code_point)) {
                     if (i + 6 >= input.size() || input[i + 1] != '\\' || input[i + 2] != 'u') {
-                        return std::nullopt;
+                        output.clear();
+                        return false;
                     }
                     std::uint32_t low = 0;
                     if (!read_json_hex4(input.substr(i + 3), low) || !is_json_low_surrogate(low)) {
-                        return std::nullopt;
+                        output.clear();
+                        return false;
                     }
                     i += 6;
                     code_point = 0x10000 + (((code_point - 0xD800) << 10) | (low - 0xDC00));
                 } else if (is_json_low_surrogate(code_point)) {
-                    return std::nullopt;
+                    output.clear();
+                    return false;
                 }
                 append_utf8(output, code_point);
                 break;
             }
             default:
-                return std::nullopt;
+                output.clear();
+                return false;
         }
         chunk_begin = ++i;
     }
     if (chunk_begin < input.size()) {
         output.append(input.data() + chunk_begin, input.size() - chunk_begin);
+    }
+    return true;
+}
+
+// Returns the complete decoded string or no value for malformed escape/UTF-8
+// input. Mutable caller storage is intentionally not accepted: a failure must
+// never expose the prefix produced before the malformed byte sequence.
+[[nodiscard]] inline std::optional<std::pmr::string> decode_json_string(
+    std::string_view input, std::pmr::memory_resource* resource) {
+    std::pmr::string output(pmr_resource_or_default(resource));
+    if (!decode_json_string_into(input, output)) {
+        return std::nullopt;
     }
     return output;
 }

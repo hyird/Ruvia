@@ -56,7 +56,19 @@ inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
 // lowercase validation and the request-only TE value exception belong to the
 // protocol boundary; application-owned names are matched case-insensitively.
 [[nodiscard]] inline bool is_forbidden_http_binary_connection_field(std::string_view name) noexcept {
-    return http_field_name_in(name, http_connection_specific_fields);
+    switch (name.size()) {
+        case 7:
+            return http_ascii_equals_ignore_case(name, "upgrade");
+        case 10:
+            return http_ascii_equals_ignore_case(name, "connection") ||
+                   http_ascii_equals_ignore_case(name, "keep-alive");
+        case 16:
+            return http_ascii_equals_ignore_case(name, "proxy-connection");
+        case 17:
+            return http_ascii_equals_ignore_case(name, "transfer-encoding");
+        default:
+            return false;
+    }
 }
 
 [[nodiscard]] inline bool is_forbidden_http_binary_response_field(std::string_view name) noexcept {

@@ -56,6 +56,7 @@ template <typename visitor_type, typename key_allocation_type>
     }
 
     auto& visitor_ref = visitor;
+    std::pmr::string decoded_key(pmr_resource_or_default(resource));
     while (true) {
         const auto key = parse_json_string(remaining);
         if (!key.has_value() || !consume_json_char(remaining, ':')) {
@@ -64,14 +65,11 @@ template <typename visitor_type, typename key_allocation_type>
 
         bool consumed = false;
         if (key->encoding() == json_string_encoding::escaped) {
-            if (!consume_key_allocation(key->raw().size())) {
+            if (!consume_key_allocation(key->raw().size()) ||
+                !decode_json_string_into(key->raw(), decoded_key)) {
                 return false;
             }
-            auto decoded_key = decode_json_string(key->raw(), resource);
-            if (!decoded_key.has_value()) {
-                return false;
-            }
-            consumed = static_cast<bool>(visitor_ref(std::string_view(*decoded_key), remaining));
+            consumed = static_cast<bool>(visitor_ref(std::string_view(decoded_key), remaining));
         } else {
             consumed = static_cast<bool>(visitor_ref(key->raw(), remaining));
         }

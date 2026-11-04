@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -302,6 +304,23 @@ struct db_graph_identity final {
     std::size_t scope_{0};
 };
 
+struct db_graph_key final {
+    std::size_t owner_{0};
+    std::size_t relation_{0};
+    std::string_view pk_{};
+
+    bool operator==(const db_graph_key&) const noexcept = default;
+};
+
+struct db_graph_key_hash final {
+    [[nodiscard]] std::size_t operator()(const db_graph_key& key) const noexcept {
+        std::size_t seed = std::hash<std::size_t>{}(key.owner_);
+        seed ^= std::hash<std::size_t>{}(key.relation_) + static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) + (seed << 6U) + (seed >> 2U);
+        seed ^= std::hash<std::string_view>{}(key.pk_) + static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) + (seed << 6U) + (seed >> 2U);
+        return seed;
+    }
+};
+
 // Indices, rather than pointers into result vectors, remain valid when a
 // collection grows. The identity table is temporary operation storage; the
 // resulting entities own their nested values without retaining this table.
@@ -312,6 +331,7 @@ public:
           resource_(pmr_resource_or_default(resource)),
           columns_(resource_),
           identities_(resource_),
+          composite_keys_(resource_),
           key_(resource_) {}
 
     template <typename entity_type>
@@ -321,20 +341,20 @@ public:
             return result;
         }
         resolve_columns<entity_type>(rows.front());
-        key_.reserve(64);
         identities_.reserve(rows.size());
         for (const auto& row : rows) {
-            if (!make_key<entity_type>(row, 0, 0, db_relation_plan::root)) {
+            const auto key = make_key<entity_type>(row, 0, 0, db_relation_plan::root);
+            if (!key) {
                 throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL root primary key in a relation query");
             }
-            auto position = identities_.find(key_);
+            auto position = identities_.find(*key);
             db_graph_identity identity;
             if (position == identities_.end()) {
                 identity = {result.size(), next_scope_++};
                 entity_type entity(resource_);
                 decode_columns(entity, row, 0);
                 result.push_back(std::move(entity));
-                identities_.emplace(key_, identity);
+                store_identity<entity_type>(*key, identity);
             } else {
                 identity = position->second;
             }
@@ -381,29 +401,52 @@ private:
     }
 
     template <typename entity_type>
-    bool make_key(const db_row& row, std::size_t offset, std::size_t owner_value, std::size_t relation) {
-        key_.clear();
-        append_db_number(key_, static_cast<std::uint64_t>(owner_value));
-        key_.push_back('/');
-        append_db_number(key_, static_cast<std::uint64_t>(relation));
-        key_.push_back('/');
-        std::size_t nulls = 0;
-        for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
-            if constexpr (column_type::options.primary_key_) {
-                const auto value = row[columns_[offset + i]].value();
-                if (!value) {
-                    ++nulls;
-                    return;
+    std::optional<db_graph_key> make_key(const db_row& row, std::size_t offset, std::size_t owner_value, std::size_t relation) {
+        if constexpr (db_primary_key_count<entity_type>() == 1) {
+            std::optional<std::string_view> pk;
+            for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
+                if constexpr (column_type::options.primary_key_) {
+                    pk = row[columns_[offset + i]].value();
                 }
-                append_db_number(key_, static_cast<std::uint64_t>(value->size()));
-                key_.push_back(':');
-                key_.append(*value);
+            });
+            if (!pk) {
+                return std::nullopt;
             }
-        });
-        if (nulls != 0 && nulls != db_primary_key_count<entity_type>()) {
-            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "partially NULL composite primary key in a relation query");
+            return db_graph_key{owner_value, relation, *pk};
+        } else {
+            key_.clear();
+            if (key_.capacity() < 64) {
+                key_.reserve(64);
+            }
+            std::size_t nulls = 0;
+            for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
+                if constexpr (column_type::options.primary_key_) {
+                    const auto value = row[columns_[offset + i]].value();
+                    if (!value) {
+                        ++nulls;
+                        return;
+                    }
+                    append_db_number(key_, static_cast<std::uint64_t>(value->size()));
+                    key_.push_back(':');
+                    key_.append(*value);
+                }
+            });
+            if (nulls != 0 && nulls != db_primary_key_count<entity_type>()) {
+                throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "partially NULL composite primary key in a relation query");
+            }
+            if (nulls != 0) {
+                return std::nullopt;
+            }
+            return db_graph_key{owner_value, relation, key_};
         }
-        return nulls == 0;
+    }
+
+    template <typename entity_type>
+    void store_identity(db_graph_key key, db_graph_identity identity) {
+        if constexpr (db_primary_key_count<entity_type>() > 1) {
+            key.pk_ = composite_keys_.emplace_back(key.pk_);
+        }
+        identities_.emplace(key, identity);
     }
 
     template <typename entity_type>
@@ -415,33 +458,33 @@ private:
             }
             const auto& node_value = plan_.nodes()[node_index];
             using target_type = typename relation_type::target_entity_type;
-            const bool present = make_key<target_type>(row, node_value.offset_, scope, node_index);
+            const auto key = make_key<target_type>(row, node_value.offset_, scope, node_index);
             if constexpr (relation_type::is_collection) {
                 auto& collection_value = db_entity_access<entity_type>::template ensure_relation_collection<relation_type::name>(entity);
-                if (!present) {
+                if (!key) {
                     return;
                 }
-                auto position = identities_.find(key_);
+                auto position = identities_.find(*key);
                 db_graph_identity identity;
                 if (position == identities_.end()) {
                     identity = {collection_value.size(), next_scope_++};
                     target_type child_value(resource_);
                     decode_columns(child_value, row, node_value.offset_);
                     collection_value.push_back(std::move(child_value));
-                    identities_.emplace(key_, identity);
+                    store_identity<target_type>(*key, identity);
                 } else {
                     identity = position->second;
                 }
                 decode_relations(collection_value[identity.index_], row, node_index, identity.scope_);
             } else {
-                if (!present) {
+                if (!key) {
                     if (entity.template is_set<relation_type::name>() && !entity.template is_null<relation_type::name>()) {
                         throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "inconsistent to-one rows in a relation query");
                     }
                     db_entity_access<entity_type>::template set_relation_null<relation_type::name>(entity);
                     return;
                 }
-                auto position = identities_.find(key_);
+                auto position = identities_.find(*key);
                 db_graph_identity identity;
                 if (position == identities_.end()) {
                     if (entity.template is_set<relation_type::name>()) {
@@ -450,7 +493,7 @@ private:
                     identity = {0, next_scope_++};
                     auto& child_value = db_entity_access<entity_type>::template emplace_relation<relation_type::name>(entity);
                     decode_columns(child_value, row, node_value.offset_);
-                    identities_.emplace(key_, identity);
+                    store_identity<target_type>(*key, identity);
                 } else {
                     identity = position->second;
                 }
@@ -462,7 +505,8 @@ private:
     const db_relation_plan& plan_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<std::size_t> columns_;
-    std::pmr::unordered_map<std::pmr::string, db_graph_identity> identities_;
+    std::pmr::unordered_map<db_graph_key, db_graph_identity, db_graph_key_hash> identities_;
+    std::pmr::deque<std::pmr::string> composite_keys_;
     std::pmr::string key_;
     std::size_t next_scope_{1};
 };

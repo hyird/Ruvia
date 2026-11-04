@@ -150,10 +150,13 @@ private:
 // stay empty and the caller keeps what the transport already knows.
 [[nodiscard]] inline forwarded_client resolve_forwarded_client(
     const http_request& request, const trusted_proxy_set& trusted) noexcept {
+    const bool has_x_for = request.header("X-Forwarded-For").has_value();
+    if (!has_x_for && !request.header("Forwarded").has_value()) {
+        return {};
+    }
     forwarding_chain forwarded;
     forwarding_chain x_forwarded_for;
-    bool has_x_for = false;
-    const bool trust_x_proto = trusted.trusts_x_forwarded_proto();
+    const bool trust_x_proto = has_x_for && trusted.trusts_x_forwarded_proto();
     std::string_view single_x_proto_value{};
     std::size_t x_proto_header_count = 0;
     const auto headers = request.headers();
@@ -163,8 +166,7 @@ private:
             visit_comma_separated(header.value(), [&](std::string_view element) {
                 forwarded.append(trusted, parse_forwarded_element(element));
             });
-        } else if (name.size() == 15U && http_ascii_equals_ignore_case(name, "X-Forwarded-For")) {
-            has_x_for = true;
+        } else if (has_x_for && name.size() == 15U && http_ascii_equals_ignore_case(name, "X-Forwarded-For")) {
             visit_comma_separated(header.value(), [&](std::string_view element) {
                 x_forwarded_for.append(trusted, {forwarded_node_address(element), {}});
             });

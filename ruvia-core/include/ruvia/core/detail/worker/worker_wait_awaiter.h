@@ -264,13 +264,7 @@ private:
             timer_.cancel_and_notify();
             return;
         }
-        auto* waiter = this;
-        worker_handle_access::defer_or_terminate(
-            state().worker_, [waiter] { waiter->resume_continuation(); });
-    }
-
-    void resume_continuation() noexcept {
-        completion_.continuation().resume();
+        state().worker_.defer_resume(completion_.continuation());
     }
 
     void on_timer_completed(worker_timer_outcome outcome) noexcept {

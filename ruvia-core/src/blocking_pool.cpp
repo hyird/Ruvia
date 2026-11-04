@@ -113,26 +113,24 @@ struct blocking_pool::impl_type final {
     }
 
     void run() noexcept {
+        std::unique_lock lock(mutex_);
         for (;;) {
-            move_only_function<void()> task;
-            node_type* node = nullptr;
-            {
-                std::unique_lock lock(mutex_);
-                condition_.wait(lock, [this] { return stopping_ || queued_ != 0; });
-                if (stopping_) {
-                    // Stopping discards every task that has not already been
-                    // picked up. A worker must never start queued work after
-                    // the stop request becomes visible.
-                    return;
-                }
-                if (!queue_.try_pop(node)) {
-                    std::terminate();
-                }
-                --queued_;
-                ++running_;
+            condition_.wait(lock, [this] { return stopping_ || queued_ != 0; });
+            if (stopping_) {
+                // Stopping discards every task that has not already been
+                // picked up. A worker must never start queued work after
+                // the stop request becomes visible.
+                return;
             }
-            task = std::move(node->task_);
-            release_node(*node);
+            node_type* node = nullptr;
+            if (!queue_.try_pop(node)) {
+                std::terminate();
+            }
+            --queued_;
+            ++running_;
+            lock.unlock();
+
+            move_only_function<void()> task = std::move(node->task_);
             try {
                 task();
             } catch (...) {
@@ -144,11 +142,12 @@ struct blocking_pool::impl_type final {
             // The task owns the completion it answered; destroy it here rather
             // than under the lock the next iteration takes.
             task = nullptr;
-            {
-                std::lock_guard lock(mutex_);
-                --running_;
-                ++completed_;
-            }
+
+            lock.lock();
+            node->next_ = free_head_;
+            free_head_ = node;
+            --running_;
+            ++completed_;
         }
     }
 

@@ -44,5 +44,6 @@ namespace ruvia::detail {
 [[nodiscard]] std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view literal) noexcept;
 [[nodiscard]] bool is_valid_ipv_future(std::string_view literal) noexcept;
 [[nodiscard]] bool is_valid_reg_name(std::string_view value) noexcept;
+[[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept;
 
 }  // namespace ruvia::detail

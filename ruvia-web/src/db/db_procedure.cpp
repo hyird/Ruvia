@@ -12,27 +12,6 @@ void require_sql_state(std::string_view state_value) {
         throw std::invalid_argument("SQLSTATE must have five uppercase alphanumeric characters and indicate failure");
     }
 }
-std::string_view table_lock_mode_name(db_table_lock_mode mode) {
-    switch (mode) {
-        case db_table_lock_mode::access_share:
-            return "ACCESS SHARE";
-        case db_table_lock_mode::row_share:
-            return "ROW SHARE";
-        case db_table_lock_mode::row_exclusive:
-            return "ROW EXCLUSIVE";
-        case db_table_lock_mode::share_update_exclusive:
-            return "SHARE UPDATE EXCLUSIVE";
-        case db_table_lock_mode::share:
-            return "SHARE";
-        case db_table_lock_mode::share_row_exclusive:
-            return "SHARE ROW EXCLUSIVE";
-        case db_table_lock_mode::exclusive:
-            return "EXCLUSIVE";
-        case db_table_lock_mode::access_exclusive:
-            return "ACCESS EXCLUSIVE";
-    }
-    throw std::invalid_argument("unknown table lock mode");
-}
 class procedure_append_guard final {
 public:
     explicit procedure_append_guard(std::pmr::string& target, std::size_t extra_reserve = 48U)
@@ -291,7 +270,7 @@ void db_procedure::execute_dynamic(db_expression command, std::span<const db_exp
     guard.commit();
 }
 void db_procedure::lock_table(std::string_view table, db_table_lock_mode mode, bool nowait) {
-    const auto mode_name = table_lock_mode_name(mode);
+    const auto mode_name = detail::table_lock_mode_name(mode);
     procedure_append_guard guard(
         statements_, 11U + table.size() + 8U + mode_name.size() + 5U + (nowait ? 7U : 0U) + 2U);
     statements_.append("LOCK TABLE ");

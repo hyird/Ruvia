@@ -7,6 +7,24 @@
 
 namespace ruvia {
 
+namespace {
+
+std::pmr::string begin_timescale_perform(std::pmr::memory_resource* resource, db_driver driver,
+    std::string_view function, std::string_view table_value, std::size_t extra_reserve) {
+    std::pmr::string name(resource);
+    name.reserve(table_value.size() + 4U);
+    detail::append_db_qualified_identifier(name, table_value, driver);
+    std::pmr::string sql(resource);
+    sql.reserve(extra_reserve + name.size());
+    sql += "PERFORM \"";
+    sql += function;
+    sql += "\"(";
+    detail::append_db_string_literal(sql, name, driver);
+    return sql;
+}
+
+}  // namespace
+
 void db_schema::set_table_options(std::string_view table_value, std::span<const db_table_option> options) {
     require_postgresql();
     if (options.empty()) {
@@ -60,14 +78,9 @@ void db_schema::set_database_option(std::string_view database_value, std::string
 void db_schema::create_hypertable(const db_hypertable_options& options) {
     require_postgresql();
     // Validate names separately from the SQL text values consumed by Timescale.
-    std::pmr::string table(resource_);
-    table.reserve(options.table_.size() + 4U);
-    detail::append_db_qualified_identifier(table, options.table_, driver_);
+    auto sql = begin_timescale_perform(
+        resource_, driver_, "create_hypertable", options.table_, 160U + options.time_column_.size());
     detail::validate_db_identifier(options.time_column_, driver_);
-    std::pmr::string sql(resource_);
-    sql.reserve(160U + table.size() + options.time_column_.size());
-    sql += "PERFORM \"create_hypertable\"(";
-    detail::append_db_string_literal(sql, table, driver_);
     sql += ", \"by_range\"(";
     detail::append_db_string_literal(sql, options.time_column_, driver_);
     if (!options.chunk_interval_.empty()) {
@@ -85,13 +98,7 @@ void db_schema::create_hypertable(const db_hypertable_options& options) {
 }
 void db_schema::set_chunk_time_interval(std::string_view table_value, db_expression interval) {
     require_postgresql();
-    std::pmr::string name(resource_);
-    name.reserve(table_value.size() + 4U);
-    detail::append_db_qualified_identifier(name, table_value, driver_);
-    std::pmr::string sql(resource_);
-    sql.reserve(64U + name.size());
-    sql += "PERFORM \"set_chunk_time_interval\"(";
-    detail::append_db_string_literal(sql, name, driver_);
+    auto sql = begin_timescale_perform(resource_, driver_, "set_chunk_time_interval", table_value, 64U);
     sql += ", ";
     append_expression(sql, interval);
     sql += ')';
@@ -137,13 +144,7 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
 }
 void db_schema::add_compression_policy(std::string_view table_value, db_expression after, bool if_not_exists) {
     require_postgresql();
-    std::pmr::string name(resource_);
-    name.reserve(table_value.size() + 4U);
-    detail::append_db_qualified_identifier(name, table_value, driver_);
-    std::pmr::string sql(resource_);
-    sql.reserve(96U + name.size());
-    sql += "PERFORM \"add_compression_policy\"(";
-    detail::append_db_string_literal(sql, name, driver_);
+    auto sql = begin_timescale_perform(resource_, driver_, "add_compression_policy", table_value, 96U);
     sql += ", \"compress_after\" => ";
     append_expression(sql, after);
     sql += ", \"if_not_exists\" => ";
@@ -153,13 +154,7 @@ void db_schema::add_compression_policy(std::string_view table_value, db_expressi
 }
 void db_schema::remove_compression_policy(std::string_view table_value, bool if_exists) {
     require_postgresql();
-    std::pmr::string name(resource_);
-    name.reserve(table_value.size() + 4U);
-    detail::append_db_qualified_identifier(name, table_value, driver_);
-    std::pmr::string sql(resource_);
-    sql.reserve(72U + name.size());
-    sql += "PERFORM \"remove_compression_policy\"(";
-    detail::append_db_string_literal(sql, name, driver_);
+    auto sql = begin_timescale_perform(resource_, driver_, "remove_compression_policy", table_value, 72U);
     sql += ", \"if_exists\" => ";
     sql += if_exists ? "TRUE" : "FALSE";
     sql += ')';
@@ -167,13 +162,7 @@ void db_schema::remove_compression_policy(std::string_view table_value, bool if_
 }
 void db_schema::add_retention_policy(std::string_view table_value, db_expression after, bool if_not_exists) {
     require_postgresql();
-    std::pmr::string name(resource_);
-    name.reserve(table_value.size() + 4U);
-    detail::append_db_qualified_identifier(name, table_value, driver_);
-    std::pmr::string sql(resource_);
-    sql.reserve(96U + name.size());
-    sql += "PERFORM \"add_retention_policy\"(";
-    detail::append_db_string_literal(sql, name, driver_);
+    auto sql = begin_timescale_perform(resource_, driver_, "add_retention_policy", table_value, 96U);
     sql += ", \"drop_after\" => ";
     append_expression(sql, after);
     sql += ", \"if_not_exists\" => ";
@@ -183,13 +172,7 @@ void db_schema::add_retention_policy(std::string_view table_value, db_expression
 }
 void db_schema::remove_retention_policy(std::string_view table_value, bool if_exists) {
     require_postgresql();
-    std::pmr::string name(resource_);
-    name.reserve(table_value.size() + 4U);
-    detail::append_db_qualified_identifier(name, table_value, driver_);
-    std::pmr::string sql(resource_);
-    sql.reserve(72U + name.size());
-    sql += "PERFORM \"remove_retention_policy\"(";
-    detail::append_db_string_literal(sql, name, driver_);
+    auto sql = begin_timescale_perform(resource_, driver_, "remove_retention_policy", table_value, 72U);
     sql += ", \"if_exists\" => ";
     sql += if_exists ? "TRUE" : "FALSE";
     sql += ')';

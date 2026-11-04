@@ -16,11 +16,11 @@ template <typename visitor_type>
     std::pmr::memory_resource* resource, visitor_type&& visitor) {
     bool valid = true;
     auto& visitor_ref = visitor;
+    std::pmr::string decoded_name(resource);
     // Form decoding keeps malformed '%' sequences literally (WHATWG), so the
     // body needs no separate percent-encoding pass.
     const bool completed = ruvia::visit_url_encoded_pairs(body, [&](std::string_view name,
                                                                     std::string_view value) {
-        std::pmr::string decoded_name(resource);
         const auto decoded = ruvia::decode_url_component(name, decoded_name, url_decode_mode::form);
         if (!decoded.has_value()) {
             valid = false;

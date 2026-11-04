@@ -186,16 +186,17 @@ public:
                 delivered_ = true;
             }
         };
-        auto posted = handle().post([completion, bound_executor,
+        auto posted = handle().post([bound_executor,
                                         retirement_lease = std::move(retirement_lease),
                                         launch = launch_guard(std::move(task_value), completion)]() mutable {
             try {
                 detail::async_start_task(std::move(*launch.task_),
-                    root_completion(bound_executor, completion, retirement_lease));
+                    root_completion(std::move(bound_executor), launch.completion_, std::move(retirement_lease)));
                 launch.release();
             } catch (...) {
+                auto failed_completion = std::move(launch.completion_);
                 launch.release();
-                completion->complete_failure(std::current_exception());
+                failed_completion->complete_failure(std::current_exception());
             }
         });
         if (!posted.accepted()) {

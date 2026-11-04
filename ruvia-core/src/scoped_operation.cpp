@@ -57,7 +57,7 @@ struct operation_scope::join_awaiter final {
 };
 
 void operation_scope::close() noexcept {
-    if (expiring_capabilities_) {
+    if (expiring_capabilities_ || (!active_ && head_ == nullptr && capability_head_ == nullptr)) {
         return;
     }
     for (auto* operation = head_; operation != nullptr; operation = operation->next_) {

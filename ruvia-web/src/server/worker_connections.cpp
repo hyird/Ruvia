@@ -59,11 +59,18 @@ void configure_accepted_socket(asio::ip::tcp::socket& socket) {
 }
 
 void assign_remote_address(std::pmr::string& output, const asio::ip::address& address) {
-    if (!address.is_v4()) {
-        output = address.to_string();
-        return;
+    asio::ip::address_v4 v4;
+    if (address.is_v4()) {
+        v4 = address.to_v4();
+    } else {
+        const auto v6 = address.to_v6();
+        if (!v6.is_v4_mapped()) {
+            output = address.to_string();
+            return;
+        }
+        v4 = asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
     }
-    const auto bytes_value = address.to_v4().to_bytes();
+    const auto bytes_value = v4.to_bytes();
     std::array<char, 15> buffer;
     char* cursor_value = buffer.data();
     for (std::size_t i = 0; i < bytes_value.size(); ++i) {

@@ -15,6 +15,7 @@
 #include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
@@ -171,6 +172,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     if (!section_size.add(":status", http_status_code_token_view(status_token))) {
         return false;
     }
+    std::size_t reserve_bytes = 5U;
     for (const auto& header : response.headers()) {
         const auto known_bit = http_response_header_access::known_bit(header);
         if (known_bit == response_header_content_length) {
@@ -179,48 +181,33 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         if (!section_size.add(header.name(), header.value())) {
             return false;
         }
+        const auto known = get_http2_known_header_encoding(known_bit);
+        reserve_bytes += (known.hpack_name_index_ != 0 ? 0U : header.name().size()) +
+                         header.value().size() + 6U;
     }
     std::string_view generated_date;
     if ((known_bits & response_header_date) == 0) {
         generated_date = cached_date_value();
-        if (!generated_date.empty() && !section_size.add("date", generated_date)) {
-            return false;
+        if (!generated_date.empty()) {
+            if (!section_size.add("date", generated_date)) {
+                return false;
+            }
+            reserve_bytes += generated_date.size() + 4U;
         }
     }
-    std::array<char, 20> content_length_bytes;
+    std::array<char, http_max_unsigned_decimal_size> content_length_bytes;
     std::string_view content_length_value;
     if (const auto content_length = plan.content_length()) {
-        const auto [end, error] = std::to_chars(content_length_bytes.data(),
-            content_length_bytes.data() + content_length_bytes.size(), *content_length);
-        if (error != std::errc{}) {
-            return false;
-        }
-        content_length_value = std::string_view(
-            content_length_bytes.data(), static_cast<std::size_t>(end - content_length_bytes.data()));
+        content_length_value = http_format_unsigned(content_length_bytes, *content_length);
         if (!section_size.add("content-length", content_length_value)) {
             return false;
         }
+        reserve_bytes += content_length_value.size() + 4U;
     }
 
     auto& header_block = stream.local_header_block();
     try {
         header_block.clear();
-        std::size_t reserve_bytes = 5U;
-        for (const auto& header : response.headers()) {
-            const auto known_bit = http_response_header_access::known_bit(header);
-            if (known_bit == response_header_content_length) {
-                continue;
-            }
-            const auto known = get_http2_known_header_encoding(known_bit);
-            reserve_bytes += (known.hpack_name_index_ != 0 ? 0U : header.name().size()) +
-                             header.value().size() + 6U;
-        }
-        if (!generated_date.empty()) {
-            reserve_bytes += generated_date.size() + 4U;
-        }
-        if (!content_length_value.empty()) {
-            reserve_bytes += content_length_value.size() + 4U;
-        }
         if (reserve_bytes > 15U) {
             header_block.reserve(reserve_bytes);
         }

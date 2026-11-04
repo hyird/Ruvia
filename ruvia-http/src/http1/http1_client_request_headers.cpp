@@ -52,6 +52,13 @@ bool analyze_header(http_header_view header, detail::request_header_kind kind,
             error = http1_client_request_prepare_error::invalid_upgrade;
             return false;
         }
+        if (facts.upgrade_field_count_ == 0) {
+            facts.first_upgrade_value_ = value;
+        } else {
+            ++facts.upgrade_value_bytes_;
+        }
+        facts.upgrade_value_bytes_ += value.size();
+        ++facts.upgrade_field_count_;
     } else if (kind == detail::request_header_kind::te) {
         facts.has_te_ = true;
     } else if (kind == detail::request_header_kind::trailer) {

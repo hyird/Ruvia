@@ -26,10 +26,10 @@ bool is_reserved_handshake_header(std::string_view name, detail::request_header_
         case detail::request_header_kind::sec_websocket_extensions:
             return true;
         case detail::request_header_kind::other:
-            return is_http_protocol_managed_request_field(name) ||
+            return detail::is_protocol_managed_request_field(kind, name) ||
                    http_ascii_equals_ignore_case(name, "sec-websocket-accept");
         default:
-            return is_http_protocol_managed_request_field(name);
+            return detail::is_protocol_managed_request_field(kind, name);
     }
 }
 }  // namespace
