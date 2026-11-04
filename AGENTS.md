@@ -165,12 +165,12 @@
 - 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用（`next`）通过三态控制块（`fresh` / `invoked` / `expired`）强制 single-shot 并在当前中间件栈帧退出后立即失效以防逃逸。前缀作用域中间件（`use_at`）按百分比解码并归一化尾斜杠后的完整路径段匹配（如 `/admin` 覆盖 `/%61dmin/x` 但不匹配 `/administrator`），归属关系在启动期编译进路由计划，仅跨边界的参数化路由在分发期检查请求路径。
 - `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
 - 上下文（`context` 与 `web_worker_context`）只暴露 typed capability（`web_worker_context` 直接借用 worker 的客户端注册表与停止令牌，启动后台任务零所有权复制，worker 退役前 `join` 全部已投递任务）；callback 由应用拥有。
-- 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
+- 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；构造响应时通过 `take_draft_or_new()` 原位移动接管 `draft` 实例并仅在未显式设置时补充默认 `Content-Type`（消除新建空响应再拷贝 `draft` 字段的开销），替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
 - `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠防止自包含结构移动时先销毁自身存储。
 - ORM 与直接查询保持独立公开路线，不混用内部实现。映射结果的标量及容器元素必须递归拥有数据；借用字段读取只在显式持有原始结果的路线提供。数值查询谓词保持字面量精度（不将 `double` 隐式窄化为 `float`）。
 - 数据库与 Redis 韧性：
-  - 事务外查询/执行可按驱动契约共享流水线连接（PostgreSQL 常规 `query` / `execute` 每连接维护有界服务端命名预处理语句集合，流式查询以无名语句运行，`db_migrator` 使用独立专用连接），事务内独占连接租约；`db_transaction` 与 `db_stream_result` 的操作借用堆上地址稳定的内部状态（移动外层句柄不使冷任务或运行中帧失效），并发启动重叠操作抛出 `std::logic_error` 但绝不中止当前已持有事务的在途语句；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
-  - 编译期 SQL 字面量（`fixed_string`）在编译期拒绝 NUL 字节、推导或验证数据库方言（MariaDB `?` vs PostgreSQL `$n`，正确跳过注释、字符串与 dollar-quoted 标签/含 `$` 标识符）并断言占位符数与实参个数严格匹配；
+  - 事务外查询/执行可按驱动契约共享流水线连接（PostgreSQL 常规 `query` / `execute` 每连接维护有界服务端命名预处理语句集合，流式查询以无名语句运行，`db_migrator` 使用独立专用连接；MariaDB 单遍扫描分类独占语句与存储过程调用，并强制拒绝 `LOCAL INFILE` 请求以防服务端读取宿主本地文件），事务内独占连接租约；`db_transaction` 与 `db_stream_result` 的操作借用堆上地址稳定的内部状态（移动外层句柄不使冷任务或运行中帧失效），并发启动重叠操作抛出 `std::logic_error` 但绝不中止当前已持有事务的在途语句；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
+  - 编译期 SQL 字面量（`fixed_string`）在编译期拒绝 NUL 字节、推导或验证数据库方言（MariaDB `?` vs PostgreSQL `$n`，正确跳过注释、字符串与 dollar-quoted 标签/含 `$` 标识符）并断言占位符数与实参个数严格匹配；运行期 PostgreSQL 字符串参数严禁包含内嵌 NUL 或超出 `INT_MAX` 长度，内联 `double` 参数强制校验有限值（`std::isfinite`）；
   - 单次 SQL 执行与迁移（`db_migration`）严格限制为单条语句，迁移 ID 在启动期做大小写不敏感去重校验；PostgreSQL 迁移默认将 DDL 与迁移记录写入置于同一事务（仅不支持事务的 DDL 显式声明 `unwrapped`），且必须识别已执行迁移内容被篡改；
   - Redis 连接池隔离与批处理：同一别名下常规请求/响应池与按需惰性建连的独立阻塞命令池（`blocking_pool_size_per_worker_`）物理隔离，防止阻塞命令耗尽常规连接；有界阻塞命令在命令写出时按“服务端阻塞时长 + 宽限期”武装截止期（不因槽位获取或建连耗时缩减等待窗口），无限期阻塞等待强制要求显式 `stop_token` 或操作超时；RESP 响应同时受总字节（`max_reply_bytes_`）与数组嵌套深度（`max_array_depth_`）约束；批处理（`redis_batch`）在返回前完成参数拥有化，事务（`transaction`）严禁含阻塞命令或同步屏障，非事务 `pipeline` 仅允许携带具备明确超时或可取消 `stop_token` 的 `WAIT` / `WAITAOF` 屏障；
   - 数据库查询结果缓存（Redis 承载）须共享同一操作的剩余截止期与组合取消令牌（`stop_group`）：遇到取消或停机（`cancelled` / `closing`）时必须立即上抛，不得被容错开关静默吞掉；截止期超时统一按查询超时处理。
