@@ -77,7 +77,7 @@
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
 - HTTP/1 与通用表示语义：
-  - 重点核对 `Host` 与请求目标（`http_authority_view` 拒绝 `userinfo` 并严格区分端口缺省、空端口与显式数值端口；默认端口未知即 `0` 时，缺省/空端口绝不与显式 `:0` 相等，非法 authority 永不相等）、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接；`CONNECT` 与 `TRACE` 接受显式零长度分帧但拒绝非空正文，而 `OPTIONS` 正文要求 `Content-Type` 仅约束发送方 RFC 9110 §9.3.7，入站准入不因缺失 `Content-Type` 拒绝）；
+  - 重点核对 `Host` 与请求目标（`http_authority_view` 拒绝 `userinfo` 并严格区分端口缺省、空端口与显式数值端口；默认端口未知即 `0` 时，缺省/空端口绝不与显式 `:0` 相等，非法 authority 永不相等）、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（客户端无正文禁止发 `100-continue`；HTTP/1.0 接收方忽略 `100-continue` 但保留 `unsupported` 扩展事实；服务端同时收到 `Upgrade` 与 `100-continue` 时按 RFC 9110 §7.8 必须在 `101` 前先发送 `100 Continue`；通用 1xx 临时响应排除 `101`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接；`CONNECT` 与 `TRACE` 接受显式零长度分帧但拒绝非空正文，而 `OPTIONS` 正文要求 `Content-Type` 仅约束发送方 RFC 9110 §9.3.7，入站准入不因缺失 `Content-Type` 拒绝）；
   - HTTP/1 客户端请求准备阶段由写入器原子决定 `Expect: 100-continue` 发射与正文门控（`continue_gated`，门控等待超时归属 I/O 运行时策略），并将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；携带正文的客户端请求必须在通知外部已完整写出预备请求正文后才可接受 `101`，且 `1xx` 的 `allow_reuse` 仅允许当前交换继续等待最终响应而不提前归还连接池；客户端响应头保留原始状态码（`received_status()`）但将收到的 `600..999` 按 RFC 9110 §15 映射为 `500` 处理，且 `HEAD` 响应（含 `205`）的 `Content-Length` 仅作元数据而不作为接收正文长度；
   - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；逗号列表与分号参数统一复用唯一引号感知扫描器（`http_find_unquoted_delimiter`，识别 `quoted-string` 与 `\"` 转义），但 `Cookie` 解析按 RFC 6265 严禁赋予 `"` 引号包裹语义；
   - 首部与 `Trailer` 节字节预算（`http_field_section_budget`）统一按规范化行开销（`name + value + 4`，与收到的 OWS 长度无关）及终止空行计入 `max_http_header_bytes`（计费失败保持原预算不变）；请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；响应 `Trailer` 通过 `validate_http_response_trailers` 先行构造借用证明（`http_response_trailer_section`），响应头序列化（`append_http1_response_head`）优先保留显式 `Date`（未设置时复用缓存时间）且从同一十进制 token 测量并写出 `Content-Length`；
@@ -113,7 +113,7 @@
 - 显式 Worker 内存模型与 PMR 分级：
   - 优先值所有权与 RAII。借用视图不延长 owner 寿命，零拷贝不得破坏借用有效期；分配器覆盖对象寿命，结果持有存储直到析构；
   - 框架动态存储通过显式传递的 `worker_memory` / `request_memory` 管理（禁止使用 `thread_local` 隐式全局池），公开启动配置不要求用户提供 PMR；
-  - `worker_memory` 无内部同步锁，直接对接进程级 mimalloc 上游（不经过全局默认 PMR）：小对象走 worker 常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的对齐精确尺寸块缓存，超出预算立即归还上游；
+  - `worker_memory` 无内部同步锁，直接对接进程级线程安全 `process_resource()`（mimalloc 上游，不替换全局默认 PMR，`construct_pmr_object` 在构造抛异常时立即按原尺寸/对齐归还已分配内存）：小对象走 worker 常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的对齐精确尺寸块缓存，超出预算立即归还上游；
   - 单次请求和握手使用 `request_memory`（`monotonic_buffer_resource` arena），优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；长生命周期连接状态、结果、池化数据以及无请求 arena 的后台投递任务（`web_worker_context`）使用 `worker_memory` 可回收 `pool()`（后台任务分配的存储须在任务作用域结束前于本 worker 销毁）；
   - 异步入口返回前完成输入拥有化和资源归一化（如跨请求复用的查询谓词暂存于进程级 PMR，生成异步操作前归一化至目标 worker 内存池）；拥有型 PMR 集合（如 `entity_rows`）跨不同 `memory_resource` 移动赋值时必须先在目标资源中递归重绑定全部元素后再交换，防止浅拷贝或分配器失配；
   - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；网络输入缓冲（`http_io_buffer`）为读取扩容时不零初始化待覆写字节，`consume()` 仅推进游标保持既有可读视图有效，`prepare()` 仅在已消费前缀足以覆盖存活字节时才前移压缩（否则几何扩容摊销开销），`clear_retaining_small()` 归还超大块，严禁按块重复 O(N²) 搬移；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
@@ -131,7 +131,7 @@
   - Windows：每个 worker 使用 `SO_REUSEADDR` 独立绑定监听 socket，全部 ready 后在共享监听句柄矩阵上发起原生 `AcceptEx`，不使用单监听回退（不保证严格均衡，也不阻止其他进程复用端口）。监听 IOCP 收到属于其他 worker 的完成时，只向 origin worker 的预留有界完成槽（容量由 worker 与监听器矩阵确定，不占用普通业务队列）发布结果并唤醒，禁止在当前线程处理或销毁 origin 的 socket、业务状态及 PMR。
 - 跨线程调度、唤醒与通道：
   - 跨线程业务调度走有界队列，禁止直接操作其他 worker 的连接或状态；`post_factory` 先预留有界准入再同步执行工厂，非平凡 `post` 在调用用户构造/移动前先保存 `worker_handle` 快照以防重入退役清空原句柄；调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次；
-  - 跨线程唤醒（`worker_notification`）采用原子锁存与非阻塞原生写，已存在未决锁存时自动合并（`coalesced`）避免唤醒风暴，析构前须确保生产者静默且 owner worker 已显式 `close()` 并 `join` 挂起等待；
+  - 跨线程唤醒（`worker_notification`）采用原子锁存与非阻塞原生写，已存在未决锁存时自动合并（`coalesced`）避免唤醒风暴，析构前须确保生产者静默且 owner worker 已显式 `close()` 并 `join` 挂起等待；worker 内侵入式唤醒（`worker_signal`）在构造冷等待操作时即递增 `reserved_waits_` 且仅限未启动态移动，存在未决或预留等待时析构直接 `std::terminate()`；
   - 已持有资源的冷路径异步清理使用 `event_loop::defer_cleanup` 获取退役保护租约，绕过普通业务队列有界准入但保证在事件循环释放物理上下文前执行完毕；已接纳挂起协程的延迟恢复（`defer_resume`）不受有界队列满拒绝，在本 worker 线程上零类型擦除直达事件循环下一轮次；
   - 跨 worker 有界 `channel` 在构造期预分配槽位，预留（`reserved_`）与已入队（`queued_`）合并计入容量上限防超发；单次异步交付（`one_shot`）将停机钩子作为首个成员以确保最后解链，并在互斥锁外执行结果值的移动提取或析构；跨 worker 投递的数据须持有独立所有权，确需共享可变数据时须明确同步与一致性语义，优先使用不可变快照。
 
