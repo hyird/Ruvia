@@ -64,7 +64,7 @@
   - 限流对客户端地址做规范化归并（无作用域 IPv6 按 `/64` 聚合、IPv4-mapped IPv6 归并至对应 IPv4、作用域 IPv6 包含数值 scope），防止同网段地址变形绕过配额。
   - 服务端 `session` 仅接受定长合法格式 ID，每次非空写入在响应头 commit 时自动轮换 ID 防会话固定攻击，替换已过期或被吊销会话返回 409；一旦响应头（含流式、WebSocket 或 `CONNECT` 握手头）开始发送，任何会话写操作立即抛出 `std::logic_error`。
   - 静态文件服务在构造期归一化根目录并建立不可变内存索引（支持按预算常驻高频小文件），默认拒绝隐藏路径段（`.` 开头或含 `/.`）、符号链接越界与非普通文件；非常驻文件在打开读取时校验底层身份（device、inode、mtime），磁盘文件被修改时严格 fail closed 报错拒绝以防按旧长度发送截断/错位内容；后台刷新在 worker 外全量构建并在请求间隙原子切换，构建中途任一文件系统操作失败则完整保留旧快照。
-  - 代理转发首部（`Forwarded` / `X-Forwarded-*`）仅在可信代理（`trusted_proxy_config`）下采信；CORS 校验遇到畸形或重复/多值 `Origin` 与 `Access-Control-Request-Method` 时绝不生成跨源授权首部（严禁从多值 `Origin` 中挑选其一放行），动态跨源响应自动追加对应 `Vary` 令牌防缓存污染；Cookie 签名、JWT 验证等安全凭证对比使用常量时间比较。
+  - 代理转发首部（`Forwarded` / `X-Forwarded-*`）仅在可信代理（`trusted_proxy_config`）下采信；CORS 校验遇到畸形或重复/多值 `Origin` 与 `Access-Control-Request-Method` 时绝不生成跨源授权首部（严禁从多值 `Origin` 中挑选其一放行），动态跨源响应自动追加对应 `Vary` 令牌防缓存污染；Cookie 签名、JWT 验证等安全凭证对比使用常量时间比较，JWT 强制校验满足 RFC 7518 的 HMAC 最小密钥字节长度并默认要求 `exp` 过期声明。
   - TLS 安全基线（RFC 9846 / RFC 9525）：证书、私钥与 CA 在注册时一次性加载校验，私钥口令副本在返回前主动擦除（cleanse）；仅协商 TLS 1.2（强制 ECDHE + AEAD，拒绝重协商）或 TLS 1.3；证书主机名严格匹配 `subjectAltName`（`DNS-ID` 最左完整标签通配、`IP` 精确匹配，禁用 `Common Name`）；连接发出的 TLS 记录总数受 `max_outgoing_records_` 硬上限约束（`KeyUpdate` 不重置计数，达限即终止连接以符合 RFC 9846 §5.5）；Ticket 密钥定期轮换并销毁过期密钥，跨 worker 会话恢复严格绑定原 `server_name`。
 - 跨平台 UTF-8 与输出脱敏：对外文本及传递给 OpenSSL / 数据库驱动的文件路径统一使用合法 UTF-8，禁止在 Windows 下经 ANSI 代码页窄化；受限长度文本或校验诊断按字节上限截断时必须回退半个多字节序列以保持 UTF-8 码点完整；系统错误信息先转换编码，JSON 输出始终转义合法。对外错误响应不回显内部异常、SQL、宿主路径或上游细节，服务端脱敏后记录诊断原因；日志、代码与制品不得包含真实凭据。
 - 故障隔离与不变量恢复：对端正常断开、自身停机或排空引起的中止属于正常结束，不按故障上报或计数；真实异常必须上报，不得静默吞掉。单次请求、单个 HTTP/2 流、单条连接或单次后端调用的超时、取消与协议错误严格隔离在当前作用域内回收，不得破坏 worker 状态机或升级为进程故障；可恢复异常捕获边界保留的对象必须维持完整不变量。
@@ -137,13 +137,13 @@
 
 协程、结构化并发、租约与连接池：
 
-- 协程保持 lazy 和 structured ownership。公开协程统一使用 `ruvia::task<t_type>`。
+- 协程保持 lazy 和 structured ownership。公开协程统一使用单一模板 `ruvia::task<t_type>`（`void` 通过 `task_promise<void>` 复用同一主模板而不单独偏特化，且仅允许右值 `&&` 执行 `co_await`）；超对齐（over-aligned）局部变量必须存放在独立拥有的堆存储中，禁止直接置于协程栈帧以规避编译器帧对齐缺陷。
 - 未启动任务可丢弃；已启动任务必须完成。取消后必须 `co_await` / `join`，禁止销毁挂起帧或静默 detach。`event_loop::start` 启动的 `root_task` 由事件循环持有协程帧直至完成，放弃 `root_task` 句柄绝不销毁挂起帧，未消费异常统一路由至循环的 failure sink。
 - 结构化并发（`task_scope`）：绑定地址稳定的左值 `worker_handle`；单次 `join()` 启动后立即封闭 `spawn` 准入并等待在途准入及全部子任务退役。析构时若仍有活跃子任务或未决 `join` 则触发 `std::terminate()`；子任务全部完成但未经 `join` 消费的异常必须转发至 `report_unhandled_failure`，严禁静默吞没。
-- `stop_token` 只引用一个取消状态；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。选项派生替换明确提供的用户 token，不隐式累加；客户端关闭仍通过自身生命周期独立终止操作。外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）投递回所属 worker 线程执行，且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
+- `stop_token` 只引用一个取消状态（`stop_state` 由进程级 mimalloc 分配，支持最末持有者在任意线程释放；`request_stop()` 在锁外执行回调，跨线程解链等待运行中回调返回而回调自解链绝不自等待）；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。选项派生替换明确提供的用户 token，不隐式累加；客户端关闭仍通过自身生命周期独立终止操作。外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）投递回所属 worker 线程执行，且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
 - 线性 lease 在任务启动时占用，不得并发或失败后复用。
 - 连接池与脏连接回收契约（`slot_pool` / `pool_lease_scheduler`）：
-  - 数据库、Redis 与出站客户端连接池均保持 worker-local 且地址稳定，槽位在构造期预分配，统一管理租约排队、按 operation id 寻址的取消与单槽截止期定时器；
+  - 数据库、Redis 与出站客户端连接池均保持 worker-local 且地址稳定，槽位在构造期预分配，统一管理租约排队、按 operation id 寻址的取消与单槽截止期定时器；`release()` 在返回前将空闲槽位所有权即刻移交排队等待者（后续取消或 `close()` 不得推翻该已提交获取），但等待者协程延迟至下一轮 worker 事件循环恢复，严禁在 `release()` 内联同步恢复；
   - 借出连接槽仅在操作正常完成，或错误明确承诺底层协议流已排空、连接处于空闲态且不在未决事务中（如 `reusable_connection()` 为真）时，才允许归还复用或转交等待者；
   - 任何超时、取消、网络 I/O 异常、半关闭、协议失步或事务内未捕获退出，必须在释放租约前立即关闭并淘汰该底层连接，严禁将未排空或携带残留事务/会话状态的脏连接放回池中。
 - 阻塞或 CPU 密集工作显式卸载到常驻有界线程池（`blocking_pool`）：
