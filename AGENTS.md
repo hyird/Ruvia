@@ -79,8 +79,8 @@
 - HTTP/1 与通用表示语义：
   - 重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接）；
   - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无（all-or-nothing）及独立字节预算追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；
-  - 条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；`Set-Cookie` 解析（RFC 6265 §5.2）零分配借用响应头，其 `Expires` 的 cookie-date 语法独立于且不放宽标准 HTTP-date 语法。
-- HTTP/2 重点核对连接前言与 `SETTINGS` 同步、流状态机与并发/流控窗口、HPACK 动态表上限与伪首部/普通首部顺序、帧长度与填充/优先级约束、`GOAWAY` / `RST_STREAM` / `PING` 及 Extended `CONNECT`（RFC 8441），严格区分流级错误与连接级错误（RFC 9113 §5.4）：出站 HPACK 编码不插入动态表条目（容量缩减直接置零）；`enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，禁用 `h2c` 或显式代理）仅限客户端启用；致命连接错误后仍允许无帧释放已持有的请求租约与 DATA 额度，释放失败由后续推进自动重试。
+  - 条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；`Set-Cookie` 解析（RFC 6265 §5.2）零分配借用响应头，其 `Expires` 的 cookie-date 语法独立于且不放宽标准 HTTP-date 语法；URI 引用修复（`percent_encode_uri_reference`）保留合法百分比三元组不二次编码（RFC 3986 §2.4），无需转义时零分配返回原视图，需转义且输入与输出缓冲存在地址别名时安全处理。
+- HTTP/2 重点核对连接前言与 `SETTINGS` 同步、流状态机与并发/流控窗口、HPACK 动态表上限与伪首部/普通首部顺序、帧长度与填充/优先级约束、`GOAWAY` / `RST_STREAM` / `PING` 及 Extended `CONNECT`（RFC 8441），严格区分流级错误与连接级错误（RFC 9113 §5.4）：出站 HPACK 编码不插入动态表条目（容量缩减直接置零）；`enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，禁用 `h2c` 或显式代理）仅限客户端启用，接受 `PUSH_PROMISE` 不自动确立传输权威，驱动在消费推送响应前须对照已认证连接校验推送 URI 的 origin；致命连接错误后仍允许无帧释放已持有的请求租约与 DATA 额度，释放失败由后续推进自动重试。
 - 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
   - 读、写、心跳保活与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；`CONNECT-UDP`（RFC 9298 / RFC 9297）本端发送强制携带唯一 `Capsule-Protocol: ?1`，接收端将非布尔、`?0` 或重复字段按缺省忽略并拒绝 204/205/206 响应；
   - 响应完成不等于请求上传完成（如客户端流式请求收到响应 `END_STREAM` 仅关闭接收半边，发送半边仍须显式完成或重置）；复用或排空连接前必须满足请求与响应双向的消息边界和生命周期契约。后续字节归属不明时关闭连接，不继续解析；非 2xx `CONNECT` 的关闭遵守 RFC 9931；
@@ -134,7 +134,7 @@
 - 协程保持 lazy 和 structured ownership。公开协程统一使用 `ruvia::task<t_type>`。
 - 未启动任务可丢弃；已启动任务必须完成。取消后必须 `co_await` / `join`，禁止销毁挂起帧或静默 detach。`event_loop::start` 启动的 `root_task` 由事件循环持有协程帧直至完成，放弃 `root_task` 句柄绝不销毁挂起帧，未消费异常统一路由至循环的 failure sink。
 - 结构化并发（`task_scope`）：绑定地址稳定的左值 `worker_handle`；单次 `join()` 启动后立即封闭 `spawn` 准入并等待在途准入及全部子任务退役。析构时若仍有活跃子任务或未决 `join` 则触发 `std::terminate()`；子任务全部完成但未经 `join` 消费的异常必须转发至 `report_unhandled_failure`，严禁静默吞没。
-- `stop_token` 只引用一个取消状态；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。选项派生替换明确提供的用户 token，不隐式累加；客户端关闭仍通过自身生命周期独立终止操作。
+- `stop_token` 只引用一个取消状态；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。选项派生替换明确提供的用户 token，不隐式累加；客户端关闭仍通过自身生命周期独立终止操作。外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）投递回所属 worker 线程执行，且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
 - 线性 lease 在任务启动时占用，不得并发或失败后复用。
 - 连接池与脏连接回收契约（`slot_pool` / `pool_lease_scheduler`）：
   - 数据库、Redis 与出站客户端连接池均保持 worker-local 且地址稳定，槽位在构造期预分配，统一管理租约排队、按 operation id 寻址的取消与单槽截止期定时器；
