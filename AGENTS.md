@@ -91,7 +91,7 @@
 - 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
   - 读、写、心跳保活与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；SSE 消息（`sse_message`）区分 `data_` 缺省（不发射 `data` 行，不触发客户端派发 `MessageEvent`）与存在空串（发射 `data:` 派发空负载事件），并强制校验合法 UTF-8 与 `event`/`id` 无非法换行；`CONNECT-UDP`（RFC 9298 / RFC 9297）本端发送强制携带唯一 `Capsule-Protocol: ?1`，接收端将非布尔、`?0` 或重复字段按缺省忽略并拒绝 204/205/206 响应；Capsule 增量解码器对不保留的类型或未知 Context ID 直接零缓冲流式跳过（不受 `max_capsule_length_` 限制，但短于 Context ID 的畸形 `DATAGRAM` 仍保留报错），`feed_one` 在首个完整保留 Capsule 处停止并将未消费后缀归还调用方；
   - 响应完成不等于请求上传完成（如客户端流式请求收到响应 `END_STREAM` 仅关闭接收半边，发送半边仍须显式完成或重置）；复用或排空连接前必须满足请求与响应双向的消息边界和生命周期契约。后续字节归属不明时关闭连接，不继续解析；非 2xx `CONNECT` 的关闭遵守 RFC 9931；
-  - WebSocket 握手、读写并发与关闭（RFC 6455 / RFC 8441）：子协议集合（`websocket_subprotocol_set`）对本端配置与客户端发送强制要求 token 唯一且超限拒绝（不截断），服务端接收则容忍并跳过重复提供项；客户端握手由版本无关的 `websocket_client_negotiation` 统一复用子协议与 `permessage-deflate` 选择校验（HTTP/1.1 校验 `101` 与 `Sec-WebSocket-Accept`，HTTP/2 Extended `CONNECT` 校验 `2xx`、流未随 `HEADERS` 提前关闭及无连接特定首部）；服务端与客户端复用同一套 123B 定长内联关闭原因（`websocket_peer_close_info`）与写通道让行原语（`websocket_write_lane`：写通道仅在完整消息边界之间轮询挂起读通道的控制帧，绝不打断在途完整消息，且读等待抛异常时自动清除 `reader_waiting_` 并唤醒写方防死锁）；禁用单帧压缩（`compress_ = false`）时同步绕过压缩字典更新以防侧信道泄漏；`websocket_close_code` 严格限制在合法线面状态码空间（拒绝 `1005`/`1006` 等本地伪状态码）；服务端刷出响应 Close 后立即计划关闭传输，客户端则保持传输打开等待对端 EOF（期间丢弃残余输入）；
+  - WebSocket 握手、读写并发与关闭（RFC 6455 / RFC 8441）：子协议集合（`websocket_subprotocol_set`）对本端配置与客户端发送强制要求 token 唯一且超限拒绝（不截断），服务端接收则容忍并跳过重复提供项；客户端握手由版本无关的 `websocket_client_negotiation` 统一复用子协议与 `permessage-deflate` 选择校验（HTTP/1.1 校验 `101` 与 `Sec-WebSocket-Accept`；HTTP/2 Extended `CONNECT` 校验 `2xx`、无连接特定首部，且仅当 `END_STREAM` 直接落在 `2xx` `HEADERS` 帧上时拒绝握手，若落在后续 `DATA` 帧上则按 RFC 8441 §5 视为已建立隧道的正常关闭）；服务端与客户端复用同一套 123B 定长内联关闭原因（`websocket_peer_close_info`）与写通道让行原语（`websocket_write_lane`：写通道仅在完整消息边界之间轮询挂起读通道的控制帧，绝不打断在途完整消息，且读等待抛异常时自动清除 `reader_waiting_` 并唤醒写方防死锁）；禁用单帧压缩（`compress_ = false`）时同步绕过压缩字典更新以防侧信道泄漏；`websocket_close_code` 严格限制在合法线面状态码空间（拒绝 `1005`/`1006` 等本地伪状态码）；服务端刷出响应 Close 后立即计划关闭传输，客户端则保持传输打开等待对端 EOF（期间丢弃残余输入）；
   - 任一方向发生错误、超时或半关闭时，必须协同唤醒并取消或排空另一方向的挂起操作，确保全部读写与定时器操作完成后才释放会话与底层传输。
 - TLS 关闭、TCP Lingering Close（RFC 9112 §9.6 / §9.8）与 HTTP/2 排空：关闭连接的 HTTP/1 最终响应与以 `GOAWAY` 结束的 HTTP/2 会话执行有界 lingering close（TLS 发送 `close_notify`，TCP 半关闭发送端，在有界时间与字节预算内排空对端未读输入），防止未读输入触发 TCP RST 抹掉最终响应；空闲、请求头超时与排空关闭等待请求的连接发送 TLS `close_notify`，写超时、传输错误与强制停机直接关闭；HTTP 消息完整性依赖连接关闭时，不得将未认证的 TLS 截断当作完整消息（而已升级的 TLS 隧道字节流按 4 KiB 分块写入并立即 `flush` 密文，且将对端未发 `close_notify` 的 TCP EOF 视为隧道正常结束）。充当中间代理时按协议处理逐跳字段，不得丢失需要保留的重复字段语义。
 - 缺陷结论以 RFC 条款和公开行为复现为证据；说明审查覆盖范围，不以已有测试通过宣称“绝对无 BUG”。
@@ -163,7 +163,7 @@
 
 - `controller` 是不继承框架类型的 `final` 类，由 `RUVIA_ROUTES_BEGIN(type)` … `RUVIA_ROUTES_END` 宏声明路由并在 `main` 前自动注册；注册去重后封存，不维护手工清单。
 - 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用（`next`）通过三态控制块（`fresh` / `invoked` / `expired`）强制 single-shot 并在当前中间件栈帧退出后立即失效以防逃逸。前缀作用域中间件（`use_at`）按百分比解码并归一化尾斜杠后的完整路径段匹配（如 `/admin` 覆盖 `/%61dmin/x` 但不匹配 `/administrator`），归属关系在启动期编译进路由计划，仅跨边界的参数化路由在分发期检查请求路径。
-- `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
+- `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。内存测试门面（`test_app`）在首次 `request()` 时封闭配置并驱动真实 worker 能力启停（禁止初始化重入，启动失败进入粘性 `failed` 态并在后续调用时原样重抛首次异常）。
 - 上下文（`context` 与 `web_worker_context`）只暴露 typed capability（`web_worker_context` 直接借用 worker 的客户端注册表与停止令牌，启动后台任务零所有权复制，worker 退役前 `join` 全部已投递任务）；callback 由应用拥有。
 - 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；构造响应时通过 `take_draft_or_new()` 原位移动接管 `draft` 实例并仅在未显式设置时补充默认 `Content-Type`（消除新建空响应再拷贝 `draft` 字段的开销），替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
 - `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查（表单解析对非字符串标量字段在无转义时直接原地解析视图而不分配 `std::pmr::string`）；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠防止自包含结构移动时先销毁自身存储。
@@ -178,7 +178,7 @@
   - 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层在构造期预解析 IP 字面量端点（`literal_endpoint_`，连接时直接跳过 DNS Resolver）并支持 Happy Eyeballs（RFC 8305：以首个解析地址族为首交错去重 IPv6/IPv4 端点，按 250ms 阶梯并发尝试并在首个连接胜出或取消时立即关闭其余在途 socket），且已启用的客户端 TCP 套接字策略（如 `no_delay` / `keep_alive`）应用失败时建连直接失败而不静默降级；
   - 强制执行两级出站结果内存预算（已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`，空 `http_client_response_bytes` 不持有存储且不占用保留配额；全量收集 `collect_all_` 发现响应体超限时立即丢弃并释放已缓冲前缀 `discard_response_body()`，防止无用半截数据滞留占用预算）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
   - 连接通告（`ORIGIN` / `Alt-Svc`）仅作有界只读观测，绝不自动改变已注册 origin、连接归并、TLS 身份或缓存策略；其底层内存池（`http_client_advertisement_memory`）独立跟踪引用计数与保留字节，客户端退役后延迟至全部外部持有的通告对象在所属 worker 释放完毕才自毁；
-  - 出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行。
+  - 出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行；已复用的 HTTP/1 连接遭遇 `io_error` 时，仅在同时满足“幂等方法、非流式上传、非隧道、尚未收到任何 `1xx` 或最终响应头且未被放弃”时才透明重试一次。
 
 ## README 内容规范
 
