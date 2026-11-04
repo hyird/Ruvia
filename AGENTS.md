@@ -52,14 +52,14 @@
 
 - 歧义即拒绝（Fail Closed）：消息边界、目标路由、编码格式或访问权限有歧义时一律拒绝，不猜测或容错放行。无根路径、点段逃逸、空字节、非法百分比编码及非 `http(s)` 的 absolute-form 目标按安全边界直接拒绝；连接无法承载目标 origin 时按 RFC 9110 §7.4 返回 421。
 - 编译期借用边界、左值限定与悬垂防护：
-  - 跨当前表达式留存的零拷贝文本或连续序列视图（如配置项、消息首部、Cookie 属性、路由/查询选项、WebSocket/隧道参数、字节转换 `as_bytes` / `as_chars`），必须通过 `borrowed_text`、`borrowed_span` 等受检视图类型在编译期拒绝绑定临时拥有型容器（rvalue `std::string`、`std::vector`、`std::initializer_list` 等）；返回对象内部存储借用的访问器标注 `RUVIA_LIFETIMEBOUND`；
-  - 被异步操作、子协程节点、定时器或取消注册借用自身地址的宿主（如 `task_scope`、`slot_pool`、`worker_memory`、`request_memory`、`session`），其构造参数（如拒绝右值 `worker_handle&&`）与成员操作（如 `spawn`、`join`、`allocator`、`resource`、`fork`、`data`）必须使用左值引用限定（`&` / `const&`）并显式 `= delete` 右值重载，从编译期阻断临时宿主悬垂。
+  - 跨当前表达式留存的零拷贝文本或连续序列视图（如配置项、消息首部、Cookie 属性、路由/查询选项、WebSocket/隧道参数、字节转换 `as_bytes` / `as_chars`），必须通过 `borrowed_text`、`borrowed_span` 等受检视图类型在编译期拒绝绑定临时拥有型容器（rvalue `std::string`、`std::vector`、`std::initializer_list` 等）；返回对象内部存储借用的访问器标注 `RUVIA_LIFETIMEBOUND`；`move_only_function` 的引用返回签名严格要求目标直接返回兼容引用，禁止从按值返回或隐式转换临时量生成悬垂引用；
+  - 被异步操作、子协程节点、定时器或取消注册借用自身地址的宿主（如 `task_scope`、`slot_pool`、`worker_memory`、`request_memory`、`session`、`env`），其构造参数（如拒绝右值 `worker_handle&&`）与成员操作（如 `spawn`、`join`、`allocator`、`resource`、`fork`、`data`、`get`）必须使用左值引用限定（`&` / `const&`）并显式 `= delete` 右值重载，从编译期阻断临时宿主悬垂。
 - 原始整数域受检转换、时钟单调性与防溢出：
   - 公开辅助函数与边界入口对任意输入安全，检查边界、溢出及输入输出别名；数字文本解析（`parse_integer`）严格拒绝空白、前导 `+` 与尾随字符，且格式错误优先于溢出报告；
   - 端口、状态码、`Content-Length`、HPACK 索引与动态表容量、协议字节预算（`protocol_byte_limit`）、查询行数、Redis 批量计数、WebSocket 关闭码、HTTP 优先级 urgency 及超时/容量参数，必须在窄化或转为无符号类型前的**原始整数域**完成符号与范围校验（如 `std::in_range`），严禁隐式转换导致负数缠绕为超大无符号上限或高位截断改变目标语义；
   - 可配置时长和字节大小参与运算时统一使用饱和算术或减法分段比较；所有超时、限流窗口、连接扫描与耗时统计统一使用单调时钟（`std::chrono::steady_clock`），日历时钟仅用于协议时间戳（HTTP Date、Cookie、JWT），防止系统时钟回拨导致超时失效。
 - 配置、会话、静态文件与 TLS 安全：
-  - 配置或持久化数据损坏必须显式报错，不得用默认值静默掩盖；有明确缺省语义的输入按契约处理。
+  - 配置或持久化数据损坏必须显式报错，不得用默认值静默掩盖；类型化环境变量查找（`env::get<T>`）严格区分变量未设置（返回 `std::nullopt`，允许 `.value_or()` 回退）与已设置但格式非法（立即抛出 `std::invalid_argument`，防止拼写错误被默认值静默掩盖）。
   - 缓存键或命名空间须完整区分影响结果或访问权限的资源、表示（如编码变体）及身份维度；允许调用方自定义时，公开契约须说明隔离与失效责任。
   - 限流对客户端地址做规范化归并（无作用域 IPv6 按 `/64` 聚合、IPv4-mapped IPv6 归并至对应 IPv4、作用域 IPv6 包含数值 scope），防止同网段地址变形绕过配额。
   - 服务端 `session` 仅接受定长合法格式 ID，每次非空写入在响应头 commit 时自动轮换 ID 防会话固定攻击，替换已过期或被吊销会话返回 409；一旦响应头（含流式、WebSocket 或 `CONNECT` 握手头）开始发送，任何会话写操作立即抛出 `std::logic_error`。
@@ -76,7 +76,7 @@
 - 涉及协议义务的代码注释与变更说明应标注具体适用的 RFC 条款；内部约束不得冒充 RFC 要求，偏离 `SHOULD` 须说明理由。
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
-- HTTP/1 与通用表示语义：重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为；增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；`Set-Cookie` 解析（RFC 6265 §5.2）零分配借用响应头，其 `Expires` 的 cookie-date 语法独立于且不放宽标准 HTTP-date 语法。
+- HTTP/1 与通用表示语义：重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，事务性校验并编码全部字段；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接）；增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；`Set-Cookie` 解析（RFC 6265 §5.2）零分配借用响应头，其 `Expires` 的 cookie-date 语法独立于且不放宽标准 HTTP-date 语法。
 - HTTP/2 重点核对连接前言与 `SETTINGS` 同步、流状态机与并发/流控窗口、HPACK 动态表上限与伪首部/普通首部顺序、帧长度与填充/优先级约束、`GOAWAY` / `RST_STREAM` / `PING` 及 Extended `CONNECT`（RFC 8441），严格区分流级错误与连接级错误（RFC 9113 §5.4）：出站 HPACK 编码不插入动态表条目（容量缩减直接置零）；`enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，禁用 `h2c` 或显式代理）仅限客户端启用；致命连接错误后仍允许无帧释放已持有的请求租约与 DATA 额度，释放失败由后续推进自动重试。
 - 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
   - 读、写、心跳保活与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；
@@ -92,7 +92,7 @@
 - 同步快路径优先：常规路径不创建可避免的协程帧或中间缓冲，能同步完成的步骤（如缓存/静态索引命中、无阻塞解析、就绪连接槽获取、无需阻塞编码或异步错误恢复的响应准备）直接同步完成；启动期一次性完成构建和预计算（如静态文件全量内存索引，确保请求期零 `stat` 系统调用）。
 - 侵入式零分配调度与按需惰性分配：worker 内的连接超时跟踪、周期扫描节点（`connection_scanner`）、槽位等待队列与取消注册优先使用内嵌于连接或协程栈帧的地址稳定侵入式节点；取消状态与非必选帧元数据仅在首次被观察或启用时按需分配，未观察路径零开销。
 - 栈上小缓冲优化（SBO）、按需拥有化（Copy-on-Unfold/Unescape）与挂起前提前释放：
-  - 高频有界短数据（如 JWT 段解码、已校验的 `multipart_boundary`、小批量键视图数组）优先使用栈上或内联定长缓冲，仅超限时回退 PMR 动态分配；
+  - 高频有界短数据与回调（如 `move_only_function` 满足尺寸/对齐且 `nothrow_move_constructible` 的可调用目标、JWT 段解码、已校验的 `multipart_boundary`、小批量键视图数组）优先使用栈上或内联定长缓冲，仅超限时回退动态分配；单线程有界环（`local_ring_queue`）在启动期一次性构造全部槽位，运行期通过 `prepare_push` / `commit_push` / `cancel_push` 两阶段协议实现零分配入队与异常回滚；
   - 协议解析（如 `multipart_part`、首部字段）对未折叠、未转义的原始切片直接以 `std::string_view` 借用调用方缓冲，仅对发生折叠展开或转义解码的字段分配 PMR 存储；WebSocket 未压缩且无掩码帧支持零拷贝发送（`submit_borrowed_frame`），无上下文接管的 `permessage-deflate` 方向同步复用共享编解码器；
   - 异步操作在构造冷任务完成参数拥有化后，调用方应在 `co_await` 进入网络 I/O 挂起前立即释放不再使用的临时源容器，缩短并发挂起期的内存驻留。
 - 预算、背压、防压缩炸弹与防慢速攻击：
