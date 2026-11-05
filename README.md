@@ -52,6 +52,15 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\examples\Release\ruvia_example_basic_http.exe
 ```
 
+真实网络测试通过 `tests/web/support/tcp_port_reservation.h` 选择并持续保留
+loopback 临时端口，直到服务器停止并 join；预留 socket 仅 bind、不 listen，
+避免抢走测试连接。POSIX 在绑定后启用共享；Windows 的共享策略在 bind 时固定，
+因此先以无 reuse 的 socket 选端口，再持有全局具名端口租约完成可共享 socket
+的重绑；其他夹具遇到该租约会重新选端口，租约也持续至服务器退出。
+禁止不持有租约的“bind 0 → close → 启动服务器”端口预选：
+并行进程可能选中同一端口，而 worker 的地址复用会使两个服务器均成功启动、
+互相接收对方的请求。此测试夹具约束不改变生产监听器的复用语义。
+
 Windows 测试需配对运行 Debug 与 Release：Debug 保留默认 STL 迭代器诊断，
 Release 执行完整分配失败扫描。MSVC 调试 STL 会在空容器构造及移动的
 `noexcept` 路径分配迭代器代理；测试不能按分配大小或序号猜测并跳过代理，

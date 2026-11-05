@@ -14,6 +14,8 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/server_config.h"
 
+#include "tcp_port_reservation.h"
+
 namespace ruvia::test {
 
 class http_server_fixture final {
@@ -38,10 +40,9 @@ private:
     class server_runtime final {
     public:
         server_runtime(asio::io_context& io, const server_config& config)
-            : startup_(std::make_shared<startup_state>()) {
-            asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-            endpoint_ = reservation.local_endpoint();
-            reservation.close();
+            : reservation_(io),
+              endpoint_(reservation_.endpoint()),
+              startup_(std::make_shared<startup_state>()) {
             app().server(config).listen({.address_ = "127.0.0.1", .http_ = endpoint_.port()}).on_start([startup = std::weak_ptr<startup_state>(startup_)] {
                 if (auto state = startup.lock()) {
                     state->announced_ = true;
@@ -111,8 +112,9 @@ private:
             }
         }
 
-        std::shared_ptr<startup_state> startup_;
+        tcp_port_reservation reservation_;
         asio::ip::tcp::endpoint endpoint_;
+        std::shared_ptr<startup_state> startup_;
         std::thread thread_;
         std::mutex mutex_;
         std::exception_ptr failure_;

@@ -25,6 +25,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/static_files.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 
 // A file body that fails before its head is sent is answered with an error
@@ -169,9 +170,8 @@ RUVIA_TEST(file_failures_before_the_head_get_an_error_response_and_stalled_opens
     static_files = std::make_unique<ruvia::static_root>(failure_dir() / "static");
 
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};

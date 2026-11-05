@@ -62,7 +62,7 @@ ruvia::app().database({
 - 语句正在执行：该语句以 `db_error`（`timeout`）失败，连接被关闭而不归还连接池，事务或流随之以失败结束，之后的调用因其已不再活跃而失败。
 - 调用方持有租约但没有操作在执行（如事务中等待远程 I/O）：worker 上由该截止期驱动的定时器（不轮询）立即关闭连接，服务端随之回滚事务并释放锁；之后对该事务或流的下一次调用（包括 `commit()`、`rollback()`、`read()`、`close()`）不再发送任何语句，以 `db_error`（`timeout`）失败并结束它。租约在此之前仍由持有者占用，析构或下一次调用后才回到连接池。
 
-迁移器沿用配置中的 `transaction_timeout_`（与 `query_timeout_` 相同，不另设）：`transactional` 迁移超过它时以 `timeout` 失败并关闭迁移会话，本次迁移随之终止且迁移锁随会话释放。需要长时间运行的事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。
+迁移器不另设事务超时：PostgreSQL 的 `transactional` 迁移沿用 `transaction_timeout_`，单个迁移及其历史记录共用一次事务租约；超过截止期时以 `timeout` 失败并关闭迁移连接，本次运行终止，服务端结束该会话后释放迁移锁。长时间运行的 PostgreSQL 事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。PostgreSQL 的 `unwrapped` 迁移及所有 MariaDB 迁移不创建事务租约，因而不受 `transaction_timeout_` 限制，执行语句仍受 `query_timeout_` 和 socket 读写超时限制。MariaDB 即使指定 `transactional` 也不包裹事务（DDL 会隐式提交）；迁移与历史记录可能只完成前者，迁移 SQL 必须可安全重跑。
 
 池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
 
@@ -158,6 +158,8 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不再自动建列或把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
 
 迁移锁（MariaDB `GET_LOCK`、PostgreSQL 会话级咨询锁）归属取得它的会话，因此迁移器只使用一条连接，且该连接结束后不再重连：会话因传输失败而断开，或某条 `unwrapped` 迁移使连接停留在事务中（如单独执行 `BEGIN`、MariaDB 的 `SET autocommit = 0`）而在归还时被关闭后，后续迁移与历史记录都以 `db_error`（`io_error`）失败，不会在未持锁的新会话上继续执行。失败时迁移器不显式释放锁，而是关闭会话使锁随之释放。
+
+超时会立即关闭客户端连接，但不等同于服务端立即取消正在执行的 SQL：服务端检测断连、结束会话并释放锁可能晚于调用返回 `timeout`。尤其 MariaDB 的自动提交迁移可能在客户端超时后仍执行成功，却没有写入迁移历史；重试前须核对实际效果，不能把 `timeout` 当作回滚证明。PostgreSQL 的 `transactional` 迁移则在会话结束时回滚本次迁移及其历史记录。
 
 ---
 

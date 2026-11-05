@@ -29,6 +29,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 
 namespace http2_drain_test {
@@ -268,9 +269,8 @@ void check_drain(ruvia::testing::test_context& ruvia_ctx, bool deadline_expires)
     auto& app = ruvia::app();
     register_start_hook(app);
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = deadline_expires ? 200ms : 10s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     app_run run(app);
@@ -364,7 +364,8 @@ public:
     silent_peer_run(ruvia::server_config config, std::string_view requests,
         std::optional<std::string_view> settings_payload = std::string_view{})
         : app_(ruvia::app()),
-          endpoint_(reserve_endpoint(io_)),
+          reservation_(io_),
+          endpoint_(reservation_.endpoint()),
           run_(configure(app_, std::move(config), endpoint_)),
           socket_(io_) {
         if (!observed().started_.try_acquire_for(3s)) {
@@ -389,12 +390,6 @@ public:
     }
 
 private:
-    static asio::ip::tcp::endpoint reserve_endpoint(asio::io_context& io) {
-        asio::ip::tcp::acceptor reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
-        const auto endpoint = reservation.local_endpoint();
-        reservation.close();
-        return endpoint;
-    }
     static ruvia::application& configure(
         ruvia::application& app, ruvia::server_config config, const asio::ip::tcp::endpoint& endpoint) {
         register_start_hook(app);
@@ -405,6 +400,7 @@ private:
 
     asio::io_context io_;
     ruvia::application& app_;
+    ruvia::test::tcp_port_reservation reservation_;
     asio::ip::tcp::endpoint endpoint_;
     app_run run_;
     asio::ip::tcp::socket socket_;
@@ -674,9 +670,8 @@ RUVIA_TEST(http2_session_started_during_drain_gets_goaway) {
     auto& app = ruvia::app();
     register_start_hook(app);
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     app_run run(app);

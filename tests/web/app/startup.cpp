@@ -24,6 +24,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/websocket.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -489,10 +490,9 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
 #endif
         occupied.bind({asio::ip::address_v4::loopback(), 0});
         occupied.listen();
-        asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-        const auto available_endpoint = reservation.local_endpoint();
+        ruvia::test::tcp_port_reservation reservation(io);
+        const auto available_endpoint = reservation.endpoint();
         const auto occupied_port = occupied.local_endpoint().port();
-        reservation.close();
         app.listen({.address_ = "127.0.0.1",
             .http_ = occupy_http ? occupied_port : available_endpoint.port(),
             .https_ = occupy_http ? available_endpoint.port() : occupied_port,
@@ -591,12 +591,10 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto stop_hooks = state_value->stop_hooks_;
         const auto destroyed_workers = state_value->destroyed_workers_.load();
         asio::io_context io;
-        asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-        asio::ip::tcp::acceptor tls_reservation(io, {asio::ip::address_v4::loopback(), 0});
-        const auto endpoint = reservation.local_endpoint();
-        const auto tls_endpoint = tls_reservation.local_endpoint();
-        reservation.close();
-        tls_reservation.close();
+        ruvia::test::tcp_port_reservation reservation(io);
+        ruvia::test::tcp_port_reservation tls_reservation(io);
+        const auto endpoint = reservation.endpoint();
+        const auto tls_endpoint = tls_reservation.endpoint();
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}, .client_certificates_ = {.ca_file_ = identity.ca_file_}}});
         app_run run(app, *state_value);
         const auto owner_thread = run.id();
@@ -724,9 +722,8 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto second_hooks = state_value->second_hooks_;
         const auto stop_hooks = state_value->stop_hooks_;
         asio::io_context io;
-        asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-        const auto endpoint = reservation.local_endpoint();
-        reservation.close();
+        ruvia::test::tcp_port_reservation reservation(io);
+        const auto endpoint = reservation.endpoint();
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
         app.stop();
         auto latched = std::async(std::launch::async, [&app] { app.run(); });
@@ -767,9 +764,8 @@ RUVIA_TEST(app_run_rejects_a_dns_client_without_the_blocking_pool) {
     using namespace startup_test;
     auto& app = ruvia::app();
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     app.blocking_pool(nullptr);
     app.http_client({.alias_ = "dns-host", .config_ = {.scheme_ = ruvia::http_scheme::http, .host_ = "localhost"}});

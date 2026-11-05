@@ -615,32 +615,39 @@ RUVIA_TEST(db_transaction_without_a_deadline_keeps_its_session_while_idle) {
 }
 
 // A stream held between reads past its deadline loses its session the same
-// way; the next read reports the timeout and ends the stream.
-RUVIA_TEST(db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_the_next_read) {
+// way; either terminal operation reports timeout, even with unread rows buffered.
+RUVIA_TEST(db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_read_or_close) {
     using namespace ruvia;
     for (const auto driver : drivers) {
-        auto peer = make_peer(driver, {step::stream_rows});
-        std::string first;
-        std::optional<db_error::code_type> code;
-        bool ended = false;
-        drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
-            auto stream = co_await connected.handle().query_stream("SELECT v FROM records");
-            if (const auto row = co_await stream.read(); row) {
-                first = (*row)["v"].as<std::string_view>().value_or("");
-            }
-            (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(300));
-            // Throws unless the session already ended while the stream sat idle.
-            co_await await_disconnects(connected.worker(), *peer);
-            try {
-                (void)co_await stream.read();
-            } catch (const db_error& error) {
-                code = error.code();
-            }
-            ended = !stream.active();
-        });
-        RUVIA_CHECK(first == "first");
-        RUVIA_CHECK(code == db_error::code_type::timeout);
-        RUVIA_CHECK(ended);
+        for (const bool close : {false, true}) {
+            auto peer = make_peer(driver, {step::stream_rows});
+            std::string first;
+            std::optional<db_error::code_type> code;
+            bool ended = false;
+            drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
+                auto stream = co_await connected.handle().query_stream("SELECT v FROM records");
+                if (const auto row = co_await stream.read(); row) {
+                    first = (*row)["v"].as<std::string_view>().value_or("");
+                }
+                (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(300));
+                // Throws unless the session already ended while the stream sat idle.
+                co_await await_disconnects(connected.worker(), *peer);
+                try {
+                    if (close) {
+                        co_await stream.close();
+                    } else {
+                        (void)co_await stream.read();
+                    }
+                } catch (const db_error& error) {
+                    code = error.code();
+                }
+                ended = !stream.active();
+                co_await stream.close();
+            });
+            RUVIA_CHECK(first == "first");
+            RUVIA_CHECK(code == db_error::code_type::timeout);
+            RUVIA_CHECK(ended);
+        }
     }
 }
 

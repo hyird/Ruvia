@@ -27,6 +27,7 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 
 namespace http2_request_limit_test {
@@ -168,9 +169,8 @@ RUVIA_TEST(http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_ser
     auto& app = ruvia::app();
     app.on_start([] { started().release(); });
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .max_requests_per_connection_ = 1});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     std::exception_ptr failure;

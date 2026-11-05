@@ -28,6 +28,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 #include "test_tls_identity.h"
 
@@ -218,12 +219,10 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
         }
     }
     asio::io_context io;
-    asio::ip::tcp::acceptor http_reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
-    asio::ip::tcp::acceptor https_reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
-    const auto http = http_reservation.local_endpoint();
-    const auto https = https_reservation.local_endpoint();
-    http_reservation.close();
-    https_reservation.close();
+    ruvia::test::tcp_port_reservation http_reservation(io);
+    ruvia::test::tcp_port_reservation https_reservation(io);
+    const auto http = http_reservation.endpoint();
+    const auto https = https_reservation.endpoint();
     const auto configure = [&] {
         app.server({.worker_count_ = 3, .drain_timeout_ = 0ms, .connection_scan_interval_ = 5ms});
         app.listen({.address_ = "127.0.0.1", .http_ = http.port(), .https_ = https.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = key}}});

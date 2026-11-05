@@ -19,6 +19,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 
 // A peer that resets its connection while a buffered handler is still running
@@ -151,9 +152,8 @@ using namespace peer_reset_test;
 
 RUVIA_TEST(a_peer_reset_during_a_handlers_transport_write_is_a_normal_connection_end) {
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};

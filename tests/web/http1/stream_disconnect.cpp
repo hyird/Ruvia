@@ -35,6 +35,7 @@
 #include "ruvia/web/streaming.h"
 #include "ruvia/web/websocket.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -585,12 +586,10 @@ RUVIA_TEST(http1_stream_peer_close_stops_request_and_recycles_connections) {
         }
     }
     asio::io_context io;
-    asio::ip::tcp::acceptor plain_reservation(io, {asio::ip::address_v4::loopback(), 0});
-    asio::ip::tcp::acceptor tls_reservation(io, {asio::ip::address_v4::loopback(), 0});
-    const auto plain_endpoint = plain_reservation.local_endpoint();
-    const auto tls_endpoint = tls_reservation.local_endpoint();
-    plain_reservation.close();
-    tls_reservation.close();
+    ruvia::test::tcp_port_reservation plain_reservation(io);
+    ruvia::test::tcp_port_reservation tls_reservation(io);
+    const auto plain_endpoint = plain_reservation.endpoint();
+    const auto tls_endpoint = tls_reservation.endpoint();
     auto& app = ruvia::app();
     std::binary_semaphore started{0};
     app.server({.worker_count_ = 2, .idle_timeout_ = 15s, .connection_scan_interval_ = 5ms, .write_timeout_ = 150ms})

@@ -34,6 +34,7 @@
 #include "ruvia/web/websocket.h"
 
 #include "http_server_fixture.h"
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -667,3 +668,31 @@ RUVIA_TEST(http1_connect_handshake_carries_the_committed_session_cookie) {
     RUVIA_CHECK(lower_head(output).find("\r\nset-cookie: sid=;") != std::string::npos);
 }
 #endif
+
+RUVIA_TEST(http_server_fixture_reservations_stay_bound_without_accepting_clients) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    ruvia::test::tcp_port_reservation first(io);
+    ruvia::test::tcp_port_reservation second(io);
+    RUVIA_CHECK(first.endpoint() != second.endpoint());
+    RUVIA_CHECK(first.endpoint() != server.endpoint());
+    RUVIA_CHECK(second.endpoint() != server.endpoint());
+
+    // A reservation must remain bound, including before the real server starts.
+    asio::ip::tcp::acceptor contender(io);
+    contender.open(asio::ip::tcp::v4());
+    std::error_code error;
+    contender.bind(first.endpoint(), error);
+    RUVIA_CHECK(error == asio::error::address_in_use);
+
+    // It must not be a listener that can steal a client's connection.
+    asio::ip::tcp::socket client(io);
+    client.connect(first.endpoint(), error);
+    RUVIA_CHECK(error == asio::error::connection_refused);
+
+    const auto response = exchange(server.endpoint(),
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    RUVIA_CHECK(response.has_value());
+    RUVIA_CHECK(response.value_or("").ends_with("\r\n\r\nplain"));
+}

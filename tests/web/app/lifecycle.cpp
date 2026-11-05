@@ -26,6 +26,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/websocket.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 
 namespace lifecycle_test {
@@ -226,13 +227,6 @@ private:
     std::thread thread_;
 };
 
-[[nodiscard]] asio::ip::tcp::endpoint reserve_endpoint(asio::io_context& io) {
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
-    return endpoint;
-}
-
 template <typename predicate_type>
 [[nodiscard]] bool wait_for(predicate_type&& predicate, std::chrono::milliseconds limit = 3s) {
     const auto deadline = std::chrono::steady_clock::now() + limit;
@@ -321,7 +315,8 @@ RUVIA_TEST(app_multi_worker_restarts_after_idle_connections_and_pending_accepts)
     install_hooks();
     auto& app = ruvia::app();
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     for (unsigned cycle = 0; cycle < 3; ++cycle) {
         app.server({.worker_count_ = 2, .drain_timeout_ = 0ms, .connection_scan_interval_ = 5ms, .max_connections_per_worker_ = 64});
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
@@ -387,7 +382,8 @@ static void check_stop_drains_in_flight_request(
     state_value.slow_saw_stop_ = false;
     state_value.stop_hook_saw_slow_return_ = false;
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = drain_timeout, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     const auto stop_hooks = state_value.stop_hooks_.load();
@@ -448,7 +444,8 @@ RUVIA_TEST(app_stop_forces_close_at_drain_deadline) {
     state_value.stuck_entered_ = false;
     state_value.stuck_cancelled_ = false;
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     constexpr auto drain_timeout = 200ms;
     app.server({.worker_count_ = 1, .drain_timeout_ = drain_timeout, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
@@ -484,7 +481,8 @@ RUVIA_TEST(app_drain_refuses_an_upgrade_established_after_the_drain_began) {
     state_value.release_upgrade_ = false;
     state_value.upgrade_handler_ran_ = false;
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
@@ -531,7 +529,8 @@ RUVIA_TEST(app_drain_closes_websockets_with_going_away) {
     auto& state_value = state();
     reset_socket_state();
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
@@ -565,7 +564,8 @@ static void check_unanswered_going_away(ruvia::testing::test_context& ruvia_ctx,
     auto& state_value = state();
     reset_socket_state();
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = drain_timeout, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
@@ -604,7 +604,8 @@ RUVIA_TEST(app_drain_closes_a_partial_request_head) {
     auto& app = ruvia::app();
     auto& state_value = state();
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
@@ -645,7 +646,8 @@ RUVIA_TEST(app_drain_lets_tunnels_finish) {
     auto& state_value = state();
     state_value.tunnel_open_ = false;
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
@@ -708,7 +710,8 @@ RUVIA_TEST(app_drain_serves_a_request_already_received) {
     state_value.block_entered_ = false;
     state_value.release_block_ = false;
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
@@ -757,7 +760,8 @@ RUVIA_TEST(app_drain_token_ends_a_long_poll_before_the_deadline) {
     state_value.drain_aware_woke_ = false;
     state_value.drain_aware_saw_stop_ = false;
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
@@ -792,7 +796,8 @@ RUVIA_TEST(app_connection_cap_evicts_the_oldest_idle_connection) {
     state_value.stuck_entered_ = false;
     state_value.drain_aware_entered_ = false;
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1,
         .drain_timeout_ = 200ms,
         .connection_scan_interval_ = 5ms,
@@ -848,7 +853,8 @@ RUVIA_TEST(app_connection_timeouts_honor_coarse_scan_clock) {
     install_hooks();
     auto& app = ruvia::app();
     asio::io_context io;
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     constexpr auto header_timeout = 200ms;
     app.server({.worker_count_ = 1,
         .drain_timeout_ = 0ms,
@@ -895,7 +901,8 @@ RUVIA_TEST(app_stop_during_capability_connect_returns_normally) {
     asio::io_context io;
     // Accepts the Redis connection and never answers its AUTH.
     asio::ip::tcp::acceptor silent_redis(io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = reserve_endpoint(io);
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     app.redis({.config_ = {.port_ = silent_redis.local_endpoint().port(),

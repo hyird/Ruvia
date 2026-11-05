@@ -33,6 +33,7 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
+#include "tcp_port_reservation.h"
 #include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -502,9 +503,8 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
     auto empty_client = empty_subject_client(identity, client_ca);
 
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
 
     auto& app = ruvia::app();
     const auto listener = [&](std::string key_password, std::filesystem::path chain) {
