@@ -3,6 +3,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -10,7 +11,10 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/bytes.h"
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/worker_handle.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_accept_encoding.h"
@@ -171,6 +175,44 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     throw std::logic_error("unexpected multipart boundary parse result");
 }
 
+// Decoded bytes a request body may produce on the event loop. A body that
+// decodes past it (a large body, or a few-KiB compression bomb) is decoded
+// again on the worker's bounded blocking pool. Without a pool, or when the pool
+// rejects the job, it is decoded inline: the handler requires the content, and
+// the route's decoded-size cap still bounds the work.
+inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
+
+[[nodiscard]] task<std::variant<std::pmr::string, http_content_decode_error>> decode_request_content(
+    const worker_handle& worker_value, std::span<const http_content_coding> codings, std::string_view raw,
+    http_content_decode_options options) {
+    if (worker_value.has_blocking_pool() && options.max_decoded_bytes_ > inline_request_decode_bytes) {
+        auto inline_result = decode_http_content(codings, raw,
+            {.max_decoded_bytes_ = inline_request_decode_bytes, .resource_ = options.resource_});
+        const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
+        if (failure == nullptr || *failure != http_content_decode_error::decoded_size_exceeded) {
+            co_return inline_result;
+        }
+        // The job carries only its own copies; request memory stays on this worker.
+        std::pmr::vector<http_content_coding> owned_codings(codings.begin(), codings.end(), process_resource());
+        std::pmr::string owned_raw(raw, process_resource());
+        auto offloaded = co_await run_blocking(worker_value, {},
+            [owned_codings = std::move(owned_codings), owned_raw = std::move(owned_raw),
+                limit = options.max_decoded_bytes_]() {
+                return decode_http_content(owned_codings, owned_raw,
+                    {.max_decoded_bytes_ = limit, .resource_ = process_resource()});
+            });
+        if (offloaded.completed() || offloaded.failed()) {
+            // A codec failure on the pool is rethrown here.
+            auto result_value = std::move(offloaded).value();
+            if (const auto* content = std::get_if<std::pmr::string>(&result_value)) {
+                co_return std::pmr::string(*content, options.resource_);
+            }
+            co_return std::get<http_content_decode_error>(result_value);
+        }
+    }
+    co_return decode_http_content(codings, raw, options);
+}
+
 // Rejects an invalid or unsupported Content-Encoding; the result owns the codings span.
 [[nodiscard]] http_content_coding_field_result require_decodable_request_coding(
     const http_request& request, detail::unsupported_request_content_coding::read_type read) {
@@ -217,7 +259,7 @@ task<std::string_view> read_request_text(const context& context_value) {
         detail::context_access::mark_body_identity(context_value);
         co_return raw;
     }
-    auto decode_result = decode_http_content(codings, raw,
+    auto decode_result = co_await decode_request_content(services.worker(), codings, raw,
         {.max_decoded_bytes_ = services.max_decoded_request_body_bytes(),
             .resource_ = decode_resource});
     auto* decoded_content = std::get_if<std::pmr::string>(&decode_result);

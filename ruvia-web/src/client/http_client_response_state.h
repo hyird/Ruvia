@@ -107,9 +107,13 @@ public:
             head.headers_.reserve(fields_value.size());
         }
         // Fieldless heads still consume response-budgeted vector storage.
+        // Each head's own field count is bounded by its decoder; across heads
+        // only the retained bytes are bounded, so many small interim heads
+        // (e.g. repeated 103 Early Hints) stay acceptable.
         auto budget = informational_budget_;
         for (const auto& field : fields_value) {
-            if (!budget.add_field(field.name(), field.value())) {
+            if (!budget.add(field.name().size()) || !budget.add(field.value().size()) ||
+                !budget.add(http_field_line_overhead)) {
                 throw http_client_error(http_client_error::code_type::protocol_error, "informational response metadata exceeds byte limit");
             }
             if constexpr (!transferring) {
@@ -146,7 +150,7 @@ public:
     http_protocol_version protocol_version_{http_protocol_version::http11};
     std::optional<http_response_body_plan> response_body_plan_{};
     std::pmr::vector<http_client_informational_response> informational_;
-    // One aggregate field-section budget across every retained interim head.
+    // One aggregate byte budget across every retained interim head.
     http_field_section_budget informational_budget_;
     std::pmr::vector<http_header> headers_;
     std::pmr::vector<http_header> trailers_;

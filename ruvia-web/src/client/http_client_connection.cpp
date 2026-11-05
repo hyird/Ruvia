@@ -51,7 +51,8 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
       http1_scheduler_(1, pool.worker(), pool.resource()),
       pool_(pool),
       index_(index),
-      http2_streams_(pool.resource()) {
+      http2_streams_(pool.resource()),
+      idle_watch_signal_(pool.worker()) {
 }
 
 http_client_connection::~http_client_connection() = default;
@@ -103,8 +104,26 @@ void http_client_connection::close() noexcept {
 }
 
 void http_client_connection::begin_idle() noexcept {
+    if (!connected_) {
+        return;
+    }
+    if (protocol_ == protocol_type::http1 && !idle_watch_wanted_) {
+        idle_watch_wanted_ = true;
+        if (idle_watcher_started_) {
+            idle_watch_signal_.notify();
+        } else {
+            try {
+                pool_.tasks().spawn(watch_idle_http1());
+                idle_watcher_started_ = true;
+            } catch (...) {
+                // An unwatched idle connection is not kept.
+                close();
+                return;
+            }
+        }
+    }
     const auto& idle_timeout = pool_.config().idle_timeout_;
-    if (!idle_timeout || !connected_ || idle_timer_.registered()) {
+    if (!idle_timeout || idle_timer_.registered()) {
         return;
     }
     try {
@@ -122,12 +141,63 @@ void http_client_connection::begin_idle() noexcept {
 
 void http_client_connection::end_idle() noexcept {
     idle_timer_.cancel();
+    if (std::exchange(idle_watch_wanted_, false)) {
+        ++idle_period_;
+        // An idle HTTP/1 connection has no other pending operation, and the
+        // next one starts only after this returns.
+        if (std::exchange(idle_wait_pending_, false)) {
+            transport_.cancel_wait();
+        }
+    }
 }
 
 void http_client_connection::close_idle() noexcept {
     // Every use of the connection ends the idle bound first; these hold only
     // for a connection nothing reused.
-    if (connected_ && http1_response_ == nullptr && http2_streams_.empty()) {
+    if (!connected_ || http1_response_ != nullptr || !http2_streams_.empty()) {
+        return;
+    }
+    if (protocol_ == protocol_type::http2 && http2_.running()) {
+        end_idle();
+        close_http2_session();
+    } else {
+        close();
+    }
+}
+
+void http_client_connection::close_http2_session() noexcept {
+    const client_transport_result closed{
+        .status_ = client_transport_status::io_failed, .error_ = std::make_error_code(std::errc::operation_canceled)};
+    // Without a running generation that can send GOAWAY it fails at once.
+    (void)http2_.begin_close(closed);
+}
+
+task<void> http_client_connection::watch_idle_http1() {
+    // Pingora's idle_poll: an HTTP/1 peer sends nothing between exchanges, so
+    // readiness of an idle connection is its EOF, a reset or unsolicited bytes,
+    // and the connection closes at once instead of waiting for reuse or
+    // idle_timeout_. Readiness is awaited on the raw socket without running
+    // the TLS engine; idle_status() then classifies it.
+    while (!retired_) {
+        if (!idle_watch_wanted_) {
+            co_await idle_watch_signal_.wait();
+            continue;
+        }
+        const auto period = idle_period_;
+        idle_wait_pending_ = true;
+        co_await transport_.wait_readable();
+        if (period != idle_period_ || retired_) {
+            // end_idle() cancelled the wait: the connection is in use or closed.
+            continue;
+        }
+        idle_wait_pending_ = false;
+        const auto status = transport_.idle_status();
+        if (status == client_idle_transport_status::reusable) {
+            continue;
+        }
+        if (status == client_idle_transport_status::pending_data) {
+            pool_.record_idle_connection_with_pending_data();
+        }
         close();
     }
 }
@@ -142,10 +212,17 @@ void http_client_connection::retain_idle_buffers() noexcept {
 
 void http_client_connection::shutdown() noexcept {
     retired_ = true;
-    transport_.abort(client_abort_reason::closing);
-    abort_http1_response();
     (void)connect_scheduler_.close();
     (void)http1_scheduler_.close();
+    idle_watch_signal_.notify();
+    if (http2_.running() && !http2_.failed() && http2_streams_.empty()) {
+        // No connect or HTTP/1 exchange runs beside a live session.
+        end_idle();
+        close_http2_session();
+        return;
+    }
+    transport_.abort(client_abort_reason::closing);
+    abort_http1_response();
     close();
 }
 
@@ -208,19 +285,37 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     }
     if (connected_) {
         if (protocol_ == protocol_type::http2) {
-            co_return true;
+            if (http2_.usable()) {
+                co_return true;
+            }
+            // A draining session retires once its last stream left.
+        } else {
+            const auto idle_status = transport_.idle_status();
+            if (idle_status == client_idle_transport_status::reusable) {
+                co_return true;
+            }
+            if (idle_status == client_idle_transport_status::pending_data) {
+                pool_.record_idle_connection_with_pending_data();
+            }
+            close();
         }
-        const auto idle_status = transport_.idle_status();
-        if (idle_status == client_idle_transport_status::reusable) {
-            co_return true;
-        }
-        if (idle_status == client_idle_transport_status::pending_data) {
-            pool_.record_idle_connection_with_pending_data();
-        }
-        close();
     }
     if (stop_token_value.stop_requested()) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client connect cancelled");
+    }
+    // A previous HTTP/2 generation may still be draining or unwinding its
+    // drivers and streams; they borrow the transport that connect() replaces.
+    // Waiting for them is part of acquiring this slot, and must not abort
+    // their transport, so it precedes this connect's cancellation binding.
+    if (http2_.running() || !http2_streams_.empty()) {
+        if (http2_streams_.empty()) {
+            // A session that admits no request and has no stream left.
+            close_http2_session();
+        }
+        co_await wait_for_http2_session_stop(acquire_timeout, stop_token_value, response);
+        if (retired_) {
+            throw http_client_error(http_client_error::code_type::closing, "HTTP client connection is retired");
+        }
     }
     transport_.reset_abort();
     generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
@@ -239,14 +334,13 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
         }
     } binding{response};
     cancellation.arm(stop_token_value);
-    // A previous HTTP/2 generation may still be unwinding its drivers and
-    // streams; they borrow the transport that connect() replaces.
-    while (http2_.running() || !http2_streams_.empty()) {
-        throw_if_aborted();
-        co_await http2_.state_signal().wait();
-    }
     throw_if_aborted();
     http2_.reset();
+    if (pool_.prefers_http11()) {
+        // The origin required HTTP/1.1 (RFC 9113 section 7): later connects
+        // offer only http/1.1, like Pingora's prefer_h1.
+        transport_.offer_alpn(client_alpn::http11);
+    }
     const auto& config = pool_.config();
     const auto timeout = operation_timeout_value.constrained_by(config.connect_timeout_);
     const auto connected = co_await transport_.connect(timeout);
@@ -274,6 +368,7 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
         timeout);
     switch (started.status_) {
         case http2_client_session_start_status::started:
+            http2_session_requests_ = 0;
             co_return false;
         case http2_client_session_start_status::transport_failed:
             close();

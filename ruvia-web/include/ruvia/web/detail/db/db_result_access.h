@@ -47,10 +47,6 @@ struct db_result_access final {
         return result_value.column_names_;
     }
 
-    [[nodiscard]] static std::span<const std::pmr::string> column_names(const db_row& row) noexcept {
-        return row.column_names();
-    }
-
     // Leaves a result whose rows could not be kept empty, so a failed
     // materialization never hands out part of a result.
     static void clear(db_rows& result_value) noexcept {

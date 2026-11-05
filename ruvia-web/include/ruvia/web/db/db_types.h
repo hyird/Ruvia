@@ -1,8 +1,6 @@
 #pragma once
 
-#include <charconv>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -11,7 +9,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -20,7 +17,7 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/port_number.h"
-#include "ruvia/web/integer.h"
+#include "ruvia/web/detail/text_scalar.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/tls_config.h"
 
@@ -114,6 +111,10 @@ struct db_config final {
 // Query-result caching stores rows in Redis. The types are declared in every
 // build so the public layout does not depend on feature macros; registering a
 // cache in a build without Redis support is rejected at configuration time.
+// A result whose entry the Redis capability's max_reply_bytes_ could not read
+// back is returned but not stored. Concurrent misses of one key on one worker
+// run one database query; the other callers wait for it within their own
+// timeout and stop token.
 struct db_cache_config final {
     std::chrono::milliseconds duration_{1000};
     bool always_enabled_{false};
@@ -251,14 +252,8 @@ private:
 
 namespace detail {
 
-template <typename t_type>
-concept db_text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
-                         (std::is_same_v<t_type, bool> || is_model_integer<t_type> ||
-                             std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
-                             std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
-
 template <typename t_type, bool allow_array = true>
-struct db_mapped_value_traits : std::bool_constant<db_text_scalar<t_type> && !std::is_same_v<t_type, std::string_view>> {};
+struct db_mapped_value_traits : std::bool_constant<text_scalar<t_type> && !std::is_same_v<t_type, std::string_view>> {};
 
 template <typename t_type, bool allow_array>
 struct db_mapped_value_traits<std::optional<t_type>, allow_array> : db_mapped_value_traits<t_type, allow_array> {};
@@ -269,43 +264,20 @@ struct db_mapped_value_traits<std::pmr::vector<t_type>, allow_array>
 
 // The one text-to-scalar conversion for database results: fields and array
 // elements accept the same boolean tokens and numeric syntax.
-template <db_text_scalar t_type>
+template <text_scalar t_type>
 [[nodiscard]] t_type convert_db_text(std::string_view text, std::pmr::memory_resource* resource) {
-    if constexpr (std::is_same_v<t_type, std::string_view>) {
-        return text;
-    } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-        return std::pmr::string(text, resource);
-    } else if constexpr (std::is_same_v<t_type, string>) {
-        return string(text, model_options{.resource_ = resource});
-    } else if constexpr (std::is_same_v<t_type, bool>) {
-        if (text == "1" || text == "t" || text == "true" || text == "TRUE") {
-            return true;
-        }
-        if (text == "0" || text == "f" || text == "false" || text == "FALSE") {
-            return false;
-        }
-        throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database text is not a boolean");
-    } else if constexpr (std::is_floating_point_v<t_type>) {
-        t_type converted{};
-        const auto* const last = text.data() + text.size();
-        const auto [end, error] = std::from_chars(text.data(), last, converted);
-        if (error != std::errc{} || end != last || !std::isfinite(converted)) {
-            throw db_conversion_error(error == std::errc::result_out_of_range && end == last
+    auto parsed = parse_text_scalar<t_type>(text, resource);
+    if (const auto* error = std::get_if<text_scalar_parse_error>(&parsed)) {
+        if constexpr (std::is_same_v<t_type, bool>) {
+            throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database text is not a boolean");
+        } else {
+            throw db_conversion_error(*error == text_scalar_parse_error::out_of_range
                                           ? db_conversion_error::code_type::out_of_range
                                           : db_conversion_error::code_type::invalid_format,
                 "database text is not a valid number");
         }
-        return converted;
-    } else {
-        const auto parsed = parse_integer<t_type>(text);
-        if (const auto* error = std::get_if<integer_parse_error>(&parsed)) {
-            throw db_conversion_error(*error == integer_parse_error::out_of_range
-                                          ? db_conversion_error::code_type::out_of_range
-                                          : db_conversion_error::code_type::invalid_format,
-                "database text is not a valid number");
-        }
-        return std::get<t_type>(parsed);
     }
+    return std::get<t_type>(std::move(parsed));
 }
 
 }  // namespace detail
@@ -403,7 +375,7 @@ public:
     }
     // string_view is a raw borrow, valid only while this field's row storage
     // remains alive. Repository mapped results instead require db_mapped_value.
-    template <detail::db_text_scalar t_type>
+    template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const& {
         const auto source_value = value();
         if (!source_value) {
@@ -412,7 +384,7 @@ public:
         return detail::convert_db_text<t_type>(*source_value, resource_);
     }
 
-    template <detail::db_text_scalar t_type>
+    template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
 
 private:

@@ -12,10 +12,11 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_codec.h"
+
+#include "http/http_compressible_media_type.h"
 
 namespace ruvia::detail {
 namespace {
@@ -50,45 +51,12 @@ namespace {
     return http_response_compression_status::compressed;
 }
 
-[[nodiscard]] bool media_type_starts_with(
-    std::string_view media_type, std::string_view prefix) noexcept {
-    return media_type.size() >= prefix.size() &&
-           http_ascii_equals_ignore_case(media_type.substr(0, prefix.size()), prefix);
-}
-
-[[nodiscard]] bool response_content_type_skips_compression(std::string_view content_type_value) noexcept {
-    if (content_type_value.empty()) {
-        return false;
-    }
-    const auto media_type = ::ruvia::http_media_type_only(content_type_value);
-    if (media_type.empty()) {
-        return false;
-    }
-    // Dominant compressible types short-circuit the skip list below.
-    if (media_type_starts_with(media_type, "text/") ||
-        http_ascii_equals_ignore_case(media_type, "application/json")) {
-        return false;
-    }
-    if (http_ascii_equals_ignore_case(media_type, "image/svg+xml")) {
-        return false;
-    }
-    return media_type_starts_with(media_type, "image/") || media_type_starts_with(media_type, "video/") ||
-           media_type_starts_with(media_type, "audio/") ||
-           http_ascii_equals_ignore_case(media_type, "application/gzip") ||
-           http_ascii_equals_ignore_case(media_type, "application/x-gzip") ||
-           http_ascii_equals_ignore_case(media_type, "application/zip") ||
-           http_ascii_equals_ignore_case(media_type, "application/zstd") ||
-           http_ascii_equals_ignore_case(media_type, "application/pdf") ||
-           http_ascii_equals_ignore_case(media_type, "application/octet-stream");
-}
-
 [[nodiscard]] bool response_headers_skip_compression(const http_response& response) noexcept {
-    if (response.header("Content-Encoding").has_value() ||
-        response.header("Content-Range").has_value()) {
+    if (response.header("Content-Range").has_value()) {
         return true;
     }
     if (const auto content_type = response.header("Content-Type");
-        content_type.has_value() && response_content_type_skips_compression(*content_type)) {
+        !content_type.has_value() || !http_media_type_compressible(*content_type)) {
         return true;
     }
     const bool has_cache_control = response.header("Cache-Control").has_value();
@@ -119,8 +87,9 @@ namespace {
     return has_cache_control && cache_parser.finish().has(cache_control_directive::no_transform);
 }
 
-// The single decimal Content-Length a HEAD handler declared, or nullopt.
-[[nodiscard]] std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
+}  // namespace
+
+std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
     const auto field = response.header("Content-Length");
     if (!field.has_value()) {
         return std::nullopt;
@@ -145,6 +114,16 @@ namespace {
     return valid ? declared : std::nullopt;
 }
 
+bool declared_length_permits_encoding(const http_response_coding_selection& selection,
+    const compression_config& options, std::uint64_t declared) noexcept {
+    // min_bytes_ only says when encoding stops paying off; a client that
+    // refuses identity is served a coding at any size instead of a 406.
+    return !(((declared == 0 || declared < options.min_bytes_) && selection.identity_accepted()) ||
+             declared > options.max_bytes_);
+}
+
+namespace {
+
 // An empty HEAD body is a HEAD handler describing the GET representation
 // without producing it. Encoding those zero bytes would publish the coded
 // length of nothing (RFC 9110 §8.6). Apply the coding GET would select, sized
@@ -153,11 +132,8 @@ namespace {
 [[nodiscard]] http_buffered_compression_step apply_head_content_encoding(
     const http_response_coding_selection& selection, http_response& response,
     const compression_config& options, std::optional<std::uint64_t> declared) {
-    const bool encode = declared.has_value()
-                            ? !(((*declared == 0 || *declared < options.min_bytes_) &&
-                                    selection.identity_accepted()) ||
-                                  *declared > options.max_bytes_)
-                            : !selection.identity_accepted();
+    const bool encode = declared.has_value() ? declared_length_permits_encoding(selection, options, *declared)
+                                             : !selection.identity_accepted();
     if (!encode) {
         return {http_response_compression_status::not_applicable, false};
     }
@@ -183,6 +159,13 @@ http_response_compression_decision prepare_response_compression(
         return http_response_compression_decision::fixed_representation;
     }
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
+        return http_response_compression_decision::fixed_representation;
+    }
+    // An application-encoded body is kept, but whether it is sent (200) or
+    // refused (406) still depends on Accept-Encoding, so caches must key on it
+    // (RFC 9110 §12.5.5; Pingora depends_on_accept_encoding).
+    if (response.header("Content-Encoding").has_value()) {
+        response.add_vary_token("Accept-Encoding");
         return http_response_compression_decision::fixed_representation;
     }
     const auto status_code = response.status();
@@ -219,16 +202,15 @@ http_buffered_compression_step apply_response_compression(const http_response_co
             return apply_head_content_encoding(selection, response, options, declared);
         }
     }
-    // min_bytes_ only says when encoding stops paying off; a client that
-    // refuses identity is served a coding at any size instead of a 406.
     if (decision != http_response_compression_decision::encode ||
-        (body.size() < options.min_bytes_ && selection.identity_accepted()) || body.size() > options.max_bytes_) {
+        !declared_length_permits_encoding(selection, options, body.size())) {
         return not_applicable;
     }
-    // Without a blocking pool there is no offload boundary, only the
-    // configured policy: everything through max_bytes_ encodes in line.
-    if (offload_available && body.size() > options.sync_bytes_) {
-        return {http_response_compression_status::not_applicable, true};
+    // sync_bytes_ is the inline ceiling. Larger bodies encode on the blocking
+    // pool; without one they stay identity (or 406 when identity is refused)
+    // rather than stall the event loop.
+    if (body.size() > options.sync_bytes_) {
+        return {http_response_compression_status::not_applicable, offload_available};
     }
 
     const auto coding = selection.coding();

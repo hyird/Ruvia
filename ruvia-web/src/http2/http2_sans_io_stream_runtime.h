@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -175,6 +176,22 @@ public:
         return selected != nullptr ? selected->signal() : nullptr;
     }
 
+    // Request-body DATA arrived at `now_ms` (the time of the read carrying it).
+    void note_request_body_progress(std::int64_t now_ms) noexcept {
+        request_body_progress_ms_ = now_ms;
+    }
+
+    // The request body is still open and has gone `inactivity` without DATA,
+    // or `completion` since it opened (the stream's request_body_timeout_ and
+    // body_completion_timeout_).
+    [[nodiscard]] bool request_body_overdue(std::int64_t now_ms,
+        const std::optional<std::chrono::milliseconds>& inactivity,
+        const std::optional<std::chrono::milliseconds>& completion) const noexcept {
+        return request_body_open_ &&
+               ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->count()) ||
+                   (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->count()));
+    }
+
 private:
     friend class http2_sans_io_stream_runtime_table;
 
@@ -192,8 +209,10 @@ private:
         return tunnel_;
     }
 
-    void mark_request_body_open() noexcept {
+    void mark_request_body_open(std::int64_t now_ms) noexcept {
         request_body_open_ = true;
+        request_body_opened_ms_ = now_ms;
+        request_body_progress_ms_ = now_ms;
     }
 
     void mark_request_body_closed() noexcept {
@@ -213,6 +232,9 @@ private:
     std::optional<http2_sans_io_selected_route> selected_route_;
     std::optional<http2_request_head_event> request_head_;
     std::optional<http_request_body_failure> body_failure_{};
+    // Valid while request_body_open_, in the connection scanner's clock.
+    std::int64_t request_body_opened_ms_{0};
+    std::int64_t request_body_progress_ms_{0};
     bool tunnel_{false};
     bool request_body_open_{false};
     bool response_committed_{false};
@@ -308,24 +330,17 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool mark_request_body_open(std::uint32_t stream_id) noexcept {
-        auto* runtime = find(stream_id);
-        if (runtime == nullptr || runtime->request_body_open()) {
-            return false;
+    // `now_ms` is the time of the read that carried the request head.
+    void mark_request_body_open(std::uint32_t stream_id, std::int64_t now_ms) noexcept {
+        if (auto* runtime = find(stream_id)) {
+            runtime->mark_request_body_open(now_ms);
         }
-        runtime->mark_request_body_open();
-        ++open_request_body_count_;
-        return true;
     }
 
-    [[nodiscard]] bool mark_request_body_closed(std::uint32_t stream_id) noexcept {
-        auto* runtime = find(stream_id);
-        if (runtime == nullptr || !runtime->request_body_open()) {
-            return false;
+    void mark_request_body_closed(std::uint32_t stream_id) noexcept {
+        if (auto* runtime = find(stream_id)) {
+            runtime->mark_request_body_closed();
         }
-        runtime->mark_request_body_closed();
-        --open_request_body_count_;
-        return true;
     }
 
     [[nodiscard]] bool remove(std::uint32_t stream_id) noexcept {
@@ -360,10 +375,6 @@ public:
         return tunnel_count_;
     }
 
-    [[nodiscard]] std::size_t open_request_body_count() const noexcept {
-        return open_request_body_count_;
-    }
-
     template <typename callback>
     void for_each(callback&& callback_value) {
         for (auto& slot : inline_) {
@@ -390,9 +401,6 @@ private:
         if (runtime.tunnel()) {
             --tunnel_count_;
         }
-        if (runtime.request_body_open()) {
-            --open_request_body_count_;
-        }
     }
 
     std::pmr::memory_resource* resource_;
@@ -402,7 +410,6 @@ private:
     std::pmr::vector<overflow_runtime_type> overflow_;
     std::size_t size_{0};
     std::size_t tunnel_count_{0};
-    std::size_t open_request_body_count_{0};
 };
 
 }  // namespace ruvia::detail

@@ -22,6 +22,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_server.h"
 
 #include "server/connection_scanner.h"
@@ -217,27 +218,6 @@ private:
     std::optional<asio_completion_awaiter<std::size_t, remainder_initiation>> remainder_;
 };
 
-#if defined(_WIN32)
-// Windows keeps its overlapped native transfer for committed file ranges.
-inline task<std::error_code> write_http1_native_file_body(asio::ip::tcp::socket& stream,
-    const http_response& response, connection_scanner::entry& progress) {
-    for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
-        const auto segment = response.body_segment(index);
-        if (segment.file_) {
-            if (const auto written = co_await write_http_response_file(stream, {}, *segment.file_, progress);
-                written.error_) {
-                co_return written.error_;
-            }
-        } else if (!segment.bytes_.empty()) {
-            if (const auto written = co_await connection_gather_write(stream, segment.bytes_, {}, progress); written.error_) {
-                co_return written.error_;
-            }
-        }
-    }
-    co_return std::error_code{};
-}
-#endif
-
 // A buffered response serialized into the connection's output.
 struct http1_response_write_start final {
     // Output offset at which this response's head is complete. Responses held
@@ -255,7 +235,7 @@ struct http1_response_write_start final {
 // request: the body is then coalesced up to that many output bytes, and a
 // response wholly in the output below the limit is held back instead of
 // written. File bodies are never coalesced or held; the caller writes any
-// held-back output first, then continues in finish_file_response_write().
+// held-back output first, then continues with http1_file_response_body.
 [[nodiscard]] inline http1_response_write_start start_response_write(http_response_head_buffer& output,
     const http_response& response, const http1_buffered_response_plan& response_plan, std::size_t hold_limit,
     bool coalesce_for_tls = false) {
@@ -283,80 +263,129 @@ struct http1_response_write_start final {
     return start;
 }
 
-// Writes a file or multipart/byteranges response whose head start_response_write()
-// serialized into an otherwise empty `head`. `progress` is the connection's
-// scanner entry; every partial transfer touches it. A plain-TCP whole-file body
-// may append its bytes to `head` so that head and body leave in one send.
+// The body of a file or multipart/byteranges response. start() runs before
+// any byte of the head leaves: it reads the first chunk, which validates the
+// first file range, or for a kernel transfer validates the response's
+// handle. A missing, unreadable or changed file can then still be answered
+// with an error response. finish() writes the head start_response_write()
+// serialized into an otherwise empty `head`, with the first chunk in the same
+// send, then the rest of the body. Every partial transfer touches `progress`.
 template <typename stream_type>
-task<http1_buffered_response_write_result> finish_file_response_write(stream_type& stream,
-    http_response_head_buffer& head, const http_response& response,
-    const http1_buffered_response_plan& response_plan, const http1_response_write_start& start,
-    const response_file_io& file_io, connection_scanner::entry& progress) {
-    const auto response_head_bytes = start.head_bytes_;
+class http1_file_response_body final {
+public:
+    // `response` is borrowed until finish() completes.
+    http1_file_response_body(const http_response& response, const response_file_io& file_io)
+        : source_(response, file_io)
 #if defined(_WIN32)
-    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
-                  native_response_file_write_available) {
-        if (!response_plan.body_plan().body_suppressed() && !response.has_multipart_file_body()) {
-            // The file is opened (or its framing handle borrowed) and, when
-            // small, read before any byte is sent: a file that is missing or
-            // changed fails before the head commits a status.
-            const auto file = *response.file_body();
-            if (file.length() > inline_response_file_max_bytes) {
-                const auto written = co_await write_http_response_file(stream, head.view(), file, progress);
+          ,
+          transmit_file_(transmit_candidate(response))
+#endif
+    {
+    }
+
+    http1_file_response_body(const http1_file_response_body&) = delete;
+    http1_file_response_body& operator=(const http1_file_response_body&) = delete;
+    http1_file_response_body(http1_file_response_body&&) = delete;
+    http1_file_response_body& operator=(http1_file_response_body&&) = delete;
+
+    // False when the body failed with nothing sent; failure() says why.
+    [[nodiscard]] task<bool> start(const http1_buffered_response_plan& response_plan) {
+        // HEAD and status-suppressed bodies transfer no representation.
+        if (response_plan.body_plan().body_suppressed()) {
+            co_return true;
+        }
+#if defined(_WIN32)
+        if (transmit_file_) {
+            // The framing handle stays valid across an in-place rewrite, which
+            // must fail before any byte is sent.
+            if (const auto error =
+                    validate_native_file(borrowed_native_file(*transmit_file_->opened_handle()), *transmit_file_)) {
+                transmit_failure_.emplace(response_file_failure::read_failed(error));
+                co_return false;
+            }
+            transmit_ = true;
+            co_return true;
+        }
+#endif
+        first_ = co_await source_.next();
+        co_return first_.kind() != response_body_chunk::kind_type::failed;
+    }
+
+    [[nodiscard]] task<http1_buffered_response_write_result> finish(stream_type& stream,
+        http_response_head_buffer& head, const http1_buffered_response_plan& response_plan,
+        const http1_response_write_start& start, connection_scanner::entry& progress) {
+        const auto response_head_bytes = start.head_bytes_;
+#if defined(_WIN32)
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            if (transmit_) {
+                const auto written = co_await write_http_response_file(stream, head.view(),
+                    borrowed_native_file(*transmit_file_->opened_handle()), *transmit_file_, progress);
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
                     written.error_, written.head_written_ ? response_head_bytes : 0);
             }
-            if (const auto read_error = append_response_file_bytes(head, file)) {
-                co_return classify_http1_buffered_response_write(
-                    response_plan, response_head_bytes, read_error, 0);
-            }
-            const auto written = co_await connection_gather_write(stream, head.view(), {}, progress);
-            co_return classify_http1_buffered_response_write(
-                response_plan, response_head_bytes, written.error_, written.bytes_);
         }
-        const auto head_written = co_await connection_gather_write(stream, head.view(), {}, progress);
-        if (head_written.error_ || !response_plan.send_body()) {
-            co_return classify_http1_buffered_response_write(
-                response_plan, response_head_bytes, head_written.error_, head_written.bytes_);
-        }
-        const auto body_error = co_await write_http1_native_file_body(stream, response, progress);
-        co_return classify_http1_buffered_response_write(
-            response_plan, response_head_bytes, body_error, response_head_bytes);
-    }
 #endif
-    response_file_source source(response, file_io);
-    auto first = response_body_chunk::end();
-    if (!response_plan.body_plan().body_suppressed()) {
-        // Validate the first file range before committing the head, including
-        // empty files for which send_body() correctly reports no payload.
-        first = co_await source.next();
-        if (first.kind() == response_body_chunk::kind_type::failed) {
-            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
-                std::make_error_code(std::errc::io_error), 0);
+        const auto first_written = co_await connection_gather_write(stream, head.view(), first_.bytes(), progress);
+        if (first_written.error_ || !response_plan.send_body()) {
+            co_return classify_http1_buffered_response_write(
+                response_plan, response_head_bytes, first_written.error_, first_written.bytes_);
         }
-    }
-    const auto first_written = co_await connection_gather_write(stream, head.view(), first.bytes(), progress);
-    if (first_written.error_ || !response_plan.send_body()) {
-        co_return classify_http1_buffered_response_write(
-            response_plan, response_head_bytes, first_written.error_, first_written.bytes_);
-    }
-    if (first.kind() == response_body_chunk::kind_type::end) {
-        co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
-    }
-    for (;;) {
-        const auto chunk = co_await source.next();
-        if (chunk.kind() == response_body_chunk::kind_type::end) {
+        if (first_.kind() == response_body_chunk::kind_type::end) {
             co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
         }
-        if (chunk.kind() == response_body_chunk::kind_type::failed) {
-            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
-                std::make_error_code(std::errc::io_error), response_head_bytes);
-        }
-        if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}, progress); written.error_) {
-            co_return classify_http1_buffered_response_write(
-                response_plan, response_head_bytes, written.error_, response_head_bytes);
+        for (;;) {
+            const auto chunk = co_await source_.next();
+            if (chunk.kind() == response_body_chunk::kind_type::end) {
+                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
+            }
+            if (chunk.kind() == response_body_chunk::kind_type::failed) {
+                co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
+                    std::make_error_code(std::errc::io_error), response_head_bytes);
+            }
+            if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}, progress); written.error_) {
+                co_return classify_http1_buffered_response_write(
+                    response_plan, response_head_bytes, written.error_, response_head_bytes);
+            }
         }
     }
-}
+
+    // Why start() or finish() could not produce the body from the file.
+    [[nodiscard]] const response_file_failure* failure() const noexcept {
+        if (const auto* failure = source_.failure()) {
+            return failure;
+        }
+#if defined(_WIN32)
+        if (transmit_failure_) {
+            return &*transmit_failure_;
+        }
+#endif
+        return nullptr;
+    }
+
+private:
+#if defined(_WIN32)
+    // The single range a kernel transfer may send from the response's handle.
+    [[nodiscard]] static std::optional<http_response_file_view> transmit_candidate(
+        [[maybe_unused]] const http_response& response) noexcept {
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            if (!response.has_multipart_file_body()) {
+                const auto file = response.file_body();
+                if (file && file->length() > transmit_file_min_bytes && file->opened_handle() != nullptr) {
+                    return file;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+#endif
+
+    response_file_source source_;
+    response_body_chunk first_{response_body_chunk::end()};
+#if defined(_WIN32)
+    std::optional<http_response_file_view> transmit_file_;
+    std::optional<response_file_failure> transmit_failure_;
+    bool transmit_{false};
+#endif
+};
 
 }  // namespace ruvia::detail

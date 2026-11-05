@@ -1,8 +1,12 @@
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -172,6 +176,31 @@ static_assert(std::ranges::is_sorted(pg_function_parameter_cast_table, {}, &pg_f
                : cast;
 }
 
+// PostgreSQL's Bind message counts parameters in an Int16 (protocol 3.0).
+constexpr std::size_t max_postgresql_parameters = 65535;
+
+// PostgreSQL lexes `$` followed by digits as a positional parameter unless the
+// `$` continues an identifier (`a$1`).
+[[nodiscard]] bool contains_pg_positional_parameter(std::string_view text) noexcept {
+    const auto is_digit = [](char value) noexcept { return value >= '0' && value <= '9'; };
+    for (auto position = text.find('$'); position != std::string_view::npos; position = text.find('$', position + 1)) {
+        if (position + 1 == text.size() || !is_digit(text[position + 1])) {
+            continue;
+        }
+        if (position == 0) {
+            return true;
+        }
+        const auto previous = static_cast<unsigned char>(text[position - 1]);
+        const bool continues_identifier = previous >= 0x80 || previous == '_' || previous == '$' ||
+                                          is_digit(static_cast<char>(previous)) ||
+                                          (previous >= 'a' && previous <= 'z') || (previous >= 'A' && previous <= 'Z');
+        if (!continues_identifier) {
+            return true;
+        }
+    }
+    return false;
+}
+
 class query_sql_writer final {
 public:
     query_sql_writer(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode)
@@ -185,7 +214,6 @@ public:
 
     std::pmr::string sql_;
     std::pmr::vector<db_value> params_;
-    std::size_t expected_params_{0};
     [[nodiscard]] db_driver driver() const noexcept {
         return driver_;
     }
@@ -223,8 +251,27 @@ public:
     // `cast` refines PostgreSQL parameter typing for the position the value
     // fills. Bare bitwise integers share the same range and SQL type in bound
     // and literal output; other casts leave literals to PostgreSQL's parser.
-    void bound(const db_value& value, const db_query_node* node = nullptr,
-        pg_parameter_cast cast = pg_parameter_cast::context) {
+    void bound(const db_value& value, pg_parameter_cast cast = pg_parameter_cast::context) {
+        append_parameter(value, nullptr, cast);
+    }
+
+    // Binds value node `index` of `s`. PostgreSQL numbers each node once,
+    // however often grouped or repeated SQL emits it.
+    void bound_node(const db_query_storage& s, std::size_t index, pg_parameter_cast cast) {
+        append_parameter(s.nodes_[index].value_, parameter_position(s, index), cast);
+    }
+
+    void number(std::uint64_t value) {
+        bound(db_value(static_cast<std::int64_t>(value)));
+    }
+
+    void type(const db_stored_type& value) {
+        append_db_type_name(sql_, value.data_type_, value.custom_name_, value.length_, value.precision_,
+            value.scale_, value.array_, driver_, db_sql_type_usage::cast);
+    }
+
+private:
+    void append_parameter(const db_value& value, std::uint32_t* position, pg_parameter_cast cast) {
         const bool bitwise_integer = pg() && cast == pg_parameter_cast::bitwise_integer;
         if (bitwise_integer && db_value_access::type(value) == db_value_type::unsigned_value &&
             db_value_access::unsigned_value(value) > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
@@ -241,38 +288,16 @@ public:
             }
             return;
         }
-        if (pg() && node != nullptr) {
-            if (!parameter_positions_.empty()) {
-                for (const auto& [existing_node, position] : parameter_positions_) {
-                    if (existing_node == node) {
-                        pg_parameter(position, value, cast);
-                        return;
-                    }
-                }
-            } else {
-                for (std::size_t i = 0; i < inline_parameter_count_; ++i) {
-                    if (inline_parameter_positions_[i].node_ == node) {
-                        pg_parameter(inline_parameter_positions_[i].position_, value, cast);
-                        return;
-                    }
-                }
-            }
+        if (position != nullptr && *position != 0) {
+            pg_parameter(*position, value, cast);
+            return;
         }
-        if (params_.empty() && expected_params_ > 1U) {
-            params_.reserve(expected_params_);
+        if (pg() && params_.size() == max_postgresql_parameters) {
+            throw std::length_error("PostgreSQL statement exceeds 65535 bound parameters");
         }
         params_.push_back(clone_db_value_for_resource(value, params_.get_allocator().resource()));
-        if (pg() && node != nullptr) {
-            if (!parameter_positions_.empty()) {
-                parameter_positions_.emplace_back(node, params_.size());
-            } else if (inline_parameter_count_ < inline_parameter_capacity) {
-                inline_parameter_positions_[inline_parameter_count_++] = {node, params_.size()};
-            } else {
-                parameter_positions_.reserve((std::max)(expected_params_, inline_parameter_capacity * 2U));
-                parameter_positions_.assign(
-                    inline_parameter_positions_.begin(), inline_parameter_positions_.end());
-                parameter_positions_.emplace_back(node, params_.size());
-            }
+        if (position != nullptr) {
+            *position = static_cast<std::uint32_t>(params_.size());
         }
         if (pg()) {
             pg_parameter(params_.size(), value, cast);
@@ -281,16 +306,23 @@ public:
         }
     }
 
-    void number(std::uint64_t value) {
-        bound(db_value(static_cast<std::int64_t>(value)));
+    // The parameter slot of a PostgreSQL bound value node, or nullptr where
+    // parameters are not numbered.
+    [[nodiscard]] std::uint32_t* parameter_position(const db_query_storage& s, std::size_t index) {
+        if (!pg() || mode_ != db_parameter_mode::bound) {
+            return nullptr;
+        }
+        if (positions_owner_ != &s) {
+            auto& positions = parameter_positions_[&s];
+            if (positions.empty()) {
+                positions.assign(s.nodes_.size(), 0);
+            }
+            positions_owner_ = &s;
+            positions_ = &positions;
+        }
+        return &(*positions_)[index];
     }
 
-    void type(const db_stored_type& value) {
-        append_db_type_name(sql_, value.data_type_, value.custom_name_, value.length_, value.precision_,
-            value.scale_, value.array_, driver_, db_sql_type_usage::cast);
-    }
-
-private:
     void pg_parameter(std::size_t position, const db_value& value, pg_parameter_cast cast) {
         sql_ += '$';
         append_db_number(sql_, static_cast<std::uint64_t>(position));
@@ -332,20 +364,14 @@ private:
         }
     }
 
-    struct parameter_position final {
-        const db_query_node* node_;
-        std::size_t position_;
-    };
-
-    static constexpr std::size_t inline_parameter_capacity = 32;
     db_driver driver_;
     db_parameter_mode mode_;
-    std::array<parameter_position, inline_parameter_capacity> inline_parameter_positions_;
-    std::size_t inline_parameter_count_{0};
-    // PostgreSQL numbers a reused node's parameter once. Queries with up to 32
-    // distinct parameter nodes use inline_parameter_positions_ without heap
-    // allocations; larger queries spill into a single contiguous vector.
-    std::pmr::vector<parameter_position> parameter_positions_;
+    // One dense table per compiled storage, indexed by node and holding the
+    // node's 1-based parameter number (0: not yet bound); positions_ caches
+    // the table of positions_owner_.
+    std::pmr::unordered_map<const db_query_storage*, std::pmr::vector<std::uint32_t>> parameter_positions_;
+    const db_query_storage* positions_owner_{nullptr};
+    std::pmr::vector<std::uint32_t>* positions_{nullptr};
 };
 
 }  // namespace
@@ -354,7 +380,8 @@ class db_query_compiler final {
 public:
     db_query_compiler(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode)
         : output_(driver, resource, mode),
-          mode_(mode) {}
+          mode_(mode),
+          grouped_{nullptr, std::pmr::vector<std::pair<std::size_t, std::size_t>>(resource)} {}
 
     query_sql_writer output_;
     db_parameter_mode mode_;
@@ -371,8 +398,8 @@ public:
         if (depth == 0) {
             output_.sql_.reserve(64U + s.nodes_.size() * 16U + s.projections_.size() * 12U +
                                  s.orders_.size() * 16U + s.joins_.size() * 32U + s.ctes_.size() * 48U);
-            output_.expected_params_ = estimate_bound_parameters(s);
         }
+        auto enclosing_groups = std::exchange(grouped_, bound_groups(s));
         if (!s.ctes_.empty()) {
             if (!output_.pg() && s.kind_ != db_query_kind::select) {
                 output_.unsupported("data-changing WITH");
@@ -502,31 +529,63 @@ public:
             output_.sql_ += " RETURNING ";
             expressions(s, s.returning_, depth + 1, true);
         }
+        grouped_ = std::move(enclosing_groups);
     }
 
 private:
+    // Grouped bound expressions of one storage. PostgreSQL must see the same
+    // parameter numbers wherever SELECT, GROUP BY and HAVING repeat a grouped
+    // expression, but an imported copy has its own value nodes; each entry
+    // maps such a GROUP BY expression to the node emitted for it.
+    struct grouped_bound_values final {
+        const db_query_storage* storage_{nullptr};
+        // (GROUP BY node, node emitted for every equal expression)
+        std::pmr::vector<std::pair<std::size_t, std::size_t>> groups_;
+    };
+
     static void require_depth(std::size_t depth) {
-        if (depth > 256) {
+        if (depth > max_db_query_depth) {
             throw std::length_error("database query nesting exceeds 256 levels");
         }
     }
     static const db_query_storage& nested(const db_query_storage& s, std::size_t index) {
         return s.queries_.at(index).storage();
     }
-    [[nodiscard]] static std::size_t estimate_bound_parameters(const db_query_storage& s, std::size_t depth = 0) noexcept {
-        if (depth > 256) {
-            return 0;
+    [[nodiscard]] grouped_bound_values bound_groups(const db_query_storage& s) const {
+        grouped_bound_values result{&s, std::pmr::vector<std::pair<std::size_t, std::size_t>>(output_.sql_.get_allocator().resource())};
+        if (!output_.pg() || mode_ != db_parameter_mode::bound) {
+            return result;
         }
-        std::size_t count = (s.limit_.has_value() ? 1U : 0U) + (s.offset_.has_value() ? 1U : 0U);
-        for (const auto& node : s.nodes_) {
-            if (node.kind_ == db_node_kind::value && db_value_access::type(node.value_) != db_value_type::null) {
-                ++count;
+        for (const auto group : s.groups_) {
+            if (!contains_bound_value(s, group)) {
+                continue;
+            }
+            auto emitted = group;
+            for (auto projection : s.projections_) {
+                if (s.nodes_[projection].kind_ == db_node_kind::alias) {
+                    projection = s.nodes_[projection].left_;
+                }
+                if (same_expression(s, group, projection)) {
+                    emitted = projection;
+                    break;
+                }
+            }
+            result.groups_.emplace_back(group, emitted);
+        }
+        return result;
+    }
+    // The node to emit for `index`: the grouped expression it repeats, if any.
+    [[nodiscard]] std::size_t grouped_node(const db_query_storage& s, std::size_t index) const {
+        if (grouped_.storage_ != &s || grouped_.groups_.empty()) {
+            return index;
+        }
+        const auto kind = s.nodes_.at(index).kind_;
+        for (const auto& [group, emitted] : grouped_.groups_) {
+            if (s.nodes_[group].kind_ == kind && same_expression(s, group, index)) {
+                return emitted;
             }
         }
-        for (const auto& sub : s.queries_) {
-            count += estimate_bound_parameters(sub.storage(), depth + 1);
-        }
-        return count;
+        return index;
     }
 
     template <class range_type, class fn_type>
@@ -598,7 +657,7 @@ private:
         if (lhs == rhs) {
             return true;
         }
-        if (lhs == no_db_node || rhs == no_db_node || depth > 256) {
+        if (lhs == no_db_node || rhs == no_db_node || depth > max_db_query_depth) {
             return false;
         }
         const auto& a = s.nodes_.at(lhs);
@@ -675,7 +734,7 @@ private:
     }
     [[nodiscard]] static bool contains_bound_value(
         const db_query_storage& s, std::size_t index, std::size_t depth = 0) noexcept {
-        if (index >= s.nodes_.size() || depth > 256) {
+        if (index >= s.nodes_.size() || depth > max_db_query_depth) {
             return false;
         }
         const auto& n = s.nodes_[index];
@@ -711,40 +770,29 @@ private:
         }
         return false;
     }
-    static std::size_t group_expression(const db_query_storage& s, std::size_t index) {
-        if (!contains_bound_value(s, index)) {
-            return index;
-        }
-        for (const auto group : s.groups_) {
-            if (!contains_bound_value(s, group) || !same_expression(s, group, index)) {
-                continue;
-            }
-            for (auto projection : s.projections_) {
-                if (s.nodes_[projection].kind_ == db_node_kind::alias) {
-                    projection = s.nodes_[projection].left_;
-                }
-                if (same_expression(s, group, projection)) {
-                    return projection;
-                }
-            }
-            return group;
-        }
-        return index;
-    }
     // `cast` applies when the expression is a bound value; see pg_parameter_cast.
     void expr(const db_query_storage& s, std::size_t index, std::size_t depth, bool aliases = false,
         pg_parameter_cast cast = pg_parameter_cast::context) {
         require_depth(depth);
-        if (output_.pg() && mode_ == db_parameter_mode::bound && !s.groups_.empty()) {
-            index = group_expression(s, index);
-        }
+        index = grouped_node(s, index);
         const auto& n = s.nodes_.at(index);
         const auto child_value = [&](std::size_t id) { expr(s, id, depth + 1); };
         switch (n.kind_) {
             case db_node_kind::sql:
+                if (output_.pg() && mode_ == db_parameter_mode::bound &&
+                    (contains_pg_positional_parameter(n.text_) ||
+                        std::ranges::any_of(n.named_, [](const auto& part) { return contains_pg_positional_parameter(part.name_); }))) {
+                    // It would silently address the compiler's own numbering.
+                    throw std::invalid_argument("raw SQL cannot contain PostgreSQL positional parameters; pass value() arguments");
+                }
                 output_.sql_ += '(';
                 for (const auto& part : n.named_) {
                     output_.sql_ += part.name_;
+                    // A following negative literal or `*` would otherwise
+                    // start a `--` line comment or a `/*` block comment.
+                    if (!part.name_.empty() && (part.name_.back() == '-' || part.name_.back() == '/')) {
+                        output_.sql_ += ' ';
+                    }
                     child_value(part.expression_);
                 }
                 output_.sql_ += n.text_;
@@ -763,7 +811,7 @@ private:
                 }
                 break;
             case db_node_kind::value:
-                output_.bound(n.value_, &n, cast);
+                output_.bound_node(s, index, cast);
                 break;
             case db_node_kind::default_value:
                 output_.sql_ += "DEFAULT";
@@ -1104,7 +1152,29 @@ private:
             }
         }
     }
+    // Emits a left-deep AND/OR chain flat, `(a AND b AND c)`, at one nesting
+    // level. A link that repeats a grouped expression goes through expr().
+    void logical_chain(const db_query_storage& s, const db_query_node& n, std::size_t depth) {
+        std::pmr::vector<const db_query_node*> spine(output_.sql_.get_allocator().resource());
+        spine.push_back(&n);
+        while (continues_logical_chain(s.nodes_, *spine.back(), spine.back()->left_) &&
+               grouped_node(s, spine.back()->left_) == spine.back()->left_) {
+            spine.push_back(&s.nodes_[spine.back()->left_]);
+        }
+        const std::string_view token = n.binary_ == db_binary_operator::and_value ? " AND " : " OR ";
+        output_.sql_ += '(';
+        expr(s, spine.back()->left_, depth);
+        for (auto link = spine.rbegin(); link != spine.rend(); ++link) {
+            output_.sql_ += token;
+            expr(s, (*link)->right_, depth);
+        }
+        output_.sql_ += ')';
+    }
     void binary(const db_query_storage& s, const db_query_node& n, std::size_t depth) {
+        if (continues_logical_chain(s.nodes_, n, n.left_) && grouped_node(s, n.left_) == n.left_) {
+            logical_chain(s, n, depth);
+            return;
+        }
         const auto& left = s.nodes_.at(n.left_);
         const auto& right = s.nodes_.at(n.right_);
         const bool null_left = left.kind_ == db_node_kind::value && db_value_access::type(left.value_) == db_value_type::null;
@@ -1569,6 +1639,8 @@ private:
             expr(s, s.having_, depth + 1);
         }
     }
+
+    grouped_bound_values grouped_;
 };
 void append_db_expression(std::pmr::string& output, db_expression expression, db_driver driver) {
     if (expression.empty()) {
@@ -1601,14 +1673,10 @@ db_statement db_query::compile(db_driver driver, std::pmr::memory_resource* reso
 }
 
 std::pmr::string db_query::render_expression(db_expression expression, db_driver driver,
-    std::pmr::memory_resource* resource, db_parameter_mode mode) {
-    if (mode != db_parameter_mode::literal) {
-        throw std::invalid_argument("standalone expression rendering requires literal mode");
-    }
-    detail::db_query_compiler compiler(driver, pmr_resource_or_default(resource), mode);
-    compiler.output_.sql_.reserve(64U);
-    compiler.expression(expression);
-    return std::move(compiler.output_.sql_);
+    std::pmr::memory_resource* resource) {
+    std::pmr::string output(pmr_resource_or_default(resource));
+    detail::append_db_expression(output, expression, driver);
+    return output;
 }
 
 }  // namespace ruvia

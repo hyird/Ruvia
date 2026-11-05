@@ -130,4 +130,19 @@ private:
 // start it.
 [[nodiscard]] std::error_code set_db_socket_non_blocking(db_slot_socket::native_socket_type driver_socket) noexcept;
 
+// What a look at an idle pooled connection's socket finds.
+enum class db_idle_socket_status : std::uint8_t {
+    quiet,
+    // Bytes wait to be read.
+    pending_data,
+    // End of stream or a socket error: the server ended the session.
+    closed,
+};
+
+// Peeks at most one byte of a driver-owned socket without blocking and
+// without taking it from the driver (Pingora's test_reusable_stream). Both
+// drivers keep their socket non-blocking: libpq always, MariaDB through
+// set_db_socket_non_blocking().
+[[nodiscard]] db_idle_socket_status peek_db_idle_socket(db_slot_socket::native_socket_type driver_socket) noexcept;
+
 }  // namespace ruvia::detail

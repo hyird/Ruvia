@@ -108,7 +108,7 @@ constexpr char db_cache_row_marker = '\2';
 
 std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_resource* resource) {
     const auto names = rows.empty() ? std::span<const std::pmr::string>{}
-                                    : db_result_access::column_names(rows.front());
+                                    : rows.front().column_names();
     std::size_t total_bytes = db_cache_entry_magic.size() + 8U + 8U;
     for (const auto& name : names) {
         total_bytes += 8U + name.size();

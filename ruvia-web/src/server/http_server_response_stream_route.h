@@ -37,8 +37,13 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
             d.routes_, d.request_memory_, d.base_route_services_, d.response_);
     }
     const auto close_policy = d.request_sequence_.next_response_close_policy();
-    const auto stream_plan =
-        http1_plan_response_stream(d.parsed_, close_policy, d.parsed_.body_plan_.consumption_if_unread());
+    // A body that arrived in full with the head does not cost the stream its
+    // reuse even if the handler never reads it: completion consumes it
+    // without I/O.
+    const auto unread_body_consumption = buffered_request_body_bytes(d.parsed_.body_plan_, body_and_pipeline)
+                                             ? http1_request_body_consumption::complete
+                                             : http1_request_body_consumption::incomplete;
+    const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy, unread_body_consumption);
     using response_sink_type = response_stream_sink<stream_type>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
@@ -53,7 +58,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
         stream_plan,
         http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
-        body_state.body(), d.response_coding_, d.response_coding_availability_, d.inbound_buffer_pool_);
+        body_state.body(), d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,
+        d.inbound_buffer_pool_);
 
     // The handler stays in the session's idle deadman phase; the sink times
     // its own writes.
@@ -117,29 +123,36 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         d.scanner_entry_.touch();
         co_return close_with_framework_response(d.response_, stream_plan.request_connection_plan());
     }
+    auto& body_reader_value = body_state.body().reader();
+    body_reader_value.consume_buffered_body();
     if (auto* route_response = result_value.route_response()) {
         d.response_ = std::move(*route_response).take_response();
         d.scanner_entry_.touch();
         co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
-            d.request_sequence_, body_state.consumption(), request_bytes.size(), pipeline_stash,
-            [&body_state, &response_sink](std::pmr::string& stash) {
-                return body_state.take_pipeline(stash, response_sink.monitored_pipeline());
+            d.request_sequence_, body_reader_value.consumption(), request_bytes.size(), pipeline_stash,
+            [&body_reader_value, &response_sink](std::pmr::string& stash) {
+                return body_reader_value.take_pipeline(stash, response_sink.monitored_pipeline());
             });
     }
 
     // Only the completed committed alternative remains.
     const auto committed_status = result_value.committed_status();
 
-    const auto connection_plan = response_sink.connection_plan();
+    auto connection_plan = response_sink.connection_plan();
     d.request_sequence_.complete_committed_response(connection_plan);
+    // A reusable head promised a body read in full or buffered in full; a
+    // read the handler failed after commit breaks that promise, so the
+    // connection closes after the stream instead.
+    if (body_reader_value.consumption() != http1_request_body_consumption::complete) {
+        connection_plan = connection_plan.require_close();
+    }
     if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
         co_return http1_session_request_completion::make_committed_stream(
             connection_plan, *committed_status, request_head.header_bytes());
     }
-    // The stream committed a reusable plan, so the request body was read in
-    // full; what followed it is the next request, in the read buffer or in
+    // What followed the body is the next request, in the read buffer or in
     // the reader's own over-read.
-    const auto pipeline = body_state.take_pipeline(pipeline_stash, response_sink.monitored_pipeline());
+    const auto pipeline = body_reader_value.take_pipeline(pipeline_stash, response_sink.monitored_pipeline());
     if (!pipeline.stashed_.empty()) {
         co_return http1_session_request_completion::make_committed_stream_pipeline_restore(
             connection_plan, *committed_status, pipeline.stashed_);

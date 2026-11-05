@@ -104,10 +104,14 @@ struct http_client_config final {
     // replaces it; nullopt leaves the exchange unbounded.
     std::optional<std::chrono::milliseconds> request_timeout_{30000};
     // Bound of the wait for a free connection slot, within request_timeout_,
-    // including the wait for the slot's reconnect.
+    // including the wait for the slot's reconnect (a draining HTTP/2 session
+    // retiring first) and for HTTP/2 stream capacity below the peer's
+    // SETTINGS_MAX_CONCURRENT_STREAMS. Applies even when request_timeout_ is
+    // nullopt.
     std::optional<std::chrono::milliseconds> acquire_timeout_{5000};
     // A pooled HTTP/1 connection between exchanges, or an HTTP/2 connection
-    // without streams, closes once idle this long.
+    // without streams, closes once idle this long. Independently, an idle
+    // HTTP/1 connection closes as soon as its peer ends it or sends bytes.
     std::optional<std::chrono::milliseconds> idle_timeout_{90000};
     // HTTP/2 connection liveness: after this long without any received frame
     // the client sends a PING, and fails the connection with timeout if
@@ -176,8 +180,9 @@ struct http_client_stats final {
     std::size_t plaintext_bytes_sent_{0};
     std::size_t plaintext_bytes_received_{0};
     // Idle HTTP/1 connections retired because transport bytes or a buffered TLS
-    // record were waiting before the next request. A TLS record can carry
-    // close_notify, post-handshake control data or an unsolicited response.
+    // record arrived while they idled, observed at once or before the next
+    // request. A TLS record can carry close_notify, post-handshake control data
+    // or an unsolicited response.
     std::size_t idle_connections_with_pending_data_{0};
     std::size_t dropped_advertisements_{0};
     std::size_t received_pushes_{0};

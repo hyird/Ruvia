@@ -3,7 +3,6 @@
 #include <zlib.h>
 #include <zstd.h>
 
-#include <array>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
@@ -23,11 +22,7 @@ namespace {
 
 using encoder_stream = std::variant<detail::zlib_deflate_stream, detail::brotli_encoder_stream, detail::zstd_encoder_stream>;
 
-template <typename stream_type>
-[[noreturn]] void fail_encoding(const stream_type& stream, const char* message) {
-    stream.rethrow_allocation_failure();
-    throw http_content_codec_error(message);
-}
+inline constexpr auto unbounded_stream_output = (std::numeric_limits<std::size_t>::max)();
 
 [[nodiscard]] encoder_stream make_encoder_stream(http_content_coding coding, std::pmr::memory_resource* resource) {
     switch (coding) {
@@ -37,7 +32,8 @@ template <typename stream_type>
                 coding == http_content_coding::gzip ? detail::zlib_content_format::gzip
                                                     : detail::zlib_content_format::deflate);
         case http_content_coding::brotli:
-            return encoder_stream(std::in_place_type<detail::brotli_encoder_stream>, resource);
+            return encoder_stream(std::in_place_type<detail::brotli_encoder_stream>, resource,
+                detail::brotli_stream_window_bits);
         case http_content_coding::zstd:
             return encoder_stream(std::in_place_type<detail::zstd_encoder_stream>, resource);
         case http_content_coding::identity:
@@ -62,72 +58,21 @@ void encode_stream(detail::zlib_deflate_stream& deflater, std::string_view input
     bool flush, bool finish_value) {
     const int operation = finish_value ? Z_FINISH : flush ? Z_SYNC_FLUSH
                                                           : Z_NO_FLUSH;
-    auto& stream = deflater.native();
-    const detail::zlib_borrow_scope borrow(stream);
-    std::size_t supplied = 0;
-    std::array<char, 16384> buffer;
-    for (;;) {
-        detail::zlib_refill_input(stream, input, supplied);
-        const auto before_input = stream.avail_in;
-        stream.next_out = reinterpret_cast<Bytef*>(buffer.data());
-        stream.avail_out = static_cast<uInt>(buffer.size());
-        const auto status = deflate(&stream, operation);
-        // Repeating a completed flush has no work left; zlib reports
-        // Z_BUF_ERROR without invalidating the stream.
-        if (status == Z_BUF_ERROR && operation != Z_FINISH &&
-            stream.avail_in == 0 && supplied == input.size()) {
-            return;
-        }
-        if (status != Z_OK && status != Z_STREAM_END) {
-            fail_encoding(deflater, "zlib content encoding failed");
-        }
-        const auto produced = buffer.size() - stream.avail_out;
-        output.append(buffer.data(), produced);
-        if (operation == Z_FINISH && status == Z_STREAM_END) {
-            return;
-        }
-        if (operation != Z_FINISH && stream.avail_in == 0 && supplied == input.size() && stream.avail_out != 0) {
-            return;
-        }
-        if (produced == 0 && stream.avail_in == before_input) {
-            fail_encoding(deflater, "zlib content encoder made no progress");
-        }
-    }
+    static_cast<void>(deflater.encode(input, output, operation, unbounded_stream_output));
 }
 
 void encode_stream(detail::brotli_encoder_stream& encoder, std::string_view input, std::pmr::string& output,
     bool flush, bool finish_value) {
     const auto operation = finish_value ? BROTLI_OPERATION_FINISH : flush ? BROTLI_OPERATION_FLUSH
                                                                           : BROTLI_OPERATION_PROCESS;
-    static_cast<void>(encoder.encode(input, output, operation, std::numeric_limits<std::size_t>::max()));
+    static_cast<void>(encoder.encode(input, output, operation, unbounded_stream_output));
 }
 
 void encode_stream(detail::zstd_encoder_stream& encoder, std::string_view input, std::pmr::string& output,
     bool flush, bool finish_value) {
     const auto operation = finish_value ? ZSTD_e_end : flush ? ZSTD_e_flush
                                                              : ZSTD_e_continue;
-    auto* context_value = encoder.native();
-    ZSTD_inBuffer input_buffer{input.data(), input.size(), 0};
-    std::array<char, 16384> buffer;
-    for (;;) {
-        ZSTD_outBuffer output_buffer{buffer.data(), buffer.size(), 0};
-        const auto before_input = input_buffer.pos;
-        const auto remaining = ZSTD_compressStream2(context_value, &output_buffer, &input_buffer, operation);
-        if (ZSTD_isError(remaining) != 0) {
-            fail_encoding(encoder, "Zstd content encoding failed");
-        }
-        output.append(buffer.data(), output_buffer.pos);
-        if (operation == ZSTD_e_end && remaining == 0 && input_buffer.pos == input_buffer.size) {
-            return;
-        }
-        if (operation != ZSTD_e_end && input_buffer.pos == input_buffer.size &&
-            output_buffer.pos < buffer.size() && (operation == ZSTD_e_continue || remaining == 0)) {
-            return;
-        }
-        if (output_buffer.pos == 0 && input_buffer.pos == before_input) {
-            fail_encoding(encoder, "Zstd content encoder made no progress");
-        }
-    }
+    static_cast<void>(encoder.encode(input, output, operation, unbounded_stream_output));
 }
 
 }  // namespace
@@ -165,7 +110,8 @@ struct http_content_encoder::impl_type final {
                 throw http_content_codec_error("failed to reset Zstd content encoder");
             }
         } else {
-            const auto& rebuilt = stream_.emplace<detail::brotli_encoder_stream>(resource_);
+            const auto& rebuilt =
+                stream_.emplace<detail::brotli_encoder_stream>(resource_, detail::brotli_stream_window_bits);
             if (!rebuilt.initialized()) {
                 throw http_content_codec_error(initialization_failure(rebuilt));
             }

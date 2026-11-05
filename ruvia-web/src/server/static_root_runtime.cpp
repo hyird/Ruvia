@@ -78,9 +78,16 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
     const auto previous = current_;
     snapshot_owner candidate(nullptr, pmr_object_deleter<static_root>{process_resource()});
     try {
+        // The unchanged-snapshot comparison walks every entry, so it runs on
+        // the pool with the rebuild; an unchanged root yields no candidate.
         auto rebuilt = co_await ruvia::run_blocking(worker, {}, [previous, &root = root_] {
-            return static_root_access::make(process_resource(), root,
+            auto built = static_root_access::make(process_resource(), root,
                 static_root_access::copy_config(*previous, process_resource()));
+            if (static_root_access::fingerprint(*built) == static_root_access::fingerprint(*previous) &&
+                static_root_access::same_snapshot(*built, *previous)) {
+                built.reset();
+            }
+            return built;
         });
         if (!rebuilt.completed()) {
             // A refresh is transactional: keep serving the last complete
@@ -100,11 +107,7 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
         co_return;
     }
 
-    if (!http_server_worker_running(state)) {
-        co_return;
-    }
-    if (static_root_access::fingerprint(*candidate) == static_root_access::fingerprint(*previous) &&
-        static_root_access::same_snapshot(*candidate, *previous)) {
+    if (candidate == nullptr || !http_server_worker_running(state)) {
         co_return;
     }
 

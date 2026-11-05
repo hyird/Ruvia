@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/client/http1_client_exchange_state_access.h"
+#include "ruvia/http/detail/client/http1_client_parsed_status_line.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http1_client_response_parser.h"
@@ -21,11 +22,6 @@
 // body is framed and whether the connection survives.
 
 namespace ruvia::detail {
-
-struct http1_client_parsed_status_line final {
-    http_received_status received_status_;
-    http_protocol_version protocol_version_;
-};
 
 struct http1_client_parsed_response_head final {
     explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line,
@@ -52,11 +48,16 @@ using http1_client_response_head_parse_result_type =
 using http1_client_response_planning_result_type =
     std::variant<http1_client_response_plan, http1_client_response_parse_error>;
 
-// Parse one complete head section, retaining each line's CRLF but excluding
-// the final empty line. Response obs-fold has already been unfolded.
+// Parse a status line, excluding its CRLF.
+[[nodiscard]] http1_client_status_line_parse_result_type parse_http1_client_status_line(
+    std::string_view status_line) noexcept;
+
+// Parse the field lines following a validated status line, each retaining its
+// CRLF but excluding the final empty line. Response obs-fold has already been
+// unfolded.
 [[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
-    std::string_view head_section, const http1_client_exchange_state& exchange_state,
-    std::pmr::memory_resource* resource, std::size_t first_line_end = std::string_view::npos);
+    const http1_client_parsed_status_line& status_line, std::string_view field_section,
+    const http1_client_exchange_state& exchange_state, std::pmr::memory_resource* resource);
 
 // Decide the response plan a parsed head implies for this request.
 [[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(

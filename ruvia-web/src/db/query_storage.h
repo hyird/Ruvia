@@ -3,7 +3,9 @@
 #include <limits>
 #include <memory_resource>
 #include <optional>
+#include <ranges>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -158,6 +160,18 @@ struct db_query_node final {
     bool explicit_alias_{false};
     std::optional<db_window_frame_options> frame_{};
 };
+// AND and OR are associative, so a left-deep chain of one of them (as built
+// by and_where/or_where or `p = std::move(p) && q`) is a single nesting level
+// for import and compilation. True when `child` continues `parent`'s chain.
+[[nodiscard]] inline bool continues_logical_chain(
+    const std::pmr::vector<db_query_node>& nodes, const db_query_node& parent, std::size_t child) noexcept {
+    if (parent.kind_ != db_node_kind::binary || child == no_db_node ||
+        (parent.binary_ != db_binary_operator::and_value && parent.binary_ != db_binary_operator::or_value)) {
+        return false;
+    }
+    const auto& node = nodes[child];
+    return node.kind_ == db_node_kind::binary && node.binary_ == parent.binary_;
+}
 struct db_stored_source_column final {
     db_stored_source_column(const db_source_column& source_value, std::pmr::memory_resource* resource)
         : name_(source_value.name_, resource),
@@ -196,6 +210,16 @@ struct db_query_source final {
     bool ordinality_{false};
     std::pmr::vector<db_stored_source_column> columns_;
 };
+// Whether a FROM item binds `name`: its alias when present, otherwise its
+// table name or, for a schema-qualified table, any dot-aligned suffix of it.
+[[nodiscard]] inline bool source_binds_name(const db_query_source& source_value, std::string_view name) noexcept {
+    if (!source_value.alias_.empty()) {
+        return source_value.alias_ == name;
+    }
+    const std::string_view table = source_value.name_;
+    return table == name ||
+           (table.size() > name.size() && table.ends_with(name) && table[table.size() - name.size() - 1] == '.');
+}
 struct db_stored_join final {
     db_stored_join(db_join_type type, db_query_source source_value, std::size_t on, std::pmr::memory_resource* resource)
         : type_(type),
@@ -220,23 +244,19 @@ struct db_stored_assignment final {
     std::size_t expression_;
 };
 struct db_stored_cte final {
-    db_stored_cte(std::string_view name, std::size_t query, const db_cte_options& options, std::pmr::memory_resource* resource)
+    template <class column_range>
+    db_stored_cte(std::string_view name, std::size_t query, bool recursive, db_materialization materialization,
+        const column_range& columns, std::pmr::memory_resource* resource)
         : name_(name, resource),
           query_(query),
-          recursive_(options.recursive_),
-          materialization_(options.materialization_),
+          recursive_(recursive),
+          materialization_(materialization),
           columns_(resource) {
-        columns_.reserve(options.columns_.size());
-        for (const auto& column : options.columns_) {
-            columns_.emplace_back(column);
+        columns_.reserve(std::ranges::size(columns));
+        for (const auto& column : columns) {
+            columns_.emplace_back(std::string_view(column));
         }
     }
-    db_stored_cte(std::string_view name, std::size_t query, db_materialization materialization,
-        std::span<const std::pmr::string> columns, std::pmr::memory_resource* resource)
-        : name_(name, resource),
-          query_(query),
-          materialization_(materialization),
-          columns_(columns.begin(), columns.end(), resource) {}
     db_stored_cte(const db_stored_cte& source_value, std::pmr::memory_resource* resource)
         : name_(source_value.name_, resource),
           query_(source_value.query_),

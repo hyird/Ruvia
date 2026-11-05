@@ -485,8 +485,10 @@ public:
     // Apply a streaming coding, or atomically replace a buffered representation
     // and its coding-dependent metadata. The coding must be a nonempty HTTP coding list;
     // outer SP/HTAB are removed before storing its field value.
-    // A failed replacement leaves this
-    // response unchanged.
+    // Both set Content-Encoding, weaken a strong ETag, drop an ETag that is not a
+    // quoted entity-tag, and drop Accept-Ranges; the replacement sets
+    // Content-Length, the streaming form removes it. A failed replacement leaves
+    // this response unchanged.
     void apply_content_encoding(std::string_view content_encoding);
     void replace_body_with_content_encoding(
         std::pmr::string&& value, std::string_view content_encoding);

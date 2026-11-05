@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 #include <system_error>
 
@@ -7,16 +8,18 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_response_file.h"
-#include "ruvia/http/http_response_head_buffer.h"
 
 #include "server/connection_scanner.h"
+#include "server/http_native_file.h"
 
 namespace ruvia::detail {
 
-// Windows plain TCP uses overlapped TransmitFile. Other platforms and TLS
-// connections read file bodies through response_file_source.
 #if defined(_WIN32)
-inline constexpr bool native_response_file_write_available = true;
+// On Windows plain TCP a single file range longer than this leaves through an
+// overlapped TransmitFile from the response's own handle. Shorter ranges,
+// multipart bodies, TLS and every other platform read through
+// response_file_source, which sends the head and first chunk together.
+inline constexpr std::uint64_t transmit_file_min_bytes = std::uint64_t{16} * 1024;
 
 struct http_response_file_write_result final {
     std::error_code error_;
@@ -24,20 +27,14 @@ struct http_response_file_write_result final {
     bool head_written_{false};
 };
 
-// Appends the bytes of `file` (at most inline_response_file_max_bytes) to
-// `head`, reading through the response's opened handle or, without one, a
-// handle opened and identity-validated here. A failure leaves nothing sent.
-[[nodiscard]] std::error_code append_response_file_bytes(
-    http_response_head_buffer& head, http_response_file_view file);
-
-// Sends `head`, then the range of `file` from the kernel. The file is opened
-// (or its opened handle borrowed) before any byte is sent, so a missing or
-// changed file fails with no head written. The first TransmitFile carries
-// the head. Touches `progress` after every transfer.
+// Sends `head`, then the range of `file` from `input`, a handle the caller
+// already validated against the file's snapshot. The first TransmitFile
+// carries the head. Each later slice starts only while `input` still matches
+// the snapshot, and the final byte waits for that check, so a file that
+// changes while it is sent never completes its framed length. Touches
+// `progress` after every transfer.
 task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket,
-    std::string_view head, http_response_file_view file, connection_scanner::entry& progress);
-#else
-inline constexpr bool native_response_file_write_available = false;
+    std::string_view head, native_file_type input, http_response_file_view file, connection_scanner::entry& progress);
 #endif
 
 }  // namespace ruvia::detail

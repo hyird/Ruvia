@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
@@ -9,32 +10,41 @@
 #include <variant>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/task.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_encoder.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/server_config.h"
 
 #include "server/http_response_compression.h"
 #include "server/worker_codecs.h"
 
 namespace ruvia::detail {
 
-// Owns the response-coding lifecycle used by HTTP/1 stream sinks.
-// The transport only submits output(); it never reconstructs whether a coding
-// was selected, whether the body is suppressed, or whether an encoder exists.
-// The encoder itself is borrowed from the worker's codecs for the stream's
-// lifetime, not constructed per response.
+// Owns the response-coding lifecycle of HTTP/1 and HTTP/2 stream sinks.
+// The transport only delivers encoded slices; it never reconstructs whether a
+// coding was selected, whether the body is suppressed, or whether an encoder
+// exists. The encoder itself is borrowed from the worker's codecs for the
+// stream's lifetime, not constructed per response.
 class http_streaming_response_compression final {
 public:
+    // Application input encoded per step. It bounds the encoded buffer and the
+    // codec work between two transport writes independently of the size of
+    // one application write.
+    static constexpr std::size_t input_slice_bytes = 16 * 1024;
+
+    // `compression` is the server's compression policy, or nullptr when the
+    // server compresses nothing.
     http_streaming_response_compression(std::pmr::memory_resource* resource, worker_codecs& codecs,
-        http_response_coding_selection selection, http_response_coding_availability availability) noexcept
+        http_response_coding_selection selection, const compression_config* compression) noexcept
         : codecs_(codecs),
           selection_(selection),
-          availability_(availability),
+          compression_(compression),
           encoded_chunk_(pmr_resource_or_default(resource)) {}
     http_streaming_response_compression(std::pmr::memory_resource*, worker_codecs&&,
-        http_response_coding_selection, http_response_coding_availability) = delete;
+        http_response_coding_selection, const compression_config*) = delete;
 
     http_streaming_response_compression(const http_streaming_response_compression&) = delete;
     http_streaming_response_compression& operator=(const http_streaming_response_compression&) = delete;
@@ -50,9 +60,11 @@ public:
             throw std::logic_error("streaming response compression is already prepared");
         }
         const auto request_method = request.known_method();
-        const auto decision = prepare_response_compression(
-            selection_, request_method, response, http_response_compression_source::stream, availability_);
-        if (decision != http_response_compression_decision::encode) {
+        const auto decision = prepare_response_compression(selection_, request_method, response,
+            http_response_compression_source::stream,
+            compression_ != nullptr ? http_response_coding_availability::identity_and_compression
+                                    : http_response_coding_availability::identity_only);
+        if (decision != http_response_compression_decision::encode || !stream_length_allows_encoding(response)) {
             if (http_response_coding_fallback_forbidden(selection_, request_method, response, &request)) {
                 throw http_error(http_not_acceptable_coding_error());
             }
@@ -97,18 +109,23 @@ public:
         state_.emplace<failed_type>();
     }
 
-    void write(std::string_view input) {
-        auto* active_state = std::get_if<active_type>(&state_);
-        if (active_state == nullptr) {
-            encoded_chunk_.clear();
-            throw std::logic_error("streaming response encoder is not active");
-        }
-        encoded_chunk_.clear();
-        try {
-            active_state->lease_.encoder().write(input, encoded_chunk_, true);
-        } catch (...) {
-            abort();
-            throw;
+    // The one slicing loop of both protocols: encodes one application write in
+    // input_slice_bytes steps and hands every non-empty encoded slice to
+    // `deliver` (the sink's framed write, returning task<void>). Only the last
+    // slice flushes, so each application write ends with exactly one codec
+    // flush, which keeps SSE events prompt without flushing every slice.
+    template <typename deliver_type>
+    task<void> write(std::string_view chunk, deliver_type deliver) {
+        std::size_t offset = 0;
+        while (offset < chunk.size()) {
+            const auto count = (std::min)(input_slice_bytes, chunk.size() - offset);
+            const auto slice = chunk.substr(offset, count);
+            offset += count;
+            encode_slice(slice, offset == chunk.size());
+            if (!encoded_chunk_.empty()) {
+                co_await deliver(std::string_view(encoded_chunk_));
+            }
+            release_output();
         }
     }
 
@@ -125,7 +142,7 @@ public:
             active_state->lease_.encoder().finish(encoded_chunk_);
             state_.emplace<finished_type>();
         } catch (...) {
-            abort();
+            fail_encoder(*active_state);
             throw;
         }
     }
@@ -160,9 +177,37 @@ private:
 
     using state_type = std::variant<unprepared_type, identity_type, pending_type, suppressed_type, finished_type, failed_type, active_type>;
 
+    // A length the head declares sizes the stream like a buffered body; an
+    // undeclared length leaves the decision to the negotiated coding.
+    [[nodiscard]] bool stream_length_allows_encoding(const http_response& response) const noexcept {
+        const auto declared = declared_content_length(response);
+        return !declared.has_value() || declared_length_permits_encoding(selection_, *compression_, *declared);
+    }
+
+    void encode_slice(std::string_view input, bool flush) {
+        auto* active_state = std::get_if<active_type>(&state_);
+        if (active_state == nullptr) {
+            encoded_chunk_.clear();
+            throw std::logic_error("streaming response encoder is not active");
+        }
+        encoded_chunk_.clear();
+        try {
+            active_state->lease_.encoder().write(input, encoded_chunk_, flush);
+        } catch (...) {
+            fail_encoder(*active_state);
+            throw;
+        }
+    }
+
+    // A codec that failed mid-stream is never returned to the worker pool.
+    void fail_encoder(active_type& active_state) noexcept {
+        active_state.lease_.discard();
+        abort();
+    }
+
     worker_codecs& codecs_;
     http_response_coding_selection selection_;
-    http_response_coding_availability availability_;
+    const compression_config* compression_;
     std::pmr::string encoded_chunk_;
     state_type state_;
 };

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
@@ -11,6 +12,7 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
 
@@ -72,6 +74,10 @@ struct parsed_request_header_slot {
 };
 
 using known_request_header_index_type = std::int16_t;
+// parse_http_header_block stops at max_http_header_fields, so every field index
+// fits the index type and the request's descriptor block.
+static_assert(max_http_header_fields <=
+              static_cast<std::size_t>((std::numeric_limits<known_request_header_index_type>::max)()));
 
 struct parsed_request_header_block {
     explicit parsed_request_header_block(std::pmr::memory_resource* resource = nullptr) noexcept
@@ -95,7 +101,7 @@ struct parsed_request_header_block {
 // True if an LF at or after search_offset (and within max_http_header_bytes)
 // is not preceded by CR. Within a field section such a line can never end the
 // CRLF-delimited head; the caller passes the end of the accepted request-line
-// or a later offset whose earlier bytes were already scanned.
+// or status-line, or a later offset whose earlier bytes were already scanned.
 [[nodiscard]] bool has_http_bare_line_feed(std::string_view buffer, std::size_t search_offset) noexcept;
 // RFC 9112 section 2.2: a server SHOULD ignore at least one empty line received
 // before the request-line. Leading CRLF or bare LF lines are skipped; they count

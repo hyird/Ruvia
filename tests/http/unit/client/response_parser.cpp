@@ -536,6 +536,68 @@ RUVIA_TEST(http_client_response_parser_enforces_the_complete_head_limit) {
     RUVIA_CHECK(*result_value.failure() == http1_client_response_parse_error::header_too_large);
 }
 
+RUVIA_TEST(http_client_response_parser_caps_header_field_count) {
+    for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
+        const auto field_count = ruvia::max_http_header_fields + excess;
+        std::string head = "HTTP/1.1 200 OK\r\nContent-Length: 0";
+        for (std::size_t index = 1; index < field_count; ++index) {
+            head.append("\r\nX:a");
+        }
+        const auto result_value = parse_result("GET", head);
+        if (excess == 0) {
+            RUVIA_CHECK(result_value.parsed() != nullptr);
+            if (const auto* parsed = result_value.parsed()) {
+                RUVIA_CHECK_EQ(parsed->head().headers().size(), field_count);
+            }
+        } else {
+            RUVIA_CHECK(result_value.failure() != nullptr);
+            if (const auto* failure = result_value.failure()) {
+                RUVIA_CHECK(*failure == http1_client_response_parse_error::header_too_large);
+            }
+        }
+    }
+}
+
+RUVIA_TEST(http_client_response_parser_fails_invalid_status_line_before_the_head_completes) {
+    // A non-HTTP peer or an LF-terminated status line fails once its line feed
+    // arrives, with the error a complete head would report.
+    for (const auto& [line, expected] : {
+             std::pair{std::string_view("HTTP/2 200 OK\r\n"), http1_client_response_parse_error::unsupported_http_version},
+             std::pair{std::string_view("SSH-2.0-OpenSSH_9.6\r\n"), http1_client_response_parse_error::invalid_status_line},
+             std::pair{std::string_view("HTTP/1.1 abc Bad\r\n"), http1_client_response_parse_error::invalid_status_code},
+             std::pair{std::string_view("HTTP/1.1 200 OK\n"), http1_client_response_parse_error::invalid_status_line},
+         }) {
+        for (const std::string_view suffix : {std::string_view{}, std::string_view("X-A: b\r\n\r\n")}) {
+            const std::string wire = std::string(line) + std::string(suffix);
+            const auto result_value = parse_wire("GET", wire);
+            RUVIA_CHECK(result_value.failure() != nullptr);
+            if (const auto* failure = result_value.failure()) {
+                RUVIA_CHECK(*failure == expected);
+            }
+        }
+    }
+}
+
+RUVIA_TEST(http_client_response_parser_fails_bare_lf_field_line_before_the_head_completes) {
+    ruvia::http_client_request_view request;
+    request.method_ = "GET";
+    for (const std::size_t split : {std::size_t{0}, std::size_t{23}}) {
+        constexpr std::string_view wire = "HTTP/1.1 200 OK\r\nX-A: b\nX-B: c";
+        http1_client_response_parser parser =
+            exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request);
+        if (split != 0) {
+            // The prefix ends just before the bare LF.
+            const auto partial = parser.parse(wire.substr(0, split));
+            RUVIA_CHECK(partial.need_more() != nullptr);
+        }
+        const auto result_value = parser.parse(wire);
+        RUVIA_CHECK(result_value.failure() != nullptr);
+        if (const auto* failure = result_value.failure()) {
+            RUVIA_CHECK(*failure == http1_client_response_parse_error::invalid_header);
+        }
+    }
+}
+
 RUVIA_TEST(http_client_response_parser_accepts_incremental_prefixes_and_resets_after_interim) {
     http1_client_response_parser parser = exchange_parser(
         ruvia::http_origin_view::https({.host_ = "example.test"}), ruvia::http_client_request_view{});

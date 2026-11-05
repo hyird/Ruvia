@@ -1,17 +1,22 @@
 #include <array>
+#include <chrono>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/timer.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "db/db_query_cache.h"
 #include "db/db_query_cache_state.h"
 #include "integration/request_io_metrics.h"
+#include "redis/redis_client_runtime.h"
+#include "redis/redis_protocol.h"
 
 namespace ruvia::detail {
 namespace {
@@ -47,6 +52,29 @@ void rethrow_or_timeout_redis_cache_error(
         throw;
     }
 }
+
+// Rows of a cached entry, or nullopt for a corrupt entry the cache ignores.
+// The bytes are released before the caller goes on to the database.
+[[nodiscard]] std::optional<db_rows> decode_cached_rows(std::pmr::string bytes_value,
+    std::pmr::memory_resource* resource, const operation_timeout& deadline, bool ignore_errors) {
+    std::optional<db_rows> rows;
+    try {
+        rows.emplace(decode_db_cache_rows(std::move(bytes_value), resource));
+    } catch (const db_conversion_error&) {
+        if (deadline.expired()) {
+            throw_db_cache_timeout();
+        }
+        if (!ignore_errors) {
+            throw;
+        }
+        return std::nullopt;
+    }
+    if (deadline.expired()) {
+        throw_db_cache_timeout();
+    }
+    return rows;
+}
+
 task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, const operation_timeout& deadline_value) {
     if (!deletion) {
         co_return;
@@ -136,13 +164,47 @@ task<void> clear_keys(
 db_query_cache_state::db_query_cache_state(const redis_handle& redis, const db_cache_config_storage& config,
     std::pmr::string prefix, std::pmr::memory_resource* resource)
     : resource_(resource),
+      worker_(redis.worker()),
       duration_(config.duration_),
       always_enabled_(config.always_enabled_),
       ignore_errors_(config.ignore_errors_),
+      max_entry_reply_bytes_(redis_client_runtime::handle_config(redis).max_reply_bytes_),
       prefix_(std::move(prefix)),
-      redis_(redis.with_options({})) {}
+      redis_(redis.with_options({})),
+      fills_(resource) {}
 
 db_query_cache_state::~db_query_cache_state() = default;
+
+// The leader's hold on the fill it listed. Every exit -- a result, a failure,
+// a cancellation or a timeout -- unlists the fill and ends it, so its waiters
+// never outlive the leader's attempt.
+class db_query_cache_state::fill_lead final {
+public:
+    fill_lead(db_query_cache_state& state, fill_pointer listed) noexcept
+        : state_(state),
+          fill_(std::move(listed)) {}
+    fill_lead(const fill_lead&) = delete;
+    fill_lead& operator=(const fill_lead&) = delete;
+    ~fill_lead() {
+        finish();
+    }
+
+    [[nodiscard]] fill& get() const noexcept {
+        return *fill_;
+    }
+    void finish() noexcept {
+        if (!finished_) {
+            finished_ = true;
+            state_.unlist_fill(*fill_);
+            fill_->done_.request_stop();
+        }
+    }
+
+private:
+    db_query_cache_state& state_;
+    fill_pointer fill_;
+    bool finished_{false};
+};
 
 void db_query_cache_state::close_now() noexcept {
     closed_ = true;
@@ -153,6 +215,22 @@ void db_query_cache_state::require_open() const {
     if (closed_) {
         throw db_error(db_error::code_type::closing, std::nullopt, "database query cache is closing");
     }
+}
+
+void db_query_cache_state::unlist_fill(const fill& ended) noexcept {
+    if (const auto listed = fills_.find(ended.key_); listed != fills_.end() && listed->second.get() == &ended) {
+        fills_.erase(listed);
+    }
+}
+
+void db_query_cache_state::unlist_fills(std::span<const std::pmr::string> keys) noexcept {
+    for (const auto& removed : keys) {
+        fills_.erase(std::string_view(removed));
+    }
+}
+
+void db_query_cache_state::unlist_all_fills() noexcept {
+    fills_.clear();
 }
 
 std::optional<std::pmr::string> db_query_cache_state::key(
@@ -173,39 +251,64 @@ task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds
 // Key, deferred database statement and options belong to this cold frame. On
 // a hit the statement is destroyed without starting. Decoded rows own their
 // fields independently of the Redis reply and later cache operations.
+//
+// A miss joins the fill already running for the same key on this worker, if
+// any (Pingora read_through), and waits for it within the caller's own
+// deadline and stop token: the leader's published result answers it like a
+// hit, and a leader that ended without one sends it back to the cache, where
+// the first to miss again leads the next fill. Each worker fills a key at most
+// once at a time; other workers and processes fill it independently.
 task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::milliseconds duration,
     db_cache_query database, operation_options options, operation_timeout deadline) {
     stop_group cancellation{options.stop_token_, stop_.token()};
     options.stop_token_ = cancellation.token();
     const auto started = std::chrono::steady_clock::now();
-    std::optional<std::pmr::string> bytes_value;
-    try {
-        bytes_value = co_await redis_.with_options(db_cache_options(options, deadline)).get(key);
-    } catch (const redis_error& error) {
-        rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
-    }
-    if (bytes_value.has_value()) {
-        std::optional<db_rows> rows;
+    for (;;) {
+        std::optional<std::pmr::string> bytes_value;
         try {
-            rows.emplace(decode_db_cache_rows(std::move(*bytes_value), resource_));
-        } catch (const db_conversion_error&) {
-            if (deadline.expired()) {
-                throw_db_cache_timeout();
-            }
-            if (!ignore_errors_) {
-                throw;
+            bytes_value = co_await redis_.with_options(db_cache_options(options, deadline)).get(key);
+        } catch (const redis_error& error) {
+            rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
+        }
+        if (bytes_value.has_value()) {
+            if (auto rows = decode_cached_rows(std::move(*bytes_value), resource_, deadline, ignore_errors_)) {
+                co_return std::move(*rows);
             }
         }
-        if (rows.has_value()) {
-            if (deadline.expired()) {
-                throw_db_cache_timeout();
-            }
-            co_return std::move(*rows);
+        const auto running = fills_.find(key);
+        if (running == fills_.end()) {
+            break;
         }
-        // An ignored corrupt entry cannot contribute to the fallback result.
-        // Release its storage before awaiting the database.
-        bytes_value.reset();
+        const auto joined = running->second;
+        joined->awaited_ = true;
+        timer_sleep_result woken{};
+        {
+            stop_group wake{options.stop_token_, joined->done_.token()};
+            woken = co_await sleep_until(
+                worker_, deadline.deadline().value_or(std::chrono::steady_clock::time_point::max()), wake.token());
+        }
+        if (options.stop_token_.stop_requested()) {
+            require_open();
+            throw db_error(db_error::code_type::cancelled, std::nullopt, "database query cache operation cancelled");
+        }
+        if (joined->result_.has_value()) {
+            if (auto rows = decode_cached_rows(std::pmr::string(*joined->result_, resource_), resource_, deadline,
+                    ignore_errors_)) {
+                co_return std::move(*rows);
+            }
+        }
+        if (deadline.expired()) {
+            throw_db_cache_timeout();
+        }
+        // Cut short with the fill still running: the worker is stopping.
+        if (woken == timer_sleep_result::stop_requested && !joined->done_.stop_requested()) {
+            throw db_error(db_error::code_type::closing, std::nullopt, "database query cache is closing");
+        }
     }
+
+    auto listed = std::allocate_shared<fill>(std::pmr::polymorphic_allocator<fill>(resource_), key, resource_);
+    fills_.emplace(std::string_view(listed->key_), listed);
+    fill_lead lead(*this, std::move(listed));
     if (deadline.expired()) {
         throw_db_cache_timeout();
     }
@@ -215,17 +318,38 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
     }
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
-    if (elapsed < duration) {
+    auto& filled = lead.get();
+    const bool store = elapsed < duration;
+    if (!store && !filled.awaited_) {
+        co_return rows;
+    }
+    auto encoded_bytes = encode_db_cache_rows(rows, resource_);
+    // An entry whose GET reply would exceed the store's reply limit would fail
+    // every hit and cost a Redis connection each time; like Pingora's
+    // ResponseTooLarge, the result stays valid but is not cached.
+    const bool fits = !max_entry_reply_bytes_.has_value() ||
+                      resp_bulk_serialized_size(encoded_bytes.size()) <= *max_entry_reply_bytes_;
+    std::optional<task<redis_set_result>> write;
+    if (store && fits) {
         try {
-            // SET owns its arguments before returning the cold operation. Do
-            // not retain the key or serialized rows while it waits on IO.
-            auto write = [&] {
-                const auto encoded_bytes = encode_db_cache_rows(rows, resource_);
-                return redis_.with_options(db_cache_options(options, deadline))
-                    .set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)});
-            }();
-            std::pmr::string(key.get_allocator().resource()).swap(key);
-            (void)co_await std::move(write);
+            // SET owns its arguments before returning the cold operation.
+            write.emplace(redis_.with_options(db_cache_options(options, deadline))
+                    .set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)}));
+        } catch (const redis_error& error) {
+            rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
+        }
+    }
+    // Waiters take the result from memory; neither the key nor the serialized
+    // rows are retained here while the SET waits on IO.
+    if (filled.awaited_) {
+        filled.result_ = std::move(encoded_bytes);
+    }
+    std::pmr::string(encoded_bytes.get_allocator().resource()).swap(encoded_bytes);
+    std::pmr::string(key.get_allocator().resource()).swap(key);
+    lead.finish();
+    if (write.has_value()) {
+        try {
+            (void)co_await std::move(*write);
         } catch (const redis_error& error) {
             rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
         }
@@ -250,6 +374,7 @@ task<void> db_query_cache_state::remove(
     for (const auto id : ids) {
         append_db_cache_id_keys(keys, prefix_, id);
     }
+    unlist_fills(keys);
     return remove_keys(redis_, std::move(keys), io_metrics, std::move(options), stop_.token());
 }
 
@@ -259,6 +384,7 @@ task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation
     pattern.reserve(prefix_.size() + 1);
     pattern.append(prefix_);
     pattern.push_back('*');
+    unlist_all_fills();
     return clear_keys(redis_, std::move(pattern), io_metrics, std::move(options), stop_.token());
 }
 

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
@@ -101,16 +102,18 @@ public:
         const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
         const context_services& services, static_file_selection_mode static_file_mode,
         http_response& response) const;
-    // HTTP/1 holds a matched buffered route's context in its existing session
-    // frame and awaits this non-coroutine entry directly. Other callers use
-    // dispatch_buffered_response to own that lifetime. Direct callers apply
-    // context_access::apply_response_policy once for routes without middleware.
-    // Destroy the context before body completion and before its arena.
-    [[nodiscard]] task<http_response> invoke_route(const resolved_route& resolved, context& context) const;
-    // Failed buffered/stream invocations preserve only the explicit policy;
-    // discarded representation fields never enter the replacement error.
-    // If finalization fails, destroy the context before the request-only fallback.
-    [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
+    // The one matched-route invocation every transport awaits: builds the
+    // context in this frame, runs the route chain, applies the response policy
+    // for routes without middleware, finalizes a failure, and falls back to the
+    // request-only handler when the context cannot be built or finalization
+    // fails. `body_failure`, when given, is a request-body failure the transport
+    // records outside the handler's reads (HTTP/2 DATA): a handler that returns
+    // without surfacing it gets that failure instead. Returns whether the
+    // response accounts for that failure. The context dies before this
+    // returns, so body completion and the request arena outlive it.
+    [[nodiscard]] task<bool> dispatch_resolved_route(const http_request& request, request_memory& memory,
+        const resolved_route& resolved, const context_services& services,
+        const std::optional<http_request_body_failure>* body_failure, http_response& response) const;
     task<http_response> handle_error(const http_request& request, request_memory& memory,
         http_error_info error, const context_services& services) const;
     task<http_response> handle_exception(const http_request& request, request_memory& memory,
@@ -131,6 +134,12 @@ public:
 
 private:
     friend class router;
+
+    [[nodiscard]] task<http_response> invoke_route(const resolved_route& resolved, context& context) const;
+    // Failed buffered/stream invocations preserve only the explicit policy;
+    // discarded representation fields never enter the replacement error.
+    // If finalization fails, destroy the context before the request-only fallback.
+    [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
 
     [[nodiscard]] route_resolution resolve(
         http_known_method method, std::string_view path) const noexcept;

@@ -11,6 +11,8 @@ using detail::append_db_qualified_identifier;
 using detail::append_db_string_literal;
 std::string_view action(db_referential_action a) {
     switch (a) {
+        case db_referential_action::no_action:
+            return "NO ACTION";
         case db_referential_action::restrict:
             return "RESTRICT";
         case db_referential_action::cascade:
@@ -19,12 +21,13 @@ std::string_view action(db_referential_action a) {
             return "SET NULL";
         case db_referential_action::set_default:
             return "SET DEFAULT";
-        default:
-            return "NO ACTION";
     }
+    throw std::invalid_argument("unknown referential action");
 }
 std::string_view method(db_index_method m) {
     switch (m) {
+        case db_index_method::btree:
+            return "btree";
         case db_index_method::hash:
             return "hash";
         case db_index_method::gin:
@@ -35,9 +38,52 @@ std::string_view method(db_index_method m) {
             return "spgist";
         case db_index_method::brin:
             return "brin";
-        default:
-            return "btree";
     }
+    throw std::invalid_argument("unknown index method");
+}
+std::string_view function_language_name(db_function_language language) {
+    switch (language) {
+        case db_function_language::plpgsql:
+            return "plpgsql";
+        case db_function_language::sql:
+            return "sql";
+    }
+    throw std::invalid_argument("unknown function language");
+}
+std::string_view function_volatility_clause(db_function_volatility volatility) {
+    switch (volatility) {
+        case db_function_volatility::volatile_value:
+            return {};
+        case db_function_volatility::stable:
+            return " STABLE";
+        case db_function_volatility::immutable:
+            return " IMMUTABLE";
+    }
+    throw std::invalid_argument("unknown function volatility");
+}
+std::string_view trigger_timing_clause(db_trigger_timing timing) {
+    switch (timing) {
+        case db_trigger_timing::before:
+            return " BEFORE ";
+        case db_trigger_timing::after:
+            return " AFTER ";
+        case db_trigger_timing::instead_of:
+            return " INSTEAD OF ";
+    }
+    throw std::invalid_argument("unknown trigger timing");
+}
+std::string_view trigger_event_name(db_trigger_event event) {
+    switch (event) {
+        case db_trigger_event::insert:
+            return "INSERT";
+        case db_trigger_event::update:
+            return "UPDATE";
+        case db_trigger_event::delete_value:
+            return "DELETE";
+        case db_trigger_event::truncate:
+            return "TRUNCATE";
+    }
+    throw std::invalid_argument("unknown trigger event");
 }
 }  // namespace
 
@@ -54,6 +100,36 @@ void db_schema::require_postgresql() const {
     if (driver_ != db_driver::postgresql) {
         throw std::invalid_argument("schema operation requires PostgreSQL");
     }
+}
+// MariaDB accepts RESTRICT and CASCADE on drops only for porting and ignores
+// them, so a requested CASCADE would silently leave dependents in place.
+void db_schema::append_drop_behavior(std::pmr::string& s, db_drop_behavior b) const {
+    switch (b) {
+        case db_drop_behavior::restrict:
+            return;
+        case db_drop_behavior::cascade:
+            if (driver_ == db_driver::mariadb) {
+                throw std::invalid_argument("MariaDB drops do not support CASCADE");
+            }
+            s += " CASCADE";
+            return;
+    }
+    throw std::invalid_argument("unknown drop behavior");
+}
+// Entity constraints follow PostgreSQL's default <table>_<name>_<suffix> naming
+// on the unqualified table name.
+std::pmr::string db_schema::constraint_name(std::string_view table, std::string_view relation, std::string_view suffix) const {
+    const auto local = detail::unqualified_db_name(table);
+    std::pmr::string name(resource_);
+    name.reserve(local.size() + relation.size() + suffix.size() + 2U);
+    name.append(local);
+    if (!relation.empty()) {
+        name.push_back('_');
+        name.append(relation);
+    }
+    name.push_back('_');
+    name.append(suffix);
+    return name;
 }
 void db_schema::append_expression(std::pmr::string& s, db_expression e) const {
     if (e.empty()) {
@@ -215,9 +291,6 @@ void db_schema::create_schema(std::string_view n, bool ine) {
     append(std::move(s));
 }
 void db_schema::drop_schema(std::string_view n, db_drop_behavior b, bool ie) {
-    if (driver_ == db_driver::mariadb && b == db_drop_behavior::cascade) {
-        throw std::invalid_argument("MariaDB schema drops do not support CASCADE");
-    }
     std::pmr::string s(resource_);
     s.reserve(36U + n.size());
     s += "DROP SCHEMA ";
@@ -225,9 +298,7 @@ void db_schema::drop_schema(std::string_view n, db_drop_behavior b, bool ie) {
         s += "IF EXISTS ";
     }
     append_db_identifier(s, n, driver_);
-    if (b == db_drop_behavior::cascade) {
-        s += " CASCADE";
-    }
+    append_drop_behavior(s, b);
     append(std::move(s));
 }
 void db_schema::create_table(const db_table_definition& t) {
@@ -304,9 +375,7 @@ void db_schema::drop_table(std::string_view t, db_drop_behavior b, bool ie) {
         s += "IF EXISTS ";
     }
     append_db_qualified_identifier(s, t, driver_);
-    if (b == db_drop_behavior::cascade) {
-        s += " CASCADE";
-    }
+    append_drop_behavior(s, b);
     append(std::move(s));
 }
 void db_schema::rename_table(std::string_view t, std::string_view n) {
@@ -346,9 +415,7 @@ void db_schema::drop_column(std::string_view t, std::string_view c, db_drop_beha
         s += "IF EXISTS ";
     }
     append_db_identifier(s, c, driver_);
-    if (b == db_drop_behavior::cascade) {
-        s += " CASCADE";
-    }
+    append_drop_behavior(s, b);
     append(std::move(s));
 }
 void db_schema::rename_column(std::string_view t, std::string_view c, std::string_view n) {
@@ -429,9 +496,7 @@ void db_schema::drop_constraint(std::string_view t, std::string_view n, db_drop_
         s += "IF EXISTS ";
     }
     append_db_identifier(s, n, driver_);
-    if (b == db_drop_behavior::cascade) {
-        s += " CASCADE";
-    }
+    append_drop_behavior(s, b);
     append(std::move(s));
 }
 void db_schema::validate_constraint(std::string_view t, std::string_view n) {
@@ -580,9 +645,7 @@ void db_schema::drop_enum(std::string_view n, db_drop_behavior b, bool ie) {
         s += "IF EXISTS ";
     }
     append_db_qualified_identifier(s, n, driver_);
-    if (b == db_drop_behavior::cascade) {
-        s += " CASCADE";
-    }
+    append_drop_behavior(s, b);
     append(std::move(s));
 }
 void db_schema::create_extension(std::string_view n, bool ie) {
@@ -635,9 +698,7 @@ void db_schema::drop_view(std::string_view n, bool mat, db_drop_behavior b, bool
         s += "IF EXISTS ";
     }
     append_db_qualified_identifier(s, n, driver_);
-    if (b == db_drop_behavior::cascade) {
-        s += " CASCADE";
-    }
+    append_drop_behavior(s, b);
     append(std::move(s));
 }
 void db_schema::execute(const db_query& q) {
@@ -651,8 +712,7 @@ void db_schema::perform(db_expression e) {
     require_postgresql();
     std::pmr::string s(resource_);
     s.reserve(64U);
-    s += "PERFORM ";
-    append_expression(s, e);
+    detail::append_db_perform_statement(s, e);
     append(std::move(s), db_migration_atomicity::transactional, true);
 }
 
@@ -686,9 +746,7 @@ void db_schema::drop_trigger_function(std::string_view name, db_drop_behavior be
     }
     append_db_qualified_identifier(sql, name, driver_);
     sql += "()";
-    if (behavior == db_drop_behavior::cascade) {
-        sql += " CASCADE";
-    }
+    append_drop_behavior(sql, behavior);
     append(std::move(sql));
 }
 void db_schema::create_function(const db_function_definition& function) {
@@ -723,17 +781,8 @@ void db_schema::create_function(const db_function_definition& function) {
     }
     append_type(sql, function.return_type_);
     sql += " LANGUAGE ";
-    sql += function.language_ == db_function_language::sql ? "sql" : "plpgsql";
-    switch (function.volatility_) {
-        case db_function_volatility::volatile_value:
-            break;
-        case db_function_volatility::stable:
-            sql += " STABLE";
-            break;
-        case db_function_volatility::immutable:
-            sql += " IMMUTABLE";
-            break;
-    }
+    sql += function_language_name(function.language_);
+    sql += function_volatility_clause(function.volatility_);
     if (function.strict_) {
         sql += " STRICT";
     }
@@ -773,24 +822,14 @@ void db_schema::drop_function(std::string_view name, std::span<const db_type_def
         append_type(sql, parameter_types[i]);
     }
     sql += ')';
-    if (behavior == db_drop_behavior::cascade) {
-        sql += " CASCADE";
-    }
+    append_drop_behavior(sql, behavior);
     append(std::move(sql));
 }
 void db_schema::lock_table(std::string_view table_value, db_table_lock_mode mode, bool nowait) {
     require_postgresql();
-    const auto mode_name = detail::table_lock_mode_name(mode);
     std::pmr::string sql(resource_);
     sql.reserve(48U + table_value.size());
-    sql += "LOCK TABLE ";
-    append_db_qualified_identifier(sql, table_value, driver_);
-    sql += " IN ";
-    sql += mode_name;
-    sql += " MODE";
-    if (nowait) {
-        sql += " NOWAIT";
-    }
+    detail::append_db_lock_table_statement(sql, table_value, mode, nowait);
     append(std::move(sql));
 }
 void db_schema::create_trigger(const db_trigger_definition& trigger) {
@@ -838,45 +877,22 @@ void db_schema::create_trigger(const db_trigger_definition& trigger) {
                 trigger.update_columns_.size() * 16U + trigger.arguments_.size() * 16U);
     sql += "CREATE TRIGGER ";
     append_db_identifier(sql, trigger.name_, driver_);
-    switch (trigger.timing_) {
-        case db_trigger_timing::before:
-            sql += " BEFORE ";
-            break;
-        case db_trigger_timing::after:
-            sql += " AFTER ";
-            break;
-        case db_trigger_timing::instead_of:
-            sql += " INSTEAD OF ";
-            break;
-    }
+    sql += trigger_timing_clause(trigger.timing_);
     bool first = true;
     for (const auto event : trigger.events_) {
         if (!first) {
             sql += " OR ";
         }
         first = false;
-        switch (event) {
-            case db_trigger_event::insert:
-                sql += "INSERT";
-                break;
-            case db_trigger_event::update:
-                sql += "UPDATE";
-                if (!trigger.update_columns_.empty()) {
-                    sql += " OF ";
-                    for (std::size_t i = 0; i < trigger.update_columns_.size(); ++i) {
-                        if (i != 0) {
-                            sql += ", ";
-                        }
-                        append_db_identifier(sql, trigger.update_columns_[i], driver_);
-                    }
+        sql += trigger_event_name(event);
+        if (event == db_trigger_event::update && !trigger.update_columns_.empty()) {
+            sql += " OF ";
+            for (std::size_t i = 0; i < trigger.update_columns_.size(); ++i) {
+                if (i != 0) {
+                    sql += ", ";
                 }
-                break;
-            case db_trigger_event::delete_value:
-                sql += "DELETE";
-                break;
-            case db_trigger_event::truncate:
-                sql += "TRUNCATE";
-                break;
+                append_db_identifier(sql, trigger.update_columns_[i], driver_);
+            }
         }
     }
     sql += " ON ";

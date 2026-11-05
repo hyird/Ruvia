@@ -173,8 +173,10 @@ private:
 // returned request is in use. Invalid method, target, or header fields throw
 // http_protocol_error. Header fields pass the same recipient field rules as
 // the HTTP/1 and HTTP/2 parsers, so a repeated singleton field such as Range or
-// If-Range throws instead of resolving to one of its lines. Body framing fields
-// are intentionally not interpreted because this API represents an
+// If-Range throws instead of resolving to one of its lines. A header section
+// outside the http_field_section_budget rule (max_http_header_bytes,
+// max_http_header_fields) throws the 431 header_too_large error. Body framing
+// fields are intentionally not interpreted because this API represents an
 // already-parsed request.
 [[nodiscard]] http_request make_parsed_http_request(
     borrowed_text method, borrowed_text target, std::span<const http_header_view> headers,

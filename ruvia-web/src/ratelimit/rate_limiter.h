@@ -57,6 +57,9 @@ inline constexpr std::size_t rate_limit_max_key_bytes = 64;
 // window holds only live entries of other keys takes the overflow decision.
 inline constexpr std::size_t rate_limit_probe_window = 32;
 
+// The 128-bit key of the table's slot-placement PRF.
+using rate_limit_hash_key = std::array<std::uint64_t, 2>;
+
 struct rate_limit_slot final {
     rate_limit_scope scope_{};
     // 0 marks an empty slot; occupied slots never hash to 0.
@@ -72,7 +75,9 @@ static_assert(sizeof(rate_limit_slot) <= 112, "worker rate-limit slots must stay
 // worker. Startup allocates every slot from worker_memory; request-path lookup
 // mutates ordinary worker-local state and performs no allocation, locking,
 // atomics, or cross-thread coordination. Keys are (route scope, rule
-// declaration, normalized remote address).
+// declaration, normalized remote address). Home slots come from a keyed hash
+// whose key each table draws at startup, so which keys share a probe window
+// cannot be computed offline to lock a victim out or to escape counting.
 class rate_limiter final {
 public:
     rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker,
@@ -97,6 +102,7 @@ private:
         rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule) noexcept;
     std::optional<rate_limit_rule> default_rule_per_worker_;
     std::pmr::vector<rate_limit_slot> slots_;
+    rate_limit_hash_key hash_key_{};
 };
 
 }  // namespace ruvia::detail

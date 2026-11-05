@@ -328,14 +328,10 @@ RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_condi
                 RUVIA_CHECK_EQ(response->status(), item.status_);
                 RUVIA_CHECK_EQ(response->header("X-Context"), std::optional<std::string_view>{"preserved"});
                 RUVIA_CHECK(!response->header("Content-Range").has_value());
-                // Outside Linux, a small context::file body is read at framing;
-                // Linux defers all file reads to the asynchronous reader.
+                // Every platform keeps the body file-backed for the pooled
+                // reader.
                 const auto file = response->file_body();
-#if defined(__linux__)
                 RUVIA_CHECK(file.has_value());
-#else
-                RUVIA_CHECK_EQ(file.has_value(), indexed);
-#endif
                 if (file) {
                     RUVIA_CHECK_EQ(file->offset(), std::uint64_t{0});
                     RUVIA_CHECK_EQ(file->length(), std::uint64_t{10});
@@ -621,17 +617,11 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
         RUVIA_CHECK(!direct.header("Vary").has_value());
         RUVIA_CHECK_EQ(direct.header("Content-Type").value_or(""),
             std::string_view("text/javascript; charset=utf-8"));
-        // Outside Linux, a small context::file body is read while framing;
-        // Linux keeps it file-backed for the asynchronous reader.
-#if defined(__linux__)
+        // Every platform keeps the body file-backed for the pooled reader.
         RUVIA_CHECK(direct.file_body().has_value());
         if (direct.file_body()) {
             RUVIA_CHECK_EQ(direct.file_body()->length(), static_cast<std::uint64_t>(fs::file_size(file_path)));
         }
-#else
-        RUVIA_CHECK(!direct.file_body().has_value());
-        RUVIA_CHECK_EQ(direct.body_bytes().size(), static_cast<std::size_t>(fs::file_size(file_path)));
-#endif
 
         fs::remove_all(dir);
     });
@@ -666,12 +656,8 @@ RUVIA_TEST(context_file_serves_borrowed_utf8_text_paths) {
             }
         };
         const auto matches_borrowed_body = [](const ruvia::http_response& response) {
-#if defined(__linux__)
             return response.file_body().has_value() &&
                    response.file_body()->length() == std::string_view("borrowed").size();
-#else
-            return response.body_bytes() == std::string_view("borrowed");
-#endif
         };
 
         const auto from_text = context_value.file({.path_ = text});
@@ -1619,5 +1605,35 @@ RUVIA_TEST(file_response_rejects_a_fifo_without_blocking_the_worker) {
     RUVIA_CHECK(!rescued);
     RUVIA_CHECK_EQ(status, ruvia::http_status::not_found);
     fs::remove_all(dir);
+}
+#endif
+
+#if !defined(_WIN32)
+// A request opens its indexed entry beneath the root without following any
+// symlink. A directory replaced by a symlink after indexing is refused even
+// when it leads to the very file that was indexed (a hard link made before
+// the index, so the identity still matches).
+RUVIA_TEST(static_file_refuses_a_directory_swapped_for_a_symlink_after_indexing) {
+    namespace fs = std::filesystem;
+    using static_file_test::static_file_status;
+    const auto base = fs::temp_directory_path() / "ruvia_static_symlink_swap";
+    std::error_code ignored;
+    fs::remove_all(base, ignored);
+    const auto root_dir = base / "root";
+    const auto outside = base / "outside";
+    fs::create_directories(root_dir / "assets");
+    fs::create_directories(outside);
+    {
+        std::ofstream output(root_dir / "assets" / "a.txt", std::ios::binary);
+        output << "indexed";
+    }
+    fs::create_hard_link(root_dir / "assets" / "a.txt", outside / "a.txt");
+    ruvia::static_root root(root_dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
+    RUVIA_CHECK(static_file_status(root, "assets/a.txt") == ruvia::http_status::ok);
+
+    fs::rename(root_dir / "assets", base / "moved_assets");
+    fs::create_directory_symlink(outside, root_dir / "assets");
+    RUVIA_CHECK(static_file_status(root, "assets/a.txt") == ruvia::http_status::internal_server_error);
+    fs::remove_all(base, ignored);
 }
 #endif

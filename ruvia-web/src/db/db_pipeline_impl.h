@@ -308,12 +308,14 @@ void db_pipeline_state<io_type>::close() noexcept {
     }
 }
 
+// Every lease a statement founds a group on passes here first.
 template <typename io_type>
 bool db_pipeline_state<io_type>::must_connect(member_type& member) {
     pool_.reset_abort(member.slot_);
     if (member.stopped()) {
         throw cancelled();
     }
+    pool_.retire_dead_idle_connection(member.slot_);
     member.connecting_ = !pool_.slot(member.slot_).connected_;
     return member.connecting_;
 }

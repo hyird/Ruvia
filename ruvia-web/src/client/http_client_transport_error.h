@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exception>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -92,14 +93,15 @@ namespace ruvia::detail {
     std::terminate();
 }
 
-// True for a failure the transport reported as http_client_error(io_error).
-[[nodiscard]] inline bool is_http_client_io_error(const std::exception_ptr& failure) noexcept {
+// The code of a failure the client reported as http_client_error.
+[[nodiscard]] inline std::optional<http_client_error::code_type> http_client_failure_code(
+    const std::exception_ptr& failure) noexcept {
     try {
         std::rethrow_exception(failure);
     } catch (const http_client_error& error) {
-        return error.code() == http_client_error::code_type::io_error;
+        return error.code();
     } catch (...) {
-        return false;
+        return std::nullopt;
     }
 }
 

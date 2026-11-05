@@ -71,6 +71,9 @@ public:
         // Caller-owned buffered suffix or its socket output is still pending.
         bool request_body_pending_{false};
         bool retryable_{false};
+        // The peer refused the request with RST_STREAM(HTTP_1_1_REQUIRED)
+        // before any response head (RFC 9113 section 7).
+        bool http11_required_{false};
         // The request addresses the fixed origin, whose jar retains the
         // response's Set-Cookie fields.
         bool addresses_origin_{true};
@@ -94,9 +97,16 @@ public:
     // Advisory only; the worker-affine request driver consumes the selected
     // capacity synchronously before another request can select it.
     [[nodiscard]] std::size_t available_http2_request_streams() const noexcept;
+    // No transport, operation, session or stream uses this slot: a request
+    // routed here connects at once.
+    [[nodiscard]] bool idle_unconnected() const noexcept {
+        return !connected_ && http1_operations_ == 0 && !http2_.running() && http2_streams_.empty();
+    }
 
     // Serialized by connect_scheduler_. Returns true only when the existing
     // transport remains connected and is reused; a replacement returns false.
+    // A previous HTTP/2 generation that is draining or still unwinding is
+    // waited for first, within `acquire_timeout`.
     [[nodiscard]] task<bool> ensure_connected(
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
         stop_token stop_token_value, http_client_response_state& response);
@@ -106,14 +116,16 @@ public:
     // Starts the idle bound of a connected HTTP/1 connection between exchanges
     // or an HTTP/2 connection without streams; its expiry closes the
     // connection unless it is in use again. A bound that cannot be armed
-    // closes the connection at once.
+    // closes the connection at once. An idle HTTP/1 connection is also
+    // watched: peer EOF, reset or unsolicited bytes close it at once.
     void begin_idle() noexcept;
     void end_idle() noexcept;
     // Applies the retention policy to both buffers. Only between exchanges,
     // when no transport operation borrows their storage.
     void retain_idle_buffers() noexcept;
     // Pool shutdown: permanently refuses new leases, aborts the connect or
-    // HTTP/1 exchange in progress with closing, then closes.
+    // HTTP/1 exchange in progress with closing, then closes. An HTTP/2
+    // session without streams closes with GOAWAY first.
     void shutdown() noexcept;
     // Lease cancellation: aborts the connect or HTTP/1 exchange in progress
     // with `reason` and closes the transport.
@@ -125,12 +137,15 @@ public:
     void throw_if_aborted() const;
 
     // HTTP/2 (http2/http_client_http2.cpp). False when the multiplexed session
-    // had ended and its replacement connection negotiated HTTP/1.1 instead:
-    // nothing was sent, and the caller runs the request as an HTTP/1 exchange
-    // on that connection. (ensure_connected() already rejects that outcome for
-    // an http2_only client.)
+    // had ended (or the peer required HTTP/1.1, RFC 9113 section 7) and its
+    // replacement connection speaks HTTP/1.1 instead: nothing was sent, and
+    // the caller runs the request as an HTTP/1 exchange on that connection.
+    // (ensure_connected() already rejects that outcome for an http2_only
+    // client.) `acquire_timeout` bounds the first attempt's reconnect and
+    // stream-capacity waits; a retry attempt gets its own acquisition bound.
     [[nodiscard]] task<bool> execute_http2(const http_client_request_storage& request,
-        const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value);
+        const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
+        http_client_response_state& state_value);
     // Registers a stream whose timeout_ is set and arms its deadline timer.
     void register_http2_stream(http2_stream& stream);
     void remove_http2_stream(http2_stream& stream) noexcept;
@@ -173,12 +188,20 @@ private:
     [[nodiscard]] http2_stream* find_http2_request(std::uint64_t request_id) noexcept;
     [[nodiscard]] bool http2_exchange_complete(const http2_stream& stream) noexcept;
     void fail_http2_stream(http2_stream& stream, std::exception_ptr failure, bool reset_stream) noexcept;
+    // Wakes a stream's driver, and capacity waiters while it has no stream ID.
+    void wake_http2_stream(http2_stream& stream) noexcept;
     // Peer input for the stream restarts its read inactivity bound.
     void restart_http2_stream_read(http2_stream& stream);
     // Arms timer_ for the earlier of the total and read deadlines.
     void schedule_http2_stream_timer(http2_stream& stream);
     void expire_http2_stream_timer(std::uint64_t request_id) noexcept;
     void close_idle() noexcept;
+    // Client close of a session that admits no further request: GOAWAY first
+    // (RFC 9113 section 6.8), bounded by the session.
+    void close_http2_session() noexcept;
+    // Pingora's idle_poll: one watcher per connection, parked while the
+    // connection is in use and retired with the pool.
+    [[nodiscard]] task<void> watch_idle_http1();
     void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
     void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
@@ -186,15 +209,29 @@ private:
         http2_end_stream end_stream, const http_client_output_queue* upload = nullptr);
     [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream,
         http_client_output_queue& upload);
+    // The one wait for a previous HTTP/2 generation to retire: its session and
+    // every stream that borrows its transport.
     [[nodiscard]] task<void> wait_for_http2_session_stop(
-        const operation_timeout& timeout, stop_token stop_token_value, const http_client_response_state& response);
+        const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& response);
 
     http_client_pool& pool_;
     std::size_t index_;
     std::pmr::vector<http2_stream*> http2_streams_;
     http2_stream* last_http2_stream_{nullptr};
     std::uint64_t next_http2_request_id_{0};
+    // Request heads accepted by the current HTTP/2 generation: a later
+    // request's stream runs on a reused connection.
+    std::size_t http2_session_requests_{0};
     http2_state_waiter* state_waiters_{};
+    // Idle watch of an HTTP/1 connection: wanted between begin_idle() and
+    // end_idle(); each end bumps idle_period_ so a late readiness of an
+    // earlier period is ignored.
+    worker_signal idle_watch_signal_;
+    std::uint64_t idle_period_{0};
+    bool idle_watch_wanted_{false};
+    // The watcher's readiness wait is pending and not yet cancelled.
+    bool idle_wait_pending_{false};
+    bool idle_watcher_started_{false};
     // Last: destroyed first, so its completion never sees a retiring connection.
     worker_timer_registration idle_timer_;
 };

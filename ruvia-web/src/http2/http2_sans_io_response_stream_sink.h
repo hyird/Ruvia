@@ -57,7 +57,7 @@ public:
         http2_data_output_budget& output_budget, std::pmr::memory_resource* resource,
         http_known_method request_method, worker_codecs& codecs,
         http_response_coding_selection response_coding,
-        http_response_coding_availability response_coding_availability, const cors_options* cors) noexcept
+        const compression_config* compression, const cors_options* cors) noexcept
         : connection_(connection),
           stream_id_(stream_id),
           stream_runtime_(stream_runtime),
@@ -66,7 +66,7 @@ public:
           output_budget_(output_budget),
           request_method_(request_method),
           cors_(cors),
-          compression_(resource, codecs, response_coding, response_coding_availability) {}
+          compression_(resource, codecs, response_coding, compression) {}
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
     }
@@ -114,21 +114,12 @@ public:
             co_return;
         }
         if (compression_.active()) {
-            constexpr std::size_t input_chunk_bytes = http2_data_output_credit_bytes;
-            std::size_t offset = 0;
-            while (offset < chunk.size()) {
-                const auto count = std::min(input_chunk_bytes, chunk.size() - offset);
-                try {
-                    compression_.write(chunk.substr(offset, count));
-                } catch (...) {
-                    state_.mark_aborted();
-                    throw;
-                }
-                if (!compression_.output().empty()) {
-                    co_await write_encoded(compression_.output());
-                }
-                compression_.release_output();
-                offset += count;
+            try {
+                co_await compression_.write(
+                    chunk, [this](std::string_view encoded) { return write_encoded(encoded); });
+            } catch (...) {
+                state_.mark_aborted();
+                throw;
             }
             co_return;
         }

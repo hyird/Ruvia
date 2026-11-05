@@ -81,11 +81,13 @@ void connection_scanner::entry::set_phase(phase next_phase) noexcept {
         close_requested_ = false;
     }
     reading_request_head_ = false;
+    sync_reusable();
 }
 void connection_scanner::entry::read_request_head(phase timeout_phase) noexcept {
     set_phase(timeout_phase);
     reading_request_head_ = scanner_ != nullptr;
     close_requested_ = false;
+    sync_reusable();
 }
 connection_scanner::entry::phase_scope::~phase_scope() {
     if (entry_.scanner_ == nullptr) {
@@ -95,6 +97,7 @@ connection_scanner::entry::phase_scope::~phase_scope() {
     entry_.phase_started_ms_ = phase_started_ms_;
     entry_.phase_ = phase_;
     entry_.reading_request_head_ = reading_request_head_;
+    entry_.sync_reusable();
 }
 connection_scanner::entry::write_scope::write_scope(entry& entry_value) noexcept
     : entry_(entry_value) {
@@ -122,6 +125,9 @@ bool connection_scanner::entry::enter_long_lived() noexcept {
 }
 std::int64_t connection_scanner::entry::last_active_ms() const noexcept {
     return last_active_ms_;
+}
+bool connection_scanner::entry::draining() const noexcept {
+    return scanner_ != nullptr && scanner_->impl_->draining_;
 }
 void connection_scanner::entry::register_periodic_check(periodic_check_registration& registration,
     void* target, periodic_check_type tick, drain_check_type drain) noexcept {
@@ -167,6 +173,29 @@ void connection_scanner::entry::detach_periodic_checks() noexcept {
 bool connection_scanner::entry::linked() const noexcept {
     return prev_ != nullptr && next_ != nullptr;
 }
+void connection_scanner::entry::sync_reusable() noexcept {
+    const bool listed = reusable_next_ != nullptr;
+    if (scanner_ == nullptr || reusable() == listed) {
+        return;
+    }
+    if (listed) {
+        unlink_reusable();
+        return;
+    }
+    auto& sentinel = scanner_->impl_->reusable_sentinel_;
+    reusable_prev_ = sentinel.reusable_prev_;
+    reusable_next_ = &sentinel;
+    sentinel.reusable_prev_->reusable_next_ = this;
+    sentinel.reusable_prev_ = this;
+}
+void connection_scanner::entry::unlink_reusable() noexcept {
+    if (reusable_next_ == nullptr) {
+        return;
+    }
+    reusable_prev_->reusable_next_ = reusable_next_;
+    reusable_next_->reusable_prev_ = reusable_prev_;
+    reusable_prev_ = reusable_next_ = nullptr;
+}
 bool connection_scanner::entry::has_drain_check() const noexcept {
     for (const auto* registration = periodic_checks_; registration != nullptr; registration = registration->next_) {
         if (registration->drain_ != nullptr) {
@@ -202,6 +231,7 @@ connection_scanner::impl_type::impl_type(
       options_(std::move(options)),
       cached_now_ms_(steady_now_ms()) {
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
+    reusable_sentinel_.reusable_prev_ = reusable_sentinel_.reusable_next_ = &reusable_sentinel_;
 }
 bool connection_scanner::impl_type::retire() noexcept {
     stop();
@@ -248,6 +278,23 @@ void connection_scanner::close_all() noexcept {
 void connection_scanner::drain() noexcept {
     impl_->drain();
 }
+bool connection_scanner::evict_oldest_reusable() noexcept {
+    auto& sentinel = impl_->reusable_sentinel_;
+    for (auto* current = sentinel.reusable_next_; current != &sentinel; current = current->reusable_next_) {
+        // A write still under way belongs to an exchange that only just
+        // ended; its connection is not idle yet.
+        if (current->write_pending()) {
+            continue;
+        }
+        // Closed at once rather than asked to close: the new connection takes
+        // the slot now. The close request keeps the entry out of the list
+        // while its owner unwinds.
+        impl_type::record_close_request(*current, impl_->cached_now_ms_);
+        close_socket(*current->socket_);
+        return true;
+    }
+    return false;
+}
 void connection_scanner::detach_entry(entry& entry_value) noexcept {
     if (entry_value.scanner_ != nullptr) {
         entry_value.scanner_->impl_->unregister_entry(entry_value);
@@ -274,6 +321,11 @@ void connection_scanner::impl_type::stop() noexcept {
 void connection_scanner::impl_type::register_entry(entry& entry_value, asio::ip::tcp::socket& socket) {
     if (entry_value.scanner_ != nullptr) {
         throw std::logic_error("connection scanner entry is already registered");
+    }
+    // A parked scanner resumes with its first entry. Armed before linking, so
+    // a failure leaves the entry unregistered.
+    if (running_ && !timer_.registered()) {
+        schedule();
     }
     entry_value.socket_ = &socket;
     entry_value.scanner_ = owner_;
@@ -302,6 +354,7 @@ void connection_scanner::impl_type::unregister_entry(entry& entry_value) noexcep
     entry_value.prev_->next_ = entry_value.next_;
     entry_value.next_->prev_ = entry_value.prev_;
     entry_value.prev_ = entry_value.next_ = nullptr;
+    entry_value.unlink_reusable();
     entry_value.socket_ = nullptr;
     entry_value.detach_periodic_checks();
     entry_value.scanner_ = nullptr;
@@ -357,11 +410,20 @@ void connection_scanner::impl_type::schedule() {
             return;
         }
         // Never during an exchange or a burst: only after a whole interval
-        // without either. The timer runs on the worker that owns the memory.
+        // without either, once per such quiet period. The timer runs on the
+        // worker that owns the memory.
         if (idle && scanner->retired_activity_ms_ < interval_start) {
-            scanner->options_.trim_when_idle_->trim(scanner->worker_);
+            if (!scanner->quiet_trimmed_) {
+                scanner->options_.trim_when_idle_->trim(scanner->worker_);
+                scanner->quiet_trimmed_ = true;
+            }
+        } else {
+            scanner->quiet_trimmed_ = false;
         }
-        if (!scanner->timer_.registered()) {
+        // With no entry left and the quiet period trimmed, nothing remains to
+        // time: park until register_entry() re-arms the scan.
+        const bool parked = scanner->quiet_trimmed_ && scanner->sentinel_.next_ == &scanner->sentinel_;
+        if (!parked && !scanner->timer_.registered()) {
             scanner->schedule();
         }
     });
@@ -393,10 +455,12 @@ bool connection_scanner::impl_type::scan(std::int64_t interval_start) noexcept {
 }
 bool connection_scanner::impl_type::active_since(const entry& entry_value, std::int64_t interval_start) noexcept {
     // A connection waiting for, or still reading, a request head has no
-    // exchange; neither has an upgraded one between messages. Anything else
-    // (a handshake, an admitted request, a response) is an exchange.
+    // exchange; neither has an upgraded one between messages, nor a
+    // multiplexed session without a stream. Anything else (a handshake, an
+    // admitted request, a response) is an exchange.
     return entry_value.last_active_ms_ >= interval_start || entry_value.write_pending() ||
-           (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived);
+           (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived &&
+               entry_value.phase_ != phase::awaiting_stream);
 }
 void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
     if (!entry_value.close_requested_) {
@@ -432,6 +496,7 @@ void connection_scanner::impl_type::record_close_request(entry& entry_value, std
         entry_value.close_deadline_ms_ = deadline_ms;
     }
     entry_value.close_requested_ = true;
+    entry_value.sync_reusable();
 }
 bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::int64_t now) const noexcept {
     // A graceful close request is bounded by its own deadline, which later
@@ -455,6 +520,8 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
         case phase::writing:
         case phase::long_lived:
             return false;
+        case phase::awaiting_stream:
+            return timeout_expired(options_.idle_timeout_, phase_elapsed_ms);
         case phase::idle:
         default:
             return timeout_expired(options_.idle_timeout_, inactive_ms);

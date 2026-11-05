@@ -622,6 +622,16 @@ public:
         return capabilities_.stop_token();
     }
 
+    // Requested when the server starts a graceful stop (application::stop()
+    // begins draining), and at the latest when the worker stops. A response
+    // that would otherwise hold the drain open -- SSE, long polling -- should
+    // observe it and finish, so stop completes before drain_timeout_ instead of
+    // cutting the response. stop_token() is unaffected: db(), redis(),
+    // http_client() and run_blocking() keep running through the drain. A
+    // context outside a serving connection (in-memory testing dispatch) gets a
+    // token that is never requested.
+    [[nodiscard]] ::ruvia::stop_token drain_token() const noexcept;
+
     // Present only while session_middleware is bound for this request.
     [[nodiscard]] ruvia::session session();
 

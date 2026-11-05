@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/detail/field/request_header_kind.h"
@@ -52,8 +53,16 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] request_header_kind classify_request_header(std::string_view name) noexcept;
-// Parses `chunk-size [ chunk-ext ]` (RFC 9112 7.1); false on any malformed or
-// overflowing line.
-[[nodiscard]] bool parse_http_chunk_size_line(std::string_view value, std::size_t& size) noexcept;
+
+struct http_chunk_size_line final {
+    std::size_t size_{0};
+    // Line bytes beyond the shortest hex spelling of size_: leading zeros and
+    // chunk-ext. A decoder charges them to a per-message framing budget.
+    std::size_t overhead_bytes_{0};
+};
+
+// Parses `chunk-size [ chunk-ext ]` (RFC 9112 7.1) without its CRLF; nullopt on
+// any malformed or overflowing line.
+[[nodiscard]] std::optional<http_chunk_size_line> parse_http_chunk_size_line(std::string_view value) noexcept;
 
 }  // namespace ruvia::detail

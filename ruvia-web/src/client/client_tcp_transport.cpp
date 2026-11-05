@@ -143,6 +143,19 @@ client_idle_transport_status client_tcp_transport::idle_status() noexcept {
                                 : client_idle_transport_status::closed;
 }
 
+task<void> client_tcp_transport::wait_readable() {
+    // A readiness wait consumes nothing, so a readiness that races the next
+    // exchange leaves its bytes to that exchange's read.
+    (void)co_await async_asio([this](auto handler) mutable {
+        stream_.next_layer().socket().async_wait(asio::socket_base::wait_read, std::move(handler));
+    });
+}
+
+void client_tcp_transport::cancel_wait() noexcept {
+    std::error_code ignored;
+    (void)stream_.next_layer().socket().cancel(ignored);
+}
+
 bool client_tcp_transport::arm(lane_deadline& lane, const operation_timeout& timeout) {
     lane.timer_.cancel();
     const auto remaining = timeout.remaining();

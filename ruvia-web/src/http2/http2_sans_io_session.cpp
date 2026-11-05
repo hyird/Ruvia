@@ -36,10 +36,10 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
 
             std::error_code write_error;
             {
-                // The reader keeps the entry in its own phase (idle, a body
-                // read, or long_lived for an RFC 8441 tunnel); this clock
-                // lets write_timeout close a peer that stopped reading
-                // regardless. Every transfer renews it.
+                // The reader keeps the entry in its own phase (readiness,
+                // awaiting a stream, active streams, or long_lived for an
+                // RFC 8441 tunnel); this clock lets write_timeout close a peer
+                // that stopped reading regardless. Every transfer renews it.
                 const connection_scanner::entry::write_scope write_stall_clock(engine.scanner_entry());
                 write_error = (co_await connection_gather_write(stream, write_scratch, {}, engine.scanner_entry())).error_;
             }

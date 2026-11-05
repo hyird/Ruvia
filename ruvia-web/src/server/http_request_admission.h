@@ -40,7 +40,6 @@ class route_table;
 struct http_request_admission_policy final {
     std::optional<std::size_t> max_stream_body_bytes_{};
     std::size_t max_buffered_body_bytes_{};
-    http_response_coding_availability coding_availability_{http_response_coding_availability::identity_only};
     bool apply_rate_limit_{true};
     // RFC 9110 §7.4: answer 421 when the connection cannot carry the target
     // (decide_http_target_origin against the services' transport facts).
@@ -230,10 +229,6 @@ public:
         return udp_tunnel_;
     }
 
-    [[nodiscard]] http_response_coding_availability coding_availability() const noexcept {
-        return coding_availability_;
-    }
-
     // The connection's request services after applying admission policy.
     [[nodiscard]] const context_services& services() const noexcept {
         return services_;
@@ -258,7 +253,6 @@ public:
           rejection_(other.rejection_),
           resolved_(other.resolved_),
           body_limit_(other.body_limit_),
-          coding_availability_(other.coding_availability_),
           endpoint_(other.endpoint_),
           udp_tunnel_(other.udp_tunnel_) {
         if (services_.io_metrics() == &other.tail_.io_metrics()) {
@@ -276,7 +270,6 @@ public:
             rejection_ = other.rejection_;
             resolved_ = other.resolved_;
             body_limit_ = other.body_limit_;
-            coding_availability_ = other.coding_availability_;
             endpoint_ = other.endpoint_;
             udp_tunnel_ = other.udp_tunnel_;
         }
@@ -289,7 +282,6 @@ public:
           rejection_(std::move(other.rejection_)),
           resolved_(other.resolved_),
           body_limit_(other.body_limit_),
-          coding_availability_(other.coding_availability_),
           endpoint_(other.endpoint_),
           udp_tunnel_(other.udp_tunnel_) {
         if (services_.io_metrics() == &other.tail_.io_metrics()) {
@@ -307,7 +299,6 @@ public:
             rejection_ = std::move(other.rejection_);
             resolved_ = other.resolved_;
             body_limit_ = other.body_limit_;
-            coding_availability_ = other.coding_availability_;
             endpoint_ = other.endpoint_;
             udp_tunnel_ = other.udp_tunnel_;
         }
@@ -330,7 +321,6 @@ private:
     std::optional<http_request_rejection> rejection_;
     const resolved_route* resolved_{};
     protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
-    http_response_coding_availability coding_availability_{http_response_coding_availability::identity_only};
     http_request_endpoint endpoint_{http_request_endpoint::buffered};
     bool udp_tunnel_{false};
 };

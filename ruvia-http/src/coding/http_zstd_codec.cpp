@@ -1,7 +1,6 @@
 #include <zstd.h>
 #include <zstd_errors.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <utility>
 
@@ -10,7 +9,7 @@
 #include "coding/http_content_codec.h"
 #include "coding/http_zstd_stream.h"
 
-// zstd (RFC 8878) with the mandatory 8 MiB HTTP window limit of RFC 9659.
+// zstd (RFC 8878) within the 8 MiB HTTP window limit of RFC 9659.
 
 namespace ruvia::detail {
 
@@ -54,43 +53,10 @@ std::optional<std::pmr::string> encode_zstd_content(
     zstd_encoder_stream& encoder, std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output("", http_pmr_resource_or_default(output_resource));
-    auto* context_value = encoder.native();
-
-    ZSTD_inBuffer in{input.data(), input.size(), 0};
-    // Uninitialized scratch: only the bytes zstd produced are copied out.
-    char buffer[8192];
-    for (;;) {
-        if (output.size() == max_encoded_bytes) {
-            char probe_value{};
-            ZSTD_outBuffer out{&probe_value, 1, 0};
-            const auto result_value = ZSTD_compressStream2(context_value, &out, &in, ZSTD_e_end);
-            if (ZSTD_isError(result_value) != 0) {
-                encoder.rethrow_allocation_failure();
-                throw http_content_codec_error(ZSTD_getErrorName(result_value));
-            }
-            if (result_value == 0 && out.pos == 0 && in.pos == in.size) {
-                return output;
-            }
-            return std::nullopt;
-        }
-
-        const auto offset = output.size();
-        const auto writable = std::min<std::size_t>(sizeof(buffer), max_encoded_bytes - offset);
-        const auto before_input = in.pos;
-        ZSTD_outBuffer out{buffer, writable, 0};
-        const auto result_value = ZSTD_compressStream2(context_value, &out, &in, ZSTD_e_end);
-        output.append(buffer, out.pos);
-        if (ZSTD_isError(result_value) != 0) {
-            encoder.rethrow_allocation_failure();
-            throw http_content_codec_error(ZSTD_getErrorName(result_value));
-        }
-        if (result_value == 0 && in.pos == in.size) {
-            return output;
-        }
-        if (output.size() == offset && in.pos == before_input) {
-            throw http_content_codec_error("zstd encoder made no progress");
-        }
+    if (!encoder.encode(input, output, ZSTD_e_end, max_encoded_bytes)) {
+        return std::nullopt;
     }
+    return output;
 }
 
 std::optional<std::pmr::string> encode_zstd_content(

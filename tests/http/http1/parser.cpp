@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
@@ -1578,6 +1579,39 @@ RUVIA_TEST(http1_parse_header_block_too_large_rejected) {
     request += std::string(64 * 1024, 'a');  // pushes past the cap, no blank line
     const auto result_value = parse_http1_request_message(request);
     RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::header_too_large));
+}
+
+RUVIA_TEST(http1_parse_caps_header_field_count) {
+    // max_http_header_fields bounds a head far below the byte cap's ~16 K
+    // smallest field lines; both the wire parser and make_parsed_http_request
+    // answer one field past it with 431.
+    for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
+        const auto field_count = ruvia::max_http_header_fields + excess;
+        std::string request = "GET / HTTP/1.1\r\nHost: x\r\n";
+        std::vector<ruvia::http_header_view> fields{{"Host", "x"}};
+        for (std::size_t index = 1; index < field_count; ++index) {
+            request.append("X:a\r\n");
+            fields.emplace_back("X", "a");
+        }
+        request.append("\r\n");
+        const auto result_value = parse_http1_request_message(request);
+        bool constructed_rejected = false;
+        try {
+            const auto constructed =
+                ruvia::make_parsed_http_request("GET", "/", fields, {}, std::pmr::get_default_resource());
+            RUVIA_CHECK_EQ(constructed.headers().size(), field_count);
+        } catch (const ruvia::http_protocol_error& error) {
+            constructed_rejected = error.status() == ruvia::http_status::request_header_fields_too_large;
+        }
+        if (excess == 0) {
+            RUVIA_CHECK(result_value.complete());
+            RUVIA_CHECK_EQ(result_value.state_.request_.headers().size(), field_count);
+            RUVIA_CHECK(!constructed_rejected);
+        } else {
+            RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::header_too_large));
+            RUVIA_CHECK(constructed_rejected);
+        }
+    }
 }
 
 RUVIA_TEST(http1_parse_request_target_reaching_head_cap_is_uri_too_long) {

@@ -33,9 +33,18 @@
 namespace ruvia::detail {
 
 class http_client_connection;
+class http_client_response_state;
 
 class http_client_pool;
 using http_client_cancellation_target = worker_cancellation_target<http_client_pool>;
+
+// The one retry rule of both wire protocols for a request that failed on a
+// reused connection (Pingora RetryType::ReusedOnly): replayed once on a new
+// connection only after a plain I/O failure (TLS failures, timeouts and
+// cancellation excluded), for an idempotent request (RFC 9110 section 9.2.2)
+// whose content is buffered, before any response head was published.
+[[nodiscard]] bool can_retry_reused_connection_request(std::optional<http_client_error::code_type> failure,
+    const http_client_request_storage& request, const http_client_response_state& response) noexcept;
 
 // Request admission over the pool's fixed lease slots, with HTTP client
 // errors for every non-acquired outcome. Slot deadlines and slot cancellation
@@ -140,6 +149,15 @@ public:
     void record_idle_connection_with_pending_data() noexcept {
         ++idle_connections_with_pending_data_;
     }
+    // The origin answered HTTP_1_1_REQUIRED (RFC 9113 section 7) to a
+    // negotiate client: every later connect of this pool offers only
+    // http/1.1, like Pingora's prefer_h1.
+    [[nodiscard]] bool prefers_http11() const noexcept {
+        return prefers_http11_;
+    }
+    void require_http11() noexcept {
+        prefers_http11_ = config_.protocol_ == http_client_protocol::negotiate;
+    }
     // Admits or rejects one HTTP/2 PUSH_PROMISE of `connection`.
     void accept_http2_push(http_client_connection& connection, const http2_push_promise_event& promise);
 
@@ -157,6 +175,14 @@ private:
     [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
         http_client_response_state& state_value);
+    // Runs the request as an HTTP/1 exchange on `connection`, reconnecting it
+    // when needed. False, with nothing sent, when the connection speaks HTTP/2.
+    // `connected_http1_generation` names a connection this request has just
+    // negotiated, which is not idle-probed.
+    [[nodiscard]] task<bool> execute_http1(http_client_connection& connection,
+        const http_client_request_storage& request, const operation_timeout& timeout,
+        const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
+        std::optional<std::uint64_t> connected_http1_generation);
     // Spawns the request driver for `state_value`, which the caller's response owns.
     void spawn_request(http_client_request_storage request, operation_options options,
         http_client_response_state& state_value);
@@ -190,6 +216,7 @@ private:
     std::size_t completed_requests_{0};
     std::size_t failed_requests_{0};
     std::size_t idle_connections_with_pending_data_{0};
+    bool prefers_http11_{false};
     bool background_joined_{false};
 };
 

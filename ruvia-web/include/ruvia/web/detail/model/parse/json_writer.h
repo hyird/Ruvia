@@ -55,22 +55,27 @@ template <typename value_type>
     } else if constexpr (is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type>) {
         return value.view().size();
     } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
-        if constexpr (is_ruvia_array<t_type>) {
-            constexpr std::size_t item_hint = json_fixed_scalar_size_hint<typename t_type::value_type>();
-            if constexpr (item_hint != 0) {
-                return value.empty() ? 2 : 2 + value.size() * item_hint + (value.size() - 1);
+        constexpr std::size_t item_hint = [] {
+            if constexpr (is_ruvia_array<t_type>) {
+                return json_fixed_scalar_size_hint<typename t_type::value_type>();
+            } else {
+                return std::size_t{0};
             }
-        }
-        std::size_t size = 2;
-        bool first = true;
-        for (const auto& item : value) {
-            if (!first) {
-                ++size;
+        }();
+        if constexpr (item_hint != 0) {
+            return value.empty() ? 2 : 2 + value.size() * item_hint + (value.size() - 1);
+        } else {
+            std::size_t size = 2;
+            bool first = true;
+            for (const auto& item : value) {
+                if (!first) {
+                    ++size;
+                }
+                first = false;
+                size += json_size_hint_value(item);
             }
-            first = false;
-            size += json_size_hint_value(item);
+            return size;
         }
-        return size;
     } else {
         static_assert(
             always_false<t_type>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");

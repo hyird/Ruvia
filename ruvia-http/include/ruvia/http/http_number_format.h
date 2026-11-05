@@ -37,6 +37,15 @@ inline constexpr std::size_t http_max_unsigned_decimal_size = 20;
     return {output.data(), static_cast<std::size_t>(end - output.data())};
 }
 
+// Sign plus the 19 digits of the most negative std::int64_t.
+inline constexpr std::size_t http_max_signed_decimal_size = 20;
+
+[[nodiscard]] inline std::string_view http_format_signed(
+    std::span<char, http_max_signed_decimal_size> output, std::int64_t value) noexcept {
+    const auto end = std::to_chars(output.data(), output.data() + output.size(), value).ptr;
+    return {output.data(), static_cast<std::size_t>(end - output.data())};
+}
+
 inline void http_append_unsigned(std::pmr::string& output, std::uint64_t value) {
     std::array<char, http_max_unsigned_decimal_size> digits;
     output.append(http_format_unsigned(digits, value));

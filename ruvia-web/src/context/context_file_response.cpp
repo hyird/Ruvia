@@ -68,31 +68,40 @@ namespace {
 
 inline constexpr std::size_t file_response_header_reserve = 7;
 
+[[nodiscard]] http_error static_file_changed_error() {
+    return http_error({.status_ = ruvia::http_status::internal_server_error,
+        .code_ = "static_file_changed",
+        .message_ = "static file changed since its index was built"});
+}
+
+// The indexed file, opened beneath its root. One that cannot be opened is
+// gone or no longer where the index found it; its path is never resolved
+// another way.
+[[nodiscard]] http_response_file_handle open_indexed_file(
+    const static_root& root, const detail::static_root_entry_view& entry) {
+    auto opened = detail::static_root_access::open_entry(root, entry);
+    if (!opened) {
+        throw static_file_changed_error();
+    }
+    return opened;
+}
+
 // Names the response file by a borrowed native path that outlives
 // make_file_response: a static_root index entry or context::file's options.
 // http_response copies the path into its own storage, so neither borrow
-// reaches the returned body. A response may also carry a handle opened for
-// it; the body takes it so the transport never reopens the path.
+// reaches the returned body. The handle opened for the response goes with the
+// body, so the transport reads it on the blocking pool and never reopens the
+// path.
 class file_response_path final {
 public:
-    enum class inline_read : std::uint8_t {
-        // The transport reads or sends the bytes and checks the handle (or the
-        // file it opens) against the identity first.
-        transport,
-        // Outside Linux, a small body is read from this framing handle here.
-        // Linux defers even small bodies to the asynchronous reader.
-        framing_snapshot,
-    };
-
     // `path` must be NUL-terminated (a c_str() or path::native() view).
     file_response_path(http_native_path_view_type path, http_response_file_identity identity,
-        http_response_file_handle opened, inline_read read_policy = inline_read::transport)
+        http_response_file_handle opened)
         : path_(path),
           identity_(identity),
-          opened_(std::move(opened)),
-          read_policy_(read_policy) {
-        if (path_.empty()) {
-            throw std::logic_error("file response has no native path");
+          opened_(std::move(opened)) {
+        if (path_.empty() || !opened_) {
+            throw std::logic_error("file response has no native path or opened handle");
         }
     }
 
@@ -104,52 +113,14 @@ public:
         return identity_;
     }
 
+    // Called only before the body takes the handle.
     void validate_current(std::uint64_t size) const {
-        if (!identity_.requires_validation()) {
-            return;
-        }
-        std::error_code ec;
-#if defined(__unix__) || defined(_WIN32)
-        const auto snapshot = opened_ ? detail::snapshot_native_file_handle(detail::borrowed_native_file(opened_), ec)
-                                      : detail::snapshot_response_file(path_.data(), ec);
-#else
-        const auto snapshot = detail::snapshot_response_file(path_.data(), ec);
-#endif
-        if (ec || snapshot.identity_ != identity_ || snapshot.size_ != size) {
-            throw http_error({.status_ = ruvia::http_status::internal_server_error,
-                .code_ = "static_file_changed",
-                .message_ = "static file changed since its index was built"});
+        if (detail::validate_native_file(detail::borrowed_native_file(opened_), identity_, size)) {
+            throw static_file_changed_error();
         }
     }
 
-    void set_body(http_response& response, std::pmr::memory_resource* resource, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length) {
-#if defined(__unix__) || defined(_WIN32)
-        if (read_policy_ == inline_read::framing_snapshot && opened_ &&
-            length <= detail::inline_response_file_max_bytes) {
-#if !defined(__linux__)
-            std::pmr::string bytes(resource);
-            bytes.resize(static_cast<std::size_t>(length));
-            if (detail::read_native_file_at(
-                    detail::borrowed_native_file(opened_), offset, bytes.data(), bytes.size())) {
-                throw http_error({.status_ = ruvia::http_status::internal_server_error,
-                    .code_ = "file_read_failed",
-                    .message_ = "file could not be read"});
-            }
-            // The head was framed from this handle's earlier snapshot: publish
-            // the bytes only if the same handle still matches it after the read.
-            validate_current(size);
-            opened_ = {};
-            response.file_bytes_body(std::move(bytes));
-            return;
-#else
-            // Linux 的小文件也交给异步读取器，不能因长度较小就在 worker 上等磁盘。
-            static_cast<void>(resource);
-#endif
-        }
-#else
-        static_cast<void>(resource);
-#endif
+    void set_body(http_response& response, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
         response.file_body(path_, size, offset, length, identity_, std::move(opened_));
     }
 
@@ -162,7 +133,6 @@ private:
     http_native_path_view_type path_;
     http_response_file_identity identity_;
     http_response_file_handle opened_;
-    inline_read read_policy_;
 };
 
 class file_response_body_source final {
@@ -198,7 +168,7 @@ public:
     void set_body(http_response& response, std::pmr::memory_resource* resource, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length) {
         if (auto* path = std::get_if<file_response_path>(&value_)) {
-            path->set_body(response, resource, size, offset, length);
+            path->set_body(response, size, offset, length);
             return;
         }
         const auto bytes_value = std::get<std::string_view>(value_);
@@ -539,11 +509,7 @@ http_response context::file(file_response_options options) {
         throw not_found();
     }
     // Open once: the response is framed from this handle's metadata, and the
-    // body comes from the same handle, so no path is resolved twice. A small
-    // body is read right away and the handle closed; HEAD sends no bytes.
-    const auto read_policy = request_.known_method() == http_known_method::head
-                                 ? file_response_path::inline_read::transport
-                                 : file_response_path::inline_read::framing_snapshot;
+    // body comes from the same handle, so no path is resolved twice.
     std::error_code ec;
     auto opened = detail::open_response_file(native_path.data(), ec);
     if (ec) {
@@ -554,8 +520,8 @@ http_response context::file(file_response_options options) {
     const auto content_type_value = options.content_type_.view();
     auto response = make_file_response(*this,
         file_response_source{
-            .body_ = file_response_body_source::file(file_response_path(
-                native_path, snapshot.identity_, std::move(opened.handle_), read_policy)),
+            .body_ = file_response_body_source::file(
+                file_response_path(native_path, snapshot.identity_, std::move(opened.handle_))),
             .size_ = snapshot.size_,
             .modified_token_ = snapshot.modified_token_,
             .modified_seconds_ = snapshot.modified_seconds_,
@@ -620,7 +586,7 @@ http_response detail::context_access::static_file_resolved(
                          ? file_response_body_source::bytes_value(*resident_bytes)
                          : file_response_body_source::file(
                                file_response_path(http_native_path_view_type(served_entry.file_path()),
-                                   served_entry.identity(), detail::static_root_access::open_entry(root, served_entry))),
+                                   served_entry.identity(), open_indexed_file(root, served_entry))),
             .size_ = response_size,
             .modified_token_ = response_modified_token,
             .modified_seconds_ = response_modified_seconds,

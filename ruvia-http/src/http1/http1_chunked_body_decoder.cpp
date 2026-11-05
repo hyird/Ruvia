@@ -131,20 +131,26 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
                 }
                 size_line_search_offset_ = 0;
                 const auto line_end = line_feed - 1;
-                std::size_t chunk_size = 0;
-                if (!detail::parse_http_chunk_size_line(line.substr(0, line_end), chunk_size)) {
+                const auto size_line = detail::parse_http_chunk_size_line(line.substr(0, line_end));
+                if (!size_line) {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
                 }
+                // RFC 9112 section 7.1.1: a recipient ought to limit the total
+                // chunk-ext length of a message; leading zeros cost the same scan.
+                if (max_http_header_bytes - framing_overhead_bytes_ < size_line->overhead_bytes_) {
+                    return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
+                }
+                framing_overhead_bytes_ += size_line->overhead_bytes_;
                 cursor += line_end + 2;
-                if (chunk_size == 0) {
+                if (size_line->size_ == 0) {
                     state_ = progress::trailers;
                     trailer_search_offset_ = 0;
                 } else {
-                    if (body_limit_.addition_exceeds(decoded_bytes_, chunk_size)) {
+                    if (body_limit_.addition_exceeds(decoded_bytes_, size_line->size_)) {
                         return fail(cursor, http1_chunk_decode_error::body_limit_exceeded);
                     }
-                    decoded_bytes_ += chunk_size;
-                    remaining_ = chunk_size;
+                    decoded_bytes_ += size_line->size_;
+                    remaining_ = size_line->size_;
                     state_ = progress::body;
                 }
                 break;

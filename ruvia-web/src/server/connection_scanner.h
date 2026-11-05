@@ -27,8 +27,9 @@ namespace ruvia::detail {
 // configuration after validate_server_limits has checked every duration.
 struct connection_scanner_options final {
     std::chrono::milliseconds scan_interval_{std::chrono::seconds(1)};
-    // Inactivity timeouts measured from the connection's last successful I/O.
-    // Absence disables the corresponding phase timeout.
+    // Inactivity timeouts measured from the connection's last successful I/O
+    // (idle_timeout_ also bounds phase::awaiting_stream, measured from entering
+    // it). Absence disables the corresponding phase timeout.
     std::optional<std::chrono::milliseconds> idle_timeout_{};
     std::optional<std::chrono::milliseconds> initial_read_timeout_{};
     std::optional<std::chrono::milliseconds> payload_read_timeout_{};
@@ -36,9 +37,10 @@ struct connection_scanner_options final {
     // Absolute phase deadlines, independent of successful I/O progress.
     std::optional<std::chrono::milliseconds> initial_read_completion_timeout_{};
     std::optional<std::chrono::milliseconds> payload_read_completion_timeout_{};
-    // A tick that follows a whole scan interval in which no entry carried a
+    // The first tick after a whole scan interval in which no entry carried a
     // request exchange and none had activity (I/O, registration or retirement)
-    // trims this memory on the worker. Must belong to the worker.
+    // trims this memory on the worker, once per such quiet period. Must belong
+    // to the worker.
     worker_memory* trim_when_idle_;
 };
 
@@ -63,6 +65,10 @@ public:
 
     enum class phase : std::uint8_t {
         idle,
+        // A multiplexed session (HTTP/2) with no open stream: idle_timeout runs
+        // from entering the phase, so frames that open no stream (PING,
+        // SETTINGS, WINDOW_UPDATE) and this side's writes do not renew it.
+        awaiting_stream,
         reading_initial,
         reading_payload,
         long_lived,
@@ -128,8 +134,9 @@ public:
         // A timeout or drain cancels the read and sets close_requested().
         void read_request_head(phase timeout_phase) noexcept;
         // The scanner asked the connection to end gracefully: it cancelled a
-        // request-head read, or invoked a drain callback for a timeout. The
-        // owner closes without waiting for further input. Activity no longer
+        // request-head read, or invoked a drain callback for a timeout -- or
+        // it already closed the socket to evict the connection. The owner
+        // closes without waiting for further input. Activity no longer
         // extends the connection: the scanner closes its socket once the
         // request's grace passes -- one scan interval for a cancelled read
         // (covering a cancel the transport lost), connection_close_grace for
@@ -185,6 +192,9 @@ public:
         // callback is notified to end gracefully, any other has its socket closed.
         [[nodiscard]] bool enter_long_lived() noexcept;
         [[nodiscard]] std::int64_t last_active_ms() const noexcept;
+        // The scanner has started draining. A drain callback registered after
+        // drain() ran was never notified; its owner asks for the drain itself.
+        [[nodiscard]] bool draining() const noexcept;
         // `drain` is optional: a long-lived connection uses it to end itself
         // gracefully once draining starts. A connection whose read or idle
         // phase times out is asked the same way once, instead of being closed.
@@ -205,6 +215,17 @@ public:
         void notify_drain() noexcept;
         void remove_periodic_check(periodic_check_registration& registration) noexcept;
         void detach_periodic_checks() noexcept;
+        // Between requests with nothing in flight: an HTTP/1 keep-alive
+        // connection awaiting its next request head, or a multiplexed session
+        // without a stream. Such a connection may give up its slot.
+        [[nodiscard]] bool reusable() const noexcept {
+            return !close_requested_ &&
+                   ((reading_request_head_ && phase_ == phase::idle) || phase_ == phase::awaiting_stream);
+        }
+        // Links the entry at the newest end of the scanner's reusable list
+        // when it became reusable, unlinks it when it stopped being so.
+        void sync_reusable() noexcept;
+        void unlink_reusable() noexcept;
         asio::ip::tcp::socket* socket_{nullptr};
         connection_scanner* scanner_{nullptr};
         entry* prev_{nullptr};
@@ -222,6 +243,9 @@ public:
         std::uint32_t write_scopes_{0};
         periodic_check_registration* periodic_checks_{nullptr};
         periodic_check_registration* periodic_scan_next_{nullptr};
+        // Links in the scanner's reusable list, oldest first; null outside it.
+        entry* reusable_prev_{nullptr};
+        entry* reusable_next_{nullptr};
     };
 
     // Binds a TCP socket to an entry for the guard lifetime; its destructor
@@ -258,6 +282,12 @@ public:
     // From then on enter_long_lived() refuses new upgrades. Admitted requests
     // and connections without a callback may finish until the worker stops.
     void drain() noexcept;
+    // Admission at the connection cap, as nginx reuses idle keep-alive
+    // connections when worker_connections run out: closes the connection
+    // that has been reusable longest (see entry::reusable(); one with a write
+    // still under way is skipped) and returns whether one was found. Its
+    // socket closes now; its slot is released once its session unwinds.
+    [[nodiscard]] bool evict_oldest_reusable() noexcept;
 
 private:
     friend class entry;
@@ -300,6 +330,9 @@ struct connection_scanner::impl_type final {
     void unregister_entry(entry& entry) noexcept;
     void close_all() noexcept;
     void drain() noexcept;
+    // Arms the next scan. Scanning parks (no timer armed) once no entry is
+    // tracked and the quiet period's trim has run; the next registration
+    // re-arms it, so an idle worker holds no scanner timer work.
     void schedule();
     // Visits every entry; returns whether none was in a request exchange or
     // active since `interval_start`.
@@ -333,12 +366,16 @@ struct connection_scanner::impl_type final {
     // Latest activity of an entry that has since been unregistered.
     std::int64_t retired_activity_ms_{(std::numeric_limits<std::int64_t>::min)()};
     entry sentinel_{};
+    // Entries for which entry::reusable() holds, oldest first.
+    entry reusable_sentinel_{};
     entry* scan_current_{nullptr};
     entry* scan_next_{nullptr};
     std::atomic_bool running_{false};
     // Worker-local: set only by the timer callback while scan() runs callbacks.
     bool scanning_{false};
     bool release_after_scan_{false};
+    // Worker-local: the current quiet period has been trimmed.
+    bool quiet_trimmed_{false};
     // Worker-local; set once by drain() and never cleared.
     bool draining_{false};
 };

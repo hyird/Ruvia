@@ -56,6 +56,8 @@ ruvia::app().database({
 
 `read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算，流空闲时间不计入它。
 
+池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
+
 ### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_handle`）
 
 在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_handle`。ORM 与直接查询保持独立公开路线，均可直接在 `db_handle` 或 `db_transaction` 上调用。
@@ -73,6 +75,8 @@ ruvia::app().database({
 | `db_query_result_cache query_result_cache() const` | （需 `RUVIA_ENABLE_REDIS`）获取查询结果缓存控制器 |
 
 查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号；从旧版本升级后，先前写入的条目不再命中，随各自的过期时间失效。
+
+缓存条目的大小受所用 Redis 连接的 `max_reply_bytes_` 约束：编码后读取回复会超过该上限的结果照常返回给调用方，但不写入缓存（否则之后每次命中都会因回复超限而失败并关闭一条 Redis 连接）。同一 worker 上同一缓存键的并发未命中只由第一个调用方查询数据库（单飞），其余调用方在各自的超时与停止令牌约束内等待它的结果并直接使用；它失败、被取消或超时后，等待者重新读取缓存，由下一个仍未命中的调用方接着查询。合并只在单个 worker 内进行，不跨 worker 或进程加锁。`remove()` / `clear()` 之后到达的调用方不会合并到此前已开始的查询上。
 
 直接查询保留 raw 借用路线：`db_field::as<std::string_view>()` 与 `value()` 返回的文本视图只在所属行存储有效期间可用，不得从已经析构的 `db_rows` 中逸出。需要独立结果时，使用 `as<std::pmr::string>()` / `as<ruvia::string>()`；ORM 映射入口则在编译期要求 owning 类型，见第 3.1 节。
 
@@ -162,7 +166,14 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
   `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"ruvia/web/entity_rows.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
-- **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。
+- **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。`clone()` 只复制当前语句可达的节点与子查询，不携带被替换子句、退役来源与废弃节点。
+- **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from`、`subquery`、`exists` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载在实参与当前 Query 使用同一 PMR resource 时直接接管其 AST，否则复制。两种右值路径都会让实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。
+- **语句类型切换**：`insert_into`、`update`、`delete_from` 把 Query 切换到另一种语句时，只保留 `WHERE` 与 `WITH`；已有 `FROM` / `JOIN`、投影、`VALUES` / 赋值、`GROUP BY` / `HAVING`、`ORDER BY`、`LIMIT` / `OFFSET`、锁、集合操作或 `DISTINCT` 时抛出 `std::invalid_argument`，以免残留的 `FROM` 静默变成 `UPDATE ... FROM` / `DELETE ... USING` 扩大目标范围。需要关联来源时显式使用 `update_from` / `delete_using`；同类语句重新指定目标不受影响。
+- **标识符**：`FROM` / `JOIN` 别名、`INSERT` / `UPDATE` / `DELETE` 目标别名、CTE 名与 `lock` 的 `OF` 目标必须是不含 `.` 的单个标识符（表名本身仍可带 schema 限定）；投影别名与列名规则不变。
+- **原始 SQL（`sql()` / `db_expr::raw_sql`）**：语法片段以 `-` 或 `/` 结尾时，编译器在其后的参数前补一个空格，避免负数字面量或 `*` 拼出 `--` / `/*` 注释。PostgreSQL 绑定模式下片段不得包含位置参数（`$` 后接数字且不处于标识符中，如 `$1`），否则抛出 `std::invalid_argument`，值请通过 `value()` 参数传入；字面量模式（如函数体 DDL）与 MariaDB 不受此限制。
+- **参数与嵌套上限**：PostgreSQL 绑定模式按节点为每个值只分配一个 `$n`（分组表达式在 `SELECT` / `GROUP BY` / `HAVING` 中复用同一编号），单条语句超过 65535 个绑定参数（协议 Bind 消息的 Int16 计数）时 `compile()` 抛出 `std::length_error`，请分批写入。表达式与子查询嵌套上限为 256 层；同一运算符的左深 `AND` / `OR` 链（`and_where` 循环、`p = std::move(p) && q`）只算一层，编译为扁平的 `(a AND b AND c)`。`render_expression()` 只以字面量渲染单个表达式。
+- **携带表名的表达式**：`db_expr::from_expression(expr, table)` 与 `db_expr(expr, table)` 记录的表名只在导入方未指定表名（`expression(query, {}, alias)`）时参与限定名重写；导入方指定表名时以导入方为准，其他表的限定名保持不变。`db_expr(expr, table)` 的 `table` 为借用文本，拒绝 `std::string` 等拥有型右值。
+- **关系路径**：`*_join_and_select` 的路径首段同时是根实体关系名、又是根别名或另一条已加载关系的别名时抛出 `std::invalid_argument`，不再按别名静默改写为其他关系；`join_relation` 的多对多中间表别名 `<alias>_junction` 已被占用时同样拒绝。
 
 ### 2.2 `ruvia::db_schema` 与 `ruvia::db_procedure`
 
@@ -172,6 +183,8 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
   - 索引、视图、枚举与扩展：`create_index`（支持 B-Tree / GIN / GiST 与部分索引条件）、`create_view`、`create_enum`、`create_extension`
   - 函数、触发器与 TimescaleDB：`create_function`、`create_trigger_function`、`create_trigger`、`create_hypertable`、`set_compression`、`add_compression_policy`、`add_retention_policy`
   - 调用 `schema.compile("0001_init")` 直接生成 `std::pmr::vector<db_migration>` 供 `db_migrator::migrate` 执行。
+  - `db_drop_behavior::cascade` 仅 PostgreSQL 支持。MariaDB 的 `DROP TABLE` / `ALTER TABLE ... DROP` 只为移植兼容而接受 `CASCADE` 且不产生任何效果（[DROP TABLE](https://mariadb.com/docs/server/server-usage/tables/drop-table)），因此 MariaDB 下所有 `drop_*` 传入 `cascade` 均抛出 `std::invalid_argument`，须改用 `restrict` 并显式删除依赖对象。
+  - 实体生成的约束名使用去掉 schema 前缀的表名：`<表>_pkey`、`<表>_<关系>_fkey`、`<表>_<关系>_key`，多对多关系表为 `<表>_owner_fkey` / `<表>_inverse_fkey` / `<表>_pkey`。
 - **`db_procedure`**：结构化构建 PL/pgSQL 过程块（变量声明、`select_into`、`begin_if`/`else_if`/`otherwise`/`end_if`、异常捕获块 `begin_block`/`catch_sql_state`、循环与 `raise_exception`）。
   - `begin_block()` 与 `apply(schema)` 的分配失败保留原正文和控制栈；资源恢复后可重试同一操作。`apply` 在完整追加本次 schema 的 SQL 及语句终止符后才发布，不留下半条语句。
 
@@ -207,10 +220,20 @@ RUVIA_DB_PROJECTION(device_summary,
 ```
 
 - **映射结果必须拥有数据**：公开概念 `ruvia::db_mapped_value<T>` 统一约束实体/投影的 `db_column`、读 Builder 与写 `RETURNING` Builder 的 `get_scalar<T>()` / `get_scalars<T>()` 以及字段解码。支持既有数值类型、`bool`、`std::pmr::string`、`ruvia::string`，以及这些值的一维 `std::pmr::vector`；`std::optional` 递归保留此约束，数组元素可用 `std::optional<T>` 表示 `NULL`。`std::string_view`、引用、含借用元素的数组与嵌套数组在编译期被拒绝；`std::string` 不属于既有映射字符串类型，请使用上述两种 owning 字符串。结果不借用局部 `db_rows` 或数组解析 token，也不会通过隐藏缓存延长其寿命；结果所使用的 PMR 资源仍须覆盖结果寿命。
-- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::pmr::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。读查询与写 `RETURNING` 共用这些语义。
+- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::pmr::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
 - **可空列约定**：顶层列类型直接使用值类型（如 `std::int64_t`、`std::pmr::string`），并在 `db_column_options` 中设置 `.nullable_ = true`。通过 `entity.set_null<"notes">()` 置空，通过 `entity.is_null<"notes">()` 检查是否为 `NULL`。
 - **实体数值输入**：SQL 与 Redis 实体的 `set<"field">()` 在发布字段前检查整数范围和有限浮点溢出，超界抛出 `std::out_of_range`，保留原值及 unset/null 状态。SQL 数组及 optional 元素递归应用同一规则，后续元素失败不会发布部分新数组。整数列不再隐式接受浮点输入（包括模型标量包装及数组元素），调用方须先显式选择整数转换策略；浮点字段保留通常的精度舍入和显式非有限值语义。检查仅覆盖 `set()`，不拦截调用方经可变 `get()` 或显式转换自行执行的赋值。
 - **生成列（Computed Columns）**：设置 `db_column_options{.generated_type_ = ruvia::db_generated_type::stored}`，ORM 在 `INSERT` / `UPDATE` 时自动跳过该列并在 `RETURNING` 中回填数据库计算结果。
+- **列选项编译期校验**：`db_column` 以 `requires` 约束拒绝互相矛盾的选项，非法组合不构成合法类型、直接编译失败，不再等到 `create_table<Entity>()` 运行期才报错，Repository 也不会接受这类声明：
+  - `.generated_`（自增标识）与 `.generated_type_`（计算列）互斥，二者都不能与 `.read_only_` 同用；`.generated_` 要求非空整数列。
+  - `.enum_name_` 只能与推断类型或数组类型同用。
+  - `.version_` 要求非空整数列；主键不能 `.nullable_`，也不能是 `.delete_date_`。
+  - 每列至多一个生命周期角色（`create_date_` / `update_date_` / `delete_date_` / `version_`）；由 Repository 写入的 `update_date_` / `delete_date_` / `version_` 列必须可写（不能是 `.read_only_` 或计算列），否则软删过滤会静默失效。
+- **生命周期列统一盖章**：所有由 ORM 生成的 `UPDATE` 与冲突更新共用一套规则：`update_date_` 列写入 `now()`，`version_` 列加 1；同一语句显式赋值该列时以显式值为准。
+  - 覆盖范围：`update(where, entity)`、`update(where, assignments)`、`increment` / `decrement`、`soft_delete`、`restore`、`update_builder()`（构建器创建时即带盖章，后续 `set` 同名列会覆盖）、`save()` 的冲突更新分支、`upsert()` 与 `insert_builder().on_conflict()` 的 `DO UPDATE`。
+  - 冲突更新仅在至少更新一个其他列时盖章；无可更新列时仍按原规则退化为 `DO NOTHING`（PostgreSQL），`do_nothing_` 也不盖章。`save()` 冲突分支对已显式设置的 `update_date_` / `version_` 使用 `excluded` 值。
+  - 批量 `save()` / `upsert()` 未指定 `update_columns_` 时，每个自动更新列（含生命周期列）须在所有实体中同时设置或同时未设置，否则抛出 `std::invalid_argument`；`EXCLUDED` 对未设置的行取列默认值，会把已有值改写为默认值。
+  - 直接 `db_query` 不参与盖章。
 - **实体关联宏**：
   - `RUVIA_DB_MANY_TO_ONE(field, TargetEntity, RUVIA_DB_JOIN_COLUMN("local_fk", "id"))`
   - `RUVIA_DB_ONE_TO_MANY(field, TargetEntity, RUVIA_DB_INVERSE("many_to_one_field"))`
@@ -245,7 +268,7 @@ RUVIA_DB_PROJECTION(device_summary,
 
 写 Builder 的 `.set(span<db_assignment>)`、`.set({...})` 和 `.set(entity)` 整批提交：字段校验与表达式导入完成后才发布 SET 列表，后续项失败不会留下此前项的部分更新。失败前已构建的 SQL 与参数语义不变；此保证针对查询构建，不等同于数据库事务。
 
-读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入，因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
+读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载在同一 resource 下直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
 
 读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。组合时若需要排除软删除行，应在源 Builder 显式添加相应条件。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
 
@@ -293,7 +316,7 @@ mixed.with("samples", samples).from_cte("samples")
 
 - 实体 / DTO 中与实际返回列同名的字段被解码；通配部分没有返回的字段保持 unset。通配带出的其他字段保留在 raw rows 中，不强迫 DTO 声明它们。
 - 显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `db_conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
-- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。
+- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。无通配项的投影（包括原始 SQL、CTE 或 JOIN 带出的同名列）同样适用：需要映射的列名必须在结果中唯一，不再取第一个匹配列。
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
 - 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 

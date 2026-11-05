@@ -233,8 +233,10 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         if (host_header_index >= 0 && i == static_cast<std::size_t>(host_header_index)) {
             value = bound_host_field_value(target_view, value);
         }
-        (void)http_request_access::add_header(
-            request_, http_header_view{header_value.name_.bind(buffer), value}, header_value.kind_);
+        if (!http_request_access::add_header(
+                request_, http_header_view{header_value.name_.bind(buffer), value}, header_value.kind_)) {
+            return fail(http_parse_error::header_too_large);
+        }
     }
 
     response_coding_qualities_ = block.response_coding_qualities_;

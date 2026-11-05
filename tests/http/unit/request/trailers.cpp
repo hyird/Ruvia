@@ -110,6 +110,49 @@ RUVIA_TEST(request_trailers_append_http1_is_atomic_and_discards_fields_not_permi
     RUVIA_CHECK(!trailers.append("X-Last", std::string(ruvia::max_http_header_bytes - 81, 'z')).has_value());
 }
 
+RUVIA_TEST(request_trailers_append_http1_retains_lowercase_names) {
+    ruvia::http_request_trailers trailers(std::pmr::new_delete_resource());
+    RUVIA_CHECK(!trailers.append("X-Appended", "1").has_value());
+    RUVIA_CHECK(!trailers.append_http1("X-Mixed-Case: 2\r\n\r\n").has_value());
+    const auto fields = trailers.fields();
+    RUVIA_CHECK_EQ(fields.size(), std::size_t{2});
+    if (fields.size() == 2) {
+        RUVIA_CHECK_EQ(fields[0].name(), std::string_view("x-appended"));
+        RUVIA_CHECK_EQ(fields[1].name(), std::string_view("x-mixed-case"));
+        RUVIA_CHECK_EQ(fields[1].value(), std::string_view("2"));
+    }
+}
+
+RUVIA_TEST(request_trailers_cap_field_count) {
+    for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
+        std::string block;
+        for (std::size_t index = 0; index < ruvia::max_http_header_fields + excess; ++index) {
+            block.append("X:a\r\n");
+        }
+        const std::string wire = "0\r\n" + block + "\r\n";
+        ruvia::http1_chunked_body_decoder decoder;
+        const auto decoded = decoder.decode(wire);
+        ruvia::http_request_trailers trailers(std::pmr::new_delete_resource());
+        const auto appended = trailers.append_http1(block);
+        if (excess == 0) {
+            RUVIA_CHECK(decoded.complete() != nullptr);
+            RUVIA_CHECK(!appended.has_value());
+            RUVIA_CHECK_EQ(trailers.fields().size(), ruvia::max_http_header_fields);
+            // A full section admits no further field through either entry.
+            RUVIA_CHECK(trailers.append("X", "b") == ruvia::http_request_trailer_error::section_too_large);
+            RUVIA_CHECK(trailers.append_http1("X:b\r\n") == ruvia::http_request_trailer_error::section_too_large);
+            RUVIA_CHECK_EQ(trailers.fields().size(), ruvia::max_http_header_fields);
+        } else {
+            RUVIA_CHECK(decoded.failure() != nullptr);
+            if (const auto* failure = decoded.failure()) {
+                RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+            }
+            RUVIA_CHECK(appended == ruvia::http_request_trailer_error::section_too_large);
+            RUVIA_CHECK(trailers.fields().empty());
+        }
+    }
+}
+
 RUVIA_TEST(request_trailers_enforce_normalized_section_limit_during_chunk_decoding) {
     for (const std::size_t field_count : {std::size_t{3}, std::size_t{80}}) {
         for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {

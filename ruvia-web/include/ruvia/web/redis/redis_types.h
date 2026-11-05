@@ -1,8 +1,6 @@
 #pragma once
 
-#include <charconv>
 #include <chrono>
-#include <cmath>
 #include <compare>
 #include <concepts>
 #include <cstddef>
@@ -22,7 +20,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
-#include "ruvia/web/integer.h"
+#include "ruvia/web/detail/text_scalar.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/tls_config.h"
 
@@ -565,43 +563,17 @@ private:
 
 namespace detail {
 
-template <typename t_type>
-concept redis_text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
-                            (std::is_same_v<t_type, bool> || is_model_integer<t_type> ||
-                                std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
-                                std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
-
-template <redis_text_scalar t_type>
+template <text_scalar t_type>
 [[nodiscard]] t_type convert_redis_text(std::string_view text, std::pmr::memory_resource* resource) {
-    if constexpr (std::is_same_v<t_type, std::string_view>) {
-        return text;
-    } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-        return std::pmr::string(text, resource);
-    } else if constexpr (std::is_same_v<t_type, string>) {
-        return string(text, model_options{.resource_ = resource});
-    } else if constexpr (std::is_same_v<t_type, bool>) {
-        if (text == "1" || text == "t" || text == "true" || text == "TRUE") {
-            return true;
-        }
-        if (text == "0" || text == "f" || text == "false" || text == "FALSE") {
-            return false;
-        }
-        throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
-    } else if constexpr (std::is_floating_point_v<t_type>) {
-        t_type converted{};
-        const auto* const last = text.data() + text.size();
-        const auto [end, error] = std::from_chars(text.data(), last, converted);
-        if (error != std::errc{} || end != last || !std::isfinite(converted)) {
+    auto parsed = parse_text_scalar<t_type>(text, resource);
+    if (std::holds_alternative<text_scalar_parse_error>(parsed)) {
+        if constexpr (std::is_same_v<t_type, bool>) {
+            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
+        } else {
             throw redis_error(redis_error::code_type::protocol_error, "redis value is not a valid number");
         }
-        return converted;
-    } else {
-        const auto parsed = parse_integer<t_type>(text);
-        if (std::holds_alternative<integer_parse_error>(parsed)) {
-            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a valid number");
-        }
-        return std::get<t_type>(parsed);
     }
+    return std::get<t_type>(std::move(parsed));
 }
 
 }  // namespace detail
@@ -651,7 +623,7 @@ public:
     [[nodiscard]] std::span<const redis_value> array() const&;
     [[nodiscard]] std::span<const redis_value> array() const&& = delete;
 
-    template <detail::redis_text_scalar t_type>
+    template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const& {
         if (is_null()) {
             return std::nullopt;
@@ -676,7 +648,7 @@ public:
         }
         return detail::convert_redis_text<t_type>(string(), string_.get_allocator().resource());
     }
-    template <detail::redis_text_scalar t_type>
+    template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
 
 private:

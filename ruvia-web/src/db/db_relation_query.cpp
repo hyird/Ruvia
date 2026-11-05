@@ -49,17 +49,9 @@ std::pmr::string db_relation_plan::normalize(std::string_view root_alias, std::s
 }
 
 bool db_relation_plan::uses_source_name(const db_query& query, std::string_view name) {
-    const auto matches = [name](const db_query_source& source_value) {
-        if (!source_value.alias_.empty()) {
-            return source_value.alias_ == name;
-        }
-        const auto full = std::string_view(source_value.name_);
-        const auto dot = full.rfind('.');
-        return full == name || full.substr(dot == std::string_view::npos ? 0 : dot + 1) == name;
-    };
     const auto& s = query.storage();
-    return (s.source_ && matches(*s.source_)) || std::ranges::any_of(s.joins_,
-                                                     [&](const auto& join) { return matches(join.source_); });
+    return (s.source_ && source_binds_name(*s.source_, name)) ||
+           std::ranges::any_of(s.joins_, [&](const auto& join) { return source_binds_name(join.source_, name); });
 }
 
 bool db_relation_plan::uses_projection_name(const db_query& query, std::string_view name) {
@@ -164,13 +156,14 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     for (const auto& key : key_names) {
         page.add_select(page.column(key, "__ruvia_ranked"));
     }
-    page.from(ranked, "__ruvia_ranked");
-    page.where(page.binary(page.column("__ruvia_page_rank", "__ruvia_ranked"),
-        db_binary_operator::equal, page.value(1)));
+    // Read the window ordering before the ranked query is moved into the page.
     const auto& window_orders = rank_storage.nodes_[ranked.require_expression(window_expr)].orders_;
     for (std::size_t i = 0; i < order_names.size(); ++i) {
         page.add_order_by(page.column(order_names[i], "__ruvia_ranked"), window_orders[i].direction_, window_orders[i].nulls_);
     }
+    page.from(std::move(ranked), "__ruvia_ranked");
+    page.where(page.binary(page.column("__ruvia_page_rank", "__ruvia_ranked"),
+        db_binary_operator::equal, page.value(1)));
     // Break ordering ties using the complete primary key, including composite keys.
     for (const auto& key : key_names) {
         page.add_order_by(page.column(key, "__ruvia_ranked"));
@@ -179,13 +172,13 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
         .offset(s.offset_ ? std::optional<query_row_count>(*s.offset_) : std::nullopt);
     db_query included(s.resource_);
     const auto page_alias = root_alias == "__ruvia_page" ? "__ruvia_page_1" : "__ruvia_page";
-    included.select(included.value(1)).from(page, page_alias);
+    included.select(included.value(1)).from(std::move(page), page_alias);
     for (std::size_t i = 0; i < primary_key.size(); ++i) {
         included.and_where(included.binary(included.column(key_names[i], page_alias),
             db_binary_operator::equal, included.column(primary_key[i], root_alias)));
     }
     result_value.limit(std::nullopt).offset(std::nullopt);
-    result_value.and_where(result_value.exists(included));
+    result_value.and_where(result_value.exists(std::move(included)));
     return result_value;
 }
 

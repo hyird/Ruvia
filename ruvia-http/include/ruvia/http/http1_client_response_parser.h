@@ -11,6 +11,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/client/http1_client_exchange_state_access.h"
+#include "ruvia/http/detail/client/http1_client_parsed_status_line.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_transfer_coding.h"
@@ -392,7 +393,10 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // HEAD/304 Content-Length representation metadata still requires valid,
 // consistent lengths; ignored 1xx/204/CONNECT framing values are not interpreted.
 // Any number of informational heads may precede the final response; each head
-// remains subject to the header limits and the supplied memory resource.
+// remains subject to the header limits (max_http_header_bytes and
+// max_http_header_fields) and the supplied memory resource. An invalid status
+// line or a line ending in a bare LF fails as soon as it arrives, without
+// waiting for the rest of the head.
 class http1_client_response_parser final {
 public:
     explicit http1_client_response_parser(
@@ -446,6 +450,11 @@ private:
     detail::http1_client_request_content_phase request_content_phase_;
     bool interim_faulty_framing_{false};
     std::size_t header_scan_offset_{0};
+    // The pending head's status line, validated as soon as its line feed
+    // arrives, and the offset of its CRLF; reset with header_scan_offset_ when
+    // a head completes.
+    std::optional<detail::http1_client_parsed_status_line> status_line_;
+    std::size_t status_line_end_{0};
 };
 
 inline http1_client_response_parser::http1_client_response_parser(

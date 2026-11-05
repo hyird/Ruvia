@@ -108,6 +108,10 @@ private:
         const context_services& request_services, http_response_tail& tail);
     [[nodiscard]] bool admit_stream(std::uint32_t stream_id);
     void remove_stream_runtime(std::uint32_t stream_id) noexcept;
+    // Scanner tick: resets each stream whose request body outlasted
+    // request_body_timeout_ / body_completion_timeout_, or whose send-window
+    // wait outlasted write_timeout_. Other streams are unaffected.
+    void expire_stream_deadlines(std::int64_t now_ms) noexcept;
     void request_drain() noexcept;
     void begin_drain() noexcept;
     void arm_drain_timer() noexcept;
@@ -142,7 +146,8 @@ private:
     bool timeout_drain_{};
     bool drain_expired_{};
     bool has_pushed_streams_{};
-    connection_scanner::periodic_check_registration drain_registration_;
+    // Scanner tick (per-stream deadlines) and drain callback.
+    connection_scanner::periodic_check_registration scanner_checks_;
     // Declared last: destroyed (and so unregistered) before the state its
     // completion touches.
     worker_timer_registration drain_timer_;

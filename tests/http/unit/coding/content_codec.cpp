@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory_resource>
@@ -76,12 +77,16 @@ public:
     [[nodiscard]] std::size_t live_bytes() const noexcept {
         return live_bytes_;
     }
+    [[nodiscard]] std::size_t largest_allocation() const noexcept {
+        return largest_allocation_;
+    }
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
         ++allocations_;
         live_bytes_ += bytes_value;
+        largest_allocation_ = (std::max)(largest_allocation_, bytes_value);
         return allocation;
     }
 
@@ -96,6 +101,7 @@ private:
 
     std::size_t allocations_{0};
     std::size_t live_bytes_{0};
+    std::size_t largest_allocation_{0};
 };
 
 class reject_output_cap_allocation_resource final : public std::pmr::memory_resource {
@@ -1057,4 +1063,52 @@ RUVIA_TEST(zstd_decode_truncated_frame_rejected) {
     // Dropping the final bytes yields an incomplete frame that must be rejected,
     // matching the zlib/brotli decoders (regression guard for silent-truncation).
     RUVIA_CHECK(!zstd_round_trip(plain, 4).has_value());
+}
+
+RUVIA_TEST(http_content_encoder_stream_state_stays_below_the_maximum_windows) {
+    // A long-lived response stream must not hold the largest window the codec
+    // supports: brotli streams use a 512 KiB window and zstd its level default
+    // (2 MiB), not the 4 MiB brotli default or a pinned 8 MiB zstd window.
+    std::string input(16 * 1024, '\0');
+    unsigned state_value = 17;
+    for (auto& byte_value : input) {
+        state_value = state_value * 1103515245U + 12345U;
+        byte_value = static_cast<char>('a' + ((state_value >> 16U) % 23U));
+    }
+    for (const auto coding : {http_content_coding::brotli, http_content_coding::zstd}) {
+        counting_memory_resource resource;
+        {
+            http_content_encoder encoder(coding, &resource);
+            std::pmr::string encoded(std::pmr::new_delete_resource());
+            encoder.write(input, encoded, true);
+            encoder.write(input, encoded, true);
+            RUVIA_CHECK(resource.live_bytes() < std::size_t{6} * 1024 * 1024);
+            encoder.finish(encoded);
+            RUVIA_CHECK_EQ(decoded(coding, encoded, input.size() * 2), input + input);
+        }
+        RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(http_brotli_decoder_memory_is_bounded_by_the_decoded_size_cap) {
+    // WBITS 24, one non-last uncompressed metablock declaring MLEN 2^24, then
+    // a few content bytes: the header alone asks for a 16 MiB ring buffer.
+    std::string encoded("\xCF\xFF\xFF\xFF", 4);
+    encoded.append(8, 'x');
+    counting_memory_resource resource;
+    const auto result_value = decode_http_content(std::array{http_content_coding::brotli}, encoded,
+        {.max_decoded_bytes_ = 4096, .resource_ = &resource});
+    RUVIA_CHECK(std::holds_alternative<http_content_decode_error>(result_value));
+    if (const auto* failure = std::get_if<http_content_decode_error>(&result_value)) {
+        RUVIA_CHECK(*failure == http_content_decode_error::decoded_size_exceeded);
+    }
+    RUVIA_CHECK(resource.largest_allocation() < std::size_t{1} << 20);
+    RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+
+    // Content that fits the cap is never refused by the bound.
+    std::string plain(300 * 1024, '\0');
+    for (std::size_t i = 0; i < plain.size(); ++i) {
+        plain[i] = static_cast<char>('a' + (i * 7 + i / 97) % 26);
+    }
+    RUVIA_CHECK_EQ(decoded(http_content_coding::brotli, brotli_compress(plain), plain.size()), plain);
 }

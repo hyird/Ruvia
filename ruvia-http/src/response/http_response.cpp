@@ -303,10 +303,16 @@ void http_response::apply_encoded_representation(
             fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
+    // RFC 9110 §8.8.3: the coded representation is not byte-identical to the
+    // identity one, so a strong validator becomes weak. A value that is not an
+    // entity-tag cannot be weakened unambiguously and is dropped (nginx gzip
+    // filter, Pingora weaken_or_clear_etag).
     const auto current_etag = detail::http_response_header_state_access::known_header_value(headers_, detail::response_header_etag);
+    const auto etag_opaque = detail::http_trim_weak_etag_prefix(current_etag);
+    const bool etag_well_formed = etag_opaque.size() >= 2 && etag_opaque.front() == '"' && etag_opaque.back() == '"';
     http_response_headers::descriptor_stage update(headers_);
     update.stage("Content-Encoding", content_encoding, detail::response_header_content_encoding);
-    if (detail::http_is_strong_etag(current_etag)) {
+    if (etag_well_formed && !detail::http_is_weak_etag(current_etag)) {
         update.stage_weak_etag(current_etag);
     }
     std::array<char, http_max_unsigned_decimal_size> length_digits;
@@ -325,6 +331,13 @@ void http_response::apply_encoded_representation(
         }
         (void)headers_.remove_header_validated("Content-Length", detail::response_header_content_length);
     }
+    if (!etag_well_formed) {
+        (void)headers_.remove_header_validated("ETag", detail::response_header_etag);
+    }
+    // Byte ranges of the identity representation do not address the coded
+    // one, and the framework never serves ranges of a body it encoded
+    // (RFC 9110 §14.3).
+    (void)headers_.remove_header_validated("Accept-Ranges", detail::response_header_accept_ranges);
     update.publish();
 }
 

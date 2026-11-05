@@ -29,16 +29,16 @@
 #include "test_harness.h"
 #include "test_io_context.h"
 
-// File bodies use buffered reads on Linux and native asynchronous transfers
-// on Windows. Pipelined responses must still arrive
-// complete and in order, whatever path each one takes.
+// File bodies are read on the blocking pool on every platform; Windows plain
+// TCP sends a single range above 16 KiB with TransmitFile. Pipelined responses
+// must still arrive complete and in order, whatever path each one takes.
 
 namespace file_response_transfer_test {
 
 namespace fs = std::filesystem;
 
-// Below, around and above the in-memory threshold, and above one kernel
-// transfer slice.
+// Below and around the kernel-transfer threshold, and above one transfer
+// slice.
 constexpr std::size_t small_size = 100;
 constexpr std::size_t medium_size = 20 * 1024;
 constexpr std::size_t large_size = 300 * 1024 + 17;
@@ -312,19 +312,17 @@ RUVIA_TEST(changed_or_deleted_indexed_empty_file_never_commits_success) {
         }
         const auto get_wire = exchange(
             io, server.endpoint(), get("/file-transfer/indexed-small", "Connection: close\r\n"));
-        RUVIA_CHECK(!get_wire.starts_with("HTTP/1.1 200 "));
+        RUVIA_CHECK(get_wire.starts_with("HTTP/1.1 500 "));
         const auto head_wire = exchange(io, server.endpoint(),
             "HEAD /file-transfer/indexed-small HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-        RUVIA_CHECK(!head_wire.starts_with("HTTP/1.1 200 "));
+        RUVIA_CHECK(head_wire.starts_with("HTTP/1.1 500 "));
         server.finish();
         indexed_root.reset();
     }
     fs::remove_all(transfer_dir(), ignored);
 }
 
-#if defined(__linux__)
-// Other platforms may own an inline snapshot when c.file returns. Linux
-// retains a file segment, including for an empty file, until its first read.
+// c.file retains the empty file's segment until its first read on the pool.
 RUVIA_TEST(empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
@@ -345,13 +343,18 @@ RUVIA_TEST(empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
     rewritten = true;
     std::string wire;
     asio::read(socket, asio::dynamic_buffer(wire), ignored);
-    // Neither the stale zero-length 200 nor the following response may
-    // escape once the first response's file validation fails.
-    RUVIA_CHECK(wire.empty());
+    // The stale zero-length 200 never leaves: the first response becomes an
+    // error response that closes the connection, so the pipelined request
+    // behind it is not answered.
+    const auto responses = split_responses(wire, {false});
+    RUVIA_CHECK_EQ(responses.size(), std::size_t{1});
+    if (responses.size() == 1) {
+        RUVIA_CHECK_EQ(responses.front().status_, std::string("500"));
+    }
+    RUVIA_CHECK(wire.find("between") == std::string::npos);
     server.finish();
     fs::remove_all(transfer_dir(), ignored);
 }
-#endif
 
 RUVIA_TEST(changed_indexed_file_is_never_sent_under_a_stale_head) {
     std::error_code ignored;
@@ -372,8 +375,8 @@ RUVIA_TEST(changed_indexed_file_is_never_sent_under_a_stale_head) {
     for (const std::string_view target : {"/file-transfer/indexed-small", "/file-transfer/indexed-large"}) {
         const auto response = exchange(io, server.endpoint(), get(target, "Connection: close\r\n"));
         // The file is checked before the head is sent, so the connection
-        // closes without committing a 200 for bytes it cannot honour.
-        RUVIA_CHECK(!response.starts_with("HTTP/1.1 200 "));
+        // gets an error response instead of a 200 for bytes it cannot honour.
+        RUVIA_CHECK(response.starts_with("HTTP/1.1 500 "));
     }
 
     server.finish();
@@ -413,19 +416,11 @@ RUVIA_TEST(file_changed_in_place_after_framing_is_never_sent_under_its_head) {
         std::string response;
         std::error_code error;
         asio::read(socket, asio::dynamic_buffer(response), error);
-        // Linux 在异步首读时校验所有大小的文件；Windows 仍可能在生成
-        // 响应时拥有小文件正文。两条路径均不允许发送被改写后的字节。
+        // Every platform reads (or, for a kernel transfer, re-checks) the
+        // framing handle before the head: the rewritten bytes never leave and
+        // the client gets an error response.
         RUVIA_CHECK(response.find(replacement.substr(0, 64)) == std::string::npos);
-#if defined(__linux__)
-        RUVIA_CHECK(!response.starts_with("HTTP/1.1 200 "));
-#else
-        if (size == small_size) {
-            RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-            RUVIA_CHECK(response.ends_with(file_bytes(size, 'a')));
-        } else {
-            RUVIA_CHECK(!response.starts_with("HTTP/1.1 200 "));
-        }
-#endif
+        RUVIA_CHECK(response.starts_with("HTTP/1.1 500 "));
     }
 
     server.finish();

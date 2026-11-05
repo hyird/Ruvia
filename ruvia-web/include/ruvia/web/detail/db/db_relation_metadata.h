@@ -12,18 +12,8 @@
 namespace ruvia::detail {
 
 template <typename entity_type, fixed_string name>
-consteval std::size_t db_relation_index() {
-    using relations_type = typename entity_type::relations_type;
-    return []<std::size_t... indexes>(std::index_sequence<indexes...>) consteval {
-        const std::array<std::string_view, sizeof...(indexes)> names{
-            std::tuple_element_t<indexes, relations_type>::name.view()...};
-        return fixed_name_index(names, name.view());
-    }(std::make_index_sequence<std::tuple_size_v<relations_type>>{});
-}
-
-template <typename entity_type, fixed_string name>
 struct db_relation_named final {
-    static constexpr auto index = db_relation_index<entity_type, name>();
+    static constexpr auto index = descriptor_index<typename entity_type::relations_type, name>();
     static_assert(index < std::tuple_size_v<typename entity_type::relations_type>, "unknown inverse database relation");
     using type = std::tuple_element_t<index, typename entity_type::relations_type>;
 };

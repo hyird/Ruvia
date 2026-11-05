@@ -156,9 +156,10 @@ RUVIA_TEST(chunked_body_decoder_separates_body_and_framing_limits) {
         RUVIA_CHECK(terminal.complete() != nullptr);
     }
 
-    // Each size line has its own bound; maximal lines do not share a budget.
+    // Size-line overhead has its own per-message budget, independent of the
+    // body limit: three large lines that together stay within it all decode.
     std::string size_line = "1;x=";
-    size_line.append(ruvia::max_http_header_bytes - size_line.size() - 2, 'a');
+    size_line.append(ruvia::max_http_header_bytes / 4 - size_line.size() - 2, 'a');
     size_line.append("\r\n");
     std::string wire;
     for (const char payload : std::string_view("xyz")) {
@@ -507,6 +508,48 @@ RUVIA_TEST(chunked_body_decoder_caps_each_size_line_at_exact_boundary) {
     RUVIA_CHECK(result_value.failure() != nullptr);
     if (const auto* failure = result_value.failure()) {
         RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
+    }
+}
+
+RUVIA_TEST(chunked_body_decoder_bounds_cumulative_size_line_overhead_per_message) {
+    // Leading zeros and chunk-ext beyond the shortest hex size share one
+    // max_http_header_bytes budget across all size lines of a message.
+    for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
+        constexpr auto leading_zeros = ruvia::max_http_header_bytes / 2;
+        std::string wire(leading_zeros, '0');
+        wire.append("1\r\nx\r\n");
+        const auto second_line_offset = wire.size();
+        wire.append("1;x=");
+        // This line's overhead is ";x=" plus the extension value.
+        wire.append(ruvia::max_http_header_bytes - leading_zeros - 3 + excess, 'a');
+        wire.append("\r\ny\r\n0\r\n\r\nNEXT");
+
+        http1_chunked_body_decoder decoder;
+        std::string_view rest(wire);
+        std::size_t consumed = 0;
+        std::string body;
+        for (;;) {
+            const auto result = decoder.decode(rest);
+            consumed += result.consumed_bytes();
+            rest.remove_prefix(result.consumed_bytes());
+            if (const auto* chunk = result.body_chunk()) {
+                body.append(chunk->bytes());
+                continue;
+            }
+            if (excess == 0) {
+                RUVIA_CHECK(result.complete() != nullptr);
+                RUVIA_CHECK_EQ(body, "xy");
+                RUVIA_CHECK_EQ(rest, "NEXT");
+            } else {
+                RUVIA_CHECK(result.failure() != nullptr);
+                if (const auto* failure = result.failure()) {
+                    RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
+                }
+                RUVIA_CHECK_EQ(consumed, second_line_offset);
+                RUVIA_CHECK_EQ(body, "x");
+            }
+            break;
+        }
     }
 }
 

@@ -7,13 +7,7 @@ namespace ruvia::detail {
 template <typename e_type>
 struct db_entity_access final {
     static auto& storage(e_type& entity) noexcept {
-        return entity.sql_storage();
-    }
-    static const auto& storage(const e_type& entity) noexcept {
         return entity.entity_;
-    }
-    [[nodiscard]] static e_type rebind(const e_type& entity, std::pmr::memory_resource* resource) {
-        return e_type(storage(entity).rebind(resource));
     }
     template <fixed_string name>
     static auto& emplace_relation(e_type& entity) {

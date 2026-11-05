@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
+#include <string>
 #include <string_view>
 
 #include "coding/pmr_codec_allocation.h"
@@ -115,6 +116,13 @@ public:
         allocation_.rethrow_allocation_failure();
     }
     [[nodiscard]] bool reset() noexcept;
+    // The single content-coding deflate loop, shared by whole-buffer and
+    // streaming coding: consumes the input and drains `flush` (Z_NO_FLUSH,
+    // Z_SYNC_FLUSH or Z_FINISH) into output. False means output would exceed
+    // `max_encoded_bytes` in total; no byte past that cap is appended. After
+    // false or an exception, the owner must reset or discard this stream.
+    [[nodiscard]] bool encode(std::string_view input, std::pmr::string& output, int flush,
+        std::size_t max_encoded_bytes);
 
 private:
     pmr_codec_allocation_context allocation_;

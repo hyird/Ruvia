@@ -63,14 +63,10 @@ class file_routes final {
             const std::string bytes(file_size, 'f');
             output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         }
-        auto response = context_value.file({.path_ = file_path()});
-        // Truncate after framing so the multipart boundary DATA frame is
-        // submitted before the file range open fails and resets the stream.
-        {
-            std::ofstream output(file_path(), std::ios::binary | std::ios::trunc);
-            output << "x";
-        }
-        co_return response;
+        // The client truncates the file once HEADERS arrive: the file was
+        // validated before them, and the multipart boundary DATA is submitted
+        // before the file range read fails and resets the stream.
+        co_return context_value.file({.path_ = file_path()});
     }
 
     ruvia::task<ruvia::http_response> mutated_empty(ruvia::context& context_value) {
@@ -307,6 +303,111 @@ RUVIA_TEST(http2_file_response_ends_with_exhausted_stream_window) {
     http2_file_flow_control_test::check_file_end(ruvia_ctx, false);
 }
 
+// A file body is validated before HEADERS but read only once the peer grants
+// send window: bytes the file held before the window opened are never sent.
+// Truncating the file between HEADERS and the first WINDOW_UPDATE therefore
+// fails the read and resets the stream without a single DATA byte.
+RUVIA_TEST(http2_file_body_is_read_only_after_send_window_is_granted) {
+    using namespace http2_file_flow_control_test;
+    const test_file file;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    std::exception_ptr failure;
+    bool expired = false;
+    bool reset = false;
+    std::string status;
+    std::size_t data_bytes = 0;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::ip::tcp::socket socket(io);
+        asio::steady_timer watchdog(io, std::chrono::seconds(5));
+        watchdog.async_wait([&](std::error_code error) {
+            if (!error) {
+                expired = true;
+                ruvia::close_socket(socket);
+            }
+        });
+        try {
+            const auto connected = co_await ruvia::async_asio([&](auto handler) {
+                socket.async_connect(server.endpoint(), std::move(handler));
+            });
+            if (connected.error_code()) {
+                throw std::system_error(connected.error_code());
+            }
+            const auto send_bytes = [&](std::string_view bytes) -> ruvia::task<void> {
+                const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(socket, asio::buffer(bytes), std::move(handler));
+                });
+                if (written.error_code()) {
+                    throw std::system_error(written.error_code());
+                }
+            };
+            std::pmr::unsynchronized_pool_resource resource;
+            std::string wire(ruvia::http2_client_preface);
+            // INITIAL_WINDOW_SIZE = 0: the stream has no send window at all.
+            append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\0\4\0\0\0\0", 6));
+            std::pmr::string block(&resource);
+            ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+            ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+            ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+            ruvia::hpack_encoder::encode_header(block, ":path", "/http2-file-flow-control");
+            append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+            co_await send_bytes(wire);
+            ruvia::hpack_decoder decoder({.resource_ = &resource});
+            while (!reset) {
+                const auto frame = co_await read_frame(socket);
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+                    (frame.header_.flags_ & 0x1) == 0) {
+                    std::string ack;
+                    append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                    co_await send_bytes(ack);
+                }
+                if (frame.header_.stream_id_ != 1) {
+                    continue;
+                }
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+                    (void)decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
+                        if (name == ":status") {
+                            status = value;
+                        }
+                        return true;
+                    });
+                    {
+                        std::ofstream output(file_path(), std::ios::binary | std::ios::trunc);
+                        output << "x";
+                    }
+                    std::string update;
+                    append_frame(update, ruvia::http2_frame_type::window_update, 0, 1, std::string_view("\0\0\xff\xff", 4));
+                    co_await send_bytes(update);
+                } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                    data_bytes += frame.payload_.size();
+                    if ((frame.header_.flags_ & 0x1) != 0) {
+                        break;
+                    }
+                } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+                    reset = true;
+                }
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ruvia::close_socket(socket);
+        (void)watchdog.cancel();
+        server.finish();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    RUVIA_CHECK(!expired);
+    RUVIA_CHECK_EQ(status, std::string("200"));
+    RUVIA_CHECK(reset);
+    RUVIA_CHECK_EQ(data_bytes, std::size_t{0});
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
     const http2_file_flow_control_test::test_file file;
     auto& io = ruvia::test::new_test_io_context();
@@ -335,9 +436,9 @@ RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
             }
             std::pmr::unsynchronized_pool_resource resource;
             std::string wire(ruvia::http2_client_preface);
-            // A 10-byte initial stream window forces the first multipart
-            // boundary chunk (~80 bytes) to remain partially queued in the
-            // connection when the subsequent file open fails and resets the stream.
+            // A 10-byte initial stream window splits the first multipart
+            // boundary chunk (~80 bytes) across window updates, so DATA output
+            // is in flight when the file range read fails and resets the stream.
             http2_file_flow_control_test::append_frame(
                 wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\0\4\0\0\0\x0a", 6));
             const auto send_bytes = [&](std::string_view bytes) -> ruvia::task<void> {
@@ -375,6 +476,8 @@ RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
                     } else if (frame.header_.stream_id_ == stream_id &&
                                frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
                         (void)decoder.decode(frame.payload_, [](std::string_view, std::string_view) { return true; });
+                        std::ofstream output(http2_file_flow_control_test::file_path(), std::ios::binary | std::ios::trunc);
+                        output << "x";
                     } else if (frame.header_.stream_id_ == stream_id &&
                                frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
                         std::string update;
@@ -479,13 +582,9 @@ RUVIA_TEST(http2_empty_file_validation_precedes_end_stream_headers) {
             // Valid empty, changed, removed, changed after framing, then a
             // healthy stream proves failed validation remains stream-local.
             for (std::uint32_t stream_id = 1; stream_id <= 9; stream_id += 2) {
-                const bool indexed_invalid = stream_id == 3 || stream_id == 5;
-#if defined(__linux__)
-                const bool framing_invalid = stream_id == 7;
-#else
-                // c.file already owns the empty inline snapshot here.
-                const bool framing_invalid = false;
-#endif
+                // Changed, removed, and changed after framing: each fails
+                // validation before HEADERS and gets an error response.
+                const bool invalid = stream_id == 3 || stream_id == 5 || stream_id == 7;
                 if (stream_id <= 5) {
                     {
                         std::ofstream output(path, std::ios::binary | std::ios::trunc);
@@ -541,13 +640,11 @@ RUVIA_TEST(http2_empty_file_validation_precedes_end_stream_headers) {
                         }
                     }
                 }
-                if (framing_invalid) {
-                    RUVIA_CHECK(reset);
-                    RUVIA_CHECK(!saw_head);
-                    RUVIA_CHECK(body.empty());
-                } else if (indexed_invalid) {
-                    RUVIA_CHECK(reset || ended);
-                    RUVIA_CHECK(!saw_head || status != "200");
+                RUVIA_CHECK(saw_head);
+                if (invalid) {
+                    RUVIA_CHECK(ended);
+                    RUVIA_CHECK(!reset);
+                    RUVIA_CHECK_EQ(status, std::string("500"));
                 } else {
                     RUVIA_CHECK(ended);
                     RUVIA_CHECK(!reset);

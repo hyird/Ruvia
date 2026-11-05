@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -45,6 +46,10 @@ struct http2_client_session_start_result final {
     return {.status_ = client_transport_status::io_failed, .error_ = std::make_error_code(std::errc::protocol_error)};
 }
 
+// Product limit: the longest a graceful close waits for its GOAWAY to reach the
+// transport before it closes anyway (an unread peer, or write_timeout nullopt).
+inline constexpr std::chrono::milliseconds http2_client_goaway_flush_time{1000};
+
 enum class http2_client_data_status : std::uint8_t {
     // Every byte was submitted and its output reached the transport, or the
     // session ended meanwhile; the caller judges that end itself.
@@ -59,7 +64,8 @@ enum class http2_client_data_status : std::uint8_t {
 
 // The handler owns stream semantics above the connection: it consumes every
 // application event and observes each generation's terminal failure. Payload
-// producers wait on state_signal(), also notified for SETTINGS/WINDOW_UPDATE.
+// producers wait on state_signal(), also notified for SETTINGS/WINDOW_UPDATE;
+// request submitters wait on capacity_signal().
 template <typename handler_type>
 concept http2_client_session_handler = requires(handler_type& handler, http2_event& event,
     const client_transport_result& transport, std::exception_ptr failure) {
@@ -93,7 +99,8 @@ public:
           read_buffer_(resource),
           write_buffer_(resource),
           write_signal_(worker_value),
-          state_signal_(worker_value) {
+          state_signal_(worker_value),
+          capacity_signal_(worker_value) {
         // Checked here: an owner composing its session is complete only in its body.
         static_assert(http2_client_session_handler<handler_type>);
     }
@@ -118,6 +125,8 @@ public:
         generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
         failed_ = false;
         draining_ = false;
+        closing_ = false;
+        request_capacity_ = 0;
         read_buffer_.clear();
         // Only the prefix reported by read_some reaches the parser.
         const auto input = read_buffer_.prepare(read_buffer_bytes);
@@ -203,6 +212,10 @@ public:
     [[nodiscard]] bool writing() const noexcept {
         return writing_;
     }
+    // begin_close() queued its GOAWAY and the generation has not ended yet.
+    [[nodiscard]] bool closing() const noexcept {
+        return closing_ && !failed_;
+    }
     [[nodiscard]] std::uint64_t generation() const noexcept {
         return generation_;
     }
@@ -210,6 +223,7 @@ public:
     void mark_draining() noexcept {
         draining_ = true;
         state_signal_.notify();
+        capacity_signal_.notify();
     }
     void wake_writer() noexcept {
         if (connection_.has_value() && !failed_ && connection_->wants_write()) {
@@ -220,11 +234,61 @@ public:
     [[nodiscard]] worker_signal& state_signal() noexcept {
         return state_signal_;
     }
+    // Notified only when the request-stream capacity grew (a stream closed or
+    // the peer raised SETTINGS_MAX_CONCURRENT_STREAMS) or the session stopped
+    // admitting streams, so a parked request submitter is not woken by
+    // unrelated input. A submitter's own cancellation notifies it explicitly.
+    [[nodiscard]] worker_signal& capacity_signal() noexcept {
+        return capacity_signal_;
+    }
 
     // Fails the current generation once: aborts the transport, reports the
     // failure to the handler and wakes every waiter.
     void fail(const client_transport_result& transport, std::exception_ptr failure = {}) noexcept {
         fail(generation_, transport, std::move(failure));
+    }
+
+    // The one client-initiated close of a running generation (RFC 9113
+    // section 6.8: GOAWAY before closing). Stops admitting streams, queues
+    // GOAWAY(NO_ERROR) and lets the writer fail the generation with `transport`
+    // once every queued frame reached the transport, or after
+    // http2_client_goaway_flush_time. Streams still open are not cancelled
+    // here; the bound ends them with the generation. Returns true while that
+    // close is pending. Without a running generation that can send the frame
+    // (or a timer to bound it) the generation fails at once and this returns
+    // false.
+    bool begin_close(const client_transport_result& transport) noexcept {
+        if (closing()) {
+            return true;
+        }
+        if (!connection_.has_value() || session_tasks_ == 0 || failed_) {
+            fail(transport);
+            return false;
+        }
+        const auto generation = generation_;
+        close_result_ = transport;
+        try {
+            // A client drain queues its final GOAWAY at once; idempotent.
+            connection_->begin_drain();
+            if (worker_.schedule_timer(close_timer_, worker_timer_deadline_after(http2_client_goaway_flush_time),
+                    [this, generation](worker_timer_outcome outcome) noexcept {
+                        if (outcome == worker_timer_outcome::expired) {
+                            fail(generation, close_result_, {});
+                        }
+                    }) != worker_timer_schedule_status::scheduled) {
+                // A stopping worker cannot bound the flush.
+                fail(generation, transport, {});
+                return false;
+            }
+        } catch (...) {
+            fail(generation, transport, {});
+            return false;
+        }
+        closing_ = true;
+        mark_draining();
+        // Also wakes an idle writer when the GOAWAY was already sent.
+        write_signal_.notify();
+        return true;
     }
 
     // Requests a RST_STREAM (CANCEL unless the stream's input was malformed);
@@ -388,7 +452,19 @@ private:
         if (connection_->wants_write()) {
             write_signal_.notify();
         }
+        publish_state();
+    }
+
+    // Every input batch and completed write may close streams or apply peer
+    // SETTINGS; only a grown request capacity wakes capacity waiters.
+    void publish_state() noexcept {
         state_signal_.notify();
+        const auto capacity =
+            usable() ? connection_->available_request_streams(std::numeric_limits<std::size_t>::max()) : 0;
+        if (capacity > request_capacity_) {
+            capacity_signal_.notify();
+        }
+        request_capacity_ = capacity;
     }
 
     void fail(std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept {
@@ -398,10 +474,12 @@ private:
         failed_ = true;
         draining_ = true;
         ping_timer_.cancel();
+        close_timer_.cancel();
         transport_.close();
         handler_.on_http2_failure(transport, std::move(failure));
         write_signal_.notify();
         state_signal_.notify();
+        capacity_signal_.notify();
     }
 
     void finish_task(std::uint64_t generation) noexcept {
@@ -465,9 +543,14 @@ private:
                         fail(generation, written, {});
                         co_return;
                     }
-                    state_signal_.notify();
+                    publish_state();
                 }
                 if (generation_ != generation || failed_) {
+                    co_return;
+                }
+                if (closing_) {
+                    // Every frame queued up to and after the GOAWAY was written.
+                    fail(generation, close_result_, {});
                     co_return;
                 }
                 co_await write_signal_.wait();
@@ -490,18 +573,26 @@ private:
     std::pmr::string write_buffer_;
     worker_signal write_signal_;
     worker_signal state_signal_;
+    worker_signal capacity_signal_;
     std::uint64_t generation_{0};
     std::size_t session_tasks_{0};
+    // Request-stream capacity at the last publish_state().
+    std::size_t request_capacity_{0};
     // When the reader last received bytes, while ping_interval_ is set.
     std::chrono::steady_clock::time_point last_input_{};
     // When the outstanding liveness PING was queued.
     std::chrono::steady_clock::time_point ping_sent_at_{};
+    // The generation's end once begin_close() flushed its GOAWAY.
+    client_transport_result close_result_{};
     bool failed_{false};
     bool draining_{false};
     bool writing_{false};
+    // begin_close() is pending for the current generation.
+    bool closing_{false};
     // A liveness PING is outstanding: no input arrived since ping_sent_at_.
     bool ping_pending_{false};
-    // Last: destroyed first, before any state its completion reads.
+    // Last: destroyed first, before any state their completions read.
+    worker_timer_registration close_timer_;
     worker_timer_registration ping_timer_;
 };
 

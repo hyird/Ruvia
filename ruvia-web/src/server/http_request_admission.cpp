@@ -56,9 +56,6 @@ http_request_admission_policy http_request_admission_policy::server(const http_s
     return {
         .max_stream_body_bytes_ = options.server_.max_stream_body_bytes_,
         .max_buffered_body_bytes_ = options.server_.max_buffered_body_bytes_,
-        .coding_availability_ = options.compression_.has_value()
-                                    ? http_response_coding_availability::identity_and_compression
-                                    : http_response_coding_availability::identity_only,
         .apply_rate_limit_ = true,
         .verify_target_origin_ = true,
     };
@@ -140,7 +137,6 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         admission.services_.bind_route_body_limit(resolved->route().max_request_body_bytes());
     }
     admission.resolved_ = resolved;
-    admission.coding_availability_ = policy.coding_availability_;
     const auto* endpoint = resolved != nullptr ? &resolved->route().endpoint() : nullptr;
     admission.body_limit_ = http_request_body_limit(input.resolution_,
         endpoint != nullptr ? endpoint->request_body_mode() : request_body_mode::buffered, policy);

@@ -94,6 +94,8 @@ class response_compression_routes final {
     RUVIA_GET("/compression-stream-mixed", stream_mixed_coding);
     RUVIA_GET("/compression-stream-204", stream_no_content);
     RUVIA_GET("/compression-stream-304", stream_not_modified);
+    RUVIA_GET("/compression-validators", validators);
+    RUVIA_GET("/compression-media", media);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> small(ruvia::context& context_value) {
@@ -181,6 +183,24 @@ class response_compression_routes final {
     }
     ruvia::task<ruvia::http_response> tiny(ruvia::context& context_value) {
         co_return context_value.text("hello");
+    }
+
+    ruvia::task<ruvia::http_response> validators(ruvia::context& context_value) {
+        auto resp = context_value.text(std::string_view(small_body));
+        resp.header("ETag", context_value.req().query("etag").value_or(""));
+        resp.header("Accept-Ranges", "bytes");
+        co_return resp;
+    }
+
+    ruvia::task<ruvia::http_response> media(ruvia::context& context_value) {
+        auto resp = context_value.text(std::string_view(small_body));
+        const auto type = context_value.req().query("type").value_or("");
+        if (type.empty()) {
+            resp.remove_header("Content-Type");
+        } else {
+            resp.header("Content-Type", type);
+        }
+        co_return resp;
     }
 
     ruvia::task<ruvia::http_response> digest(ruvia::context& context_value) {
@@ -395,6 +415,92 @@ RUVIA_TEST(http1_compression_encodes_small_bodies_when_identity_is_refused) {
     RUVIA_CHECK(accepted.starts_with("HTTP/1.1 200 "));
     RUVIA_CHECK(!has_field(head_fields(accepted), "content-encoding:"));
     RUVIA_CHECK(response_body(accepted) == "hello");
+    server.finish();
+}
+
+// RFC 9110 §8.8.3 / §14.3: a coded representation weakens a strong ETag, drops
+// a value that is not an entity-tag, and stops advertising identity ranges.
+RUVIA_TEST(http1_compression_rewrites_validators_and_range_support) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const struct {
+        std::string_view query_;
+        std::optional<std::string_view> expected_;
+    } cases[] = {
+        {"%22v1%22", "etag: w/\"v1\""},
+        {"W%2F%22v2%22", "etag: w/\"v2\""},
+        {"abc", std::nullopt},
+        {"%22unterminated", std::nullopt},
+    };
+    for (const auto& test : cases) {
+        const auto text = fetch_response(server.endpoint(),
+            get_request("/compression-validators?etag=" + std::string(test.query_), "Accept-Encoding: gzip\r\n"))
+                              .value_or("");
+        RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+        const auto fields = head_fields(text);
+        RUVIA_CHECK(has_field(fields, "content-encoding: gzip"));
+        RUVIA_CHECK(!has_field(fields, "accept-ranges:"));
+        if (test.expected_.has_value()) {
+            RUVIA_CHECK(has_field(fields, *test.expected_));
+        } else {
+            RUVIA_CHECK(!has_field(fields, "etag:"));
+        }
+    }
+
+    // Identity keeps both fields untouched.
+    const auto identity = fetch_response(server.endpoint(),
+        get_request("/compression-validators?etag=%22v1%22", "Accept-Encoding: identity\r\n"))
+                              .value_or("");
+    RUVIA_CHECK(has_field(head_fields(identity), "etag: \"v1\""));
+    RUVIA_CHECK(has_field(head_fields(identity), "accept-ranges: bytes"));
+    server.finish();
+}
+
+// One allowlist decides compressibility: already-compressed and unknown media
+// types, and a response without Content-Type, stay identity.
+RUVIA_TEST(http1_compression_encodes_only_compressible_media_types) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const struct {
+        std::string_view query_;
+        bool encoded_;
+    } cases[] = {
+        {"application%2Fjson", true},
+        {"application%2Fld%2Bjson", true},
+        {"image%2Fsvg%2Bxml", true},
+        {"font%2Fwoff2", false},
+        {"application%2Fepub%2Bzip", false},
+        {"application%2Fx-7z-compressed", false},
+        {"application%2Fx-unknown", false},
+        {"", false},
+    };
+    for (const auto& test : cases) {
+        const auto text = fetch_response(server.endpoint(),
+            get_request("/compression-media?type=" + std::string(test.query_), "Accept-Encoding: gzip\r\n"))
+                              .value_or("");
+        RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+        RUVIA_CHECK_EQ(has_field(head_fields(text), "content-encoding: gzip"), test.encoded_);
+        if (!test.encoded_) {
+            RUVIA_CHECK(response_body(text) == small_body);
+        }
+    }
+    server.finish();
+}
+
+// RFC 9110 §12.5.5: an application-encoded body is sent or refused (406)
+// depending on Accept-Encoding, so the 200 varies on it like a framework coding.
+RUVIA_TEST(http1_application_encoded_responses_vary_on_accept_encoding) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const std::string_view path :
+        {std::string_view("/compression-custom-coding"), std::string_view("/compression-stream-custom")}) {
+        const auto text = fetch_response(server.endpoint(), get_request(path, "Accept-Encoding: x-custom\r\n"))
+                              .value_or("");
+        RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+        const auto fields = head_fields(text);
+        RUVIA_CHECK(has_field(fields, "content-encoding: x-custom"));
+        RUVIA_CHECK(has_field(fields, "vary: accept-encoding"));
+    }
     server.finish();
 }
 

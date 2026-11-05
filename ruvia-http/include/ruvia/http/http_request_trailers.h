@@ -18,8 +18,9 @@ enum class http_request_trailer_error : unsigned char { invalid_field,
 // Owns decoded terminal request fields, separately from the initial head.
 // Drivers populate this object before reporting successful body completion.
 // resource must outlive this object and every borrowed field view.
-// The section must fit the http_field_section_budget byte rule, starting from
-// http_trailer_section_budget().
+// The section must fit the http_field_section_budget byte and field-count rule,
+// starting from http_trailer_section_budget(). Retained field names are
+// lowercase whichever append overload or protocol supplied them.
 class http_request_trailers final {
 public:
     explicit http_request_trailers(std::pmr::memory_resource* resource);

@@ -214,9 +214,7 @@ struct test_app::impl_type final {
         if (!prepared.write_plan_.body_plan().body_suppressed()) {
             if (response.file_body() || response.has_multipart_file_body()) {
                 detail::response_file_source source(response,
-                    {.worker_ = worker_,
-                        .stop_ = stop_token_,
-                        .resource_ = request_memory_value.resource()});
+                    {.worker_ = worker_, .stop_ = stop_token_, .timeout_ = options_.server_.write_timeout_});
                 for (;;) {
                     const auto chunk = co_await source.next();
                     if (chunk.kind() == detail::response_body_chunk::kind_type::end) {

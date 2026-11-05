@@ -151,14 +151,16 @@ struct http1_chunked_body_decoder_config final {
 // borrow the supplied input and remain valid only until it is modified;
 // incomplete framing stays unconsumed for the caller to retain. The body limit
 // counts chunk payload bytes, which may still be transfer-encoded.
-// There is no chunk-count or cumulative framing budget: RFC 9112 places no limit
-// on the chunk count, and a zero-size chunk ends the body, so empty chunks cannot
-// repeat. Each chunk-size line (including extensions) and the encoded trailer
-// section (including its final empty line) are bounded independently by
-// max_http_header_bytes. Searches stop at those caps, and reaching a cap
-// with no terminator reports framing_limit_exceeded without inspecting
-// later bytes. Malformed framing within the permitted prefix still reports
-// invalid_framing.
+// RFC 9112 places no limit on the chunk count, and a zero-size chunk ends the
+// body, so empty chunks cannot repeat. Each chunk-size line (including
+// extensions) and the encoded trailer section (including its final empty line)
+// are bounded independently by max_http_header_bytes. Searches stop at those
+// caps, and reaching a cap with no terminator reports framing_limit_exceeded
+// without inspecting later bytes. Size-line bytes beyond the shortest hex size
+// (leading zeros and chunk-ext) also share one per-message budget of
+// max_http_header_bytes (RFC 9112 section 7.1.1); exceeding it reports
+// framing_limit_exceeded. Malformed framing within the permitted prefix still
+// reports invalid_framing.
 // Trailer sections must also fit the http_field_section_budget byte rule
 // (name.size() + value.size() + 4 per field, plus 2 for the terminating empty
 // line; see http_trailer_section_budget()). obs-fold in the trailer section
@@ -204,6 +206,9 @@ private:
     std::size_t trailer_search_offset_{0};
     std::size_t remaining_{0};
     std::size_t decoded_bytes_{0};
+    // Charged size-line bytes beyond the shortest hex size; never exceeds
+    // max_http_header_bytes.
+    std::size_t framing_overhead_bytes_{0};
 };
 
 // A request-body failure detected by a server driver while enforcing the

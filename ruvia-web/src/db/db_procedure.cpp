@@ -51,16 +51,13 @@ db_procedure::db_procedure(std::pmr::memory_resource* resource)
 void db_procedure::append_expression(std::pmr::string& output, db_expression value) const {
     detail::append_db_expression(output, value, pg);
 }
-void db_procedure::register_variable(std::string_view name) {
+void db_procedure::require_unique_variable(std::string_view name) const {
     if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == name; })) {
         throw std::invalid_argument("duplicate procedure variable");
     }
-    variables_.emplace_back(name);
 }
 void db_procedure::declare_variable(const db_variable_definition& variable) {
-    if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == variable.name_; })) {
-        throw std::invalid_argument("duplicate procedure variable");
-    }
+    require_unique_variable(variable.name_);
     procedure_append_guard guard(declarations_, 32U + variable.name_.size());
     detail::append_db_identifier(declarations_, variable.name_, pg);
     declarations_ += ' ';
@@ -76,9 +73,7 @@ void db_procedure::declare_variable(const db_variable_definition& variable) {
     guard.commit();
 }
 void db_procedure::declare_row(std::string_view name, std::string_view table_value) {
-    if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == name; })) {
-        throw std::invalid_argument("duplicate procedure variable");
-    }
+    require_unique_variable(name);
     procedure_append_guard guard(declarations_, 16U + name.size() + table_value.size());
     detail::append_db_identifier(declarations_, name, pg);
     declarations_ += ' ';
@@ -88,10 +83,7 @@ void db_procedure::declare_row(std::string_view name, std::string_view table_val
     guard.commit();
 }
 void db_procedure::declare_record(std::string_view name) {
-    detail::validate_db_identifier(name, pg);
-    if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == name; })) {
-        throw std::invalid_argument("duplicate procedure variable");
-    }
+    require_unique_variable(name);
     procedure_append_guard guard(declarations_, name.size() + 11U);
     detail::append_db_identifier(declarations_, name, pg);
     declarations_ += " RECORD;\n";
@@ -137,8 +129,7 @@ void db_procedure::execute(const db_query& query) {
 }
 void db_procedure::perform(db_expression expression) {
     procedure_append_guard guard(statements_, 48U);
-    statements_ += "PERFORM ";
-    append_expression(statements_, expression);
+    detail::append_db_perform_statement(statements_, expression);
     statements_ += ";\n";
     guard.commit();
 }
@@ -221,7 +212,6 @@ void db_procedure::begin_for_query(std::string_view target, const db_query& quer
     if (!query.returns_rows()) {
         throw std::invalid_argument("FOR IN query loop requires a row-returning query");
     }
-    detail::validate_db_identifier(target, pg);
     const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
     procedure_append_guard guard(statements_, 16U + target.size() + statement.sql().size());
     statements_.append("FOR ");
@@ -270,17 +260,8 @@ void db_procedure::execute_dynamic(db_expression command, std::span<const db_exp
     guard.commit();
 }
 void db_procedure::lock_table(std::string_view table, db_table_lock_mode mode, bool nowait) {
-    const auto mode_name = detail::table_lock_mode_name(mode);
-    procedure_append_guard guard(
-        statements_, 11U + table.size() + 8U + mode_name.size() + 5U + (nowait ? 7U : 0U) + 2U);
-    statements_.append("LOCK TABLE ");
-    detail::append_db_qualified_identifier(statements_, table, pg);
-    statements_.append(" IN ");
-    statements_.append(mode_name);
-    statements_.append(" MODE");
-    if (nowait) {
-        statements_.append(" NOWAIT");
-    }
+    procedure_append_guard guard(statements_, 48U + table.size());
+    detail::append_db_lock_table_statement(statements_, table, mode, nowait);
     statements_.append(";\n");
     guard.commit();
 }

@@ -50,6 +50,8 @@ struct context_worker_services final {
     const worker_state_registry* states_{};
     bool precompressed_static_files_{};
     const trusted_proxy_set* trusted_proxies_{};
+    // The serving worker's drain token; null outside a serving connection.
+    const stop_token* drain_token_{};
 };
 
 struct context_connection_services final {
@@ -155,6 +157,21 @@ public:
     [[nodiscard]] const stop_token& get_stop_token() const noexcept {
         return request_services_.stop_token_.get();
     }
+
+    // Requested when the serving worker starts draining, and at the latest
+    // when it stops. A context outside a serving connection (in-memory test
+    // dispatch) gets a token that is never requested.
+    [[nodiscard]] stop_token drain_token() const noexcept {
+        return worker_services_.drain_token_ != nullptr ? *worker_services_.drain_token_ : stop_token{};
+    }
+
+    // The worker-owned token outlives every connection it is bound to.
+    [[nodiscard]] context_services with_drain_token(const stop_token& token) const noexcept {
+        auto services = *this;
+        services.worker_services_.drain_token_ = &token;
+        return services;
+    }
+    context_services with_drain_token(stop_token&&) const = delete;
 
     [[nodiscard]] const route_table* routes() const noexcept {
         return worker_services_.routes_;

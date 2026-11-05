@@ -10,10 +10,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <limits>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -24,13 +28,18 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#include <cerrno>
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#endif
 #elif defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#error "ruvia-web file responses need POSIX file descriptors or Windows file handles"
 #endif
 
 namespace ruvia::detail {
@@ -49,12 +58,6 @@ struct opened_response_file final {
     response_file_snapshot snapshot_;
 };
 
-// A whole-body file range up to this size is read into memory rather than
-// handed to a kernel file transfer: for small files one positional read costs
-// less than a kernel transfer and its completion, and it never queues behind
-// TransmitFile's per-SKU concurrency limit.
-inline constexpr std::uint64_t inline_response_file_max_bytes = std::uint64_t{16} * 1024;
-
 inline constexpr std::uint64_t windows_to_unix_epoch100ns = UINT64_C(116444736000000000);
 inline constexpr std::uint64_t windows_file_time_ticks_per_second = UINT64_C(10000000);
 
@@ -70,22 +73,9 @@ inline constexpr std::uint64_t windows_file_time_ticks_per_second = UINT64_C(100
         (ticks - windows_to_unix_epoch100ns) / windows_file_time_ticks_per_second);
 }
 
-#if defined(__unix__) || defined(_WIN32)
 #if defined(__unix__)
 using native_file_type = int;
-#else
-using native_file_type = HANDLE;
-#endif
 
-// Whether `input` still holds the representation `file` was framed from. A
-// file rewritten in place keeps its handle valid, so a handle opened at
-// framing must be checked again before its bytes are sent under the framed
-// validators; state_not_recoverable when it no longer matches.
-[[nodiscard]] inline std::error_code validate_native_file(
-    native_file_type input, http_response_file_view file) noexcept;
-#endif
-
-#if defined(__unix__)
 class native_file_handle final {
 public:
     explicit native_file_handle(int fd = -1) noexcept
@@ -109,6 +99,10 @@ public:
         return *this;
     }
 
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return fd_ >= 0;
+    }
+
     [[nodiscard]] int get() const noexcept {
         return fd_;
     }
@@ -128,11 +122,15 @@ private:
     int fd_;
 };
 
+[[nodiscard]] inline std::error_code last_native_file_error() noexcept {
+    return std::error_code(errno, std::system_category());
+}
+
 [[nodiscard]] inline response_file_snapshot snapshot_native_file_handle(
     int fd, std::error_code& ec) noexcept {
     struct stat status{};
     if (::fstat(fd, &status) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = last_native_file_error();
         return {};
     }
     if (!S_ISREG(status.st_mode) || status.st_size < 0) {
@@ -159,14 +157,13 @@ private:
 // it; it has no effect on reads from a regular file.
 inline constexpr int native_file_open_flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
 
-[[nodiscard]] inline response_file_snapshot snapshot_response_file(
+// The one open of a file by path; every response, index and read handle
+// starts here.
+[[nodiscard]] inline native_file_handle open_native_file(
     const http_native_path_char_type* path, std::error_code& ec) noexcept {
     native_file_handle input(::open(path, native_file_open_flags));
-    if (input.get() < 0) {
-        ec = std::error_code(errno, std::system_category());
-        return {};
-    }
-    return snapshot_native_file_handle(input.get(), ec);
+    ec = input ? std::error_code{} : last_native_file_error();
+    return input;
 }
 
 inline void release_response_file_handle(http_response_file_handle::native_type value) noexcept {
@@ -177,20 +174,19 @@ inline void release_response_file_handle(http_response_file_handle::native_type 
     return static_cast<int>(handle.native());
 }
 
-[[nodiscard]] inline opened_response_file open_response_file(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
-    native_file_handle input(::open(path, native_file_open_flags));
-    if (input.get() < 0) {
-        ec = std::error_code(errno, std::system_category());
-        return {};
-    }
-    const auto snapshot = snapshot_native_file_handle(input.get(), ec);
-    if (ec) {
-        return {};
-    }
-    return {http_response_file_handle(static_cast<http_response_file_handle::native_type>(input.release()),
-                &release_response_file_handle),
-        snapshot};
+[[nodiscard]] inline http_response_file_handle adopt_response_file_handle(native_file_handle input) noexcept {
+    return http_response_file_handle(
+        static_cast<http_response_file_handle::native_type>(input.release()), &release_response_file_handle);
+}
+
+// An independent handle to the same open file, so a read state that outlives
+// the response (an abandoned pool read) never borrows the response's handle.
+// Reads are positional, so the shared file offset is never relied on.
+[[nodiscard]] inline native_file_handle duplicate_native_file(
+    const http_response_file_handle& handle, std::error_code& ec) noexcept {
+    native_file_handle duplicate(::fcntl(borrowed_native_file(handle), F_DUPFD_CLOEXEC, 0));
+    ec = duplicate ? std::error_code{} : last_native_file_error();
+    return duplicate;
 }
 
 #if defined(O_PATH)
@@ -204,11 +200,7 @@ inline constexpr int native_directory_open_flags = O_RDONLY | O_DIRECTORY | O_CL
 [[nodiscard]] inline native_file_handle open_native_directory(
     const http_native_path_char_type* path, std::error_code& ec) noexcept {
     native_file_handle directory(::open(path, native_directory_open_flags));
-    if (directory.get() < 0) {
-        ec = std::error_code(errno, std::system_category());
-        return native_file_handle();
-    }
-    ec = {};
+    ec = directory ? std::error_code{} : last_native_file_error();
     return directory;
 }
 
@@ -234,7 +226,7 @@ struct native_directory_identity final {
     int directory, std::error_code& ec) noexcept {
     struct stat status{};
     if (::fstat(directory, &status) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = last_native_file_error();
         return {};
     }
     return native_directory_identity_of(status, ec);
@@ -244,30 +236,101 @@ struct native_directory_identity final {
     const http_native_path_char_type* path, std::error_code& ec) noexcept {
     struct stat status{};
     if (::stat(path, &status) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = last_native_file_error();
         return {};
     }
     return native_directory_identity_of(status, ec);
 }
 
-// Opens `relative` below `directory` for a response body. The final component
-// must not be a symlink (an index never records one). The handle is not
-// validated here: the response carries its indexed identity, and every use
-// checks the handle against it before trusting its bytes.
-[[nodiscard]] inline http_response_file_handle open_response_file_at(
-    int directory, const http_native_path_char_type* relative, std::error_code& ec) noexcept {
-    const int input = ::openat(directory, relative, native_file_open_flags | O_NOFOLLOW);
-    if (input < 0) {
-        ec = std::error_code(errno, std::system_category());
-        return {};
+// Opens `relative` ('/'-separated, as an index records it) below `directory`
+// one component at a time, refusing a symlink, "." or ".." in any component.
+[[nodiscard]] inline native_file_handle open_native_file_beneath_by_components(
+    int directory, std::string_view relative, std::error_code& ec) noexcept {
+    // NAME_MAX of every supported filesystem; a longer component cannot exist.
+    constexpr std::size_t max_component_bytes = 255;
+    std::array<char, max_component_bytes + 1> component{};
+    native_file_handle parent;
+    for (;;) {
+        const auto separator = relative.find('/');
+        const auto name = relative.substr(0, separator);
+        if (name.empty() || name == "." || name == "..") {
+            ec = std::make_error_code(std::errc::permission_denied);
+            return native_file_handle();
+        }
+        if (name.size() > max_component_bytes) {
+            ec = std::make_error_code(std::errc::filename_too_long);
+            return native_file_handle();
+        }
+        std::memcpy(component.data(), name.data(), name.size());
+        component[name.size()] = '\0';
+        const int at = parent ? parent.get() : directory;
+        if (separator == std::string_view::npos) {
+            native_file_handle input(::openat(at, component.data(), native_file_open_flags | O_NOFOLLOW));
+            ec = input ? std::error_code{} : last_native_file_error();
+            return input;
+        }
+        // O_DIRECTORY | O_NOFOLLOW fails on a symlink rather than opening it.
+        native_file_handle next(::openat(at, component.data(), native_directory_open_flags | O_NOFOLLOW));
+        if (!next) {
+            ec = last_native_file_error();
+            return native_file_handle();
+        }
+        parent = std::move(next);
+        relative.remove_prefix(separator + 1);
     }
-    ec = {};
-    return http_response_file_handle(
-        static_cast<http_response_file_handle::native_type>(input), &release_response_file_handle);
+}
+
+#if defined(__linux__) && defined(SYS_openat2)
+// struct open_how and its resolve flags from the kernel ABI
+// (include/uapi/linux/openat2.h), declared here so the build needs only the
+// syscall number from the libc headers.
+struct native_open_how final {
+    std::uint64_t flags_;
+    std::uint64_t mode_;
+    std::uint64_t resolve_;
+};
+inline constexpr std::uint64_t native_resolve_no_magiclinks = 0x02;
+inline constexpr std::uint64_t native_resolve_no_symlinks = 0x04;
+inline constexpr std::uint64_t native_resolve_beneath = 0x08;
+
+// Cleared once the kernel reports openat2 missing; the component walk then
+// serves every later open in the process.
+inline std::atomic<bool> native_openat2_available{true};
+#endif
+
+// Opens `relative` below `directory` without following a symlink in any
+// component and without leaving `directory`: an index never records a
+// symlink, so a path that now resolves through one was swapped after it was
+// indexed and is refused. The handle is not validated here: the caller
+// snapshots it (index) or checks it against the indexed identity (response).
+[[nodiscard]] inline native_file_handle open_native_file_beneath(
+    int directory, const http_native_path_char_type* relative, std::error_code& ec) noexcept {
+#if defined(__linux__) && defined(SYS_openat2)
+    if (native_openat2_available.load(std::memory_order_relaxed)) {
+        const native_open_how how{.flags_ = static_cast<std::uint64_t>(native_file_open_flags | O_NOFOLLOW),
+            .mode_ = 0,
+            .resolve_ = native_resolve_beneath | native_resolve_no_symlinks | native_resolve_no_magiclinks};
+        const auto opened = ::syscall(SYS_openat2, directory, relative, &how, sizeof(how));
+        if (opened >= 0) {
+            ec = {};
+            return native_file_handle(static_cast<int>(opened));
+        }
+        // ENOSYS: kernel before 5.6; EPERM: a seccomp filter that refuses the
+        // syscall. The component walk enforces the same rule.
+        if (errno == ENOSYS) {
+            native_openat2_available.store(false, std::memory_order_relaxed);
+        } else if (errno != EPERM) {
+            ec = last_native_file_error();
+            return native_file_handle();
+        }
+    }
+#endif
+    return open_native_file_beneath_by_components(directory, relative, ec);
 }
 
 // Reads exactly `size` bytes at `offset` without moving the descriptor's file
-// position, so a handle shared by several ranges needs no seek.
+// position, so a handle shared by several ranges needs no seek. A file that
+// ends early is shorter than the snapshot it was framed from: it changed.
 [[nodiscard]] inline std::error_code read_native_file_at(
     int fd, std::uint64_t offset, char* output, std::size_t size) noexcept {
     while (size != 0) {
@@ -276,10 +339,10 @@ struct native_directory_identity final {
             if (errno == EINTR) {
                 continue;
             }
-            return std::error_code(errno, std::system_category());
+            return last_native_file_error();
         }
         if (count == 0) {
-            return std::make_error_code(std::errc::io_error);
+            return std::make_error_code(std::errc::state_not_recoverable);
         }
         output += count;
         offset += static_cast<std::uint64_t>(count);
@@ -288,20 +351,44 @@ struct native_directory_identity final {
     return {};
 }
 
-[[nodiscard]] inline native_file_handle open_native_file_for_read(
-    http_response_file_view file, std::error_code& ec) noexcept {
-    native_file_handle input(::open(file.native_path_c_str(), native_file_open_flags));
-    if (input.get() < 0) {
-        ec = std::error_code(errno, std::system_category());
-        return native_file_handle();
+#if defined(__linux__)
+// Reads only bytes already in the page cache (RWF_NOWAIT), never waiting for
+// the disk; 0 when none are. A kernel without RWF_NOWAIT clears `supported`.
+[[nodiscard]] inline std::size_t read_native_file_cached(
+    int fd, std::uint64_t offset, char* output, std::size_t size, bool& supported) noexcept {
+#if defined(SYS_preadv2) && defined(RWF_NOWAIT)
+    if (!supported || offset > static_cast<std::uint64_t>((std::numeric_limits<off_t>::max)())) {
+        return 0;
     }
-    ec = validate_native_file(input.get(), file);
-    if (ec) {
-        return native_file_handle();
+    iovec buffer{output, size};
+    // The kernel ABI splits the offset into unsigned longs; on 64-bit ABIs the
+    // high word is zero.
+    const auto low = static_cast<unsigned long>(offset);
+    unsigned long high = 0;
+    if constexpr (sizeof(unsigned long) < sizeof(offset)) {
+        high = static_cast<unsigned long>(offset >> 32);
     }
-    return input;
+    const auto count = ::syscall(SYS_preadv2, fd, &buffer, 1UL, low, high, RWF_NOWAIT);
+    if (count < 0) {
+        if (errno == ENOSYS || errno == EOPNOTSUPP || errno == EINVAL || errno == EPERM) {
+            supported = false;
+        }
+        return 0;
+    }
+    return static_cast<std::size_t>(count);
+#else
+    static_cast<void>(fd);
+    static_cast<void>(offset);
+    static_cast<void>(output);
+    static_cast<void>(size);
+    supported = false;
+    return 0;
+#endif
 }
-#elif defined(_WIN32)
+#endif
+#else
+using native_file_type = HANDLE;
+
 class native_file_handle final {
 public:
     explicit native_file_handle(HANDLE handle = INVALID_HANDLE_VALUE) noexcept
@@ -325,6 +412,10 @@ public:
         return *this;
     }
 
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return handle_ != INVALID_HANDLE_VALUE;
+    }
+
     [[nodiscard]] HANDLE get() const noexcept {
         return handle_;
     }
@@ -344,6 +435,10 @@ private:
     HANDLE handle_;
 };
 
+[[nodiscard]] inline std::error_code last_native_file_error() noexcept {
+    return std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+}
+
 [[nodiscard]] inline std::uint64_t windows_file_time_token(LARGE_INTEGER value) noexcept {
     return static_cast<std::uint64_t>(value.QuadPart);
 }
@@ -361,7 +456,7 @@ private:
         ::GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) ==
             0 ||
         ::GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) == 0) {
-        ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+        ec = last_native_file_error();
         return {};
     }
     if (standard.Directory != FALSE || standard.EndOfFile.QuadPart < 0) {
@@ -381,16 +476,19 @@ private:
         windows_file_time_token(basic.LastWriteTime), windows_file_time_seconds(basic.LastWriteTime)};
 }
 
-[[nodiscard]] inline response_file_snapshot snapshot_response_file(
+// FILE_SHARE_DELETE lets a served file be renamed or replaced while a handle
+// to it stays open, as POSIX allows.
+inline constexpr DWORD native_file_share_mode = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+inline constexpr DWORD native_file_open_flags = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN;
+
+// The one open of a file by path; every response, index and read handle
+// starts here.
+[[nodiscard]] inline native_file_handle open_native_file(
     const http_native_path_char_type* path, std::error_code& ec) noexcept {
-    native_file_handle input(
-        ::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
-    if (input.get() == INVALID_HANDLE_VALUE) {
-        ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
-        return {};
-    }
-    return snapshot_native_file_handle(input.get(), ec);
+    native_file_handle input(::CreateFileW(
+        path, GENERIC_READ, native_file_share_mode, nullptr, OPEN_EXISTING, native_file_open_flags, nullptr));
+    ec = input ? std::error_code{} : last_native_file_error();
+    return input;
 }
 
 inline void release_response_file_handle(http_response_file_handle::native_type value) noexcept {
@@ -401,27 +499,30 @@ inline void release_response_file_handle(http_response_file_handle::native_type 
     return reinterpret_cast<HANDLE>(handle.native());
 }
 
-[[nodiscard]] inline opened_response_file open_response_file(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
-    native_file_handle input(
-        ::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
-    if (input.get() == INVALID_HANDLE_VALUE) {
-        ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
-        return {};
+[[nodiscard]] inline http_response_file_handle adopt_response_file_handle(native_file_handle input) noexcept {
+    return http_response_file_handle(
+        reinterpret_cast<http_response_file_handle::native_type>(input.release()), &release_response_file_handle);
+}
+
+// An independent handle to the same open file, so a read state that outlives
+// the response (an abandoned pool read) never borrows the response's handle.
+// Reads carry their offset, so the shared file pointer is never relied on.
+[[nodiscard]] inline native_file_handle duplicate_native_file(
+    const http_response_file_handle& handle, std::error_code& ec) noexcept {
+    HANDLE duplicate = nullptr;
+    if (::DuplicateHandle(::GetCurrentProcess(), borrowed_native_file(handle), ::GetCurrentProcess(), &duplicate, 0,
+            FALSE, DUPLICATE_SAME_ACCESS) == 0) {
+        ec = last_native_file_error();
+        return native_file_handle();
     }
-    const auto snapshot = snapshot_native_file_handle(input.get(), ec);
-    if (ec) {
-        return {};
-    }
-    return {http_response_file_handle(reinterpret_cast<http_response_file_handle::native_type>(input.release()),
-                &release_response_file_handle),
-        snapshot};
+    ec = {};
+    return native_file_handle(duplicate);
 }
 
 // Reads exactly `size` bytes at `offset`. A synchronous handle honours the
 // OVERLAPPED offset and completes inline, so ranges sharing a handle need no
-// seek.
+// seek. A file that ends early is shorter than the snapshot it was framed
+// from: it changed.
 [[nodiscard]] inline std::error_code read_native_file_at(
     HANDLE handle, std::uint64_t offset, char* output, std::size_t size) noexcept {
     while (size != 0) {
@@ -433,11 +534,11 @@ inline void release_response_file_handle(http_response_file_handle::native_type 
         DWORD count = 0;
         if (::ReadFile(handle, output, requested, &count, &position) == 0) {
             const auto error = ::GetLastError();
-            return error == ERROR_HANDLE_EOF ? std::make_error_code(std::errc::io_error)
+            return error == ERROR_HANDLE_EOF ? std::make_error_code(std::errc::state_not_recoverable)
                                              : std::error_code(static_cast<int>(error), std::system_category());
         }
         if (count == 0) {
-            return std::make_error_code(std::errc::io_error);
+            return std::make_error_code(std::errc::state_not_recoverable);
         }
         output += count;
         offset += count;
@@ -445,42 +546,29 @@ inline void release_response_file_handle(http_response_file_handle::native_type 
     }
     return {};
 }
-
-[[nodiscard]] inline native_file_handle open_native_file_for_read(
-    http_response_file_view file, std::error_code& ec) noexcept {
-    native_file_handle input(::CreateFileW(file.native_path_c_str(), GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-        nullptr));
-    if (input.get() == INVALID_HANDLE_VALUE) {
-        ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
-        return native_file_handle();
-    }
-    ec = validate_native_file(input.get(), file);
-    if (ec) {
-        return native_file_handle();
-    }
-    return input;
-}
-#else
-[[nodiscard]] inline response_file_snapshot snapshot_response_file(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
-    static_cast<void>(path);
-    ec = std::make_error_code(std::errc::not_supported);
-    return {};
-}
-
-[[nodiscard]] inline opened_response_file open_response_file(
-    const http_native_path_char_type* path, std::error_code& ec) noexcept {
-    static_cast<void>(path);
-    ec = std::make_error_code(std::errc::not_supported);
-    return {};
-}
 #endif
 
-#if defined(__unix__) || defined(_WIN32)
+// Opens `path` once and snapshots the handle it opened.
+[[nodiscard]] inline opened_response_file open_response_file(
+    const http_native_path_char_type* path, std::error_code& ec) noexcept {
+    auto input = open_native_file(path, ec);
+    if (ec) {
+        return {};
+    }
+    const auto snapshot = snapshot_native_file_handle(input.get(), ec);
+    if (ec) {
+        return {};
+    }
+    return {adopt_response_file_handle(std::move(input)), snapshot};
+}
+
+// Whether `input` still holds the representation framed with `identity` and
+// `size`. A file rewritten in place keeps its handle valid, so a handle opened
+// at framing must be checked again before its bytes are sent under the framed
+// validators; state_not_recoverable when it no longer matches.
 [[nodiscard]] inline std::error_code validate_native_file(
-    native_file_type input, http_response_file_view file) noexcept {
-    if (!file.identity().requires_validation()) {
+    native_file_type input, http_response_file_identity identity, std::uint64_t size) noexcept {
+    if (!identity.requires_validation()) {
         return {};
     }
     std::error_code error;
@@ -488,11 +576,15 @@ inline void release_response_file_handle(http_response_file_handle::native_type 
     if (error) {
         return error;
     }
-    if (snapshot.identity_ != file.identity() || snapshot.size_ != file.size()) {
+    if (snapshot.identity_ != identity || snapshot.size_ != size) {
         return std::make_error_code(std::errc::state_not_recoverable);
     }
     return {};
 }
-#endif
+
+[[nodiscard]] inline std::error_code validate_native_file(
+    native_file_type input, http_response_file_view file) noexcept {
+    return validate_native_file(input, file.identity(), file.size());
+}
 
 }  // namespace ruvia::detail

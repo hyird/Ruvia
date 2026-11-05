@@ -1,5 +1,6 @@
 #include "http2/http2_sans_io_send_window.h"
 
+#include <optional>
 #include <stdexcept>
 
 namespace ruvia::detail {
@@ -21,6 +22,21 @@ namespace {
 task<http2_send_window_wait_status> await_http2_send_window(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, const bool* aborted) {
+    // Marks the whole wait, across wakes that find no capacity, so the
+    // session's write_timeout check sees one continuous stall.
+    struct send_window_wait_guard final {
+        http2_sans_io_stream_signal& signal_;
+        explicit send_window_wait_guard(http2_sans_io_stream_signal& signal_value) noexcept
+            : signal_(signal_value) {
+            signal_.set_waiting_send_window(true);
+        }
+        ~send_window_wait_guard() noexcept {
+            signal_.set_waiting_send_window(false);
+        }
+        send_window_wait_guard(const send_window_wait_guard&) = delete;
+        send_window_wait_guard& operator=(const send_window_wait_guard&) = delete;
+    };
+    std::optional<send_window_wait_guard> wait_guard;
     for (;;) {
         if ((aborted != nullptr && *aborted) ||
             connection.stream_aborted(stream_id) ||
@@ -34,16 +50,9 @@ task<http2_send_window_wait_status> await_http2_send_window(
         if (window->available_ != 0) {
             co_return http2_send_window_wait_status::ready;
         }
-        struct send_window_wait_guard final {
-            http2_sans_io_stream_signal& signal_;
-            explicit send_window_wait_guard(http2_sans_io_stream_signal& signal_value) noexcept
-                : signal_(signal_value) {
-                signal_.set_waiting_send_window(true);
-            }
-            ~send_window_wait_guard() noexcept {
-                signal_.set_waiting_send_window(false);
-            }
-        } wait_guard(*signal);
+        if (!wait_guard.has_value()) {
+            wait_guard.emplace(*signal);
+        }
         co_await signal->wait();
     }
 }

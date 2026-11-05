@@ -27,11 +27,6 @@ public:
         return reader_.trailers();
     }
 
-    [[nodiscard]] body_pipeline_handover take_pipeline(
-        std::pmr::string& stash, std::string_view additional_pipeline = {}) {
-        return reader_.take_pipeline(stash, additional_pipeline);
-    }
-
     [[nodiscard]] std::size_t pipeline_size() const noexcept {
         return reader_.pipeline_size();
     }

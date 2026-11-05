@@ -1,7 +1,9 @@
 #include "server/worker_codecs.h"
 
+#include <exception>
 #include <stdexcept>
 
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
@@ -74,8 +76,13 @@ void worker_codecs::release_stream_encoder(http_content_encoder& encoder) noexce
         } catch (...) {
             // A codec that cannot be reset is not kept; the next stream
             // constructs a fresh one.
+            ruvia::report_unhandled_failure("stream encoder reset", std::current_exception());
         }
     }
+    destroy_stream_encoder(encoder);
+}
+
+void worker_codecs::destroy_stream_encoder(http_content_encoder& encoder) noexcept {
     destroy_pmr_object(resolved_pmr_resource_tag{}, &encoder, resource_);
 }
 

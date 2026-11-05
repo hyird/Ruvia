@@ -2,6 +2,8 @@
 
 #if !defined(_WIN32)
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -170,6 +172,25 @@ std::error_code set_db_socket_non_blocking(db_slot_socket::native_socket_type dr
     }
 #endif
     return {};
+}
+
+db_idle_socket_status peek_db_idle_socket(db_slot_socket::native_socket_type driver_socket) noexcept {
+    char byte{};
+#if defined(_WIN32)
+    const int received = ::recv(static_cast<SOCKET>(driver_socket), &byte, 1, MSG_PEEK);
+    if (received == SOCKET_ERROR) {
+        return ::WSAGetLastError() == WSAEWOULDBLOCK ? db_idle_socket_status::quiet : db_idle_socket_status::closed;
+    }
+#else
+    ssize_t received = 0;
+    do {
+        received = ::recv(driver_socket, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+    } while (received < 0 && errno == EINTR);
+    if (received < 0) {
+        return errno == EAGAIN || errno == EWOULDBLOCK ? db_idle_socket_status::quiet : db_idle_socket_status::closed;
+    }
+#endif
+    return received == 0 ? db_idle_socket_status::closed : db_idle_socket_status::pending_data;
 }
 
 }  // namespace ruvia::detail

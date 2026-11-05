@@ -1,5 +1,6 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 
+#include <algorithm>
 #include <limits>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
@@ -282,11 +283,12 @@ bool is_valid_http_chunk_extension(std::string_view value) noexcept {
 
 }  // namespace
 
-bool parse_http_chunk_size_line(std::string_view value, std::size_t& size) noexcept {
+std::optional<http_chunk_size_line> parse_http_chunk_size_line(std::string_view value) noexcept {
     // RFC 9112: chunk-size starts at the first byte of the line. Leading OWS
     // before the size is a known request-smuggling vector and is rejected,
     // matching picohttpparser/llhttp strict parsing.
     std::size_t cursor_value = 0;
+    std::size_t leading_zero_digits = 0;
     std::size_t parsed_value = 0;
     constexpr auto max_before_shift = std::numeric_limits<std::size_t>::max() >> 4U;
     while (cursor_value < value.size()) {
@@ -295,17 +297,22 @@ bool parse_http_chunk_size_line(std::string_view value, std::size_t& size) noexc
             break;
         }
         if (parsed_value > max_before_shift) {
-            return false;
+            return std::nullopt;
+        }
+        if (parsed_value == 0 && nibble == 0) {
+            ++leading_zero_digits;
         }
         parsed_value = (parsed_value << 4U) | static_cast<std::size_t>(nibble);
         ++cursor_value;
     }
     if (cursor_value == 0 || !is_valid_http_chunk_extension(value.substr(cursor_value))) {
-        return false;
+        return std::nullopt;
     }
 
-    size = parsed_value;
-    return true;
+    // The shortest spelling of a size drops its leading zeros but keeps one
+    // digit for a zero size.
+    const auto significant_digits = std::max<std::size_t>(cursor_value - leading_zero_digits, 1);
+    return http_chunk_size_line{.size_ = parsed_value, .overhead_bytes_ = value.size() - significant_digits};
 }
 
 }  // namespace ruvia::detail

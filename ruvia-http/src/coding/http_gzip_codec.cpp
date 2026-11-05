@@ -1,6 +1,5 @@
 #include <zlib.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <utility>
 
@@ -81,47 +80,10 @@ static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_con
 std::optional<std::pmr::string> encode_zlib_content(zlib_deflate_stream& deflater,
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output("", http_pmr_resource_or_default(output_resource));
-    auto& stream = deflater.native();
-    const zlib_borrow_scope borrow(stream);
-
-    std::size_t supplied = 0;
-    // Uninitialized scratch: only the bytes zlib produced are copied out.
-    char buffer[8192];
-    for (;;) {
-        zlib_refill_input(stream, input, supplied);
-        if (output.size() == max_encoded_bytes) {
-            if (stream.avail_in == 0 && supplied == input.size()) {
-                Bytef probe_value{};
-                stream.next_out = &probe_value;
-                stream.avail_out = 1;
-                const auto status = deflate(&stream, Z_FINISH);
-                if (status != Z_OK && status != Z_STREAM_END) {
-                    deflater.rethrow_allocation_failure();
-                    throw http_content_codec_error("zlib encoding failed");
-                }
-                if (status == Z_STREAM_END && stream.avail_out == 1) {
-                    return output;
-                }
-            }
-            return std::nullopt;
-        }
-        const auto offset = output.size();
-        const auto writable = std::min<std::size_t>(sizeof(buffer), max_encoded_bytes - offset);
-        const auto before_input = stream.avail_in;
-        stream.next_out = reinterpret_cast<Bytef*>(buffer);
-        stream.avail_out = static_cast<uInt>(writable);
-        const int status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
-        output.append(buffer, writable - stream.avail_out);
-        if (status != Z_OK && status != Z_STREAM_END) {
-            deflater.rethrow_allocation_failure();
-        }
-        if (status == Z_STREAM_END) {
-            return output;
-        }
-        if (status != Z_OK || (output.size() == offset && stream.avail_in == before_input)) {
-            throw http_content_codec_error("zlib encoding failed or made no progress");
-        }
+    if (!deflater.encode(input, output, Z_FINISH, max_encoded_bytes)) {
+        return std::nullopt;
     }
+    return output;
 }
 
 namespace {

@@ -42,6 +42,43 @@ struct body_pipeline_handover final {
     std::string_view stashed_;
 };
 
+// Advances `decoder` over the chunked framing in `input` from `cursor`,
+// skipping payload without decoding it. True once the body ended there,
+// trailers included; false when it needs more input or the framing failed.
+[[nodiscard]] inline bool skip_buffered_chunked_body(
+    http1_chunked_body_decoder& decoder, std::string_view input, std::size_t& cursor) {
+    for (;;) {
+        const auto result_value = decoder.decode(input.substr(cursor));
+        cursor += result_value.consumed_bytes();
+        if (result_value.complete() != nullptr) {
+            return true;
+        }
+        if (result_value.body_chunk() == nullptr) {
+            return false;
+        }
+    }
+}
+
+// Length of the framed request body when all of it is already in
+// `body_and_pipeline`, the input that followed its head, so it is consumed
+// without I/O and the connection stays reusable (RFC 9112 section 9.3);
+// nullopt when it still needs input or its chunked framing is invalid.
+[[nodiscard]] inline std::optional<std::size_t> buffered_request_body_bytes(
+    const http1_request_body_plan& body_plan, std::string_view body_and_pipeline) {
+    if (const auto* known_length = body_plan.known_length()) {
+        const auto content_length = known_length->content_length();
+        return body_and_pipeline.size() >= content_length ? std::optional<std::size_t>(content_length)
+                                                          : std::nullopt;
+    }
+    if (body_plan.chunked() == nullptr) {
+        return std::size_t{0};
+    }
+    http1_chunked_body_decoder decoder;
+    std::size_t cursor = 0;
+    return skip_buffered_chunked_body(decoder, body_and_pipeline, cursor) ? std::optional<std::size_t>(cursor)
+                                                                          : std::nullopt;
+}
+
 template <typename stream_type>
 class stream_body_reader final {
 public:
@@ -60,6 +97,11 @@ public:
     [[nodiscard]] const http_request_trailers& trailers() const& noexcept {
         return trailers_;
     }
+    // Consumes, without I/O, the rest of a body that arrived in full with
+    // its head and that the route left unread or partly read, so the
+    // connection stays reusable. A body that still needs input, or whose
+    // read failed, stays incomplete.
+    void consume_buffered_body();
     // Hands the pipelined suffix over and drops this reader's claim on it. The
     // connection read buffer is deliberately untouched: every view in the
     // request being served still borrows it. `stash` receives bytes when the

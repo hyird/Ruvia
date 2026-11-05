@@ -241,6 +241,7 @@ void worker_dispatcher::note_stale_timer() noexcept {
         // Nothing live remains: drop the heap and the armed wait so an idle
         // worker holds no timer work.
         timers_.clear();
+        release_drained_timer_heap();
         stale_timer_count_ = 0;
         if (timer_armed_ && timer_) {
             ++timer_generation_;
@@ -261,6 +262,15 @@ void worker_dispatcher::note_stale_timer() noexcept {
             std::ranges::make_heap(timers_, timer_entry_later{});
             stale_timer_count_ = 0;
         }
+    }
+}
+
+void worker_dispatcher::release_drained_timer_heap() noexcept {
+    // Slots stay: registrations keep their addresses and (slot, generation)
+    // pairs across threads, so only the heap, which nothing references, shrinks.
+    // The heap regrows geometrically on the next burst.
+    if (timers_.empty() && timers_.capacity() > capacity_) {
+        std::pmr::vector<timer_entry>(timers_.get_allocator()).swap(timers_);
     }
 }
 
@@ -295,6 +305,7 @@ void worker_dispatcher::stop_timers() noexcept {
     }
 
     timers_.clear();
+    release_drained_timer_heap();
     stale_timer_count_ = 0;
     for (std::size_t index = 0; index < timer_slots_.size(); ++index) {
         if (!timer_slots_[index].occupied_) {
@@ -332,6 +343,7 @@ void worker_dispatcher::arm_timer() {
         }
     }
     if (timers_stopping_.load(std::memory_order_acquire) || timers_.empty()) {
+        release_drained_timer_heap();
         return;
     }
     armed_deadline_ = timers_.front().deadline_;

@@ -58,9 +58,12 @@ struct server_config final {
     // Graceful stop of a serving app: once stop() closes admission, admitted
     // requests, tunnels and WebSocket close handshakes may finish for up to
     // this long before every remaining connection is closed. Zero closes them
-    // at once. An HTTP/2 drain (stop, request cap or connection timeout) sends
-    // its final GOAWAY after the PING round trip or min(1 s, half of this
-    // value), whichever comes first (product limit). A drain started by a
+    // at once. An HTTP/1 request whose head was already received in full when
+    // the drain began is still served, with Connection: close; handlers learn
+    // that the drain began from context::drain_token(). An HTTP/2 drain
+    // (stop, request cap or connection timeout) sends its final GOAWAY after
+    // the PING round trip or min(1 s, half of this value), whichever comes
+    // first (product limit). A drain started by a
     // connection timeout ends the session at that point, cancelling streams
     // still open; a write still blocked then is closed 2 s after the timeout.
     std::chrono::milliseconds drain_timeout_{std::chrono::seconds(10)};
@@ -68,13 +71,24 @@ struct server_config final {
     // HTTP connection inactivity: the keep-alive wait for the next request,
     // and a handler -- buffered or response-stream -- that neither reads nor
     // writes the connection (for a stream, the wait between two writes).
-    // Upgraded WebSockets use their route lifecycle heartbeat and
-    // close-handshake deadlines instead, even when heartbeat is disabled.
+    // An HTTP/2 connection with no stream is idle from the end of its last
+    // stream (or its readiness): frames that open no stream and this side's
+    // writes do not renew it, as with Pingora's h2_idle_timeout; it then
+    // drains with GOAWAY. Upgraded WebSockets use their route lifecycle
+    // heartbeat and close-handshake deadlines instead, even when heartbeat is
+    // disabled.
     std::optional<std::chrono::milliseconds> idle_timeout_{std::chrono::seconds(75)};
     // How often connection timeouts are checked. A timeout fires once at least
-    // its duration has passed, and at most about two intervals later.
+    // its duration has passed, and at most about two intervals later. A worker
+    // with no connection stops scanning until its next connection.
     std::chrono::milliseconds connection_scan_interval_{std::chrono::seconds(1)};
+    // Request-head inactivity; also bounds an HTTP/2 connection until the
+    // client preface and SETTINGS arrive (with header_completion_timeout_).
     std::optional<std::chrono::milliseconds> request_header_timeout_{std::chrono::seconds(60)};
+    // Request-body inactivity. HTTP/2 times each stream's body on its own: a
+    // stream that receives no DATA for this long (or whose body outlasts
+    // body_completion_timeout_) is reset with RST_STREAM(CANCEL), leaving the
+    // connection and its other streams untouched.
     std::optional<std::chrono::milliseconds> request_body_timeout_{std::chrono::seconds(60)};
     // Absolute phase deadlines: progress does not renew these limits.
     std::optional<std::chrono::milliseconds> header_completion_timeout_{std::chrono::seconds(30)};
@@ -87,11 +101,22 @@ struct server_config final {
     // read side is doing (idle, reading a body, a long-lived upgrade) and
     // whether or not a WebSocket heartbeat is configured: a peer that stops
     // reading has its connection closed. Time between response-stream writes
-    // is governed by idle_timeout_.
+    // is governed by idle_timeout_. An HTTP/2 stream that waits this long for
+    // peer flow-control window (send window 0) is reset with
+    // RST_STREAM(CANCEL); its connection and other streams continue. A file
+    // body read the next write waits on (on the blocking pool) is bounded by
+    // the same limit: when it expires the response is answered with 503
+    // before its head, or its connection (HTTP/1) or stream (HTTP/2) ends.
     std::optional<std::chrono::milliseconds> write_timeout_{std::chrono::seconds(60)};
     // Bounded by default so a connection flood cannot exhaust FDs or memory.
-    // Excess accepted sockets are closed before TLS or HTTP protocol
-    // detection, so admission never fabricates a response.
+    // At the cap, a new connection takes the slot of the connection that has
+    // been idle between requests longest -- an HTTP/1 keep-alive connection
+    // awaiting its next request, or an HTTP/2 connection without a stream --
+    // whose socket is closed at once (as nginx reuses keep-alive connections
+    // when worker_connections run out); active_connections_ may exceed the cap
+    // by such closes until their sessions unwind. With no idle connection the
+    // new socket is closed before TLS or HTTP protocol detection, so admission
+    // never fabricates a response, and counted in connections_refused_.
     std::optional<std::size_t> max_connections_per_worker_{1024};
     // Cumulative request cap for each connection. HTTP/2 then drains gracefully
     // (RFC 9113 section 6.8): streams the client had in flight before the final
@@ -154,6 +179,11 @@ struct listen_config final {
 // server options. They stay top-level so configuration is not copied between
 // models.
 struct compression_config final {
+    // Only text-like media types are encoded (text/*, JSON, XML and their +json
+    // / +xml suffixes, JavaScript, WebAssembly, SVG, icons, uncompressed fonts);
+    // a missing or other Content-Type, or one naming a zip container, stays
+    // identity. A streamed response whose head declares Content-Length follows
+    // the same min_bytes_ / max_bytes_ rule as a buffered body.
     // Buffered in-memory responses below this size remain identity, unless the
     // request refuses identity (e.g. "gzip, identity;q=0"): then any size is
     // encoded rather than answered with 406. File responses (context::file,
@@ -162,8 +192,9 @@ struct compression_config final {
     // representation.
     std::size_t min_bytes_{1024};
     // Eligible bodies through this size are encoded synchronously on the
-    // worker; larger bodies are offloaded to the bounded blocking pool when it
-    // is enabled, otherwise they are also encoded synchronously.
+    // worker. It is the inline ceiling: larger bodies are offloaded to the
+    // bounded blocking pool when it is enabled, and otherwise stay identity
+    // (406 when the request refuses identity).
     std::size_t sync_bytes_{std::size_t{64} * 1024};
     // Buffered bodies above this size remain identity. Static files use their
     // own document-root precompression thresholds and still prefer checked-in
@@ -378,8 +409,10 @@ private:
 struct http_server_stats final {
     // Connections held right now, against server_config::max_connections_per_worker_.
     std::size_t active_connections_{0};
-    // Connections closed on accept because that budget was full. A rising
-    // count means the server is shedding load rather than queueing it.
+    // Connections closed on accept because that budget was full and no idle
+    // connection could give up its slot (an idle one evicted to admit a new
+    // connection is not counted). A rising count means the server is shedding
+    // load rather than queueing it.
     std::size_t connections_refused_{0};
     // Connections lost to an exception, as delivered to on_connection_failure
     // (peer resets and closes and server-cancelled I/O are not failures).

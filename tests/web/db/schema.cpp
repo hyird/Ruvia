@@ -211,9 +211,38 @@ RUVIA_DB_ENTITY(invalid_computed_type, "invalid_computed",
     ruvia::db_column<"value", std::int64_t>,
     ruvia::db_column<"total", std::int64_t,
         ruvia::db_column_options{.generated_type_ = db_generated_type::stored}>)
-RUVIA_DB_ENTITY(identity_computed_entity_type, "identity_computed",
-    ruvia::db_column<"id", std::int64_t,
-        ruvia::db_column_options{.generated_ = true, .generated_type_ = db_generated_type::stored}>)
+
+namespace db_schema_column_option_test {
+
+template <typename value_type, auto options>
+concept declarable_db_column = requires { typename ruvia::db_column<"value", value_type, options>; };
+
+static_assert(declarable_db_column<std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>);
+static_assert(declarable_db_column<std::pmr::string, ruvia::db_column_options{.read_only_ = true}>);
+static_assert(declarable_db_column<std::pmr::string, ruvia::db_column_options{.read_only_ = true, .create_date_ = true}>);
+static_assert(declarable_db_column<std::int32_t, ruvia::db_column_options{.version_ = true}>);
+static_assert(declarable_db_column<std::pmr::string, ruvia::db_column_options{.delete_date_ = true}>);
+// Identity and computed generation exclude each other and read-only columns.
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .generated_type_ = db_generated_type::stored}>);
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .read_only_ = true}>);
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_type_ = db_generated_type::stored, .read_only_ = true}>);
+// Identity needs a non-null integer.
+static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.generated_ = true}>);
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .nullable_ = true}>);
+// A named enum type replaces the scalar type.
+static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::text, .enum_name_ = ruvia::fixed_string{"app.state"}}>);
+// version_ is a non-null integer concurrency token.
+static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.version_ = true}>);
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.nullable_ = true, .version_ = true}>);
+// Primary keys cannot be nullable or soft-delete markers.
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.primary_key_ = true, .nullable_ = true}>);
+static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.primary_key_ = true, .delete_date_ = true}>);
+// One lifecycle role per column, and repository-stamped roles must be writable.
+static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.update_date_ = true, .version_ = true}>);
+static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.read_only_ = true, .delete_date_ = true}>);
+static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.generated_type_ = db_generated_type::stored, .update_date_ = true}>);
+
+}  // namespace db_schema_column_option_test
 
 RUVIA_TEST(db_schema_computed_columns_reject_invalid_metadata_and_conflicts) {
     using computed_type = invalid_computed_type;
@@ -240,17 +269,12 @@ RUVIA_TEST(db_schema_computed_columns_reject_invalid_metadata_and_conflicts) {
         schema.create_table<computed_type>({.defaults_ = {{.column_ = "total", .value_ = expression}},
             .generated_columns_ = {{.column_ = "total", .expression_ = expression}}});
     }));
-    using identity_computed_type = identity_computed_entity_type;
-    RUVIA_CHECK(throws_on([&] {
-        db_schema schema({.driver_ = db_driver::postgresql});
-        schema.create_table<identity_computed_type>({.generated_columns_ = {{.column_ = "id", .expression_ = expression}}});
-    }));
 }
 
 RUVIA_DB_ENTITY(computed_keys_entity_type, "computed_keys",
     ruvia::db_column<"source", std::int64_t>,
     ruvia::db_column<"computed", std::int64_t,
-        ruvia::db_column_options{.primary_key_ = true, .generated_type_ = db_generated_type::stored, .nullable_ = true}>)
+        ruvia::db_column_options{.primary_key_ = true, .generated_type_ = db_generated_type::stored}>)
 
 RUVIA_TEST(db_schema_mariadb_computed_columns_reject_table_primary_keys) {
     using entity_type = computed_keys_entity_type;
@@ -422,11 +446,14 @@ RUVIA_TEST(db_schema_ddl_operations_and_table_options_render_for_both_drivers) {
     maria.rename_column("cs_maria.records", "note", "memo");
     maria.set_column_default("cs_maria.records", "memo", maria_expressions.value("n/a"));
     maria.drop_column_default("cs_maria.records", "memo");
-    maria.drop_column("cs_maria.records", "memo", ruvia::db_drop_behavior::cascade, true);
+    RUVIA_CHECK(throws_on([&] { maria.drop_column("cs_maria.records", "memo", ruvia::db_drop_behavior::cascade, true); }));
+    maria.drop_column("cs_maria.records", "memo", ruvia::db_drop_behavior::restrict, true);
     maria.add_constraint("cs_maria.records", {.name_ = "records_state_unique", .kind_ = ruvia::db_constraint_kind::unique, .columns_ = {"state"}});
-    maria.drop_constraint("cs_maria.records", "records_state_unique", ruvia::db_drop_behavior::cascade, true);
+    RUVIA_CHECK(throws_on([&] { maria.drop_constraint("cs_maria.records", "records_state_unique", ruvia::db_drop_behavior::cascade, true); }));
+    maria.drop_constraint("cs_maria.records", "records_state_unique", ruvia::db_drop_behavior::restrict, true);
     maria.rename_table("cs_maria.records", "records_renamed");
-    maria.drop_table("cs_maria.records_renamed", ruvia::db_drop_behavior::cascade, true);
+    RUVIA_CHECK(throws_on([&] { maria.drop_table("cs_maria.records_renamed", ruvia::db_drop_behavior::cascade, true); }));
+    maria.drop_table("cs_maria.records_renamed", ruvia::db_drop_behavior::restrict, true);
     RUVIA_CHECK(throws_on([&] { maria.drop_schema("cs_maria", ruvia::db_drop_behavior::cascade, true); }));
     maria.drop_schema("cs_maria", ruvia::db_drop_behavior::restrict, true);
     const auto maria_migrations = maria.compile("cs_maria_ops");
@@ -436,7 +463,10 @@ RUVIA_TEST(db_schema_ddl_operations_and_table_options_render_for_both_drivers) {
     RUVIA_CHECK(maria_migrations[1].sql().find("AUTO_INCREMENT") != std::string_view::npos);
     RUVIA_CHECK(maria_migrations[2].sql().find("ADD COLUMN IF NOT EXISTS `note` TEXT") != std::string_view::npos);
     RUVIA_CHECK(maria_migrations[9].sql().find("ALTER TABLE `cs_maria`.`records` RENAME TO `cs_maria`.`records_renamed`") != std::string_view::npos);
-    RUVIA_CHECK(maria_migrations[10].sql().find("DROP TABLE IF EXISTS `cs_maria`.`records_renamed` CASCADE") != std::string_view::npos);
+    RUVIA_CHECK(maria_migrations[10].sql().find("DROP TABLE IF EXISTS `cs_maria`.`records_renamed`") != std::string_view::npos);
+    for (const auto& migration : maria_migrations) {
+        RUVIA_CHECK(migration.sql().find("CASCADE") == std::string_view::npos);
+    }
     RUVIA_CHECK(throws_on([&] {
         maria.alter_column_type("cs_maria.records", "state", {.data_type_ = db_data_type::text});
     }));
@@ -609,7 +639,8 @@ RUVIA_TEST(db_schema_views_enums_extensions_and_commands_cover_dialect_boundarie
 
     db_schema maria({.driver_ = db_driver::mariadb});
     maria.create_view("cs_view", query);
-    maria.drop_view("cs_view", false, ruvia::db_drop_behavior::cascade, true);
+    RUVIA_CHECK(throws_on([&] { maria.drop_view("cs_view", false, ruvia::db_drop_behavior::cascade, true); }));
+    maria.drop_view("cs_view", false, ruvia::db_drop_behavior::restrict, true);
     maria.execute(command);
     RUVIA_CHECK(maria.compile("cs_objects").size() == std::size_t{3});
     RUVIA_CHECK(throws_on([&] { maria.create_enum("status", values); }));
@@ -880,8 +911,6 @@ RUVIA_TEST(db_procedure_public_helpers_render_and_validate) {
 RUVIA_DB_ENTITY(devices_read_only_entity, "devices",
     ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
     ruvia::db_column<"protocol_address", std::pmr::string, ruvia::db_column_options{.read_only_ = true}>)
-RUVIA_DB_ENTITY(invalid_ro_entity, "invalid_ro",
-    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.generated_ = true, .read_only_ = true}>)
 
 RUVIA_TEST(db_schema_trigger_transition_tables_and_read_only_columns_render_and_validate) {
     using read_only_entity = devices_read_only_entity;
@@ -955,10 +984,18 @@ RUVIA_TEST(db_schema_trigger_transition_tables_and_read_only_columns_render_and_
             .new_table_ = "rows",
         });
     }));
-    using invalid_read_only_entity = invalid_ro_entity;
+}
+
+// Enum values outside the declared enumerators (reachable only through a cast)
+// are rejected instead of rendering a default clause.
+RUVIA_TEST(db_schema_rejects_unknown_enum_values_instead_of_defaulting) {
+    db_schema pg({.driver_ = db_driver::postgresql});
+    RUVIA_CHECK(throws_on([&] { pg.drop_table("cs_records", static_cast<ruvia::db_drop_behavior>(7)); }));
     RUVIA_CHECK(throws_on([&] {
-        db_schema invalid({.driver_ = db_driver::postgresql});
-        invalid.create_table<invalid_read_only_entity>();
+        pg.add_constraint("cs_child", {.name_ = "child_fk", .kind_ = ruvia::db_constraint_kind::foreign_key, .columns_ = {"parent_id"}, .referenced_table_ = "cs_parent", .referenced_columns_ = {"id"}, .on_delete_ = static_cast<ruvia::db_referential_action>(9)});
+    }));
+    RUVIA_CHECK(throws_on([&] {
+        pg.create_trigger({.name_ = "cs_trigger", .table_ = "cs_records", .function_ = "fn", .timing_ = static_cast<ruvia::db_trigger_timing>(9), .events_ = {ruvia::db_trigger_event::insert}});
     }));
 }
 

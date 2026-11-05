@@ -65,7 +65,8 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
         block.remove_suffix(2);
     }
     // The block is appended all-or-nothing, like append(): it extends the
-    // retained section's field count and byte budget. Received fields that are
+    // retained section's field count and byte budget, and names are retained
+    // lowercase as append() and HTTP/2 retain them. Received fields that are
     // not permitted in request trailers are discarded (RFC 9112 section 7.1.2).
     // Fields are appended during the single validating pass and rolled back
     // when the block turns out invalid.
@@ -79,7 +80,7 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
         auto* const resource = fields_.get_allocator().resource();
         status = detail::visit_http1_trailer_block(block, detail::is_forbidden_http_request_trailer_name, budget,
             [this, resource](std::string_view name, std::string_view value) {
-                fields_.emplace_back(name, value, resource);
+                fields_.push_back(http_header::copy_with_lowercase_name(name, value, resource));
                 return true;
             });
     } catch (...) {

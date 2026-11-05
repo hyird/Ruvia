@@ -1,9 +1,12 @@
 #include <array>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_types.h"
 
@@ -32,6 +35,40 @@ ruvia::task<void> run_statement(ruvia::db_handle& handle, statement_kind kind) {
             break;
         }
     }
+}
+
+// `peer` answers "before" and then ends the session while the pool holds it
+// idle; it answers "after" on the next connection.
+void check_session_ended_while_idle(
+    ruvia::testing::test_context& ruvia_ctx, ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver) {
+    using namespace ruvia;
+    auto config = peer.config();
+    config.driver_ = driver;
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    std::string before;
+    std::optional<db_error::code_type> code;
+    std::string after;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto first = co_await handle.query("SELECT v FROM before");
+        before = first.front()["v"].as<std::string_view>().value_or("");
+        peer.wait_for_idle_close();
+        // The peer has closed its end; give its FIN the loopback hop to this
+        // worker's socket before the next lease looks at it.
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(50));
+        try {
+            const auto second = co_await handle.query("SELECT v FROM after");
+            after = second.front()["v"].as<std::string_view>().value_or("");
+        } catch (const db_error& error) {
+            code = error.code();
+        }
+    });
+    RUVIA_CHECK(before == "before");
+    RUVIA_CHECK(!code.has_value());
+    RUVIA_CHECK(after == "after");
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
 }
 
 }  // namespace
@@ -67,6 +104,28 @@ RUVIA_TEST(db_connection_lost_mid_result_is_an_io_error) {
             RUVIA_CHECK(code == db_error::code_type::io_error);
         }
     }
+}
+
+// The server ends a pooled session while the pool holds it idle (PostgreSQL
+// idle_session_timeout or pg_terminate_backend, MariaDB wait_timeout or KILL).
+// The next lease looks at the connection before sending anything, reconnects,
+// and the statement succeeds on the new session.
+RUVIA_TEST(db_session_ended_while_idle_reconnects_before_the_next_statement) {
+    using peer_type = ruvia::test::backend_startup_peer;
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    {
+        peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
+            {{.rows_ = {"before"}, .close_after_ = true}, {.rows_ = {"after"}}});
+        check_session_ended_while_idle(ruvia_ctx, peer, ruvia::db_driver::postgresql);
+    }
+#endif
+#ifdef RUVIA_ENABLE_MARIADB
+    {
+        peer_type peer(std::vector<peer_type::maria_reply>{{.rows_ = {"before"}, .close_after_ = true}, {.rows_ = {"after"}}},
+            peer_type::after_startup::reaccept);
+        check_session_ended_while_idle(ruvia_ctx, peer, ruvia::db_driver::mariadb);
+    }
+#endif
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL

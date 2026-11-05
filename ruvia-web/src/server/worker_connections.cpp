@@ -318,6 +318,7 @@ void worker_connections::drain() noexcept {
 #endif
     drain_.begin();
     scanner_.drain();
+    drain_source_.request_stop();
 }
 void worker_connections::stop() noexcept {
 #if defined(_WIN32)
@@ -327,6 +328,7 @@ void worker_connections::stop() noexcept {
 #else
     close_listeners();
 #endif
+    drain_source_.request_stop();
     scanner_.stop();
     scanner_.close_all();
     drain_.complete();
@@ -516,7 +518,9 @@ task<void> worker_connections::run_session(http_server_session_config& listener_
     try {
         name_remote_endpoint(remote, remote_address, remote_port);
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
-            capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
+            capabilities_.make_context_services(stop_token_)
+                .with_drain_token(drain_token_)
+                .with_plain_transport(remote_address, remote_port));
         // Plain TCP has no close alert: only a lingering close differs from an
         // immediate one. A worker stop closes at once; scanner close_all
         // reaches a lingering close that is already running.
@@ -568,6 +572,7 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         }
         tls_served_certificate served_certificate(SSL_get_certificate(tls_stream.native_handle()));
         const auto services = capabilities_.make_context_services(stop_token_)
+                                  .with_drain_token(drain_token_)
                                   .with_tls_transport(remote_address, client_subject, remote_port, served_certificate);
         const auto close_mode = is_http2_alpn_selected(tls_stream)
                                     ? co_await run_http2(tls_stream, socket, services)
@@ -613,7 +618,12 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
         return;
     }
     const auto& max_connections = options_.server_.max_connections_per_worker_;
-    if (max_connections.has_value() && drain_.active() >= *max_connections) {
+    // At the cap, the connection idle longest between requests gives up its
+    // slot (nginx-style reuse); only when none is idle is the new one refused.
+    // The evicted socket closes now and its slot frees as its session
+    // unwinds, so the gauge may briefly exceed the cap by those evictions
+    // while the open sockets do not.
+    if (max_connections.has_value() && drain_.active() >= *max_connections && !scanner_.evict_oldest_reusable()) {
         refused_.fetch_add(1, std::memory_order_relaxed);
         return;
     }

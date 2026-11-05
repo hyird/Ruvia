@@ -44,15 +44,22 @@ void* pmr_codec_allocate(void* opaque, std::size_t bytes_value) noexcept {
     if (context_value == nullptr) {
         return nullptr;
     }
-    try {
-        return allocate_codec_block(context_value->resource(), bytes_value);
-    } catch (...) {
-        context_value->capture_current_exception();
+    if (!context_value->reserve_native_bytes(bytes_value)) {
         return nullptr;
     }
+    void* block = nullptr;
+    try {
+        block = allocate_codec_block(context_value->resource(), bytes_value);
+    } catch (...) {
+        context_value->capture_current_exception();
+    }
+    if (block == nullptr) {
+        context_value->release_native_bytes(bytes_value);
+    }
+    return block;
 }
 
-void pmr_codec_free(void*, void* address) noexcept {
+void pmr_codec_free(void* opaque, void* address) noexcept {
     if (address == nullptr) {
         return;
     }
@@ -62,6 +69,8 @@ void pmr_codec_free(void*, void* address) noexcept {
     const auto bytes_value = header_value->bytes_;
     std::destroy_at(header_value);
     resource->deallocate(raw, bytes_value, alignof(allocation_header));
+    static_cast<pmr_codec_allocation_context*>(opaque)->release_native_bytes(
+        bytes_value - sizeof(allocation_header));
 }
 
 }  // namespace ruvia::detail

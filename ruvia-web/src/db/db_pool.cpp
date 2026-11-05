@@ -216,6 +216,17 @@ void db_pool<driver_type>::release_slot(std::size_t index) noexcept {
     }
 }
 
+// Nothing has been sent on a fresh lease, so replacing the connection is
+// always safe; a pool that does not reconnect then reports the ended session
+// from connect_slot() before any statement.
+template <typename driver_type>
+void db_pool<driver_type>::retire_dead_idle_connection(std::size_t index) noexcept {
+    auto& leased = slot(index);
+    if (leased.connected_ && !driver_type::idle_connection_alive(*leased.connection_)) {
+        close_slot(index);
+    }
+}
+
 template <typename driver_type>
 std::optional<std::uint64_t> db_pool<driver_type>::oldest_exclusive_arrival() const noexcept {
     for (const auto* waiting = oldest_exclusive_; waiting != nullptr; waiting = waiting->next_) {

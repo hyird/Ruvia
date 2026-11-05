@@ -72,6 +72,9 @@ class admission_routes final {
     RUVIA_GET("/events", events);
     RUVIA_GET("/boom", boom);
     RUVIA_GET("/limited", plain, ruvia::rate_limit<1, 600000>);
+    // Answer without reading the request body.
+    RUVIA_POST("/ignore", plain);
+    RUVIA_POST("/stream-ignore", events);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {
@@ -127,6 +130,17 @@ std::optional<std::string> stalled_connection_output(const asio::ip::tcp::endpoi
         return std::nullopt;
     }
     return output;
+}
+
+// The status codes of the HTTP/1.1 responses in `output`, concatenated.
+std::string status_codes(std::string_view output) {
+    constexpr std::string_view status_line = "HTTP/1.1 ";
+    std::string codes;
+    for (auto position = output.find(status_line); position != std::string_view::npos;
+        position = output.find(status_line, position + status_line.size())) {
+        codes.append(output.substr(position + status_line.size(), 3));
+    }
+    return codes;
 }
 
 }  // namespace
@@ -291,5 +305,60 @@ RUVIA_TEST(http1_rate_limits_canonicalize_forwarded_client_addresses) {
         }
         RUVIA_CHECK(send("/plain", address).starts_with("HTTP/1.1 429 "));
     }
+    server.finish();
+}
+
+// A request body that arrived in full with its head costs no keep-alive when
+// the response never reads it -- an unresolved target, a handler or stream
+// that ignores it, or an app-wide 429 -- so the request pipelined behind it is
+// still answered. A body still incomplete closes the connection instead.
+// Distinct loopback source addresses give each case its own rate-limit budget.
+RUVIA_TEST(http1_unread_buffered_body_keeps_the_connection) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, admission_server_config());
+    const auto output_from = [&](std::string_view source, std::string_view requests) {
+        const auto output =
+            stalled_connection_output(server.endpoint(), asio::ip::make_address_v4(std::string(source)), requests);
+        RUVIA_CHECK(output.has_value());
+        return output.value_or("");
+    };
+    const std::string next("GET /plain HTTP/1.1\r\nHost: a\r\n\r\n");
+    const std::string length_body("Content-Length: 5\r\n\r\nhello");
+
+    RUVIA_CHECK_EQ(
+        status_codes(output_from("127.0.0.10", "POST /missing HTTP/1.1\r\nHost: a\r\n" + length_body + next)),
+        std::string("404200"));
+    RUVIA_CHECK_EQ(status_codes(output_from("127.0.0.11",
+                       "POST /plain HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
+                       "5\r\nhello\r\n0\r\n\r\n" +
+                           next)),
+        std::string("405200"));
+    RUVIA_CHECK_EQ(
+        status_codes(output_from("127.0.0.12", "POST /ignore HTTP/1.1\r\nHost: a\r\n" + length_body + next)),
+        std::string("200200"));
+    const auto streamed =
+        output_from("127.0.0.13", "POST /stream-ignore HTTP/1.1\r\nHost: a\r\n" + length_body + next);
+    RUVIA_CHECK_EQ(status_codes(streamed), std::string("200200"));
+    RUVIA_CHECK(streamed.find("event") != std::string::npos);
+
+    // Body bytes still to come: the response closes the connection.
+    const auto partial =
+        output_from("127.0.0.14", "POST /missing HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
+    RUVIA_CHECK_EQ(status_codes(partial), std::string("404"));
+    RUVIA_CHECK(partial.find("Connection: close\r\n") != std::string::npos);
+
+    // The app-wide limit admits four requests; the 429s that follow keep the
+    // connection while the body is in hand, and close it when it is not.
+    std::string spent;
+    for (std::size_t i = 0; i < admitted_requests; ++i) {
+        spent.append(next);
+    }
+    RUVIA_CHECK_EQ(
+        status_codes(output_from("127.0.0.15", spent + "POST /upload HTTP/1.1\r\nHost: a\r\n" + length_body + next)),
+        std::string("200200200200429429"));
+    const auto limited_partial =
+        output_from("127.0.0.16", spent + "POST /upload HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
+    RUVIA_CHECK_EQ(status_codes(limited_partial), std::string("200200200200429"));
+    RUVIA_CHECK(limited_partial.find("Connection: close\r\n") != std::string::npos);
     server.finish();
 }

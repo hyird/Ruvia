@@ -28,12 +28,12 @@ enum class websocket_inflate_result : std::uint8_t {
 // with one codec set instead of a dictionary pair per connection.
 //
 // Each call handles one whole message and resets the codec it used before
-// returning, on success, failure and exception alike: no message, and no
-// failed message, ever influences another. Raw deflaters are created on first
-// use for each (compression level, window bits) pair; one raw inflater with a
-// 15-bit window serves every receive window. All codec memory comes from the
-// resource, which must outlive this object. Not thread-safe; the address is
-// stable for the borrowers.
+// returning; a codec left by an exception is discarded and recreated by the
+// next use: no message, and no failed message, ever influences another. Raw
+// deflaters are created on first use for each (compression level, window
+// bits) pair; one raw inflater with a 15-bit window serves every receive
+// window. All codec memory comes from the resource, which must outlive this
+// object. Not thread-safe; the address is stable for the borrowers.
 class websocket_deflate_codecs final {
 public:
     explicit websocket_deflate_codecs(std::pmr::memory_resource* resource) noexcept;

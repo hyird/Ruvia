@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <utility>
 
 #include "context/context_services.h"
@@ -39,14 +38,14 @@ private:
     connection_scanner::entry& scanner_entry_;
 };
 
-[[nodiscard]] inline connection_scanner::phase http2_sans_io_inactivity_phase(
-    bool header_block_in_progress, std::size_t open_request_body_count,
-    bool websocket_tunnel_active) noexcept {
-    if (header_block_in_progress) {
+// The connection-wide scanner phase. Request bodies and send-window waits are
+// timed per stream by the session's periodic check, not by this phase.
+[[nodiscard]] inline connection_scanner::phase http2_sans_io_inactivity_phase(bool peer_settings_received,
+    bool header_block_in_progress, bool stream_active, bool websocket_tunnel_active) noexcept {
+    // Readiness (the client preface and its SETTINGS) and an incomplete header
+    // block are bounded like an HTTP/1 request head.
+    if (!peer_settings_received || header_block_in_progress) {
         return connection_scanner::phase::reading_initial;
-    }
-    if (open_request_body_count != 0) {
-        return connection_scanner::phase::reading_payload;
     }
     if (websocket_tunnel_active) {
         // A successful RFC 8441 tunnel is long-lived, not a stalled request body.
@@ -54,7 +53,9 @@ private:
         // cannot hold the connection open indefinitely.
         return connection_scanner::phase::long_lived;
     }
-    return connection_scanner::phase::idle;
+    // As in Pingora's h2 idle timeout, idleness starts when the last stream
+    // ends; an active stream keeps the inactivity deadman of an HTTP/1 handler.
+    return stream_active ? connection_scanner::phase::idle : connection_scanner::phase::awaiting_stream;
 }
 
 }  // namespace ruvia::detail

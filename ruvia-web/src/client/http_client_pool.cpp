@@ -25,17 +25,6 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
     }
 }
 
-[[nodiscard]] bool can_retry_reused_http1_request(const std::exception_ptr& failure,
-    const http_client_request_storage& request,
-    const http_client_response_state& response) noexcept {
-    if (request.upload() != nullptr || request.is_tunnel() ||
-        !is_http_method_idempotent(request.method()) || response.head_ready_ ||
-        !response.informational_.empty() || response.abandoned_) {
-        return false;
-    }
-    return is_http_client_io_error(failure);
-}
-
 [[nodiscard]] std::size_t http_client_scheduler_slots(const http_client_config_storage& config) noexcept {
     if (config.protocol_ == http_client_protocol::http1_only) {
         return config.connection_count_;
@@ -44,6 +33,13 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
 }
 
 }  // namespace
+
+bool can_retry_reused_connection_request(std::optional<http_client_error::code_type> failure,
+    const http_client_request_storage& request, const http_client_response_state& response) noexcept {
+    return failure == http_client_error::code_type::io_error && request.upload() == nullptr && !request.is_tunnel() &&
+           is_http_method_idempotent(request.method()) && !response.head_ready_ && response.informational_.empty() &&
+           !response.abandoned_;
+}
 
 void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
     throw_http_client_wait_failure(status, "HTTP client connection pool acquire");
@@ -262,6 +258,15 @@ http_client_connection& http_client_pool::connection_for_request(std::size_t ind
                 return candidate;
             }
         }
+        // A full or draining session never blocks a request while another
+        // slot can open a connection at once (Pingora: a shutting-down or
+        // full HTTP/2 connection leads to a new connection).
+        for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
+            auto& candidate = connection(index + offset);
+            if (candidate.idle_unconnected()) {
+                return candidate;
+            }
+        }
         return preferred;
     }
     if (preferred.http1_operations_ == 0) {
@@ -339,11 +344,34 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
         // possibly other requests; a request-local failure must not discard it.
         // A session that ended and was replaced by an HTTP/1.1 connection has
         // sent nothing yet: the request continues as an HTTP/1 exchange below.
-        if (co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value)) {
+        if (co_await connection_value.execute_http2(request, timeout, acquire_timeout, stop_token_value, state_value)) {
             co_return;
         }
         connected_http1_generation = connection_value.generation_;
     }
+    if (co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value,
+            connected_http1_generation)) {
+        co_return;
+    }
+    if (co_await connection_value.execute_http2(request, timeout, acquire_timeout, stop_token_value, state_value)) {
+        co_return;
+    }
+    // The HTTP/2 session negotiated above ended before this request could use
+    // it and its replacement speaks HTTP/1.1. One protocol change per request,
+    // unless the origin required HTTP/1.1: then the replacement offered no h2
+    // and the change is final.
+    if (!prefers_http11() ||
+        !co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value,
+            connection_value.generation_)) {
+        throw http_client_error(
+            http_client_error::code_type::protocol_unavailable, "upstream renegotiated the protocol repeatedly");
+    }
+}
+
+task<bool> http_client_pool::execute_http1(http_client_connection& connection_value,
+    const http_client_request_storage& request, const operation_timeout& timeout,
+    const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
+    std::optional<std::uint64_t> connected_http1_generation) {
     // A negotiated HTTP/1 connection can have several operations that already
     // hold outer HTTP/2-capacity slots. Waiting for this connection's single
     // exchange slot does not own its socket: a timeout/cancellation here must
@@ -352,122 +380,102 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
     if (must_buffer && requests_buffered_ >= config_.max_buffered_requests_) {
         throw http_client_error(http_client_error::code_type::queue_full, "HTTP client request buffer is full");
     }
-    bool retry_as_http2 = false;
-    {
-        ++connection_value.http1_operations_;
-        if (must_buffer) {
-            --requests_in_flight_;
-            ++requests_buffered_;
-        }
-        struct http1_operation final {
-            http_client_pool& pool_;
-            http_client_connection& connection_;
-            bool buffered_;
-            ~http1_operation() {
-                if (buffered_) {
-                    --pool_.requests_buffered_;
-                    ++pool_.requests_in_flight_;
-                }
-                if (connection_.http1_operations_ == 0) {
-                    std::terminate();
-                }
-                --connection_.http1_operations_;
-            }
-        } operation{*this, connection_value, must_buffer};
-        const auto acquired =
-            co_await connection_value.http1_scheduler_.acquire(acquire_timeout.remaining(), stop_token_value);
-        if (!acquired.has_value()) {
-            throw_http_client_wait_failure(acquired.status(), "HTTP/1 connection acquire");
-        }
-        const auto slot = acquired.value();
-        if (operation.buffered_) {
-            --requests_buffered_;
-            ++requests_in_flight_;
-            operation.buffered_ = false;
-        }
-        struct http1_release final {
-            pool_lease_scheduler& scheduler_;
-            std::size_t slot_;
-            ~http1_release() {
-                scheduler_.release(slot_);
-            }
-        } release{connection_value.http1_scheduler_, slot};
-
-        throw_if_abandoned(state_value);
-        if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
-            retry_as_http2 = true;
-        } else {
-            // A previous HTTP/1 exchange may have closed this connection while this
-            // request waited for the serial exchange slot. Reconnect only after
-            // acquiring that slot, so the connection cannot be replaced underneath
-            // an active HTTP/1 exchange. Every final failure below closes the
-            // connection before the slot is released; pool handoff resumes the next
-            // waiter synchronously.
-            try {
-                // The HTTP/2 fallback already connected and negotiated HTTP/1.
-                // Do not idle-probe this fresh TLS stream before its first response:
-                // session tickets can look like unsolicited response bytes. A connect
-                // or exchange while waiting for this slot invalidates the snapshot.
-                bool reused_http1 = false;
-                if (!connection_value.connected_ ||
-                    connected_http1_generation != connection_value.generation_) {
-                    reused_http1 = co_await connection_value.ensure_connected(
-                        timeout, acquire_timeout, stop_token_value, state_value);
-                }
-                if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
-                    retry_as_http2 = true;
-                } else {
-                    bool retried = false;
-                    for (;;) {
-                        std::exception_ptr failure;
-                        try {
-                            http1_client_exchange exchange(*this, connection_value);
-                            co_await exchange.run(request, timeout, stop_token_value, state_value);
-                        } catch (...) {
-                            failure = std::current_exception();
-                        }
-                        if (failure == nullptr) {
-                            connection_value.begin_idle();
-                            break;
-                        }
-                        if (retried || !reused_http1 ||
-                            !can_retry_reused_http1_request(failure, request, state_value)) {
-                            std::rethrow_exception(failure);
-                        }
-                        // RFC 9110 section 9.2.2 permits automatically retrying
-                        // an idempotent request. Limit that recovery to one failed
-                        // reused transport and a response head not yet published.
-                        connection_value.close();
-                        connection_value.retain_idle_buffers();
-                        retried = true;
-                        reused_http1 = false;
-                        (void)co_await connection_value.ensure_connected(
-                            timeout, acquire_timeout, stop_token_value, state_value);
-                        if (connection_value.protocol_ ==
-                            http_client_connection::protocol_type::http2) {
-                            retry_as_http2 = true;
-                            break;
-                        }
-                    }
-                }
-            } catch (...) {
-                if (connection_value.protocol_ != http_client_connection::protocol_type::http2) {
-                    connection_value.close();
-                    // exchange.run() has joined its child operations, so no I/O
-                    // still borrows these failed exchange buffers.
-                    connection_value.retain_idle_buffers();
-                }
-                throw;
-            }
-        }
+    ++connection_value.http1_operations_;
+    if (must_buffer) {
+        --requests_in_flight_;
+        ++requests_buffered_;
     }
-    if (retry_as_http2 &&
-        !co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value)) {
-        // One protocol change per request: the HTTP/2 session negotiated above
-        // ended before this request could use it and its replacement speaks
-        // HTTP/1.1 again.
-        throw http_client_error(
-            http_client_error::code_type::protocol_unavailable, "upstream renegotiated the protocol repeatedly");
+    struct http1_operation final {
+        http_client_pool& pool_;
+        http_client_connection& connection_;
+        bool buffered_;
+        ~http1_operation() {
+            if (buffered_) {
+                --pool_.requests_buffered_;
+                ++pool_.requests_in_flight_;
+            }
+            if (connection_.http1_operations_ == 0) {
+                std::terminate();
+            }
+            --connection_.http1_operations_;
+        }
+    } operation{*this, connection_value, must_buffer};
+    const auto acquired =
+        co_await connection_value.http1_scheduler_.acquire(acquire_timeout.remaining(), stop_token_value);
+    if (!acquired.has_value()) {
+        throw_http_client_wait_failure(acquired.status(), "HTTP/1 connection acquire");
+    }
+    const auto slot = acquired.value();
+    if (operation.buffered_) {
+        --requests_buffered_;
+        ++requests_in_flight_;
+        operation.buffered_ = false;
+    }
+    struct http1_release final {
+        pool_lease_scheduler& scheduler_;
+        std::size_t slot_;
+        ~http1_release() {
+            scheduler_.release(slot_);
+        }
+    } release{connection_value.http1_scheduler_, slot};
+
+    throw_if_abandoned(state_value);
+    if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
+        co_return false;
+    }
+    // A previous HTTP/1 exchange may have closed this connection while this
+    // request waited for the serial exchange slot. Reconnect only after
+    // acquiring that slot, so the connection cannot be replaced underneath
+    // an active HTTP/1 exchange. Every final failure below closes the
+    // connection before the slot is released; pool handoff resumes the next
+    // waiter synchronously.
+    try {
+        // The HTTP/2 fallback already connected and negotiated HTTP/1.
+        // Do not idle-probe this fresh TLS stream before its first response:
+        // session tickets can look like unsolicited response bytes. A connect
+        // or exchange while waiting for this slot invalidates the snapshot.
+        bool reused_http1 = false;
+        if (!connection_value.connected_ || connected_http1_generation != connection_value.generation_) {
+            reused_http1 =
+                co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+        }
+        if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
+            co_return false;
+        }
+        bool retried = false;
+        for (;;) {
+            std::exception_ptr failure;
+            try {
+                http1_client_exchange exchange(*this, connection_value);
+                co_await exchange.run(request, timeout, stop_token_value, state_value);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            if (failure == nullptr) {
+                connection_value.begin_idle();
+                co_return true;
+            }
+            if (retried || !reused_http1 ||
+                !can_retry_reused_connection_request(http_client_failure_code(failure), request, state_value)) {
+                std::rethrow_exception(failure);
+            }
+            connection_value.close();
+            connection_value.retain_idle_buffers();
+            retried = true;
+            reused_http1 = false;
+            (void)co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+            if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
+                co_return false;
+            }
+        }
+    } catch (...) {
+        if (connection_value.protocol_ != http_client_connection::protocol_type::http2) {
+            connection_value.close();
+            // exchange.run() has joined its child operations, so no I/O
+            // still borrows these failed exchange buffers.
+            connection_value.retain_idle_buffers();
+        }
+        throw;
     }
 }
 

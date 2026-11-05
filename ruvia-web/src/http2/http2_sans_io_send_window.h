@@ -20,6 +20,8 @@ enum class http2_send_window_wait_status : std::uint8_t {
 // Wait for payload window availability. Input processing wakes the Web-owned
 // signal even when SETTINGS/WINDOW_UPDATE produces no application event.
 // Stream existence, abort and session end are re-checked after every wake.
+// The session resets a stream whose wait outlasts write_timeout_ (Pingora
+// bounds the h2 capacity wait by its write timeout), which ends it as aborted.
 [[nodiscard]] task<http2_send_window_wait_status> await_http2_send_window(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, const bool* aborted = nullptr);

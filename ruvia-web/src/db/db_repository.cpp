@@ -1,7 +1,6 @@
 #include "ruvia/web/db/db_repository.h"
 
 #include <algorithm>
-#include <array>
 #include <stdexcept>
 
 #include "db/db_sql_format.h"
@@ -20,30 +19,14 @@ db_projection apply_projection(db_query& query, std::span<const db_selection> se
         result.columns_ = previous->columns_;
         result.wildcard_ = previous->wildcard_;
     }
-    static constexpr std::size_t inline_capacity = 16;
-    std::array<db_expression, inline_capacity> inline_values{};
-    std::pmr::vector<db_expression> heap_values(query.resource());
-    if (selection.size() > inline_capacity) {
-        heap_values.reserve(selection.size());
-    }
-    auto* const values_data = selection.size() <= inline_capacity ? inline_values.data() : nullptr;
-    std::size_t value_index = 0;
-    const auto push_value = [&](db_expression expr) {
-        if (values_data != nullptr) {
-            values_data[value_index++] = expr;
-        } else {
-            heap_values.push_back(expr);
-        }
-    };
     const auto alias = qualifier == root_table ? std::string_view{} : qualifier;
-    for (const auto& field : selection) {
+    const auto import_field = [&](const db_selection& field) -> db_expression {
         if (field.is_wildcard()) {
             if (!field.column_.empty()) {
                 throw std::invalid_argument("wildcard projections cannot have a result alias");
             }
-            push_value(field.expression(query, root_table, alias));
             result.wildcard_ = true;
-            continue;
+            return field.expression(query, root_table, alias);
         }
         if (field.column_.empty() || std::ranges::find(result.columns_, std::string_view(field.column_)) != result.columns_.end()) {
             throw std::invalid_argument("projection requires unique nonempty field names");
@@ -52,20 +35,20 @@ db_projection apply_projection(db_query& query, std::span<const db_selection> se
         auto expression = !field.has_expression()
                               ? query.column(field.column_, qualifier)
                               : field.expression(query, root_table, alias);
-        push_value(query.alias(expression, field.column_));
-    }
-    const std::span<const db_expression> values =
-        values_data != nullptr ? std::span<const db_expression>(values_data, value_index)
-                               : std::span<const db_expression>(heap_values);
-    if (returning) {
-        query.returning(values);
-    } else if (previous) {
-        for (const auto value : values) {
-            query.add_select(value);
+        return query.alias(expression, field.column_);
+    };
+    const auto publish = [&](std::span<const db_expression> values) {
+        if (returning) {
+            query.returning(values);
+        } else if (previous) {
+            for (const auto value : values) {
+                query.add_select(value);
+            }
+        } else {
+            query.select(values);
         }
-    } else {
-        query.select(values);
-    }
+    };
+    import_db_expressions(query, selection, import_field, publish);
     return result;
 }
 

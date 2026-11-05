@@ -108,53 +108,17 @@ bool websocket_http2_transport::stopping() const noexcept {
 }
 
 bool websocket_http2_transport::stop() noexcept {
-    if (stopped_) {
-        return goaway_pending_;
+    if (!std::exchange(stopped_, true)) {
+        // Its draining wakes every waiter: operations observe the owner's
+        // abort reason.
+        (void)session_.begin_close({.status_ = client_transport_status::aborted, .abort_ = owner_.abort_reason_});
     }
-    stopped_ = true;
-    if (session_.has_connection() && session_.running() && !session_.failed()) {
-        try {
-            // A client drain queues its final GOAWAY(NO_ERROR) at once.
-            session_.connection().begin_drain();
-            goaway_pending_ = true;
-            session_.wake_writer();
-            // Wakes every waiter: operations observe the owner's abort reason.
-            session_.mark_draining();
-            return true;
-        } catch (...) {
-            // Without the frame there is nothing to flush; close now.
-        }
-    }
-    session_.fail({.status_ = client_transport_status::aborted, .abort_ = owner_.abort_reason_});
-    return false;
-}
-
-task<void> websocket_http2_transport::flush_goaway() {
-    // The bound covers a peer that does not read and an unbounded
-    // write_timeout_; a stopping worker cannot arm it and closes at once.
-    const bool armed = owner_.worker_.schedule_timer(goaway_timer_,
-                           worker_timer_deadline_after(websocket_http2_goaway_flush_time),
-                           [this](worker_timer_outcome outcome) noexcept {
-                               if (outcome == worker_timer_outcome::expired) {
-                                   goaway_expired_ = true;
-                                   session_.state_signal().notify();
-                               }
-                           }) == worker_timer_schedule_status::scheduled;
-    while (armed && !goaway_expired_ && !session_.failed() &&
-           (session_.writing() || session_.connection().wants_write())) {
-        co_await session_.state_signal().wait();
-    }
-    goaway_timer_.cancel();
-    goaway_pending_ = false;
-    session_.fail({.status_ = client_transport_status::aborted, .abort_ = owner_.abort_reason_});
-    owner_.transport_.abort(owner_.abort_reason_);
-    owner_.transport_.close();
+    return session_.closing();
 }
 
 task<void> websocket_http2_transport::join() {
-    if (goaway_pending_) {
-        co_await flush_goaway();
-    }
+    // A pending close ends the generation once its GOAWAY is flushed (bounded),
+    // which also ends the reader.
     co_await drivers_.join();
     received_credit_.reset();
     received_.clear_retaining_small(0);

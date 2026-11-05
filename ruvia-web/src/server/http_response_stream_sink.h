@@ -60,7 +60,7 @@ public:
         const worker_handle& worker_value, const http_request& request, const cors_options* cors,
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
-        http_response_coding_availability response_coding_availability,
+        const compression_config* compression,
         std::pmr::memory_resource& inbound_resource) noexcept
         : stream_(stream),
           head_(head),
@@ -73,14 +73,14 @@ public:
           consumed_plan_(consumed_plan),
           request_body_(request_body),
           connection_plan_(plan.request_connection_plan().require_close()),
-          compression_(memory.resource(), codecs, response_coding, response_coding_availability),
+          compression_(memory.resource(), codecs, response_coding, compression),
           inbound_resource_(&inbound_resource) {}
 
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
         connection_scanner::entry&, worker_handle&&, const http_request&, const cors_options*,
         http1_response_stream_plan, http1_response_stream_plan,
         lazy_buffered_body<stream_type>&, http_response_coding_selection,
-        http_response_coding_availability, std::pmr::memory_resource&) = delete;
+        const compression_config*, std::pmr::memory_resource&) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -198,15 +198,14 @@ private:
     // sends the gather write as one segment already.
     void coalesce_tls_frame(std::array<asio::const_buffer, 3>& buffers, std::string_view first,
         std::string_view second, std::string_view third) noexcept {
-        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
-            return;
-        }
-        if (first.size() + second.size() + third.size() > response_head_retained_heap_bytes) {
-            return;
-        }
-        head_.reset();
-        if (try_coalesce_tls_frame(head_, {first, second, third})) {
-            buffers = {asio::buffer(head_.view()), asio::const_buffer{}, asio::const_buffer{}};
+        if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            if (first.size() + second.size() + third.size() > response_head_retained_heap_bytes) {
+                return;
+            }
+            head_.reset();
+            if (try_coalesce_tls_frame(head_, {first, second, third})) {
+                buffers = {asio::buffer(head_.view()), asio::const_buffer{}, asio::const_buffer{}};
+            }
         }
     }
 
@@ -294,16 +293,12 @@ private:
 
         if (compression_.active()) {
             try {
-                compression_.write(chunk);
+                co_await compression_.write(
+                    chunk, [this](std::string_view encoded) { return write_encoded(encoded); });
             } catch (...) {
                 state_.mark_aborted();
                 throw;
             }
-            if (compression_.output().empty()) {
-                co_return;
-            }
-            co_await write_encoded(compression_.output());
-            compression_.release_output();
             co_return;
         }
 

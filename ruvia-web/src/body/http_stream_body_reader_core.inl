@@ -60,6 +60,27 @@ http1_request_body_consumption stream_body_reader<stream_type>::consumption() co
 }
 
 template <typename stream_type>
+void stream_body_reader<stream_type>::consume_buffered_body() {
+    // Reads keep borrowing the initial view only while it still holds unread
+    // body bytes; once they moved to buffer_, the rest needs socket input.
+    if (finished_ || failed_ || initial_body_and_pipeline_.empty()) {
+        return;
+    }
+    if (const auto* known_length = body_plan_.known_length()) {
+        if (initial_body_and_pipeline_.size() >= known_length->content_length()) {
+            delivered_bytes_ = known_length->content_length();
+            mark_finished();
+        }
+        return;
+    }
+    // Chunked framing resumes where read_chunked() left the decoder, at
+    // read_cursor_ in the borrowed view.
+    if (skip_buffered_chunked_body(chunk_decoder_, initial_body_and_pipeline_, read_cursor_)) {
+        mark_finished();
+    }
+}
+
+template <typename stream_type>
 body_pipeline_handover stream_body_reader<stream_type>::take_pipeline(
     std::pmr::string& stash, std::string_view additional_pipeline) {
     // The body reader's suffix is either the tail of the connection read

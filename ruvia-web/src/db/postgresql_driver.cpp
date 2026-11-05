@@ -662,6 +662,27 @@ bool postgresql_driver::reusable_connection(connection_type& connection) noexcep
     return PQstatus(&connection) == CONNECTION_OK && PQtransactionStatus(&connection) == PQTRANS_IDLE;
 }
 
+// An idle session may legitimately receive asynchronous messages (NOTIFY,
+// ParameterStatus, a notice), so pending bytes go to libpq first; a FATAL
+// error ahead of a server-side close is read the same way. Whatever is still
+// waiting behind them -- the end of the stream, or more unsolicited traffic --
+// retires the connection.
+bool postgresql_driver::idle_connection_alive(connection_type& connection) noexcept {
+    const auto native = PQsocket(&connection);
+    if (PQstatus(&connection) != CONNECTION_OK || native < 0) {
+        return false;
+    }
+    const auto driver_socket = static_cast<db_slot_socket::native_socket_type>(native);
+    auto status = peek_db_idle_socket(driver_socket);
+    if (status == db_idle_socket_status::pending_data) {
+        if (PQconsumeInput(&connection) == 0 || PQstatus(&connection) != CONNECTION_OK) {
+            return false;
+        }
+        status = peek_db_idle_socket(driver_socket);
+    }
+    return status == db_idle_socket_status::quiet;
+}
+
 task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     return run_cached_statement<db_rows>(pool, index, sql, params, resource, deadline_value);

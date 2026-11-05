@@ -48,15 +48,6 @@ struct http_lazy_buffered_body_route_state final {
     [[nodiscard]] lazy_buffered_body<stream_type>& body() noexcept {
         return body_->loader();
     }
-
-    [[nodiscard]] http1_request_body_consumption consumption() const noexcept {
-        return body_->loader().consumption();
-    }
-
-    [[nodiscard]] body_pipeline_handover take_pipeline(
-        std::pmr::string& stash, std::string_view additional_pipeline = {}) {
-        return body_->loader().take_pipeline(stash, additional_pipeline);
-    }
 };
 
 // Returns the setup failure (allocation included) so the caller answers it
@@ -127,14 +118,33 @@ template <typename take_pipeline_type>
         });
 }
 
-template <typename body_owner_type>
+// A body the route left unread costs no reuse when it arrived in full with
+// its head: it is consumed here without I/O.
+template <typename stream_type>
 [[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
     connection_scanner::entry& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
-    std::size_t request_bytes, std::pmr::string& pipeline_stash, body_owner_type& body_owner) {
+    std::size_t request_bytes, std::pmr::string& pipeline_stash, stream_body_reader<stream_type>& reader) {
+    reader.consume_buffered_body();
     return complete_successful_http_body_route(scanner_entry, response, connection_plan, request_sequence,
-        body_owner.consumption(), request_bytes, pipeline_stash,
-        [&body_owner](std::pmr::string& stash) { return body_owner.take_pipeline(stash); });
+        reader.consumption(), request_bytes, pipeline_stash,
+        [&reader](std::pmr::string& stash) { return reader.take_pipeline(stash); });
+}
+
+// Completes a response produced without reading the request body (an
+// unresolved route or a rate-limit rejection). `request_bytes` is the
+// connection's buffered input from the start of this request. A body that
+// arrived in full with the head is consumed without I/O and the connection
+// stays reusable; any other unread body closes it after the response.
+[[nodiscard]] inline http1_session_request_completion finalize_unread_body_response(http_response& response,
+    const http1_server_request_parse_state& parsed_value, const http1_server_request_head_ready& request_head,
+    std::string_view request_bytes, http1_request_sequence& request_sequence) {
+    const auto body_bytes =
+        buffered_request_body_bytes(parsed_value.body_plan_, http_body_and_pipeline(request_head, request_bytes));
+    const auto connection_plan = apply_request_body_consumption(parsed_value.connection_plan_,
+        body_bytes ? http1_request_body_consumption::complete : http1_request_body_consumption::incomplete);
+    return finalize_buffered_route_response(
+        response, connection_plan, request_sequence, request_head.header_bytes() + body_bytes.value_or(0));
 }
 
 }  // namespace ruvia::detail

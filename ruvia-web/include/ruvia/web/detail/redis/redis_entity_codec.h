@@ -12,9 +12,11 @@
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <variant>
 
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_entity_traits.h"
+#include "ruvia/web/detail/text_scalar.h"
 #include "ruvia/web/redis/redis_types.h"
 
 namespace ruvia::detail {
@@ -43,30 +45,9 @@ template <typename t_type>
         return http_format_unsigned(
             std::span<char, http_max_unsigned_decimal_size>(scratch.data(), http_max_unsigned_decimal_size), value);
     } else {
-        const auto [ptr, ec] = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value);
-        if (ec != std::errc{}) {
-            throw std::logic_error("failed to encode Redis scalar");
-        }
-        return {scratch.data(), static_cast<std::size_t>(ptr - scratch.data())};
+        return http_format_signed(
+            std::span<char, http_max_signed_decimal_size>(scratch.data(), http_max_signed_decimal_size), value);
     }
-}
-
-template <typename t_type>
-[[nodiscard]] t_type decode_redis_number(std::string_view value) {
-    t_type result_value{};
-    const auto parsed_value = [&] {
-        if constexpr (std::is_floating_point_v<t_type>) {
-            return std::from_chars(value.data(), value.data() + value.size(), result_value,
-                std::chars_format::general);
-        } else {
-            return std::from_chars(value.data(), value.data() + value.size(), result_value);
-        }
-    }();
-    if (parsed_value.ec != std::errc{} || parsed_value.ptr != value.data() + value.size() ||
-        (std::is_floating_point_v<t_type> && !std::isfinite(result_value))) {
-        throw_invalid_redis_scalar("malformed Redis scalar");
-    }
-    return result_value;
 }
 
 template <typename t_type>
@@ -108,7 +89,11 @@ template <typename t_type>
         }
         throw_invalid_redis_scalar("malformed Redis boolean scalar");
     } else if constexpr (is_redis_entity_native_number<scalar_type>) {
-        return decode_redis_number<scalar_type>(value);
+        const auto parsed = parse_text_scalar<scalar_type>(value, memory_resource);
+        if (std::holds_alternative<text_scalar_parse_error>(parsed)) {
+            throw_invalid_redis_scalar("malformed Redis scalar");
+        }
+        return std::get<scalar_type>(parsed);
     } else {
         static_assert(always_false<scalar_type>, "unsupported Redis scalar type");
     }

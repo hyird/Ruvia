@@ -171,6 +171,36 @@ RUVIA_TEST(http_content_encode_context_resets_after_a_failed_encode) {
     }
 }
 
+RUVIA_TEST(http_content_encode_context_discards_state_left_by_an_exception) {
+    const auto failed_input = sample_body(100'000, 13);
+    const auto next_input = sample_body(5'000, 14);
+    for (const auto coding : compressing_codings) {
+        counting_resource state_resource;
+        {
+            http_content_encode_context context(coding, &state_resource);
+            const auto expected = one_shot(coding, next_input, next_input.size());
+            RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
+
+            failing_memory_resource output_resource;
+            output_resource.fail_after(0);
+            bool threw = false;
+            try {
+                static_cast<void>(context.encode(
+                    failed_input, {.max_encoded_bytes_ = failed_input.size(), .resource_ = &output_resource}));
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            RUVIA_CHECK(threw);
+            // Native state that an exception interrupted is freed, not reset
+            // and kept for the next representation.
+            RUVIA_CHECK_EQ(state_resource.live_bytes(), 0U);
+
+            RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
+        }
+        RUVIA_CHECK_EQ(state_resource.live_bytes(), 0U);
+    }
+}
+
 RUVIA_TEST(http_content_encode_context_recovers_from_state_allocation_failure) {
     const auto input = sample_body(3'000, 21);
     for (const auto coding : compressing_codings) {

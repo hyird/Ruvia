@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -138,6 +139,54 @@ private:
     std::unique_ptr<detail::redis_predicate_storage, pmr_object_deleter<detail::redis_predicate_storage>> storage_;
 };
 
+struct redis_column_options final {
+    bool primary_key_{false};
+    bool nullable_{false};
+};
+
+template <fixed_string field_name, typename t_type, redis_column_options options_type = {}>
+struct redis_column final {
+    static_assert(detail::is_redis_entity_scalar<t_type>, "Redis columns require owning scalar values");
+    static_assert(!options_type.primary_key_ || (detail::is_redis_entity_primary_key_scalar<t_type> && !options_type.nullable_),
+        "Redis primary keys must be non-nullable strings or integers");
+    static constexpr auto name = field_name;
+    using value_type = t_type;
+    static constexpr auto options = options_type;
+};
+
+namespace detail {
+template <typename t_type>
+struct is_redis_column : std::false_type {};
+template <fixed_string name, typename t_type, redis_column_options options_type>
+struct is_redis_column<redis_column<name, t_type, options_type>> : std::true_type {};
+
+template <typename columns>
+inline constexpr bool redis_columns = []<std::size_t... indices>(std::index_sequence<indices...>) {
+    return (is_redis_column<std::tuple_element_t<indices, columns>>::value && ...);
+}(std::make_index_sequence<std::tuple_size_v<columns>>{});
+
+// Column names are unique through entity_value_storage.
+template <fixed_string key_prefix, typename... columns>
+struct redis_entity_storage final {
+    static_assert((is_redis_column<columns>::value && ...),
+        "Redis entities require RUVIA_REDIS_COLUMN descriptors");
+    static_assert((std::size_t{columns::options.primary_key_} + ... + std::size_t{0}) == 1,
+        "Redis entities require exactly one primary key");
+    static constexpr auto prefix_value = key_prefix;
+    using type = entity_value_storage<columns...>;
+};
+
+template <typename entity>
+concept redis_entity_schema = requires(const entity& value) {
+    typename entity::redis_entity_type;
+    typename entity::columns_type;
+    requires std::same_as<entity, typename entity::redis_entity_type>;
+    requires redis_columns<typename entity::columns_type>;
+    { entity::prefix() } -> std::convertible_to<std::string_view>;
+    { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
+};
+}  // namespace detail
+
 namespace detail {
 struct redis_predicate_access final {
     // Null for an empty predicate.
@@ -257,38 +306,6 @@ private:
 
 namespace ruvia {
 
-struct redis_column_options final {
-    bool primary_key_{false};
-    bool nullable_{false};
-};
-
-template <fixed_string field_name, typename t_type, redis_column_options options_type = {}>
-struct redis_column final {
-    static_assert(detail::is_redis_entity_scalar<t_type>, "Redis columns require owning scalar values");
-    static_assert(!options_type.primary_key_ || (detail::is_redis_entity_primary_key_scalar<t_type> && !options_type.nullable_),
-        "Redis primary keys must be non-nullable strings or integers");
-    static constexpr auto name = field_name;
-    using value_type = t_type;
-    static constexpr auto options = options_type;
-};
-
-namespace detail {
-template <typename t_type>
-struct is_redis_column : std::false_type {};
-template <fixed_string name, typename t_type, redis_column_options options_type>
-struct is_redis_column<redis_column<name, t_type, options_type>> : std::true_type {};
-template <fixed_string key_prefix, typename... columns>
-struct redis_entity_storage final {
-    static_assert((is_redis_column<columns>::value && ...),
-        "Redis entities require RUVIA_REDIS_COLUMN descriptors");
-    static_assert((std::size_t{columns::options.primary_key_} + ... + std::size_t{0}) == 1,
-        "Redis entities require exactly one primary key");
-    static_assert(unique_entity_columns<columns...>(), "duplicate Redis entity column name");
-    static constexpr auto prefix_value = key_prefix;
-    using type = entity_value_storage<columns...>;
-};
-}  // namespace detail
-
 #define RUVIA_REDIS_COLUMN(name, value_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
 
 // set<field>() 检查整数范围与有限浮点溢出；整数列不隐式接受浮点输入。
@@ -299,35 +316,11 @@ struct redis_entity_storage final {
         using descriptor_type = ::ruvia::detail::redis_entity_storage<::ruvia::fixed_string{key_prefix}, __VA_ARGS__>; \
         using storage_type = typename descriptor_type::type;                                                           \
         storage_type entity_;                                                                                          \
-        template <typename>                                                                                            \
-        friend class ::ruvia::entity_rows;                                                                             \
-        explicit name(storage_type&& entity) noexcept                                                                  \
-            : entity_(std::move(entity)) {}                                                                            \
-        [[nodiscard]] name rebind_for_rows(std::pmr::memory_resource* resource) const {                                \
-            return name(entity_.rebind(resource));                                                                     \
-        }                                                                                                              \
-                                                                                                                       \
-    public:                                                                                                            \
+        RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, entity_)                                                     \
         using redis_entity_type = name;                                                                                \
         using columns_type = typename storage_type::columns_type;                                                      \
-        explicit name(std::pmr::memory_resource* resource = nullptr)                                                   \
-            : entity_(resource) {}                                                                                     \
-        template <typename owner_type>                                                                                 \
-            requires requires(owner_type& owner) {                                                                     \
-                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;                               \
-            }                                                                                                          \
-        explicit name(owner_type& owner)                                                                               \
-            : entity_(owner.resource()) {}                                                                             \
         static constexpr std::string_view prefix() noexcept {                                                          \
             return descriptor_type::prefix_value.view();                                                               \
-        }                                                                                                              \
-        template <::ruvia::fixed_string field_name>                                                                    \
-        static consteval std::size_t column_index() {                                                                  \
-            return storage_type::template index<field_name>();                                                         \
-        }                                                                                                              \
-        template <::ruvia::fixed_string field_name>                                                                    \
-        static consteval std::string_view column_name() noexcept {                                                     \
-            return storage_type::template column_name<field_name>();                                                   \
         }                                                                                                              \
         template <::ruvia::fixed_string field_name>                                                                    \
         static constexpr ::ruvia::redis_field_reference<name, field_name> column() noexcept {                          \
@@ -425,13 +418,13 @@ public:
     [[nodiscard]] task<redis_write_result> insert(
         const entity_type& entity, redis_write_options options = {}) const {
         detail::redis_scalar_scratch_type id_scratch;
-        return write("insert", detail::redis_entity_id(entity, id_scratch), entity, options);
+        return write(write_mode::insert, detail::redis_entity_id(entity, id_scratch), entity, options);
     }
 
     [[nodiscard]] task<redis_write_result> upsert(
         const entity_type& entity, redis_write_options options = {}) const {
         detail::redis_scalar_scratch_type id_scratch;
-        return write("upsert", detail::redis_entity_id(entity, id_scratch), entity, options);
+        return write(write_mode::upsert, detail::redis_entity_id(entity, id_scratch), entity, options);
     }
 
     [[nodiscard]] task<redis_write_result> update(
@@ -439,7 +432,7 @@ public:
         redis_write_options options = {}) const {
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
-        return write("update", id, changes, options);
+        return write(write_mode::update, id, changes, options);
     }
 
     [[nodiscard]] task<entity_rows<entity_type>> find(
@@ -576,9 +569,7 @@ private:
     explicit redis_repository(const redis_handle& handle, const redis_repository_config& config)
         : handle_(handle),
           mapping_(detail::normalize_redis_mapping(columns, entity_type::prefix(), config, handle.resource_)),
-          registration_(handle.registration_.scope(), this, &redis_repository::expire_capability) {
-        detail::validate_redis_entity<entity_type>();
-    }
+          registration_(handle.registration_.scope(), this, &redis_repository::expire_capability) {}
 
     [[nodiscard]] std::pmr::memory_resource* resource() const {
         registration_.require_active();
@@ -617,8 +608,27 @@ private:
             detail::redis_orm_delete_arguments(mapping().prefix_, id, memory), detail::redis_orm_delete_result);
     }
 
+    enum class write_mode : std::uint8_t {
+        insert,
+        upsert,
+        update,
+    };
+
+    // The write script's ARGV mode token.
+    [[nodiscard]] static constexpr std::string_view write_mode_token(write_mode mode) {
+        switch (mode) {
+            case write_mode::insert:
+                return "insert";
+            case write_mode::upsert:
+                return "upsert";
+            case write_mode::update:
+                return "update";
+        }
+        throw std::logic_error("invalid Redis write mode");
+    }
+
     [[nodiscard]] task<redis_write_result> write(
-        std::string_view mode, std::string_view id, const entity_type& entity,
+        write_mode mode, std::string_view id, const entity_type& entity,
         redis_write_options options) const {
         auto* memory = resource();
         static constexpr std::size_t required = [] {
@@ -641,7 +651,7 @@ private:
             return count;
         }();
         auto args = detail::redis_orm_write_arguments(
-            mapping().prefix_, id, mode, options, 1 + required + max_mutation_arguments, memory);
+            mapping().prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments, memory);
         detail::redis_scalar_scratch_type scalar_scratch;
         args.emplace_back(detail::encode_redis_scalar(required, scalar_scratch));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
@@ -650,25 +660,25 @@ private:
             }
         });
 
-        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        const auto& column_index_kinds = mapping().column_index_kinds_;
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t index> {
             constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
             constexpr bool tag_shadow =
                 value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
             const auto field = column_type::name.view();
+            const bool numeric_index = !tag_shadow && column_index_kinds[index] == redis_index_kind::numeric;
             if constexpr (column_type::options.primary_key_) {
-                if (mode == "update" && entity.template is_set<column_type::name>() &&
+                if (mode == write_mode::update && entity.template is_set<column_type::name>() &&
                     detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch) != id) {
                     throw std::invalid_argument("an entity update cannot change its ID");
                 }
-                detail::append_redis_entity_field(args, field, id,
-                    !tag_shadow && mapping().index_kind(field) == redis_index_kind::numeric, tag_shadow, memory);
+                detail::append_redis_entity_field(args, field, id, numeric_index, tag_shadow, memory);
             } else if (entity.template is_set<column_type::name>()) {
                 if (entity.template is_null<column_type::name>()) {
                     detail::append_redis_entity_field(args, field, std::nullopt, false, tag_shadow, memory);
                 } else {
                     const auto value = detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch);
-                    detail::append_redis_entity_field(args, field, value,
-                        !tag_shadow && mapping().index_kind(field) == redis_index_kind::numeric, tag_shadow, memory);
+                    detail::append_redis_entity_field(args, field, value, numeric_index, tag_shadow, memory);
                 }
             }
         });

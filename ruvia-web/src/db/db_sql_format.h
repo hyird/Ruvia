@@ -206,6 +206,23 @@ inline void append_db_dollar_body(std::pmr::string& output, std::string_view bod
     throw std::invalid_argument("unknown table lock mode");
 }
 
+// PostgreSQL statements emitted both as migration steps and inside PL/pgSQL bodies.
+inline void append_db_lock_table_statement(std::pmr::string& output, std::string_view table, db_table_lock_mode mode, bool nowait) {
+    const auto mode_name = table_lock_mode_name(mode);
+    output.append("LOCK TABLE ");
+    append_db_qualified_identifier(output, table, db_driver::postgresql);
+    output.append(" IN ");
+    output.append(mode_name);
+    output.append(" MODE");
+    if (nowait) {
+        output.append(" NOWAIT");
+    }
+}
+inline void append_db_perform_statement(std::pmr::string& output, db_expression expression) {
+    output.append("PERFORM ");
+    append_db_expression(output, expression, db_driver::postgresql);
+}
+
 inline void append_db_type_name(std::pmr::string& output, db_data_type type,
     std::string_view custom_name, std::size_t length, unsigned precision, unsigned scale,
     bool array_value, db_driver driver, db_sql_type_usage usage = db_sql_type_usage::column) {

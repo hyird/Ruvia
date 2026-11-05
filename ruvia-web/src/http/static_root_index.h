@@ -111,9 +111,9 @@ struct static_root_state final {
     std::uint64_t fingerprint_{0};
     bool has_sidecars_{false};
 #if defined(__unix__)
-    // The indexed root, opened once: each request opens its entry relative to
-    // it. Owned by this state and closed with it.
-    int root_directory_{-1};
+    // The indexed root, opened once: the index snapshot and each request
+    // open entries beneath it.
+    native_file_handle root_directory_;
     // The directory instance root_directory_ names; the index was built from
     // the same one.
     native_directory_identity root_identity_{};
@@ -124,7 +124,6 @@ struct static_root_state final {
           config_(std::move(configured_policy)),
           entries_(resource),
           directories_(resource) {}
-    ~static_root_state();
 
     static_root_state(const static_root_state&) = delete;
     static_root_state& operator=(const static_root_state&) = delete;
@@ -331,10 +330,10 @@ public:
     // as indexed stays file-backed and keeps its identity check.
     static void install_resident_bodies(static_root& root, const static_root* previous,
         const static_root_resident_options& options);
-    // Opens the entry's file relative to the root's directory handle, for a
-    // response whose identity check runs on that handle. Empty where no
-    // directory handle exists (Windows) or the open failed; the transport then
-    // opens the indexed path itself and fails closed exactly as before.
+    // Opens the entry's file for a response whose identity check runs on the
+    // returned handle: beneath the root's directory handle without following
+    // symlinks on POSIX, by its canonical path on Windows. Empty when the open
+    // failed; the caller then answers without resolving the path again.
     [[nodiscard]] static http_response_file_handle open_entry(
         const static_root& root, const static_root_entry_view& entry) noexcept;
 };

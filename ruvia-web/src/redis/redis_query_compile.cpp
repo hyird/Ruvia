@@ -573,16 +573,18 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
         }
     }
     redis_mapping result_value{columns, entity_prefix, std::pmr::string(prefix, resource),
-        std::pmr::vector<redis_index_definition>(resource)};
+        std::pmr::vector<redis_index_definition>(resource),
+        std::pmr::vector<redis_index_kind>(columns.size(), redis_index_kind::none, resource)};
     result_value.indexes_.reserve(config.indexes_.size());
     for (const auto& index : config.indexes_) {
         const std::string_view field = index.column_;
-        if (result_value.index_kind(field) != redis_index_kind::none) {
-            throw std::invalid_argument("duplicate Redis index column");
-        }
         const auto column = std::ranges::find(columns, field, &redis_column_info::name_);
         if (column == columns.end()) {
             throw std::invalid_argument("unknown Redis index column");
+        }
+        auto& column_index_kind = result_value.column_index_kinds_[static_cast<std::size_t>(column - columns.begin())];
+        if (column_index_kind != redis_index_kind::none) {
+            throw std::invalid_argument("duplicate Redis index column");
         }
         // Index columns name query fields and shadow hash fields.
         if (!is_safe_identifier(field)) {
@@ -590,6 +592,7 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
         }
         require_index_fits_column(index.kind_, column->kind_);
         result_value.indexes_.push_back({std::pmr::string(field, resource), index.kind_, index.sortable_});
+        column_index_kind = index.kind_;
     }
     return result_value;
 }

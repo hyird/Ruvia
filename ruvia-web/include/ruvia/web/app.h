@@ -123,9 +123,11 @@ public:
     // lookups of registered clients. It is enabled by default with bounded
     // CPU-based sizing; nullptr explicitly disables it: run_blocking() then
     // reports blocking_status::unavailable, large buffered-response compression
-    // runs synchronously, Linux file reads fail instead of blocking a worker on
-    // file I/O, and run() fails for a document root or for a registered client
-    // whose host is not an IP literal. run() starts the threads before the
+    // runs synchronously, a file response is answered with 503 before its head
+    // instead of blocking a worker on file I/O, and run() fails for a document
+    // root or for a registered client whose host is not an IP literal. On
+    // Windows plain TCP a single file range above 16 KiB still leaves through
+    // TransmitFile, which needs no pool. run() starts the threads before the
     // first request; after workers stop, running callables are not awaited and
     // may finish on the pool's detached state.
     application& blocking_pool(blocking_pool_options config);
@@ -217,12 +219,15 @@ public:
     // kept for the next run(), which then returns without serving. A stop
     // during startup rolls it back at once. A serving app stops gracefully:
     // listeners close; connections without an admitted request (idle, or still
-    // receiving a request head) close; each WebSocket session starts its close
+    // receiving a request head) close, though a request head already received
+    // in full is still served; each WebSocket session starts its close
     // handshake with 1001 Going Away, bounded by its close_handshake_timeout_;
     // admitted requests and tunnels may finish, each request closing its
-    // connection after the response. Once server_config::drain_timeout_
-    // passes, every remaining connection is closed and handlers observe their
-    // stop token. A worker failure skips the drain.
+    // connection after the response, and handlers observe their drain token
+    // (context::drain_token()) so long-lived responses can end early. Once
+    // server_config::drain_timeout_ passes, every remaining connection is
+    // closed and handlers observe their stop token. A worker failure skips
+    // the drain.
     void stop();
     // HTTP serving counters summed across every worker. All zero before run()
     // starts them and after it returns. Safe from any thread, including from a

@@ -2,12 +2,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -42,6 +44,15 @@ template <typename stream_type>
 struct http1_connection_session;
 class route_table;
 class worker_capabilities;
+
+// What serve_requests hands back to run_stream when the connection stays open:
+// no input is left buffered (the next request is awaited without a work set),
+// or a complete prior-knowledge HTTP/2 preface is pending in the work set's
+// read buffer (RFC 9113 §3.3).
+enum class http1_serve_handoff : std::uint8_t {
+    await_request,
+    cleartext_http2,
+};
 
 // Worker-local listeners, connection resources and session assembly. The
 // surrounding runtime owns lifecycle phases and the scope joining every task.
@@ -114,7 +125,7 @@ private:
     template <typename stream_type>
     task<http_connection_close> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services);
     template <typename stream_type>
-    task<std::optional<http_connection_close>> serve_requests(
+    task<std::variant<http1_serve_handoff, http_connection_close>> serve_requests(
         http1_connection_session<stream_type>& session, connection_work_set& work_set);
     asio::io_context& io_;
     const worker_handle& worker_;
@@ -123,6 +134,11 @@ private:
     worker_capabilities& capabilities_;
     http_server_options& options_;
     const stop_token& stop_token_;
+    // Requested once the worker starts draining, and at the latest when it
+    // stops: context::drain_token() for handlers whose response would
+    // otherwise hold the drain open (SSE, long polling).
+    stop_source drain_source_;
+    stop_token drain_token_{drain_source_.token()};
     http_server_worker_state& state_;
     task_scope& tasks_;
     worker_runtime& runtime_;

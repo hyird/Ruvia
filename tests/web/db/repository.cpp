@@ -487,6 +487,24 @@ RUVIA_TEST(db_repository_relation_joins_validate_source_and_target_aliases) {
     });
 }
 
+RUVIA_TEST(db_repository_relation_path_rejects_alias_and_relation_name_ambiguity) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
+        auto qb = client.handle().repository<parent>().query_builder("p");
+        qb.left_join_and_select("children", "c");
+        qb.left_join_and_select("c.parent", "children");
+        // "children" is both a root relation and the alias of children.parent.
+        RUVIA_CHECK(testing::throws_on([&] { qb.left_join_and_select("children.children", "grandchildren"); }));
+        // An alias that names no root relation still resolves through the alias.
+        qb.left_join_and_select("c.parent.children", "siblings");
+
+        // A root alias that also names a root relation is ambiguous too.
+        auto shadowed = client.handle().repository<parent>().query_builder("children");
+        RUVIA_CHECK(testing::throws_on([&] { shadowed.left_join_and_select("children.parent", "owner"); }));
+        co_return;
+    });
+}
+
 RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_source) {
     repository_runtime runtime;
     test::counting_memory_resource source;
@@ -1535,8 +1553,10 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
         const borrowed_text update_columns[]{"title", "views"};
         ins_update.values(item).on_conflict({.conflict_paths_ = conflict_paths, .update_columns_ = update_columns}).returning({"id"});
         const auto ins_update_sql = ins_update.get_query_and_parameters();
+        // The conflict update stamps the lifecycle columns the caller left unnamed.
         RUVIA_CHECK_EQ(ins_update_sql.sql(),
-            "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT (\"id\") DO UPDATE SET \"title\" = excluded.\"title\", \"views\" = excluded.\"views\" RETURNING \"articles\".\"id\" AS \"id\"");
+            "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT (\"id\") DO UPDATE SET \"title\" = excluded.\"title\", \"views\" = excluded.\"views\", "
+            "\"updated_at\" = \"now\"(), \"revision\" = (\"articles\".\"revision\" + $4) RETURNING \"articles\".\"id\" AS \"id\"");
         {
             auto op1 = repo.find({.where_ = soft_entity::column<"id">() == 1});
             auto op2 = repo.find_one({.where_ = soft_entity::column<"id">() == 1});
@@ -1689,6 +1709,8 @@ RUVIA_TEST(db_repository_decodes_postgresql_array_bounds_in_element_order) {
         "[0:0]x={7}",
         "[0:1][0:1]={{7,8},{9,10}}",
         "{{7,8},{9,10}}",
+        "[1:3]={7}",
+        "[0:2147483646]={7}",
     };
     std::vector<test::backend_startup_peer::postgres_reply> replies;
     for (const auto& value : valid) {
@@ -1736,7 +1758,150 @@ RUVIA_TEST(db_repository_decodes_postgresql_array_bounds_in_element_order) {
     });
 }
 
+// Rejects any single allocation above the cap, so a reserve sized by an
+// unverified declared array length surfaces as bad_alloc even under overcommit.
+class capped_memory_resource final : public std::pmr::memory_resource {
+public:
+    static constexpr std::size_t max_allocation = std::size_t{64} << 20;
+
+private:
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (bytes_value > max_allocation) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
+
+RUVIA_TEST(db_repository_bounds_declared_postgresql_array_length_by_arrived_text) {
+    using namespace ruvia;
+    std::vector<test::backend_startup_peer::postgres_reply> replies;
+    replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"[0:2147483646]={7}"}});
+    replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"{21,22}"}});
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle, std::move(replies));
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    capped_memory_resource capped;
+    // The client captures the default resource at construction, so decoding
+    // allocates from the capped resource.
+    const test::default_resource_guard guard(capped);
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().repository<array_entity>();
+        bool rejected = false;
+        try {
+            (void)co_await repository.query_builder().get_scalar<std::pmr::vector<int>>();
+        } catch (const db_conversion_error& error) {
+            rejected = error.code() == db_conversion_error::code_type::invalid_format;
+        }
+        RUVIA_CHECK(rejected);
+        const auto values = co_await repository.query_builder().get_scalar<std::pmr::vector<int>>();
+        RUVIA_CHECK(values.has_value());
+        if (values) {
+            RUVIA_CHECK(std::ranges::equal(*values, std::array{21, 22}));
+        }
+    });
+}
+
 }  // namespace db_repository_array_test
+
+namespace db_repository_lifecycle_test {
+
+RUVIA_DB_ENTITY(versioned_entity, "articles",
+    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
+    ruvia::db_column<"views", std::int64_t>,
+    ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>,
+    ruvia::db_column<"updated_at", std::pmr::string, ruvia::db_column_options{.update_date_ = true}>,
+    ruvia::db_column<"deleted_at", std::pmr::string, ruvia::db_column_options{.delete_date_ = true}>)
+
+// Every repository write that changes a row moves the version token and the
+// update date, unless the caller assigns that column itself.
+RUVIA_TEST(db_repository_write_paths_stamp_version_and_update_date) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    std::vector<peer_type::postgres_reply> replies(6, peer_type::postgres_reply{.column_ = "", .command_ = "UPDATE 1"});
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().repository<versioned_entity>();
+        const auto row = versioned_entity::column<"id">() == 1;
+        (void)co_await repository.restore(row);
+        (void)co_await repository.soft_delete(row);
+        (void)co_await repository.increment(row, "views");
+        const std::array assignments{versioned_entity::column<"views">().set(5)};
+        (void)co_await repository.update(row, std::span<const db_assignment>(assignments));
+        versioned_entity entity;
+        entity.set<"id">(1);
+        entity.set<"views">(7);
+        const borrowed_text conflict_paths[]{"id"};
+        (void)co_await repository.upsert(entity, {.conflict_paths_ = conflict_paths});
+        versioned_entity explicit_version;
+        explicit_version.set<"revision">(42);
+        (void)co_await repository.update(row, explicit_version);
+    });
+    const auto statements = peer.postgres_parses();
+    RUVIA_CHECK_EQ(statements.size(), std::size_t{6});
+    for (std::size_t i = 0; i < statements.size(); ++i) {
+        const std::string_view sql = statements[i].sql_;
+        RUVIA_CHECK(sql.find("\"updated_at\" = \"now\"()") != std::string_view::npos);
+        const bool bumped = sql.find("\"revision\" = (\"articles\".\"revision\" + $") != std::string_view::npos;
+        RUVIA_CHECK_EQ(bumped, i + 1 < statements.size());
+    }
+    if (statements.size() == 6) {
+        RUVIA_CHECK(std::string_view(statements[5].sql_).find("\"revision\" = $") != std::string_view::npos);
+        RUVIA_CHECK(std::ranges::find(statements[5].parameter_values_, std::optional<std::string>{"42"}) != statements[5].parameter_values_.end());
+    }
+}
+
+}  // namespace db_repository_lifecycle_test
+
+namespace db_repository_result_column_test {
+
+RUVIA_DB_ENTITY(named_entity, "named_records",
+    ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
+    ruvia::db_column<"name", std::pmr::string>)
+
+// A mapped column must resolve to exactly one result column in every
+// projection mode; a repeated name is ambiguous rather than "first wins".
+RUVIA_TEST(db_repository_rejects_repeated_mapped_result_columns_without_wildcards) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
+        {{.columns_ = {"id", "name", "name"}, .values_ = {{"1", "first", "second"}}},
+            {.columns_ = {"name", "id"}, .values_ = {{"third", "3"}}}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().repository<named_entity>();
+        bool ambiguous = false;
+        try {
+            (void)co_await repository.find();
+        } catch (const db_conversion_error& error) {
+            ambiguous = error.code() == db_conversion_error::code_type::invalid_format;
+        }
+        RUVIA_CHECK(ambiguous);
+        const auto rows = co_await repository.find();
+        RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+        if (!rows.empty()) {
+            RUVIA_CHECK_EQ(rows[0].get<"id">(), std::int64_t{3});
+            RUVIA_CHECK_EQ(rows[0].get<"name">(), "third");
+        }
+    });
+}
+
+}  // namespace db_repository_result_column_test
 #endif
 
 namespace {

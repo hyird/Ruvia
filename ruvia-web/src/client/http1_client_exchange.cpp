@@ -720,7 +720,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
         // request errors and explicit abandonment still terminate both lanes.
         const bool preserve_response = !state_value.abandoned_ &&
                                        connection_.transport_.abort_reason() == client_abort_reason::none &&
-                                       is_http_client_io_error(upload_failure);
+                                       http_client_failure_code(upload_failure) == http_client_error::code_type::io_error;
         if (preserve_response) {
             upload.failure_ = upload_failure;
             if (!state_value.complete_ && !upload.output_.stopped_) {

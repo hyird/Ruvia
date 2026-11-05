@@ -79,6 +79,19 @@ public:
             if (alias.find('.') != std::string_view::npos || alias.find('\0') != std::string_view::npos) {
                 throw std::invalid_argument("a relation join alias must be one identifier");
             }
+            // normalize() reads a leading component as the root alias or a
+            // loaded relation's alias; reject paths where it also names a
+            // root relation, so the requested relation is never replaced.
+            if (const auto dot = path.find('.'); dot != std::string_view::npos) {
+                const auto head = path.substr(0, dot);
+                bool alias_reading = head == root_alias;
+                for (const auto& node : nodes_) {
+                    alias_reading |= node.alias_ == head && node.path_ != head;
+                }
+                if (alias_reading && names_relation<entity_type>(head)) {
+                    throw std::invalid_argument("relation path is ambiguous between an alias and a relation name");
+                }
+            }
             auto normalized = normalize(root_alias, path);
             validate_path<entity_type>(normalized, 0);
             if (!alias.empty() && uses_source_name(query, alias)) {
@@ -131,6 +144,9 @@ public:
                 junction.reserve(alias.size() + 9U);
                 junction.append(alias);
                 junction.append("_junction");
+                if (uses_source_name(query, junction)) {
+                    throw std::invalid_argument("relation junction alias is already in use");
+                }
                 append_relation_joins<entity_type, relation_type>(
                     query, source_alias, alias, junction, join, condition);
             } else {
@@ -160,8 +176,17 @@ private:
         std::span<const std::string_view> primary_key, std::string_view root_alias, db_driver driver);
 
     template <typename entity_type>
+    [[nodiscard]] static bool names_relation(std::string_view name) {
+        bool found = false;
+        for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t> {
+            found = found || name == relation_type::name.view();
+        });
+        return found;
+    }
+
+    template <typename entity_type>
     static void validate_path(std::string_view path, std::size_t depth) {
-        if (path.empty() || depth >= 256) {
+        if (path.empty() || depth >= max_db_query_depth) {
             throw std::invalid_argument("relation path is empty or exceeds query nesting depth");
         }
         const auto dot = path.find('.');
@@ -371,21 +396,16 @@ private:
     template <typename entity_type>
     void resolve_columns(const db_row& row) {
         columns_.resize(plan_.column_count());
-        const auto names = db_result_access::column_names(row);
+        const auto names = row.column_names();
         const auto resolve = [&](std::string_view name) {
-            std::size_t found = names.size();
-            for (std::size_t i = 0; i < names.size(); ++i) {
-                if (names[i] == name) {
-                    if (found != names.size()) {
-                        throw db_conversion_error(db_conversion_error::code_type::invalid_format, "duplicate entity projection name in a relation query");
-                    }
-                    found = i;
-                }
+            const auto lookup = find_unique_db_result_column(names, name);
+            if (lookup.state_ == db_result_column_lookup::state_type::repeated) {
+                throw db_conversion_error(db_conversion_error::code_type::invalid_format, "duplicate entity projection name in a relation query");
             }
-            if (found == names.size() || found >= row.size()) {
+            if (lookup.state_ == db_result_column_lookup::state_type::absent || lookup.index_ >= row.size()) {
                 throw db_conversion_error(db_conversion_error::code_type::missing_column, "relation query must select every mapped entity column");
             }
-            return found;
+            return lookup.index_;
         };
         for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
             columns_[i] = resolve(column_type::name.view());

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -157,12 +158,13 @@ struct http_buffered_compression_step final {
 };
 
 // Applies the buffered compression policy without suspending: eligibility,
-// size bounds, and encoding up to sync_bytes_ (through max_bytes_ when
-// `offload_available` is false, i.e. the worker has no blocking pool). Only an
-// offload result requires compress_response_offloaded(), so identity and
-// ineligible responses never create a coroutine frame. The inline encoder is
-// the worker's reusable one: its state stays in worker memory, and only the
-// encoded body comes from the response's resource.
+// size bounds, and encoding up to sync_bytes_. sync_bytes_ is the inline
+// ceiling: a larger body is flagged for offload when `offload_available`, and
+// otherwise stays identity (not_applicable). Only an offload result requires
+// compress_response_offloaded(), so identity and ineligible responses never
+// create a coroutine frame. The inline encoder is the worker's reusable one:
+// its state stays in worker memory, and only the encoded body comes from the
+// response's resource.
 [[nodiscard]] http_buffered_compression_step apply_response_compression(
     const http_response_coding_selection& selection, http_known_method request_method,
     http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available);
@@ -175,9 +177,20 @@ struct http_buffered_compression_step final {
 [[nodiscard]] task<http_response_compression_status> compress_response_offloaded(
     http_response_coding_selection selection, http_response& response, const worker_handle& worker_value);
 
-// Response compression policy. Fixed representations do not vary by coding;
-// eligible representations are annotated before deciding between identity
-// and an encoder. Encoder availability never changes Accept-Encoding parsing.
+// The single decimal Content-Length a handler declared, or nullopt.
+[[nodiscard]] std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept;
+
+// The size rule for a body of `declared` bytes, shared by buffered bodies,
+// HEAD metadata and streams whose head declares a length: below min_bytes_
+// (or empty) stays identity unless identity is refused, and above max_bytes_
+// always stays identity.
+[[nodiscard]] bool declared_length_permits_encoding(const http_response_coding_selection& selection,
+    const compression_config& options, std::uint64_t declared) noexcept;
+
+// Response compression policy. Fixed representations do not vary by coding,
+// except an application-encoded body, whose 200-or-406 outcome does; eligible
+// representations are annotated before deciding between identity and an
+// encoder. Encoder availability never changes Accept-Encoding parsing.
 [[nodiscard]] http_response_compression_decision prepare_response_compression(
     const http_response_coding_selection& selection, http_known_method request_method,
     http_response& response, http_response_compression_source source_value,

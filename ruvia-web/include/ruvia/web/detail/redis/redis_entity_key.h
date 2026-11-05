@@ -3,12 +3,14 @@
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
+#include "ruvia/web/detail/entity/value_storage.h"
 #include "ruvia/web/detail/redis/redis_entity_codec.h"
 
 namespace ruvia::detail {
@@ -58,7 +60,6 @@ inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
 template <typename entity_type>
 [[nodiscard]] std::optional<std::string_view> try_redis_entity_id(
     const entity_type& entity, std::span<char, redis_scalar_scratch_size> scratch) {
-    validate_redis_entity<entity_type>();
     std::optional<std::string_view> id;
     for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
         if constexpr (column_type::options.primary_key_) {

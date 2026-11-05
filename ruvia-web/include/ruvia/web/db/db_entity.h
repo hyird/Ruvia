@@ -236,6 +236,11 @@ template <typename c_type>
 consteval bool is_writable_db_column() noexcept {
     return c_type::options.generated_type_ == db_generated_type::none && !c_type::options.read_only_;
 }
+// Columns a conflict update writes from EXCLUDED when the caller names none.
+template <typename c_type>
+consteval bool is_conflict_updatable_db_column() noexcept {
+    return !c_type::options.primary_key_ && !c_type::options.generated_ && is_writable_db_column<c_type>();
+}
 template <typename c_type>
 consteval bool is_numeric_db_column() noexcept {
     return !is_pmr_vector<typename c_type::value_type>::value &&
@@ -245,6 +250,39 @@ consteval bool is_numeric_db_column() noexcept {
                c_type::data_type == db_data_type::numeric ||
                c_type::data_type == db_data_type::real ||
                c_type::data_type == db_data_type::double_value);
+}
+consteval bool is_integer_db_data_type(db_data_type type) noexcept {
+    return type == db_data_type::small_int || type == db_data_type::integer || type == db_data_type::big_int;
+}
+
+// Every rule here depends only on the descriptor, so a malformed column is
+// rejected where it is declared instead of when a schema compiles it; the
+// repository relies on these invariants (for example, the soft-delete filter
+// requires a writable delete_date_ column).
+template <typename t_type>
+consteval bool valid_db_column_options(const auto& options) noexcept {
+    const auto data_type = options.data_type_ == db_data_type::inferred ? db_entity_type_traits<t_type>::data_type : options.data_type_;
+    const bool integer = !is_pmr_vector<t_type>::value && is_integer_db_data_type(data_type);
+    const bool computed = options.generated_type_ != db_generated_type::none;
+    const bool writable = !computed && !options.read_only_;
+    const int lifecycle_flags = int{options.create_date_} + int{options.update_date_} + int{options.delete_date_} + int{options.version_};
+    // create_date_ only selects a schema default; the repository writes the other three.
+    const bool repository_stamped = options.update_date_ || options.delete_date_ || options.version_;
+    return !(options.generated_ && computed) &&
+           !(options.read_only_ && (options.generated_ || computed)) &&
+           (options.enum_name_.view().empty() || options.data_type_ == db_data_type::inferred || options.data_type_ == db_data_type::array) &&
+           (!options.generated_ || (integer && !options.nullable_)) &&
+           (!options.version_ || (integer && !options.nullable_)) &&
+           (!options.primary_key_ || (!options.nullable_ && !options.delete_date_)) &&
+           lifecycle_flags <= 1 &&
+           (!repository_stamped || writable);
+}
+
+// Table names may be schema-qualified; generated aliases and constraint names
+// use the unqualified table name.
+constexpr std::string_view unqualified_db_name(std::string_view name) noexcept {
+    const auto dot = name.rfind('.');
+    return dot == std::string_view::npos ? name : name.substr(dot + 1);
 }
 
 template <typename t_type>
@@ -324,7 +362,10 @@ using tuple_filter_t = typename tuple_filter<predicate_type, ts_type...>::type;
 // PostgreSQL arrays use std::pmr::vector of owning scalar or optional elements.
 // Decoding retains one-dimensional element order and discards the lower bound;
 // multidimensional arrays are rejected with db_conversion_error.
+// Option combinations that cannot hold (see valid_db_column_options) do not
+// name a column type, so the declaration fails to compile.
 template <fixed_string field_name, db_mapped_value t_type, db_column_options options_type = db_column_options{}>
+    requires(detail::valid_db_column_options<t_type>(options_type))
 struct db_column final {
     static_assert(!detail::is_optional<t_type>::value, "use nullable column options and set_null for entity fields; optional is only for array elements");
     static constexpr auto name = field_name;
@@ -396,29 +437,15 @@ class db_entity_storage final {
         : columns_(std::move(columns)),
           relation_slots_(std::move(relation_slots)) {}
     template <fixed_string name>
-    static consteval std::size_t index() {
-        return column_storage::template index<name>();
-    }
-    template <fixed_string name>
     static consteval std::size_t relation_index() {
-        constexpr auto result_value = []<std::size_t... indexes>(std::index_sequence<indexes...>) consteval {
-            const std::array<std::string_view, sizeof...(indexes)> names{
-                std::tuple_element_t<indexes, relations_tuple_type>::name.view()...};
-            return ::ruvia::detail::fixed_name_index(names, name.view());
-        }(std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{});
+        constexpr auto result_value = descriptor_index<relations_tuple_type, name>();
         static_assert(result_value < std::tuple_size_v<relations_tuple_type>, "unknown database entity relation");
         return result_value;
     }
+    // Member names are unique across columns and relations.
     template <fixed_string name>
     static consteval bool is_relation() {
-        constexpr bool matches[] = {members_type::name == name...};
-        constexpr bool columns[] = {is_db_column<members_type>::value...};
-        for (std::size_t i = 0; i < sizeof...(members_type); ++i) {
-            if (matches[i]) {
-                return !columns[i];
-            }
-        }
-        return false;
+        return descriptor_index<relations_tuple_type, name>() < std::tuple_size_v<relations_tuple_type>;
     }
     template <fixed_string name>
     auto& relation_slot() {
@@ -437,11 +464,11 @@ public:
     }
     template <fixed_string name>
     static consteval std::size_t column_index() {
-        return index<name>();
+        return column_storage::template column_index<name>();
     }
     template <fixed_string name>
     static consteval std::string_view column_name() noexcept {
-        return std::tuple_element_t<index<name>(), columns_type>::name.view();
+        return column_storage::template column_name<name>();
     }
     explicit db_entity_storage(std::pmr::memory_resource* resource = nullptr)
         : columns_(resource),
@@ -480,7 +507,7 @@ public:
     }
     template <fixed_string name>
     void set_null()
-        requires(!is_relation<name>() && std::tuple_element_t<index<name>(), columns_type>::options.nullable_)
+        requires(!is_relation<name>() && std::tuple_element_t<column_index<name>(), columns_type>::options.nullable_)
     {
         columns_.template set_null<name>();
     }
@@ -596,8 +623,7 @@ public:
         return to_expr();
     }
     [[nodiscard]] db_expr excluded_expr() const noexcept {
-        return db_expr(detail::db_owned_expression::make_static_excluded(
-            field_name.view(), e_type::table_name()));
+        return db_expr(detail::db_owned_expression::make_static_excluded(field_name.view()));
     }
     [[nodiscard]] db_order_term asc(db_nulls_order nulls = db_nulls_order::default_value) const {
         return to_expr().asc(nulls);
@@ -913,41 +939,14 @@ private:
         storage_type entity_;                                                                                               \
         template <typename>                                                                                                 \
         friend struct ::ruvia::detail::db_entity_access;                                                                    \
-        storage_type& sql_storage() noexcept {                                                                              \
-            return entity_;                                                                                                 \
-        }                                                                                                                   \
-        template <typename>                                                                                                 \
-        friend class ::ruvia::entity_rows;                                                                                  \
         template <typename, bool>                                                                                           \
         friend struct ::ruvia::detail::db_relation_slot;                                                                    \
-        explicit name(storage_type&& storage) noexcept                                                                      \
-            : entity_(std::move(storage)) {}                                                                                \
-        [[nodiscard]] name rebind_for_rows(std::pmr::memory_resource* resource) const {                                     \
-            return name(entity_.rebind(resource));                                                                          \
-        }                                                                                                                   \
-                                                                                                                            \
-    public:                                                                                                                 \
+        RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, entity_)                                                          \
         using sql_entity_type = name;                                                                                       \
         using columns_type = typename storage_type::columns_type;                                                           \
         using relations_type = typename storage_type::relations_type;                                                       \
-        explicit name(std::pmr::memory_resource* resource = nullptr)                                                        \
-            : entity_(resource) {}                                                                                          \
-        template <typename owner_type>                                                                                      \
-            requires requires(owner_type& owner) {                                                                          \
-                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;                                    \
-            }                                                                                                               \
-        explicit name(owner_type& owner)                                                                                    \
-            : entity_(owner.resource()) {}                                                                                  \
         static constexpr std::string_view table_name() noexcept {                                                           \
             return storage_type::table_name();                                                                              \
-        }                                                                                                                   \
-        template <::ruvia::fixed_string field_name>                                                                         \
-        static consteval std::size_t column_index() {                                                                       \
-            return storage_type::template column_index<field_name>();                                                       \
-        }                                                                                                                   \
-        template <::ruvia::fixed_string field_name>                                                                         \
-        static consteval std::string_view column_name() noexcept {                                                          \
-            return storage_type::template column_name<field_name>();                                                        \
         }                                                                                                                   \
         template <::ruvia::fixed_string field_name>                                                                         \
         static constexpr ::ruvia::db_field_reference<name, field_name> column(::ruvia::borrowed_text alias = {}) noexcept { \
@@ -968,33 +967,9 @@ struct db_projection_storage final {
     private:                                                                                     \
         using storage_type = typename ::ruvia::detail::db_projection_storage<__VA_ARGS__>::type; \
         storage_type values_;                                                                    \
-        template <typename>                                                                      \
-        friend class ::ruvia::entity_rows;                                                       \
-        explicit name(storage_type&& values) noexcept                                            \
-            : values_(std::move(values)) {}                                                      \
-        [[nodiscard]] name rebind_for_rows(std::pmr::memory_resource* resource) const {          \
-            return name(values_.rebind(resource));                                               \
-        }                                                                                        \
-                                                                                                 \
-    public:                                                                                      \
+        RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, values_)                               \
         using db_projection_type = name;                                                         \
         using columns_type = typename storage_type::columns_type;                                \
-        explicit name(std::pmr::memory_resource* resource = nullptr)                             \
-            : values_(resource) {}                                                               \
-        template <typename owner_type>                                                           \
-            requires requires(owner_type& owner) {                                               \
-                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;         \
-            }                                                                                    \
-        explicit name(owner_type& owner)                                                         \
-            : values_(owner.resource()) {}                                                       \
-        template <::ruvia::fixed_string field_name>                                              \
-        static consteval std::size_t column_index() {                                            \
-            return storage_type::template index<field_name>();                                   \
-        }                                                                                        \
-        template <::ruvia::fixed_string field_name>                                              \
-        static consteval std::string_view column_name() noexcept {                               \
-            return storage_type::template column_name<field_name>();                             \
-        }                                                                                        \
         RUVIA_DETAIL_ENTITY_VALUE_API(values_)                                                   \
     };
 

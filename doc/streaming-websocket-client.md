@@ -323,9 +323,9 @@ Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.htm
 | `protocol_` | `http_client_protocol`（默认 `negotiate`） | `negotiate`（TLS 下通过 ALPN 协商 H2/H1.1，明文使用 H1.1）、`http1_only`、`http2_only`（明文下使用 H2 prior knowledge） |
 | `connection_count_` | `std::size_t`（默认 `1`） | 每个客户端实例维护的最大连接数 |
 | `max_concurrent_http2_streams_per_connection_` | `std::size_t`（默认 `100`） | 单条 HTTP/2 连接并发流上限 |
-| `connect_timeout_` / `write_timeout_` / `request_timeout_` / `acquire_timeout_` | 超时配置 | 连接建立（默认 `5s`）、单次写入（`30s`）、完整请求（`30s`）与连接池借用等待超时（`5s`，HTTP/1 与 HTTP/2 等待同一连接槽重连时同样适用，且不超过 `request_timeout_`） |
+| `connect_timeout_` / `write_timeout_` / `request_timeout_` / `acquire_timeout_` | 超时配置 | 连接建立（默认 `5s`）、单次写入（`30s`）、完整请求（`30s`）与连接池借用等待超时（`5s`，且不超过 `request_timeout_`）。借用等待包括：等待连接槽、等待同一连接槽重连（含等待排空中的旧 HTTP/2 会话退役）、以及等待 HTTP/2 流并发额度（对端 `SETTINGS_MAX_CONCURRENT_STREAMS` 低于本地上限时）；即使 `request_timeout_` 为 `nullopt`，这些等待也在 `acquire_timeout_` 到期时以 `timeout` 失败 |
 | `read_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `30s`） | 单次响应读取的无活动上限，每次收到字节后重新计时（同 Pingora `PeerOptions::read_timeout`）：HTTP/1 的响应头、正文与隧道读取，HTTP/2 中该流的响应头与 `DATA`（含推送流与 Extended CONNECT 隧道）。等待本地消费者腾出缓冲（HTTP/2 下即归还流控额度）不算无活动；流式上传期间的响应读取同样受限，对端在整个上传结束后才响应时需调大或设为 `nullopt`。到期以 `timeout` 失败该响应，仍受 `request_timeout_` 约束；HTTP/2 只复位该流（`RST_STREAM(CANCEL)`），会话继续服务其他流 |
-| `idle_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `90s`） | 连接池空闲上限（同 Go `IdleConnTimeout` / hyper 连接池）：两次交换之间的 HTTP/1 keep-alive 连接、或没有任何流的 HTTP/2 连接空闲到期即关闭，由事件驱动的定时器在连接空闲时启动、复用时取消；下一个请求新建连接 |
+| `idle_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `90s`） | 连接池空闲上限（同 Go `IdleConnTimeout` / hyper 连接池）：两次交换之间的 HTTP/1 keep-alive 连接、或没有任何流的 HTTP/2 连接空闲到期即关闭，由事件驱动的定时器在连接空闲时启动、复用时取消；下一个请求新建连接。与该上限无关（包括 `nullopt`），空闲的 HTTP/1 连接始终被监视（同 Pingora `idle_poll`，基于套接字可读事件，无轮询）：对端在空闲期间关闭（FIN / RST）或发送任何字节时立即关闭该连接，后者计入 `idle_connections_with_pending_data_` |
 | `http2_ping_interval_` | `std::optional<std::chrono::milliseconds>`（默认 `nullopt`） | HTTP/2 连接活性探测（同 Pingora `h2_ping_interval` / Go `ReadIdleTimeout`）：连续一个间隔未收到任何帧时发送 `PING`，再一个间隔仍无任何输入（`PING` ACK 也算输入）即以 `timeout` 失败该会话，其上所有流失败，下一个请求重新连接；`nullopt` 不发送 `PING` |
 | `max_response_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | `read_all()` 默认最大响应体字节数 |
 | `tls_` / `tcp_` | `client_tls_config` / `client_tcp_config`（`ruvia/web/client_tcp_config.h`） | 客户端 TLS 总是校验对端：`ca_file_`（缺省使用系统信任库）、mTLS 客户端身份 `identity_`（`tls_identity_config`）与 `server_name_`。HTTP、WebSocket、Redis 和数据库客户端都按 RFC 9525 校验证书 subjectAltName：DNS 名只匹配 DNS 项，IP 只匹配 IP 项，不回退到主题 CN，DNS 通配符只能是完整的最左标签。仅 TLS 1.2 / 1.3，TLS 1.2 只提供 ECDHE + AEAD 密码套件并拒绝重协商。`max_outgoing_records_`（默认 `2^23`，范围 `1..2^23`）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限。`tcp_` 的 `no_delay_`（`tcp_no_delay_policy`）与 `keep_alive_`（`tcp_keep_alive_policy`）选择每条出站 TCP 连接是否关闭 Nagle、开启 keep-alive 或保留系统默认；HTTP 与 WebSocket 客户端默认都为 `enable`，Redis 默认关闭 Nagle、keep-alive 使用系统默认；启用的策略无法应用时连接建立失败 |
@@ -347,6 +347,12 @@ HTTP、WebSocket 与 Redis 客户端对系统解析结果执行 [RFC 8305 §4–
 HTTP/1 请求头序列化完成后，临时首部视图和合并的 Cookie 缓冲立即释放；响应解析器接管该请求的协议状态，写入仍借用已序列化的头部和请求正文，直到发送完成。
 
 HTTP/2 握手和会话读取只向解析器提交传输实际写入的字节；接收窗口中尚未写入的部分不会被读取。
+
+HTTP/2 连接选择与退役：收到 `GOAWAY` 的排空中会话不再接纳新请求，也不阻塞新请求——若有其他连接槽仍有流额度或完全空闲未连接，请求立即改用该槽（同 Pingora 对 shutting-down / 满载连接的处理）；否则等待旧会话在最后一个流结束后退役再重连，该等待受 `acquire_timeout_` 约束。等待流并发额度的请求只在额度增加（流关闭、对端调高 `SETTINGS_MAX_CONCURRENT_STREAMS`）或会话停止接纳流时被唤醒。客户端主动关闭健康的 HTTP/2 会话（`idle_timeout_` 到期、排空会话退役、`shutdown()` 时没有流的会话）与 WebSocket 客户端共用同一路径：先发送 `GOAWAY(NO_ERROR)`（[RFC 9113 §6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8)），待写出后关闭传输，最长等待 1 秒（产品限制）；`shutdown()` 时仍有进行中流的会话、错误与取消照常立即关闭。
+
+复用连接失败重试：HTTP/1 与 HTTP/2 使用同一规则（同 Pingora `RetryType::ReusedOnly`）——请求在已被先前请求使用过的连接上遇到普通 I/O 失败（对端 EOF / RST，不含 TLS 失败、超时与取消）时，仅当方法幂等（[RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)）、请求体已缓冲（非流式上传、非隧道）且尚未发布任何响应头（含 1xx）时，在新连接上重试一次。HTTP/2 下同一会话中第一个被接受的请求不视为复用。被 `GOAWAY` 或 `RST_STREAM(REFUSED_STREAM)` 判定为未处理的请求仍按原规则重试。
+
+`HTTP_1_1_REQUIRED`（[RFC 9113 §7](https://www.rfc-editor.org/rfc/rfc9113.html#section-7)）：`negotiate` 客户端收到某请求在响应头之前的 `RST_STREAM(HTTP_1_1_REQUIRED)`，或错误码为 `HTTP_1_1_REQUIRED` 的 `GOAWAY` 后，该客户端此后所有新连接在 ALPN 中只提供 `http/1.1`（同 Pingora `prefer_h1`），被拒的 HTTP/2 会话不再接纳新请求并在其流结束后退役；被拒请求若请求体已缓冲则在 HTTP/1.1 连接上重试一次（等待旧会话退役同样受 `acquire_timeout_` 约束）。流式上传与隧道无法重放，以 `protocol_unavailable` 失败；`http2_only` 客户端收到该错误码同样以 `protocol_unavailable` 失败。
 
 ### 5.3 发送请求、读取响应与流式代理
 

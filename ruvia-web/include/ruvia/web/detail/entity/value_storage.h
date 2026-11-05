@@ -73,10 +73,14 @@ struct entity_value_slot {
     t_type value_;
 };
 
-template <fixed_string name, typename... column_types>
-consteval std::size_t entity_column_index() {
-    const std::array<std::string_view, sizeof...(column_types)> names{column_types::name.view()...};
-    return fixed_name_index(names, name.view());
+// Position of the descriptor named `name` in a descriptor tuple (entity
+// columns or relations), or the tuple size when it is absent.
+template <typename tuple_type, fixed_string name>
+consteval std::size_t descriptor_index() {
+    return []<std::size_t... i>(std::index_sequence<i...>) consteval {
+        const std::array<std::string_view, sizeof...(i)> names{std::tuple_element_t<i, tuple_type>::name.view()...};
+        return fixed_name_index(names, name.view());
+    }(std::make_index_sequence<std::tuple_size_v<tuple_type>>{});
 }
 template <typename... column_types>
 consteval bool unique_entity_columns() {
@@ -267,24 +271,24 @@ class entity_value_storage final {
     using slots_type = std::tuple<entity_value_slot<typename columns::value_type>...>;
     template <fixed_string name>
     auto& slot() {
-        return std::get<index<name>()>(slots_);
+        return std::get<column_index<name>()>(slots_);
     }
     template <fixed_string name>
     const auto& slot() const {
-        return std::get<index<name>()>(slots_);
+        return std::get<column_index<name>()>(slots_);
     }
 
 public:
     using columns_type = std::tuple<columns...>;
     template <fixed_string name>
-    static consteval std::size_t index() {
-        constexpr auto result_value = entity_column_index<name, columns...>();
+    static consteval std::size_t column_index() {
+        constexpr auto result_value = descriptor_index<columns_type, name>();
         static_assert(result_value < sizeof...(columns), "unknown entity column");
         return result_value;
     }
     template <fixed_string name>
     static consteval std::string_view column_name() noexcept {
-        return std::tuple_element_t<index<name>(), columns_type>::name.view();
+        return std::tuple_element_t<column_index<name>(), columns_type>::name.view();
     }
     explicit entity_value_storage(std::pmr::memory_resource* resource = nullptr)
         : resource_(pmr_resource_or_default(resource)),
@@ -315,7 +319,7 @@ public:
     }
     template <fixed_string name>
     void set_null()
-        requires(std::tuple_element_t<index<name>(), columns_type>::options.nullable_)
+        requires(std::tuple_element_t<column_index<name>(), columns_type>::options.nullable_)
     {
         auto& value = slot<name>();
         value.clear();
@@ -369,6 +373,36 @@ struct entity_storage_from_tuple<std::tuple<columns...>> {
 };
 
 }  // namespace ruvia::detail
+
+// Construction, row rebinding and column lookup shared by every entity owner
+// macro (SQL entity, SQL projection, Redis entity). Leaves access public.
+#define RUVIA_DETAIL_ENTITY_OWNER_API(owner, storage_type, member)                    \
+private:                                                                              \
+    template <typename>                                                               \
+    friend class ::ruvia::entity_rows;                                                \
+    explicit owner(storage_type&& storage) noexcept                                   \
+        : member(std::move(storage)) {}                                               \
+    [[nodiscard]] owner rebind_for_rows(std::pmr::memory_resource* resource) const {  \
+        return owner(member.rebind(resource));                                        \
+    }                                                                                 \
+                                                                                      \
+public:                                                                               \
+    explicit owner(std::pmr::memory_resource* resource = nullptr)                     \
+        : member(resource) {}                                                         \
+    template <typename owner_type>                                                    \
+        requires requires(owner_type& source) {                                       \
+            { source.resource() } -> std::convertible_to<std::pmr::memory_resource*>; \
+        }                                                                             \
+    explicit owner(owner_type& source)                                                \
+        : member(source.resource()) {}                                                \
+    template <::ruvia::fixed_string field_name>                                       \
+    static consteval std::size_t column_index() {                                     \
+        return storage_type::template column_index<field_name>();                     \
+    }                                                                                 \
+    template <::ruvia::fixed_string field_name>                                       \
+    static consteval std::string_view column_name() noexcept {                        \
+        return storage_type::template column_name<field_name>();                      \
+    }
 
 // Public value facades only forward; state transitions belong to the owner.
 #define RUVIA_DETAIL_ENTITY_VALUE_API(member)                       \

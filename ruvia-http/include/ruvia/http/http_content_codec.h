@@ -45,11 +45,12 @@ struct http_content_encode_options final {
 // Reusable whole-buffer encoder for one coding, for an owner that encodes many
 // representations on one thread. The first encode() creates the codec state
 // from `state_resource`; gzip, deflate and zstd keep it and reset it after
-// every call, including failures and exceptions, so no history crosses
-// representations. Brotli has no reset, so its state is created per call, also
-// from `state_resource`. Results follow encode_http_content() exactly: the same
-// bytes, cap, failures, and output from options.resource_. The context is not
-// thread-safe, and `state_resource` must outlive it.
+// every call that returns, and discard it after an exception, so no history
+// and no failed state crosses representations. Brotli has no reset, so its
+// state is created per call, also from `state_resource`. Results follow
+// encode_http_content() exactly: the same bytes, cap, failures, and output
+// from options.resource_. The context is not thread-safe, and
+// `state_resource` must outlive it.
 class http_content_encode_context final {
 public:
     http_content_encode_context(http_content_coding coding, std::pmr::memory_resource* state_resource) noexcept;

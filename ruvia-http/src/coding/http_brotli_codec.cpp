@@ -33,7 +33,7 @@ namespace {
 std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
     std::pmr::string output("", http_pmr_resource_or_default(resource));
-    brotli_decoder_stream decoder(output.get_allocator().resource());
+    brotli_decoder_stream decoder(output.get_allocator().resource(), max_decoded_bytes);
     if (!decoder.initialized()) {
         throw http_content_codec_error("brotli decoder initialization failed");
     }
@@ -67,6 +67,11 @@ std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
             return http_content_decode_error::invalid_content;
         }
         if (result_value == BROTLI_DECODER_RESULT_ERROR) {
+            // A ring buffer refused by the native budget was declared larger
+            // than the cap allows the content to be.
+            if (decoder.native_budget_exceeded()) {
+                return http_content_decode_error::decoded_size_exceeded;
+            }
             decoder.rethrow_allocation_failure();
             if (brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))) {
                 throw http_content_codec_error("brotli decoder ran out of memory");
@@ -94,7 +99,7 @@ std::optional<std::pmr::string> encode_brotli_content(
 std::optional<std::pmr::string> encode_brotli_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     auto* const state_resource = http_pmr_resource_or_default(resource);
-    brotli_encoder_stream encoder(state_resource);
+    brotli_encoder_stream encoder(state_resource, brotli_whole_buffer_window_bits);
     if (!encoder.initialized()) {
         throw http_content_codec_error("brotli encoder initialization failed");
     }

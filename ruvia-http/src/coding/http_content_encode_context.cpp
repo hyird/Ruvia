@@ -67,7 +67,7 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
         case http_content_coding::zstd:
             break;
         case http_content_coding::brotli: {
-            detail::brotli_encoder_stream encoder(resource_);
+            detail::brotli_encoder_stream encoder(resource_, detail::brotli_whole_buffer_window_bits);
             if (!encoder.initialized()) {
                 throw http_content_codec_error("brotli encoder initialization failed");
             }
@@ -78,8 +78,9 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
             return encode_http_content(coding_, input, options);
     }
 
-    // Every exit, including a rethrown allocation failure, leaves the next
-    // representation a fresh stream.
+    // A normal exit, including the output-cap outcome, resets the state for
+    // the next representation; a failure discards it so the next encode
+    // starts from fresh native state.
     if (detail::acquire_pmr_codec(impl_, resource_, coding_, resource_) == nullptr) {
         throw http_content_codec_error("content encoder initialization failed");
     }

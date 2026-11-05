@@ -1,6 +1,8 @@
 #include "coding/http_brotli_stream.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 
 #include "ruvia/http/http_content_codec.h"
 
@@ -10,10 +12,33 @@ namespace {
 
 inline constexpr std::uint32_t http_brotli_quality = 5;
 
+// Upper bound of the per-metablock Huffman groups (256 trees each of the
+// literal, command and 520-symbol distance alphabets at alphabet + 376
+// four-byte entries, about 2.7 MB in the reference decoder) plus context maps,
+// block-type trees and the state itself. It does not depend on the window.
+inline constexpr std::size_t brotli_decoder_table_allowance = 3U * 1024U * 1024U;
+
+// The reference decoder sizes its ring buffer as the smallest power of two
+// covering the bytes already decoded plus the declared metablock length, and
+// grows it by doubling, holding the old ring during the copy. Content that
+// fits `max_decoded_bytes` therefore never needs more than three times that
+// cap (1 KiB floor) plus write-ahead slack; a larger ring can only serve
+// content the cap rejects anyway.
+[[nodiscard]] std::size_t brotli_decoder_native_budget(std::size_t max_decoded_bytes) noexcept {
+    constexpr auto unlimited = (std::numeric_limits<std::size_t>::max)();
+    constexpr std::size_t ring_floor = 1024;
+    constexpr std::size_t ring_slack = 2 * 1024;
+    const auto ring_bytes = (std::max)(max_decoded_bytes, ring_floor);
+    if (ring_bytes > (unlimited - ring_slack - brotli_decoder_table_allowance) / 3) {
+        return unlimited;
+    }
+    return 3 * ring_bytes + ring_slack + brotli_decoder_table_allowance;
+}
+
 }  // namespace
 
-brotli_decoder_stream::brotli_decoder_stream(std::pmr::memory_resource* resource)
-    : allocation_(resource),
+brotli_decoder_stream::brotli_decoder_stream(std::pmr::memory_resource* resource, std::size_t max_decoded_bytes)
+    : allocation_(resource, brotli_decoder_native_budget(max_decoded_bytes)),
       state_(BrotliDecoderCreateInstance(&pmr_codec_allocate, &pmr_codec_free, &allocation_)) {
     if (state_ == nullptr) {
         allocation_.rethrow_allocation_failure();
@@ -26,10 +51,12 @@ brotli_decoder_stream::~brotli_decoder_stream() {
     }
 }
 
-brotli_encoder_stream::brotli_encoder_stream(std::pmr::memory_resource* resource)
+brotli_encoder_stream::brotli_encoder_stream(std::pmr::memory_resource* resource, int window_bits)
     : allocation_(resource),
       state_(BrotliEncoderCreateInstance(&pmr_codec_allocate, &pmr_codec_free, &allocation_)) {
-    if (state_ != nullptr && BrotliEncoderSetParameter(state_, BROTLI_PARAM_QUALITY, http_brotli_quality) != BROTLI_TRUE) {
+    if (state_ != nullptr &&
+        (BrotliEncoderSetParameter(state_, BROTLI_PARAM_QUALITY, http_brotli_quality) != BROTLI_TRUE ||
+            BrotliEncoderSetParameter(state_, BROTLI_PARAM_LGWIN, static_cast<std::uint32_t>(window_bits)) != BROTLI_TRUE)) {
         BrotliEncoderDestroyInstance(state_);
         state_ = nullptr;
     }

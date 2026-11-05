@@ -185,6 +185,10 @@ if(RUVIA_BUILD_WEB)
     # Owns a multi-worker application whose document root changes under it.
     ruvia_add_web_standalone_test(ruvia_document_root_refresh_tests 60
         web/http/document_root_refresh.cpp)
+    # Owns an application with a short write timeout, a one-thread blocking
+    # pool and a connection-failure hook.
+    ruvia_add_web_standalone_test(ruvia_file_response_failure_tests 30
+        web/http/file_response_failure.cpp)
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)

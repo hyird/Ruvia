@@ -103,6 +103,9 @@ class db_pool;
 // hears when a caller stops waiting for a lease, and is closed by close_now().
 // Before any lease is reassigned, reusable_connection() must confirm that the
 // drained connection is outside a transaction and safe for unrelated callers.
+// idle_connection_alive() looks at a connection that sat in the pool, without
+// blocking and before anything is sent on it: false when the server ended the
+// session meanwhile, so the pool reconnects instead.
 //
 // Stream hooks are protocol steps only: the pool owns a stream's cancellation,
 // deadline and the release of its slot. A stream's `result` handle is the
@@ -120,6 +123,7 @@ struct mariadb_driver final {
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
@@ -146,6 +150,7 @@ struct postgresql_driver final {
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
@@ -320,6 +325,11 @@ public:
     // Gives a lease back, unless the driver state keeps it for a caller of its
     // own. Every lease this pool hands out ends here.
     void release_slot(std::size_t index) noexcept;
+    // Runs once per new lease, before its first statement: closes the leased
+    // slot's pooled connection when the server ended the session while it sat
+    // idle, so the next connect_slot() replaces it and nothing is sent on a
+    // dead connection.
+    void retire_dead_idle_connection(std::size_t index) noexcept;
     // Connects a leased slot unless it is connected; a failure closes it. A
     // pool that does not reconnect (db_config_storage::reconnect_) fails here
     // for a slot whose connection ended.
@@ -407,7 +417,8 @@ private:
     class lease_acquire final {
     public:
         lease_acquire(db_pool& pool, const operation_timeout& timeout, const stop_token& stop)
-            : waiting_(pool, stop),
+            : pool_(pool),
+              waiting_(pool, stop),
               acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop)) {}
         lease_acquire(const lease_acquire&) = delete;
         lease_acquire& operator=(const lease_acquire&) = delete;
@@ -419,10 +430,13 @@ private:
             return acquire_.await_suspend(continuation);
         }
         [[nodiscard]] std::size_t await_resume() {
-            return acquire_.await_resume();
+            const auto index = acquire_.await_resume();
+            pool_.retire_dead_idle_connection(index);
+            return index;
         }
 
     private:
+        db_pool& pool_;
         exclusive_wait waiting_;
         typename leases_type::acquire_awaiter acquire_;
     };

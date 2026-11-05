@@ -55,11 +55,14 @@ struct redis_index_definition final {
 // index kind that fits its value kind. `columns_` and `entity_prefix_` view the
 // entity's static schema: `entity_prefix_` is the declared prefix predicates
 // are bound to, `prefix_` names the index and storage keys.
+// `column_index_kinds_[i]` is the index kind of `columns_[i]` (none when the
+// column is not indexed), so writes address it by descriptor index.
 struct redis_mapping final {
     std::span<const redis_column_info> columns_;
     std::string_view entity_prefix_;
     std::pmr::string prefix_;
     std::pmr::vector<redis_index_definition> indexes_;
+    std::pmr::vector<redis_index_kind> column_index_kinds_;
 
     [[nodiscard]] redis_index_kind index_kind(std::string_view column) const noexcept {
         for (const auto& index : indexes_) {

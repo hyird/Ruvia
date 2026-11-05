@@ -138,6 +138,10 @@ namespace {
     parsed_request_header_block& block) {
     buffer = buffer.substr(0, headers_end);
     while (cursor_value < headers_end) {
+        // The field-count rule of http_field_section_budget.
+        if (block.headers_.size() == max_http_header_fields) {
+            return http_parse_error::header_too_large;
+        }
         const auto field = scan_http1_field_line(buffer, cursor_value);
         if (!field) {
             return http_parse_error::invalid_header;

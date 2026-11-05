@@ -5,6 +5,7 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_limits.h"
 
 #include "client/http_client_response_head.h"
 #include "parser/http_header_block_parser.h"
@@ -13,43 +14,6 @@
 namespace ruvia::detail {
 
 namespace {
-
-[[nodiscard]] http1_client_status_line_parse_result_type parse_status_line(
-    std::string_view status_line) noexcept {
-    const auto separator = status_line.find(' ');
-    if (separator == std::string_view::npos) {
-        return http1_client_response_parse_error::invalid_status_line;
-    }
-
-    // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3). A higher
-    // HTTP/1 minor version is processed as HTTP/1.1 (RFC 9110 section 6.2).
-    const auto version = status_line.substr(0, separator);
-    if (version.size() != 8 || !version.starts_with("HTTP/1.") || version[7] < '0' || version[7] > '9') {
-        return http1_client_response_parse_error::unsupported_http_version;
-    }
-
-    // status-line = HTTP-version SP status-code SP [ reason-phrase ]. The
-    // separator after the three digits is mandatory even for an empty phrase.
-    if (status_line.size() < separator + 5 || status_line[separator + 4] != ' ') {
-        return http1_client_response_parse_error::invalid_status_code;
-    }
-
-    // RFC 9110 section 15: a received 000..099 or 600..999 is processed as a
-    // 5xx response.
-    const auto parsed_status = http_received_status::try_parse(status_line.substr(separator + 1, 3));
-    if (!parsed_status) {
-        return http1_client_response_parse_error::invalid_status_code;
-    }
-
-    // Unlike a field value, reason-phrase can legitimately begin or end with
-    // SP/HTAB. Validate bytes directly instead of applying OWS trimming rules.
-    if (!is_valid_http_field_value_bytes(status_line.substr(separator + 5))) {
-        return http1_client_response_parse_error::invalid_reason_phrase;
-    }
-
-    return http1_client_parsed_status_line{.received_status_ = *parsed_status,
-        .protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11};
-}
 
 [[nodiscard]] bool request_offers_protocol(
     const http1_client_exchange_state& exchange_state, const http_upgrade_protocol& selected) noexcept {
@@ -99,6 +63,42 @@ namespace {
 
 }  // namespace
 
+http1_client_status_line_parse_result_type parse_http1_client_status_line(std::string_view status_line) noexcept {
+    const auto separator = status_line.find(' ');
+    if (separator == std::string_view::npos) {
+        return http1_client_response_parse_error::invalid_status_line;
+    }
+
+    // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3). A higher
+    // HTTP/1 minor version is processed as HTTP/1.1 (RFC 9110 section 6.2).
+    const auto version = status_line.substr(0, separator);
+    if (version.size() != 8 || !version.starts_with("HTTP/1.") || version[7] < '0' || version[7] > '9') {
+        return http1_client_response_parse_error::unsupported_http_version;
+    }
+
+    // status-line = HTTP-version SP status-code SP [ reason-phrase ]. The
+    // separator after the three digits is mandatory even for an empty phrase.
+    if (status_line.size() < separator + 5 || status_line[separator + 4] != ' ') {
+        return http1_client_response_parse_error::invalid_status_code;
+    }
+
+    // RFC 9110 section 15: a received 000..099 or 600..999 is processed as a
+    // 5xx response.
+    const auto parsed_status = http_received_status::try_parse(status_line.substr(separator + 1, 3));
+    if (!parsed_status) {
+        return http1_client_response_parse_error::invalid_status_code;
+    }
+
+    // Unlike a field value, reason-phrase can legitimately begin or end with
+    // SP/HTAB. Validate bytes directly instead of applying OWS trimming rules.
+    if (!is_valid_http_field_value_bytes(status_line.substr(separator + 5))) {
+        return http1_client_response_parse_error::invalid_reason_phrase;
+    }
+
+    return http1_client_parsed_status_line{.received_status_ = *parsed_status,
+        .protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11};
+}
+
 http1_client_parsed_response_head::http1_client_parsed_response_head(
     const http1_client_parsed_status_line& status_line, std::pmr::memory_resource* resource) noexcept
     : received_status_(status_line.received_status_),
@@ -107,17 +107,9 @@ http1_client_parsed_response_head::http1_client_parsed_response_head(
       headers_(resource) {}
 
 http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
-    std::string_view head_section, const http1_client_exchange_state& exchange_state,
-    std::pmr::memory_resource* resource, std::size_t first_line_end) {
-    if (first_line_end > head_section.size()) {
-        first_line_end = head_section.find("\r\n");
-    }
-    const auto first_line = head_section.substr(0, first_line_end);
-    const auto status_line = parse_status_line(first_line);
-    if ((status_line.index() != 0)) {
-        return std::get<1>(status_line);
-    }
-    http1_client_parsed_response_head output(std::get<0>(status_line), resource);
+    const http1_client_parsed_status_line& status_line, std::string_view field_section,
+    const http1_client_exchange_state& exchange_state, std::pmr::memory_resource* resource) {
+    http1_client_parsed_response_head output(status_line, resource);
 
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), output.status_code_);
@@ -129,10 +121,13 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     // field describing the selected representation.
     const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
 
-    const auto remaining = head_section.substr(first_line_end + 2);
     std::size_t cursor_value = 0;
-    while (cursor_value < remaining.size()) {
-        const auto field = scan_http1_field_line(remaining, cursor_value);
+    while (cursor_value < field_section.size()) {
+        // The field-count rule of http_field_section_budget.
+        if (output.headers_.size() == max_http_header_fields) {
+            return http1_client_response_parse_error::header_too_large;
+        }
+        const auto field = scan_http1_field_line(field_section, cursor_value);
         if (!field) {
             return http1_client_response_parse_error::invalid_header;
         }

@@ -197,26 +197,51 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             co_return;
         }
 
-        auto context_value = make_route_context(memory, request, *resolved, services);
-        auto& context_services_value = detail::context_access::services(context_value);
-        context_services_value.bind_routes(*this);
-        context_services_value.bind_route_body_limit(resolved->route().max_request_body_bytes());
-        std::exception_ptr exception;
-        try {
-            response = co_await invoke_route(*resolved, context_value);
-            if (!resolved->route().has_middleware()) {
-                detail::context_access::apply_response_policy(context_value, response);
-            }
-            co_return;
-        } catch (...) {
-            exception = std::current_exception();
-        }
-        response = co_await finalize_failure(context_value, exception);
+        (void)co_await dispatch_resolved_route(request, memory, *resolved, services, nullptr, response);
         co_return;
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
     response = co_await handle_exception(request, memory, dispatch_exception, services);
+}
+
+task<bool> detail::route_table::dispatch_resolved_route(const http_request& request, request_memory& memory,
+    const resolved_route& resolved, const context_services& services,
+    const std::optional<http_request_body_failure>* body_failure, http_response& response) const {
+    const auto body_failed = [body_failure] { return body_failure != nullptr && body_failure->has_value(); };
+    bool body_failure_handled = false;
+    std::exception_ptr dispatch_exception;
+    try {
+        auto context_value = make_route_context(memory, request, resolved, services);
+        auto& context_services_value = detail::context_access::services(context_value);
+        context_services_value.bind_routes(*this);
+        context_services_value.bind_route_body_limit(resolved.route().max_request_body_bytes());
+        std::exception_ptr exception;
+        try {
+            response = co_await invoke_route(resolved, context_value);
+            if (body_failed() && context_value.exception() == nullptr) {
+                throw http_request_body_protocol_error(**body_failure);
+            }
+            if (!resolved.route().has_middleware()) {
+                detail::context_access::apply_response_policy(context_value, response);
+            }
+        } catch (...) {
+            exception = std::current_exception();
+        }
+        if (exception != nullptr) {
+            response = co_await finalize_failure(context_value, exception);
+        }
+        body_failure_handled = body_failed() && context_value.exception() != nullptr;
+    } catch (...) {
+        dispatch_exception = std::current_exception();
+    }
+    if (dispatch_exception != nullptr) {
+        // Context construction and failed error finalization keep the
+        // request-only fallback; transport failures still escape to the session.
+        body_failure_handled = body_failed();
+        response = co_await handle_exception(request, memory, dispatch_exception, services);
+    }
+    co_return body_failure_handled;
 }
 
 }  // namespace ruvia

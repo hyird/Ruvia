@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -101,34 +102,65 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         return detail::http1_client_response_parse_result_access::failure(error);
     };
 
+    // The status line is validated once its line feed arrives, so a non-HTTP
+    // peer or a bare LF fails without waiting for the whole head. Bytes before
+    // header_scan_offset_ held no line feed in an earlier call.
+    if (!status_line_) {
+        const auto line_feed = buffer.substr(0, max_http_header_bytes).find('\n', header_scan_offset_);
+        if (line_feed != std::string_view::npos) {
+            if (line_feed == 0 || buffer[line_feed - 1] != '\r') {
+                return fail(http1_client_response_parse_error::invalid_status_line);
+            }
+            const auto status_line = detail::parse_http1_client_status_line(buffer.substr(0, line_feed - 1));
+            if (status_line.index() != 0) {
+                return fail(std::get<1>(status_line));
+            }
+            status_line_ = std::get<0>(status_line);
+            status_line_end_ = line_feed - 1;
+        }
+    }
+
     const auto header_bytes = detail::find_http_header_end(buffer, header_scan_offset_);
     if (header_bytes == std::string_view::npos) {
+        // A field line ending in a bare LF can never complete the
+        // CRLF-delimited head (RFC 9112 section 2.2).
+        if (status_line_ &&
+            detail::has_http_bare_line_feed(buffer, std::max(status_line_end_ + 2, header_scan_offset_))) {
+            return fail(http1_client_response_parse_error::invalid_header);
+        }
         if (buffer.size() >= max_http_header_bytes) {
             return fail(http1_client_response_parse_error::header_too_large);
         }
         header_scan_offset_ = buffer.size() > 3 ? buffer.size() - 3 : 0;
         return detail::http1_client_response_parse_result_access::need_more();
     }
+    // A complete head holds a line feed, so its status line was validated
+    // above unless the input broke the same-prefix contract of parse().
+    // A retry after an allocation failure rescans from the start.
+    if (!status_line_) {
+        throw std::logic_error("HTTP/1 client response input does not extend the previous prefix");
+    }
+    const auto status_line = *status_line_;
+    const auto fields_begin = status_line_end_ + 2;
     header_scan_offset_ = 0;
+    status_line_.reset();
+    status_line_end_ = 0;
 
     // Exclude only the final empty line: every field keeps its CRLF, matching
     // the request scanner even when the head contains no fields.
-    auto head_section = buffer.substr(0, header_bytes - 2);
-    std::optional<std::pmr::string> unfolded_head;
-    const auto status_line_end = head_section.find("\r\n");
-    if (status_line_end != std::string_view::npos) {
-        // The status line is not a field: its following whitespace cannot be
-        // folded into the reason phrase. Only normalize within the field block.
-        const auto first_fold = detail::find_field_line_fold(head_section, status_line_end + 2);
-        if (first_fold != std::string_view::npos) {
-            unfolded_head.emplace("", detail::http_pmr_resource_or_default(resource_));
-            detail::copy_unfolded_field_lines(
-                head_section, first_fold, detail::field_line_folding_policy::http, *unfolded_head);
-            head_section = *unfolded_head;
-        }
+    auto field_section = buffer.substr(fields_begin, header_bytes - 2 - fields_begin);
+    std::optional<std::pmr::string> unfolded_fields;
+    // The status line is not a field: its following whitespace cannot be
+    // folded into the reason phrase. Only normalize within the field block.
+    if (const auto first_fold = detail::find_field_line_fold(field_section);
+        first_fold != std::string_view::npos) {
+        unfolded_fields.emplace("", detail::http_pmr_resource_or_default(resource_));
+        detail::copy_unfolded_field_lines(
+            field_section, first_fold, detail::field_line_folding_policy::http, *unfolded_fields);
+        field_section = *unfolded_fields;
     }
     auto parsed_head = detail::parse_http1_client_response_head_fields(
-        head_section, exchange_state_, resource_, status_line_end);
+        status_line, field_section, exchange_state_, resource_);
     if ((parsed_head.index() != 0)) {
         return fail(std::get<1>(parsed_head));
     }

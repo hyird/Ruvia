@@ -110,9 +110,13 @@ public:
         return endpoint_.tls_ != nullptr;
     }
     // Resolves, connects, applies socket policies and, for TLS, prepares SNI,
-    // peer identity and the endpoint's ALPN offer before the handshake. Every
+    // peer identity and the ALPN offer before the handshake. Every
     // operation borrowing a previous connection must have finished.
     [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
+    // Replaces the endpoint's ALPN offer for every later connect().
+    void offer_alpn(client_alpn alpn) noexcept {
+        endpoint_.alpn_ = alpn;
+    }
     // Selected ALPN protocol of the current TLS connection; empty for TCP.
     [[nodiscard]] std::string_view alpn() noexcept;
     // HTTP/1 clients offer only http/1.1: a TLS peer either skips ALPN or
@@ -157,6 +161,12 @@ public:
     // end of stream before either condition retires the connection. Pending TLS
     // data can be close_notify, a post-handshake record or an unsolicited response.
     [[nodiscard]] client_idle_transport_status idle_status() noexcept;
+    // Completes once the socket of a connected, idle transport is readable,
+    // at its end or failed, without reading and without running the TLS
+    // engine; idle_status() then classifies it. Only while no other operation
+    // is pending: cancel_wait() ends it early.
+    [[nodiscard]] task<void> wait_readable();
+    void cancel_wait() noexcept;
 
     // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown: the
     // transport no longer sends close_notify for this connection.

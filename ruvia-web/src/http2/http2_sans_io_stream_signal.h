@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <coroutine>
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -58,12 +60,30 @@ public:
         return termination_;
     }
 
+    // Spans one whole send-window wait: wakes inside it keep its clock.
     void set_waiting_send_window(bool waiting) noexcept {
         waiting_send_window_ = waiting;
+        send_window_wait_observed_ms_.reset();
+        send_window_wait_expired_ = false;
     }
 
     [[nodiscard]] bool waiting_send_window() const noexcept {
         return waiting_send_window_;
+    }
+
+    // True once per send-window wait, when it has been observed for
+    // `timeout` in the connection scanner's clock. The first observation
+    // starts the clock, so the wait is charged from at most one scan after it
+    // began, never earlier.
+    [[nodiscard]] bool send_window_wait_expired(std::int64_t now_ms, std::chrono::milliseconds timeout) noexcept {
+        if (!waiting_send_window_ || send_window_wait_expired_) {
+            return false;
+        }
+        if (!send_window_wait_observed_ms_.has_value()) {
+            send_window_wait_observed_ms_ = now_ms;
+        }
+        send_window_wait_expired_ = now_ms - *send_window_wait_observed_ms_ >= timeout.count();
+        return send_window_wait_expired_;
     }
 
     class wait_operation final {
@@ -112,6 +132,8 @@ private:
     std::optional<stop_source> stop_source_;
     bool stopped_{false};
     bool waiting_send_window_{false};
+    bool send_window_wait_expired_{false};
+    std::optional<std::int64_t> send_window_wait_observed_ms_;
 };
 
 }  // namespace ruvia::detail

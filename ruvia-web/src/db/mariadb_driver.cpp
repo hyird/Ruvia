@@ -1077,6 +1077,15 @@ bool mariadb_driver::reusable_connection(connection_type& connection) noexcept {
     return (status & SERVER_STATUS_IN_TRANS) == 0 && (status & SERVER_STATUS_AUTOCOMMIT) != 0;
 }
 
+// The server sends nothing between commands except the error packet that
+// precedes its own close (wait_timeout, KILL, shutdown), so any byte, the end
+// of the stream or a socket error retires the connection.
+bool mariadb_driver::idle_connection_alive(connection_type& connection) noexcept {
+    const auto native = mysql_native_socket(connection);
+    return native != db_slot_socket::invalid_socket &&
+           peek_db_idle_socket(native) == db_idle_socket_status::quiet;
+}
+
 namespace {
 
 // A statement as text on a connection its caller holds exclusively: its

@@ -17,7 +17,9 @@ class worker_codecs;
 // An incremental encoder on loan from worker_codecs for one response stream.
 // Destroying the lease hands the encoder back; the worker resets it and keeps
 // it for the next stream, so streamed and SSE responses reuse codec state the
-// way buffered responses reuse the worker's whole-buffer contexts.
+// way buffered responses reuse the worker's whole-buffer contexts. A lease
+// whose encoder failed is discarded instead: failed codec state is freed, never
+// pooled.
 class stream_encoder_lease final {
 public:
     stream_encoder_lease(const stream_encoder_lease&) = delete;
@@ -32,6 +34,8 @@ public:
     [[nodiscard]] http_content_encoder& encoder() noexcept {
         return *encoder_;
     }
+
+    void discard() noexcept;
 
 private:
     friend class worker_codecs;
@@ -70,7 +74,8 @@ public:
     // A fresh incremental encoder for `coding` (a compressing coding; identity
     // throws std::logic_error): a pooled one when the worker holds any, else a
     // new one from the worker resource. Each coding keeps a bounded free list;
-    // a returned encoder past that bound, or one whose reset fails, is freed.
+    // a returned encoder past that bound, a discarded one, or one whose reset
+    // fails, is freed.
     [[nodiscard]] stream_encoder_lease acquire_stream_encoder(http_content_coding coding);
 
     [[nodiscard]] websocket_deflate_codecs& websocket_deflate() noexcept {
@@ -80,9 +85,10 @@ public:
 private:
     friend class stream_encoder_lease;
 
-    // Idle stream encoders retained per coding. Deflate state alone is a few
-    // hundred KB, so the bound keeps a burst of streams from pinning memory
-    // for the worker's whole life.
+    // Idle stream encoders retained per coding. Stream encoders use reduced
+    // windows (brotli 512 KiB, zstd its level default), but each still holds
+    // its working memory while pooled, so the bound keeps a burst of streams
+    // from pinning memory for the worker's whole life.
     static constexpr std::size_t max_pooled_stream_encoders = 8;
 
     struct stream_encoder_pool_type final {
@@ -92,6 +98,7 @@ private:
 
     [[nodiscard]] stream_encoder_pool_type& stream_encoders(http_content_coding coding);
     void release_stream_encoder(http_content_encoder& encoder) noexcept;
+    void destroy_stream_encoder(http_content_encoder& encoder) noexcept;
 
     std::pmr::memory_resource* resource_;
     http_content_encode_context gzip_;
@@ -108,6 +115,13 @@ private:
 inline void stream_encoder_lease::release() noexcept {
     if (encoder_ != nullptr) {
         codecs_->release_stream_encoder(*std::exchange(encoder_, nullptr));
+        codecs_ = nullptr;
+    }
+}
+
+inline void stream_encoder_lease::discard() noexcept {
+    if (encoder_ != nullptr) {
+        codecs_->destroy_stream_encoder(*std::exchange(encoder_, nullptr));
         codecs_ = nullptr;
     }
 }

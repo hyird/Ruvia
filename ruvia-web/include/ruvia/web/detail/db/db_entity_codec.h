@@ -72,6 +72,11 @@ void for_each_postgresql_array_element(std::string_view source, std::pmr::memory
     const auto array = parse_postgresql_array_text(source);
     const auto contents = array.contents_;
     if (array.elements_) {
+        // Every element occupies at least one byte plus a separator inside the
+        // braces, so the arrived text bounds the declared length before reserve.
+        if (*array.elements_ > (contents.size() - 1) / 2) {
+            throw_invalid_postgresql_array();
+        }
         reserve(*array.elements_);
     }
     std::pmr::string escaped_token(resource);
@@ -242,9 +247,7 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
         }
     }
     using value_type = typename c_type::value_type;
-    if constexpr (std::is_same_v<value_type, std::pmr::string> || std::is_same_v<value_type, string> ||
-                  std::is_same_v<value_type, std::optional<std::pmr::string>> ||
-                  std::is_same_v<value_type, std::optional<string>>) {
+    if constexpr (std::is_same_v<value_type, std::pmr::string> || std::is_same_v<value_type, string>) {
         (void)resource;
         entity.template set<c_type::name>(*raw);
     } else {
@@ -252,6 +255,29 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
         decode_db_field(field, value, resource);
         entity.template set<c_type::name>(std::move(value));
     }
+}
+
+// SQL permits repeated result names; a mapped column must name exactly one.
+struct db_result_column_lookup final {
+    enum class state_type : unsigned char { absent,
+        found,
+        repeated };
+    state_type state_{state_type::absent};
+    std::size_t index_{0};
+};
+
+[[nodiscard]] inline db_result_column_lookup find_unique_db_result_column(
+    std::span<const std::pmr::string> names, std::string_view name) noexcept {
+    db_result_column_lookup result;
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (names[index] == name) {
+            if (result.state_ == db_result_column_lookup::state_type::found) {
+                return {db_result_column_lookup::state_type::repeated, index};
+            }
+            result = {db_result_column_lookup::state_type::found, index};
+        }
+    }
+    return result;
 }
 
 template <typename e_type>
@@ -266,43 +292,30 @@ public:
           wildcard_(wildcard) {}
 
     e_type decode(const db_row& row, std::pmr::memory_resource* resource) {
-        const auto names = db_result_access::column_names(row);
+        const auto names = row.column_names();
         if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
-            bool ordered_wildcard = wildcard_ && names.size() == column_count;
-            if (ordered_wildcard) {
-                for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
-                    if (ordered_wildcard && names[i] == column_type::name.view()) {
-                        indices_[i] = i;
-                    } else {
-                        ordered_wildcard = false;
-                    }
-                });
-            }
-            if (!ordered_wildcard) {
-                for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
-                    if (!selected_[i] && !wildcard_) {
-                        indices_[i] = missing_column;
-                        return;
-                    }
-                    if (!wildcard_ && i < names.size() && names[i] == column_type::name.view()) {
-                        indices_[i] = i;
-                        return;
-                    }
+            // Entity column names are unique, so a result naming exactly the
+            // entity columns in declaration order cannot repeat a name.
+            bool ordered = names.size() == column_count;
+            for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+                ordered = ordered && names[i] == column_type::name.view();
+            });
+            for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+                if (ordered) {
+                    indices_[i] = i;
+                    return;
+                }
+                if (!selected_[i] && !wildcard_) {
                     indices_[i] = missing_column;
-                    for (std::size_t index = 0; index < names.size(); ++index) {
-                        if (names[index] == column_type::name.view()) {
-                            if (wildcard_ && indices_[i] != missing_column) {
-                                throw db_conversion_error(
-                                    db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
-                            }
-                            indices_[i] = index;
-                            if (!wildcard_) {
-                                return;
-                            }
-                        }
-                    }
-                });
-            }
+                    return;
+                }
+                const auto lookup = find_unique_db_result_column(names, column_type::name.view());
+                if (lookup.state_ == db_result_column_lookup::state_type::repeated) {
+                    throw db_conversion_error(
+                        db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
+                }
+                indices_[i] = lookup.state_ == db_result_column_lookup::state_type::found ? lookup.index_ : missing_column;
+            });
             schema_ = names;
         }
         e_type result(resource);
@@ -377,12 +390,7 @@ void append_entity_array_value(std::pmr::string& output, const t_type& value) {
 
 template <typename t_type>
 db_value entity_db_value(const t_type& value, [[maybe_unused]] std::pmr::memory_resource* resource) {
-    if constexpr (is_optional<t_type>::value) {
-        if (!value) {
-            return db_value(nullptr);
-        }
-        return entity_db_value(*value, resource);
-    } else if constexpr (std::is_same_v<t_type, std::pmr::string> || std::is_same_v<t_type, string>) {
+    if constexpr (std::is_same_v<t_type, std::pmr::string> || std::is_same_v<t_type, string>) {
         return db_value(std::string_view(value));
     } else if constexpr (std::is_same_v<t_type, bool> || std::is_arithmetic_v<t_type>) {
         return db_value(value);

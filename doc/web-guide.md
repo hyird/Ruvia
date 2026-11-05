@@ -42,7 +42,7 @@ int main() {
 | `application& document_root(document_root_config config)` / `document_root(std::nullptr_t)` | 启用或禁用后台定时刷新的静态文档根目录服务 |
 | `application& trusted_proxies(trusted_proxy_config config)` / `trusted_proxies(std::nullptr_t)` | 配置可信反向代理 CIDR 列表与 `X-Forwarded-Proto` 信任策略 |
 | `application& rate_limit(rate_limit_config config)` / `rate_limit(std::nullptr_t)` | 启用或禁用全局按客户端 IP 限流 |
-| `application& blocking_pool(blocking_pool_options config)` / `blocking_pool(std::nullptr_t)` | 配置各 worker 事件循环借用的常驻阻塞卸载线程池（默认启用）；注册客户端也在其上执行 DNS 查询。禁用后 `run_blocking` 返回 `blocking_status::unavailable`，配置了文档根或主机不是 IP 字面量的注册客户端会使 `run()` 启动失败 |
+| `application& blocking_pool(blocking_pool_options config)` / `blocking_pool(std::nullptr_t)` | 配置各 worker 事件循环借用的常驻阻塞卸载线程池（默认启用）；注册客户端也在其上执行 DNS 查询。禁用后 `run_blocking` 返回 `blocking_status::unavailable`，文件响应在响应头前以 `503` 回答（Windows 明文 TCP 上大于 16 KiB 的单范围仍走 `TransmitFile`），配置了文档根或主机不是 IP 字面量的注册客户端会使 `run()` 启动失败 |
 | `application& http_client(http_client_registration_config config)` / `http_client(std::nullptr_t)` | 注册绑定到每个 worker 的出站 HTTP 客户端池（支持命名 `alias_`，默认 `"default"`） |
 | `application& database(db_registration_config config)` / `database(std::nullptr_t)` | 注册 per-worker SQL 数据库连接池（需 `RUVIA_ENABLE_DATABASE`） |
 | `application& redis(redis_registration_config config)` / `redis(std::nullptr_t)` | 注册 per-worker Redis 连接池（需 `RUVIA_ENABLE_REDIS`） |
@@ -52,7 +52,7 @@ int main() {
 | `application& on_connection_failure(connection_failure_callback callback)` | 注册连接/握手层异常回调（`noexcept`） |
 | `application& on_start(app_hook hook)` / `on_stop(app_hook hook)` | 注册启动后（accept 开始前）与停机后的生命周期钩子（在 `run()` 调用线程上执行） |
 | `void run()` | 启动所有业务 worker 并阻塞，直到调用 `stop()` 或收到停止信号；排空完成后返回 |
-| `void stop()` | 线程安全地请求停机：停止接入新连接 → 在 `drain_timeout_` 内排空已接纳请求并发送 WebSocket `1001` 关闭帧 → 强制关闭超时连接 → 退役退出 |
+| `void stop()` | 线程安全地请求停机：停止接入新连接 → 在 `drain_timeout_` 内排空已接纳请求（已完整收到请求头的 HTTP/1 请求仍会处理并以 `Connection: close` 应答）、发送 WebSocket `1001` 关闭帧并触发 `c.drain_token()` → 强制关闭超时连接 → 退役退出 |
 | `http_server_stats http_stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
 | `blocking_pool_stats blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
 | `std::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄 |
@@ -74,14 +74,14 @@ int main() {
 | `process_signal_handlers_` | `process_signal_handler_policy`（默认 `external_owner`） | 设为 `install` 时自动安装 `SIGINT` / `SIGTERM` 信号处理以触发优雅停机 |
 | `drain_timeout_` | `std::chrono::milliseconds`（默认 `10s`） | 停机排空阶段等待在途请求完成的最大时长。HTTP/2 连接按 RFC 9113 §6.8 两阶段排空：先发 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳客户端已在途的流；收到 `PING` ACK、往返等待达到 `min(1 秒, drain_timeout_ / 2)`（产品上限，不必等 ACK）或客户端此间新开超过 128 条流时，再发携带最后流 ID 的 `GOAWAY` 并拒绝之后的流。客户端已先发 `GOAWAY` 时直接发出最终 `GOAWAY`，不再走 `PING` 往返 |
 | `worker_queue_capacity_` | `std::size_t`（默认 `1024`） | 每个 worker 跨线程任务投递队列容量 |
-| `idle_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `75s`） | 空闲连接超时时间 |
-| `connection_scan_interval_` | `std::chrono::milliseconds`（默认 `1s`） | 连接超时扫描周期 |
-| `request_header_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求头读取超时 |
-| `request_body_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求体单次读取超时 |
-| `header_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `30s`） | 请求头整体完成截止时间 |
-| `body_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `120s`） | 请求体整体完成截止时间 |
-| `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 写入无进展超时：每次 socket 写入期间独立计时，只有写入进展续期（读到的数据不续期），不是整体截止期。覆盖 HTTP/1 响应、HTTP/1 升级连接（WebSocket 消息、控制帧与关闭帧，`CONNECT` 隧道数据，与是否启用 WebSocket 心跳无关）以及 HTTP/2 连接的全部帧输出（含 RFC 8441 WebSocket 与 `CONNECT` 隧道），与读方向当前处于空闲、读取请求体还是长连接阶段无关：对端停止读取时关闭连接 |
-| `max_connections_per_worker_` | `std::optional<std::size_t>`（默认 `1024`） | 单个 worker 允许的最大并发连接数 |
+| `idle_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `75s`） | 空闲连接超时时间。HTTP/1 为等待下一个请求时的无活动时长，也是处理器既不读也不写时的兜底。HTTP/2 没有任何流时从最后一条流结束（或连接就绪）起计时，`PING`、`SETTINGS`、`WINDOW_UPDATE` 等不开启流的帧以及服务端自身的写出都不续期（与 Pingora `h2_idle_timeout` 一致），到期以 `GOAWAY` 排空；有在途流时与 HTTP/1 处理器兜底相同 |
+| `connection_scan_interval_` | `std::chrono::milliseconds`（默认 `1s`） | 连接超时扫描周期。worker 没有任何连接且空闲修剪已执行后扫描停止，下一个连接到来时恢复 |
+| `request_header_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求头读取超时；HTTP/2 连接收到客户端连接前言与 `SETTINGS` 之前、以及头块（`CONTINUATION`）未完成时同样受此约束 |
+| `request_body_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求体单次读取超时。HTTP/2 按流计时：某条流超过该时长没有收到请求体 `DATA` 时，只以 `RST_STREAM(CANCEL)` 重置该流（不发送响应），连接与其他流不受影响，其他流或控制帧不续期 |
+| `header_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `30s`） | 请求头整体完成截止时间；HTTP/2 连接就绪（连接前言与 `SETTINGS`）同样受此截止期约束 |
+| `body_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `120s`） | 请求体整体完成截止时间。HTTP/2 按流计时：自该流请求头到达起计算，到期只重置该流 |
+| `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 写入无进展超时：每次 socket 写入期间独立计时，只有写入进展续期（读到的数据不续期），不是整体截止期。覆盖 HTTP/1 响应、HTTP/1 升级连接（WebSocket 消息、控制帧与关闭帧，`CONNECT` 隧道数据，与是否启用 WebSocket 心跳无关）以及 HTTP/2 连接的全部帧输出（含 RFC 8441 WebSocket 与 `CONNECT` 隧道），与读方向当前处于空闲、读取请求体还是长连接阶段无关：对端停止读取时关闭连接。HTTP/2 流等待对端流控窗口（发送窗口为 0）也受此限制：连续等待超过该时长的流以 `RST_STREAM(CANCEL)` 重置，只影响该流（与 Pingora 以写超时约束 h2 流控等待一致） |
+| `max_connections_per_worker_` | `std::optional<std::size_t>`（默认 `1024`） | 单个 worker 允许的最大并发连接数。达到上限时，新连接接管“请求间空闲最久”的连接的槽位（等待下一个请求的 HTTP/1 keep-alive 连接，或没有任何流的 HTTP/2 连接），后者的 socket 立即关闭（与 nginx 在 `worker_connections` 用尽时复用 keep-alive 连接的机制一致）；被淘汰连接的会话退出前 `active_connections_` 可能短暂超过上限，但打开的 socket 数不超过。没有空闲连接时，新 socket 在 TLS 与协议识别之前直接关闭（不伪造响应），并计入 `connections_refused_` |
 | `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数；HTTP/2 达到上限时按上述两阶段 `GOAWAY` 排空，往返期间在途的流仍被处理（产品上限：最多再接纳 128 条，往返最长等待同上） |
 | `max_buffered_body_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | 缓冲式路由默认允许的最大请求体字节数 |
 | `max_inbound_buffer_bytes_per_worker_` | `std::size_t`（默认 `256 MiB`） | 单 worker 入站缓冲总字节上限 |
@@ -95,8 +95,28 @@ int main() {
 
 - 服务器主动结束、而对端仍可能发来数据时采用逗留关闭：HTTP/1 发送要求关闭连接的最终响应（`Connection: close`、请求被拒绝、排空中）后，以及 HTTP/2 以 `GOAWAY` 结束会话（排空完成、空闲超时、连接错误）后，TLS 先发送 `close_notify`，再半关闭 TCP 发送方向，读取并丢弃对端剩余输入，直到对端结束输入、累计 2 秒或丢弃 4 MiB 先发生为止，然后关闭 TCP。这样未读输入不会使 TCP 以 RST 结束连接而冲掉最后的响应。2 秒与 4 MiB 是固定的产品上限。
 - 等待请求头时发生空闲超时、请求头超时或排空，以及对端正常结束输入时，TLS 发送 `close_notify` 后关闭。HTTP/2 对端结束输入（FIN 或 `close_notify`）时先发送最终 `GOAWAY(NO_ERROR)` 再关闭；该连接上仍在处理的流被取消，不再完成其响应。
-- HTTP/2 连接超时（写入超时除外）先进入 `GOAWAY` 排空，但不再获得第二个完整超时周期：往返等待达到上述 `min(1 秒, drain_timeout_ / 2)` 时发出最终 `GOAWAY`，取消仍未结束的流，并以逗留关闭结束连接（TLS 发送 `close_notify`）。若届时仍有写入未完成（对端不读取），自超时起 2 秒（产品上限）后直接关闭连接，不发送关闭告警。
+- HTTP/2 连接超时（写入超时除外）先进入 `GOAWAY` 排空，但不再获得第二个完整超时周期：往返等待达到上述 `min(1 秒, drain_timeout_ / 2)` 时发出最终 `GOAWAY`，取消仍未结束的流，并以逗留关闭结束连接（TLS 发送 `close_notify`）。若届时仍有写入未完成（对端不读取），自超时起 2 秒（产品上限）后直接关闭连接，不发送关闭告警。HTTP/2 请求体超时与流控窗口等待超时属于单条流，只以 `RST_STREAM(CANCEL)` 重置该流，不结束连接。
 - 写超时（HTTP/1 响应、WebSocket 与 `CONNECT` 隧道的写入，以及 HTTP/2 连接的写入）、HTTP/1 读取请求体超时与处理器无读写超过 `idle_timeout_`、传输错误以及 `drain_timeout_` 到期后的强制关闭立即关闭连接，不发送关闭告警（停滞的写入无法再携带 `GOAWAY` 或关闭告警）。逗留中的连接计入 `active_connections_`，受 `drain_timeout_` 约束。
+- HTTP/1 路由未读取请求体就给出响应（未命中路由的 `404`/`405`/`OPTIONS`/文档根、处理器或中间件未读请求体即返回，以及限流的 `429`）时，若整个请求体（`Content-Length` 或完整的 `chunked` 帧）已随请求头一并收到，框架不经任何 I/O 直接消费它，连接保持 keep-alive；请求体仍有未到达部分时，响应后按上文逗留关闭。其他由框架生成的拒绝（`400`、`413`、`417`、`421` 等）一律关闭连接。
+
+#### 优雅停机与 `c.drain_token()`
+
+`app().stop()` 开始排空时，每个 worker 请求其 `drain_token`（`drain_timeout_ = 0` 跳过排空时，于 worker 停止时请求）。SSE、长轮询等会一直占住连接的响应应观察 `c.drain_token()` 并主动结束，使停机在 `drain_timeout_` 到期前完成，而不是到期后被强制切断。`c.stop_token()` 不受影响：`db()`、`redis()`、`http_client()` 与 `run_blocking()` 绑定的仍是 `stop_token()`，排空期间继续运行；内存内测试分发（`ruvia::testing`）得到的 `drain_token()` 永不触发。
+
+```cpp
+ruvia::task<void> events(ruvia::context& c) {
+    auto writer = c.stream_sse();
+    if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+        co_return;
+    }
+    const auto drain = c.drain_token();
+    while (!drain.stop_requested()) {
+        co_await writer.write({.data_ = "tick"});
+        // 排空开始时立即醒来，随后结束流，连接随响应结束关闭。
+        (void)co_await ruvia::sleep_for(c.worker(), std::chrono::seconds(1), drain);
+    }
+}
+```
 
 #### `ruvia::listen_config` 与 `ruvia::tls_config`
 
@@ -139,7 +159,7 @@ ruvia::app().listen({
 
 #### 压缩、CORS 与可信代理配置
 
-- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）；应用自行设置的 `Content-Encoding` 编码栈（含自定义编码 token）仍按请求的 `Accept-Encoding` 逐项校验，任一层编码被拒绝时回 `406`。`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`（拒绝 identity 时同样编码 0 字节体）；显式 `RUVIA_HEAD` 路由返回空非文件响应体时不压缩该空体：按其声明的 `Content-Length`（支持逗号分隔的相同值；无声明时仅在拒绝 identity 时）决定是否加 `Content-Encoding`，加上时去掉 `Content-Length`（编码后长度未知，RFC 9110 §8.6 允许省略），未声明 `Content-Length` 的显式空 `HEAD` 响应省略 `Content-Length`。
+- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）；应用自行设置的 `Content-Encoding` 编码栈（含自定义编码 token）仍按请求的 `Accept-Encoding` 逐项校验，任一层编码被拒绝时回 `406`。仅文本类媒体类型参与压缩（`text/*`、JSON / XML 及 `+json` / `+xml` 后缀、JavaScript / ECMAScript、`application/wasm`、`application/x-ndjson`、SVG、图标及未压缩字体 `font/ttf` / `font/otf` / `application/vnd.ms-fontobject`），缺少 `Content-Type`、其他类型或类型名含 `zip` 时保持 identity；静态文件预压缩使用同一白名单。应用自带 `Content-Encoding` 的响应不再编码，但其 `200` / `406` 结果取决于 `Accept-Encoding`，因此同样加 `Vary: Accept-Encoding`。框架编码响应时弱化强 `ETag`、删除不是带引号 entity-tag 的 `ETag`，并删除 `Accept-Ranges`（identity 字节范围不适用于编码后的表示）。`sync_bytes_` 是事件循环内联编码上限：更大的缓冲体在启用阻塞池时卸载编码，未启用时保持 identity（拒绝 identity 时回 `406`），不在事件循环上编码。流式响应的头部声明 `Content-Length` 时按与缓冲体相同的 `min_bytes_` / `max_bytes_` 规则决定是否编码；每次应用写入按 16 KiB 输入分片编码，仅在该次写入末尾 flush 一次（HTTP/1 与 HTTP/2 一致）；流式 br 使用 512 KiB 窗口（lgwin 19，同 Pingora），zstd 使用压缩级别默认窗口（RFC 9659 的 8 MiB 只作上限），编码失败的流式编码器直接释放、不回池复用。`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`（拒绝 identity 时同样编码 0 字节体）；显式 `RUVIA_HEAD` 路由返回空非文件响应体时不压缩该空体：按其声明的 `Content-Length`（支持逗号分隔的相同值；无声明时仅在拒绝 identity 时）决定是否加 `Content-Encoding`，加上时去掉 `Content-Length`（编码后长度未知，RFC 9110 §8.6 允许省略），未声明 `Content-Length` 的显式空 `HEAD` 响应省略 `Content-Length`。请求体按 `Content-Encoding` 透明解码时，前 64 KiB 解码输出在事件循环内完成，更大的表示改在阻塞池上解码；无阻塞池或池拒绝时仍在事件循环内解码（请求必须得到内容），两者都受解码上限约束。
 - `cors_config`：
   - `origin_`：`cors_origin_config{.mode_ = cors_origin_mode::any | exact | credentialed_exact, .value_ = "..."}`
   - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`
@@ -407,7 +427,7 @@ const auto& user = c.request_state<current_user>();
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
 
-每个 worker 预分配 `capacity_per_worker_`（默认 `8192`）个固定窗口计数槽。一次查找或插入只探测该 key 哈希位置起的固定窗口（`min(capacity_per_worker_, 32)` 个槽），单次请求的开销与表容量无关；窗口内全是其他 key 的未过期计数时，该请求按规则的 `overflow_policy_` 处理（默认 `deny`），即使表的其他部分仍有空位。容量需要为活跃客户端数留出余量。
+每个 worker 预分配 `capacity_per_worker_`（默认 `8192`）个固定窗口计数槽。key 的起始槽位由每个 worker 启动时随机抽取密钥的 SipHash-1-3 计算，攻击者无法离线算出哪些 key 落入同一探测窗口；一次查找或插入只探测该起始槽位起的固定窗口（`min(capacity_per_worker_, 32)` 个槽），单次请求的开销与表容量无关；窗口内全是其他 key 的未过期计数时，该请求按规则的 `overflow_policy_` 处理（默认 `deny`），即使表的其他部分仍有空位。容量需要为活跃客户端数留出余量。
 
 会话仅接受固定 48 位小写十六进制 ID，其他长度或字符按不存在的会话处理，不读取或修改其拼接的 Redis key。已有合法 ID 与 `key_prefix_ + ID` 存储格式保持不变；旧的非标准 ID 不再被识别。固定长度防止不同前缀通过变长 ID 穿透命名空间；使用同一 Redis 数据库和相同前缀则共享会话命名空间，隔离责任由配置方承担。
 
@@ -532,7 +552,15 @@ Ruvia 提供三种静态文件服务方式：
 
 多个范围的请求返回 `multipart/byteranges`，各部分只带 `Content-Type` 与 `Content-Range`；选中预压缩变体（带 `Content-Encoding`）时多范围请求返回完整的 `200` 表示（单个范围仍是带 `Content-Encoding` 的单部分 `206`）。`If-Range` 匹配后的 `206` 只带必需字段（`ETag`、`Cache-Control`、`Vary`、`Content-Range` 或 multipart `Content-Type` 等）及描述所发字节的 `Content-Encoding`，不再重复 `Content-Type`、`Last-Modified`（RFC 9110 §15.3.7）。
 
-非 resident 文件响应会验证索引或构造时记录的文件身份，零字节文件也不例外：空文件在索引后被改写或删除，不能以旧 `Content-Length: 0` 成功提交。单文件传输在成功响应头之前读取/验证首块，后续读取仍检查快照；提交前失败不会发送成功响应头，提交后失败按当前 HTTP 连接或流终止。resident 和已经复制到响应内的字节仍属于独立快照，不因后续磁盘变化失效。
+非 resident 文件响应会验证索引或构造时记录的文件身份，零字节文件也不例外：空文件在索引后被改写或删除，不能以旧 `Content-Length: 0` 成功提交。`c.file()` 与 `c.static_file()` 在处理器内打开文件一次，响应正文由同一句柄（读取时为其复制句柄）提供，传输层不再按路径重新解析。
+
+文件正文在所有平台、所有传输上走同一条读取链：打开与阻塞读取在阻塞池上执行，每轮最多预读 64 KiB，worker 不做同步文件读取；唯一例外是 Windows 明文 TCP 上大于 16 KiB 的单个范围，经内核 `TransmitFile` 按 64 KiB 分片发送，每片之后重新校验句柄身份，最后一个字节在校验通过后才发出。每次文件读取的等待以 `server_config::write_timeout_` 为界，超时后放弃等待（读取在池线程上自行结束并释放句柄与缓冲），连接不再被卡住的磁盘占用。
+
+响应头之前读取并校验首个文件范围（multipart 正文也一样，先于首个边界）。提交前失败时连接或流仍得到错误响应：文件被删除、替换或改写、读取出错返回 `500 file_read_failed`；读取未完成（阻塞池队列满、未配置阻塞池、超过 `write_timeout_`）返回 `503 file_read_unavailable`；HTTP/1 随后关闭连接，HTTP/2 只结束该流（响应头已发出后则以 `RST_STREAM(INTERNAL_ERROR)` 结束）。真实故障（I/O 错误、句柄耗尽、读取超时、缺少阻塞池）经连接故障通道报告（`on_connection_failure()` 回调；未注册时走限流的未处理故障报告）；文件变化、队列满（计入 `blocking_pool_stats().rejected_`）与停机不报告。提交后失败按当前 HTTP 连接或流终止。resident 和已经复制到响应内的字节仍属于独立快照，不因后续磁盘变化失效。
+
+HTTP/2 文件正文在 `HEADERS` 之前只打开并校验、不预读；之后每块只在对端授予发送窗口后读取，至多读取窗口大小，每个连接同时最多 4 个流占用阻塞池读取或持有读取缓冲，等待窗口的流不持有缓冲。
+
+Linux 上 `static_root` 与文档根的索引和每个请求都在保留的根目录句柄之下打开条目（`openat2` 的 `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`；内核不支持时逐段 `O_NOFOLLOW` 打开），任何一段路径被换成符号链接都会拒绝，不会索引或服务根目录之外的文件。Windows 按规范化后的绝对路径打开，以索引记录的卷序列号与 FileId 身份校验作为防线。
 
 ### 6.2 内存内无 Socket 测试（`"ruvia/web/testing.h"`）
 

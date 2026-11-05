@@ -126,8 +126,16 @@ void http_client_connection::fail_http2_stream(
     if (reset_stream) {
         http2_.submit_reset(stream.stream_id_);
     }
+    wake_http2_stream(stream);
+}
+
+void http_client_connection::wake_http2_stream(http2_stream& stream) noexcept {
     stream.signal_.notify();
     http2_.state_signal().notify();
+    if (stream.stream_id_ == 0) {
+        // Its driver may be parked for request-stream capacity.
+        http2_.capacity_signal().notify();
+    }
 }
 
 void http_client_connection::release_response_data(http_client_response_state& state_value) noexcept {
@@ -296,6 +304,19 @@ void http_client_connection::on_http2_event(http2_event& event) {
                     output->stop();
                 }
                 stream->signal_.notify();
+            } else if (closed->source() == http2_stream_close_source::peer &&
+                       closed->error() == http2_error_code::http11_required && !state_value.head_ready_ &&
+                       !state_value.promised_request_) {
+                // RFC 9113 section 7: the origin refuses this request over
+                // HTTP/2. Like Pingora, a negotiate pool prefers HTTP/1.1 from
+                // now on and this session admits no further request.
+                stream->retryable_ = true;
+                stream->http11_required_ = true;
+                pool_.require_http11();
+                if (pool_.prefers_http11()) {
+                    http2_.mark_draining();
+                }
+                stream->signal_.notify();
             } else if (!state_value.tunnel_ || !state_value.tunnel_->accepted_ || !state_value.tunnel_->receive_ended_ ||
                        !state_value.tunnel_->output_.end_requested_) {
                 stream->error_ = http_client_error::code_type::protocol_error;
@@ -310,7 +331,12 @@ void http_client_connection::on_http2_event(http2_event& event) {
             stream->retryable_ = true;
             stream->signal_.notify();
         }
-    } else if (event.goaway() != nullptr) {
+    } else if (const auto* goaway = event.goaway()) {
+        if (goaway->error() == http2_error_code::http11_required) {
+            // Its unprocessed requests retry over a connection offering only
+            // http/1.1.
+            pool_.require_http11();
+        }
         http2_.mark_draining();
     }
 }
@@ -355,8 +381,7 @@ void http_client_connection::cancel_http2_stream(
     }
     stream.error_ = http_client_abort_error(reason);
     http2_.submit_reset(stream.stream_id_, error);
-    stream.signal_.notify();
-    http2_.state_signal().notify();
+    wake_http2_stream(stream);
 }
 
 void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept {
@@ -388,8 +413,7 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
     if (http2_.draining() && http2_streams_.empty() && http2_.running()) {
         // A drained session admits no new streams; retire it so the next
         // request opens a fresh connection.
-        http2_.fail({.status_ = client_transport_status::io_failed,
-            .error_ = std::make_error_code(std::errc::operation_canceled)});
+        close_http2_session();
     } else if (http2_streams_.empty() && http2_.usable()) {
         begin_idle();
     }
@@ -409,7 +433,7 @@ void http_client_connection::reprioritize(http_client_response_state& state_valu
 }
 
 task<void> http_client_connection::wait_for_http2_session_stop(
-    const operation_timeout& timeout, stop_token stop_token_value, const http_client_response_state& response) {
+    const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& response) {
     worker_timer_registration deadline_timer;
     if (const auto deadline = timeout.deadline()) {
         if (*deadline <= std::chrono::steady_clock::now()) {
@@ -439,6 +463,14 @@ task<void> http_client_connection::wait_for_http2_session_stop(
         }
     } wait_guard{state_waiters_, waiter};
     worker_cancellation_registration cancellation(pool_.cancellation_target(), waiter.cancellation_id_);
+    // Abandoning the response finds this waiter through the id.
+    response.cancellation_id_ = cancellation.id();
+    struct response_wait_binding final {
+        http_client_response_state& response_;
+        ~response_wait_binding() {
+            response_.cancellation_id_ = 0;
+        }
+    } binding{response};
     cancellation.arm(stop_token_value);
     while (http2_.running() || !http2_streams_.empty()) {
         if (stop_token_value.stop_requested() || response.abandoned_) {
@@ -452,7 +484,8 @@ task<void> http_client_connection::wait_for_http2_session_stop(
 }
 
 task<bool> http_client_connection::execute_http2(const http_client_request_storage& request,
-    const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+    const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
+    http_client_response_state& state_value) {
     const auto& config = pool_.config();
     auto* const resource = pool_.resource();
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
@@ -462,22 +495,22 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                                               : ::ruvia::http2_request_content::none();
 
     for (int attempt_value = 0; attempt_value < 2; ++attempt_value) {
+        // Each attempt acquires its stream like a connection slot: the slot's
+        // reconnect and the wait for request-stream capacity both end at
+        // acquire_timeout_. A retry is a new acquisition.
+        const auto attempt_acquire =
+            attempt_value == 0 ? acquire_timeout : timeout.constrained_by(config.acquire_timeout_);
         if (!http2_.usable()) {
-            if (http2_.draining() && http2_streams_.empty() && http2_.running()) {
-                http2_.fail({.status_ = client_transport_status::io_failed,
-                    .error_ = std::make_error_code(std::errc::operation_canceled)});
-            }
-            co_await wait_for_http2_session_stop(timeout, stop_token_value, state_value);
-            // Waiting for the slot's reconnect is a connection acquisition.
-            const auto acquire_timeout = timeout.constrained_by(config.acquire_timeout_);
-            (void)co_await ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+            (void)co_await ensure_connected(timeout, attempt_acquire, stop_token_value, state_value);
             if (protocol_ != protocol_type::http2) {
                 co_return false;
             }
         }
 
         http2_stream stream(pool_.worker(), state_value);
-        stream.timeout_ = &timeout;
+        // Until the head is accepted; the stream timer then also bounds the
+        // exchange by the request timeout.
+        stream.timeout_ = &attempt_acquire;
         stream.request_target_ = request.target();
         stream.addresses_origin_ = pool_.policy().addresses_origin(request);
         stream.request_id_ = next_http2_request_id();
@@ -512,11 +545,14 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         client_prepared_request_scratch scratch(resource);
         const auto source_value = pool_.policy().prepare_request(request, scratch);
         const auto headers = static_cast<std::span<const http_header_view>>(source_value.headers_);
+        // Whether another request already used this session when this head
+        // was accepted.
+        bool reused_session = false;
         for (;;) {
             if (stream.failed()) {
                 break;
             }
-            if (timeout.expired()) {
+            if (attempt_acquire.expired()) {
                 stream.error_ = http_client_error::code_type::timeout;
                 break;
             }
@@ -542,6 +578,10 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
                 stream.stream_id_ = *accepted;
                 state_value.stream_id_ = stream.stream_id_;
+                reused_session = http2_session_requests_ != 0;
+                ++http2_session_requests_;
+                stream.timeout_ = &timeout;
+                schedule_http2_stream_timer(stream);
                 if (request.has_body() && !request.body().empty()) {
                     stream.request_body_pending_ = true;
                     (void)co_await send_http2_request_data(stream, request.body(), http2_end_stream::end_stream);
@@ -556,7 +596,10 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             const auto error = std::get<http2_request_head_submit_error>(submitted);
             if (error == http2_request_head_submit_error::peer_stream_limit_reached ||
                 error == http2_request_head_submit_error::local_stream_capacity_reached) {
-                co_await http2_.state_signal().wait();
+                // Outer admission counts the local stream limit; a lower peer
+                // limit parks here until a stream closes or the peer raises
+                // it, within the attempt's acquisition bound.
+                co_await http2_.capacity_signal().wait();
                 continue;
             }
             if (error == http2_request_head_submit_error::connection_unavailable) {
@@ -586,16 +629,33 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             co_await stream.signal_.wait();
         }
         const bool retryable = stream.retryable_;
+        const bool http11_required = stream.http11_required_;
         const auto error = stream.error_;
         const auto failure = stream.failure_;
         registration.reset();
+        const bool may_retry = attempt_value == 0 && !timeout.expired() && !stop_token_value.stop_requested();
+        if (http11_required) {
+            // RFC 9113 section 7 (Pingora downgrades and retries): the
+            // retry reconnects this slot offering only http/1.1, once the
+            // drained session retired.
+            if (pool_.prefers_http11() && request.output() == nullptr && may_retry) {
+                continue;
+            }
+            throw http_client_error(
+                http_client_error::code_type::protocol_unavailable, "upstream requires HTTP/1.1 for this request");
+        }
         // No stream ID means no request head or body was submitted to this
         // connection. A transport failure at the stream-capacity wait is safe
         // to retry even for a streaming upload; protocol and cancellation
         // failures must still be reported.
-        if (stream.stream_id_ == 0 && failure == nullptr &&
-            error == http_client_error::code_type::io_error && attempt_value == 0 &&
-            !timeout.expired() && !stop_token_value.stop_requested()) {
+        if (stream.stream_id_ == 0 && failure == nullptr && error == http_client_error::code_type::io_error &&
+            may_retry) {
+            continue;
+        }
+        // The same rule as an HTTP/1 exchange on a reused connection.
+        if (stream.stream_id_ != 0 && reused_session && may_retry &&
+            can_retry_reused_connection_request(
+                failure != nullptr ? http_client_failure_code(failure) : error, request, state_value)) {
             continue;
         }
         if (retryable && (request.output() == nullptr || stream.stream_id_ == 0) &&

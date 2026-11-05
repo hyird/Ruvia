@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -11,7 +10,6 @@
 #include <string_view>
 
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_io_buffer.h"
 
@@ -19,9 +17,6 @@
 #include "http2/http2_client_session.h"
 
 namespace ruvia::detail {
-// Product limit: the longest retirement waits to write the final GOAWAY before
-// it closes the transport anyway (an unread peer, or write_timeout_ nullopt).
-inline constexpr std::chrono::milliseconds websocket_http2_goaway_flush_time{1000};
 
 class websocket_client_state;
 
@@ -47,10 +42,11 @@ public:
         eof_ = true;
         session_.state_signal().notify();
     }
-    // Retires the connection for the owner's abort reason. A running session
-    // first queues GOAWAY(NO_ERROR) (RFC 9113 section 6.8) and returns true:
-    // the transport then stays open until join() has flushed it, for at most
-    // websocket_http2_goaway_flush_time, and join() closes it. Otherwise the
+    // Retires the connection for the owner's abort reason through the
+    // session's graceful close: a running session first queues GOAWAY(NO_ERROR)
+    // (RFC 9113 section 6.8) and returns true while the transport stays open
+    // until the writer flushed it, for at most http2_client_goaway_flush_time;
+    // the session then closes it, and join() waits for that. Otherwise the
     // session fails at once and the owner closes the transport. Idempotent.
     [[nodiscard]] bool stop() noexcept;
     [[nodiscard]] task<void> join();
@@ -61,7 +57,6 @@ public:
 
 private:
     [[nodiscard]] task<void> flush();
-    [[nodiscard]] task<void> flush_goaway();
     void check_failure() const;
     void require_live() const;
     // A failure or the owner's abort ends every DATA and flush wait.
@@ -82,10 +77,5 @@ private:
     // The peer ended the connection before pending output was written.
     bool output_lost_{false};
     bool stopped_{false};
-    // stop() queued a GOAWAY that join() still has to flush.
-    bool goaway_pending_{false};
-    bool goaway_expired_{false};
-    // Last: destroyed first, before the session its completion notifies.
-    worker_timer_registration goaway_timer_;
 };
 }  // namespace ruvia::detail

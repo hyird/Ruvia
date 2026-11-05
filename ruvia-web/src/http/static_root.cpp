@@ -19,22 +19,22 @@
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/detail/fnv1a.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/http/http_accept_match.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
 
+#include "http/http_compressible_media_type.h"
 #include "http/static_file_metadata.h"
 #include "http/static_file_types.h"
 #include "http/static_path_normalization.h"
 #include "http/static_root_index.h"
 #include "http/static_root_options_validation.h"
-#include "server/http_file_open.h"
 #include "server/http_native_file.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after
-// that touch only the index -- a request never stats the filesystem.
+// that touch only the index. A request never walks or stats the tree: a
+// file-backed response opens its one indexed entry and checks the handle
+// against the indexed identity.
 
 namespace ruvia {
 namespace {
@@ -78,35 +78,6 @@ namespace {
     const std::pmr::vector<std::pmr::string>& directories, std::string_view relative_path) noexcept {
     return detail::find_static_index_entry(directories, relative_path,
                [](const std::pmr::string& directory) noexcept { return std::string_view(directory); }) != nullptr;
-}
-
-[[nodiscard]] bool media_type_starts_with(
-    std::string_view media_type, std::string_view prefix) noexcept {
-    return media_type.size() >= prefix.size() &&
-           http_ascii_equals_ignore_case(media_type.substr(0, prefix.size()), prefix);
-}
-
-[[nodiscard]] bool media_type_ends_with(std::string_view media_type, std::string_view suffix) noexcept {
-    return media_type.size() >= suffix.size() &&
-           http_ascii_equals_ignore_case(
-               media_type.substr(media_type.size() - suffix.size()), suffix);
-}
-
-[[nodiscard]] bool static_content_type_eligible_for_precompression(
-    std::string_view content_type_value) noexcept {
-    const auto media_type = http_media_type_only(content_type_value);
-    if (media_type.empty()) {
-        return false;
-    }
-    return media_type_starts_with(media_type, "text/") ||
-           http_ascii_equals_ignore_case(media_type, "application/json") ||
-           http_ascii_equals_ignore_case(media_type, "application/javascript") ||
-           http_ascii_equals_ignore_case(media_type, "application/x-javascript") ||
-           http_ascii_equals_ignore_case(media_type, "application/wasm") ||
-           http_ascii_equals_ignore_case(media_type, "application/xml") ||
-           http_ascii_equals_ignore_case(media_type, "application/xhtml+xml") ||
-           http_ascii_equals_ignore_case(media_type, "image/svg+xml") ||
-           media_type_ends_with(media_type, "+json") || media_type_ends_with(media_type, "+xml");
 }
 
 [[nodiscard]] detail::static_file_version static_root_entry_version(
@@ -178,22 +149,43 @@ void share_memory_variant(detail::static_root_entry& entry_value,
     stored.last_modified_ = source_value.last_modified_;
 }
 
+// Opens an indexed file the way every use does. On POSIX it is opened beneath
+// the retained root handle without following a symlink in any component, so
+// a path swapped after indexing cannot reach outside the root. Windows opens
+// the canonical path; the identity check against the index is its guard.
+[[nodiscard]] detail::native_file_handle open_static_root_file(const detail::static_root_state& state_value,
+    const http_native_path_char_type* file_path, std::error_code& ec) noexcept {
+#if defined(__unix__)
+    // Every entry path is the canonical root joined with its relative path,
+    // so the relative part starts right after the root and its separator.
+    const auto& root_path = state_value.root_;
+    const auto prefix = root_path.size() + (root_path.ends_with('/') ? 0 : 1);
+    return detail::open_native_file_beneath(state_value.root_directory_.get(), file_path + prefix, ec);
+#else
+    static_cast<void>(state_value);
+    return detail::open_native_file(file_path, ec);
+#endif
+}
+
 // A file that changed (or vanished) since it was indexed yields nothing: only
 // that entry loses its variants and stays file-backed, validated per request.
-[[nodiscard]] std::optional<std::pmr::string> read_static_root_entry_bytes(
+[[nodiscard]] std::optional<std::pmr::string> read_static_root_entry_bytes(const detail::static_root_state& state_value,
     const detail::static_root_entry& entry_value, std::pmr::memory_resource* resource) {
     if (entry_value.size_ > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
         throw std::runtime_error("static file is too large to buffer");
     }
     const auto size = static_cast<std::size_t>(entry_value.size_);
-    std::pmr::string bytes(resource);
-    bytes.resize(size);
     // Read and revalidate through one handle: the kept bytes are exactly those
     // of the indexed snapshot, with no path re-resolution in between.
-    detail::response_file_input input(http_response_file_view(
-        entry_value.file_path_.c_str(), entry_value.size_, 0, entry_value.size_, entry_value.identity_));
-    if (!input || !detail::read_exact(input, bytes.data(), size) ||
-        !input.matches_snapshot(entry_value.identity_, entry_value.size_)) {
+    std::error_code ec;
+    const auto input = open_static_root_file(state_value, entry_value.file_path_.c_str(), ec);
+    if (ec || detail::validate_native_file(input.get(), entry_value.identity_, entry_value.size_)) {
+        return std::nullopt;
+    }
+    std::pmr::string bytes(resource);
+    bytes.resize(size);
+    if ((size != 0 && detail::read_native_file_at(input.get(), 0, bytes.data(), size)) ||
+        detail::validate_native_file(input.get(), entry_value.identity_, entry_value.size_)) {
         return std::nullopt;
     }
     return bytes;
@@ -368,7 +360,7 @@ void detail::static_root_access::install_precompressed_variants(
     for (auto& entry : state_value.entries_) {
         if (!entry.directly_servable_ || entry.size_ < options.min_bytes_ ||
             entry.size_ > options.max_bytes_ ||
-            !static_content_type_eligible_for_precompression(entry.content_type_)) {
+            !detail::http_media_type_compressible(entry.content_type_)) {
             continue;
         }
 
@@ -395,7 +387,7 @@ void detail::static_root_access::install_precompressed_variants(
                 }
             }
             if (plain_bytes == nullptr) {
-                plain = read_static_root_entry_bytes(entry, resource);
+                plain = read_static_root_entry_bytes(state_value, entry, resource);
                 if (!plain.has_value()) {
                     entry.memory_variants_.clear();
                     break;
@@ -438,7 +430,7 @@ void detail::static_root_access::install_resident_bodies(
                 continue;
             }
         }
-        auto bytes = read_static_root_entry_bytes(entry, resource);
+        auto bytes = read_static_root_entry_bytes(state_value, entry, resource);
         if (!bytes.has_value()) {
             continue;
         }
@@ -450,22 +442,12 @@ void detail::static_root_access::install_resident_bodies(
 
 http_response_file_handle detail::static_root_access::open_entry(
     const static_root& root, const static_root_entry_view& entry) noexcept {
-#if defined(__unix__)
-    const auto& state_value = *root.state_;
-    if (state_value.root_directory_ < 0) {
+    std::error_code ec;
+    auto input = open_static_root_file(*root.state_, entry.file_path(), ec);
+    if (ec) {
         return {};
     }
-    // Every entry path is the canonical root joined with its relative path,
-    // so the relative part starts right after the root and its separator.
-    const auto& root_path = state_value.root_;
-    const auto prefix = root_path.size() + (root_path.ends_with('/') ? 0 : 1);
-    std::error_code ec;
-    return open_response_file_at(state_value.root_directory_, entry.file_path() + prefix, ec);
-#else
-    static_cast<void>(root);
-    static_cast<void>(entry);
-    return {};
-#endif
+    return adopt_response_file_handle(std::move(input));
 }
 
 bool detail::static_root_access::same_snapshot(
@@ -527,7 +509,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (ec) {
             throw std::filesystem::filesystem_error("inspect static file root", canonical_root, ec);
         }
-        state_value.root_directory_ = root_directory.release();
+        state_value.root_directory_ = std::move(root_directory);
     }
 #endif
 
@@ -592,8 +574,16 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (!directly_servable && !usable_as_sidecar) {
             continue;
         }
+        // The entry is opened beneath the retained root, the way a request
+        // opens it: a directory swapped for a symlink after it was listed
+        // fails the snapshot instead of indexing a file outside the root.
+        http_native_path_string_type native_path(upstream);
+        http_assign_native_path(native_path, file_path);
         ec.clear();
-        const auto snapshot = detail::snapshot_response_file(file_path.c_str(), ec);
+        const auto snapshot = [&] {
+            const auto input = open_static_root_file(state_value, native_path.c_str(), ec);
+            return ec ? detail::response_file_snapshot{} : detail::snapshot_native_file_handle(input.get(), ec);
+        }();
         if (ec) {
             throw std::filesystem::filesystem_error(
                 "snapshot static file root entry", file_path, ec);
@@ -602,7 +592,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
             config.response_validators_ == static_response_validator_policy::emit;
         detail::static_root_entry entry(upstream);
         entry.relative_path_ = std::move(relative);
-        http_assign_native_path(entry.file_path_, file_path);
+        entry.file_path_ = std::move(native_path);
         entry.content_type_ = detail::content_type_for(extension, config, upstream);
         entry.size_ = snapshot.size_;
         entry.identity_ = snapshot.identity_;
@@ -686,14 +676,6 @@ static_root::static_root(const std::filesystem::path& root, static_root_options 
 }
 
 static_root::~static_root() = default;
-
-detail::static_root_state::~static_root_state() {
-#if defined(__unix__)
-    if (root_directory_ >= 0) {
-        ::close(root_directory_);
-    }
-#endif
-}
 
 void static_root::state_deleter_type::operator()(detail::static_root_state* state_value) const noexcept {
     destroy_pmr_object(state_value, process_resource());

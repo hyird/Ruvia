@@ -88,6 +88,9 @@ public:
         std::size_t batch_{1};
         // After reading the batch, close the connection instead of answering.
         bool drop_{false};
+        // After answering, close the connection while the client holds it
+        // idle, as a server ending an idle session does.
+        bool close_after_{false};
         // The flight's Parse fails with error_ and keeps no statement, instead
         // of its Bind failing.
         bool parse_fails_{false};
@@ -146,6 +149,9 @@ public:
         std::size_t batch_{1};
         // After reading the batch, close the connection instead of answering.
         bool drop_{false};
+        // After answering, close the connection while the client holds it
+        // idle, as a server ending an idle session does.
+        bool close_after_{false};
         // Nonzero: held, like deferred_, until release_hold() names it.
         std::size_t hold_{0};
         std::vector<maria_column> columns_;
@@ -224,6 +230,14 @@ public:
             throw std::runtime_error("PostgreSQL test peer did not receive startup");
         }
         startup_ready_.get();
+    }
+
+    // Blocks until a close_after_ reply has closed its connection.
+    void wait_for_idle_close() {
+        if (idle_close_ready_.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            throw std::runtime_error("backend test peer did not close its idle connection");
+        }
+        idle_close_ready_.get();
     }
 
     void authenticate() {
@@ -306,6 +320,7 @@ private:
           connection_next_(connection_replies_.size(), 0),
           maria_replies_(std::move(maria_replies)),
           startup_ready_(startup_.get_future()),
+          idle_close_ready_(idle_close_.get_future()),
           acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           sockets_(make_sockets(io_, std::max(connections, connection_replies_.size()))),
           work_(asio::make_work_guard(io_)),
@@ -328,6 +343,14 @@ private:
         if (defer_authentication_) {
             std::error_code ignored;
             co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
+        }
+    }
+
+    void close_idle_connection(asio::ip::tcp::socket& socket) {
+        socket.close();
+        if (!idle_closed_) {
+            idle_closed_ = true;
+            idle_close_.set_value();
         }
     }
 
@@ -722,6 +745,10 @@ private:
                 postgres_flight_response(response, messages, replies[next++]);
             }
             co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+            if (reply.close_after_) {
+                close_idle_connection(socket);
+                co_return true;
+            }
         }
         co_return false;
     }
@@ -1269,6 +1296,10 @@ private:
                 }
             }
             co_await asio::async_write(socket, asio::buffer(response.data() + sent, response.size() - sent), asio::use_awaitable);
+            if (reply.close_after_) {
+                close_idle_connection(socket);
+                co_return true;
+            }
         }
         co_return false;
     }
@@ -1372,6 +1403,9 @@ private:
     bool closing_{false};
     std::promise<void> startup_;
     std::future<void> startup_ready_;
+    std::promise<void> idle_close_;
+    std::future<void> idle_close_ready_;
+    bool idle_closed_{false};
     asio::ip::tcp::acceptor acceptor_;
     std::vector<asio::ip::tcp::socket> sockets_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
