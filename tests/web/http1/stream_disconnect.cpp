@@ -751,12 +751,12 @@ RUVIA_TEST(http1_stream_peer_close_stops_request_and_recycles_connections) {
             }
             peer explicit_peer(io, plain_endpoint, false);
             const auto explicit_before = cancelled.load();
-            const auto context_before = context_cancelled.load();
+            const auto explicit_context_before = context_cancelled.load();
             explicit_peer.send(request("explicit"));
             RUVIA_CHECK(explicit_peer.read_until("data: first").find("data: first") != std::string::npos);
             explicit_stop.request_stop();
             RUVIA_CHECK(wait_until([&] { return cancelled.load() == explicit_before + 1; }));
-            RUVIA_CHECK_EQ(context_cancelled.load(), context_before);
+            RUVIA_CHECK_EQ(context_cancelled.load(), explicit_context_before);
             explicit_peer.close();
             RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
 
