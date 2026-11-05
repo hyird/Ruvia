@@ -29,7 +29,9 @@ public:
     }
 
     [[nodiscard]] std::string_view method() const& noexcept {
-        return method_;
+        return known_method_ != http_known_method::unknown
+                   ? known_http_method_token(known_method_)
+                   : std::string_view(method_);
     }
     [[nodiscard]] std::string_view method() const&& = delete;
 
@@ -37,6 +39,9 @@ public:
         return known_method_;
     }
 
+    [[nodiscard]] bool has_method() const noexcept {
+        return known_method_ != http_known_method::unknown || !method_.empty();
+    }
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return method_.get_allocator().resource();
     }
@@ -85,8 +90,14 @@ public:
     }
 
     void assign_method(std::string_view method) {
+        const auto known = classify_http_method(method);
+        if (known != http_known_method::unknown) {
+            method_.clear();
+            known_method_ = known;
+            return;
+        }
         method_.assign(method.data(), method.size());
-        known_method_ = classify_http_method(method);
+        known_method_ = http_known_method::unknown;
     }
 
     [[nodiscard]] std::string_view scheme() const& noexcept {

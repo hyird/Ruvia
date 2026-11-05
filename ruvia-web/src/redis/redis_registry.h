@@ -96,6 +96,10 @@ public:
     // `reply_timeout` starts when the command is written, so a server-side
     // block window is not consumed by slot acquisition or a lazy connect.
     // `io_metrics` is the request's counter block, or null outside a request.
+    task<redis_value> execute_owned(redis_owned_command command,
+        std::pmr::memory_resource* resource, operation_options options = {},
+        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt,
+        request_io_metrics* io_metrics = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
         std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt,
@@ -143,6 +147,9 @@ struct redis_command_executor final {
     request_io_metrics* io_metrics_{nullptr};
     operation_options options_;
 
+    [[nodiscard]] task<redis_value> execute(redis_owned_command command,
+        std::pmr::memory_resource* resource,
+        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt);
     [[nodiscard]] task<redis_value> execute(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource,
         std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt);

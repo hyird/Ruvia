@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <forward_list>
 #include <functional>
 #include <memory_resource>
@@ -140,13 +141,23 @@ void jwt_append_json_numeric_date(
 
 void jwt_validate_jose_header(std::string_view json,
     std::optional<std::string_view> expected_algorithm, std::pmr::memory_resource* resource) {
-    std::optional<std::pmr::string> algorithm;
+    std::optional<std::string_view> algorithm;
+    std::pmr::string decoded_algorithm(resource);
     bool unsupported_extension = false;
     const bool valid = visit_unique_jwt_json_object_fields(
         json, resource, [&](std::string_view name, std::string_view& value) {
             if (name == "alg") {
-                algorithm = jwt_decode_json_string_value(value, resource);
-                return algorithm.has_value();
+                const auto parsed = parse_json_string(value);
+                if (!parsed.has_value()) {
+                    return false;
+                }
+                if (parsed->encoding() == json_string_encoding::literal) {
+                    algorithm = parsed->raw();
+                } else {
+                    decoded_algorithm = decode_json_string(*parsed, resource);
+                    algorithm = decoded_algorithm;
+                }
+                return true;
             }
             if (name == "crit" || name == "b64") {
                 // No critical extensions are implemented. RFC 7797 section 7
@@ -212,8 +223,12 @@ namespace {
 }  // namespace
 
 bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
-    std::string_view& value, std::pmr::memory_resource* resolved) {
-    if (detail::jwt_is_reserved_claim(key)) {
+    std::string_view& value, std::uint8_t& seen_reserved_mask, std::pmr::memory_resource* resolved) {
+    if (const auto bit = detail::jwt_reserved_claim_bit(key); bit != 0) {
+        if ((seen_reserved_mask & bit) != 0) {
+            return false;
+        }
+        seen_reserved_mask |= bit;
         if (key == "iss") {
             if (auto issuer = detail::jwt_decode_json_string_value(value, resolved)) {
                 payload_value.issuer_ = std::move(*issuer);
@@ -281,9 +296,10 @@ bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_v
 jwt_payload detail::jwt_payload_access::decode_payload_json(
     std::string_view json, std::pmr::memory_resource* resolved) {
     jwt_payload payload_value(resolved);
+    std::uint8_t seen_reserved_mask = 0;
     const bool valid = detail::visit_unique_jwt_json_object_fields(
         json, resolved, [&](std::string_view key, std::string_view& value) {
-            return decode_jwt_payload_claim(payload_value, key, value, resolved);
+            return decode_jwt_payload_claim(payload_value, key, value, seen_reserved_mask, resolved);
         });
     if (!valid) {
         throw jwt_error(

@@ -28,7 +28,8 @@ public:
           kinds_(std::exchange(other.kinds_, nullptr)),
           resource_(std::exchange(other.resource_, nullptr)),
           size_(std::exchange(other.size_, std::uint16_t{0})),
-          capacity_(std::exchange(other.capacity_, std::uint16_t{0})) {}
+          capacity_(std::exchange(other.capacity_, std::uint16_t{0})),
+          repeated_known_bits_(std::exchange(other.repeated_known_bits_, std::uint32_t{0})) {}
     http_request_header_block& operator=(http_request_header_block&& other) noexcept {
         if (this != &other) {
             release();
@@ -37,6 +38,7 @@ public:
             resource_ = std::exchange(other.resource_, nullptr);
             size_ = std::exchange(other.size_, std::uint16_t{0});
             capacity_ = std::exchange(other.capacity_, std::uint16_t{0});
+            repeated_known_bits_ = std::exchange(other.repeated_known_bits_, std::uint32_t{0});
         }
         return *this;
     }
@@ -59,6 +61,14 @@ public:
     [[nodiscard]] std::span<const http_header_view> fields() const noexcept {
         return {fields_, size_};
     }
+    void mark_repeated_known_slot(std::size_t slot) noexcept {
+        if (slot < 32U) {
+            repeated_known_bits_ |= (std::uint32_t{1} << slot);
+        }
+    }
+    [[nodiscard]] bool has_repeated_known_slot(std::size_t slot) const noexcept {
+        return slot < 32U && (repeated_known_bits_ & (std::uint32_t{1} << slot)) != 0;
+    }
 
     void reserve(std::size_t count, std::pmr::memory_resource* resource) {
         if (count > UINT16_MAX) {
@@ -76,12 +86,14 @@ public:
             replacement_kinds[i] = kinds_[i];
         }
         const auto size = size_;
+        const auto repeated_known_bits = repeated_known_bits_;
         release();
         fields_ = replacement;
         kinds_ = replacement_kinds;
         resource_ = owner_value;
         size_ = size;
         capacity_ = static_cast<std::uint16_t>(count);
+        repeated_known_bits_ = repeated_known_bits;
     }
 
     void append(http_header_view field, request_header_kind kind) {
@@ -113,6 +125,7 @@ private:
         resource_ = nullptr;
         size_ = 0;
         capacity_ = 0;
+        repeated_known_bits_ = 0;
     }
 
     http_header_view* fields_{nullptr};
@@ -120,6 +133,7 @@ private:
     std::pmr::memory_resource* resource_{nullptr};
     std::uint16_t size_{0};
     std::uint16_t capacity_{0};
+    std::uint32_t repeated_known_bits_{0};
 };
 
 }  // namespace ruvia::detail

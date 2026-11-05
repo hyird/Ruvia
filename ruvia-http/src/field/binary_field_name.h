@@ -19,10 +19,23 @@ inline constexpr auto binary_field_name_char_table = [] {
     if (name.empty()) {
         return false;
     }
-    for (const unsigned char byte : name) {
-        if (!binary_field_name_char_table[byte]) {
+    std::size_t index = 0;
+    while (name.size() - index >= 4) {
+        const auto* bytes_value = reinterpret_cast<const unsigned char*>(name.data() + index);
+        const bool first = binary_field_name_char_table[bytes_value[0]];
+        const bool second = binary_field_name_char_table[bytes_value[1]];
+        const bool third = binary_field_name_char_table[bytes_value[2]];
+        const bool fourth = binary_field_name_char_table[bytes_value[3]];
+        if (!(first & second & third & fourth)) {
             return false;
         }
+        index += 4;
+    }
+    while (index < name.size()) {
+        if (!binary_field_name_char_table[static_cast<unsigned char>(name[index])]) {
+            return false;
+        }
+        ++index;
     }
     return true;
 }

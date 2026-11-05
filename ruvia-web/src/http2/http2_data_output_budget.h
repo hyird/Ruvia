@@ -28,18 +28,25 @@ public:
     http2_data_output_budget(const http2_data_output_budget&) = delete;
     http2_data_output_budget& operator=(const http2_data_output_budget&) = delete;
 
+    [[nodiscard]] bool try_acquire(std::uint32_t stream_id) noexcept {
+        if (std::ranges::find(held_, stream_id) != held_.end()) {
+            return false;
+        }
+        for (auto& held : held_) {
+            if (held == 0) {
+                held = stream_id;
+                return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, http2_sans_io_stream_signal& stream,
         const ruvia::http2_connection& connection, const bool* aborted) {
         while (!stream.terminated() && !connection.stream_aborted(stream_id) &&
                (aborted == nullptr || !*aborted)) {
-            const bool already_held = std::ranges::find(held_, stream_id) != held_.end();
-            if (!already_held) {
-                for (auto& held : held_) {
-                    if (held == 0) {
-                        held = stream_id;
-                        co_return true;
-                    }
-                }
+            if (try_acquire(stream_id)) {
+                co_return true;
             }
             // A stream may own only one DATA reservation; wait for the current
             // chunk to drain rather than admitting another and confusing release.

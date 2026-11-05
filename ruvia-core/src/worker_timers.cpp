@@ -247,12 +247,20 @@ void worker_dispatcher::note_stale_timer() noexcept {
             timer_armed_ = false;
             timer_->cancel();
         }
-    } else if (stale_timer_count_ >= 64 && stale_timer_count_ * 2 >= timers_.size()) {
-        std::erase_if(timers_, [this](const timer_entry& entry_value) {
-            return !has_live_timer_entry(entry_value.slot_, entry_value.generation_);
-        });
-        std::ranges::make_heap(timers_, timer_entry_later{});
-        stale_timer_count_ = 0;
+    } else {
+        while (!timers_.empty() &&
+               !has_live_timer_entry(timers_.front().slot_, timers_.front().generation_)) {
+            std::ranges::pop_heap(timers_, timer_entry_later{});
+            timers_.pop_back();
+            --stale_timer_count_;
+        }
+        if (stale_timer_count_ >= 64 && stale_timer_count_ * 2 >= timers_.size()) {
+            std::erase_if(timers_, [this](const timer_entry& entry_value) {
+                return !has_live_timer_entry(entry_value.slot_, entry_value.generation_);
+            });
+            std::ranges::make_heap(timers_, timer_entry_later{});
+            stale_timer_count_ = 0;
+        }
     }
 }
 

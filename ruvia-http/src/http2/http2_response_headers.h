@@ -128,13 +128,11 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
 }
 
 [[nodiscard]] inline http2_interim_response_header_encode_status append_http2_interim_response_headers(
-    http2_stream_state& stream, const http_interim_response_head& response) {
+    std::pmr::string& header_block, const http_interim_response_head& response) {
     if (const auto status = validate_http2_interim_response_headers(response);
         status != http2_interim_response_header_encode_status::ok) {
         return status;
     }
-
-    auto& header_block = stream.local_header_block();
     try {
         header_block.clear();
         const auto headers = response.headers();
@@ -160,7 +158,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     return http2_interim_response_header_encode_status::ok;
 }
 
-[[nodiscard]] inline bool append_http2_response_headers(http2_stream_state& stream,
+[[nodiscard]] inline bool append_http2_response_headers(std::pmr::string& header_block,
     const http_response& response, const http2_response_head_plan& plan) {
     // The owning header block already enforces field syntax, sender metadata
     // grammar and singleton rules. Revisit only protocol-specific section limits,
@@ -205,7 +203,6 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         reserve_bytes += content_length_value.size() + 4U;
     }
 
-    auto& header_block = stream.local_header_block();
     try {
         header_block.clear();
         if (reserve_bytes > 15U) {
@@ -239,8 +236,8 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     return true;
 }
 
-inline void http2_release_local_header_block(http2_stream_state& stream) {
-    http_clear_pmr_string_retaining_small(stream.local_header_block());
+inline void http2_release_local_header_block(std::pmr::string& header_block) {
+    http_clear_pmr_string_retaining_small(header_block);
 }
 
 inline void append_http2_response_trailers(

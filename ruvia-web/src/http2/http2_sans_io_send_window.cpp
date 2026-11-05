@@ -34,6 +34,16 @@ task<http2_send_window_wait_status> await_http2_send_window(
         if (window->available_ != 0) {
             co_return http2_send_window_wait_status::ready;
         }
+        struct send_window_wait_guard final {
+            http2_sans_io_stream_signal& signal_;
+            explicit send_window_wait_guard(http2_sans_io_stream_signal& signal_value) noexcept
+                : signal_(signal_value) {
+                signal_.set_waiting_send_window(true);
+            }
+            ~send_window_wait_guard() noexcept {
+                signal_.set_waiting_send_window(false);
+            }
+        } wait_guard(*signal);
         co_await signal->wait();
     }
 }
@@ -56,16 +66,25 @@ task<http2_stream_data_write_status> write_http2_stream_data(
             co_return http2_stream_data_write_status::peer_closed;
         }
         if (!bytes.empty()) {
-            if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
-                http2_send_window_wait_status::aborted) {
+            const auto window = connection.send_window_state(stream_id);
+            if (!window || connection.stream_aborted(stream_id)) {
                 co_return classify_aborted_write(signal, aborted);
             }
-            if (!(co_await output_budget.acquire(stream_id, *signal, connection, aborted))) {
-                co_return classify_aborted_write(signal, aborted);
+            if (window->available_ == 0) {
+                if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
+                    http2_send_window_wait_status::aborted) {
+                    co_return classify_aborted_write(signal, aborted);
+                }
             }
-            if ((aborted != nullptr && *aborted) || signal->terminated()) {
-                output_budget.release(stream_id);
-                co_return classify_aborted_write(signal, aborted);
+            if (!output_budget.try_acquire(stream_id)) {
+                if (!(co_await output_budget.acquire(stream_id, *signal, connection, aborted))) {
+                    co_return classify_aborted_write(signal, aborted);
+                }
+                if ((aborted != nullptr && *aborted) || signal->terminated() ||
+                    connection.stream_aborted(stream_id)) {
+                    output_budget.release(stream_id);
+                    co_return classify_aborted_write(signal, aborted);
+                }
             }
         }
         http2_data_submit_result result_value{};

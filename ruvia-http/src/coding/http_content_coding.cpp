@@ -170,7 +170,13 @@ http_content_coding_field_result parse_http_content_coding_headers(
 http_content_coding_field_result parse_http_content_coding_headers(
     const http_response_headers& headers) noexcept {
     detail::http_content_coding_field_parser parser;
-    if (!detail::response_has_known_header(headers, detail::response_header_content_encoding)) {
+    const auto* const first = detail::http_response_header_state_access::known_header(
+        headers, detail::response_header_content_encoding);
+    if (first == nullptr) {
+        return parser.finish();
+    }
+    if (!detail::http_response_header_access::append(*first)) {
+        parser.update(first->value());
         return parser.finish();
     }
     for (const auto& header : headers) {
@@ -185,6 +191,12 @@ http_content_coding_field_result parse_http_content_coding_headers(
 http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
     detail::http_content_coding_field_parser parser;
     if (!detail::request_has_known_header(request, detail::request_header_kind::content_encoding)) {
+        return parser.finish();
+    }
+    if (!detail::http_request_access::has_repeated_known_header(
+            request, detail::request_header_kind::content_encoding)) {
+        parser.update(
+            detail::request_known_header(request, detail::request_header_kind::content_encoding));
         return parser.finish();
     }
     const auto headers = request.headers();

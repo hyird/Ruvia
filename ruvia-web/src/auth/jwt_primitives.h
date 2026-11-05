@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory_resource>
 #include <optional>
@@ -79,10 +80,36 @@ private:
     std::size_t reserve_hint_{0};
 };
 
-[[nodiscard]] inline bool jwt_is_reserved_claim(std::string_view name) noexcept {
-    return name.size() == 3 &&
-           (name == "iss" || name == "sub" || name == "aud" || name == "exp" || name == "nbf" ||
-               name == "iat" || name == "jti");
+[[nodiscard]] constexpr std::uint8_t jwt_reserved_claim_bit(std::string_view name) noexcept {
+    if (name.size() != 3) {
+        return 0;
+    }
+    if (name == "iss") {
+        return 1U << 0;
+    }
+    if (name == "sub") {
+        return 1U << 1;
+    }
+    if (name == "aud") {
+        return 1U << 2;
+    }
+    if (name == "jti") {
+        return 1U << 3;
+    }
+    if (name == "exp") {
+        return 1U << 4;
+    }
+    if (name == "nbf") {
+        return 1U << 5;
+    }
+    if (name == "iat") {
+        return 1U << 6;
+    }
+    return 0;
+}
+
+[[nodiscard]] constexpr bool jwt_is_reserved_claim(std::string_view name) noexcept {
+    return jwt_reserved_claim_bit(name) != 0;
 }
 
 void jwt_append_json_member(
@@ -102,7 +129,7 @@ struct jwt_payload_access final {
     }
 
     [[nodiscard]] static bool decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
-        std::string_view& value, std::pmr::memory_resource* resource);
+        std::string_view& value, std::uint8_t& seen_reserved_mask, std::pmr::memory_resource* resource);
     static jwt_payload decode_payload_json(std::string_view json, std::pmr::memory_resource* resource);
 };
 

@@ -1,4 +1,5 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 
@@ -9,10 +10,9 @@ http1_response_head_plan prepare_http1_connect_response_head(
         !response.status().is_successful() || response.file_body() || !response.body_bytes().empty()) {
         throw http1_response_head_error("invalid HTTP/1 CONNECT response head");
     }
-    for (const auto& header : response.headers()) {
-        if (detail::http_field_name_in(header.name(), detail::http_message_framing_fields)) {
-            throw http1_response_head_error("CONNECT response cannot contain message framing fields");
-        }
+    if (detail::response_has_known_header(
+            response, detail::response_header_content_length | detail::response_header_transfer_encoding)) {
+        throw http1_response_head_error("CONNECT response cannot contain message framing fields");
     }
     const auto body = plan_http_response_body(http_known_method::connect, response.status());
     const auto connection = version == http_protocol_version::http10

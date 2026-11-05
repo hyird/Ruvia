@@ -60,7 +60,8 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
             engine.touch_activity();
             engine.output_write_completed();
             // Leave room for the frame header and string capacity growth, but keep retention bounded.
-            http_clear_pmr_string_retaining_small(write_scratch, 2 * http2_data_output_credit_bytes);
+            http_clear_pmr_string_retaining_small(
+                write_scratch, http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096);
         }
         if (engine.writer_should_exit()) {
             co_return;

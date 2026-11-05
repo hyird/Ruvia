@@ -72,9 +72,11 @@ private:
         std::string_view value, std::string_view path, std::string_view domain) noexcept;
     [[nodiscard]] bool has_capacity(std::size_t replaced_bytes,
         std::size_t replacement_bytes, bool adding) const noexcept;
+    void recompute_next_expiry() noexcept;
     const http_client_config_storage& config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<stored_cookie> cookies_;
+    std::optional<std::chrono::system_clock::time_point> next_expiry_{};
     std::size_t cookie_bytes_{};
 };
 }  // namespace ruvia::detail

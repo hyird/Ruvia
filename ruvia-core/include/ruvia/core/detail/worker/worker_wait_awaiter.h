@@ -261,25 +261,29 @@ private:
     // A wake on the worker's own thread posts the resume directly.
     void wake() noexcept {
         if (timer_.registered()) {
-            timer_.cancel_and_notify();
-            return;
+            timer_.cancel();
         }
         state().worker_.defer_resume(completion_.continuation());
     }
 
     void on_timer_completed(worker_timer_outcome outcome) noexcept {
+        std::coroutine_handle<> continuation;
         {
             auto& owner_value = state();
             auto state_lock = owner_value.lock_state();
             // Still pending: a cancellation reaching a pending wait comes only
             // from stop_timers().
-            if (owner_value.wait_slot_.detach(this)) {
-                (void)completion_.complete(worker_wait_result_access::outcome<t_type>(
-                    outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
-                                                             : worker_wait_status::worker_stopping));
+            if (!owner_value.wait_slot_.detach(this)) {
+                return;
             }
+            if (!completion_.complete(worker_wait_result_access::outcome<t_type>(
+                    outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
+                                                             : worker_wait_status::worker_stopping))) {
+                return;
+            }
+            continuation = completion_.continuation();
         }
-        completion_.continuation().resume();
+        continuation.resume();
     }
 
     static void request_cancellation(const std::shared_ptr<state_type>& state_value, std::uint64_t generation) {

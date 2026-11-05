@@ -18,6 +18,30 @@ inline void emplace_redis_string(std::pmr::vector<std::pmr::string>& target, std
     target.emplace_back(value.data(), value.size());
 }
 
+inline constexpr std::size_t redis_int_scratch_size = 20;
+inline constexpr std::size_t redis_score_scratch_size = 64;
+
+[[nodiscard]] inline std::string_view format_redis_int(
+    std::span<char, redis_int_scratch_size> scratch, std::int64_t value) noexcept {
+    const auto end = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value).ptr;
+    return {scratch.data(), static_cast<std::size_t>(end - scratch.data())};
+}
+
+[[nodiscard]] inline std::string_view format_redis_score(
+    std::span<char, redis_score_scratch_size> scratch, double value) {
+    if (std::isinf(value)) {
+        return value > 0 ? "+inf" : "-inf";
+    }
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument("redis sorted set score must not be NaN");
+    }
+    const auto [ptr, ec] = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value);
+    if (ec != std::errc{}) {
+        throw std::logic_error("redis sorted set score is invalid");
+    }
+    return {scratch.data(), static_cast<std::size_t>(ptr - scratch.data())};
+}
+
 inline void append_redis_number(std::pmr::string& output, std::uint64_t value) {
     http_append_unsigned(output, value);
 }

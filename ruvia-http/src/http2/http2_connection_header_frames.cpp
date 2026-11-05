@@ -126,12 +126,14 @@ bool http2_connection::process_headers_fragment(const http2_frame_header& header
         } else if (role_ == http2_role::client) {
             if (existing->push_reservation() == http2_push_reservation::remote) {
                 std::size_t active_push = 0;
-                streams_.for_each([&](const auto& item) {
-                    if ((item.id() & 1U) == 0 && !http2_stream_is_closed(item) &&
-                        item.push_reservation() == http2_push_reservation::none) {
-                        ++active_push;
-                    }
-                });
+                if (streams_.size() >= http2_local_settings::max_concurrent_streams) {
+                    streams_.for_each([&](const auto& item) {
+                        if ((item.id() & 1U) == 0 && !http2_stream_is_closed(item) &&
+                            item.push_reservation() == http2_push_reservation::none) {
+                            ++active_push;
+                        }
+                    });
+                }
                 if (active_push + 1 > http2_local_settings::max_concurrent_streams) {
                     discarded_action = discarded_header_action_type::refuse_stream;
                 } else {
@@ -195,27 +197,31 @@ bool http2_connection::process_headers_fragment(const http2_frame_header& header
             // buffer append must leave the complete frame retryable; advancing the
             // high-water mark before that point would turn the retry into a false
             // "stream id is not increasing" connection error.
-            std::size_t prioritized_idle = 0, active = 0;
-            for (const auto& [id, priority] : priorities_) {
-                if (id > header_value.stream_id_ && is_idle_stream_id(id)) {
-                    ++prioritized_idle;
-                }
-            }
-            streams_.for_each([&](const auto& item) {
-                // The advertised limit bounds streams the peer initiated (RFC 9113
-                // 5.1.2); active server pushes count against the client's limit.
-                if ((item.id() & 1U) != 0 && !http2_stream_is_closed(item) &&
-                    item.push_reservation() == http2_push_reservation::none) {
-                    ++active;
-                }
-            });
             // A HEADERS frame that exceeds the advertised limit is a stream error
             // (RFC 9113 5.1.2). RFC 9218 7.1 prescribes a connection error only for
             // the PRIORITY_UPDATE that over-commits idle priorities; a HEADERS that
             // would push retained idle priorities plus active streams past the limit
             // is refused (REFUSED_STREAM, RFC 9113 8.7) so priority state stays bounded.
-            const bool concurrency_exceeded =
-                prioritized_idle + active + 1 > http2_local_settings::max_concurrent_streams;
+            bool concurrency_exceeded = false;
+            if (streams_.size() + priorities_.size() >=
+                http2_local_settings::max_concurrent_streams) {
+                std::size_t prioritized_idle = 0, active = 0;
+                for (const auto& [id, priority] : priorities_) {
+                    if (id > header_value.stream_id_ && is_idle_stream_id(id)) {
+                        ++prioritized_idle;
+                    }
+                }
+                streams_.for_each([&](const auto& item) {
+                    // The advertised limit bounds streams the peer initiated (RFC 9113
+                    // 5.1.2); active server pushes count against the client's limit.
+                    if ((item.id() & 1U) != 0 && !http2_stream_is_closed(item) &&
+                        item.push_reservation() == http2_push_reservation::none) {
+                        ++active;
+                    }
+                });
+                concurrency_exceeded =
+                    prioritized_idle + active + 1 > http2_local_settings::max_concurrent_streams;
+            }
             new_peer_stream = true;
             if (const auto* round_trip = local_connection_state_.graceful_drain();
                 round_trip != nullptr && round_trip->awaiting_round_trip() &&

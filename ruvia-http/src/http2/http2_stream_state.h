@@ -54,6 +54,7 @@ class http2_stream_state final {
     http2_stream_header_blocks header_blocks_;
     http2_stream_request_data message_data_;
     http2_local_request_content_gate local_request_content_gate_{http2_local_request_content_gate::open};
+    bool pinned_{false};
 
 public:
     explicit http2_stream_state(std::uint32_t stream_id, std::pmr::memory_resource* resource)
@@ -75,6 +76,13 @@ public:
         return id_;
     }
 
+    [[nodiscard]] bool pinned() const noexcept {
+        return pinned_;
+    }
+
+    void set_pinned(bool pinned_value) noexcept {
+        pinned_ = pinned_value;
+    }
     void set_send_window(std::int32_t window) noexcept {
         flow_control_.set_send_window(window);
     }
@@ -137,16 +145,6 @@ public:
         return header_blocks_.remote();
     }
     [[nodiscard]] const std::pmr::string& remote_header_block() const&& = delete;
-
-    [[nodiscard]] std::pmr::string& local_header_block() & noexcept {
-        return header_blocks_.local();
-    }
-    [[nodiscard]] std::pmr::string& local_header_block() && = delete;
-
-    [[nodiscard]] const std::pmr::string& local_header_block() const& noexcept {
-        return header_blocks_.local();
-    }
-    [[nodiscard]] const std::pmr::string& local_header_block() const&& = delete;
 
     [[nodiscard]] bool declare_remote_content_length(std::uint64_t value) noexcept {
         if (value > (std::numeric_limits<std::size_t>::max)()) {
@@ -436,7 +434,7 @@ public:
     }
 
     [[nodiscard]] bool has_method() const noexcept {
-        return !request_method().empty();
+        return message_data_.has_method();
     }
 
     [[nodiscard]] bool has_protocol() const noexcept {
@@ -493,8 +491,12 @@ public:
         return request_state_.has_host();
     }
 
-    void mark_host() noexcept {
-        request_state_.mark_host();
+    void mark_host(std::size_t index) noexcept {
+        request_state_.mark_host(index);
+    }
+
+    [[nodiscard]] std::size_t host_header_index() const noexcept {
+        return request_state_.host_header_index();
     }
 
     [[nodiscard]] bool has_cookie() const noexcept {

@@ -26,6 +26,22 @@ struct model_json_access final {
 };
 
 template <typename value_type>
+consteval std::size_t json_fixed_scalar_size_hint() noexcept {
+    using t_type = std::remove_cvref_t<value_type>;
+    if constexpr (is_ruvia_scalar<t_type>) {
+        return json_fixed_scalar_size_hint<decltype(std::declval<t_type>().value_)>();
+    } else if constexpr (std::is_same_v<t_type, bool>) {
+        return 5;
+    } else if constexpr (std::is_integral_v<t_type>) {
+        return static_cast<std::size_t>(std::numeric_limits<t_type>::digits10) + 3;
+    } else if constexpr (std::is_floating_point_v<t_type>) {
+        return 32;
+    } else {
+        return 0;
+    }
+}
+
+template <typename value_type>
 [[nodiscard]] std::size_t json_size_hint_value(const value_type& value) {
     using t_type = std::remove_cvref_t<value_type>;
     if constexpr (is_ruvia_scalar<t_type>) {
@@ -43,6 +59,12 @@ template <typename value_type>
     } else if constexpr (is_model<t_type>) {
         return model_json_access::size_hint(value);
     } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
+        if constexpr (is_ruvia_array<t_type>) {
+            constexpr std::size_t item_hint = json_fixed_scalar_size_hint<typename t_type::value_type>();
+            if constexpr (item_hint != 0) {
+                return value.empty() ? 2 : 2 + value.size() * item_hint + (value.size() - 1);
+            }
+        }
         std::size_t size = 2;
         bool first = true;
         for (const auto& item : value) {

@@ -58,6 +58,14 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
     pool.connections_[slot]->abort(client_abort_reason::cancelled);
 }
 
+task<redis_value> redis_pool::execute_owned(redis_owned_command command,
+    std::pmr::memory_resource* resource, operation_options options,
+    std::optional<std::chrono::milliseconds> reply_timeout, request_io_metrics* io_metrics,
+    std::optional<operation_timeout> deadline) {
+    return execute_commands<redis_value>(
+        std::move(command), std::move(options), reply_timeout, resource, deadline, io_metrics);
+}
+
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout, request_io_metrics* io_metrics,
@@ -82,14 +90,13 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     constexpr bool single_reply = std::is_same_v<result_type, redis_value>;
     constexpr std::string_view multi_command = "*1\r\n$5\r\nMULTI\r\n";
     constexpr std::string_view exec_command = "*1\r\n$4\r\nEXEC\r\n";
-    const auto commands = [&] {
+    const auto reply_count = [&]() -> std::size_t {
         if constexpr (single_reply) {
-            return std::array{redis_command_args_view{redis_arg_span(source)}};
+            return 1U;
         } else {
-            return std::span<const redis_owned_command>(source);
+            return source.size() + (wrap_transaction ? 2U : 0U);
         }
     }();
-    const auto reply_count = commands.size() + (wrap_transaction ? 2U : 0U);
     auto* const resolved = pmr_resource_or_default(resource);
     result_type result(resolved);
     if constexpr (!single_reply) {
@@ -111,32 +118,43 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
 
         auto& write_buffer = connection.write_buffer();
         write_buffer.clear();
-        std::size_t serialized_bytes = wrap_transaction ? multi_command.size() + exec_command.size() : 0U;
-        for (const auto& command : commands) {
-            const std::span<const std::pmr::string> args = command.args_;
-            const auto command_bytes = resp_command_serialized_size(args);
-            if (command_bytes > std::numeric_limits<std::size_t>::max() - serialized_bytes) {
-                throw std::length_error("redis RESP request is too large");
+        if constexpr (std::is_same_v<command_source_type, redis_owned_command>) {
+            if (source.wire_.empty()) {
+                throw std::invalid_argument("redis command must not be empty");
             }
-            serialized_bytes += command_bytes;
-        }
-        write_buffer.reserve(serialized_bytes);
-        if (wrap_transaction) {
-            write_buffer.append(multi_command);
-        }
-        for (const auto& command : commands) {
-            const std::span<const std::pmr::string> args = command.args_;
-            serialize_resp_command(write_buffer, args);
-        }
-        if (wrap_transaction) {
-            write_buffer.append(exec_command);
-        }
-        if constexpr (std::is_same_v<command_source_type, std::pmr::vector<std::pmr::string>> ||
-                      std::is_same_v<command_source_type, std::pmr::vector<redis_owned_command>>) {
-            // The wire buffer owns every argument; the command views are no
-            // longer used and the reply count has already been saved.
+            write_buffer.assign(source.wire_);
+            std::pmr::string(source.wire_.get_allocator()).swap(source.wire_);
+        } else if constexpr (std::is_same_v<command_source_type, std::pmr::vector<redis_owned_command>>) {
+            std::size_t serialized_bytes =
+                wrap_transaction ? multi_command.size() + exec_command.size() : 0U;
+            for (const auto& command : source) {
+                if (command.wire_.empty()) {
+                    throw std::invalid_argument("redis command must not be empty");
+                }
+                if (command.wire_.size() > std::numeric_limits<std::size_t>::max() - serialized_bytes) {
+                    throw std::length_error("redis RESP request is too large");
+                }
+                serialized_bytes += command.wire_.size();
+            }
+            write_buffer.reserve(serialized_bytes);
+            if (wrap_transaction) {
+                write_buffer.append(multi_command);
+            }
+            for (const auto& command : source) {
+                write_buffer.append(command.wire_);
+            }
+            if (wrap_transaction) {
+                write_buffer.append(exec_command);
+            }
             command_source_type empty(source.get_allocator());
             source.swap(empty);
+        } else {
+            const auto args = redis_arg_span(source);
+            append_resp_command(write_buffer, args);
+            if constexpr (std::is_same_v<command_source_type, std::pmr::vector<std::pmr::string>>) {
+                command_source_type empty(source.get_allocator());
+                source.swap(empty);
+            }
         }
 
         const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);

@@ -20,6 +20,7 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/failure_report.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
@@ -198,13 +199,15 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
     std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
-    if (mariadb_names_session_tracking(sql)) {
+    const auto classification = classify_mariadb_statement(sql);
+    if (classification.names_session_tracking_) {
         statements.untrack();
     }
     std::pmr::string interpolated_sql(pmr_resource_or_default(resource));
     if (!params.empty()) {
+        const auto param_traits = inspect_mariadb_parameters(params);
         const MARIADB_CHARSET_INFO* charset = nullptr;
-        if (mariadb_interpolation_needs_charset(connection, params)) {
+        if (mariadb_escape_needs_charset(connection, param_traits.has_ambiguous_backslash_)) {
             charset = statements.client_utf8mb4() ? &mariadb_utf8mb4_charset()
                                                   : co_await query_mysql_charset(pool, index, deadline_value);
         }
@@ -212,7 +215,6 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
         sql = interpolated_sql;
     }
     validate_mariadb_sql_length(sql.size());
-    const auto classification = classify_mariadb_statement(sql);
     if (classification.calls_routine_) {
         statements.routine_called();
     }
@@ -480,12 +482,11 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
             record.flight_.sent_ = true;
             data.bytes_in_flight_ += record.flight_.size_;
             ++data.sent_;
-            if (data.send_buffer_.capacity() > mariadb_pipeline_send_budget &&
-                record.flight_.size_ * 4 < data.send_buffer_.capacity()) {
-                // Left over from a much larger statement: the connection does
-                // not keep its size, while a run of large ones keeps it.
-                data.send_buffer_ = std::pmr::string(data.send_buffer_.get_allocator());
-            }
+            const auto size_limit = std::numeric_limits<std::size_t>::max();
+            const auto amortized_bytes =
+                record.flight_.size_ <= size_limit / 4 ? record.flight_.size_ * 4 : size_limit;
+            http_clear_pmr_string_retaining_small(
+                data.send_buffer_, std::max(mariadb_pipeline_send_budget, amortized_bytes));
             return;
         }
         case mariadb_operation::read:
@@ -618,7 +619,11 @@ mariadb_pipeline_io::statement_type mariadb_pipeline_io::prepare(
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
-    return {sql, params, std::pmr::string(pool.resource())};
+    const auto classification = classify_mariadb_statement(sql);
+    const auto param_traits = params.empty() ? mariadb_parameter_traits{} : inspect_mariadb_parameters(params);
+    const bool deferred = !params.empty() && (classification.has_backslash_ || param_traits.has_backslash_);
+    return {sql, params, std::pmr::string(pool.resource()), classification, deferred,
+        param_traits.has_ambiguous_backslash_};
 }
 
 db_slot_socket::native_socket_type mariadb_pipeline_io::socket(pool_type& pool, std::size_t slot) {
@@ -638,20 +643,23 @@ void mariadb_pipeline_io::open(state_type&, std::size_t) {}
 // once the connection stands between two responses.
 bool mariadb_pipeline_io::queue(
     state_type& state, std::size_t index, member_type&, statement_type& statement, flight_type& flight) {
-    if (mariadb_names_session_tracking(statement.sql_)) {
+    if (statement.classification_.names_session_tracking_) {
         state.pool().slot(index).session_.statements_.untrack();
     }
-    const bool deferred = mariadb_interpolation_needs_session(statement.sql_, statement.params_);
+    const bool deferred = statement.deferred_;
     std::string_view sql = statement.sql_;
     if (!statement.params_.empty() && !deferred) {
-        interpolate_sql(
-            *state.pool().slot(index).connection_, statement.sql_, statement.params_, statement.interpolated_);
+        if (statement.interpolated_.empty()) {
+            interpolate_sql(
+                *state.pool().slot(index).connection_, statement.sql_, statement.params_, statement.interpolated_);
+        }
         sql = statement.interpolated_;
     }
     validate_mariadb_sql_length(sql.size());
-    const auto classification = classify_mariadb_statement(statement.sql_);
-    flight = {deferred ? std::string_view{} : sql, statement.sql_, statement.params_, 0, false, deferred,
-        classification.exclusive_, classification.calls_routine_};
+    flight = {deferred ? std::string_view{} : sql, statement.sql_, statement.params_,
+        (!statement.params_.empty() && !deferred) ? &statement.interpolated_ : nullptr, 0, false, deferred,
+        statement.classification_.exclusive_, statement.classification_.calls_routine_, false,
+        statement.ambiguous_backslash_};
     return false;
 }
 
@@ -716,7 +724,7 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
                 data.bytes_in_flight_ + record.flight_.sql_.size() <= mariadb_pipeline_send_budget) {
                 if (record.flight_.deferred_) {
                     if (record.flight_.charset_ == nullptr &&
-                        mariadb_interpolation_needs_charset(connection, record.flight_.params_)) {
+                        mariadb_escape_needs_charset(connection, record.flight_.ambiguous_backslash_)) {
                         // Its escape depends on the session's client
                         // character set. Every response before it has been
                         // read, so a tracked session's report of it is
@@ -745,6 +753,9 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
                         state.complete_head(index, reader, std::move(outcome));
                         return true;
                     }
+                } else if (record.flight_.interpolated_ != nullptr && !record.flight_.interpolated_->empty()) {
+                    data.send_buffer_.swap(*record.flight_.interpolated_);
+                    record.flight_.sql_ = data.send_buffer_;
                 } else {
                     data.send_buffer_.assign(record.flight_.sql_);
                 }

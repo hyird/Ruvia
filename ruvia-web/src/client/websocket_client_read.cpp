@@ -55,10 +55,22 @@ task<websocket_event> websocket_client_state::poll_protocol_event(
             }
         }
         if (!event.has_value()) {
-            const auto read_bytes = std::clamp(
-                (std::max)(input_.capacity() - input_.size(), require_protocol().needed_input_bytes()),
-                websocket_client_transport_buffer_bytes, std::size_t{64} * 1024);
-            const auto space = input_.prepare(read_bytes);
+            constexpr std::size_t min_spare_read_bytes = 4096;
+            constexpr std::size_t max_read_bytes = std::size_t{64} * 1024;
+            const auto needed = require_protocol().needed_input_bytes();
+            const auto spare = input_.capacity() - input_.size();
+            std::span<char> space;
+            if (input_.capacity() >= websocket_client_transport_buffer_bytes &&
+                spare >= (std::max)(needed, min_spare_read_bytes)) {
+                space = input_.prepare_spare();
+                if (space.size() > max_read_bytes) {
+                    space = space.first(max_read_bytes);
+                }
+            } else {
+                const auto read_bytes = std::clamp(
+                    (std::max)(spare, needed), websocket_client_transport_buffer_bytes, max_read_bytes);
+                space = input_.prepare(read_bytes);
+            }
             const auto count = co_await read_transport(space, read_timeout);
             if (count == 0) {
                 require_protocol().notify_transport_eof();

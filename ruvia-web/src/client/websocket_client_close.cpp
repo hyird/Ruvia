@@ -98,6 +98,7 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
         lifecycle_.require_ready();
         write_guard_type write_guard(*this);
         const auto submitted = require_protocol().submit_close(options.code_, reason);
+        std::pmr::string(reason.get_allocator()).swap(reason);
         if (submitted != websocket_close_submit_status::accepted) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                 "invalid WebSocket client close payload");

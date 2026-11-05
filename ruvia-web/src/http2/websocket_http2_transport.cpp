@@ -149,7 +149,7 @@ task<void> websocket_http2_transport::join() {
     }
     co_await drivers_.join();
     received_credit_.reset();
-    std::pmr::string(received_.get_allocator()).swap(received_);
+    received_.clear_retaining_small(0);
 }
 
 void websocket_http2_transport::on_http2_event(http2_event& event) {
@@ -265,14 +265,13 @@ task<void> websocket_http2_transport::flush() {
 task<std::size_t> websocket_http2_transport::read(std::span<char> output) {
     for (;;) {
         check_failure();
-        const auto available = received_.size() - read_offset_;
+        const auto available = received_.size();
         if (available != 0) {
             const auto count = std::min(output.size(), available);
-            std::memcpy(output.data(), received_.data() + read_offset_, count);
-            read_offset_ += count;
-            if (read_offset_ == received_.size()) {
-                http_clear_pmr_string_retaining_small(received_, 2 * websocket_http2_data_chunk_bytes);
-                read_offset_ = 0;
+            std::memcpy(output.data(), received_.data(), count);
+            received_.consume(count);
+            if (received_.empty()) {
+                received_.clear_retaining_small(2 * websocket_http2_data_chunk_bytes);
                 received_credit_.reset();
                 session_.wake_writer();
             }
@@ -285,7 +284,7 @@ task<std::size_t> websocket_http2_transport::read(std::span<char> output) {
     }
 }
 
-task<void> websocket_http2_transport::write(std::string_view bytes_value) {
+task<void> websocket_http2_transport::write(std::string_view bytes_value, http2_end_stream end_stream) {
     while (!bytes_value.empty()) {
         require_live();
         auto& connection = session_.connection();
@@ -296,7 +295,7 @@ task<void> websocket_http2_transport::write(std::string_view bytes_value) {
         http2_data_submit_result submitted{};
         try {
             submitted = connection.submit_data(
-                stream_id_, bytes_value, http2_end_stream::keep_open, websocket_http2_data_chunk_bytes);
+                stream_id_, bytes_value, end_stream, websocket_http2_data_chunk_bytes);
         } catch (...) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                 "could not submit HTTP/2 WebSocket DATA");

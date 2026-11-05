@@ -14,43 +14,18 @@
 namespace ruvia {
 
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
-    http_conditional_headers result{
-        detail::request_known_header(request, detail::request_header_kind::if_unmodified_since),
-        detail::request_known_header(request, detail::request_header_kind::if_modified_since),
+    return http_conditional_headers{
+        detail::http_request_access::has_repeated_known_header(
+            request, detail::request_header_kind::if_unmodified_since)
+            ? std::string_view{}
+            : detail::request_known_header(request, detail::request_header_kind::if_unmodified_since),
+        detail::http_request_access::has_repeated_known_header(
+            request, detail::request_header_kind::if_modified_since)
+            ? std::string_view{}
+            : detail::request_known_header(request, detail::request_header_kind::if_modified_since),
         detail::request_known_header(request, detail::request_header_kind::range),
         detail::request_known_header(request, detail::request_header_kind::if_range),
         detail::request_has_known_header(request, detail::request_header_kind::if_range)};
-    if (result.if_unmodified_since_.empty() && result.if_modified_since_.empty()) {
-        return result;
-    }
-    // Multiple date field lines are not one HTTP-date. Do not let the
-    // last-field cache turn them into an actionable 304 or 412 condition.
-    const auto headers = request.headers();
-    const auto last_unmodified = detail::http_request_access::known_header_index(
-        request, detail::request_header_kind::if_unmodified_since);
-    const auto last_modified = detail::http_request_access::known_header_index(
-        request, detail::request_header_kind::if_modified_since);
-    const auto limit = std::min(headers.size(), std::max(last_unmodified, last_modified));
-    if (limit <= 1U) {
-        return result;
-    }
-    bool saw_unmodified_since = false;
-    bool saw_modified_since = false;
-    for (std::size_t i = 0; i < limit; ++i) {
-        const auto kind = detail::http_request_access::header_kind(request, i);
-        if (kind == detail::request_header_kind::if_unmodified_since) {
-            if (saw_unmodified_since) {
-                result.if_unmodified_since_ = {};
-            }
-            saw_unmodified_since = true;
-        } else if (kind == detail::request_header_kind::if_modified_since) {
-            if (saw_modified_since) {
-                result.if_modified_since_ = {};
-            }
-            saw_modified_since = true;
-        }
-    }
-    return result;
 }
 
 void http_etag_field_condition::update(
@@ -80,6 +55,22 @@ http_etag_preconditions get_http_etag_preconditions(
     const bool has_if_none_match =
         detail::request_has_known_header(request, detail::request_header_kind::if_none_match);
     if (!has_if_match && !has_if_none_match) {
+        return result;
+    }
+    if ((!has_if_match ||
+            !detail::http_request_access::has_repeated_known_header(
+                request, detail::request_header_kind::if_match)) &&
+        (!has_if_none_match ||
+            !detail::http_request_access::has_repeated_known_header(
+                request, detail::request_header_kind::if_none_match))) {
+        if (has_if_match) {
+            result.if_match_.update(
+                detail::request_known_header(request, detail::request_header_kind::if_match), etag, true);
+        }
+        if (has_if_none_match) {
+            result.if_none_match_.update(
+                detail::request_known_header(request, detail::request_header_kind::if_none_match), etag, false);
+        }
         return result;
     }
 

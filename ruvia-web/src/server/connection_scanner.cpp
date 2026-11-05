@@ -187,10 +187,13 @@ bool connection_scanner::impl_type::retire() noexcept {
     // scanning_ is worker-local; only the worker thread may observe it. On that
     // thread a set flag means this call is nested inside the scan callback,
     // which already holds the timer mutex.
-    const bool nested_in_scan = worker_.is_current() && scanning_;
+    const bool on_worker = worker_.is_current();
+    const bool nested_in_scan = on_worker && scanning_;
     if (nested_in_scan) {
         timer_state_->owner_ = nullptr;
         release_after_scan_ = true;
+    } else if (on_worker) {
+        timer_state_->owner_ = nullptr;
     } else {
         // Another thread may be scanning; wait for that callback to finish.
         std::lock_guard lock(timer_state_->mutex_);

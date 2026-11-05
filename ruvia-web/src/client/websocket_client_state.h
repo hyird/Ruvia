@@ -182,7 +182,8 @@ private:
     [[nodiscard]] task<void> await_peer_transport_end();
     [[nodiscard]] task<std::size_t> read_transport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configured_timeout);
-    [[nodiscard]] task<void> write_transport(std::string_view bytes);
+    [[nodiscard]] task<void> write_transport(
+        std::string_view bytes, http2_end_stream end_stream = http2_end_stream::keep_open);
     void arm(worker_timer_registration& timer, std::optional<std::chrono::milliseconds> timeout,
         client_abort_reason reason);
     [[nodiscard]] static bool generate_mask(void*, websocket_mask_key_type& key) noexcept;

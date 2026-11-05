@@ -58,6 +58,14 @@ public:
         return termination_;
     }
 
+    void set_waiting_send_window(bool waiting) noexcept {
+        waiting_send_window_ = waiting;
+    }
+
+    [[nodiscard]] bool waiting_send_window() const noexcept {
+        return waiting_send_window_;
+    }
+
     class wait_operation final {
     public:
         wait_operation(const wait_operation&) = delete;
@@ -103,6 +111,7 @@ private:
     http2_sans_io_termination& termination_;
     std::optional<stop_source> stop_source_;
     bool stopped_{false};
+    bool waiting_send_window_{false};
 };
 
 }  // namespace ruvia::detail

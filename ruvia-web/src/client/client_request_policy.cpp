@@ -210,14 +210,31 @@ void client_request_policy::reserve_cookie_slot() {
     cookies_.reserve(cookies_.size() + growth);
 }
 
+void client_request_policy::recompute_next_expiry() noexcept {
+    next_expiry_.reset();
+    for (const auto& cookie : cookies_) {
+        if (cookie.expires_.has_value() && (!next_expiry_.has_value() || *cookie.expires_ < *next_expiry_)) {
+            next_expiry_ = *cookie.expires_;
+        }
+    }
+}
+
 void client_request_policy::discard_expired(std::chrono::system_clock::time_point now) {
-    std::erase_if(cookies_, [this, now](const stored_cookie& cookie) {
-        if (!cookie.expires_.has_value() || cookie.expires_.value() > now) {
+    std::optional<std::chrono::system_clock::time_point> earliest_expiry;
+    std::erase_if(cookies_, [this, now, &earliest_expiry](const stored_cookie& cookie) {
+        if (!cookie.expires_.has_value()) {
+            return false;
+        }
+        if (*cookie.expires_ > now) {
+            if (!earliest_expiry.has_value() || *cookie.expires_ < *earliest_expiry) {
+                earliest_expiry = *cookie.expires_;
+            }
             return false;
         }
         cookie_bytes_ -= storage_bytes(cookie.name_, cookie.value_, cookie.path_, cookie.domain_);
         return true;
     });
+    next_expiry_ = earliest_expiry;
 }
 
 http_client_request_view client_request_policy::prepare_request(
@@ -232,7 +249,44 @@ http_client_request_view client_request_policy::prepare_request(
     std::size_t index = 0;
     bool add_user_agent = !config_.user_agent_.empty();
     scratch.overflow_cookie_header_.clear();
-    std::size_t cookie_header_bytes = 0;
+    std::size_t inline_cookie_size = 0;
+    bool cookie_overflowed = false;
+    // RFC 6265 section 4.2.1: cookie-pairs are joined by "; ".
+    const auto ensure_cookie_space = [&](std::size_t count) -> char* {
+        const auto current_size = cookie_overflowed ? scratch.overflow_cookie_header_.size() : inline_cookie_size;
+        const auto separator_bytes = current_size == 0 ? std::size_t{0} : std::size_t{2};
+        const auto total_needed = separator_bytes + count;
+        if (total_needed == 0) {
+            return scratch.inline_cookie_header_.data();
+        }
+        if (!cookie_overflowed && total_needed <= scratch.inline_cookie_header_.size() - inline_cookie_size) {
+            char* cursor = scratch.inline_cookie_header_.data() + inline_cookie_size;
+            if (separator_bytes != 0) {
+                *cursor++ = ';';
+                *cursor++ = ' ';
+            }
+            inline_cookie_size += total_needed;
+            return cursor;
+        }
+        if (!cookie_overflowed) {
+            scratch.overflow_cookie_header_.reserve(
+                std::max(inline_cookie_size + total_needed, scratch.inline_cookie_header_.size() * 2));
+            scratch.overflow_cookie_header_.append(scratch.inline_cookie_header_.data(), inline_cookie_size);
+            cookie_overflowed = true;
+        }
+        const auto old_size = scratch.overflow_cookie_header_.size();
+        if (old_size + total_needed > scratch.overflow_cookie_header_.capacity()) {
+            scratch.overflow_cookie_header_.reserve(
+                std::max(old_size + total_needed, scratch.overflow_cookie_header_.capacity() * 2));
+        }
+        scratch.overflow_cookie_header_.resize(old_size + total_needed);
+        char* cursor = scratch.overflow_cookie_header_.data() + old_size;
+        if (separator_bytes != 0) {
+            *cursor++ = ';';
+            *cursor++ = ' ';
+        }
+        return cursor;
+    };
     // Request storage preserves caller field-name spelling.
     for (const auto& field : input_headers) {
         const auto name = field.name();
@@ -240,80 +294,46 @@ http_client_request_view client_request_policy::prepare_request(
             add_user_agent = false;
         }
         if (name.size() == 6U && http_ascii_equals_ignore_case(name, "cookie")) {
-            if (cookie_header_bytes != 0) {
-                cookie_header_bytes += 2;
-            }
-            cookie_header_bytes += field.value().size();
+            const auto value = field.value();
+            std::ranges::copy(value, ensure_cookie_space(value.size()));
             continue;
         }
         prepared_begin[index++] = http_header_view{name, field.value()};
     }
-    const bool has_input_cookie = index != input_headers.size();
 
     // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
     // out; caller-written Cookie fields above remain the caller's choice.
     // Empty jars have no expiry or path constraints to inspect.
-    const bool check_jar = !cookies_.empty() && request.method() != "TRACE";
-    std::string_view path;
-    // Domain matching is settled at storage: every stored domain is empty or
-    // matched the same fixed origin host.
-    const auto jar_cookie_sent = [&](const auto& cookie) {
-        if (!cookie.configured_ && config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
-            return false;
-        }
-        if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
-            return false;
-        }
-        return cookie_path_matches(path, cookie.path_);
-    };
-    if (check_jar) {
-        discard_expired(std::chrono::system_clock::now());
-        path = request_path_only(request.target());
-        for (const auto& cookie : cookies_) {
-            if (!jar_cookie_sent(cookie)) {
-                continue;
-            }
-            if (cookie_header_bytes != 0) {
-                cookie_header_bytes += 2;
-            }
-            cookie_header_bytes += cookie_request_pair_size(cookie.name_, cookie.value_);
-        }
-    }
-    std::string_view cookie_header_view{};
-    if (cookie_header_bytes != 0) {
-        char* cookie_begin = scratch.inline_cookie_header_.data();
-        if (cookie_header_bytes > scratch.inline_cookie_header_.size()) {
-            scratch.overflow_cookie_header_.resize(cookie_header_bytes);
-            cookie_begin = scratch.overflow_cookie_header_.data();
-        }
-        char* cursor = cookie_begin;
-        // RFC 6265 section 4.2.1: cookie-pairs are joined by "; ".
-        const auto separate = [&]() noexcept {
-            if (cursor != cookie_begin) {
-                *cursor++ = ';';
-                *cursor++ = ' ';
-            }
-        };
-        if (has_input_cookie) {
-            for (const auto& field : input_headers) {
-                if (field.name().size() != 6U || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
-                    continue;
-                }
-                separate();
-                cursor = std::ranges::copy(field.value(), cursor).out;
+    if (!cookies_.empty() && request.method() != "TRACE") {
+        if (next_expiry_.has_value()) {
+            const auto now = std::chrono::system_clock::now();
+            if (now >= *next_expiry_) {
+                discard_expired(now);
             }
         }
-        if (check_jar) {
+        if (!cookies_.empty()) {
+            const auto path = request_path_only(request.target());
+            // Domain matching is settled at storage: every stored domain is empty
+            // or matched the same fixed origin host.
             for (const auto& cookie : cookies_) {
-                if (!jar_cookie_sent(cookie)) {
+                if (!cookie.configured_ &&
+                    config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
                     continue;
                 }
-                separate();
-                cursor = write_cookie_request_pair(cursor, cookie.name_, cookie.value_);
+                if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
+                    continue;
+                }
+                if (!cookie_path_matches(path, cookie.path_)) {
+                    continue;
+                }
+                const auto pair_size = cookie_request_pair_size(cookie.name_, cookie.value_);
+                (void)write_cookie_request_pair(ensure_cookie_space(pair_size), cookie.name_, cookie.value_);
             }
         }
-        cookie_header_view = std::string_view(cookie_begin, static_cast<std::size_t>(cursor - cookie_begin));
     }
+    const auto cookie_header_view =
+        cookie_overflowed ? std::string_view(scratch.overflow_cookie_header_)
+                          : std::string_view(scratch.inline_cookie_header_.data(), inline_cookie_size);
     if (add_user_agent) {
         prepared_begin[index++] = http_header_view{"user-agent", config_.user_agent_};
     }
@@ -348,7 +368,12 @@ void client_request_policy::retain_response_cookies(
         }
         if (!discarded_expired) {
             discarded_expired = true;
-            discard_expired(current_time());
+            if (next_expiry_.has_value()) {
+                const auto current = current_time();
+                if (current >= *next_expiry_) {
+                    discard_expired(current);
+                }
+            }
         }
         const auto parsed_cookie = parse_set_cookie(header.value());
         if (!parsed_cookie) {
@@ -375,8 +400,12 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
         match == cookies_.end() ? 0 : storage_bytes(match->name_, match->value_, match->path_, match->domain_);
     if (cookie.expired_) {
         if (match != cookies_.end()) {
+            const bool removed_earliest = match->expires_.has_value() && next_expiry_ == match->expires_;
             cookie_bytes_ -= replaced_bytes;
             cookies_.erase(match);
+            if (removed_earliest) {
+                recompute_next_expiry();
+            }
         }
         return;
     }
@@ -398,7 +427,11 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
         const auto insertion_index = insertion - cookies_.begin();
         reserve_cookie_slot();
         cookies_.emplace(cookies_.begin() + insertion_index, std::move(replacement));
+        if (cookie.expires_.has_value() && (!next_expiry_.has_value() || *cookie.expires_ < *next_expiry_)) {
+            next_expiry_ = *cookie.expires_;
+        }
     } else {
+        const auto old_expires = match->expires_;
         std::optional<std::pmr::string> replacement_value;
         if (match->value_ != cookie.value_ && cookie.value_.size() > match->value_.capacity()) {
             replacement_value.emplace(cookie.value_, resource_);
@@ -419,6 +452,11 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
         }
         match->expires_ = cookie.expires_;
         match->secure_ = cookie.secure_;
+        if (cookie.expires_.has_value() && (!next_expiry_.has_value() || *cookie.expires_ <= *next_expiry_)) {
+            next_expiry_ = *cookie.expires_;
+        } else if (old_expires.has_value() && next_expiry_ == old_expires) {
+            recompute_next_expiry();
+        }
     }
     cookie_bytes_ = cookie_bytes_ - replaced_bytes + replacement_bytes;
 }

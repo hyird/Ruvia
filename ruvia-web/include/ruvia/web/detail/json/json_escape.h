@@ -12,30 +12,10 @@ namespace ruvia::detail {
 enum class json_hex_case : std::uint8_t { upper,
     lower };
 
-// Reservation hint for append_json_string. It counts escapes only; output for
-// ill-formed UTF-8 grows by up to two bytes per replaced byte beyond the hint.
-[[nodiscard]] inline std::size_t json_string_size_hint(std::string_view value) noexcept {
-    std::size_t size = value.size() + 2;
-    std::size_t offset = 0;
-    while ((offset = find_json_escape_byte(value, offset)) != std::string_view::npos) {
-        const auto c = static_cast<unsigned char>(value[offset]);
-        switch (c) {
-            case '"':
-            case '\\':
-            case '\b':
-            case '\f':
-            case '\n':
-            case '\r':
-            case '\t':
-                ++size;
-                break;
-            default:
-                size += 5;
-                break;
-        }
-        ++offset;
-    }
-    return size;
+// O(1) reservation hint for append_json_string, avoiding a pre-scan pass over
+// the string before escaping.
+[[nodiscard]] constexpr std::size_t json_string_size_hint(std::string_view value) noexcept {
+    return value.size() + 2;
 }
 
 // Escapes and appends a JSON string. RFC 8259 §8.1 requires interchanged JSON

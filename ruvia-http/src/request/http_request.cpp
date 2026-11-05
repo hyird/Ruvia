@@ -23,7 +23,8 @@ std::optional<std::string_view> http_request::header(std::string_view name) cons
 
     for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
-        if (http_ascii_equals_ignore_case(headers_[index].name(), name)) {
+        if (headers_.kind_at(index) == detail::request_header_kind::other &&
+            http_ascii_equals_ignore_case(headers_[index].name(), name)) {
             return headers_[index].value();
         }
     }
@@ -61,11 +62,15 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
     };
     const auto last_cookie =
         detail::request_known_header(*this, detail::request_header_kind::cookie);
-    const auto last_cookie_index =
-        cached_headers_[detail::request_header_kind_known_slot(detail::request_header_kind::cookie)];
     if (auto value = find_in(last_cookie)) {
         return value;
     }
+    if (!detail::http_request_access::has_repeated_known_header(
+            *this, detail::request_header_kind::cookie)) {
+        return std::nullopt;
+    }
+    const auto last_cookie_index =
+        cached_headers_[detail::request_header_kind_known_slot(detail::request_header_kind::cookie)];
     // The one-based cache points to the last Cookie field; only earlier fields can contribute.
     for (std::size_t i = last_cookie_index - 1; i > 0; --i) {
         const auto index = i - 1;
@@ -82,16 +87,22 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
 http_response_coding_selection http_response_coding_selection_for(const http_request& request) noexcept {
     http_response_coding_qualities qualities;
     if (detail::request_has_known_header(request, detail::request_header_kind::accept_encoding)) {
-        // Every field line contributes: RFC 9110 section 5.3 combines repeated
-        // list fields, and the request cache records only the last line.
-        const auto headers = request.headers();
-        const auto last_index = detail::http_request_access::known_header_index(
-            request, detail::request_header_kind::accept_encoding);
-        const auto limit = last_index <= headers.size() ? last_index : headers.size();
-        for (std::size_t i = 0; i < limit; ++i) {
-            if (detail::http_request_access::header_kind(request, i) ==
-                detail::request_header_kind::accept_encoding) {
-                qualities.update(headers[i].value());
+        if (!detail::http_request_access::has_repeated_known_header(
+                request, detail::request_header_kind::accept_encoding)) {
+            qualities.update(
+                detail::request_known_header(request, detail::request_header_kind::accept_encoding));
+        } else {
+            // Every field line contributes: RFC 9110 section 5.3 combines repeated
+            // list fields, and the request cache records only the last line.
+            const auto headers = request.headers();
+            const auto last_index = detail::http_request_access::known_header_index(
+                request, detail::request_header_kind::accept_encoding);
+            const auto limit = last_index <= headers.size() ? last_index : headers.size();
+            for (std::size_t i = 0; i < limit; ++i) {
+                if (detail::http_request_access::header_kind(request, i) ==
+                    detail::request_header_kind::accept_encoding) {
+                    qualities.update(headers[i].value());
+                }
             }
         }
     }

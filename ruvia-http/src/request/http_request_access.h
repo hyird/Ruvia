@@ -45,6 +45,12 @@ struct http_request_access final {
                request.cached_headers_[slot] <= request.headers_.size();
     }
 
+    [[nodiscard]] static bool has_repeated_known_header(
+        const http_request& request, request_header_kind name) noexcept {
+        const auto slot = known_header_slot(name);
+        return slot < cached_header_slots && request.headers_.has_repeated_known_slot(slot);
+    }
+
     [[nodiscard]] static std::size_t known_header_index(
         const http_request& request, request_header_kind name) noexcept {
         const auto slot = known_header_slot(name);
@@ -116,6 +122,9 @@ struct http_request_access final {
         request.headers_.append(
             header_value, known_slot < cached_header_slots ? kind : request_header_kind::other);
         if (known_slot < cached_header_slots) {
+            if (request.cached_headers_[known_slot] != 0) {
+                request.headers_.mark_repeated_known_slot(known_slot);
+            }
             request.cached_headers_[known_slot] = static_cast<std::uint16_t>(request.headers_.size());
         }
         return true;

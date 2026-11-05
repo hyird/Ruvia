@@ -207,6 +207,11 @@ private:
             : connection_(&connection) {
             const auto status = [&] {
                 if constexpr (native_stream) {
+                    if constexpr (requires(stream_type& value) { value.next_layer(); }) {
+                        if (payload.size() + 14 <= websocket_retained_buffer_bytes) {
+                            return connection.protocol_.submit_frame(opcode, payload, compress);
+                        }
+                    }
                     return connection.protocol_.submit_borrowed_frame(opcode, payload, compress);
                 } else {
                     return connection.protocol_.submit_frame(opcode, payload, compress);

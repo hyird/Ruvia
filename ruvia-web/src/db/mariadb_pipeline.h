@@ -13,6 +13,7 @@
 
 #include "db/db_pipeline.h"
 #include "db/db_slot_socket.h"
+#include "db/db_sql.h"
 #include "db/mariadb_statements.h"
 
 struct st_mysql_res;
@@ -68,6 +69,7 @@ struct mariadb_flight final {
     std::string_view sql_{};
     std::string_view statement_sql_{};
     std::span<const db_value> params_{};
+    std::pmr::string* interpolated_{nullptr};
     // The bytes it put on the wire, once sent.
     std::size_t size_{0};
     bool sent_{false};
@@ -81,6 +83,8 @@ struct mariadb_flight final {
     // Its use was counted in the statement cache: when the reader comes back
     // to it, it goes out as text.
     bool counted_{false};
+    // Whether `params_` contains a backslash preceded by a non-ASCII byte.
+    bool ambiguous_backslash_{false};
     // The session's client character set, read for a deferred statement
     // whose escape depends on it.
     const ma_charset_info_st* charset_{nullptr};
@@ -152,6 +156,9 @@ struct mariadb_pipeline_io final {
         std::string_view sql_;
         std::span<const db_value> params_;
         std::pmr::string interpolated_;
+        mariadb_statement_classification classification_{};
+        bool deferred_{false};
+        bool ambiguous_backslash_{false};
     };
 
     [[nodiscard]] static statement_type prepare(pool_type& pool, std::string_view sql, std::span<const db_value> params);

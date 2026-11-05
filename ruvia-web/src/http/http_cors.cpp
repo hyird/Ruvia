@@ -69,27 +69,30 @@ struct cors_request_fields final {
     // CORS is an application policy, not message framing. Opaque or malformed
     // metadata may reach the handler but must not generate cross-origin grants.
     // Never select one origin from a multi-origin value for a CORS decision.
+    const auto origin = request.header("Origin");
+    if (origin.has_value()) {
+        if (!is_valid_cors_origin(*origin)) {
+            return std::nullopt;
+        }
+        result.origin_ = *origin;
+    }
+    if (!options) {
+        return result;
+    }
+    const auto requested_method = request.header("Access-Control-Request-Method");
+    if (requested_method.has_value()) {
+        if (!is_valid_http_method_token(*requested_method)) {
+            return std::nullopt;
+        }
+        result.requested_method_ = *requested_method;
+    }
+    if (!request.header("Access-Control-Request-Headers").has_value()) {
+        return result;
+    }
     bool first_header_name = true;
     for (const auto& field : request.headers()) {
-        if (http_ascii_equals_ignore_case(field.name(), "Origin")) {
-            if (result.origin_.has_value() || !is_valid_cors_origin(field.value())) {
-                return std::nullopt;
-            }
-            result.origin_ = field.value();
-            continue;
-        }
-        if (!options) {
-            continue;
-        }
-        if (http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Method")) {
-            if (result.requested_method_.has_value() ||
-                !is_valid_http_method_token(field.value())) {
-                return std::nullopt;
-            }
-            result.requested_method_ = field.value();
-            continue;
-        }
-        if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
+        if (field.name().size() != 30U ||
+            !http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
             continue;
         }
         http_field_name_list names(field.value());

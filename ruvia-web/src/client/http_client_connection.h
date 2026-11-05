@@ -52,6 +52,7 @@ public:
         http_client_response_state* state_;
         std::optional<http_client_error::code_type> error_;
         std::exception_ptr failure_;
+        std::size_t registry_index_{0};
         std::uint64_t request_id_{0};
         std::uint64_t cancellation_id_{0};
         std::uint32_t stream_id_{0};
@@ -152,10 +153,6 @@ private:
     void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
     void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
-    [[nodiscard]] task<void> wait_for_http2_output(
-        http2_stream& stream, const http_client_output_queue* upload = nullptr);
-    [[nodiscard]] task<void> wait_for_http2_send_window(
-        http2_stream& stream, const http_client_output_queue* upload = nullptr);
     [[nodiscard]] task<bool> send_http2_request_data(http2_stream& stream, std::string_view bytes,
         http2_end_stream end_stream, const http_client_output_queue* upload = nullptr);
     [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream,
@@ -166,6 +163,7 @@ private:
     http_client_pool& pool_;
     std::size_t index_;
     std::pmr::vector<http2_stream*> http2_streams_;
+    http2_stream* last_http2_stream_{nullptr};
     std::uint64_t next_http2_request_id_{0};
     http2_state_waiter* state_waiters_{};
 };

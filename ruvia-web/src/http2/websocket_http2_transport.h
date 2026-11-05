@@ -13,6 +13,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_io_buffer.h"
 
 #include "client/client_tcp_transport.h"
 #include "http2/http2_client_session.h"
@@ -39,7 +40,8 @@ public:
 
     [[nodiscard]] task<void> connect();
     [[nodiscard]] task<std::size_t> read(std::span<char> output);
-    [[nodiscard]] task<void> write(std::string_view bytes);
+    [[nodiscard]] task<void> write(
+        std::string_view bytes, http2_end_stream end_stream = http2_end_stream::keep_open);
     [[nodiscard]] task<void> finish();
     void end_peer_read() noexcept {
         eof_ = true;
@@ -66,8 +68,7 @@ private:
     websocket_client_state& owner_;
     task_scope drivers_;
     http2_client_session<websocket_http2_transport> session_;
-    std::pmr::string received_;
-    std::size_t read_offset_{0};
+    http_io_buffer received_;
     std::optional<http2_received_data_credit> received_credit_{};
     std::optional<http_client_response_head> response_{};
     std::exception_ptr failure_{};

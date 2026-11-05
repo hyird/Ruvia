@@ -83,9 +83,16 @@ namespace {
 }
 
 [[nodiscard]] bool response_headers_skip_compression(const http_response& response) noexcept {
+    if (response.header("Content-Encoding").has_value() ||
+        response.header("Content-Range").has_value()) {
+        return true;
+    }
+    if (const auto content_type = response.header("Content-Type");
+        content_type.has_value() && response_content_type_skips_compression(*content_type)) {
+        return true;
+    }
+    const bool has_cache_control = response.header("Cache-Control").has_value();
     cache_control_field_parser cache_parser;
-    bool saw_cache_control = false;
-    std::string_view content_type_value;
     for (const auto& header : response.headers()) {
         const auto name = header.name();
         switch (name.size()) {
@@ -95,17 +102,8 @@ namespace {
                     return true;
                 }
                 break;
-            case 12U:
-                if (http_ascii_equals_ignore_case(name, "Content-Type")) {
-                    content_type_value = header.value();
-                }
-                break;
             case 13U:
-                if (http_ascii_equals_ignore_case(name, "Content-Range")) {
-                    return true;
-                }
-                if (http_ascii_equals_ignore_case(name, "Cache-Control")) {
-                    saw_cache_control = true;
+                if (has_cache_control && http_ascii_equals_ignore_case(name, "Cache-Control")) {
                     cache_parser.update(header.value());
                 }
                 break;
@@ -114,17 +112,11 @@ namespace {
                     return true;
                 }
                 break;
-            case 16U:
-                if (http_ascii_equals_ignore_case(name, "Content-Encoding")) {
-                    return true;
-                }
-                break;
             default:
                 break;
         }
     }
-    return response_content_type_skips_compression(content_type_value) ||
-           (saw_cache_control && cache_parser.finish().has(cache_control_directive::no_transform));
+    return has_cache_control && cache_parser.finish().has(cache_control_directive::no_transform);
 }
 
 // The single decimal Content-Length a HEAD handler declared, or nullopt.

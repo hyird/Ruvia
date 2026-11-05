@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -8,6 +9,8 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
@@ -101,11 +104,11 @@ struct http1_connection_session final {
 [[nodiscard]] inline std::exception_ptr try_start_buffered_response_write(
     http_response_head_buffer& response_head, const http_response& response,
     const http1_buffered_response_plan& planned_response, bool next_request_buffered,
-    std::optional<http1_response_write_start>& started_write) {
+    std::optional<http1_response_write_start>& started_write, bool coalesce_for_tls = false) {
     const auto held_output_bytes = response_head.view().size();
     try {
         started_write.emplace(start_response_write(response_head, response, planned_response,
-            next_request_buffered ? pipelined_output_batch_bytes : 0));
+            next_request_buffered ? pipelined_output_batch_bytes : 0, coalesce_for_tls));
         return nullptr;
     } catch (...) {
         if (response_head.view().size() != held_output_bytes) {
@@ -162,8 +165,6 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         enable_plain_tcp_sync_write(socket);
     }
     for (;;) {
-        scanner_entry.set_phase(connection_scanner::phase::idle);
-
         // Borrow-on-use / return-on-idle for the whole work set: the
         // connection holds none while it waits for its next request, and reads
         // that request's first bytes into the small connection-resident buffer
@@ -201,6 +202,35 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         work_set = work_sets_.acquire();
         static_assert(idle_resident_read_bytes <= initial_read_buffer_bytes);
         work_set->read_buffer_.assign(std::string_view(idle_read_buffer.data(), idle_completion.result()));
+        if (idle_completion.result() == idle_read_buffer.size()) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>) {
+                if (stream.non_blocking()) {
+                    const auto read_space = work_set->read_buffer_.prepare_read();
+                    if (!read_space.empty()) {
+                        std::error_code extra_ec;
+                        const auto extra_bytes = stream.read_some(asio::buffer(read_space), extra_ec);
+                        if (!extra_ec && extra_bytes != 0) {
+                            work_set->read_buffer_.commit_read(extra_bytes);
+                        }
+                    }
+                }
+            } else {
+                for (int pending = SSL_pending(stream.native_handle()); pending > 0;
+                    pending = SSL_pending(stream.native_handle())) {
+                    const auto read_space = work_set->read_buffer_.prepare_read();
+                    if (read_space.empty()) {
+                        break;
+                    }
+                    std::size_t extra_bytes = 0;
+                    const auto to_read = (std::min)(read_space.size(), static_cast<std::size_t>(pending));
+                    if (SSL_read_ex(stream.native_handle(), read_space.data(), to_read, &extra_bytes) != 1 ||
+                        extra_bytes == 0) {
+                        break;
+                    }
+                    work_set->read_buffer_.commit_read(extra_bytes);
+                }
+            }
+        }
         scanner_entry.touch();
         if (const auto close_mode = co_await serve_requests(session, *work_set)) {
             co_return *close_mode;
@@ -265,7 +295,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         std::size_t header_search_offset = 0;
         // Request timing starts with the request's first bytes: the idle wait
         // above already has them; a pipelined request's arrived earlier.
-        auto request_start = std::chrono::steady_clock::now();
+        const bool record_access_timing = static_cast<bool>(options_.access_log_.callback_);
+        auto request_start = record_access_timing ? std::chrono::steady_clock::now()
+                                                  : std::chrono::steady_clock::time_point{};
         for (;;) {
             if constexpr (plain_tcp) {
                 // The client preface must be the first bytes of the connection
@@ -561,7 +593,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             if (!http_server_worker_running(state_)) {
                 co_return http_connection_close::notify;
             }
-            if (read_buffer.empty()) {
+            if (record_access_timing && read_buffer.empty()) {
                 request_start = std::chrono::steady_clock::now();
             }
             read_buffer.commit_read(bytes_read);
@@ -635,7 +667,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 // Head validation fails before touching output. Body coalescing can
                 // fail after appending a head, leaving an incomplete buffered message.
                 const auto head_failure = try_start_buffered_response_write(
-                    response_head, response, *planned_response, next_request_buffered, started_write);
+                    response_head, response, *planned_response, next_request_buffered, started_write, !plain_tcp);
                 if (head_failure == nullptr) {
                     break;
                 }
@@ -713,7 +745,6 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         if (read_buffer.empty()) {
             co_return std::nullopt;
         }
-        scanner_entry.set_phase(connection_scanner::phase::idle);
     }
 }
 

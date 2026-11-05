@@ -360,6 +360,29 @@ void free_stored_result(void* result_value) noexcept {
     mysql_free_result(static_cast<st_mysql_res*>(result_value));
 }
 
+mariadb_parameter_traits inspect_mariadb_parameters(std::span<const db_value> params) noexcept {
+    mariadb_parameter_traits result{};
+    for (const auto& param : params) {
+        if (db_value_access::type(param) != db_value_type::string) {
+            continue;
+        }
+        const auto value = db_value_access::text(param);
+        for (auto backslash = value.find('\\'); backslash != std::string_view::npos;
+            backslash = value.find('\\', backslash + 1)) {
+            result.has_backslash_ = true;
+            if (backslash != 0 && static_cast<unsigned char>(value[backslash - 1]) > 0x7f) {
+                result.has_ambiguous_backslash_ = true;
+                return result;
+            }
+        }
+    }
+    return result;
+}
+
+bool mariadb_escape_needs_charset(const st_mysql& connection, bool has_ambiguous_backslash) noexcept {
+    return has_ambiguous_backslash && (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
+}
+
 bool mariadb_interpolation_needs_session(std::string_view sql, std::span<const db_value> params) noexcept {
     if (params.empty()) {
         return false;
@@ -367,25 +390,14 @@ bool mariadb_interpolation_needs_session(std::string_view sql, std::span<const d
     if (sql.find('\\') != std::string_view::npos) {
         return true;
     }
-    for (const auto& param : params) {
-        if (db_value_access::type(param) == db_value_type::string &&
-            db_value_access::text(param).find('\\') != std::string_view::npos) {
-            return true;
-        }
-    }
-    return false;
+    return inspect_mariadb_parameters(params).has_backslash_;
 }
 
 bool mariadb_interpolation_needs_charset(const st_mysql& connection, std::span<const db_value> params) noexcept {
     if ((connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) != 0) {
         return false;
     }
-    for (const auto& param : params) {
-        if (db_value_access::type(param) == db_value_type::string && ambiguous_backslash(db_value_access::text(param))) {
-            return true;
-        }
-    }
-    return false;
+    return inspect_mariadb_parameters(params).has_ambiguous_backslash_;
 }
 
 const MARIADB_CHARSET_INFO& mariadb_queried_charset(MYSQL_RES& result) {
@@ -483,14 +495,33 @@ mariadb_statement_traits mariadb_statement_traits_of(std::string_view sql) noexc
 }
 
 mariadb_statement_classification classify_mariadb_statement(std::string_view sql) noexcept {
+    mariadb_statement_classification result{};
     const auto leading = leading_sql_token(sql, true);
     if (leading.kind_ == sql_token::kind::hidden) {
-        return {true, true};
+        result.exclusive_ = true;
+        result.calls_routine_ = true;
+    } else if (leading.kind_ == sql_token::kind::word) {
+        result.exclusive_ = sql_keyword(leading.text_, "load");
+        result.calls_routine_ = sql_keyword(leading.text_, "call");
     }
-    if (leading.kind_ != sql_token::kind::word) {
-        return {};
+    constexpr std::string_view tracking_name = "session_track";
+    for (std::size_t i = 0; i < sql.size(); ++i) {
+        const char ch = sql[i];
+        if (ch == '\\') {
+            result.has_backslash_ = true;
+            if (result.names_session_tracking_) {
+                break;
+            }
+        } else if (ch == '_' && !result.names_session_tracking_ && i >= 7 &&
+                   sql.size() - (i - 7) >= tracking_name.size() &&
+                   http_ascii_equals_ignore_case(sql.substr(i - 7, tracking_name.size()), tracking_name)) {
+            result.names_session_tracking_ = true;
+            if (result.has_backslash_) {
+                break;
+            }
+        }
     }
-    return {sql_keyword(leading.text_, "load"), sql_keyword(leading.text_, "call")};
+    return result;
 }
 
 }  // namespace ruvia::detail

@@ -14,6 +14,7 @@
 #include "http2/http2_header_rules.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
+#include "http2/http2_response_headers.h"
 #include "http2/http2_websocket_handshake.h"
 #include "parser/http_request_target.h"
 #include "websocket/http_websocket_handshake_fields.h"
@@ -225,7 +226,7 @@ http2_connection::submit_regular_request_head(std::string_view method,
     return submit_local_request_head([&](http2_stream_state& stream) {
         stream.assign_request_method(method);
         stream.assign_request_scheme(scheme);
-        auto& block = stream.local_header_block();
+        auto& block = local_header_block_;
         block.clear();
         std::size_t reserve_bytes = 8U + (authority.has_value() ? authority->size() + 4U : 0U) +
                                     path.size() + (emit_length ? content_length_value.size() + 4U : 0U);
@@ -296,7 +297,7 @@ http2_connection::submit_connect_request_head(
         stream.begin_local_content_forbidden();
         (void)stream.begin_local_connect_request();
 
-        auto& block = stream.local_header_block();
+        auto& block = local_header_block_;
         block.clear();
         std::size_t reserve_bytes = 6U + authority.size();
         for (const auto& header : headers) {
@@ -348,7 +349,7 @@ http2_connection::submit_extended_connect_request_head(
         stream.begin_local_content_forbidden();
         (void)stream.begin_local_connect_request();
 
-        auto& block = stream.local_header_block();
+        auto& block = local_header_block_;
         block.clear();
         std::size_t reserve_bytes =
             16U + encoded_protocol.size() + scheme.size() + authority.size() + path.size();
@@ -404,7 +405,8 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
             http_request_field_source::generated)) {
         return error_type::invalid_request;
     }
-    std::pmr::string block(resource_);
+    auto& block = local_header_block_;
+    block.clear();
     std::size_t reserve_bytes =
         (encoder_table_size_update_pending_ ? encoder_zero_table_size_update_.size() : 0U) +
         8U + request.authority_.size() + request.path_.size();
@@ -426,6 +428,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     http2_encode_outbound_request_headers(block, request.headers_);
     auto* stream = create_stream(next_push_stream_id_);
     if (!stream) {
+        http2_release_local_header_block(local_header_block_);
         return error_type::stream_limit;
     }
     const auto checkpoint = output_.checkpoint();
@@ -443,7 +446,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
             const auto& header = request.headers_[i];
             const auto kind = classify_request_header(header.name());
             if (kind == request_header_kind::host) {
-                stream->mark_host();
+                stream->mark_host(stream->remote_header_count());
             }
             if (kind == request_header_kind::cookie) {
                 if (!http2_append_cookie_header_value(*stream, header.value())) {
@@ -480,10 +483,12 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
             offset += count;
         }
     } catch (...) {
+        local_header_block_.clear();
         output_.rollback_to(checkpoint);
         streams_.remove(next_push_stream_id_);
         throw;
     }
+    http2_release_local_header_block(local_header_block_);
     encoder_table_size_update_pending_ = false;
     const auto id = next_push_stream_id_;
     next_push_stream_id_ += 2;

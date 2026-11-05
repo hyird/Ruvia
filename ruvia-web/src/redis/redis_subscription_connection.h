@@ -40,7 +40,7 @@ public:
 
     // Writes one subscription command, connecting first when needed. The
     // write is bound by the operation timeout and command_timeout.
-    task<void> send(std::pmr::vector<std::pmr::string> args);
+    task<void> send(redis_owned_command command);
     // Reads the next pushed reply. Views of the returned event borrow
     // current_reply_ until the next read() releases it.
     task<std::optional<redis_pubsub_event>> read();

@@ -37,7 +37,19 @@ inline void add_vary_token(http_response_headers& headers,
     const bool wildcard_token = token == "*";
     std::size_t existing_value_count = 0;
     std::size_t existing_bytes = 0;
-    if (response_has_known_header(headers, response_header_vary)) {
+    const auto* const first =
+        http_response_header_state_access::known_header(headers, response_header_vary);
+    const bool single_vary = first != nullptr && !http_response_header_access::append(*first);
+    if (single_vary) {
+        const auto value = first->value();
+        if (http_has_token(value, "*") || (!wildcard_token && http_has_token(value, token))) {
+            return;
+        }
+        if (!http_trim_ows(value).empty()) {
+            existing_value_count = 1;
+            existing_bytes = value.size();
+        }
+    } else if (first != nullptr) {
         for (const auto& header : headers) {
             if (http_response_header_access::known_bit(header) != response_header_vary) {
                 continue;
@@ -73,16 +85,24 @@ inline void add_vary_token(http_response_headers& headers,
     if (total_size <= inline_vary_capacity) {
         std::array<char, inline_vary_capacity> buffer{};
         std::size_t length = 0;
-        for (const auto& header : headers) {
-            if (http_response_header_access::known_bit(header) != response_header_vary ||
-                http_trim_ows(header.value()).empty()) {
-                continue;
-            }
-            const auto value = header.value();
-            std::memcpy(buffer.data() + length, value.data(), value.size());
-            length += value.size();
+        if (single_vary) {
+            const auto value = first->value();
+            std::memcpy(buffer.data(), value.data(), value.size());
+            length = value.size();
             buffer[length++] = ',';
             buffer[length++] = ' ';
+        } else {
+            for (const auto& header : headers) {
+                if (http_response_header_access::known_bit(header) != response_header_vary ||
+                    http_trim_ows(header.value()).empty()) {
+                    continue;
+                }
+                const auto value = header.value();
+                std::memcpy(buffer.data() + length, value.data(), value.size());
+                length += value.size();
+                buffer[length++] = ',';
+                buffer[length++] = ' ';
+            }
         }
         std::memcpy(buffer.data() + length, token.data(), token.size());
         length += token.size();
@@ -92,13 +112,18 @@ inline void add_vary_token(http_response_headers& headers,
 
     std::pmr::string updated(resource);
     updated.reserve(total_size);
-    for (const auto& header : headers) {
-        if (http_response_header_access::known_bit(header) != response_header_vary ||
-            http_trim_ows(header.value()).empty()) {
-            continue;
-        }
-        updated.append(header.value());
+    if (single_vary) {
+        updated.append(first->value());
         updated.append(", ");
+    } else {
+        for (const auto& header : headers) {
+            if (http_response_header_access::known_bit(header) != response_header_vary ||
+                http_trim_ows(header.value()).empty()) {
+                continue;
+            }
+            updated.append(header.value());
+            updated.append(", ");
+        }
     }
     updated.append(token);
     headers.header("Vary", updated);

@@ -31,12 +31,15 @@ constexpr std::size_t http2_rapid_reset_goaway_bytes =
 }  // namespace
 
 bool http2_connection::is_pinned(std::uint32_t stream_id) const noexcept {
-    return std::ranges::find(pinned_streams_, stream_id) != pinned_streams_.end();
+    const auto* const stream = streams_.find(stream_id);
+    return stream != nullptr && stream->pinned();
 }
 
 void http2_connection::pin_stream(std::uint32_t stream_id) {
-    if (!is_pinned(stream_id)) {
+    auto* const stream = streams_.find(stream_id);
+    if (stream != nullptr && !stream->pinned()) {
         pinned_streams_.push_back(stream_id);
+        stream->set_pinned(true);
     }
 }
 
@@ -72,7 +75,9 @@ void http2_connection::detach_active_header_block(http2_stream_state& stream) {
 void http2_connection::unpin_stream(std::uint32_t stream_id) {
     auto* stream = streams_.find(stream_id);
     if (stream == nullptr) {
-        priorities_.erase(stream_id);
+        if (!priorities_.empty()) {
+            priorities_.erase(stream_id);
+        }
         std::erase(pinned_streams_, stream_id);
         return;  // never created, or already removed
     }
@@ -81,7 +86,9 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         // Returning the owner lease is the fallback that settles any abandoned
         // debt before storage is finally removed.
         flush_window_debt(*stream);
-        priorities_.erase(stream_id);
+        if (!priorities_.empty()) {
+            priorities_.erase(stream_id);
+        }
         std::erase(pinned_streams_, stream_id);
         release_local_request_stream(*stream);
         streams_.remove(stream_id);
@@ -93,13 +100,14 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         // completion can finally release storage and refill the rapid-reset budget.
         flush_window_debt(*stream);
         detach_active_header_block(*stream);
-        http2_release_local_header_block(*stream);
         if (closed_streams_.source(stream_id) != http2_stream_close_source::peer) {
             closed_streams_.remember(stream_id, http2_stream_close_source::local);
         }
         ++completed_responses_;
         release_local_request_stream_if_closed(*stream);
-        priorities_.erase(stream_id);
+        if (!priorities_.empty()) {
+            priorities_.erase(stream_id);
+        }
         std::erase(pinned_streams_, stream_id);
         streams_.remove(stream_id);
         return;
@@ -114,13 +122,15 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
                            ? http2_error_code::no_error
                            : http2_error_code::cancel;
     (void)submit_reset(stream_id, error);
-    if (auto* retained_stream = streams_.find(stream_id);
-        retained_stream != nullptr && retained_stream->is_aborted()) {
-        flush_window_debt(*retained_stream);
-        release_local_request_stream(*retained_stream);
-        std::erase(pinned_streams_, stream_id);
-        streams_.remove(stream_id);
-        return;
+    if (auto* retained_stream = streams_.find(stream_id)) {
+        if (retained_stream->is_aborted()) {
+            flush_window_debt(*retained_stream);
+            release_local_request_stream(*retained_stream);
+            std::erase(pinned_streams_, stream_id);
+            streams_.remove(stream_id);
+            return;
+        }
+        retained_stream->set_pinned(false);
     }
     std::erase(pinned_streams_, stream_id);
 }
@@ -136,22 +146,22 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
         if (notification == close_notification_type::emit_event) {
             reserve_event_slots(1);
         }
-        if (!is_pinned(stream_id)) {
+        if (!stream->pinned()) {
             reserve_consumed_data_credit(nullptr, stream->window_debt());
         }
     }
     if (stream != nullptr && !stream->is_aborted()) {
         detach_active_header_block(*stream);
     }
-    if (stream != nullptr) {
-        http2_release_local_header_block(*stream);
-    }
     if (stream == nullptr || stream->is_aborted()) {
         return false;
     }
 
+    const bool pinned = stream->pinned();
     release_local_request_stream(*stream);
-    priorities_.erase(stream_id);
+    if (!priorities_.empty()) {
+        priorities_.erase(stream_id);
+    }
     (void)stream->abort(source_value);
     if (notification == close_notification_type::emit_event) {
         events_.push_back(http2_event(http2_stream_closed_event(stream_id, source_value, error)));
@@ -160,11 +170,11 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     // until the credit is acknowledged or its token is abandoned. Unpinned
     // internal consumers have no external acknowledgement token, so their
     // window debt is settled immediately.
-    if (!is_pinned(stream_id)) {
+    if (!pinned) {
         flush_window_debt(*stream);
     }
     closed_streams_.remember(stream_id, source_value, source_value == http2_stream_close_source::local);
-    if (!is_pinned(stream_id)) {
+    if (!pinned) {
         streams_.remove(stream_id);
     }
     return true;
@@ -327,7 +337,7 @@ http2_connection::publish_local_request_head(http2_stream_state& stream) noexcep
     if (stream.hold_peer_concurrency_slot()) {
         ++active_local_request_streams_;
     }
-    http2_release_local_header_block(stream);
+    http2_release_local_header_block(local_header_block_);
     return stream.id();
 }
 
@@ -344,11 +354,11 @@ void http2_connection::release_local_request_stream_if_closed(http2_stream_state
 }
 
 void http2_connection::retire_completed_local_push(std::uint32_t stream_id) {
-    if (role_ != http2_role::server || (stream_id & 1U) != 0 || is_pinned(stream_id) || has_pending_events(stream_id)) {
+    if (role_ != http2_role::server || (stream_id & 1U) != 0 || has_pending_events(stream_id)) {
         return;
     }
     const auto* stream = find_stream(stream_id);
-    if (stream != nullptr && http2_stream_is_closed(*stream)) {
+    if (stream != nullptr && !stream->pinned() && http2_stream_is_closed(*stream)) {
         unpin_stream(stream_id);
     }
 }

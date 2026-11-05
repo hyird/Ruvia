@@ -115,18 +115,37 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
         constexpr std::size_t min_read_bytes = 4096;
         constexpr std::size_t max_read_bytes = 64 * 1024;
         const bool between_frames = buffer_.empty();
-        std::size_t read_bytes = 0;
+        std::span<char> read_space;
         if (between_frames) {
             // Preserve the native socket's small idle read allocation and
             // retained storage for steady mid-size messages.
-            read_bytes = small_frames_ ? websocket_idle_read_bytes : (std::max)(buffer_.capacity(), min_read_bytes);
-            buffer_.shrink_to(read_bytes);
+            if (buffer_.capacity() > websocket_retained_buffer_bytes) {
+                buffer_.shrink_to(websocket_retained_buffer_bytes);
+            }
+            const auto min_idle_bytes = small_frames_ ? websocket_idle_read_bytes : min_read_bytes;
+            if (buffer_.capacity() < min_idle_bytes) {
+                read_space = buffer_.prepare(min_idle_bytes);
+            } else {
+                read_space = buffer_.prepare_spare();
+                if (small_frames_ && read_space.size() > websocket_idle_read_bytes) {
+                    read_space = read_space.first(websocket_idle_read_bytes);
+                } else if (read_space.size() > max_read_bytes) {
+                    read_space = read_space.first(max_read_bytes);
+                }
+            }
         } else {
-            // Grow geometrically within a frame; read space is uninitialized.
-            read_bytes = std::clamp((std::max)(buffer_.capacity() - buffer_.size(), protocol_.needed_input_bytes()),
-                min_read_bytes, max_read_bytes);
+            // Reclaim any consumed prefix first; grow geometrically within a
+            // frame only when spare storage is smaller than needed.
+            const auto needed = std::clamp(protocol_.needed_input_bytes(), min_read_bytes, max_read_bytes);
+            if (buffer_.capacity() - buffer_.size() >= needed) {
+                read_space = buffer_.prepare_spare();
+                if (read_space.size() > max_read_bytes) {
+                    read_space = read_space.first(max_read_bytes);
+                }
+            } else {
+                read_space = buffer_.prepare(needed);
+            }
         }
-        const auto read_space = buffer_.prepare(read_bytes);
         auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
             stream_.async_read_some(asio::buffer(read_space), std::move(handler));
         });

@@ -412,8 +412,10 @@ http_response_header& http_response_headers::collapse_response_headers(
     auto* write = first;
     for (auto* read = first; read != last; ++read) {
         const auto header_known_bit = detail::http_response_header_access::known_bit(*read);
-        const bool matches = known_bit != 0 ? header_known_bit == known_bit
-                                            : http_ascii_equals_ignore_case(read->name(), key);
+        const bool matches =
+            known_bit != 0 ? header_known_bit == known_bit
+                           : (header_known_bit == 0 &&
+                                 http_ascii_equals_ignore_case(read->name(), key));
         if (matches && read != retained_address) {
             release_header(*read);
             continue;
@@ -445,8 +447,10 @@ bool http_response_headers::remove_header_validated(std::string_view key, std::u
 
     for (auto* read = first; read != last; ++read) {
         const auto header_known_bit = detail::http_response_header_access::known_bit(*read);
-        const bool matches = known_bit != 0 ? header_known_bit == known_bit
-                                            : http_ascii_equals_ignore_case(read->name(), key);
+        const bool matches =
+            known_bit != 0 ? header_known_bit == known_bit
+                           : (header_known_bit == 0 &&
+                                 http_ascii_equals_ignore_case(read->name(), key));
         if (matches) {
             if (!removed) {
                 retired_key_header = std::exchange(*read, http_response_header{});

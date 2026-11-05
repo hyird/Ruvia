@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string_view>
 
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -44,30 +45,49 @@ void validate_postgresql_double_param(double value) {
 // The digest covers the SQL, a NUL that SQL never contains, and every type
 // OID as four big-endian bytes, so no two keys share an encoding.
 postgresql_statement_name make_postgresql_statement_name(
-    std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource* resource) {
-    const std::size_t key_size = sql.size() + 1U + types.size() * 4U;
-    constexpr std::size_t stack_capacity = 512;
-    std::array<unsigned char, stack_capacity> stack_key;
-    std::pmr::string heap_key(resource);
-    unsigned char* buffer = stack_key.data();
-    if (key_size > stack_capacity) {
-        heap_key.resize(key_size);
-        buffer = reinterpret_cast<unsigned char*>(heap_key.data());
-    }
-    if (!sql.empty()) {
-        std::memcpy(buffer, sql.data(), sql.size());
-    }
-    std::size_t offset = sql.size();
-    buffer[offset++] = 0;
-    for (const auto type : types) {
-        buffer[offset++] = static_cast<unsigned char>((type >> 24) & 0xffU);
-        buffer[offset++] = static_cast<unsigned char>((type >> 16) & 0xffU);
-        buffer[offset++] = static_cast<unsigned char>((type >> 8) & 0xffU);
-        buffer[offset++] = static_cast<unsigned char>(type & 0xffU);
-    }
+    std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource*) {
     std::array<unsigned char, SHA256_DIGEST_LENGTH> digest;
-    if (SHA256(buffer, key_size, digest.data()) == nullptr) {
-        throw std::runtime_error("PostgreSQL statement name digest failed");
+    const auto key_size = sql.size() + 1 + types.size() * 4;
+    std::array<unsigned char, 512> stack_key;
+    if (key_size <= stack_key.size()) {
+        std::memcpy(stack_key.data(), sql.data(), sql.size());
+        stack_key[sql.size()] = 0;
+        auto* out = stack_key.data() + sql.size() + 1;
+        for (const auto type : types) {
+            *out++ = static_cast<unsigned char>((type >> 24) & 0xffU);
+            *out++ = static_cast<unsigned char>((type >> 16) & 0xffU);
+            *out++ = static_cast<unsigned char>((type >> 8) & 0xffU);
+            *out++ = static_cast<unsigned char>(type & 0xffU);
+        }
+        if (!SHA256(stack_key.data(), key_size, digest.data())) {
+            throw std::runtime_error("PostgreSQL statement name digest failed");
+        }
+    } else {
+        std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(), &EVP_MD_CTX_free);
+        if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1 ||
+            (!sql.empty() && EVP_DigestUpdate(context.get(), sql.data(), sql.size()) != 1)) {
+            throw std::runtime_error("PostgreSQL statement name digest failed");
+        }
+        stack_key[0] = 0;
+        std::size_t offset = 1;
+        for (const auto type : types) {
+            if (offset + 4 > stack_key.size()) {
+                if (EVP_DigestUpdate(context.get(), stack_key.data(), offset) != 1) {
+                    throw std::runtime_error("PostgreSQL statement name digest failed");
+                }
+                offset = 0;
+            }
+            stack_key[offset++] = static_cast<unsigned char>((type >> 24) & 0xffU);
+            stack_key[offset++] = static_cast<unsigned char>((type >> 16) & 0xffU);
+            stack_key[offset++] = static_cast<unsigned char>((type >> 8) & 0xffU);
+            stack_key[offset++] = static_cast<unsigned char>(type & 0xffU);
+        }
+        unsigned int digest_len = 0;
+        if ((offset != 0 && EVP_DigestUpdate(context.get(), stack_key.data(), offset) != 1) ||
+            EVP_DigestFinal_ex(context.get(), digest.data(), &digest_len) != 1 ||
+            digest_len != digest.size()) {
+            throw std::runtime_error("PostgreSQL statement name digest failed");
+        }
     }
     constexpr std::string_view prefix{"ruvia_"};
     postgresql_statement_name name;

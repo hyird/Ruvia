@@ -22,10 +22,10 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
 }
 
 task<redis_ttl> redis_ttl_command(detail::redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource,
+    detail::redis_owned_command command, std::pmr::memory_resource* resource,
     bool seconds_precision) {
     const auto value =
-        co_await detail::redis_integer_command(std::move(executor), std::move(args), resource);
+        co_await detail::redis_integer_command(std::move(executor), std::move(command), resource);
     if (value == -2) {
         co_return detail::redis_types_access::ttl(redis_ttl_state::missing);
     }
@@ -200,7 +200,7 @@ task<std::int64_t> redis_handle::strlen(std::string_view key) const {
 task<std::int64_t> redis_handle::incr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(executor(),
-        detail::make_redis_integer_command("INCRBY", key, value, resource_).args_, resource_));
+        detail::make_redis_integer_command("INCRBY", key, value, resource_), resource_));
 }
 
 task<std::int64_t> redis_handle::decr(std::string_view key) const {
@@ -212,7 +212,7 @@ task<std::int64_t> redis_handle::decr(std::string_view key) const {
 task<std::int64_t> redis_handle::decr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(executor(),
-        detail::make_redis_integer_command("DECRBY", key, value, resource_).args_, resource_));
+        detail::make_redis_integer_command("DECRBY", key, value, resource_), resource_));
 }
 
 task<std::int64_t> redis_handle::del(std::string_view key) const {
@@ -273,14 +273,14 @@ task<bool> redis_handle::expire(std::string_view key, std::chrono::seconds ttl) 
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis expire TTL must be greater than zero");
     return scoped(detail::execute_redis_integer_bool(executor(),
-        detail::make_redis_integer_command("EXPIRE", key, ttl.count(), resource_).args_, resource_));
+        detail::make_redis_integer_command("EXPIRE", key, ttl.count(), resource_), resource_));
 }
 
 task<bool> redis_handle::pexpire(std::string_view key, std::chrono::milliseconds ttl) const {
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis pexpire TTL must be greater than zero");
     return scoped(detail::execute_redis_integer_bool(executor(),
-        detail::make_redis_integer_command("PEXPIRE", key, ttl.count(), resource_).args_, resource_));
+        detail::make_redis_integer_command("PEXPIRE", key, ttl.count(), resource_), resource_));
 }
 
 task<bool> redis_handle::expire_at(
@@ -289,7 +289,7 @@ task<bool> redis_handle::expire_at(
     const auto expires_ms =
         std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()).count();
     return scoped(detail::execute_redis_integer_bool(executor(),
-        detail::make_redis_integer_command("PEXPIREAT", key, expires_ms, resource_).args_, resource_));
+        detail::make_redis_integer_command("PEXPIREAT", key, expires_ms, resource_), resource_));
 }
 
 task<bool> redis_handle::persist(std::string_view key) const {

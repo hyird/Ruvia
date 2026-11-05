@@ -1,3 +1,4 @@
+#include <array>
 #include <string_view>
 #include <utility>
 
@@ -78,13 +79,10 @@ task<std::pmr::vector<std::pmr::string>> redis_handle::hvals(std::string_view ke
 task<std::int64_t> redis_handle::hincr_by(
     std::string_view key, std::string_view field, std::int64_t value) const {
     registration_.require_active();
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(4);
-    detail::emplace_redis_string(args, "HINCRBY");
-    detail::emplace_redis_string(args, key);
-    detail::emplace_redis_string(args, field);
-    args.emplace_back(detail::redis_int_string(value, resource_));
-    return scoped(detail::redis_integer_command(executor(), std::move(args), resource_));
+    std::array<char, detail::redis_int_scratch_size> value_scratch{};
+    const std::string_view args[]{"HINCRBY", key, field, detail::format_redis_int(value_scratch, value)};
+    return scoped(detail::redis_integer_command(
+        executor(), detail::make_owned_redis_command(resource_, args), resource_));
 }
 
 task<std::int64_t> redis_handle::lpush(
@@ -123,45 +121,39 @@ task<std::pmr::vector<std::pmr::string>> redis_handle::lrange(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(executor(),
-        detail::make_redis_range_command("LRANGE", key, start, stop, resource_).args_, resource_));
+        detail::make_redis_range_command("LRANGE", key, start, stop, resource_), resource_));
 }
 
 task<std::optional<std::pmr::string>> redis_handle::lindex(
     std::string_view key, std::int64_t index) const {
     registration_.require_active();
     return scoped(detail::redis_string_command(executor(),
-        detail::make_redis_integer_command("LINDEX", key, index, resource_).args_, resource_));
+        detail::make_redis_integer_command("LINDEX", key, index, resource_), resource_));
 }
 
 task<void> redis_handle::lset(
     std::string_view key, std::int64_t index, std::string_view value) const {
     registration_.require_active();
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(4);
-    detail::emplace_redis_string(args, "LSET");
-    detail::emplace_redis_string(args, key);
-    args.emplace_back(detail::redis_int_string(index, resource_));
-    detail::emplace_redis_string(args, value);
-    return scoped(detail::redis_ok_command(executor(), std::move(args), resource_));
+    std::array<char, detail::redis_int_scratch_size> index_scratch{};
+    const std::string_view args[]{"LSET", key, detail::format_redis_int(index_scratch, index), value};
+    return scoped(detail::redis_ok_command(
+        executor(), detail::make_owned_redis_command(resource_, args), resource_));
 }
 
 task<void> redis_handle::ltrim(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     return scoped(detail::redis_ok_command(executor(),
-        detail::make_redis_range_command("LTRIM", key, start, stop, resource_).args_, resource_));
+        detail::make_redis_range_command("LTRIM", key, start, stop, resource_), resource_));
 }
 
 task<std::int64_t> redis_handle::lrem(
     std::string_view key, std::int64_t count, std::string_view value) const {
     registration_.require_active();
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(4);
-    detail::emplace_redis_string(args, "LREM");
-    detail::emplace_redis_string(args, key);
-    args.emplace_back(detail::redis_int_string(count, resource_));
-    detail::emplace_redis_string(args, value);
-    return scoped(detail::redis_integer_command(executor(), std::move(args), resource_));
+    std::array<char, detail::redis_int_scratch_size> count_scratch{};
+    const std::string_view args[]{"LREM", key, detail::format_redis_int(count_scratch, count), value};
+    return scoped(detail::redis_integer_command(
+        executor(), detail::make_owned_redis_command(resource_, args), resource_));
 }
 
 }  // namespace ruvia

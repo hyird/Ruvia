@@ -395,7 +395,7 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     if (!detail::constant_time_bytes_equal(expected, parts.signature_)) {
         throw jwt_error(jwt_error::code_type::signature_mismatch, "JWT signature verification failed");
     }
-    {
+    if (parts.header_ != detail::jwt_encoded_header_prefix(options.algorithm_).substr(0, 36)) {
         const detail::jwt_decoded_section header_value(parts.header_, resolved);
         detail::jwt_validate_jose_header(
             header_value.view(), detail::jwt_algorithm_name(options.algorithm_), resolved);
@@ -443,7 +443,9 @@ jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options) 
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
-    {
+    if (parts.header_ != detail::jwt_encoded_header_prefix(jwt_algorithm::hs256).substr(0, 36) &&
+        parts.header_ != detail::jwt_encoded_header_prefix(jwt_algorithm::hs384).substr(0, 36) &&
+        parts.header_ != detail::jwt_encoded_header_prefix(jwt_algorithm::hs512).substr(0, 36)) {
         const detail::jwt_decoded_section header_value(parts.header_, resolved);
         detail::jwt_validate_jose_header(header_value.view(), std::nullopt, resolved);
     }

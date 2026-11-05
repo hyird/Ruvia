@@ -5,6 +5,9 @@
 
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/http/http_pmr_string.h"
+
+#include "body/http_body_buffer.h"
 
 namespace ruvia::detail {
 // Owned by the response memory domain, not by a connection/session arena.
@@ -24,11 +27,12 @@ public:
     }
     void acknowledge_chunk() noexcept {
         chunk_ready_ = false;
-        std::pmr::string(chunk_.get_allocator()).swap(chunk_);
+        http_clear_pmr_string_retaining_small(chunk_, http_body_buffer_bytes);
         space_.notify();
     }
     void finish() noexcept {
         ended_ = true;
+        std::pmr::string(chunk_.get_allocator()).swap(chunk_);
         space_.notify();
     }
     void stop() noexcept {

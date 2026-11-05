@@ -29,6 +29,10 @@ inline constexpr std::uint32_t response_header_last_modified = 1U << 19;
 inline constexpr std::uint32_t response_header_location = 1U << 20;
 inline constexpr std::uint32_t response_header_set_cookie = 1U << 21;
 inline constexpr std::size_t response_known_header_count = 22;
+inline constexpr std::uint32_t response_header_upgrade = 1U << 22;
+inline constexpr std::uint32_t response_header_trailer = 1U << 23;
+inline constexpr std::uint32_t response_header_keep_alive = 1U << 24;
+inline constexpr std::uint32_t response_header_proxy_connection = 1U << 25;
 
 [[nodiscard]] inline constexpr std::size_t response_known_header_slot(std::uint32_t bit) noexcept {
     constexpr std::uint32_t known_mask = (1U << response_known_header_count) - 1U;

@@ -105,7 +105,7 @@ public:
             while (connection_->wants_write()) {
                 take_output_batch(write_buffer_);
                 const auto written = co_await transport_.write(write_buffer_, timeout);
-                http_clear_pmr_string_retaining_small(write_buffer_, 2 * write_batch_bytes);
+                http_clear_pmr_string_retaining_small(write_buffer_, write_batch_bytes);
                 if (!written.ok()) {
                     reset();
                     co_return http2_client_session_start_result{
@@ -187,7 +187,9 @@ public:
         state_signal_.notify();
     }
     void wake_writer() noexcept {
-        write_signal_.notify();
+        if (connection_.has_value() && !failed_ && connection_->wants_write()) {
+            write_signal_.notify();
+        }
     }
     // Notified after every input batch, state transition and completed write.
     [[nodiscard]] worker_signal& state_signal() noexcept {
@@ -207,8 +209,10 @@ public:
             return;
         }
         try {
-            (void)connection_->submit_reset(stream_id, error);
-            write_signal_.notify();
+            if (connection_->submit_reset(stream_id, error) == http2_submit_status::accepted &&
+                connection_->wants_write()) {
+                write_signal_.notify();
+            }
         } catch (...) {
             fail({}, std::current_exception());
         }
@@ -226,7 +230,7 @@ public:
 
 private:
     static constexpr std::size_t read_buffer_bytes = 16384;
-    static constexpr std::size_t write_batch_bytes = http2_default_max_frame_size;
+    static constexpr std::size_t write_batch_bytes = 2 * http2_default_max_frame_size;
 
     void take_output_batch(std::pmr::string& output) {
         output.clear();
@@ -321,7 +325,7 @@ private:
                     // Retain ordinary heads and frame-sized DATA batches, but
                     // return an unexpectedly larger indivisible frame before
                     // the connection idles.
-                    http_clear_pmr_string_retaining_small(write_buffer_, 2 * write_batch_bytes);
+                    http_clear_pmr_string_retaining_small(write_buffer_, write_batch_bytes);
                     if (!written.ok()) {
                         fail(generation, written, {});
                         co_return;

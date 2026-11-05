@@ -5,12 +5,11 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace ruvia::detail {
 
 struct redis_owned_command final {
-    std::pmr::vector<std::pmr::string> args_;
+    std::pmr::string wire_;
 };
 
 [[nodiscard]] redis_owned_command make_owned_redis_command(

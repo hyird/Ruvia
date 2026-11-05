@@ -498,6 +498,7 @@ private:
         try {
             std::forward<prepare_type>(prepare)(*stream);
         } catch (...) {
+            local_header_block_.clear();
             (void)streams_.remove(stream_id);
             next_local_stream_id_ -= 2;
             throw;
@@ -536,8 +537,9 @@ private:
     // appending and replaying the already committed prefix.
     std::pmr::string input_;
     std::size_t input_offset_{0};
+    std::size_t retry_in_offset_{0};
     bool retry_input_{false};
-
+    std::pmr::string local_header_block_;
     // Outbound serialization and consumed-prefix ownership are isolated from
     // connection state transitions.
     http2_output_buffer output_;
@@ -575,7 +577,6 @@ private:
     std::pmr::vector<http2_event> events_;
     std::size_t event_offset_{0};
 
-    // streams with an in-flight handler; close_stream keeps these alive (see pin_stream)
     std::pmr::vector<std::uint32_t> pinned_streams_;
     http2_stream_lease_ledger leases_;
 

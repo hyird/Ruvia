@@ -86,7 +86,7 @@ void http2_connection::append_response_header_frames(
         // staged block that no longer has a matching stream state.
         output_.rollback_to(output_checkpoint);
         encoder_table_size_update_pending_ = previous_encoder_table_size_update_pending;
-        stream.local_header_block().clear();
+        local_header_block_.clear();
         throw;
     }
     if (stream.push_reservation() == http2_push_reservation::local && stream.hold_peer_concurrency_slot()) {
@@ -98,11 +98,11 @@ void http2_connection::append_response_header_frames(
 void http2_connection::commit_connect_response_head(
     http2_stream_state& stream, bool terminal_remote_half) {
     append_response_header_frames(
-        stream, std::string_view(stream.local_header_block()), http2_end_stream::keep_open);
+        stream, std::string_view(local_header_block_), http2_end_stream::keep_open);
     (void)stream.accept_connect();
     stream.begin_local_content_unbounded();
     (void)stream.open_local_connect_tunnel();
-    http2_release_local_header_block(stream);
+    http2_release_local_header_block(local_header_block_);
     if (terminal_remote_half) {
         events_.push_back(http2_event(http2_tunnel_end_event(stream.id())));
     }
@@ -147,12 +147,12 @@ http2_connection::submit_response_head(
                    ? http2_response_head_submit_error::response_plan_mismatch
                    : http2_response_head_submit_error::invalid_message;
     }
-    if (!append_http2_response_headers(*stream, response, *head_plan)) {
+    if (!append_http2_response_headers(local_header_block_, response, *head_plan)) {
         return http2_response_head_submit_error::invalid_message;
     }
     const auto end_stream =
         write_plan.send_body() ? http2_end_stream::keep_open : http2_end_stream::end_stream;
-    append_response_header_frames(*stream, std::string_view(stream->local_header_block()), end_stream);
+    append_response_header_frames(*stream, std::string_view(local_header_block_), end_stream);
     if (head_plan->body_plan().body_suppressed()) {
         stream->begin_local_content_forbidden();
     } else {
@@ -166,7 +166,7 @@ http2_connection::submit_response_head(
     if (stream->tunnel().pending() != nullptr) {
         (void)stream->reject_connect();
     }
-    http2_release_local_header_block(*stream);
+    http2_release_local_header_block(local_header_block_);
     release_local_request_stream_if_closed(*stream);
     retire_completed_local_push(stream_id);
     return write_plan;
@@ -211,14 +211,14 @@ http2_connection::submit_streaming_response_head(
     if (head_plan == nullptr) {
         return http2_response_head_submit_error::invalid_message;
     }
-    if (!append_http2_response_headers(*stream, stream_head.response(), *head_plan)) {
+    if (!append_http2_response_headers(local_header_block_, stream_head.response(), *head_plan)) {
         return http2_response_head_submit_error::invalid_message;
     }
     const auto end_stream =
         commit_plan.head_disposition() == http_response_stream_head_disposition::message_ended
             ? http2_end_stream::end_stream
             : http2_end_stream::keep_open;
-    append_response_header_frames(*stream, std::string_view(stream->local_header_block()), end_stream);
+    append_response_header_frames(*stream, std::string_view(local_header_block_), end_stream);
     if (head_plan->body_plan().body_suppressed()) {
         stream->begin_local_content_forbidden();
     } else if (const auto content_length = head_plan->streaming_content_length()) {
@@ -234,7 +234,7 @@ http2_connection::submit_streaming_response_head(
     if (stream->tunnel().pending() != nullptr) {
         (void)stream->reject_connect();
     }
-    http2_release_local_header_block(*stream);
+    http2_release_local_header_block(local_header_block_);
     release_local_request_stream_if_closed(*stream);
     retire_completed_local_push(stream_id);
     return commit_plan;
@@ -254,13 +254,13 @@ http2_submit_status http2_connection::submit_interim_response_head(
         active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
         return http2_submit_status::peer_capability_unavailable;
     }
-    if (append_http2_interim_response_headers(*stream, response) !=
+    if (append_http2_interim_response_headers(local_header_block_, response) !=
         http2_interim_response_header_encode_status::ok) {
         return http2_submit_status::invalid_message;
     }
     append_response_header_frames(
-        *stream, std::string_view(stream->local_header_block()), http2_end_stream::keep_open);
-    http2_release_local_header_block(*stream);
+        *stream, std::string_view(local_header_block_), http2_end_stream::keep_open);
+    http2_release_local_header_block(local_header_block_);
     return http2_submit_status::accepted;
 }
 
@@ -360,7 +360,7 @@ http2_submit_status http2_connection::submit_connect_response_head(
     if (terminal_remote_half) {
         reserve_event_slots(1);
     }
-    if (!append_http2_response_headers(*stream, response, *head_plan)) {
+    if (!append_http2_response_headers(local_header_block_, response, *head_plan)) {
         return http2_submit_status::invalid_message;
     }
     commit_connect_response_head(*stream, terminal_remote_half);
@@ -386,7 +386,7 @@ http2_connection::submit_websocket_handshake(
     if (terminal_remote_half) {
         reserve_event_slots(1);
     }
-    http2_encode_websocket_handshake_headers(stream->local_header_block(), negotiation);
+    http2_encode_websocket_handshake_headers(local_header_block_, negotiation);
     commit_connect_response_head(*stream, terminal_remote_half);
     const auto compression = negotiation.compression();
     return http2_websocket_negotiation(std::move(negotiation).take_subprotocol(), compression);
@@ -417,7 +417,7 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
             }
             reserve_bytes += field.name().size() + field.value().size() + 6U;
         }
-        auto& block = stream->local_header_block();
+        auto& block = local_header_block_;
         try {
             block.clear();
             if (reserve_bytes > 15U) {
@@ -435,7 +435,7 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
             throw;
         }
         append_response_header_frames(*stream, std::string_view(block), http2_end_stream::end_stream);
-        http2_release_local_header_block(*stream);
+        http2_release_local_header_block(local_header_block_);
     }
     (void)stream->commit_local_end_stream();
     release_local_request_stream_if_closed(*stream);
@@ -459,7 +459,7 @@ http2_finish_status http2_connection::finish_response(
     if (trailers.empty()) {
         output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream_id, {});
     } else {
-        auto& trailer_block = stream->local_header_block();
+        auto& trailer_block = local_header_block_;
         try {
             trailer_block.clear();
             append_http2_response_trailers(trailer_block, trailers);
@@ -468,7 +468,7 @@ http2_finish_status http2_connection::finish_response(
             throw;
         }
         append_response_header_frames(*stream, std::string_view(trailer_block), http2_end_stream::end_stream);
-        http2_release_local_header_block(*stream);
+        http2_release_local_header_block(local_header_block_);
     }
     (void)stream->commit_local_end_stream();
     release_local_request_stream_if_closed(*stream);

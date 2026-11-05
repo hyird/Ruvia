@@ -68,7 +68,13 @@ public:
         std::string_view sql, std::span<const unsigned int> types, bool may_insert, factory_type&& make) {
         const auto hash = key_hash(sql, types);
         ++clock_;
-        for (std::size_t index = 0; index < entries_.size(); ++index) {
+        constexpr std::size_t mask = index_capacity - 1;
+        for (std::size_t step = 0, slot = hash & mask; step < index_capacity; ++step, slot = (slot + 1) & mask) {
+            const auto code = entry_slots_[slot];
+            if (code == 0) {
+                break;
+            }
+            const std::size_t index = static_cast<std::size_t>(code - 1);
             auto& existing = entries_[index];
             if (existing.generation_ != 0 && existing.hash_ == hash && existing.sql_ == sql &&
                 std::ranges::equal(existing.types_, types)) {
@@ -76,8 +82,8 @@ public:
                 return {handle{index, existing.generation_}, false, std::nullopt, hash};
             }
         }
-        const auto first_use = std::ranges::find(first_uses_, hash);
-        if (first_use == first_uses_.end()) {
+        const auto first_use_index = find_first_use(hash);
+        if (!first_use_index.has_value()) {
             remember(hash);
             return {std::nullopt, false, std::nullopt, hash};
         }
@@ -104,16 +110,17 @@ public:
         // A forgotten entry is reused before the table grows; only a full
         // table evicts a statement the server still holds.
         if (has_free_entry) {
+            const auto index = static_cast<std::size_t>(free_entry - entries_.begin());
             free_entry->sql_.assign(sql);
             free_entry->types_.assign(types.begin(), types.end());
             free_entry->hash_ = hash;
             free_entry->last_use_ = clock_;
             free_entry->generation_ = next_generation;
             free_entry->payload_ = std::move(*created_payload);
-            *first_use = 0;
+            insert_entry_slot(index, hash);
+            clear_first_use(*first_use_index, hash);
             ++generation_;
-            return {handle{static_cast<std::size_t>(free_entry - entries_.begin()), next_generation}, true,
-                std::nullopt, hash};
+            return {handle{index, next_generation}, true, std::nullopt, hash};
         }
         if (entries_.size() < capacity) {
             entry added{std::pmr::string(sql, resource),
@@ -121,11 +128,14 @@ public:
                 std::move(*created_payload)};
             const auto index = entries_.size();
             entries_.push_back(std::move(added));
-            *first_use = 0;
+            insert_entry_slot(index, hash);
+            clear_first_use(*first_use_index, hash);
             ++generation_;
             return {handle{index, next_generation}, true, std::nullopt, hash};
         }
         const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
+        const auto oldest_index = static_cast<std::size_t>(oldest - entries_.begin());
+        erase_entry_slot(oldest_index, oldest->hash_);
         oldest->sql_.assign(sql);
         oldest->types_.assign(types.begin(), types.end());
         std::optional<payload_type> evicted(std::move(oldest->payload_));
@@ -133,10 +143,10 @@ public:
         oldest->last_use_ = clock_;
         oldest->generation_ = next_generation;
         oldest->payload_ = std::move(*created_payload);
-        *first_use = 0;
+        insert_entry_slot(oldest_index, hash);
+        clear_first_use(*first_use_index, hash);
         ++generation_;
-        return {handle{static_cast<std::size_t>(oldest - entries_.begin()), next_generation}, true,
-            std::move(evicted), hash};
+        return {handle{oldest_index, next_generation}, true, std::move(evicted), hash};
     }
 
     [[nodiscard]] payload_type* payload(handle statement) noexcept {
@@ -162,9 +172,11 @@ public:
         if (found == nullptr) {
             return std::nullopt;
         }
+        const auto old_hash = found->hash_;
+        erase_entry_slot(statement.index_, old_hash);
         found->generation_ = 0;
         if (use_again) {
-            remember(found->hash_);
+            remember(old_hash);
         }
         return std::move(found->payload_);
     }
@@ -182,7 +194,9 @@ public:
     // A new connection starts without server-side statements.
     void clear() noexcept {
         entries_.clear();
+        entry_slots_.fill(0);
         first_uses_.fill(0);
+        first_use_slots_.fill(0);
     }
 
     // The hash a key is kept under; never zero, which marks a free position.
@@ -213,15 +227,114 @@ private:
         return &entries_[statement.index_];
     }
 
+    static constexpr std::size_t index_capacity = 256;
+    static_assert((index_capacity & (index_capacity - 1)) == 0 && index_capacity >= capacity * 2);
+
+    void insert_entry_slot(std::size_t index, std::size_t hash) noexcept {
+        constexpr std::size_t mask = index_capacity - 1;
+        std::size_t slot = hash & mask;
+        while (entry_slots_[slot] != 0) {
+            slot = (slot + 1) & mask;
+        }
+        entry_slots_[slot] = static_cast<std::uint8_t>(index + 1);
+    }
+
+    void erase_entry_slot(std::size_t index, std::size_t hash) noexcept {
+        constexpr std::size_t mask = index_capacity - 1;
+        const auto target = static_cast<std::uint8_t>(index + 1);
+        for (std::size_t step = 0, slot = hash & mask; step < index_capacity; ++step, slot = (slot + 1) & mask) {
+            const auto code = entry_slots_[slot];
+            if (code == 0) {
+                return;
+            }
+            if (code == target) {
+                std::size_t empty = slot;
+                for (std::size_t next = (slot + 1) & mask; entry_slots_[next] != 0; next = (next + 1) & mask) {
+                    const auto next_index = static_cast<std::size_t>(entry_slots_[next] - 1);
+                    const auto ideal = entries_[next_index].hash_ & mask;
+                    if (((next - ideal) & mask) >= ((next - empty) & mask)) {
+                        entry_slots_[empty] = entry_slots_[next];
+                        empty = next;
+                    }
+                }
+                entry_slots_[empty] = 0;
+                return;
+            }
+        }
+    }
+
+    [[nodiscard]] std::optional<std::size_t> find_first_use(std::size_t hash) const noexcept {
+        constexpr std::size_t mask = index_capacity - 1;
+        for (std::size_t step = 0, slot = hash & mask; step < index_capacity; ++step, slot = (slot + 1) & mask) {
+            const auto code = first_use_slots_[slot];
+            if (code == 0) {
+                return std::nullopt;
+            }
+            const std::size_t pos = static_cast<std::size_t>(code - 1);
+            if (first_uses_[pos] == hash) {
+                return pos;
+            }
+        }
+        return std::nullopt;
+    }
+
+    void insert_first_use_slot(std::size_t pos, std::size_t hash) noexcept {
+        constexpr std::size_t mask = index_capacity - 1;
+        std::size_t slot = hash & mask;
+        while (first_use_slots_[slot] != 0) {
+            slot = (slot + 1) & mask;
+        }
+        first_use_slots_[slot] = static_cast<std::uint8_t>(pos + 1);
+    }
+
+    void erase_first_use_slot(std::size_t pos, std::size_t hash) noexcept {
+        constexpr std::size_t mask = index_capacity - 1;
+        const auto target = static_cast<std::uint8_t>(pos + 1);
+        for (std::size_t step = 0, slot = hash & mask; step < index_capacity; ++step, slot = (slot + 1) & mask) {
+            const auto code = first_use_slots_[slot];
+            if (code == 0) {
+                return;
+            }
+            if (code == target) {
+                std::size_t empty = slot;
+                for (std::size_t next = (slot + 1) & mask; first_use_slots_[next] != 0; next = (next + 1) & mask) {
+                    const auto next_pos = static_cast<std::size_t>(first_use_slots_[next] - 1);
+                    const auto ideal = first_uses_[next_pos] & mask;
+                    if (((next - ideal) & mask) >= ((next - empty) & mask)) {
+                        first_use_slots_[empty] = first_use_slots_[next];
+                        empty = next;
+                    }
+                }
+                first_use_slots_[empty] = 0;
+                return;
+            }
+        }
+    }
+
+    void clear_first_use(std::size_t pos, std::size_t hash) noexcept {
+        erase_first_use_slot(pos, hash);
+        first_uses_[pos] = 0;
+    }
+
     void remember(std::size_t hash) noexcept {
-        first_uses_[next_first_use_] = hash;
+        if (const auto existing = find_first_use(hash); existing.has_value()) {
+            return;
+        }
+        const auto pos = next_first_use_;
+        if (first_uses_[pos] != 0) {
+            erase_first_use_slot(pos, first_uses_[pos]);
+        }
+        first_uses_[pos] = hash;
+        insert_first_use_slot(pos, hash);
         next_first_use_ = (next_first_use_ + 1) % first_uses_.size();
     }
 
     std::pmr::vector<entry> entries_;
+    std::array<std::uint8_t, index_capacity> entry_slots_{};
     // Key hashes of recent first uses; zero marks a free position. A hash
     // collision only prepares a statement on its first use.
     std::array<std::size_t, capacity> first_uses_{};
+    std::array<std::uint8_t, index_capacity> first_use_slots_{};
     std::size_t next_first_use_{0};
     std::uint64_t clock_{0};
     std::uint64_t generation_{0};

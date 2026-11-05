@@ -73,6 +73,30 @@ namespace {
     return protocols.has_protocol() && offered;
 }
 
+[[nodiscard]] request_header_kind classify_client_response_control_header(
+    std::string_view name) noexcept {
+    switch (name.size()) {
+        case 7:
+            return http_ascii_equals_ignore_case(name, "Upgrade")
+                       ? request_header_kind::upgrade
+                       : request_header_kind::other;
+        case 10:
+            return http_ascii_equals_ignore_case(name, "Connection")
+                       ? request_header_kind::connection
+                       : request_header_kind::other;
+        case 14:
+            return http_ascii_equals_ignore_case(name, "Content-Length")
+                       ? request_header_kind::content_length
+                       : request_header_kind::other;
+        case 17:
+            return http_ascii_equals_ignore_case(name, "Transfer-Encoding")
+                       ? request_header_kind::transfer_encoding
+                       : request_header_kind::other;
+        default:
+            return request_header_kind::other;
+    }
+}
+
 }  // namespace
 
 http1_client_parsed_response_head::http1_client_parsed_response_head(
@@ -114,7 +138,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
         }
         const auto name = field->name();
         const auto value = field->value();
-        const auto kind = classify_request_header(name);
+        const auto kind = classify_client_response_control_header(name);
         output.headers_.append(http_header_view{name, value});
 
         switch (kind) {

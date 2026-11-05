@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/http_pmr_string.h"
+
 #include "http2/http2_frame_codec.h"
 #include "http2/http2_frame_payload.h"
 #include "http2/http2_remote_receive_semantics.h"
@@ -50,6 +52,7 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
     bool receive_origin_advertisements, bool receive_frame_metadata)
     : resource_(resource),
       input_(std::string_view{}, resource),
+      local_header_block_(std::string_view{}, resource),
       output_(resource),
       streams_(resource),
       priorities_(resource),
@@ -686,34 +689,66 @@ http2_feed_result http2_connection::feed(std::string_view in) {
     // and cursor intact until the retained uncommitted suffix has been dispatched.
     const bool retrying_input = retry_input_;
     if (!retrying_input && input_offset_ > 0) {
-        input_.erase(0, input_offset_);
-        input_offset_ = 0;
+        if (input_offset_ == input_.size()) {
+            http_clear_pmr_string_retaining_small(input_);
+            input_offset_ = 0;
+        } else if (input_offset_ >= 4096 && input_offset_ * 2 >= input_.size()) {
+            input_.erase(0, input_offset_);
+            input_offset_ = 0;
+        }
     }
     events_.clear();
     event_offset_ = 0;
 
-    // FAST PATH: nothing buffered and no preface pending -> parse exactly one complete
-    // frame DIRECTLY over the caller's `in`. A span containing a second frame (or even
-    // a partial tail) takes the owned slow path below. This is the boundary that keeps
-    // a throwing later frame from making the caller retry an already committed prefix.
-    if (input_.empty() && preface_phase_ != preface_phase_type::awaiting_client_magic &&
-        in.size() >= http2_frame_header_bytes) {
-        const auto header_value = http2_parse_frame_header(in.substr(0, http2_frame_header_bytes));
-        if (in.size() - http2_frame_header_bytes == header_value.length_) {
-            std::size_t offset = 0;
+    if (input_.empty()) {
+        std::size_t offset = retrying_input ? std::min(retry_in_offset_, in.size()) : std::size_t{0};
+        try {
+            if (preface_phase_ == preface_phase_type::awaiting_client_magic) {
+                if (in.size() - offset < http2_client_preface.size()) {
+                    input_.append(in.data() + offset, in.size() - offset);
+                    retry_input_ = false;
+                    retry_in_offset_ = 0;
+                    return http2_feed_result::need_input;
+                }
+                if (in.substr(offset, http2_client_preface.size()) != http2_client_preface) {
+                    append_goaway(http2_error_code::protocol_error, "invalid connection preface");
+                    retry_input_ = false;
+                    retry_in_offset_ = 0;
+                    return http2_feed_result::protocol_failure;
+                }
+                offset += http2_client_preface.size();
+                preface_phase_ = preface_phase_type::awaiting_peer_settings;
+            }
+
             if (!consume_frames(in, offset)) {
+                retry_input_ = false;
+                retry_in_offset_ = 0;
                 return http2_feed_result::protocol_failure;
             }
             if (local_connection_state_.fatal_failure() != nullptr) {
+                retry_input_ = false;
+                retry_in_offset_ = 0;
                 return http2_feed_result::protocol_failure;
             }
+            if (offset < in.size()) {
+                input_.append(in.data() + offset, in.size() - offset);
+                retry_input_ = false;
+                retry_in_offset_ = 0;
+                return http2_feed_result::need_input;
+            }
+            retry_input_ = false;
+            retry_in_offset_ = 0;
             return http2_feed_result::accepted;
+        } catch (...) {
+            retry_input_ = true;
+            retry_in_offset_ = offset;
+            throw;
         }
     }
 
-    // SLOW PATH: a buffered partial-frame tail, a connection preface, or more than
-    // one frame is pending. Own all new bytes before dispatch. If dispatch throws,
-    // retain the cursor and do not append the caller's retry span a second time.
+    // SLOW PATH: a buffered partial-frame tail is pending in input_. Own all new
+    // bytes before dispatch. If dispatch throws, retain the cursor and do not
+    // append the caller's retry span a second time.
     if (!retrying_input) {
         input_.append(in.data(), in.size());
     }
@@ -743,11 +778,13 @@ http2_feed_result http2_connection::feed(std::string_view in) {
             return http2_feed_result::protocol_failure;
         }
         retry_input_ = false;
+        retry_in_offset_ = 0;
         return input_offset_ < input_.size() ? http2_feed_result::need_input
                                              : http2_feed_result::accepted;
     } catch (...) {
         if (!retrying_input) {
             retry_input_ = true;
+            retry_in_offset_ = 0;
         }
         throw;
     }

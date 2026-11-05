@@ -282,14 +282,35 @@ void http_client_pool::require_accepting() const {
 
 http_client_connection& http_client_pool::connection_for_request(std::size_t index) noexcept {
     auto& preferred = connection(index);
-    if (preferred.protocol_ != http_client_connection::protocol_type::http2 ||
-        preferred.available_http2_request_streams() != 0) {
+    if (preferred.protocol_ == http_client_connection::protocol_type::http2) {
+        if (preferred.available_http2_request_streams() != 0) {
+            return preferred;
+        }
+        for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
+            auto& candidate = connection(index + offset);
+            if (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
+                candidate.available_http2_request_streams() != 0) {
+                return candidate;
+            }
+        }
+        return preferred;
+    }
+    if (preferred.http1_operations_ == 0) {
         return preferred;
     }
     for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
         auto& candidate = connection(index + offset);
-        if (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
-            candidate.available_http2_request_streams() != 0) {
+        if ((candidate.connected_ && candidate.protocol_ == http_client_connection::protocol_type::http1 &&
+                candidate.http1_operations_ == 0) ||
+            (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
+                candidate.available_http2_request_streams() != 0)) {
+            return candidate;
+        }
+    }
+    for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
+        auto& candidate = connection(index + offset);
+        if (candidate.protocol_ != http_client_connection::protocol_type::http2 &&
+            candidate.http1_operations_ == 0) {
             return candidate;
         }
     }
@@ -504,7 +525,10 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
         case http_client_response_transport::unassigned:
         case http_client_response_transport::http1:
             if (state_value.cancellation_id_ != 0) {
-                cancel_operation_by_id(state_value.cancellation_id_);
+                if (state_value.connection_index_ >= connections_.size() ||
+                    !connection(state_value.connection_index_).cancel_by_id(state_value.cancellation_id_)) {
+                    cancel_operation_by_id(state_value.cancellation_id_);
+                }
             } else if (state_value.connection_index_ < connections_.size() &&
                        connection(state_value.connection_index_).http1_response_ == &state_value) {
                 connection(state_value.connection_index_).close();

@@ -83,7 +83,9 @@ inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
     std::string_view name, std::uint32_t known_bit) noexcept {
     switch (known_bit) {
         case 0:
-            return classify_request_header(name);
+            return name.size() == 2 && http_ascii_equals_ignore_case(name, "TE")
+                       ? request_header_kind::te
+                       : request_header_kind::other;
         case response_header_connection:
             return request_header_kind::connection;
         case response_header_content_encoding:
@@ -94,6 +96,10 @@ inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
             return request_header_kind::content_type;
         case response_header_transfer_encoding:
             return request_header_kind::transfer_encoding;
+        case response_header_upgrade:
+            return request_header_kind::upgrade;
+        case response_header_trailer:
+            return request_header_kind::trailer;
         default:
             return request_header_kind::other;
     }
@@ -121,6 +127,7 @@ enum class http_connection_option : std::uint8_t {
     std::string_view option) noexcept {
     switch (classify_request_header(option)) {
         case request_header_kind::other:
+            break;
         case request_header_kind::connection:
         case request_header_kind::upgrade:
         case request_header_kind::forwarded:
@@ -129,7 +136,7 @@ enum class http_connection_option : std::uint8_t {
         case request_header_kind::sec_websocket_extensions:
         case request_header_kind::te:
         case request_header_kind::proxy_authorization:
-            break;
+            return false;
         case request_header_kind::accept:
         case request_header_kind::accept_encoding:
         case request_header_kind::access_control_request_headers:
@@ -157,7 +164,8 @@ enum class http_connection_option : std::uint8_t {
             return true;
     }
     const auto known_bit = classify_response_header_name(option);
-    return known_bit != 0 && known_bit != response_header_connection;
+    return (known_bit & ~(response_header_connection | response_header_upgrade |
+                            response_header_keep_alive | response_header_proxy_connection)) != 0;
 }
 
 // Who parses a Connection field: its sender, or the recipient of a request or

@@ -180,9 +180,8 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
             out.reset();
             return;
         }
-        auto value = entity_value_slot<v_type>::make_value(resource);
-        decode_db_field(field, value, resource);
-        out = std::move(value);
+        auto& inner = out.emplace(entity_value_slot<v_type>::make_value(resource));
+        decode_db_field(field, inner, resource);
     } else if constexpr (is_pmr_vector<u_type>::value) {
         using v_type = typename is_pmr_vector<u_type>::value_type;
         const auto source_value = field.value();
@@ -243,7 +242,9 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
         }
     }
     using value_type = typename c_type::value_type;
-    if constexpr (std::is_same_v<value_type, std::pmr::string> || std::is_same_v<value_type, string>) {
+    if constexpr (std::is_same_v<value_type, std::pmr::string> || std::is_same_v<value_type, string> ||
+                  std::is_same_v<value_type, std::optional<std::pmr::string>> ||
+                  std::is_same_v<value_type, std::optional<string>>) {
         (void)resource;
         entity.template set<c_type::name>(*raw);
     } else {
@@ -267,29 +268,41 @@ public:
     e_type decode(const db_row& row, std::pmr::memory_resource* resource) {
         const auto names = db_result_access::column_names(row);
         if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
-            for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
-                if (!selected_[i] && !wildcard_) {
+            bool ordered_wildcard = wildcard_ && names.size() == column_count;
+            if (ordered_wildcard) {
+                for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+                    if (ordered_wildcard && names[i] == column_type::name.view()) {
+                        indices_[i] = i;
+                    } else {
+                        ordered_wildcard = false;
+                    }
+                });
+            }
+            if (!ordered_wildcard) {
+                for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+                    if (!selected_[i] && !wildcard_) {
+                        indices_[i] = missing_column;
+                        return;
+                    }
+                    if (!wildcard_ && i < names.size() && names[i] == column_type::name.view()) {
+                        indices_[i] = i;
+                        return;
+                    }
                     indices_[i] = missing_column;
-                    return;
-                }
-                if (!wildcard_ && i < names.size() && names[i] == column_type::name.view()) {
-                    indices_[i] = i;
-                    return;
-                }
-                indices_[i] = missing_column;
-                for (std::size_t index = 0; index < names.size(); ++index) {
-                    if (names[index] == column_type::name.view()) {
-                        if (wildcard_ && indices_[i] != missing_column) {
-                            throw db_conversion_error(
-                                db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
-                        }
-                        indices_[i] = index;
-                        if (!wildcard_) {
-                            return;
+                    for (std::size_t index = 0; index < names.size(); ++index) {
+                        if (names[index] == column_type::name.view()) {
+                            if (wildcard_ && indices_[i] != missing_column) {
+                                throw db_conversion_error(
+                                    db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
+                            }
+                            indices_[i] = index;
+                            if (!wildcard_) {
+                                return;
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
             schema_ = names;
         }
         e_type result(resource);

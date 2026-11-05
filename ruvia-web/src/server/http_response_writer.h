@@ -59,7 +59,9 @@ public:
         : entry_(&entry) {}
 
     [[nodiscard]] std::size_t operator()(const std::error_code& error, std::size_t bytes_transferred) const noexcept {
-        entry_->touch();
+        if (bytes_transferred != 0) {
+            entry_->touch();
+        }
         return asio::transfer_all()(error, bytes_transferred);
     }
 
@@ -168,7 +170,8 @@ struct http1_response_write_start final {
 // written. File bodies are never coalesced or held; the caller writes any
 // held-back output first, then continues in finish_file_response_write().
 [[nodiscard]] inline http1_response_write_start start_response_write(http_response_head_buffer& output,
-    const http_response& response, const http1_buffered_response_plan& response_plan, std::size_t hold_limit) {
+    const http_response& response, const http1_buffered_response_plan& response_plan, std::size_t hold_limit,
+    bool coalesce_for_tls = false) {
     append_http1_response_head(response, output, response_plan.head_plan());
     http1_response_write_start start;
     start.head_bytes_ = output.view().size();
@@ -177,10 +180,19 @@ struct http1_response_write_start final {
     }
 
     auto body = response_plan.send_body() ? response.body_bytes() : std::string_view{};
-    if (!body.empty() && (output.can_append_on_stack(body.size()) ||
-                             (start.head_bytes_ < hold_limit && body.size() < hold_limit - start.head_bytes_))) {
-        output.append(body);
-        body = {};
+    if (!body.empty()) {
+        const bool can_hold = start.head_bytes_ < hold_limit && body.size() < hold_limit - start.head_bytes_;
+        if (can_hold || (coalesce_for_tls && output.can_append_on_stack(body.size()))) {
+            output.append(body);
+            body = {};
+        } else if (coalesce_for_tls && start.head_bytes_ <= response_head_retained_heap_bytes &&
+                   body.size() <= response_head_retained_heap_bytes - start.head_bytes_) {
+            try {
+                output.append(body);
+                body = {};
+            } catch (...) {
+            }
+        }
     }
     start.body_ = body;
     start.held_ = body.empty() && output.view().size() < hold_limit;
@@ -256,14 +268,37 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
                 std::make_error_code(std::errc::io_error), 0);
         }
     }
-    const std::array<asio::const_buffer, 2> buffers{asio::buffer(head.view()), asio::buffer(first.bytes())};
-    auto write_completion = co_await ruvia::async_asio<std::size_t>(
-        [&stream, &progress, &buffers](auto handler) mutable {
-            asio::async_write(stream, buffers, http_write_progress(progress), std::move(handler));
-        });
-    if (write_completion.error_code() || !response_plan.send_body()) {
-        co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
-            write_completion.error_code(), write_completion.result());
+    const auto head_view = head.view();
+    const auto first_bytes = first.bytes();
+    const std::array<asio::const_buffer, 2> buffers{asio::buffer(head_view), asio::buffer(first_bytes)};
+    std::error_code first_ec;
+    std::size_t first_written = 0;
+    bool first_done = false;
+    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+        first_done = try_plain_tcp_sync_write(
+            stream, buffers, head_view.size() + first_bytes.size(), 0, first_ec, first_written);
+        if (first_written != 0) {
+            progress.touch();
+        }
+    }
+    if (!first_done) {
+        auto write_completion = co_await ruvia::async_asio<std::size_t>(
+            [&stream, &progress, head_view, first_bytes, first_written](auto handler) mutable {
+                if (first_written >= head_view.size()) {
+                    asio::async_write(stream, asio::buffer(first_bytes.substr(first_written - head_view.size())),
+                        http_write_progress(progress), std::move(handler));
+                } else {
+                    const std::array<asio::const_buffer, 2> remaining{
+                        asio::buffer(head_view.substr(first_written)), asio::buffer(first_bytes)};
+                    asio::async_write(stream, remaining, http_write_progress(progress), std::move(handler));
+                }
+            });
+        first_ec = write_completion.error_code();
+        first_written += write_completion.result();
+    }
+    if (first_ec || !response_plan.send_body()) {
+        co_return classify_http1_buffered_response_write(
+            response_plan, response_head_bytes, first_ec, first_written);
     }
     if (first.kind() == response_body_chunk::kind_type::end) {
         co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
@@ -277,13 +312,27 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
             co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
                 std::make_error_code(std::errc::io_error), response_head_bytes);
         }
-        auto written = co_await ruvia::async_asio<std::size_t>(
-            [&stream, &progress, bytes = chunk.bytes()](auto handler) mutable {
-                asio::async_write(stream, asio::buffer(bytes), http_write_progress(progress), std::move(handler));
-            });
-        if (written.error_code()) {
-            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
-                written.error_code(), response_head_bytes);
+        const auto bytes = chunk.bytes();
+        std::error_code chunk_ec;
+        std::size_t chunk_written = 0;
+        bool chunk_done = false;
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            chunk_done = try_plain_tcp_sync_write(
+                stream, asio::buffer(bytes), bytes.size(), 0, chunk_ec, chunk_written);
+            if (chunk_written != 0) {
+                progress.touch();
+            }
+        }
+        if (!chunk_done) {
+            auto written = co_await ruvia::async_asio<std::size_t>(
+                [&stream, &progress, rest = bytes.substr(chunk_written)](auto handler) mutable {
+                    asio::async_write(stream, asio::buffer(rest), http_write_progress(progress), std::move(handler));
+                });
+            chunk_ec = written.error_code();
+        }
+        if (chunk_ec) {
+            co_return classify_http1_buffered_response_write(
+                response_plan, response_head_bytes, chunk_ec, response_head_bytes);
         }
     }
 }

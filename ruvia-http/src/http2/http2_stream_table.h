@@ -28,6 +28,7 @@ public:
 
     explicit http2_stream_table(std::pmr::memory_resource* resource)
         : resource_(http_pmr_resource_or_default(resource)),
+          overflow_ids_(std::size_t{0}, resource_),
           overflow_(std::size_t{0}, resource_) {}
 
     [[nodiscard]] std::size_t size() const noexcept {
@@ -35,14 +36,19 @@ public:
     }
 
     [[nodiscard]] http2_stream_state* find(std::uint32_t stream_id) & noexcept {
+        if (stream_id == 0) {
+            return nullptr;
+        }
         for (auto& slot : inline_) {
             if (slot && slot->id() == stream_id) {
                 return &*slot;
             }
         }
-        for (auto& stream : overflow_) {
-            if (stream != nullptr && stream->id() == stream_id) {
-                return stream.get();
+        const auto* const ids = overflow_ids_.data();
+        const auto count = overflow_ids_.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            if (ids[i] == stream_id) {
+                return overflow_[i].get();
             }
         }
         return nullptr;
@@ -50,14 +56,19 @@ public:
     [[nodiscard]] http2_stream_state* find(std::uint32_t) && = delete;
 
     [[nodiscard]] const http2_stream_state* find(std::uint32_t stream_id) const& noexcept {
+        if (stream_id == 0) {
+            return nullptr;
+        }
         for (const auto& slot : inline_) {
             if (slot && slot->id() == stream_id) {
                 return &*slot;
             }
         }
-        for (const auto& stream : overflow_) {
-            if (stream != nullptr && stream->id() == stream_id) {
-                return stream.get();
+        const auto* const ids = overflow_ids_.data();
+        const auto count = overflow_ids_.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            if (ids[i] == stream_id) {
+                return overflow_[i].get();
             }
         }
         return nullptr;
@@ -93,7 +104,14 @@ public:
         }
         auto stream = make_http_pmr_object<http2_stream_state>(resource_, stream_id, resource_);
         stream->set_send_window(peer_initial_window_size);
+        if (overflow_ids_.size() == overflow_ids_.capacity()) {
+            overflow_ids_.reserve(overflow_ids_.empty() ? 4 : overflow_ids_.capacity() * 2);
+        }
+        if (overflow_.size() == overflow_.capacity()) {
+            overflow_.reserve(overflow_.empty() ? 4 : overflow_.capacity() * 2);
+        }
         auto* result_value = stream.get();
+        overflow_ids_.push_back(stream_id);
         overflow_.push_back(std::move(stream));
         ++size_;
         if (is_push) {
@@ -104,6 +122,9 @@ public:
     [[nodiscard]] http2_stream_state* create(std::uint32_t, std::int32_t) && = delete;
 
     bool remove(std::uint32_t stream_id) noexcept {
+        if (stream_id == 0) {
+            return false;
+        }
         for (auto& slot : inline_) {
             if (slot && slot->id() == stream_id) {
                 slot.reset();
@@ -114,8 +135,10 @@ public:
                 return true;
             }
         }
-        for (std::size_t i = 0; i < overflow_.size(); ++i) {
-            if (overflow_[i] != nullptr && overflow_[i]->id() == stream_id) {
+        const auto* const ids = overflow_ids_.data();
+        const auto count = overflow_ids_.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            if (ids[i] == stream_id) {
                 erase_overflow_at(i);
                 --size_;
                 if ((stream_id & 1U) == 0) {
@@ -210,13 +233,16 @@ private:
 
     void erase_overflow_at(std::size_t index) noexcept {
         if (snapshot_iteration_depth_ != 0) {
+            overflow_ids_[index] = 0;
             overflow_[index].reset();
             overflow_needs_compact_ = true;
             return;
         }
         if (index + 1 != overflow_.size()) {
+            overflow_ids_[index] = overflow_ids_.back();
             overflow_[index] = std::move(overflow_.back());
         }
+        overflow_ids_.pop_back();
         overflow_.pop_back();
     }
 
@@ -227,8 +253,10 @@ private:
         for (std::size_t i = 0; i < overflow_.size();) {
             if (overflow_[i] == nullptr) {
                 if (i + 1 != overflow_.size()) {
+                    overflow_ids_[i] = overflow_ids_.back();
                     overflow_[i] = std::move(overflow_.back());
                 }
+                overflow_ids_.pop_back();
                 overflow_.pop_back();
                 continue;
             }
@@ -239,6 +267,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::array<std::optional<http2_stream_state>, inline_capacity> inline_{};
+    std::pmr::vector<std::uint32_t> overflow_ids_;
     std::pmr::vector<overflow_stream_type> overflow_;
     std::size_t size_{0};
     std::size_t push_size_{0};

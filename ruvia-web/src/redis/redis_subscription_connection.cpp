@@ -80,7 +80,7 @@ void redis_subscription_connection::abort(client_abort_reason reason) noexcept {
     connection_.abort(reason);
 }
 
-task<void> redis_subscription_connection::send(std::pmr::vector<std::pmr::string> args) {
+task<void> redis_subscription_connection::send(redis_owned_command command) {
     auto lease = claim_operation_lane(write_active_, "redis subscription command is already in progress");
     throw_if_closed();
     const operation_timeout operation_timeout_value(options_.timeout_);
@@ -92,10 +92,9 @@ task<void> redis_subscription_connection::send(std::pmr::vector<std::pmr::string
             ready_ = true;
         }
         auto& write_buffer = connection_.write_buffer();
-        write_buffer.clear();
-        append_resp_command(write_buffer, args);
+        write_buffer.assign(command.wire_);
         // The serialized request owns the bytes needed by the write.
-        std::pmr::vector<std::pmr::string>(args.get_allocator()).swap(args);
+        std::pmr::string(command.wire_.get_allocator()).swap(command.wire_);
         co_await connection_.write_request(operation_timeout_value.constrained_by(owner_.config_.command_timeout_));
     } catch (...) {
         fail();

@@ -424,6 +424,9 @@ const request_name_value_list& context_request::cookie_fields() const {
     if (cache) {
         return *cache;
     }
+    if (!context_->request_.header("Cookie").has_value()) {
+        return empty_request_fields();
+    }
     std::size_t cookie_count = 0;
     std::size_t cookie_header_count = 0;
     std::string_view single_cookie_value{};
@@ -513,6 +516,9 @@ std::optional<std::string_view> context_request::negotiate(
     const bool encoding = field == negotiable_field::encoding;
     const auto header_name = negotiation_header_name(field);
     // Only Accept-Language needs prefix matching in the generic token parser.
+    if ((media_type || encoding) && !context_->request_.header(header_name).has_value()) {
+        return supported.front();
+    }
     const auto token_mode = field == negotiable_field::language
                                 ? http_accept_token_match_mode::language_prefix
                                 : http_accept_token_match_mode::exact;

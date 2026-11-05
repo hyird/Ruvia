@@ -202,16 +202,22 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         std::pmr::string owned(std::string_view(value), resource);
         commit_entity_value(out, std::move(owned));
     } else if constexpr (is_optional<t_type>::value) {
-        if (!value) {
-            out.reset();
-        } else {
-            using element_type = typename is_optional<t_type>::value_type;
-            auto owned = entity_value_slot<element_type>::make_value(resource);
-            if constexpr (movable_rvalue) {
-                assign_entity_value(owned, std::move(*value), resource);
+        using element_type = typename is_optional<t_type>::value_type;
+        if constexpr (is_optional<std::remove_cvref_t<v_type>>::value) {
+            if (!value) {
+                out.reset();
             } else {
-                assign_entity_value(owned, *value, resource);
+                auto owned = entity_value_slot<element_type>::make_value(resource);
+                if constexpr (movable_rvalue) {
+                    assign_entity_value(owned, std::move(*value), resource);
+                } else {
+                    assign_entity_value(owned, *value, resource);
+                }
+                out.emplace(std::move(owned));
             }
+        } else {
+            auto owned = entity_value_slot<element_type>::make_value(resource);
+            assign_entity_value(owned, std::forward<v_type>(value), resource);
             out.emplace(std::move(owned));
         }
     } else if constexpr (is_pmr_vector<t_type>::value) {

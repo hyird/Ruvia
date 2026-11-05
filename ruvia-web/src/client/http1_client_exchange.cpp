@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <exception>
 #include <optional>
 #include <span>
@@ -167,7 +168,10 @@ task<void> http1_client_exchange::write(std::span<const asio::const_buffer> part
 
 task<client_transport_result> http1_client_exchange::read_append(
     http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout) {
-    const auto read_space = target.prepare(max_bytes);
+    const auto read_space =
+        (target.capacity() >= max_bytes && target.size() <= target.capacity() / 2)
+            ? target.prepare_spare().first(std::min(max_bytes, target.capacity() - target.size()))
+            : target.prepare(max_bytes);
     const auto read = co_await connection_.transport_.read_some(read_space, timeout);
     // close() may clear the target while the read is pending; never publish
     // bytes of a closed connection into it.
@@ -221,11 +225,19 @@ task<void> http1_client_exchange::run(
     }
     http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), response_resource);
     if (const auto* content = prepared->content_plan().immediate(); content && !content->bytes().empty()) {
-        // Keep the retained head alive through the composed scatter-gather write.
-        const std::array<asio::const_buffer, 2> parts{
+        std::array<asio::const_buffer, 2> parts{
             asio::buffer(prepared->head().data(), prepared->head().size()),
             asio::buffer(content->bytes().data(), content->bytes().size())};
-        co_await write(parts, timeout);
+        std::size_t part_count = 2;
+        if (connection_.transport_.secure() &&
+            prepared->head().size() <= http_retained_pmr_string_bytes &&
+            content->bytes().size() <= http_retained_pmr_string_bytes - prepared->head().size()) {
+            write_buffer.commit(prepared->head().size());
+            write_buffer.append(content->bytes());
+            parts[0] = asio::buffer(write_buffer.view().data(), write_buffer.view().size());
+            part_count = 1;
+        }
+        co_await write(std::span<const asio::const_buffer>(parts.data(), part_count), timeout);
         if (parser.complete_request_content() != http1_client_request_content_completion_status::completed) {
             std::terminate();
         }
@@ -327,10 +339,14 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     const auto* known_length = plan.known_length();
     const bool empty_body = !content_semantics_present ||
                             (known_length != nullptr && !known_length->requires_body_consumption());
-    std::array<char, 1> empty_output;
+    const bool needs_transfer_scratch =
+        !empty_body && !plan.discards_content() &&
+        ((plan.chunked() != nullptr && !plan.chunked()->transfer_codings().empty()) ||
+            (plan.close_delimited() != nullptr && !plan.close_delimited()->transfer_codings().empty()));
+    std::array<char, 1> empty_output{};
     http_io_buffer output_storage(pool_.resource());
-    const auto output = empty_body ? std::span<char>(empty_output)
-                                   : output_storage.prepare(http_body_buffer_bytes);
+    const auto transfer_output = needs_transfer_scratch ? output_storage.prepare(http_body_buffer_bytes)
+                                                        : std::span<char>{};
     bool eof = false;
     http1_close_policy persistence = http1_close_policy::close_after_response;
     for (;;) {
@@ -342,6 +358,12 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             co_await wait_for_body_space(state_value, timeout);
         }
         connection_.throw_if_aborted();
+        const auto output = needs_transfer_scratch
+                                ? transfer_output
+                                : (!empty_body && !read_buffer.empty()
+                                          ? std::span<char>(read_buffer.data(),
+                                                std::min(read_buffer.size(), http_body_buffer_bytes))
+                                          : std::span<char>(empty_output));
         const auto capacity = state_value.collect_all_
                                   ? output.size()
                                   : std::min(output.size(), max_response_bytes - state_value.pending_.size());
@@ -653,9 +675,38 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 const auto& planned = std::get<0>(chunk);
                 // The write lane has its own deadline, so the concurrent
                 // response reader keeps its read deadline.
-                const std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix()),
+                std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix()),
                     asio::buffer(planned.payload()), asio::buffer(planned.suffix())};
-                co_await write(parts, timeout);
+                std::size_t part_count = 3;
+                const auto total_chunk_bytes =
+                    planned.prefix().size() + planned.payload().size() + planned.suffix().size();
+                const bool coalesce_chunk = connection_.transport_.secure() &&
+                                            (!planned.prefix().empty() || !planned.suffix().empty()) &&
+                                            total_chunk_bytes <= http_retained_pmr_string_bytes;
+                if (coalesce_chunk) {
+                    auto& write_buffer = connection_.write_buffer_;
+                    write_buffer.clear();
+                    const auto coalesced = write_buffer.prepare(total_chunk_bytes);
+                    auto* cursor = coalesced.data();
+                    if (!planned.prefix().empty()) {
+                        std::memcpy(cursor, planned.prefix().data(), planned.prefix().size());
+                        cursor += planned.prefix().size();
+                    }
+                    if (!planned.payload().empty()) {
+                        std::memcpy(cursor, planned.payload().data(), planned.payload().size());
+                        cursor += planned.payload().size();
+                    }
+                    if (!planned.suffix().empty()) {
+                        std::memcpy(cursor, planned.suffix().data(), planned.suffix().size());
+                    }
+                    write_buffer.commit(total_chunk_bytes);
+                    parts[0] = asio::buffer(write_buffer.view().data(), write_buffer.view().size());
+                    part_count = 1;
+                }
+                co_await write(std::span<const asio::const_buffer>(parts.data(), part_count), timeout);
+                if (coalesce_chunk) {
+                    connection_.write_buffer_.clear_retaining_small();
+                }
                 writer.commit_chunk();
                 upload.output_.acknowledge_chunk();
                 continue;

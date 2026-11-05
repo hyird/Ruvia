@@ -20,9 +20,16 @@
 namespace ruvia::detail {
 
 http_client_connection::http2_stream* http_client_connection::find_http2_stream(std::uint32_t stream_id) noexcept {
+    if (stream_id != 0 && last_http2_stream_ != nullptr && last_http2_stream_->stream_id_ == stream_id) {
+        return last_http2_stream_;
+    }
     const auto match = std::ranges::find_if(
         http2_streams_, [stream_id](const http2_stream* stream) { return stream->stream_id_ == stream_id; });
-    return match == http2_streams_.end() ? nullptr : *match;
+    if (match == http2_streams_.end()) {
+        return nullptr;
+    }
+    last_http2_stream_ = *match;
+    return *match;
 }
 
 std::uint64_t http_client_connection::next_http2_request_id() noexcept {
@@ -31,7 +38,9 @@ std::uint64_t http_client_connection::next_http2_request_id() noexcept {
 }
 
 void http_client_connection::register_http2_stream(http2_stream& stream) {
+    stream.registry_index_ = http2_streams_.size();
     http2_streams_.push_back(&stream);
+    last_http2_stream_ = &stream;
 }
 
 bool http_client_connection::http2_exchange_complete(const http2_stream& stream) noexcept {
@@ -303,15 +312,24 @@ void http_client_connection::cancel_http2_stream(
 void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept {
     // The core decides whether a half is still open. In particular a successful
     // early response does not retire an abandoned or Continue-cancelled upload.
-    if (!stream.retryable_) {
+    const bool both_halves_closed =
+        stream.complete_ && !stream.failed() &&
+        (stream.state_->output() != nullptr ? stream.state_->output()->ended_ : !stream.request_body_pending_);
+    if (!stream.retryable_ && stream.stream_id_ != 0 && !both_halves_closed) {
         http2_.submit_reset(stream.stream_id_);
     }
     release_response_data(*stream.state_);
-    const auto match = std::ranges::find(http2_streams_, &stream);
-    if (match == http2_streams_.end()) {
+    const auto index = stream.registry_index_;
+    if (index >= http2_streams_.size() || http2_streams_[index] != &stream) {
         std::terminate();
     }
-    http2_streams_.erase(match);
+    if (last_http2_stream_ == &stream) {
+        last_http2_stream_ = nullptr;
+    }
+    auto* const back = http2_streams_.back();
+    http2_streams_[index] = back;
+    back->registry_index_ = index;
+    http2_streams_.pop_back();
     http2_.state_signal().notify();
     if (http2_.draining() && http2_streams_.empty() && http2_.running()) {
         // A drained session admits no new streams; retire it so the next
@@ -564,29 +582,6 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/2 request retry exhausted");
 }
 
-task<void> http_client_connection::wait_for_http2_output(
-    http2_stream& stream, const http_client_output_queue* upload) {
-    auto& connection = http2_.connection();
-    while (http2_.has_connection() &&
-           (connection.wants_write() || http2_.writing()) &&
-           !stream.failed() && !stream.retryable_ && (upload == nullptr || !upload->stopped_)) {
-        co_await http2_.state_signal().wait();
-    }
-}
-
-task<void> http_client_connection::wait_for_http2_send_window(
-    http2_stream& stream, const http_client_output_queue* upload) {
-    while (http2_.has_connection() && !stream.failed() && !stream.retryable_ &&
-           (upload == nullptr || !upload->stopped_)) {
-        const auto window = http2_.connection().send_window_state(stream.stream_id_);
-        if (!window || window->available_ != 0 || http2_.connection().stream_aborted(stream.stream_id_)) {
-            co_return;
-        }
-        // WINDOW_UPDATE and SETTINGS may produce no stream event.
-        co_await http2_.state_signal().wait();
-    }
-}
-
 task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
     std::string_view bytes, http2_end_stream end_stream, const http_client_output_queue* upload) {
     // Keep one frame-sized copy in the sans-I/O/session output while the caller
@@ -627,9 +622,20 @@ task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
             }
             co_return false;
         }
-        co_await wait_for_http2_output(stream, upload);
+        while (http2_.has_connection() && (connection.wants_write() || http2_.writing()) && !stream.failed() &&
+               !stream.retryable_ && (upload == nullptr || !upload->stopped_)) {
+            co_await http2_.state_signal().wait();
+        }
         if (submitted.status_ == http2_data_submit_status::backpressured) {
-            co_await wait_for_http2_send_window(stream, upload);
+            while (http2_.has_connection() && !stream.failed() && !stream.retryable_ &&
+                   (upload == nullptr || !upload->stopped_)) {
+                const auto window = connection.send_window_state(stream.stream_id_);
+                if (!window || window->available_ != 0 || connection.stream_aborted(stream.stream_id_)) {
+                    break;
+                }
+                // WINDOW_UPDATE and SETTINGS may produce no stream event.
+                co_await http2_.state_signal().wait();
+            }
         }
     }
     co_return offset == bytes.size() && !stream.failed() && !stream.retryable_ &&
@@ -705,7 +711,10 @@ task<void> http_client_connection::stream_http2_upload(
                 break;
             }
             http2_.wake_writer();
-            co_await wait_for_http2_output(stream, &upload);
+            while (http2_.has_connection() && (connection.wants_write() || http2_.writing()) && !stream.failed() &&
+                   !stream.retryable_ && !upload.stopped_) {
+                co_await http2_.state_signal().wait();
+            }
             if (!stream.failed() && !stream.retryable_ && !upload.stopped_) {
                 upload.finish();
             }

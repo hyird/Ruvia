@@ -86,8 +86,9 @@ struct http2_header_decode_context final {
     if (!stream.has_host()) {
         return {};
     }
-    for (std::size_t i = 0; i < stream.remote_header_count(); ++i) {
-        const auto header_value = stream.remote_header_at(i);
+    const auto index = stream.host_header_index();
+    if (index < stream.remote_header_count()) {
+        const auto header_value = stream.remote_header_at(index);
         if (header_value.kind_ == request_header_kind::host) {
             return header_value.value_;
         }
@@ -208,7 +209,7 @@ struct http2_header_decode_context final {
                 !authority_matches_host(stream.request_authority(), value, stream.scheme_default_port())) {
                 return false;
             }
-            stream.mark_host();
+            stream.mark_host(stream.remote_header_count());
             break;
         case request_header_kind::cookie:
             return http2_append_cookie_header_value(stream, value);

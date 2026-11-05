@@ -102,7 +102,19 @@ struct mariadb_statement_classification final {
     // A statement that may run a stored procedure: a CALL, or one hidden behind
     // an executable comment.
     bool calls_routine_{false};
+    // Whether `sql` names one of the session tracking variables.
+    bool names_session_tracking_{false};
+    // Whether `sql` contains a backslash character.
+    bool has_backslash_{false};
+};
+
+struct mariadb_parameter_traits final {
+    bool has_backslash_{false};
+    bool has_ambiguous_backslash_{false};
 };
 
 [[nodiscard]] mariadb_statement_classification classify_mariadb_statement(std::string_view sql) noexcept;
+[[nodiscard]] mariadb_parameter_traits inspect_mariadb_parameters(std::span<const db_value> params) noexcept;
+[[nodiscard]] bool mariadb_escape_needs_charset(
+    const st_mysql& connection, bool has_ambiguous_backslash) noexcept;
 }  // namespace ruvia::detail

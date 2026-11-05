@@ -53,7 +53,7 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
         return finish_delete_key_batch(std::nullopt, deadline_value);
     }
     try {
-        static constexpr std::size_t inline_capacity = 32;
+        static constexpr std::size_t inline_capacity = 64;
         if (keys.size() <= inline_capacity) {
             std::array<std::string_view, inline_capacity> inline_views;
             for (std::size_t i = 0; i < keys.size(); ++i) {

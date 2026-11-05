@@ -122,7 +122,6 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
     if (runtime != nullptr) {
         runtime->mark_response_committed();
     }
-    wake_writer();
     const auto committed_status = submitted_head->body_plan().response_status();
     const auto fail_after_commit = [this, stream_id, committed_status]() noexcept -> std::optional<http_status_code> {
         submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
@@ -131,10 +130,12 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         return committed_status;
     };
     if (!submitted_head->send_body()) {
+        wake_writer();
         co_return committed_status;
     }
 
     if (source) {
+        wake_writer();
         for (;;) {
             if (chunk.kind() == response_body_chunk::kind_type::end) {
                 const auto ended = co_await write_data(stream_id, {}, http2_end_stream::end_stream);
@@ -164,7 +165,38 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         }
     }
 
-    const auto body = response.body_bytes();
+    auto body = response.body_bytes();
+    if (!body.empty() && signal != nullptr && !signal->terminated() && !connection_.stream_aborted(stream_id)) {
+        const auto window = connection_.send_window_state(stream_id);
+        if (window && window->available_ != 0 && output_budget_.try_acquire(stream_id)) {
+            http2_data_submit_result submitted{};
+            try {
+                submitted = connection_.submit_data(
+                    stream_id, body, http2_end_stream::end_stream, http2_data_output_credit_bytes);
+            } catch (const std::logic_error&) {
+                output_budget_.release(stream_id);
+                co_return fail_after_commit();
+            } catch (...) {
+                output_budget_.release(stream_id);
+                wake_writer();
+                throw;
+            }
+            output_budget_.note_data_submitted(stream_id, submitted.consumed_bytes_);
+            if (submitted.consumed_bytes_ == 0) {
+                output_budget_.release(stream_id);
+            }
+            wake_writer();
+            body.remove_prefix(submitted.consumed_bytes_);
+            if (submitted.status_ == http2_data_submit_status::complete ||
+                submitted.status_ == http2_data_submit_status::closed) {
+                co_return committed_status;
+            }
+        } else {
+            wake_writer();
+        }
+    } else {
+        wake_writer();
+    }
     if (!body.empty()) {
         const auto result_value = co_await write_data(stream_id, body, http2_end_stream::end_stream);
         if (result_value == data_write_result_type::peer_aborted) {

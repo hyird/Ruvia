@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -77,46 +78,76 @@ template <typename t_type>
             return std::nullopt;
         }
         return input;
-    } else {
-        std::pmr::string decoded_storage(resource);
+    } else if constexpr (is_ruvia_scalar<field_type>) {
+        std::array<char, 128> stack_buffer{};
+        std::optional<std::pmr::string> heap_storage;
         auto decoded = input;
-        if (encoding == form_value_encoding::url_encoded) {
-            const auto decoded_value =
-                ruvia::decode_url_component(input, decoded_storage, url_decode_mode::form);
-            if (!decoded_value.has_value()) {
+        if (encoding == form_value_encoding::url_encoded &&
+            ruvia::has_url_encoding(input, url_decode_mode::form)) {
+            if (input.size() <= stack_buffer.size()) {
+                std::size_t len = 0;
+                for (std::size_t i = 0; i < input.size(); ++i) {
+                    char c = input[i];
+                    if (c == '+') {
+                        c = ' ';
+                    } else if (c == '%') {
+                        if (const auto byte = http_try_decode_percent_byte(input, i)) {
+                            c = static_cast<char>(*byte);
+                            i += 2;
+                        }
+                    }
+                    stack_buffer[len++] = c;
+                }
+                decoded = std::string_view(stack_buffer.data(), len);
+            } else {
+                auto& storage = heap_storage.emplace(resource);
+                const auto decoded_value =
+                    ruvia::decode_url_component(input, storage, url_decode_mode::form);
+                if (!decoded_value.has_value()) {
+                    return std::nullopt;
+                }
+                decoded = *decoded_value;
+            }
+        }
+        using scalar_type = model_scalar_value_type<field_type>;
+        if constexpr (std::is_same_v<scalar_type, bool>) {
+            const auto parsed_value = parse_form_bool(decoded);
+            if (!parsed_value.has_value()) {
                 return std::nullopt;
             }
-            decoded = *decoded_value;
-        }
-
-        if constexpr (is_ruvia_string<field_type>) {
-            if (decoded.data() == input.data()) {
-                if (string_storage == model_string_storage::owned) {
-                    return field_type(decoded, ::ruvia::model_options{.resource_ = resource});
-                }
-                return model_value_factory::make_string(decoded, resource);
-            }
-            field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
-            value.assign_owned(std::move(decoded_storage));
-            return value;
-        } else if constexpr (is_ruvia_scalar<field_type>) {
-            using scalar_type = model_scalar_value_type<field_type>;
-            if constexpr (std::is_same_v<scalar_type, bool>) {
-                const auto parsed_value = parse_form_bool(decoded);
-                if (!parsed_value.has_value()) {
-                    return std::nullopt;
-                }
-                return field_type(*parsed_value);
-            } else {
-                const auto parsed_value = parse_form_number<scalar_type>(decoded);
-                if (!parsed_value.has_value()) {
-                    return std::nullopt;
-                }
-                return field_type(*parsed_value);
-            }
+            return field_type(*parsed_value);
         } else {
+            const auto parsed_value = parse_form_number<scalar_type>(decoded);
+            if (!parsed_value.has_value()) {
+                return std::nullopt;
+            }
+            return field_type(*parsed_value);
+        }
+    } else if constexpr (is_ruvia_string<field_type>) {
+        if (encoding != form_value_encoding::url_encoded ||
+            !ruvia::has_url_encoding(input, url_decode_mode::form)) {
+            if (string_storage == model_string_storage::owned) {
+                return field_type(input, ::ruvia::model_options{.resource_ = resource});
+            }
+            return model_value_factory::make_string(input, resource);
+        }
+        std::pmr::string decoded_storage(resource);
+        const auto decoded_value =
+            ruvia::decode_url_component(input, decoded_storage, url_decode_mode::form);
+        if (!decoded_value.has_value()) {
             return std::nullopt;
         }
+        if (decoded_value->data() == input.data()) {
+            if (string_storage == model_string_storage::owned) {
+                return field_type(input, ::ruvia::model_options{.resource_ = resource});
+            }
+            return model_value_factory::make_string(input, resource);
+        }
+        field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
+        value.assign_owned(std::move(decoded_storage));
+        return value;
+    } else {
+        return std::nullopt;
     }
 }
 

@@ -43,6 +43,22 @@ std::uint32_t classify_response_header_name(std::string_view name) noexcept {
                 return response_header_server;
             }
             return 0;
+        case 7:
+            switch (first) {
+                case 't':
+                    if (http_ascii_equals_ignore_case(name, "Trailer")) {
+                        return response_header_trailer;
+                    }
+                    break;
+                case 'u':
+                    if (http_ascii_equals_ignore_case(name, "Upgrade")) {
+                        return response_header_upgrade;
+                    }
+                    break;
+                default:
+                    break;
+            }
+            return 0;
         case 8:
             if (first == 'l' && http_ascii_equals_ignore_case(name, "Location")) {
                 return response_header_location;
@@ -55,12 +71,15 @@ std::uint32_t classify_response_header_name(std::string_view name) noexcept {
                         return response_header_connection;
                     }
                     break;
+                case 'k':
+                    if (http_ascii_equals_ignore_case(name, "Keep-Alive")) {
+                        return response_header_keep_alive;
+                    }
+                    break;
                 case 's':
                     if (http_ascii_equals_ignore_case(name, "Set-Cookie")) {
                         return response_header_set_cookie;
                     }
-                    break;
-                default:
                     break;
             }
             return 0;
@@ -99,8 +118,19 @@ std::uint32_t classify_response_header_name(std::string_view name) noexcept {
             }
             return 0;
         case 16:
-            if (first == 'c' && http_ascii_equals_ignore_case(name, "Content-Encoding")) {
-                return response_header_content_encoding;
+            switch (first) {
+                case 'c':
+                    if (http_ascii_equals_ignore_case(name, "Content-Encoding")) {
+                        return response_header_content_encoding;
+                    }
+                    break;
+                case 'p':
+                    if (http_ascii_equals_ignore_case(name, "Proxy-Connection")) {
+                        return response_header_proxy_connection;
+                    }
+                    break;
+                default:
+                    break;
             }
             return 0;
         case 17:

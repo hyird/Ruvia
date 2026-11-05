@@ -23,23 +23,11 @@ public:
     }
     [[nodiscard]] const std::pmr::string& remote() const&& = delete;
 
-    [[nodiscard]] std::pmr::string& local() & noexcept {
-        return local_;
-    }
-    [[nodiscard]] std::pmr::string& local() && = delete;
-
-    [[nodiscard]] const std::pmr::string& local() const& noexcept {
-        return local_;
-    }
-    [[nodiscard]] const std::pmr::string& local() const&& = delete;
-
 private:
     http2_stream_header_blocks(http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : remote_("", resource),
-          local_("", resource) {}
+        : remote_("", resource) {}
 
     std::pmr::string remote_;
-    std::pmr::string local_;
 };
 
 }  // namespace ruvia::detail

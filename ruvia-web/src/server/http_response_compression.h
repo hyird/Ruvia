@@ -60,7 +60,7 @@ enum class http_response_compression_status : std::uint8_t {
 
 [[nodiscard]] inline bool http_response_custom_coding_accepted(
     const http_request* request, std::string_view coding) noexcept {
-    if (request == nullptr) {
+    if (request == nullptr || !request->header("Accept-Encoding").has_value()) {
         return true;
     }
     bool saw_header = false;
@@ -80,6 +80,12 @@ enum class http_response_compression_status : std::uint8_t {
 [[nodiscard]] inline bool http_known_response_content_encoding_stack_accepted(
     const http_response_coding_selection& selection, const http_response& response,
     const http_request* request = nullptr, bool* has_content_encoding = nullptr) noexcept {
+    if (!response.header("Content-Encoding").has_value()) {
+        if (has_content_encoding != nullptr) {
+            *has_content_encoding = false;
+        }
+        return true;
+    }
     bool saw_header = false;
     bool saw_coding = false;
     bool accepted = true;

@@ -131,6 +131,7 @@ private:
     // the session instead of only making the GOAWAY boundary final.
     bool timeout_drain_{};
     bool drain_expired_{};
+    bool has_pushed_streams_{};
     connection_scanner::periodic_check_registration drain_registration_;
     // Declared last: destroyed (and so unregistered) before the state its
     // completion touches.

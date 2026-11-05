@@ -75,14 +75,21 @@ constexpr std::string_view cache_prefix = "ruvia:qc:v3:";
 constexpr std::size_t digest_text_bytes = 2 * SHA256_DIGEST_LENGTH;
 constexpr std::size_t full_prefix_bytes = cache_prefix.size() + digest_text_bytes + 1;
 
-[[nodiscard]] std::pmr::string make_id_key(std::string_view prefix, db_cache_shape shape,
-    const std::array<unsigned char, SHA256_DIGEST_LENGTH>& hash, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::string make_id_key_from_hex(std::string_view prefix, db_cache_shape shape,
+    std::string_view digest_hex, std::pmr::memory_resource* resource) {
     const auto shape_tag = db_cache_shape_tag(shape);
     std::pmr::string result(resource);
-    result.reserve(prefix.size() + 3 + shape_tag.size() + 1 + digest_text_bytes);
+    result.reserve(prefix.size() + 3 + shape_tag.size() + 1 + digest_hex.size());
     result.append(prefix).append("id:").append(shape_tag).push_back(':');
-    http_append_lower_hex(result, hash);
+    result.append(digest_hex);
     return result;
+}
+
+[[nodiscard]] std::pmr::string make_id_key(std::string_view prefix, db_cache_shape shape,
+    const std::array<unsigned char, SHA256_DIGEST_LENGTH>& hash, std::pmr::memory_resource* resource) {
+    std::array<char, digest_text_bytes> hex{};
+    http_encode_lower_hex(hex.data(), hash);
+    return make_id_key_from_hex(prefix, shape, std::string_view(hex.data(), hex.size()), resource);
 }
 
 void release_cache_storage(void* storage) noexcept {
@@ -146,8 +153,8 @@ public:
                 throw std::runtime_error("database cache key digest failed");
             }
         } else {
-            unsigned length = 0;
-            if (EVP_DigestFinal_ex(context_, hash.data(), &length) != 1 || length != hash.size()) {
+            unsigned int size = 0;
+            if (EVP_DigestFinal_ex(context_, hash.data(), &size) != 1 || size != hash.size()) {
                 throw std::runtime_error("database cache key digest failed");
             }
         }
@@ -306,9 +313,12 @@ std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_r
 void append_db_cache_id_keys(
     std::pmr::vector<std::pmr::string>& keys, std::string_view prefix, std::string_view id) {
     const auto hash = cache_digest(id);
+    std::array<char, digest_text_bytes> hex{};
+    http_encode_lower_hex(hex.data(), hash);
+    const std::string_view hex_view(hex.data(), hex.size());
     auto* const resource = keys.get_allocator().resource();
     for (const auto shape : db_cache_shapes) {
-        keys.push_back(make_id_key(prefix, shape, hash, resource));
+        keys.push_back(make_id_key_from_hex(prefix, shape, hex_view, resource));
     }
 }
 std::pmr::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,

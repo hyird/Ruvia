@@ -335,8 +335,10 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     // A later frame in the same input batch can close this stream before the
     // public request event acquires its lease. Keep that event's storage alive.
     if (role_ == http2_role::server) {
-        if (const auto priority = priorities_.find(stream.id()); priority != priorities_.end()) {
-            stream.set_priority_update(priority->second);
+        if (!priorities_.empty()) {
+            if (const auto priority = priorities_.find(stream.id()); priority != priorities_.end()) {
+                stream.set_priority_update(priority->second);
+            }
         }
         pin_stream(stream.id());
     }

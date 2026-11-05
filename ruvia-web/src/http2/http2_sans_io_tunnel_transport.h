@@ -67,6 +67,10 @@ public:
             }
             if (!chunk.empty()) {
                 buffer.append(std::string_view(chunk.data(), chunk.size()));
+                body_queue_.release_active_credits();
+                if (connection_.wants_write()) {
+                    wake_writer();
+                }
                 co_return true;
             }
             if (!body_queue_.empty()) {

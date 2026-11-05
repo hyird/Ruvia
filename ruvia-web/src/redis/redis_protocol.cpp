@@ -16,35 +16,21 @@
 namespace ruvia::detail {
 namespace {
 
+[[nodiscard]] std::size_t resp_decimal_size(std::size_t value) {
+    if (value > std::numeric_limits<std::uint64_t>::max()) {
+        throw std::length_error("redis RESP length is too large");
+    }
+    return http_unsigned_decimal_size(static_cast<std::uint64_t>(value));
+}
+
 template <typename args_type>
 [[nodiscard]] std::size_t resp_serialized_size(const args_type& args) {
     if (args.empty()) {
         throw std::invalid_argument("redis command must not be empty");
     }
-    const auto decimal_size = [](std::size_t value) {
-        if (value > std::numeric_limits<std::uint64_t>::max()) {
-            throw std::length_error("redis RESP length is too large");
-        }
-        return http_unsigned_decimal_size(static_cast<std::uint64_t>(value));
-    };
-    const auto add_size = [](std::size_t& current, std::size_t amount) {
-        if (amount > std::numeric_limits<std::size_t>::max() - current) {
-            throw std::length_error("redis RESP command is too large");
-        }
-        current += amount;
-    };
-
-    std::size_t size = 0;
-    add_size(size, 1);
-    add_size(size, decimal_size(args.size()));
-    add_size(size, 2);
+    std::size_t size = resp_header_serialized_size(args.size());
     for (const auto& arg : args) {
-        const auto bytes_value = static_cast<std::size_t>(arg.size());
-        add_size(size, 1);
-        add_size(size, decimal_size(bytes_value));
-        add_size(size, 2);
-        add_size(size, bytes_value);
-        add_size(size, 2);
+        add_resp_serialized_size(size, resp_bulk_serialized_size(static_cast<std::size_t>(arg.size())));
     }
     return size;
 }
@@ -54,18 +40,9 @@ template <typename args_type>
 // for the whole batch in redis_pool::execute_commands()).
 template <typename args_type>
 void serialize_resp_command_impl(std::pmr::string& output, const args_type& args) {
-    output.push_back('*');
-    append_redis_number(output, static_cast<std::uint64_t>(args.size()));
-    output.append("\r\n", 2);
+    append_resp_header(output, args.size());
     for (const auto& arg : args) {
-        const auto size = static_cast<std::size_t>(arg.size());
-        output.push_back('$');
-        append_redis_number(output, static_cast<std::uint64_t>(size));
-        output.append("\r\n", 2);
-        if (size != 0) {
-            output.append(arg.data(), size);
-        }
-        output.append("\r\n", 2);
+        append_resp_bulk(output, std::string_view(arg.data(), static_cast<std::size_t>(arg.size())));
     }
 }
 
@@ -85,12 +62,68 @@ void append_resp_command_impl(std::pmr::string& output, const args_type& args) {
 
 }  // namespace
 
+void add_resp_serialized_size(std::size_t& current, std::size_t amount) {
+    if (amount > std::numeric_limits<std::size_t>::max() - current) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    current += amount;
+}
+
+std::size_t resp_header_serialized_size(std::size_t arg_count) {
+    if (arg_count == 0) {
+        throw std::invalid_argument("redis command must not be empty");
+    }
+    std::size_t size = 0;
+    add_resp_serialized_size(size, 1);
+    add_resp_serialized_size(size, resp_decimal_size(arg_count));
+    add_resp_serialized_size(size, 2);
+    return size;
+}
+
+std::size_t resp_bulk_serialized_size(std::size_t arg_bytes) {
+    std::size_t size = 0;
+    add_resp_serialized_size(size, 1);
+    add_resp_serialized_size(size, resp_decimal_size(arg_bytes));
+    add_resp_serialized_size(size, 2);
+    add_resp_serialized_size(size, arg_bytes);
+    add_resp_serialized_size(size, 2);
+    return size;
+}
+
+void append_resp_header(std::pmr::string& output, std::size_t arg_count) {
+    output.push_back('*');
+    append_redis_number(output, static_cast<std::uint64_t>(arg_count));
+    output.append("\r\n", 2);
+}
+
+void append_resp_bulk(std::pmr::string& output, std::string_view arg) {
+    output.push_back('$');
+    append_redis_number(output, static_cast<std::uint64_t>(arg.size()));
+    output.append("\r\n", 2);
+    if (!arg.empty()) {
+        output.append(arg.data(), arg.size());
+    }
+    output.append("\r\n", 2);
+}
+
 void serialize_resp_command(std::pmr::string& output, std::span<const std::string_view> args) {
     serialize_resp_command_impl(output, args);
 }
 
 void serialize_resp_command(std::pmr::string& output, std::span<const std::pmr::string> args) {
     serialize_resp_command_impl(output, args);
+}
+
+void serialize_resp_command(
+    std::pmr::string& output, std::string_view first, std::span<const std::string_view> rest) {
+    if (rest.size() == std::numeric_limits<std::size_t>::max()) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    append_resp_header(output, rest.size() + 1U);
+    append_resp_bulk(output, first);
+    for (const auto arg : rest) {
+        append_resp_bulk(output, arg);
+    }
 }
 
 void append_resp_command(std::pmr::string& output, std::span<const std::string_view> args) {
@@ -101,12 +134,35 @@ void append_resp_command(std::pmr::string& output, std::span<const std::pmr::str
     append_resp_command_impl(output, args);
 }
 
+void append_resp_command(
+    std::pmr::string& output, std::string_view first, std::span<const std::string_view> rest) {
+    const auto serialized_size = resp_command_serialized_size(first, rest);
+    if (serialized_size > std::numeric_limits<std::size_t>::max() - output.size()) {
+        throw std::length_error("redis RESP output is too large");
+    }
+    output.reserve(output.size() + serialized_size);
+    serialize_resp_command(output, first, rest);
+}
+
 std::size_t resp_command_serialized_size(std::span<const std::string_view> args) {
     return resp_serialized_size(args);
 }
 
 std::size_t resp_command_serialized_size(std::span<const std::pmr::string> args) {
     return resp_serialized_size(args);
+}
+
+std::size_t resp_command_serialized_size(
+    std::string_view first, std::span<const std::string_view> rest) {
+    if (rest.size() == std::numeric_limits<std::size_t>::max()) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    std::size_t size = resp_header_serialized_size(rest.size() + 1U);
+    add_resp_serialized_size(size, resp_bulk_serialized_size(first.size()));
+    for (const auto arg : rest) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(arg.size()));
+    }
+    return size;
 }
 
 const char* hiredis_reader_error(const redisReader& reader_value) noexcept {

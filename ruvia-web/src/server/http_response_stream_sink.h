@@ -259,7 +259,8 @@ private:
         }
     }
 
-    task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+    task<timer_sleep_result>
+    sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
         state_.ensure_body_allowed();
         co_return co_await sleep_for(worker_, duration, stop_token_value);
     }
@@ -312,9 +313,38 @@ private:
         }
 
         const http1_chunk_header chunk_header(chunk.size());
-        const std::array<asio::const_buffer, 3> buffers{asio::buffer(chunk_header.view()),
-            asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
         std::error_code write_ec;
+        if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            const auto frame_size =
+                chunk_header.view().size() + chunk.size() + http1_chunk_data_terminator.size();
+            if (frame_size <= response_head_retained_heap_bytes) {
+                bool coalesced = false;
+                try {
+                    head_.reset();
+                    head_.reserve_additional(frame_size);
+                    head_.append(chunk_header.view());
+                    head_.append(chunk);
+                    head_.append(http1_chunk_data_terminator);
+                    coalesced = true;
+                } catch (...) {
+                }
+                if (coalesced) {
+                    {
+                        const connection_scanner::entry::phase_scope write_phase(
+                            scanner_entry_, connection_scanner::phase::writing);
+                        const auto completion = co_await write_to_stream(asio::buffer(head_.view()));
+                        write_ec = completion.error_code();
+                    }
+                    if (write_ec) {
+                        mark_write_failure(write_ec);
+                        throw inbound_transport_error(write_ec, "failed to write HTTP response stream body");
+                    }
+                    co_return;
+                }
+            }
+        }
+        std::array<asio::const_buffer, 3> buffers{asio::buffer(chunk_header.view()),
+            asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);
@@ -369,9 +399,39 @@ private:
 
         // The protocol primitive owns the last-chunk and trailer-section delimiters;
         // this runtime layer only submits their byte views to the socket.
-        const std::array<asio::const_buffer, 3> buffers{asio::buffer(http1_last_chunk_prefix),
-            asio::buffer(trailers_), asio::buffer(http1_trailer_section_terminator)};
         std::error_code ec;
+        if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            const auto end_frame_size =
+                http1_last_chunk_prefix.size() + trailers_.size() + http1_trailer_section_terminator.size();
+            if (end_frame_size <= response_head_retained_heap_bytes) {
+                bool coalesced = false;
+                try {
+                    head_.reset();
+                    head_.reserve_additional(end_frame_size);
+                    head_.append(http1_last_chunk_prefix);
+                    head_.append(trailers_);
+                    head_.append(http1_trailer_section_terminator);
+                    coalesced = true;
+                } catch (...) {
+                }
+                if (coalesced) {
+                    {
+                        const connection_scanner::entry::phase_scope write_phase(
+                            scanner_entry_, connection_scanner::phase::writing);
+                        const auto completion = co_await write_to_stream(asio::buffer(head_.view()));
+                        ec = completion.error_code();
+                    }
+                    if (ec) {
+                        mark_write_failure(ec);
+                        throw inbound_transport_error(ec, "failed to write HTTP response stream end");
+                    }
+                    state_.mark_ended();
+                    co_return;
+                }
+            }
+        }
+        std::array<asio::const_buffer, 3> buffers{asio::buffer(http1_last_chunk_prefix),
+            asio::buffer(trailers_), asio::buffer(http1_trailer_section_terminator)};
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);

@@ -141,7 +141,12 @@ void http2_sans_io_session_engine::take_output(std::pmr::string& output) {
     // core batch operation only consumes output and invokes its observer after the
     // copy succeeds, so allocation failure leaves protocol bytes and budget intact.
     output.clear();
-    (void)connection_.take_output_batch(http2_data_output_credit_bytes, output, [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept { static_cast<http2_data_output_budget*>(context_value)->note_data_output(stream_id, payload_bytes); }, &output_budget_);
+    (void)connection_.take_output_batch(
+        http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096, output,
+        [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept {
+            static_cast<http2_data_output_budget*>(context_value)->note_data_output(stream_id, payload_bytes);
+        },
+        &output_budget_);
     output_write_in_flight_ = !output.empty();
 }
 
@@ -312,7 +317,9 @@ void http2_sans_io_session_engine::touch_activity() noexcept {
 }
 
 void http2_sans_io_session_engine::wake_writer() noexcept {
-    write_signal_.notify();
+    if (connection_.wants_write() || writer_should_exit()) {
+        write_signal_.notify();
+    }
 }
 
 void http2_sans_io_session_engine::terminate(std::error_code error) noexcept {
@@ -382,6 +389,7 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
         throw;
     }
     runtime->bind_push_parent(associated_stream_id);
+    has_pushed_streams_ = true;
     if (!admit_stream(id)) {
         reset_stream_no_throw(id, http2_error_code::cancel);
         wake_writer();
@@ -476,8 +484,10 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         }
     } cleanup{*this, stream_id};
     try {
-        const auto request_start = std::chrono::steady_clock::now();
         const auto& options = session_.options();
+        const auto request_start = options.access_log_.callback_
+                                       ? std::chrono::steady_clock::now()
+                                       : std::chrono::steady_clock::time_point{};
 
         std::array<std::byte, http2_request_arena_stack_bytes> arena_block;
         std::optional<request_memory> request_memory_storage;
@@ -780,7 +790,7 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
                     if (active_handler_tasks_ == 0) {
                         handler_finished_.notify();
                     }
-                    write_signal_.notify();
+                    wake_writer();
                 }));
     } catch (...) {
         if (counted) {
@@ -978,7 +988,6 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
         return;
     }
     signal->wake();
-    wake_writer();
 }
 
 void http2_sans_io_session_engine::on_tunnel_end(const http2_tunnel_end_event& tunnel_end) noexcept {
@@ -1015,19 +1024,22 @@ void http2_sans_io_session_engine::on_message_end(const http2_message_end_event&
 
 void http2_sans_io_session_engine::on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept {
     const auto stream_id = stream_closed.stream_id();
-    stream_runtimes_.for_each([this, stream_id](http2_sans_io_stream_runtime& child_value) {
-        if (child_value.push_parent() == stream_id) {
-            reset_stream_no_throw(child_value.stream_id(), http2_error_code::cancel);
-            if (auto* child_signal = child_value.signal()) {
-                child_signal->wake();
+    if (has_pushed_streams_) {
+        stream_runtimes_.for_each([this, stream_id](http2_sans_io_stream_runtime& child_value) {
+            if (child_value.push_parent() == stream_id) {
+                reset_stream_no_throw(child_value.stream_id(), http2_error_code::cancel);
+                if (auto* child_signal = child_value.signal()) {
+                    child_signal->wake();
+                }
             }
-        }
-    });
+        });
+    }
     output_budget_.release_and_reconcile(stream_id, connection_);
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
     if (signal != nullptr) {
         if (connection_.stream_aborted(stream_id)) {
+            output_budget_.wake();
             signal->stop();
         } else {
             signal->wake();
@@ -1064,11 +1076,10 @@ void http2_sans_io_session_engine::drain_events() {
     // SETTINGS and WINDOW_UPDATE can restore DATA capacity without publishing
     // an application event; producers must retry their caller-owned suffixes.
     stream_runtimes_.for_each([](http2_sans_io_stream_runtime& runtime) {
-        if (auto* signal = runtime.signal()) {
+        if (auto* signal = runtime.signal(); signal != nullptr && signal->waiting_send_window()) {
             signal->wake();
         }
     });
-    output_budget_.wake();
 }
 
 http2_feed_result http2_sans_io_session_engine::feed_and_drain(std::string_view bytes_value) {

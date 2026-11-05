@@ -55,7 +55,8 @@ template <typename header_pointer_type, std::size_t count>
     for (auto cursor_value = begin; cursor_value != end; ++cursor_value) {
         const auto header_known_bit = http_response_header_access::known_bit(*cursor_value);
         if ((known_bit != 0 && header_known_bit == known_bit) ||
-            (known_bit == 0 && http_ascii_equals_ignore_case(cursor_value->name(), name))) {
+            (known_bit == 0 && header_known_bit == 0 &&
+                http_ascii_equals_ignore_case(cursor_value->name(), name))) {
             return cursor_value;
         }
     }

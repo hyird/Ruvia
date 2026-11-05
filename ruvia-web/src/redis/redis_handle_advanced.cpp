@@ -1,3 +1,4 @@
+#include <array>
 #include <chrono>
 #include <memory_resource>
 #include <optional>
@@ -11,55 +12,62 @@
 
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_registry.h"
+#include "redis/redis_types_access.h"
 #include "redis/redis_utils.h"
 
 namespace ruvia {
 namespace {
 
-[[nodiscard]] std::size_t redis_scan_option_arg_count(const redis_scan_options& options) {
-    return (options.match_.has_value() ? 2U : 0U) + (options.count_.has_value() ? 2U : 0U);
+[[nodiscard]] detail::redis_owned_command build_redis_scan_command(std::string_view command,
+    std::optional<std::string_view> key, const redis_scan_options& options,
+    std::pmr::memory_resource* resource) {
+    std::array<char, http_max_unsigned_decimal_size> cursor_scratch{};
+    std::array<char, http_max_unsigned_decimal_size> count_scratch{};
+    std::array<std::string_view, 7> args{};
+    std::size_t count = 0;
+    args[count++] = command;
+    if (key.has_value()) {
+        args[count++] = *key;
+    }
+    args[count++] = http_format_unsigned(
+        cursor_scratch, options.cursor_.has_value() ? detail::redis_types_access::cursor_value(*options.cursor_) : 0);
+    if (options.match_.has_value()) {
+        args[count++] = "MATCH";
+        args[count++] = *options.match_;
+    }
+    if (options.count_.has_value()) {
+        args[count++] = "COUNT";
+        args[count++] = http_format_unsigned(count_scratch, options.count_->value());
+    }
+    return detail::make_owned_redis_command(
+        resource, std::span<const std::string_view>(args.data(), count));
 }
 
-[[nodiscard]] std::pmr::vector<std::pmr::string> redis_scan_args(std::string_view command,
+[[nodiscard]] detail::redis_owned_command redis_scan_args(std::string_view command,
     const redis_scan_options& options, std::pmr::memory_resource* resource) {
-    const auto option_args = redis_scan_option_arg_count(options);
-    auto cursor_value = detail::redis_cursor_string(options.cursor_, resource);
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(2 + option_args);
-    detail::emplace_redis_string(args, command);
-    args.emplace_back(std::move(cursor_value));
-    detail::append_redis_scan_options(args, options, resource);
-    return args;
+    return build_redis_scan_command(command, std::nullopt, options, resource);
 }
 
-[[nodiscard]] std::pmr::vector<std::pmr::string> redis_key_scan_args(std::string_view command,
+[[nodiscard]] detail::redis_owned_command redis_key_scan_args(std::string_view command,
     std::string_view key, const redis_scan_options& options, std::pmr::memory_resource* resource) {
-    const auto option_args = redis_scan_option_arg_count(options);
-    auto cursor_value = detail::redis_cursor_string(options.cursor_, resource);
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(3 + option_args);
-    detail::emplace_redis_string(args, command);
-    detail::emplace_redis_string(args, key);
-    args.emplace_back(std::move(cursor_value));
-    detail::append_redis_scan_options(args, options, resource);
-    return args;
+    return build_redis_scan_command(command, key, options, resource);
 }
 
 task<redis_scan_result> execute_redis_scan(detail::redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto value = co_await executor.execute(std::move(args), resource);
+    detail::redis_owned_command command, std::pmr::memory_resource* resource) {
+    auto value = co_await executor.execute(std::move(command), resource);
     co_return detail::parse_redis_scan_result(std::move(value), resource);
 }
 
 task<redis_hash_scan_result> execute_redis_hash_scan(detail::redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto value = co_await executor.execute(std::move(args), resource);
+    detail::redis_owned_command command, std::pmr::memory_resource* resource) {
+    auto value = co_await executor.execute(std::move(command), resource);
     co_return detail::parse_redis_hash_scan_result(std::move(value), resource);
 }
 
 task<redis_z_scan_result> execute_redis_z_scan(detail::redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto value = co_await executor.execute(std::move(args), resource);
+    detail::redis_owned_command command, std::pmr::memory_resource* resource) {
+    auto value = co_await executor.execute(std::move(command), resource);
     co_return detail::parse_redis_z_scan_result(std::move(value), resource);
 }
 
@@ -83,16 +91,16 @@ task<redis_z_scan_result> execute_redis_z_scan(detail::redis_command_executor ex
 }
 
 task<std::optional<redis_key_value>> execute_redis_blocking_pop(detail::redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args,
+    detail::redis_owned_command command,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
-    auto reply = co_await executor.execute(std::move(args), resource, reply_timeout);
+    auto reply = co_await executor.execute(std::move(command), resource, reply_timeout);
     co_return detail::parse_redis_blocking_pop_reply(std::move(reply), resource);
 }
 
 task<std::optional<redis_x_read_group_result>> execute_redis_x_read_group(detail::redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args,
+    detail::redis_owned_command command,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource) {
-    auto reply = co_await executor.execute(std::move(args), resource, reply_timeout);
+    auto reply = co_await executor.execute(std::move(command), resource, reply_timeout);
     co_return detail::parse_redis_x_read_group_reply(std::move(reply), resource);
 }
 
@@ -148,17 +156,8 @@ task<std::pmr::string> redis_handle::script_load(std::string_view script) const 
 task<std::pmr::vector<bool>> redis_handle::script_exists(
     std::span<const std::string_view> sha1s) const {
     registration_.require_active();
-    if (sha1s.empty()) {
-        throw std::invalid_argument("redis script exists requires at least one sha1");
-    }
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(sha1s.size() + 2);
-    detail::emplace_redis_string(args, "SCRIPT");
-    detail::emplace_redis_string(args, "EXISTS");
-    for (const auto sha1 : sha1s) {
-        detail::emplace_redis_string(args, sha1);
-    }
-    return scoped(detail::redis_bool_array_command(executor(), std::move(args), resource_));
+    return scoped(detail::redis_bool_array_command(
+        executor(), detail::redis_command_with_key_fields("SCRIPT", "EXISTS", sha1s, resource_), resource_));
 }
 
 task<std::optional<redis_key_value>> redis_handle::blpop(

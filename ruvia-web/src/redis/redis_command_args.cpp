@@ -1,91 +1,76 @@
+#include <array>
+#include <limits>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 #include "ruvia/web/detail/redis/redis_owned_command.h"
 
 #include "redis/redis_handle_helpers.h"
+#include "redis/redis_protocol.h"
 #include "redis/redis_types_access.h"
 #include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 
-namespace {
-
-std::pmr::vector<std::pmr::string> own_redis_args_impl(std::optional<std::string_view> first,
+redis_owned_command own_redis_args(
     std::span<const std::string_view> args, std::pmr::memory_resource* resource) {
-    std::pmr::vector<std::pmr::string> owned(resource);
-    owned.reserve(args.size() + static_cast<std::size_t>(first.has_value()));
-    if (first.has_value()) {
-        emplace_redis_string(owned, *first);
-    }
-    for (const auto arg : args) {
-        emplace_redis_string(owned, arg);
-    }
-    return owned;
+    return make_owned_redis_command(resource, args);
 }
 
-}  // namespace
-
-std::pmr::vector<std::pmr::string> own_redis_args(
-    std::span<const std::string_view> args, std::pmr::memory_resource* resource) {
-    return own_redis_args_impl(std::nullopt, args, resource);
-}
-
-std::pmr::vector<std::pmr::string> own_redis_args(std::string_view first,
+redis_owned_command own_redis_args(std::string_view first,
     std::span<const std::string_view> rest, std::pmr::memory_resource* resource) {
-    return own_redis_args_impl(first, rest, resource);
+    return make_owned_redis_command(resource, first, rest);
 }
 
 redis_owned_command make_owned_redis_command(
     std::pmr::memory_resource* resource, std::span<const std::string_view> args) {
-    return {own_redis_args(args, resource)};
+    redis_owned_command command{std::pmr::string(pmr_resource_or_default(resource))};
+    append_resp_command(command.wire_, args);
+    return command;
 }
 
 redis_owned_command make_owned_redis_command(std::pmr::memory_resource* resource,
     std::string_view first, std::span<const std::string_view> rest) {
-    return {own_redis_args(first, rest, resource)};
+    redis_owned_command command{std::pmr::string(pmr_resource_or_default(resource))};
+    append_resp_command(command.wire_, first, rest);
+    return command;
 }
 
 redis_owned_command make_redis_integer_command(std::string_view command,
     std::string_view key, std::int64_t value, std::pmr::memory_resource* resource) {
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(3);
-    emplace_redis_string(args, command);
-    emplace_redis_string(args, key);
-    args.emplace_back(redis_int_string(value, resource));
-    return {std::move(args)};
+    std::array<char, redis_int_scratch_size> value_scratch{};
+    const std::string_view args[]{command, key, format_redis_int(value_scratch, value)};
+    return make_owned_redis_command(resource, args);
 }
 
 redis_owned_command make_redis_range_command(std::string_view command,
     std::string_view key, std::int64_t start, std::int64_t stop, std::pmr::memory_resource* resource,
     bool with_scores) {
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(with_scores ? 5 : 4);
-    emplace_redis_string(args, command);
-    emplace_redis_string(args, key);
-    args.emplace_back(redis_int_string(start, resource));
-    args.emplace_back(redis_int_string(stop, resource));
-    if (with_scores) {
-        emplace_redis_string(args, "WITHSCORES");
-    }
-    return {std::move(args)};
+    std::array<char, redis_int_scratch_size> start_scratch{};
+    std::array<char, redis_int_scratch_size> stop_scratch{};
+    const std::string_view args[]{
+        command,
+        key,
+        format_redis_int(start_scratch, start),
+        format_redis_int(stop_scratch, stop),
+        "WITHSCORES",
+    };
+    return make_owned_redis_command(
+        resource, std::span<const std::string_view>(args, with_scores ? 5U : 4U));
 }
 
 redis_owned_command make_redis_zadd_command(std::string_view key, double score,
     std::string_view member, std::pmr::memory_resource* resource) {
-    auto score_value = redis_score_string(score, resource);
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(4);
-    emplace_redis_string(args, "ZADD");
-    emplace_redis_string(args, key);
-    args.emplace_back(std::move(score_value));
-    emplace_redis_string(args, member);
-    return {std::move(args)};
+    std::array<char, redis_score_scratch_size> score_scratch{};
+    const std::string_view args[]{"ZADD", key, format_redis_score(score_scratch, score), member};
+    return make_owned_redis_command(resource, args);
 }
 
-std::pmr::vector<std::pmr::string> own_redis_args(
+redis_owned_command own_redis_args(
     std::initializer_list<std::string_view> args, std::pmr::memory_resource* resource) {
-    return own_redis_args(std::span<const std::string_view>(args.begin(), args.size()), resource);
+    return make_owned_redis_command(
+        resource, std::span<const std::string_view>(args.begin(), args.size()));
 }
 
 std::pmr::string redis_milliseconds_string(
@@ -93,44 +78,42 @@ std::pmr::string redis_milliseconds_string(
     return redis_int_string(static_cast<std::int64_t>(ttl.count()), resource);
 }
 
-std::pmr::string redis_cursor_string(
-    std::optional<redis_scan_cursor> cursor_value, std::pmr::memory_resource* resource) {
-    std::pmr::string output(resource);
-    append_redis_number(output, cursor_value.has_value() ? redis_types_access::cursor_value(*cursor_value) : 0);
-    return output;
-}
-
-std::pmr::vector<std::pmr::string> redis_command_with_keys(std::string_view command,
+redis_owned_command redis_command_with_keys(std::string_view command,
     std::span<const std::string_view> keys, std::pmr::memory_resource* resource) {
     if (keys.empty()) {
         throw std::invalid_argument("redis command requires at least one key");
     }
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(keys.size() + 1);
-    emplace_redis_string(args, command);
-    for (const auto key : keys) {
-        emplace_redis_string(args, key);
-    }
-    return args;
+    return make_owned_redis_command(resource, command, keys);
 }
 
-std::pmr::vector<std::pmr::string> redis_mset_args(
+redis_owned_command redis_mset_args(
     std::span<const std::pair<std::string_view, std::string_view>> items,
     std::pmr::memory_resource* resource) {
     if (items.empty()) {
         throw std::invalid_argument("redis mset requires at least one item");
     }
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(items.size() * 2 + 1);
-    emplace_redis_string(args, "MSET");
-    for (const auto& [key, value] : items) {
-        emplace_redis_string(args, key);
-        emplace_redis_string(args, value);
+    if (items.size() > (std::numeric_limits<std::size_t>::max() - 1U) / 2U) {
+        throw std::length_error("redis RESP command is too large");
     }
-    return args;
+    const auto arg_count = items.size() * 2U + 1U;
+    std::size_t size = resp_header_serialized_size(arg_count);
+    add_resp_serialized_size(size, resp_bulk_serialized_size(4U));
+    for (const auto& [key, value] : items) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(key.size()));
+        add_resp_serialized_size(size, resp_bulk_serialized_size(value.size()));
+    }
+    redis_owned_command command{std::pmr::string(pmr_resource_or_default(resource))};
+    command.wire_.reserve(size);
+    append_resp_header(command.wire_, arg_count);
+    append_resp_bulk(command.wire_, "MSET");
+    for (const auto& [key, value] : items) {
+        append_resp_bulk(command.wire_, key);
+        append_resp_bulk(command.wire_, value);
+    }
+    return command;
 }
 
-std::pmr::vector<std::pmr::string> redis_set_args(std::string_view key, std::string_view value,
+redis_owned_command redis_set_args(std::string_view key, std::string_view value,
     const redis_set_options& options, std::pmr::memory_resource* resource) {
     std::string_view condition_token;
     if (options.condition_) {
@@ -148,123 +131,164 @@ std::pmr::vector<std::pmr::string> redis_set_args(std::string_view key, std::str
     const bool returns_previous = redis_set_returns_previous(options.previous_value_);
     const auto* duration = options.expiration_ ? options.expiration_->duration() : nullptr;
     const bool keeps_existing = options.expiration_ && options.expiration_->keeps_existing();
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(3 + (duration != nullptr ? 2 : 0) + (!condition_token.empty() ? 1 : 0) +
-                 (returns_previous ? 1 : 0) + (keeps_existing ? 1 : 0));
-    emplace_redis_string(args, "SET");
-    emplace_redis_string(args, key);
-    emplace_redis_string(args, value);
+    std::array<char, redis_int_scratch_size> duration_scratch{};
+    std::array<std::string_view, 8> args{};
+    std::size_t count = 0;
+    args[count++] = "SET";
+    args[count++] = key;
+    args[count++] = value;
     if (duration != nullptr) {
-        emplace_redis_string(args, "PX");
-        args.emplace_back(redis_milliseconds_string(*duration, resource));
+        args[count++] = "PX";
+        args[count++] = format_redis_int(duration_scratch, static_cast<std::int64_t>(duration->count()));
     }
     if (!condition_token.empty()) {
-        emplace_redis_string(args, condition_token);
+        args[count++] = condition_token;
     }
     if (returns_previous) {
-        emplace_redis_string(args, "GET");
+        args[count++] = "GET";
     }
     if (keeps_existing) {
-        emplace_redis_string(args, "KEEPTTL");
+        args[count++] = "KEEPTTL";
     }
-    return args;
+    return make_owned_redis_command(resource, std::span<const std::string_view>(args.data(), count));
 }
 
-std::pmr::vector<std::pmr::string> redis_hset_fields_args(std::string_view key,
+redis_owned_command redis_hset_fields_args(std::string_view key,
     std::span<const std::pair<std::string_view, std::string_view>> fields_value,
     std::pmr::memory_resource* resource) {
     if (fields_value.empty()) {
         throw std::invalid_argument("redis hset requires at least one field");
     }
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(fields_value.size() * 2 + 2);
-    emplace_redis_string(args, "HSET");
-    emplace_redis_string(args, key);
-    for (const auto& [field, value] : fields_value) {
-        emplace_redis_string(args, field);
-        emplace_redis_string(args, value);
+    if (fields_value.size() > (std::numeric_limits<std::size_t>::max() - 2U) / 2U) {
+        throw std::length_error("redis RESP command is too large");
     }
-    return args;
+    const auto arg_count = fields_value.size() * 2U + 2U;
+    std::size_t size = resp_header_serialized_size(arg_count);
+    add_resp_serialized_size(size, resp_bulk_serialized_size(4U));
+    add_resp_serialized_size(size, resp_bulk_serialized_size(key.size()));
+    for (const auto& [field, value] : fields_value) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(field.size()));
+        add_resp_serialized_size(size, resp_bulk_serialized_size(value.size()));
+    }
+    redis_owned_command command{std::pmr::string(pmr_resource_or_default(resource))};
+    command.wire_.reserve(size);
+    append_resp_header(command.wire_, arg_count);
+    append_resp_bulk(command.wire_, "HSET");
+    append_resp_bulk(command.wire_, key);
+    for (const auto& [field, value] : fields_value) {
+        append_resp_bulk(command.wire_, field);
+        append_resp_bulk(command.wire_, value);
+    }
+    return command;
 }
 
-std::pmr::vector<std::pmr::string> redis_command_with_key_fields(std::string_view command,
+redis_owned_command redis_command_with_key_fields(std::string_view command,
     std::string_view key, std::span<const std::string_view> fields_value,
     std::pmr::memory_resource* resource) {
     if (fields_value.empty()) {
         throw std::invalid_argument("redis command requires at least one field");
     }
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(fields_value.size() + 2);
-    emplace_redis_string(args, command);
-    emplace_redis_string(args, key);
+    if (fields_value.size() > std::numeric_limits<std::size_t>::max() - 2U) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    const auto arg_count = fields_value.size() + 2U;
+    std::size_t size = resp_header_serialized_size(arg_count);
+    add_resp_serialized_size(size, resp_bulk_serialized_size(command.size()));
+    add_resp_serialized_size(size, resp_bulk_serialized_size(key.size()));
     for (const auto field : fields_value) {
-        emplace_redis_string(args, field);
+        add_resp_serialized_size(size, resp_bulk_serialized_size(field.size()));
     }
-    return args;
+    redis_owned_command owned{std::pmr::string(pmr_resource_or_default(resource))};
+    owned.wire_.reserve(size);
+    append_resp_header(owned.wire_, arg_count);
+    append_resp_bulk(owned.wire_, command);
+    append_resp_bulk(owned.wire_, key);
+    for (const auto field : fields_value) {
+        append_resp_bulk(owned.wire_, field);
+    }
+    return owned;
 }
 
-void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
-    const redis_scan_options& options, std::pmr::memory_resource* resource) {
-    if (options.match_.has_value()) {
-        emplace_redis_string(args, "MATCH");
-        emplace_redis_string(args, *options.match_);
-    }
-    if (options.count_.has_value()) {
-        emplace_redis_string(args, "COUNT");
-        std::pmr::string count(resource);
-        append_redis_number(count, options.count_->value());
-        args.emplace_back(std::move(count));
-    }
-}
-
-std::pmr::vector<std::pmr::string> redis_eval_args(std::string_view command, std::string_view script,
+redis_owned_command redis_eval_args(std::string_view command, std::string_view script,
     std::span<const std::string_view> keys, std::span<const std::string_view> argv,
     std::pmr::memory_resource* resource) {
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(3 + keys.size() + argv.size());
-    emplace_redis_string(args, command);
-    emplace_redis_string(args, script);
-    args.emplace_back(redis_int_string(static_cast<std::int64_t>(keys.size()), resource));
+    if (keys.size() > std::numeric_limits<std::size_t>::max() - 3U ||
+        argv.size() > std::numeric_limits<std::size_t>::max() - 3U - keys.size()) {
+        throw std::length_error("redis RESP command is too large");
+    }
+    const auto arg_count = 3U + keys.size() + argv.size();
+    std::array<char, redis_int_scratch_size> key_count_scratch{};
+    const auto key_count = format_redis_int(key_count_scratch, static_cast<std::int64_t>(keys.size()));
+    std::size_t size = resp_header_serialized_size(arg_count);
+    add_resp_serialized_size(size, resp_bulk_serialized_size(command.size()));
+    add_resp_serialized_size(size, resp_bulk_serialized_size(script.size()));
+    add_resp_serialized_size(size, resp_bulk_serialized_size(key_count.size()));
     for (const auto key : keys) {
-        emplace_redis_string(args, key);
+        add_resp_serialized_size(size, resp_bulk_serialized_size(key.size()));
     }
     for (const auto arg : argv) {
-        emplace_redis_string(args, arg);
+        add_resp_serialized_size(size, resp_bulk_serialized_size(arg.size()));
     }
-    return args;
+    redis_owned_command owned{std::pmr::string(pmr_resource_or_default(resource))};
+    owned.wire_.reserve(size);
+    append_resp_header(owned.wire_, arg_count);
+    append_resp_bulk(owned.wire_, command);
+    append_resp_bulk(owned.wire_, script);
+    append_resp_bulk(owned.wire_, key_count);
+    for (const auto key : keys) {
+        append_resp_bulk(owned.wire_, key);
+    }
+    for (const auto arg : argv) {
+        append_resp_bulk(owned.wire_, arg);
+    }
+    return owned;
 }
 
-std::pmr::vector<std::pmr::string> redis_blocking_pop_args(std::string_view command,
+redis_owned_command redis_blocking_pop_args(std::string_view command,
     std::span<const std::string_view> keys, redis_block_wait wait,
     std::pmr::memory_resource* resource) {
     if (keys.empty()) {
         throw std::invalid_argument("redis blocking pop requires at least one key");
     }
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(keys.size() + 2);
-    emplace_redis_string(args, command);
-    for (const auto key : keys) {
-        emplace_redis_string(args, key);
+    if (keys.size() > std::numeric_limits<std::size_t>::max() - 2U) {
+        throw std::length_error("redis RESP command is too large");
     }
-    std::pmr::string timeout(resource);
+    std::array<char, 32> timeout_scratch{};
+    std::string_view timeout_text = "0";
     if (const auto duration = wait.duration(); duration.has_value()) {
         const auto milliseconds = duration->count();
-        append_redis_number(timeout, milliseconds / 1000);
+        const auto seconds_text = format_redis_int(
+            std::span<char, redis_int_scratch_size>(timeout_scratch.data(), redis_int_scratch_size),
+            milliseconds / 1000);
+        auto len = seconds_text.size();
         const auto remainder = milliseconds % 1000;
         if (remainder != 0) {
-            timeout.push_back('.');
-            timeout.push_back(static_cast<char>('0' + remainder / 100));
-            timeout.push_back(static_cast<char>('0' + (remainder / 10) % 10));
-            timeout.push_back(static_cast<char>('0' + remainder % 10));
+            timeout_scratch[len++] = '.';
+            timeout_scratch[len++] = static_cast<char>('0' + remainder / 100);
+            timeout_scratch[len++] = static_cast<char>('0' + (remainder / 10) % 10);
+            timeout_scratch[len++] = static_cast<char>('0' + remainder % 10);
         }
-    } else {
-        timeout.push_back('0');
+        timeout_text = std::string_view(timeout_scratch.data(), len);
     }
-    args.emplace_back(std::move(timeout));
-    return args;
+    const auto arg_count = keys.size() + 2U;
+    std::size_t size = resp_header_serialized_size(arg_count);
+    add_resp_serialized_size(size, resp_bulk_serialized_size(command.size()));
+    for (const auto key : keys) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(key.size()));
+    }
+    add_resp_serialized_size(size, resp_bulk_serialized_size(timeout_text.size()));
+    redis_owned_command owned{std::pmr::string(pmr_resource_or_default(resource))};
+    owned.wire_.reserve(size);
+    append_resp_header(owned.wire_, arg_count);
+    append_resp_bulk(owned.wire_, command);
+    for (const auto key : keys) {
+        append_resp_bulk(owned.wire_, key);
+    }
+    append_resp_bulk(owned.wire_, timeout_text);
+    return owned;
 }
 
-std::pmr::vector<std::pmr::string> redis_x_read_group_args(std::string_view group,
+redis_owned_command redis_x_read_group_args(std::string_view group,
     std::string_view consumer, std::span<const redis_stream_read_view> streams,
     const redis_x_read_group_options& options, std::pmr::memory_resource* resource) {
     if (group.empty() || consumer.empty()) {
@@ -278,40 +302,73 @@ std::pmr::vector<std::pmr::string> redis_x_read_group_args(std::string_view grou
             throw std::invalid_argument("redis xreadgroup stream and id must not be empty");
         }
     }
-
-    std::pmr::vector<std::pmr::string> args(resource);
     const auto use_no_ack = redis_x_read_group_uses_no_ack(options.acknowledgement_);
-    args.reserve(6 + streams.size() * 2 + (options.count_.has_value() ? 2 : 0) +
-                 (options.block_.has_value() ? 2 : 0) + (use_no_ack ? 1 : 0));
-    emplace_redis_string(args, "XREADGROUP");
-    emplace_redis_string(args, "GROUP");
-    emplace_redis_string(args, group);
-    emplace_redis_string(args, consumer);
-    if (options.count_.has_value()) {
-        emplace_redis_string(args, "COUNT");
-        std::pmr::string count(resource);
-        append_redis_number(count, options.count_->value());
-        args.emplace_back(std::move(count));
+    const std::size_t extra_args = 5U + (options.count_.has_value() ? 2U : 0U) +
+                                   (options.block_.has_value() ? 2U : 0U) + (use_no_ack ? 1U : 0U);
+    if (streams.size() > (std::numeric_limits<std::size_t>::max() - extra_args) / 2U) {
+        throw std::length_error("redis RESP command is too large");
     }
+    const auto arg_count = extra_args + streams.size() * 2U;
+    std::array<char, http_max_unsigned_decimal_size> count_scratch{};
+    std::string_view count_text;
+    if (options.count_.has_value()) {
+        count_text = http_format_unsigned(count_scratch, options.count_->value());
+    }
+    std::array<char, redis_int_scratch_size> block_scratch{};
+    std::string_view block_text = "0";
     if (options.block_.has_value()) {
-        emplace_redis_string(args, "BLOCK");
         if (const auto duration = options.block_->duration(); duration.has_value()) {
-            args.emplace_back(redis_milliseconds_string(*duration, resource));
-        } else {
-            emplace_redis_string(args, "0");
+            block_text = format_redis_int(block_scratch, static_cast<std::int64_t>(duration->count()));
         }
     }
-    if (use_no_ack) {
-        emplace_redis_string(args, "NOACK");
-    }
-    emplace_redis_string(args, "STREAMS");
-    for (const auto& stream : streams) {
-        emplace_redis_string(args, stream.stream_.view());
-    }
-    for (const auto& stream : streams) {
-        emplace_redis_string(args, stream.id_.view());
-    }
-    return args;
-}
 
+    std::size_t size = resp_header_serialized_size(arg_count);
+    add_resp_serialized_size(size, resp_bulk_serialized_size(10U));  // XREADGROUP
+    add_resp_serialized_size(size, resp_bulk_serialized_size(5U));   // GROUP
+    add_resp_serialized_size(size, resp_bulk_serialized_size(group.size()));
+    add_resp_serialized_size(size, resp_bulk_serialized_size(consumer.size()));
+    if (options.count_.has_value()) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(5U));  // COUNT
+        add_resp_serialized_size(size, resp_bulk_serialized_size(count_text.size()));
+    }
+    if (options.block_.has_value()) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(5U));  // BLOCK
+        add_resp_serialized_size(size, resp_bulk_serialized_size(block_text.size()));
+    }
+    if (use_no_ack) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(5U));  // NOACK
+    }
+    add_resp_serialized_size(size, resp_bulk_serialized_size(7U));  // STREAMS
+    for (const auto& stream : streams) {
+        add_resp_serialized_size(size, resp_bulk_serialized_size(stream.stream_.size()));
+        add_resp_serialized_size(size, resp_bulk_serialized_size(stream.id_.size()));
+    }
+
+    redis_owned_command owned{std::pmr::string(pmr_resource_or_default(resource))};
+    owned.wire_.reserve(size);
+    append_resp_header(owned.wire_, arg_count);
+    append_resp_bulk(owned.wire_, "XREADGROUP");
+    append_resp_bulk(owned.wire_, "GROUP");
+    append_resp_bulk(owned.wire_, group);
+    append_resp_bulk(owned.wire_, consumer);
+    if (options.count_.has_value()) {
+        append_resp_bulk(owned.wire_, "COUNT");
+        append_resp_bulk(owned.wire_, count_text);
+    }
+    if (options.block_.has_value()) {
+        append_resp_bulk(owned.wire_, "BLOCK");
+        append_resp_bulk(owned.wire_, block_text);
+    }
+    if (use_no_ack) {
+        append_resp_bulk(owned.wire_, "NOACK");
+    }
+    append_resp_bulk(owned.wire_, "STREAMS");
+    for (const auto& stream : streams) {
+        append_resp_bulk(owned.wire_, stream.stream_.view());
+    }
+    for (const auto& stream : streams) {
+        append_resp_bulk(owned.wire_, stream.id_.view());
+    }
+    return owned;
+}
 }  // namespace ruvia::detail

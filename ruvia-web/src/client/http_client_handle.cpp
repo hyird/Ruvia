@@ -7,6 +7,7 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
@@ -214,11 +215,11 @@ void detail::http_client_response_state::release_consumed_body_prefix() {
     if (offset_ == 0 || offset_ != buffered_.size()) {
         return;
     }
-    {
-        std::pmr::string empty(resource_);
-        buffered_.swap(empty);
-    }
+    http_clear_pmr_string_retaining_small(buffered_, response_body_read_chunk_bytes);
     offset_ = 0;
+    if (pending_.empty() && buffered_.capacity() > pending_.capacity()) {
+        pending_.swap(buffered_);
+    }
     notify_producer_space();
 }
 
@@ -230,8 +231,7 @@ void detail::http_client_response_state::promote_pending_data() {
     if (state_value.http2_data_credit_ && state_value.pool_ != nullptr) {
         state_value.pool_->release_response_data(state_value);
     }
-    std::pmr::string empty(state_value.resource_);
-    state_value.buffered_.swap(empty);
+    http_clear_pmr_string_retaining_small(state_value.buffered_, response_body_read_chunk_bytes);
     state_value.offset_ = 0;
     state_value.buffered_.swap(state_value.pending_);
     state_value.notify_producer_space();

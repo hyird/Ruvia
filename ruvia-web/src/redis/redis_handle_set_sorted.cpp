@@ -1,3 +1,4 @@
+#include <array>
 #include <string_view>
 #include <utility>
 
@@ -80,7 +81,7 @@ task<std::int64_t> redis_handle::zadd(
     std::string_view key, double score, std::string_view member) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(executor(),
-        detail::make_redis_zadd_command(key, score, member, resource_).args_, resource_));
+        detail::make_redis_zadd_command(key, score, member, resource_), resource_));
 }
 
 task<std::int64_t> redis_handle::zrem(
@@ -94,14 +95,14 @@ task<std::pmr::vector<std::pmr::string>> redis_handle::zrange(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(executor(),
-        detail::make_redis_range_command("ZRANGE", key, start, stop, resource_).args_, resource_));
+        detail::make_redis_range_command("ZRANGE", key, start, stop, resource_), resource_));
 }
 
 task<std::pmr::vector<redis_scored_value>> redis_handle::zrange_with_scores(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     auto command = detail::make_redis_range_command("ZRANGE", key, start, stop, resource_, true);
-    return scoped(detail::execute_redis_scored_array(executor(), std::move(command.args_), resource_));
+    return scoped(detail::execute_redis_scored_array(executor(), std::move(command), resource_));
 }
 
 task<std::optional<double>> redis_handle::zscore(
@@ -121,15 +122,16 @@ task<std::int64_t> redis_handle::zcard(std::string_view key) const {
 task<std::int64_t> redis_handle::zcount(
     std::string_view key, double min_value, double max_value) const {
     registration_.require_active();
-    auto min_text = detail::redis_score_string(min_value, resource_);
-    auto max_text = detail::redis_score_string(max_value, resource_);
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(4);
-    detail::emplace_redis_string(args, "ZCOUNT");
-    detail::emplace_redis_string(args, key);
-    args.emplace_back(std::move(min_text));
-    args.emplace_back(std::move(max_text));
-    return scoped(detail::redis_integer_command(executor(), std::move(args), resource_));
+    std::array<char, detail::redis_score_scratch_size> min_scratch{};
+    std::array<char, detail::redis_score_scratch_size> max_scratch{};
+    const std::string_view args[]{
+        "ZCOUNT",
+        key,
+        detail::format_redis_score(min_scratch, min_value),
+        detail::format_redis_score(max_scratch, max_value),
+    };
+    return scoped(detail::redis_integer_command(
+        executor(), detail::make_owned_redis_command(resource_, args), resource_));
 }
 
 }  // namespace ruvia

@@ -65,8 +65,13 @@ public:
         return has_host_;
     }
 
-    void mark_host() noexcept {
+    void mark_host(std::size_t index) noexcept {
         has_host_ = true;
+        host_header_index_ = static_cast<std::uint16_t>(index);
+    }
+
+    [[nodiscard]] std::size_t host_header_index() const noexcept {
+        return host_header_index_;
     }
 
     [[nodiscard]] bool has_cookie() const noexcept {
@@ -128,6 +133,7 @@ private:
     bool regular_header_seen_ : 1 {false};
     bool has_informational_response_ : 1 {false};
     std::uint16_t scheme_default_port_{0};
+    std::uint16_t host_header_index_{0};
     std::optional<http_received_status> response_status_;
     std::optional<http_priority_fields> priority_update_;
 };

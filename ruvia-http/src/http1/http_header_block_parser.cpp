@@ -172,12 +172,20 @@ std::size_t find_http_header_end(std::string_view buffer, std::size_t search_off
 
     auto cursor_value = std::max<std::size_t>(3, search_offset);
     while (cursor_value < buffer.size()) {
-        const auto i = buffer[cursor_value] == '\n' ? cursor_value : buffer.find('\n', cursor_value + 1);
+        const auto i =
+            buffer[cursor_value] == '\n' ? cursor_value : buffer.find('\n', cursor_value + 1);
         if (i == std::string_view::npos) {
             return std::string_view::npos;
         }
-        if (buffer[i - 1] == '\r' && buffer[i - 2] == '\n' && buffer[i - 3] == '\r') {
-            return i + 1;
+        if (buffer[i - 1] == '\r') {
+            if (buffer[i - 2] == '\n' && buffer[i - 3] == '\r') {
+                return i + 1;
+            }
+            if (i + 2 < buffer.size() && buffer[i + 1] == '\r' && buffer[i + 2] == '\n') {
+                return i + 3;
+            }
+            cursor_value = i + 3;
+            continue;
         }
         cursor_value = i + 1;
     }

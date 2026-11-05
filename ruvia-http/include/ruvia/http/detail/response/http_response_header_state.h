@@ -11,6 +11,11 @@ struct http_response_header_state_access final {
         return headers.known_header_bits_;
     }
 
+    [[nodiscard]] static const http_response_header* known_header(
+        const http_response_headers& headers, std::uint32_t bit) noexcept {
+        return headers.find_header_for_read({}, bit);
+    }
+
     [[nodiscard]] static std::string_view known_header_value(
         const http_response_headers& headers, std::uint32_t bit) noexcept {
         return headers.known_header_value(bit);

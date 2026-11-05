@@ -7,18 +7,18 @@
 
 namespace ruvia::detail {
 
-task<void> execute_redis_ping(redis_command_executor executor, std::pmr::vector<std::pmr::string> args,
+task<void> execute_redis_ping(redis_command_executor executor, redis_owned_command command,
     std::pmr::memory_resource* resource) {
-    auto reply = co_await executor.execute(std::move(args), resource);
+    auto reply = co_await executor.execute(std::move(command), resource);
     if (!http_ascii_equals_ignore_case(redis_value_string(reply), "PONG")) {
         throw redis_error(redis_error::code_type::command_error, "unexpected redis ping reply");
     }
 }
 
 task<redis_set_result> execute_redis_set(redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, redis_set_options options,
+    redis_owned_command command, redis_set_options options,
     std::pmr::memory_resource* resource) {
-    auto reply = co_await executor.execute(std::move(args), resource);
+    auto reply = co_await executor.execute(std::move(command), resource);
     throw_if_redis_error(reply);
     const auto returns_previous = redis_set_returns_previous(options.previous_value_);
     if (reply.null()) {
@@ -40,28 +40,28 @@ task<redis_set_result> execute_redis_set(redis_command_executor executor,
 }
 
 task<bool> execute_redis_integer_bool(redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto reply = co_await executor.execute(std::move(args), resource);
+    redis_owned_command command, std::pmr::memory_resource* resource) {
+    auto reply = co_await executor.execute(std::move(command), resource);
     co_return redis_value_integer_bool(reply);
 }
 
 task<std::pmr::vector<redis_key_value>> execute_redis_key_value_array(redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::string_view context_value,
+    redis_owned_command command, std::string_view context_value,
     std::pmr::memory_resource* resource) {
-    auto value = co_await executor.execute(std::move(args), resource);
+    auto value = co_await executor.execute(std::move(command), resource);
     co_return parse_redis_key_value_array(std::move(value), resource, context_value);
 }
 
 task<std::pmr::vector<redis_scored_value>> execute_redis_scored_array(redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto value = co_await executor.execute(std::move(args), resource);
+    redis_owned_command command, std::pmr::memory_resource* resource) {
+    auto value = co_await executor.execute(std::move(command), resource);
     co_return parse_redis_scored_array(std::move(value), resource);
 }
 
 task<std::optional<double>> execute_redis_optional_double(redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::string_view context_value,
+    redis_owned_command command, std::string_view context_value,
     std::pmr::memory_resource* resource) {
-    auto reply = co_await executor.execute(std::move(args), resource);
+    auto reply = co_await executor.execute(std::move(command), resource);
     throw_if_redis_error(reply);
     if (reply.null()) {
         co_return std::nullopt;
