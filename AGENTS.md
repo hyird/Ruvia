@@ -1,32 +1,47 @@
 # AGENTS.md
 
 默认中文回复。文档用中文，路径、命令、标识符保留原文。
-本文件只记录规范、边界与核心设计，不作记事本；仅在全局规范、架构边界或核心设计变化时更新，不记录单点修复与临时验证过程。`README.md` 是使用入口，遵守下文 README 规范；代码风格、命名、头文件分组与异常处理统一遵守 `STYLE.md`。
+本文件只记录全局规范、架构边界、核心设计与通用编程范式，不作记事本；仅在全局规范、架构边界或核心设计变化时更新，不记录单点修复、局部实现符号与临时验证过程。`README.md` 是使用入口，遵守下文 README 规范；代码风格、命名、头文件分组与异常处理统一遵守 `STYLE.md`。
 规范覆盖整个项目：`ruvia-core`、`ruvia-http`、`ruvia-web`、`examples` 和 `tests`。
 
-## 工程原则与内聚解耦
+## 工程原则与架构解耦
 
 - 修改前检查 `git status`，保留用户及并行任务的已有改动，不回滚或夹带无关修改。
 - 正确性优先，其次长期可维护性与实测性能。围绕调用主链、状态不变量、失败路径和资源回收实现完整需求，采用最小、清晰、可验证的方案。
-- 新增设计只服务现有调用方和明确需求，不预设扩展点；不为单一用法引入模板参数、策略、配置项或可插拔接口。两个及以上真实用法共享的逻辑才抽象，用具体类型和明确契约表达；禁止引入无职责转发包装，也不将同步操作或非事务操作伪装成异步流程或事务。
-- 高内聚、低耦合、职责单一，模块依赖保持严格单向无环：
-  - 同一领域状态机或协议阶段的代码保持内聚，避免拆成碎片文件或跨多层胶水转发；大型状态机仅在按正交阶段（如 `connect` / `read` / `write` / `heartbeat` / `close`）拆分 `.cpp` 或 `.inl` 时共享同一内部状态头，且每个实现片段必须显式包含自身直接使用的头文件，不依赖兄弟 `.inl` 或预编译头的隐式传递。
-  - 新增同类能力统一入口，共用唯一主链、状态机和生命周期，共同逻辑只有一份权威实现，已有的公开等价形式在内部复用它；禁止通过复制代码、平行维护多套解析/校验逻辑、引入无独立语义的中间 Flag/DTO 搬运结构体、共享可变状态或薄包装掩盖重复，差异只在明确的策略或边界点处理。
-  - 服务端请求、进程内子请求（subrequest）与内存测试门面（`test_app`）复用同一套权威请求准入（admission）、路由分发与响应尾部管线（CORS、内容编码、错误恢复），不维护平行分叉路径。
-- 严格区分「编译期 → 启动期 → 请求期」三阶段职责：
-  - 编译期完成 schema、路由元信息、模板化中间件配置、概念约束、SQL 字面量占位符与类型关系校验；
-  - 启动期一次性完成配置与凭证加载校验、路由查找计划（动态路由树静态段直接以 `std::string_view` 借用不可变 `route_entry` 路径并在建树时一次性绑定参数名）、中间件链、静态目录全量索引（记录目录级 `has_sidecars` 等全局存在性特征）、outbound origin 池与监听矩阵构建，启动后封存为只读结构；
-  - 请求期热路径只做无锁查表、确定性状态机推进与零拷贝 I/O。
-- 对象生命周期与状态机不变量：
-  - 构造即就绪（Construction Is Ready）：不引入半初始化状态或无意义的二次 `init()`；构造中途失败必须通过 RAII 完整回滚已获取的上游内存、描述符或注册项，不暴露半成品对象。
-  - 宿主固定与值移动分离：持有地址稳定运行态、在途 I/O、侵入式节点或被回调/协程借用 `this` 的宿主类型必须显式 `= delete` 拷贝与移动；纯所有权转移的值或冷任务类型支持 `noexcept` 移动，移动后源对象保持可安全析构的确定性空状态，且移动操作须防范源与目标存储自包含重叠。
-  - `const` 查询纯洁性、失败原子性与精简状态：移除未被状态机真正依赖或与外层队列重复的布尔标志与无意义的单布尔位域；当只读配置与 worker 局部运行态（如 SNI 主机名与 TLS 上下文）等长一一对应时，直接按平行数组同下标索引，禁止额外维护冗余的 `(view, ptr)` 查找向量；`const` 成员函数绝不修改可观测状态或夹带副作用；输入因背压、超限或格式错误被拒绝，或多步字符串/语句构建器（如 `procedure_append_guard`）中途抛出异常时，必须保持强异常安全原子性（零消费或自动 `resize` 截断回滚至初始长度，不破坏已排队输出与宿主不变量）。
-- 作用域策略遵循“只紧不松（Narrower Scope May Only Tighten）”与独立叠加原则：更窄作用域的限制（如路由级 `body_limit`）只能收紧全局上限；多层声明的限流规则（全局、控制器、路由及同路由多重规则）各自独立计数并同时生效，不互相覆盖或混用计数器。
+- 按需设计（YAGNI）：只服务现有调用方和明确需求，不预设扩展点；不为单一用法引入模板参数、策略、配置项或可插拔接口。两个及以上真实用法共享的逻辑才抽象，用具体类型和明确契约表达；禁止引入无职责转发包装，也不将同步操作或非事务操作伪装成异步流程或事务。
+- 高内聚、低耦合、单向无环依赖：
+  - 同一领域状态机或协议阶段的代码保持内聚，避免拆成碎片文件或跨多层胶水转发；大型状态机仅在按正交职责（如 `connect` / `read` / `write` / `heartbeat` / `close`）拆分 `.cpp` 或 `.inl` 时共享同一内部状态头，且每个实现片段必须显式包含自身直接依赖的头文件，不依赖兄弟 `.inl` 或预编译头的隐式传递。
+  - 同类能力统一入口，共用唯一主链、状态机和生命周期，共同逻辑只有一份权威实现，已有公开等价形式在内部复用它；严禁复制代码、平行维护多套解析/校验逻辑、引入无独立语义的中间 DTO/Flag 搬运结构体或薄包装掩盖重复，差异只在明确的策略边界处理。
+  - 服务端生产请求、进程内子请求与内存测试门面（`test_app`）复用同一套权威准入、路由分发与响应尾部管线（CORS、内容编码、错误恢复），不维护分叉路径。
+- 组合优于继承。继承仅用于标准库与 Asio 契约：异常层次、`std::pmr::memory_resource`、`std::error_category`、Asio service、实际使用的 `std::enable_shared_from_this` 和 `std::integral_constant` 谓词。框架扩展使用概念（`concept`）和宏。
 - 避免深层 lambda 嵌套：lambda 只承载短小局部回调，复杂控制流和多阶段异步流程提取为具名函数或协程，明确捕获范围、所有权与生命周期。
-- 同一阶段内可安全复用的计算、解析与查询结果只获取一次（入口处一次性完成时钟/整数边界归一化并向下游传递受检类型；内部数值比较直接构造归一化视图如 `format_clock_decimal`，禁止“先格式化为文本再重新扫描解析”的回路；词法扫描阶段一次性完成 UTF-8 与转义校验并标记 `literal`/`escaped`，后续解码阶段对 `literal` 直接拷贝、对 `escaped` 按转义点分段解码而不二次扫描验证；JSON 对象/数组与请求首部准备采用按需单遍流式消费或按上界单遍写入，禁止“先预扫描计数/缓冲切片再二次遍历”；路由查找通过 `excluded_mask`/`initial_mask` 位掩码剪枝复用已探测方法结果，避免 `405`/`OPTIONS` 重复探测）；不跨状态变化、一致性边界或对象生命周期盲目缓存，也不为减少调用破坏重试和取消语义。支持局部变更的资源，在不破坏原子性、一致性和失效语义的前提下，优先只更新受影响目标，保留仍有效的运行态与缓存。
-- 组合优于继承。继承仅用于标准库与 Asio 契约：异常层次、`std::pmr::memory_resource`、`std::error_category`、Asio service、实际使用的 `std::enable_shared_from_this` 和 `std::integral_constant` 谓词。框架扩展用概念和宏。
-- 公开 API（各库 `include/` 下非 `detail` 的类型、函数、宏和配置项）已冻结，服务仓库外使用方，必须能调用本库提供的全部能力：`src` 与 `detail` 只承载实现细节，不承载只能在库内使用的能力。不得删除、收窄、改名、合并或改变现有公开 API 签名与契约。
-- 后续即便要求破坏兼容性的重构或设计调整，也必须在不改变公开 API 的前提下仅针对内部实现（`src` 与 `detail`）进行；内部改造一次到位，彻底清理旧内部实现、无职责转发、死代码或临时 TODO。
+- 公开 API 冻结契约：各库 `include/` 下非 `detail` 的类型、函数、宏和配置项已冻结，服务仓库外使用方，必须能调用本库提供的全部能力；`src` 与 `detail` 只承载实现细节，不承载只能在库内使用的能力。不得删除、收窄、改名、合并或改变现有公开 API 签名与契约。内部重构或设计演进必须在保持公开 API 不变的前提下一次到位，彻底清理旧内部实现、无职责转发、死代码或临时 TODO。
+
+## 核心编程范式（Programming Paradigms）
+
+### 1. 类型驱动不变量与编译期防线
+
+- **强类型状态机（Make Illegal States Unrepresentable）**：使用互斥的 `std::variant` 表达状态机阶段与操作结果，使每个状态分支仅持有该阶段合法的字段；移除与队列/状态机重复的冗余布尔标志或与输出参数耦合的动作枚举。
+- **编译期借用边界与悬垂阻断**：
+  - 跨当前表达式留存的零拷贝文本或连续序列视图（配置项、首部、Cookie、路由/查询选项、WebSocket/隧道参数、字节转换 `as_bytes` / `as_chars`），必须通过 `borrowed_text`、`borrowed_span` 等受检类型在编译期拒绝绑定右值临时拥有型容器（`std::string&&`、`std::vector&&`、`std::initializer_list` 等）；返回内部存储借用的访问器必须标注 `RUVIA_LIFETIMEBOUND`；
+  - 被异步操作、子协程、定时器或取消注册借用自身地址的宿主（如 `task_scope`、`slot_pool`、`worker_memory`、`request_memory`、`session`、`env`），其构造参数与成员操作必须使用左值引用限定（`&` / `const&`）并显式 `= delete` 右值重载，从编译期阻断临时宿主悬垂；
+  - 函数包装器（`move_only_function`）的引用返回签名必须要求目标可调用对象直接返回兼容引用，严禁从按值返回或隐式转换产生的临时量绑定悬垂引用。
+- **原始整数域受检转换**：端口、状态码、长度、索引、表容量、字节配额（`protocol_byte_limit`）、批量计数、优先级及超时参数，必须在窄化或转为无符号类型前的**原始整数域**完成符号与范围校验（如 `std::in_range`），严禁隐式转换导致负数缠绕为极大无符号数或高位截断改变目标语义；时长与大小参与运算时统一使用饱和算术或减法分段比较（`limit - used < delta`）。
+- **三阶段职责前移（编译期 → 启动期 → 请求期）**：
+  - 编译期：通过 `consteval` / `constexpr`、概念约束与编译期 Schema 完成静态查表（如 Huffman/语法转移表）、SQL 字面量方言与占位符核验、模型字段元数据及类型资源特征（是否含 PMR 分配器）推导；
+  - 启动期：一次性完成配置与证书校验、不可变路由查找计划、中间件链、静态目录全量内存索引与连接池槽位预分配，启动后封存为只读结构；当只读配置与 worker 局部运行态等长一一对应时，直接按平行数组同下标寻址，不维护冗余映射表；
+  - 请求热路径：只做无锁查表、确定性状态机推进与零拷贝 I/O。
+
+### 2. 所有权、自别名安全与事务化变更
+
+- **构造即就绪（Construction Is Ready）**：不引入半初始化状态或二次 `init()`；构造中途失败必须通过 RAII 完整回滚已获取的上游内存、描述符或注册项，绝不暴露半成品对象。
+- **宿主固定与值移动分离**：持有地址稳定运行态、在途 I/O、侵入式节点或被回调/协程借用 `this` 的宿主类型必须显式 `= delete` 拷贝与移动；纯所有权转移的值或未启动的冷任务类型支持 `noexcept` 移动，移动后源对象恢复为确定性可安全析构的空状态，且自包含结构的移动赋值须检测源与目标存储重叠。
+- **自别名与内存重叠（Self-Aliasing）防护**：任何可能引起容器扩容重分配、前缀压缩或释放旧存储的写入/替换/删除操作，若输入参数视图可能借用目标容器自身存储（如动态表索引名自引用、首部原地更新、按键名删除首部、Base64/URI/报文原地编码），必须先在独立缓冲或栈快照中完成新内容构造，再发布替换并释放旧存储。
+- **强异常安全与事务化提交（Prepare-Then-Commit）**：
+  - `const` 成员函数绝不修改可观测状态或夹带副作用；
+  - 多步状态变更或复合帧/语句追加必须具备事务原子性：要么先在分离的候选副本上完成校验与计算再一次性替换，要么在修改活跃状态前一次性预留（`reserve`）全部所需的输出缓冲、分段描述符与事件槽位（记录 `checkpoint` 或由局部守卫保存初始长度），待所有可能抛异常的步骤完成后再执行 `noexcept` 状态提交；若中途因背压、超限、格式错误或分配失败中止，必须完整回滚至检查点或初始长度，保证操作可安全重试且不产生半截孤儿数据。
+- **单遍解析与归一化传递（Parse, Don't Validate Twice）**：同一阶段内可安全复用的计算、解析与查询结果只获取一次；在边界入口一次性完成时钟/整数归一化与词法/UTF-8/转义扫描并向下游传递受检类型或标记（未转义切片直接拷贝/借用，仅转义切片分段解码），严禁“先预扫描计数再二次遍历”或“先格式化为文本再重新解析”的回路；不跨状态变化、一致性边界或对象生命周期盲目缓存，也不为减少调用破坏重试和取消语义。
+- **作用域策略“只紧不松”与独立叠加**：更窄作用域的配额或超时（如路由级 `body_limit`、`with_options` 派生超时）只能收紧（tighten）外层已有上限；多层级声明的策略（如全局、控制器、路由及同路由多重限流规则）各自独立计数并同时生效，不互相覆盖。
 
 ## 分层与架构边界
 
@@ -36,156 +51,98 @@
 |`ruvia-http`|`ruvia::http`|独立 sans-I/O 协议引擎：HTTP/1.0、HTTP/1.1、HTTP/2、HPACK、内容编码（zlib/Brotli/zstd）、multipart、Range、条件请求、Cookie、WebSocket 握手/帧协议与 Capsule 数据报；不依赖 `core`、Asio、socket、定时器、OpenSSL 或 mimalloc|
 |`ruvia-web`|`ruvia::web`|应用框架与 I/O 驱动：路由、中间件、Model/ORM、静态文件、限流、Session、TLS/crypto（OpenSSL 3.0+）、服务端/出站客户端网络驱动、HTTP/WebSocket 隧道及数据库/Redis/JWT 接入；依赖 `ruvia::core` + `ruvia::http`，消费 HTTP 层协议计划驱动 I/O，不复制协议判断或将 Web 语义下沉|
 
-- 使用 C++20。源码只放在三个库、`examples` 和 `tests`。
-- 各库自带 `CMakeLists.txt`、`include` 和 `src`，只拥有自己的源码、预编译头（`src/pch.h`）和公开命名根。`src` 最多一层职责目录；`ruvia-core/src` 保持扁平。
+- 使用 C++20。源码只放在三个库、`examples` 和 `tests`。各库自带 `CMakeLists.txt`、`include`、`src` 和预编译头（`src/pch.h`）；`src` 最多一层职责目录，`ruvia-core/src` 保持扁平。
 - 跨库只用非 `detail` 公开 API，严禁穿透内部头、跨组件 `detail` 头或相对物理路径。需要跨库共享的通用辅助能力由所属下层库公开提供。
-- 公开头文件保持最小包含闭包（Include Firewall）：核心入口头（如 `context.h`）对独立子系统句柄优先使用前置声明，由实际消费该能力的编译单元按需包含定义头，避免全量头文件耦合传染。
-- sans-I/O 与网络驱动边界：
-  - `ruvia-http` 只产出确定性的解析结果、协议计划（表示响应计划、首部校验、重定向改写计划、帧编码与流控预算消费）和状态机转换，不持有 socket、定时器、协程挂起或执行系统文件 I/O（文件响应体仅通过不透明的 `http_response_file_identity` 与 `uintptr_t + release` 函数指针封装的 `http_response_file_handle` 传递已打开原生句柄）；
-  - `ruvia-web` 严格消费 `ruvia-http` 的协议计划驱动读写、超时、重连与跨源策略，直接复用构帧时已打开的同一原生文件句柄发送文件响应（避免二次解析路径及 TOCTOU 替换风险；内联小文件读取完毕后在写出前二次校验 `validate_native_file` 以防同尺寸原地改写将新字节与旧 `ETag` 配对，Windows `TransmitFile` 首帧借 `TRANSMIT_FILE_BUFFERS` 合并响应头并按 256 KiB IOCP 异步分片刷新 `write_timeout`；经 `blocking_pool` 卸载的文件预读缓冲强制使用 `process_resource()`，且 Linux 下经 `F_DUPFD_CLOEXEC` 复制独立 `fd` 随卸载状态转移以防取消后响应先析构导致句柄悬垂），不在 Web 层二次解析协议语法或绕过协议状态机拼接报文。
-- 构建、链接与安装闭包：
-  - 根 `CMakeLists.txt` 统一管理第三方依赖查找与 `ruviaConfig.cmake` 的 `find_dependency` 导出，确保构建期与安装消费期依赖完全一致。
-  - 非 Windows 下 `ruvia-core` 以 `WHOLE_ARCHIVE` 链接启用 `override` 的静态 `mimalloc-static`（消费方不得混用其他全局分配器替换）；Windows 统一使用 MSVC 静态运行时（`MultiThreaded$<$<CONFIG:Debug>:Debug>`）与普通 mimalloc。
+- 公开头文件保持最小包含闭包（Include Firewall）：核心入口头（如 `context.h`）对独立子系统句柄优先使用前置声明，由实际消费该能力的编译单元按需包含定义头。
+- **sans-I/O 协议层与网络驱动解耦范式**：
+  - `ruvia-http` 只产出确定性的解析结果、协议计划（表示响应计划、首部校验、重定向改写计划、帧编码与流控预算消费）和状态机转换，不持有 socket、定时器、协程挂起或执行系统文件 I/O（文件响应体仅通过不透明的文件身份快照与类型擦除原生句柄传递）；
+  - `ruvia-web` 严格消费 `ruvia-http` 的协议计划驱动读写、超时、重连与跨源策略，直接复用构帧时已打开的同一原生文件句柄发送文件响应（避免二次解析路径及 TOCTOU 替换风险），不在 Web 层二次解析协议语法或绕过协议状态机拼接报文。
+- **构建、链接与安装闭包**：
+  - 根 `CMakeLists.txt` 统一管理第三方依赖查找与 `ruviaConfig.cmake` 的 `find_dependency` 导出，确保构建期与安装消费期依赖一致；
+  - 非 Windows 下 `ruvia-core` 以 `WHOLE_ARCHIVE` 链接启用 `override` 的静态 `mimalloc-static`（消费方不得混用其他全局分配器替换）；Windows 统一使用 MSVC 静态运行时（`MultiThreaded$<$<CONFIG:Debug>:Debug>`）与普通 mimalloc；
   - 可选特性（`MARIADB`、`POSTGRESQL`、`REDIS`、`JWT`）关闭时，同步剔除对应实现源码与安装头文件目录（`db/`、`redis/`、`auth/`）；安装只包含启用特性的公开头及其真实传递引用的同组件 `detail` 头文件闭包。
 
-## 安全、类型防线与生产鲁棒性
+## 性能与分级内存治理范式
 
-- 歧义即拒绝（Fail Closed）：消息边界、目标路由、编码格式或访问权限有歧义时一律拒绝，不猜测或容错放行。无根路径、点段逃逸、空字节、非法百分比编码及非 `http(s)` 的 absolute-form 目标按安全边界直接拒绝；连接无法承载目标 origin（`decide_http_target_origin`：拒绝明文连接上的 `https` 目标、`IPvFuture` 及尾随点 IPv4 字面量如 `"127.0.0.1."`，并对 `reg-name` 中百分比编码的 `unreserved` 字节在栈上解码归一化后核对 TLS 证书）时按 RFC 9110 §7.4 返回 421。
-- 编译期借用边界、左值限定与悬垂防护：
-  - 跨当前表达式留存的零拷贝文本或连续序列视图（如配置项、消息首部、Cookie 属性、路由/查询选项、WebSocket/隧道参数、字节转换 `as_bytes` / `as_chars`），必须通过 `borrowed_text`、`borrowed_span` 等受检视图类型在编译期拒绝绑定临时拥有型容器（rvalue `std::string`、`std::vector`、`std::initializer_list` 等）；返回对象内部存储借用的访问器标注 `RUVIA_LIFETIMEBOUND`；`move_only_function` 的引用返回签名严格要求目标直接返回兼容引用，禁止从按值返回或隐式转换临时量生成悬垂引用；
-  - 被异步操作、子协程节点、定时器或取消注册借用自身地址的宿主（如 `task_scope`、`slot_pool`、`worker_memory`、`request_memory`、`session`、`env`），其构造参数（如拒绝右值 `worker_handle&&`）与成员操作（如 `spawn`、`join`、`allocator`、`resource`、`fork`、`data`、`get`）必须使用左值引用限定（`&` / `const&`）并显式 `= delete` 右值重载，从编译期阻断临时宿主悬垂。
-- 原始整数域受检转换、时钟单调性与防溢出：
-  - 公开辅助函数与边界入口对任意输入安全，检查边界、溢出及输入输出别名（如 `http_base64_encode` 通过计算正向/反向分组分界点支持任意偏移内存重叠与原地编码，解码严格区分必选填充与禁止填充）；数字文本解析（`parse_integer`）严格拒绝空白、前导 `+` 与尾随字符，且格式错误优先于溢出报告；
-  - 端口、状态码、`Content-Length`、HPACK 索引与动态表容量、协议字节预算（`protocol_byte_limit`）、查询行数、Redis 批量计数、WebSocket 关闭码、HTTP 优先级 urgency 及超时/容量参数，必须在窄化或转为无符号类型前的**原始整数域**完成符号与范围校验（如 `std::in_range`），严禁隐式转换导致负数缠绕为超大无符号上限或高位截断改变目标语义；
-  - 可配置时长和字节大小参与运算时统一使用饱和算术或减法分段比较（`worker_timer_saturating_duration_cast` 保持整数全因子精确换算，浮点转换将 `NaN` 映射为 `0`、无穷大饱和至边界）；所有超时、限流窗口、连接扫描与耗时统计统一使用单调时钟（`std::chrono::steady_clock`），日历时钟仅用于协议时间戳（HTTP Date、Cookie、JWT），防止系统时钟回拨导致超时失效。
-- 配置、会话、静态文件与 TLS 安全：
-  - 配置或持久化数据损坏必须显式报错，不得用默认值静默掩盖；类型化环境变量查找（`env::get<T>`）严格区分变量未设置（返回 `std::nullopt`，允许 `.value_or()` 回退）与已设置但格式非法（立即抛出 `std::invalid_argument`，防止拼写错误被默认值静默掩盖）。
-  - 缓存键或命名空间须完整区分影响结果或访问权限的资源、表示（如编码变体）及身份维度；允许调用方自定义时，公开契约须说明隔离与失效责任。
-  - 限流对客户端地址做规范化归并（无作用域 IPv6 按 `/64` 聚合、IPv4-mapped IPv6 归并至对应 IPv4、作用域 IPv6 包含数值 scope），防止同网段地址变形绕过配额；开放寻址线性探测遇到已过期槽位时仅记录首个 `reclaimable` 候选并继续探测至空槽或命中目标 key，严禁在过期槽处提前终止探测而遮蔽后续同 key 活跃槽位。
-  - 服务端 `session` 仅接受定长合法格式 ID，每次非空写入在响应头 commit 时自动轮换 ID 防会话固定攻击（连续调用 `clear()` 保持首次捕获的 `old_id_` 不被清空，且 `clear()` 后再 `set()` 自动升级为 `session_rotate(old_id_, data)` 以防旧服务端会话残留为孤儿数据），替换已过期或被吊销会话返回 409；一旦响应头（含流式、WebSocket 或 `CONNECT` 握手头）开始发送，任何会话写操作立即抛出 `std::logic_error`。
-  - 静态文件服务在构造期归一化根目录并建立不可变内存索引（支持按预算常驻高频小文件），默认拒绝隐藏路径段（`.` 开头或含 `/.`）、符号链接越界与非普通文件；`context::static_file` 接收已由路由解码的相对路径时严禁二次百分比解码（防止 `"%252E%252E"` 被二次解码为逃过路由与前缀中间件检查的 `".."`）并直接按字节精确查表；非常驻文件在打开读取时校验底层身份（device、inode、mtime），磁盘文件被修改时严格 fail closed 报错拒绝以防按旧长度发送截断/错位内容；后台刷新在 worker 外全量构建并在请求间隙原子切换，构建中途任一文件系统操作失败则完整保留旧快照。
-  - 代理转发首部（`Forwarded` / `X-Forwarded-*`）仅在可信代理（`trusted_proxy_config`）下采信（同时存在时 `X-Forwarded-*` 优先于 `Forwarded`，合并同名多行并从右向左逆序定位首个不可信跳作为客户端边界，且仅采信该边界跳上的 `proto` 以防客户端在左侧注入伪造 IP 或 HTTPS）；Auto-HTTPS 308 重定向保留原始 `target` 空查询 `?` 区分并强制附加 `Cache-Control: private`，防止共享缓存将伪造 `Host` 的重定向投毒给其他客户端；CORS 校验遇到畸形或重复/多值 `Origin` 与 `Access-Control-Request-Method` 时绝不生成跨源授权首部（严禁从多值 `Origin` 中挑选其一放行），动态跨源响应自动追加对应 `Vary` 令牌防缓存污染；Cookie 签名、JWT 验证等安全凭证对比使用常量时间比较（签名 Cookie 前置 4B 大端 `name_len` 拼装 `lenPrefix || name || value` 防跨名值边界碰撞，$\le 512\text{B}$ 栈内联完成 HMAC-SHA256 零堆分配），JWT 强制校验满足 RFC 7518 的 HMAC 最小密钥字节长度并默认要求 `exp` 过期声明。
-  - TLS 安全基线（RFC 9846 / RFC 9525）：
-    - 凭证预检与非交互加载：证书、私钥与 CA 在注册时先完成全量配置与 SNI 主机名大小写不敏感去重预检，再经临时 `scratch` `SSL_CTX` 一次性读取磁盘文件并提取 `X509*`/`EVP_PKEY*` 引用计数句柄供各 worker 内存级安装（`tls_password_scope` 强制将 `PEM_def_callback` 替换为非交互式内存回调以防无口令加密私钥阻塞终端 stdin，私钥口令副本在返回前主动擦除 cleanse）；
-    - 协议、主机名与 mTLS 校验：仅协商 TLS 1.2（强制 ECDHE + AEAD，拒绝重协商）或 TLS 1.3；证书主机名严格匹配 `subjectAltName`（`DNS-ID` 最左完整标签通配、`IP` 精确匹配，禁用 `Common Name`；数据库驱动 TLS 强制覆盖 `verify_cb` 在握手内执行 `NEVER_CHECK_SUBJECT | NO_PARTIAL_WILDCARDS` 校验，禁止驱动默认延迟/容错回调）；服务端 mTLS 启用 `verify_peer` 时强制绑定非空 `session_id_context`（防止会话恢复触发致命握手错误），客户端证书提取严格区分“无证书”与 RFC 5280 空 Subject DN，并经内存 `BIO` 按 `XN_FLAG_RFC2253` 无截断渲染（禁用定长 `X509_NAME_oneline`）；
-    - 记录数上限与 Ticket 密钥轮换：连接发出的 TLS 记录总数受 `max_outgoing_records_` 硬上限约束（`KeyUpdate` 不重置计数，跨 `CONNECT` 写 `BIO` 替换持续绑定同一计数器，达限或状态分配失败即经 `deny_output` 阻断密文写出以符合 RFC 9846 §5.5）；Ticket 密钥定期轮换（仅当 `epoch == epoch_ + 1` 相邻周期时才将旧密钥保留为 `previous_` 供解密，跨多周期全部重置，且析构时经 `OPENSSL_cleanse` 擦除 `name`/`hmac_key`/`aes_key`），跨 worker 会话恢复严格绑定原 `server_name`。
-- 跨平台 UTF-8 与输出脱敏：对外文本及传递给 OpenSSL / 数据库驱动 / 文件响应的路径统一使用合法 UTF-8（文本文件路径拒绝内嵌 `\0`，Windows 下经 `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, ...)` 严格宽化，严禁经 ANSI 代码页窄化或将非法字节替换为 `?`）；Windows 下 `std::system_category()` 与 `asio::system_category()` 错误消息必须经 `FormatMessageW` 转为 UTF-8（`error_code_text` / `system_error_text`），防止本地 ANSI 编码污染 JSON 与日志；受限长度文本或校验诊断按字节上限截断时必须回退半个多字节序列以保持 UTF-8 码点完整。对外错误响应不回显内部异常、SQL、宿主路径或上游细节，服务端脱敏后记录诊断原因；日志、代码与制品不得包含真实凭据。
-- 故障隔离、不变量恢复与兜底限流汇聚：对端正常断开、自身停机或排空引起的中止属于正常结束，不按故障上报或计数；真实异常必须上报，不得静默吞掉。请求入站传输自身的 I/O 失败（如发送 `100 Continue` 或临时响应头时对端已断开）直接穿透回会话层终止连接，绝不转入应用错误处理器伪造无法送达的响应；路由异常捕获边界通过单次 `rethrow_exception` 一次性提取错误码与响应头元数据（如 `Accept-Encoding`、限流 `Retry-After`；入站缓冲预算耗尽 `inbound_buffer_limit_error` 与阻塞池拒绝 `blocking_operation_rejected` 按容量过载统一映射为 `503 Service Unavailable`，未知异常绝不向客户端回显 `what()` 且在未配置应用 `on_error` 处理器时强制转发至 `report_unhandled_failure`）。无调用方重抛的后台/回调异常统一路由至 `report_unhandled_failure`（内置速率限制并将被抑制计数随下一条放行诊断一并输出，通过 `equivalent_failures` 将多单元观察到的同一根因合并为单行汇报；生命周期 owner 重抛其一时仅上报未重抛的其余异常）。单次请求、单个 HTTP/2 流、单条连接或单次后端调用的超时、取消与协议错误严格隔离在当前作用域内回收，不得破坏 worker 状态机或升级为进程故障；可恢复异常捕获边界保留的对象必须维持完整不变量。
+- **零开销热路径与同步快路径优先**：
+  - 请求热路径不新增锁、原子争用、类型擦除、共享所有权或无用拷贝（连接/会话级不变的服务绑定在连接构造期一次性预构建并跨流复用，上下文与服务句柄优先按 `const&` 传递并就地绑定）；显式阻塞卸载是共享所有权的唯一例外；
+  - 能同步完成的步骤（缓存/静态索引命中、无伴随文件时的零路径拼接短路、无阻塞解析、就绪连接槽获取、无需阻塞编码或异步错误恢复的响应准备）直接同步完成，不创建可避免的协程帧或中间缓冲。
+- **侵入式零分配调度与按需惰性分配**：worker 内的连接超时跟踪、周期扫描节点、槽位等待队列、异步通知等待与取消注册优先使用内嵌于连接或协程栈帧的地址稳定侵入式节点与内联单槽分配器；取消状态与非必选元数据仅在首次被观察或启用时按需分配，未观察路径零开销。
+- **栈上小缓冲优化（SBO）与按需拥有化（Copy-on-Unfold/Unescape）**：
+  - 高频有界短数据与回调（如满足尺寸/对齐且 `nothrow_move_constructible` 的可调用目标、段解码、散集帧前后缀、流式哈希摘要、路径扩展名归一化、短重定向/属性拼装、$\le 16$ 项的表达式/首部视图切片）优先使用栈内联定长缓冲，小输入零堆分配单次完成，仅超限时溢出至 PMR 存储；多条目只读缓存采用共享紧凑连续字节池配 `(offset, size)` 索引，避免稀疏二维数组浪费缓存行；
+  - 协议解析对未折叠、未转义的原始切片直接以 `std::string_view` 借用底层缓冲，仅对发生折叠展开或转义解码的字段分配 PMR 存储；响应首部表优先匹配编译期内置静态首部或内存中紧邻连续的名值稳定视图实现零分配，覆写拥有型首部时若新旧名值总长相等且无重叠则直接原位覆写。
+- **显式分级 PMR 内存模型（严禁隐式 `thread_local` 全局池）**：
+  - 优先值所有权与 RAII。借用视图不延长 owner 寿命，零拷贝不得破坏借用有效期；分配器覆盖对象寿命，结果持有存储直到析构。公开启动配置不要求用户提供 PMR；
+  - 进程级线程安全 `process_resource()`（mimalloc 上游，不替换全局默认 PMR）：供跨线程共享状态（如 `stop_state`、跨线程调度器、卸载预读缓冲）及 `worker_memory` 上游使用；`construct_pmr_object` 在构造抛异常时立即按原尺寸/对齐归还内存；原生 C 编解码库内部分配统一前置对齐元数据头路由至当前 PMR，并在 `noexcept` C 回调边界捕获重抛首个分配异常（防将内存预算耗尽误报为格式损坏）；
+  - Worker 级无锁 `worker_memory`：小对象走常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的精确尺寸块缓存，超预算立即归还上游；长生命周期连接状态、结果、池化数据、有界编解码器池及无请求 arena 的后台任务（`web_worker_context`）使用可回收 `pool()`（后台任务存储须在任务作用域结束前于本 worker 销毁）；
+  - 请求与握手级 `request_memory`（`monotonic_buffer_resource` arena）：优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；
+  - 拥有化、重绑定与挂起前释放：异步入口返回前完成输入拥有化和资源归一化；调用方在构造冷任务后、`co_await` 进入 I/O 挂起前应立即释放不再使用的临时源容器；拥有型 PMR 集合跨不同 `memory_resource` 移动赋值时须先在目标资源中递归重绑定全部元素后再交换（对编译期判定不含 PMR 资源的纯标量直接短路）。
+- **水位线摊销保留、几何扩容与防预分配 DoS**：
+  - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；流、连接或读取器内建暂存缓冲优先原位复用，操作完成后若容量超过保留水位线（或超过本次负载的摊销倍数）则主动归还大块存储，否则仅清空内容保留小容量；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle` 归还缓存大块与线程协程帧缓存；
+  - 流式缓冲（如 `http_io_buffer`、HPACK 动态表、HTTP/2 输出分段表）为读取扩容时不零初始化待覆写字节，`consume()` 仅推进游标保持既有借用视图有效，仅在已消费/淘汰前缀足以覆盖存活后缀（且不在观察者回调内）时才一次性前移压缩（$O(1)$ 摊销搬移），否则按几何倍数扩容；多命令/多帧批量追加先做受检字节求和并依赖几何扩容保持摊销 $O(\text{total})$，严禁按块重复搬移或逐次精确 `reserve(size + delta)` 导致 $O(N^2)$ 重分配；
+  - 外部输入声明的长度或计数（如 `Content-Length`、缓存序列化行数/列数）在分配前必须先受实际剩余可读字节或初始窗口底线（如 `64 KiB`）约束，随后按实际到达数据几何翻倍扩容，严禁采信未经证实的声明长度一次性预分配巨额内存。
 
-## 协议实现与审查
+## 并发、结构化协程与连接池韧性范式
 
-- HTTP/1.0、HTTP/1.1、HTTP/2、TLS、WebSocket、HTTP 隧道（含 CONNECT-UDP / Capsule）、缓存、条件请求、范围请求、压缩、DNS 等协议及其扩展的实现必须符合适用的现行 RFC，以正文、适用更新及已验证勘误为准。HTTP 参照 RFC 9110/9111/9112/9113，TLS 1.3 参照 [RFC 9846](https://www.rfc-editor.org/info/rfc9846/)（取代 RFC 8446）。
-- 区分 MUST、SHOULD、MAY 及发送方、接收方、中间代理的义务，不把发送方的 MUST NOT 自动变成接收方的拒绝规则。代应用构建请求的组件独占协议托管首部（`Host`、`Content-Length`、`Transfer-Encoding`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`），拒绝应用层直接传入这些首部或首尾含 SP/HTAB 的字段值；出站首部显式区分本端生成（`generated`）与代理转发（`forwarded`，RFC 9110 §2.2：保留收到的 `Content-Type`、`Origin` 与 CORS 请求值并容忍 `Content-Encoding` / `Upgrade` 中的合法空成员，但绝不放宽字段字节安全、单例首部计数或写入器所有权，且按 §7.6.1 剥离/重建逐跳首部）。按规范忽略、容忍或规范化输入；未知但合法的扩展不等于格式错误，不支持的能力按协议处理。
-- 涉及协议义务的代码注释与变更说明应标注具体适用的 RFC 条款；内部约束不得冒充 RFC 要求，偏离 `SHOULD` 须说明理由。
-- 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
-- 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
-- HTTP/1 与通用表示语义：
-  - 重点核对 `Host` 与请求目标（`http_authority_view` 拒绝 `userinfo` 并严格区分端口缺省、空端口与显式数值端口；默认端口未知即 `0` 时，缺省/空端口绝不与显式 `:0` 相等，非法 authority 永不相等；`absolute-form` 与 `authority-form` 按 RFC 9112 §3.2.2 / §3.3 将 `headers()` 及已知首部中的 `Host` 值强制绑定至 `target.authority_` 以消除双路由真值；请求头未闭合触及 `max_http_header_bytes` 时按方法 SP 后是否仍在 `request-target` 内精确区分 `414 URI Too Long` 与 `431`；请求行 8 字节 `"HTTP/" DIGIT "." DIGIT` 主版本非 `'1'` 返回 505，而 `HTTP/1.1..1.9` 按 RFC 9110 §6.2 统一归一化为 `http11`）、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（客户端无正文禁止发 `100-continue`；HTTP/1.0 接收方忽略 `100-continue` 但保留 `unsupported` 扩展事实；服务端同时收到 `Upgrade` 与 `100-continue` 时按 RFC 9110 §7.8 必须在 `101` 前先发送 `100 Continue`；通用 1xx 临时响应排除 `101`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接；`CONNECT` 与 `TRACE` 接受显式零长度分帧但拒绝非空正文，而 `OPTIONS` 正文要求 `Content-Type` 仅约束发送方 RFC 9110 §9.3.7，入站准入不因缺失 `Content-Type` 拒绝）；
-  - HTTP/1 客户端请求准备阶段由写入器原子决定 `Expect: 100-continue` 发射与正文门控（`continue_gated`，门控等待超时归属 I/O 运行时策略），强制要求 `Trailer` 声明首部仅限未知长度的 `chunked` 流式请求正文（RFC 9110 §6.6.2），复用单次格式化的端口与 `Content-Length` 十进制 token 完成预算计费、`CONNECT` authority 与首部写出，并将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；流式请求正文写入（`http1_request_content_writer`）通过栈内联 `prefix`、零拷贝借用 `payload` 与常量 `suffix` 生成散集（scatter-gather）分片，定长正文也必须经 `commit_finish()` 校验总长度精确匹配（上传完成前收到最终响应或传输失败必须 `abort()` 而非发隐式结束帧）；携带正文的客户端请求必须在通知外部已完整写出预备请求正文后才可接受 `101`，且 `1xx` 的 `allow_reuse` 仅允许当前交换继续等待最终响应而不提前归还连接池；HTTP/1.0 响应（含 `1xx`）一旦携带 `Transfer-Encoding` 按 RFC 9112 §6.1 判为缺陷分帧并在响应后强制关闭连接，且 `awaiting_continue` 门控期间收到最终响应在取消正文的同时按 RFC 9110 §10.1.1 强制关闭连接以防后续复用请求被服务端当作正文字节消费；客户端响应头保留原始状态码（`received_status()`）但将收到的 `600..999` 按 RFC 9110 §15 映射为 `500` 处理，`HEAD` 响应（含 `205`）的 `Content-Length` 仅作元数据而不作为接收正文长度，且非 `HEAD` 的 `205 Reset Content` 按分帧完整消费线面字节但跳过传输编码解压且绝不向上层产出正文（RFC 9110 §15.3.6）；
-  - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节（未闭合请求头与 `chunk` 大小行一旦扫到非 `CRLF` 的裸 `LF` 立即按协议错误拒绝而不等超时；HTTP/1 流水线仅在后续请求无请求正文且匹配缓冲响应路由时才允许在前序响应待写出期间继续执行 `http1_request_follows_held_output`；`stream_body_reader` 在首次 `read()` 且定长 `Content-Length` 校验未超限时才按需发送 `100 Continue`，叠加传输编码栈 `read_transfer_decoded_chunked` 时在当前借用的 `transfer_input_` 完全耗尽前绝不再次调用 `read_chunked()` 以防缓冲压缩使视图悬垂，`http_transfer_coding_stack_decoder` 按编码逆序级联且最末阶段直写调用方缓冲使单层编码零内部暂存，`gzip` 成员边界仅在分帧 EOF `finish_input()` 时确认为完成，且 `take_pipeline` 在仅有连接读缓冲尾部余量时直接零拷贝返回后缀长度，仅当含读取器超读或被动监控余量时才按序合并至 `stash`）；multipart 增量边界查找维护最多 3 字节前缀重叠（`search_cursor`）与传输填充（`padding_cursor`）双游标断点续扫（未结束 preamble 末尾的 `"\r\n-"` 暂不计入配额直至下一字节消歧；完整正文 `parse_multipart_body` 通过 `multipart_borrowed_input` 零拷贝直借输入并在首 part 后对 $\le 64\text{ KiB}$ 剩余缓冲预扫 boundary 数一次性 `reserve`）；请求体分帧计划（`http1_request_body_plan`）仅由解析器构造（`chunked` 请求体即便解码后为空也必须消费终止零块才算消费完成，未消费完请求体按 RFC 9112 §9.3 严禁复用连接）；请求连接持久性计划（`http1_request_connection_plan`）在解析时确立初始倾向，后续策略只能单向收紧为关闭（`require_close()`）；明文监听器在请求行失败时仅当首行含 HTTP 版本标识才回 `400`，对非 HTTP 流量直接静默丢弃并关闭连接；逗号列表与分号参数统一复用唯一引号感知扫描器（`http_find_unquoted_delimiter`，识别 `quoted-string` 与 `\"` 转义），但 `Cookie` 解析按 RFC 6265 严禁赋予 `"` 引号包裹语义；
-  - 首部与 `Trailer` 节字节预算（`http_field_section_budget`）统一按规范化行开销（`name + value + 4`，与收到的 OWS 长度无关；客户端 `chunked` Trailer 接收 `obs-fold` 时零分配直接按展开后单 `SP` 与去 OWS 长度计费 `folded_trailers_valid`）及终止空行计入 `max_http_header_bytes`（计费失败保持原预算不变）；请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；
-  - 响应 `Trailer` 与响应头计划：响应 `Trailer` 通过 `validate_http_response_trailers` 先行构造借用证明（`http_response_trailer_section`；`append_http1_response_trailers` 遇输入与输出重叠时经 `noinline` 栈快照隔离，免去常规路径大栈帧）；最终响应头分帧（`http1_response_head_plan`）使用互斥变体（缓冲定长、`chunked` 流、关闭定界流，关闭定界流剥离应用层 `Content-Length`/`Transfer-Encoding`），流式响应对绝不允许正文的状态码（`1xx`/`204`/`205`/`304`）拒绝 `trailer` 意图，对其他不支持 trailer 的分帧（如 HTTP/1.0 关闭定界，严禁向 HTTP/1.0 发送 `chunked`）则静默丢弃 trailer；强制标记关闭连接（`http1_mark_connection_close`）时合并重复 `Connection` 首部并保留应用声明的自定义逐跳字段名；`Allow` 与 `Content-Range` 先精确计算长度并经 `make_uninitialized_header` 直写（`allow_methods` 若检测到 `extension_methods` 借用旧 `Allow` 存储，先格式化新首部再替换释放旧字节）；响应头序列化（`append_http1_response_head`）优先保留显式 `Date`（未设置时复用秒级单缓冲 `http_date_cache`：同一 `"Date: <IMF-fixdate>\r\n"` 供 HTTP/1 整行与 HTTP/2 值切片共用，时钟不可用时按 RFC 9110 §6.6.1 省略 `Date`），对未构造表示正文且未设显式长度的 `HEAD` 响应省略 `Content-Length`（防按 RFC 9110 §8.6 谎报空 `GET` 表示，而 `205` 统一规范化为 `0`），且从同一十进制 token 测量并写出 `Content-Length`；
-  - 条件请求、缓存与内容协商：条件请求遵循 RFC 9110 §13.2.2 优先级，`If-Match` / `If-None-Match` 跨多行零分配折叠校验且要求 `"*"` 通配符独占唯一首部行（与其他行共存即判无效），重复的 `If-Modified-Since` / `If-Unmodified-Since` 首部行按无效日期条件直接忽略（不取末行生效），日期形式的 `If-Range` 要求强验证器且时间戳精确相等（文件 `mtime` 若晚于当前响应秒数则按 RFC 9110 §8.8.2.1 钳位至当前秒，且被钳位的时间戳自动取消 `If-Range` 强验证器资格 RFC 9110 §13.1.5）；HTTP-date 解析兼容 `IMF-fixdate`、RFC 850 与 `asctime`，写出严格固定为 29 字节 `IMF-fixdate`；`Cache-Control` 跨多行首部作为单一指令列表增量解析，重复的新鲜度 `delta-seconds` 指令严格保留首次出现的值（支持 `quoted-string` 内的 `quoted-pair` 原地解转义如 `"6\0"` 等价于 `60`，语法合法的超长数字饱和至 `uint64_t::max()`）；`Accept` 匹配（`http_accept_match`）跨多行零分配累积，高特异性覆盖低特异性（含 `q=0` 排除，非空参数即使在 `q` 后也增加特异性，token 模式拒绝未知参数）；`Accept-Encoding`（RFC 9110 §12.5.3）区分首部缺失（接受任意编码）与显式空值（仅接受 `identity`），`gzip` 与 `x-gzip` 共享权重，`identity` 默认权重为 `1000`（除非被 `*;q=0` 排除）；对响应应用 `Content-Encoding`（`apply_encoded_representation`）时自动将已有强 `ETag` 弱化为 `W/` 并经 `descriptor_stage` 全量预留描述符与槽位后再原子替换正文与发布首部，静态文件编码协商在应用 `context` 元数据后合并 `Vary: Accept-Encoding`（防止用户 `Vary` 覆盖导致不同压缩变体混用缓存）；流式响应压缩（`http_streaming_response_compression`）在 `prepare()` 提交响应头前校验表示首部与 `406`，但延迟至 `activate(body_plan)` 才借用编码器（对 `HEAD` 等 `body_suppressed` 响应转入 `suppressed` 态，绝不为空正文分配编码器）；`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节；`make_http_multipart_byte_range_plan` 单遍预计算总长并将前一区间尾 `\r\n` 与下一区间头合并为连续 `metadata` 段）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；
-  - Cookie 语义与 `Set-Cookie`（RFC 6265 / RFC 6265bis）：`set_cookie_plan` 在进入语法扫描前先经受检加法求完完整线面长度（防超长视图扫描与未初始化写出长度缠绕）；响应 `Set-Cookie` 按 `(name, domain [大小写不敏感], path, partitioned)` 四元存储键原地替换首个匹配行并擦除后续同键阴影行（保留其他作用域 Cookie）；强制校验 `__Secure-`（需 `Secure`）、`__Host-`（需 `Secure`、`Path=/` 且无 `Domain`）与 `SameSite=None`（需 `Secure`）；删除 Cookie 使用 Epoch 0 `Expires` 而非 `Max-Age=0`（符合 RFC 6265 §4.1.1 非零首数字约束）；400 天寿命上限仅在客户端 Cookie Jar 封顶而不限制服务端发送；`Set-Cookie` 解析（RFC 6265 §5.2）零分配借用响应头（`Domain` 忽略空值并剥离前导 `.` 使 `"Domain=."` 退化为 host-only，非 `/` 开头的 `Path` 清除已记录值回退默认路径，`Expires` 遵循 cookie-date 语法及勘误 4148 非数字后缀约束）；请求 `Cookie` 拼接（`append_cookie_request_pair` / `write_cookie_request_pair`）支持输入借用目标缓冲（扩容重定位或 $\le 256\text{B}$ 栈快照隔离重叠输入）；URI 引用修复（`percent_encode_uri_reference`）保留合法百分比三元组不二次编码（RFC 3986 §2.4），无需转义时零分配返回原视图，需转义且输入与输出缓冲存在地址别名时安全处理。
-- HTTP/2 与 HTTP 优先级：
-  - 连接前言、`SETTINGS` 事务与流控窗口：`SETTINGS` 帧必须先在分离的候选副本（`candidate_value`）上逐项校验并跟踪 `initial_window_size` 极值增量，全部合法且无流控溢出后才提交至活跃 `peer_settings_`（防尾随非法项触发 `GOAWAY` 前半途污染活跃设置）；`closed` 状态流按 RFC 9113 §5.1 忽略含 `0` 增量的任何 `WINDOW_UPDATE`；`DATA` 帧必须在预留完输出与事件容量后才扣减 `connection_receive_window_` 以保证分配异常整帧可重试，对本端已重置或对端 `GOAWAY` 流的迟到丢弃 `DATA` 帧扣减连接窗口后立即经 `release_dropped_data_connection_window` 归还，且流移除时 `flush_window_debt` 将未释放的事件信用保留在连接级窗口以防连接窗口永久萎缩；
-  - 帧约束、洪水防御与两阶段 `GOAWAY` 排空（RFC 9113 §5.4 / §6.8）：首部列表按 RFC 9113 §6.5.2 包含伪首部每字段 `+32` 字节计费；出站 `:path = "*"` 按 RFC 9113 §8.3.1 禁止生成 `:authority`；Extended `CONNECT` 当 `:protocol` 大小写不敏感匹配 `"websocket"` 时按 RFC 8441 强制规范化为全小写 `"websocket"` 上链、要求 `:scheme` 为 `http(s)` 并拒绝 `Host`/`Sec-WebSocket-Key`/`Sec-WebSocket-Accept`；客户端响应解码严禁 `101` 与带 `END_STREAM` 的 `1xx`，成功 `CONNECT` 按 RFC 9110 §9.3.6 忽略 `Content-Length` 分帧语义但保留字段供扩展检验，接收响应 `Trailer` 拒绝伪首部/连接首部/`TE` 并丢弃发送方禁止字段（绝不合并入响应头节），且 `finish_trailer_block` 预留终态事件槽并校验 `terminal_length_valid()`；`DATA` padding 校验优先于任何流状态短路；携带 `PRIORITY` 标志但不足 5B 的 `HEADERS` 帧按 RFC 9113 §4.2 判为连接级 `FRAME_SIZE_ERROR`（首部处理异常或拒绝时回滚已入队的优先级事件），而长度非 5B 的独立 `PRIORITY` 帧在活跃流上发 `RST_STREAM(FRAME_SIZE_ERROR)`、在 `idle`/`closed` 流（禁止发 `RST_STREAM`）上升级为连接级 `GOAWAY(FRAME_SIZE_ERROR)`；本端 `submit_reset` 拒绝在客户端尚未提交请求 `HEADERS` 或服务端尚未完成入站初始首部块解码前发送 `RST_STREAM`，但允许对本端已关闭且未发过重置的流补发唯一一次 `RST_STREAM(PROTOCOL_ERROR)`；已由对端 `RST_STREAM` 关闭的流再次收到对端 `RST_STREAM` 触发 `GOAWAY(STREAM_CLOSED)`，客户端收到 `RST_STREAM(REFUSED_STREAM)` 仅在尚未收到任何 `1xx` 或最终响应头时才按 RFC 9113 §8.7 发布 `request_unprocessed` 允许重放；自上次出站缓冲完全排空以来未排空非 ACK `PING` 或 `SETTINGS` 达 1000 个、对端 `RST_STREAM` 超出正常完成响应数（`completed_responses_`）的净差值达 1000 个（防 CVE-2023-44487 Rapid-Reset 洪水），或单连接累计畸形请求头流达 32 个（正常请求不回充该预算），均立即触发 `GOAWAY(ENHANCE_YOUR_CALM)`；服务端优雅排空（`begin_drain`）首阶段发送 `GOAWAY(2^31-1, NO_ERROR)` 与 8B `PING("ruviadrn")` 并在等待 RTT 期间最多再接纳 `2 * max_concurrent_streams` 个新流（防扣留 ACK 无限续命），致命 `append_goaway` 先预留帧空间再标记 `fail()` 且通告 ID 钳位至 `min(last_stream_id_, drain->last_stream_id())` 保证单调不增；已关闭流有界环形历史 `http2_closed_stream_history` 在覆盖淘汰本端已发 `RST_STREAM` 的奇数流时推进 `forgotten_local_request_reset_through_` 水位线，按 RFC 9113 §5.1 安全忽略小于等于该水位的迟到帧；
-  - HPACK 动态表、Server Push 与通告帧：入站 HPACK Huffman 解码使用编译期 `consteval` 构建自检的 $256 \times 16$ 4-bit 半字节状态转移表并严格校验 $0..7$ bit 全 `1` EOS 填充（RFC 7541 §5.2）；入站动态表（`hpack_decoder`）在 `reserve` 与驱逐前先将 `name`/`value` 构造为独立 `entry_type`（防 RFC 7541 §6.2.1 Indexed-Name 自别名在扩容或驱逐时悬垂），首部块解码开启事务快照（分配抛异常时 `rollback_decode_transaction` 无损恢复块前状态），且仅当已淘汰前缀数达到或超过存活后缀数时才一次性前移压缩；等待 `CONTINUATION` 期间被移除的流通过 `detach_active_header_block` 零分配 `swap` 转移未完成压缩块至 `discarded_header_stream_` 以继续完成后续 `CONTINUATION` 的 HPACK 同步（`start_discarded_header_block` 抛异常时立即 `reset` 废弃草稿与动作锁存，防重试时误判为重叠 `CONTINUATION`）；出站 HPACK 编码（`hpack_encoder`）不插入动态表条目（容量缩减直接置零），对未命中静态表全索引的敏感首部自动标记 `never_indexed` 并检测输入与输出缓冲地址重叠，出站 `HEADERS + CONTINUATION` 序列通过 `output_.checkpoint()` 原子预留写入并在分配异常时完整回滚输出缓冲与动态表大小更新标志（`http2_output_buffer` 仅在 `observer_depth_ == 0`、已消费分段 $\ge 32$ 且覆盖未消费分段时摊销前移压缩分段表）；服务端 `submit_push_promise` 仅允许 `GET`/`HEAD`，`reserved (local)` 承诺流在发出首个响应 `HEADERS` 前不占用并发槽且禁止发送 `ALTSVC`（RFC 7838 §4）；`enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，禁用 `h2c` 或显式代理；解码时忽略语法非法的单个 origin 但对长度截断条目拒绝整帧）仅限客户端启用，已建立隧道流收到 `PUSH_PROMISE` 时按 RFC 9113 §8.5 / §6.6 先解码提交 HPACK 保持同步，再对父流发 `RST_STREAM(PROTOCOL_ERROR)` 并对预留 `promised_id` 发 `RST_STREAM(CANCEL)`；接受 `PUSH_PROMISE` 不自动确立传输权威，驱动在消费推送响应前须对照已认证连接校验推送 URI 的 origin；`ALTSVC` 帧（RFC 7838）在流 0 携带显式 origin，在请求流携带空 origin 以继承请求 origin；
-  - HTTP 优先级、流控信用令牌与流租约账本：HTTP 优先级（RFC 9218 / RFC 8941）本端构造严格校验 `0..7`，对端字典解析忽略未知成员、参数类型错误与越界值（按线序后出现的成员覆盖前值，缺省响应参数保持未设置以便代理合并；服务端处理 `PRIORITY_UPDATE` 时清理已关闭流记录并强制 `活跃客户端流 + 空闲流优先级记录 <= max_concurrent_streams`，超限发 `GOAWAY(PROTOCOL_ERROR)` 防空闲流优先级无界堆积）；接收数据流控信用（`http2_received_data_credit`）为线性令牌（显式 `acknowledge()` 或析构均无异常归还精确字节，支持同流 `merge()`；入站请求体队列 `http2_sans_io_body_queue` 采用 `queued_chunk_` / `active_chunk_` 双缓冲拼接以保证 `enqueue` 不使已借出的 `pop()` 视图失效，仅在字节成功追加后才接管信用并在上层消费完毕后经 `release_active_credits()` 归还窗口）；请求头事件（`http2_request_head_event`）兼具流存储租约职责，若同批次输入已携带正文则读取为 `no_content` 以按 RFC 9110 §10.1.1 省去冗余 `100 Continue`；同执行器启动 HTTP/2 写协程（`http2_sans_io_session_lifecycle`）必须在 `co_spawn` 前先标记 `submitted`（防内联完成竞态，启动抛异常则回滚）；当被 pin 流仍有 `window_debt` 或挂起事件时，流租约释放登记至定长零分配账本 `http2_stream_lease_ledger`（`after_credits` / `after_remote_end` / `abandon`）并随流控确认自动重试解锁，致命连接错误后仍允许无帧释放已持有的请求租约与 DATA 额度。
-- 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
-  - 读、写、心跳保活与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，单向租约 `operation_lane_lease` 抢占失败时置空内部指针以保证析构绝不误清已在途操作的 `active` 标志，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；SSE 消息（`sse_message`）区分 `data_` 缺省（不发射 `data` 行，不触发客户端派发 `MessageEvent`）与存在空串（发射 `data:` 派发空负载事件），强制校验合法 UTF-8、`event`/`id` 无非法换行、`id` 不含 `\0` NUL 字节且 `retry` 非负，并单遍预计算多行 `data:` 展开总长一次性 `reserve`；`CONNECT-UDP`（RFC 9298 / RFC 9297）本端发送强制携带唯一 `Capsule-Protocol: ?1`（`parse_http_capsule_protocol` 按 RFC 8941 §4.2 顶层布尔 `Item` 仅允许 `SP` 环绕而拒绝 `HTAB`），接收端将非布尔、`?0` 或重复字段按缺省忽略并拒绝 204/205/206 响应；`plan_datagram_capsule` 将 Capsule 头与 Context ID 编码进栈内联 `prefix_` 并零拷贝借用负载分片，Capsule 增量解码器对不保留的类型或未知 Context ID 直接零缓冲流式跳过（不受 `max_capsule_length_` 限制，但短于 Context ID 的畸形 `DATAGRAM` 仍保留报错），`feed_one` 在首个完整保留 Capsule 处停止并将未消费后缀归还调用方；
-  - 响应完成不等于请求上传完成（如客户端流式请求收到响应 `END_STREAM` 仅关闭接收半边，发送半边仍须显式完成或重置）；HTTP/1 流式响应对端断开监控（`http1_peer_eof_monitor`）仅在显式调用 `cancel_on_peer_eof()` 且请求体已完整消费时按需启动（以剩余请求头配额 `max_http_header_bytes - existing_pipeline_bytes` 有界暂存流水线输入，取消前先置 `closing_` 以保留已排队字节且不再续读）；复用或排空连接前必须满足请求与响应双向的消息边界和生命周期契约。后续字节归属不明时关闭连接，不继续解析；非 2xx `CONNECT` 的关闭遵守 RFC 9931；
-  - WebSocket 握手、读写并发与关闭（RFC 6455 / RFC 8441）：子协议集合（`websocket_subprotocol_set`）对本端配置与客户端发送强制要求 token 唯一且超限拒绝（不截断），服务端接收则容忍并跳过重复提供项；客户端握手由版本无关的 `websocket_client_negotiation` 统一复用子协议与 `permessage-deflate` 选择校验（HTTP/1.1 校验 `101` 与 `Sec-WebSocket-Accept`；HTTP/2 Extended `CONNECT` 校验 `2xx`、无连接特定首部，且仅当 `END_STREAM` 直接落在 `2xx` `HEADERS` 帧上时拒绝握手，若落在后续 `DATA` 帧上则按 RFC 8441 §5 视为已建立隧道的正常关闭）；入站消息组装器（`websocket_inbound_assembler`）对未分片完整单帧直接零拷贝借用帧 `payload()`，分片消息交付后在 `idle` 态经 `release_completed()` 按水位线保留小缓冲并释放大块；出站 `append_frame` 检测到输入负载与 `out_buffer_` 重叠时先拷贝至局部存储，并以单次 `reserve(total_size)` 作为事务边界（确保后续追加零分配绝不产生孤儿帧头）；服务端与客户端复用同一套 123B 定长内联关闭原因（`websocket_peer_close_info`）与写通道让行原语（`websocket_write_lane`：写通道仅在完整消息边界之间轮询挂起读通道的控制帧，绝不打断在途完整消息，且读等待抛异常时自动清除 `reader_waiting_` 并唤醒写方防死锁）；`permessage-deflate`（RFC 7692）8-bit 发送窗口采用 `-9` 窗口配合 `Z_HUFFMAN_ONLY` 策略，解压遇到 `BFINAL=1` 块时调用 `inflateResetKeep` 丢弃填充位并保留 LZ77 滑动窗口历史，且禁用单帧压缩（`compress_ = false`）时同步绕过压缩字典更新以防侧信道泄漏；`websocket_close_code` 严格限制在合法线面状态码空间（拒绝 `1005`/`1006` 等本地伪状态码）；服务端刷出响应 Close 后立即计划关闭传输，客户端则保持传输打开等待对端 EOF（期间丢弃残余输入；客户端 `close()` 独占读/写/关闭三通道且退役前先锁定首个 `abort_reason_`，运行中的 HTTP/2 会话保持底层传输至 `join()` 有界刷出 `GOAWAY` 后才关闭）；
-  - 任一方向发生错误、超时或半关闭时，必须协同唤醒并取消或排空另一方向的挂起操作，确保全部读写与定时器操作完成后才释放会话与底层传输。
-- TLS 关闭、TCP Lingering Close（RFC 9112 §9.6 / §9.8）与 HTTP/2 排空：关闭连接的 HTTP/1 最终响应与以 `GOAWAY` 结束的 HTTP/2 会话在 2 秒截止期内（纳入 `connection_scanner`）执行有界 lingering close（TLS 按 RFC 9846 §6.1 预置 `SSL_RECEIVED_SHUTDOWN` 单向刷出 `close_notify` 而不等待对端 alert，TCP 半关闭发送端后直接在底层 socket 上读取丢弃最多 4 MiB 未读输入而不再经 TLS 解密），防止未读输入触发 TCP RST 抹掉最终响应；空闲、请求头超时与排空关闭等待请求的连接发送 TLS `close_notify`，写超时、传输错误与强制停机直接关闭；HTTP 消息完整性依赖连接关闭时，不得将未认证的 TLS 截断当作完整消息（而已升级的 TLS 隧道字节流按 4 KiB 分块写入并立即 `flush` 密文，且将对端未发 `close_notify` 的 TCP EOF 视为隧道正常结束）。充当中间代理时按协议处理逐跳字段，不得丢失需要保留的重复字段语义。
-- 缺陷结论以 RFC 条款和公开行为复现为证据；说明审查覆盖范围，不以已有测试通过宣称“绝对无 BUG”。
+- **Share-Nothing 线程与连接归属模型**：
+  - 生产 `application` 是进程级单例（`ruvia::app()`），配置与生命周期入口唯一；`core` 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner（严禁单线程嵌套运行多个 worker；附着外部 `asio::io_context` 时通过自定义 Asio `service` 独占认领并在 `shutdown()` 时自动退役状态）；
+  - 每个业务 worker 独占一个 standalone Asio 事件循环，在本 worker 上独立 bind/listen 全部监听端点；待接受 socket 从创建起归发起 accept 的 origin worker，全部请求、TCP/TLS I/O、定时器和连接生命周期均留在该 worker，不设跨 worker 连接交接队列；
+  - 平台监听：POSIX 使用 `SO_REUSEADDR` + `SO_REUSEPORT`（缺失或失败则启动失败）；Windows 各 worker 使用 `SO_REUSEADDR` 独立绑定，全部 ready 后在共享监听矩阵上发起原生 `AcceptEx`（跨 worker 完成只向 origin 的预留有界完成槽发布结果并唤醒，严禁在当前线程触碰或销毁 origin 的 socket、状态及 PMR）。
+- **跨线程调度、唤醒与锁外析构铁律**：
+  - 跨线程业务调度（`worker_dispatcher`）、有界通道（`channel`）与阻塞池（`blocking_pool`）在构造期预分配定长节点/槽位池（预留与已入队合并计入容量上限，确保准入通过时运行期零堆分配）；互斥锁内仅交换指针或整链摘取队列，**用户可调用对象与结果值的移动、执行及析构（含停机丢弃排队任务时的析构）必须严格在互斥锁外进行**，防止析构函数重入引发死锁或栈递归；投递被拒时完整退回未消费的值或可调用对象；
+  - 跨线程唤醒（`worker_notification`）采用原子锁存与非阻塞原生写，已有未决锁存时自动合并（`coalesced`）防唤醒风暴；冷路径资源清理使用 `defer_cleanup` 获取退役保护租约，本 worker 挂起协程的延迟恢复使用零类型擦除的 `defer_resume` 直达下一轮事件循环。
+- **结构化协程与取消安全**：
+  - 公开协程统一使用 lazy 的单一主模板 `ruvia::task<t_type>`（仅允许右值 `&&` 执行 `co_await`）；异步发起与协程挂起的双向竞争统一由 `suspend_race_state` 原子裁决（严禁在协程真正挂起前从 `await_suspend` 内联恢复 continuation，负载移动抛异常时回滚原状态）；超对齐局部变量必须存放在独立堆存储中；
+  - 未启动任务可丢弃；已启动任务必须完成，取消后必须 `co_await` / `join`，严禁销毁挂起帧或静默 detach；
+  - 结构化作用域（`task_scope` / `operation_scope`）：`spawn` 在分配节点前先递增活跃计数，若分配失败必须先销毁冷子任务帧再递减计数唤醒 `join`（防 `join` 提前退役外部宿主导致冷帧析构悬垂）；作用域关闭退役冷任务与能力回调期间，必须在栈上挂载防重入守卫节点（`drain_guard` / `retiring_guard`），直至最后解链才恢复 `joiner`（恢复后立即返回，不再触碰可能已被内联销毁的作用域）；能力注册项必须声明在宿主负载成员之后以保证先解链再析构负载；
+  - 取消令牌（`stop_token`）与单定时器最小堆：`stop_state::request_stop()` 在锁外执行回调并通过栈局部 `destroyed` 指针感知回调自销毁（仅在未自销毁时写回完成标志以防 Use-After-Free）；多源取消由地址稳定的 `stop_group` 显式拥有；跨线程 `stop_token` 回调不得直接触碰 worker 局部定时器或连接槽，必须经按非零 64 位 `operation_id` 寻址的 `worker_cancellation_target` 或带代际计数（`slot + generation`）的 `worker_timer_cancellation` 投递回所属 worker（每个 worker 由单一 `asio::steady_timer` 与最小堆驱动全部定时器，跨线程无通知取消直接 CAS 置零代际免唤醒）；带取消的等待操作必须将取消注册项声明为末位成员。
+- **连接池调度、流水线共享与脏连接零容忍（`slot_pool` / `pool_lease_scheduler`）**：
+  - 数据库、Redis 与出站客户端连接池均保持 worker-local 且地址稳定；同线程取消与 `release()` 槽位移交均经 `defer_resume` 延迟至下一轮事件循环恢复（严禁在 `release()` 内联同步恢复），后续取消或 `close()` 不得推翻 `release()` 已提交的槽位移交；
+  - 共享流水线反饥饿与故障隔离：当存在更早排队的独占请求（如事务或流式查询）或流水线组队首请求已被放弃（`stalled`）时，禁止将新到达的查询并入该流水线组；连接级无进展 I/O 超时起算点（`stretch_start`）跨读者角色交接连续计量（防读者轮流超时交接无限续命）；非读者跟随者取消或超时仅置空其槽位成员指针，由后续读者静默吸收孤儿结果而不中断同连接兄弟查询；
+  - 脏连接零容忍淘汰：借出连接槽仅在操作正常完成，或错误明确承诺底层协议流已完整排空、连接处于空闲态、未关闭 `autocommit` 且不在未决事务中（`reusable_connection()` 为真）时才允许归还复用；任何超时、取消、网络 I/O 异常、半关闭、协议失步或事务内未捕获退出，必须在释放租约前立即关闭并淘汰该底层连接（若仍有活跃套接字等待则仅取消等待，待协程栈展开后按“先关 Asio 包装句柄、后关底层驱动连接”顺序释放）。
+- **阻塞卸载池（`blocking_pool`）与分阶段启停**：
+  - 阻塞任务只携带自有数据，严禁触碰 `context`、请求 arena 或 worker 局部状态，池内任务严禁同步等待同一阻塞池的子任务；统计严格区分队列满拒绝（`rejected` / `queue_full`）与停机丢弃（`discarded` / `pool_stopped`）；
+  - 启动与停机：`worker_group` 按 `start()`（就绪屏障）→ `serve()`（服务屏障）→ `request_stop()` → `join(primary)` 推进，任一阶段失败立即全组回滚；停机按「停止接入（封闭 accept，Windows 等待全部原生 `AcceptEx` 完成转递与消费静默）→ 有界排空（关闭空闲与未完成首部连接，在途请求在 `drain_timeout` 内完成，HTTP/2 两阶段 `GOAWAY`，WebSocket 发 1001；排空屏障热路径无锁计数，`wait_until` 按 $\le 1\text{h}$ 分段等待防时钟转换溢出）→ 强制关闭 → 终止 I/O 并 join 全部后台任务与钩子」顺序执行，停机清理钩子严禁抛异常。
 
-## 性能与内存治理
+## 协议实现与审查规范
 
-- 请求热路径以零拷贝、零抽象成本为目标：不新增锁、原子争用、类型擦除、共享所有权或无用拷贝（会话/连接级不变的服务绑定如 HTTP/2 `base_services_` 在连接构造期一次性预构建并跨流复用，热路径上下文与服务句柄优先按 `const&` 传递并在目标对象内就地绑定，避免每流/每请求按值拷贝派生临时副本）；显式阻塞卸载是共享所有权的唯一例外。
-- 同步快路径优先：常规路径不创建可避免的协程帧或中间缓冲（如 `as_awaitable(task<void>)` 直接复用 `std::exception_ptr` 签名生成 `asio::awaitable<void>` 而不额外分配包装协程帧），能同步完成的步骤（如缓存/静态索引命中、目录无预压缩伴随文件 `has_sidecars` 时的零路径拼接短路、无阻塞解析、就绪连接槽获取、无需阻塞编码或异步错误恢复的响应准备）直接同步完成；启动期一次性完成构建和预计算（如静态文件全量内存索引，确保请求期零 `stat` 系统调用）。
-- 侵入式零分配调度与按需惰性分配：worker 内的连接超时跟踪、周期扫描节点（`connection_scanner`）、槽位等待队列与取消注册优先使用内嵌于连接或协程栈帧的地址稳定侵入式节点；取消状态与非必选帧元数据仅在首次被观察或启用时按需分配，未观察路径零开销。
-- 栈上小缓冲优化（SBO）、按需拥有化（Copy-on-Unfold/Unescape）与挂起前提前释放：
-  - 高频有界短数据与回调（如 `move_only_function` 满足尺寸/对齐且 `nothrow_move_constructible` 的可调用目标、JWT 段解码、已校验的 `multipart_boundary`、小批量键视图数组、流式摘要 `cache_key_hasher` 的栈内联缓冲快路径、原生路径视图在栈定长数组上完成扩展名 ASCII 小写归一化与 MIME 查表）优先使用栈上或内联定长缓冲，小输入零堆分配直接单次完成计算，仅超限时才惰性分配动态上下文或 PMR 存储；多条目内联缓存（如 TLS 证书主机校验缓存）优先采用共享紧凑连续字节池配合 `(offset, size)` 索引，避免稀疏最大长度二维数组浪费缓存行；单线程有界环（`local_ring_queue`）在启动期一次性构造全部槽位，运行期通过 `prepare_push` / `commit_push` / `cancel_push` 两阶段协议实现零分配入队与异常回滚；
-  - 协议解析（如 `multipart_part`、首部字段、无百分比编码的路由参数与查询键值）对未折叠、未转义的原始切片直接以 `std::string_view` 借用调用方缓冲，仅对发生折叠展开或转义解码的字段分配 PMR 存储（已解压请求体缓存为 `decoded_body` 供同一请求内重复读取零拷贝复用）；拥有型 `http_header` 检查长度求和溢出并在单次分配中连续存放名与值（已绑定资源的实例赋值时始终保留目标 `memory_resource*`）；`http_request` 仅拥有紧凑首部描述符块而借用底层协议输入，在输入存储退役前复用实例须调用 `reset()` 清空描述符与借用视图；WebSocket 未压缩且无掩码帧支持零拷贝发送（`submit_borrowed_frame`），无上下文接管的 `permessage-deflate` 方向同步复用共享编解码器；
-  - 异步操作在构造冷任务完成参数拥有化后，调用方应在 `co_await` 进入网络 I/O 挂起前立即释放不再使用的临时源容器，缩短并发挂起期的内存驻留。
-- 预算、背压、防压缩炸弹与防慢速攻击：
-  - 框架的长期队列、缓存、连接池等待队列和外部输入驱动的缓冲，须明确资源预算及背压、拒绝或淘汰机制；重试须可取消且受生命周期约束；
-  - 每个 worker 强制执行不可禁用的两级实时入站缓冲上限（worker 级与单连接级，覆盖缓冲/流式请求体、隧道读取与 WebSocket 会话，含容量与重分配重叠），超限抛出 `std::bad_alloc`；定长请求体全量读取（`read_known_length_all`）以 `min(content_length, 64 KiB)` 为初始容量上限并按实际到达字节数几何翻倍扩容直接读入 `body` 尾部（防虚报巨额 `Content-Length` 触发预分配 DoS，提前 EOF 时截断至已实际写入长度 `filled`）；超出连接上限的新连接在 TLS 握手与协议探测前直接关闭 socket；达到单连接累计请求上限时 HTTP/2 按 RFC 9113 §6.8 两阶段 `GOAWAY` 优雅排空；
-  - 流式解码与帧接收（如 WebSocket `feed()` 与 HTTP 内容解压）同时约束待消费输入缓冲上限与解压后消息/正文上限，拒绝时保持零消费且不破坏已排队输出；`Content-Encoding` 限制最大编码层数（超限按 415 拒绝），多层编解码对每个中间表示均强制施加字节上限并在下一阶段完成前立即释放上一阶段缓冲（`gzip` 多成员与 `zstd` 多帧消费至输入末尾，Brotli 拒绝尾随字节，Zstandard 编码与解码双向锁定 RFC 9659 HTTP 窗口上限 `windowLog = 23` 即 8 MiB 且编码复用时执行 `ZSTD_reset_session_only`；C 压缩库内部分配统一经 `pmr_codec_allocation` 前置 `allocation_header` 路由至 PMR，并在 `noexcept` C 回调边界捕获重抛首个分配异常以防将内存预算耗尽误报为编码损坏；`worker_codecs` 仅限所属 worker 线程同步借用，缓冲响应复用每编码唯一的 `http_content_encode_context` 并在每次调用及异常后彻底重置，流式响应借用每算法最多 8 个的有界增量编码器池 `stream_encoder_lease` 且归还 `reset()` 失败或池满时直接销毁，卸载压缩则使用外部线程独立编码器）；
-  - 服务端连接超时区分基于最后成功 I/O 的阶段无活动超时（`idle`、`initial_read`、`payload_read`、`write`：新连接首个请求及已收到部分字节的请求头按 `reading_initial` 计，已服务过请求的复用连接在等待下一请求首字节期间按 `idle` 计）与不可被慢速涓流刷新的绝对阶段完成截止期（`initial_read_completion`、`payload_read_completion`），排空回调受固定关闭宽限期兜底，防止慢速连接长期滞留。
-- sans-I/O HTTP/2 DATA 提交（`submit_data`）在按流控窗口与调用方输出额度裁剪前缀前，必须先对完整输入块与 `end_stream` 校验已声明的 `Content-Length` 边界（防止无法满足总长度的终态调用将半截前缀发上网络），未消费后缀始终归调用方，协议层不代存阻塞正文；已编码输出与 socket 写完成仍分别记账。
-- 显式 Worker 内存模型与 PMR 分级：
-  - 优先值所有权与 RAII。借用视图不延长 owner 寿命，零拷贝不得破坏借用有效期；分配器覆盖对象寿命，结果持有存储直到析构；
-  - 框架动态存储通过显式传递的 `worker_memory` / `request_memory` 管理（禁止使用 `thread_local` 隐式全局池），公开启动配置不要求用户提供 PMR；
-  - `worker_memory` 无内部同步锁，直接对接进程级线程安全 `process_resource()`（mimalloc 上游，不替换全局默认 PMR，`construct_pmr_object` 在构造抛异常时立即按原尺寸/对齐归还已分配内存）：小对象走 worker 常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的对齐精确尺寸块缓存，超出预算立即归还上游；
-  - 单次请求和握手使用 `request_memory`（`monotonic_buffer_resource` arena），优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；长生命周期连接状态、结果、池化数据以及无请求 arena 的后台投递任务（`web_worker_context`）使用 `worker_memory` 可回收 `pool()`（后台任务分配的存储须在任务作用域结束前于本 worker 销毁）；
-  - 异步入口返回前完成输入拥有化和资源归一化（如跨请求复用的查询谓词暂存于进程级 PMR，生成异步操作前归一化至目标 worker 内存池）；拥有型 PMR 集合（如 `entity_rows`）跨不同 `memory_resource` 移动赋值时必须先在目标资源中递归重绑定全部元素后再交换，防止浅拷贝或分配器失配（通过 `consteval` 编译期递归判定字段是否含 PMR 资源 `entity_type_has_resource`，对不含 PMR 资源的纯标量或 `optional<标量>` 直接编译期短路）；
-  - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；流或连接内建暂存缓冲（如 HTTP/2 流局部首部/Trailer 编码块、Redis 连接写缓冲与网络输入缓冲 `http_io_buffer`）优先原位复用，使用后若容量超过保留阈值（`http_retained_pmr_string_bytes`）则主动归还大块存储，否则仅清空内容保留小容量；HTTP/1 连接读缓冲（`connection_read_buffer`）在连接中途待处理字节回落时缩容超 `max_http_header_bytes` 的缓冲，归还有界工作集池时保留 ≤16 KiB 容量以免大首部请求反复扩缩，且流水线合并写出通过 `http1_deferred_access_log` 在对应响应头真正写入 socket 后才发射访问日志；`http_io_buffer` 为读取扩容时不零初始化待覆写字节，`consume()` 仅推进游标保持既有可读视图有效，`prepare()` 仅在已消费前缀足以覆盖存活字节时才前移压缩（否则几何扩容摊销开销），多命令流水线追加先校验字节求和溢出并依赖几何扩容保持摊销 $O(\text{total})$，严禁按块重复搬移或逐命令精确 `reserve(size + delta)` 导致 $O(N^2)$ 重分配；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
+- **RFC 权威遵循与角色义务区分**：
+  - HTTP/1.0、HTTP/1.1、HTTP/2、TLS、WebSocket、HTTP 隧道（含 CONNECT-UDP / Capsule）、缓存、条件请求、范围请求、压缩、DNS 等实现必须符合现行 RFC（HTTP 参照 RFC 9110/9111/9112/9113，TLS 1.3 参照 [RFC 9846](https://www.rfc-editor.org/info/rfc9846/)），代码注释与变更说明标注具体 RFC 条款，内部资源限制单独说明，不冒充 RFC 要求；
+  - 严格区分发送方、接收方与中间代理的 MUST / SHOULD / MAY 义务，不把发送方的 MUST NOT 自动变成接收方的拒绝规则；代应用构建请求的组件独占协议托管首部，显式区分本端生成（`generated`）与代理转发（`forwarded`，保留合法转发字段并按规范剥离/重建逐跳首部）；
+  - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，缺陷结论以 RFC 条款和公开行为复现为证据。
+- **HTTP/1.x 与通用表示语义**：
+  - 请求行、目标与 `Host`：8 字节版本主版本非 `'1'` 回 505，`HTTP/1.1..1.9` 按 RFC 9110 §6.2 归一化为 `http11`；明文监听器在请求行失败时仅当首行含 HTTP 版本标识才回 400，非 HTTP 流量直接静默关连；请求头未闭合触及上限时按是否仍在 `request-target` 内精确区分 414 与 431；未闭合请求头与 `chunk` 大小行扫到裸 `LF` 立即按协议错误拒绝；`http_authority_view` 拒绝 `userinfo` 并严格区分端口缺省、空端口与显式 `:0`；`absolute-form` 与 `authority-form` 将 `Host` 首部值强制绑定至 `target.authority_` 以消除双路由真值；
+  - 消息分帧与特殊状态码：严守 `Content-Length` 与 `Transfer-Encoding` 冲突/优先级规则（HTTP/1.0 含 `Transfer-Encoding` 按缺陷分帧在响应后强制关连）；核对 `HEAD`（未构造表示且无显式长度时省略 `Content-Length` 防谎报 `0`）、`1xx`（通用临时响应排除 `101`，同时收到 `Upgrade` 与 `100-continue` 时先发 `100` 再发 `101`，含 `Connection: close` 刷出后即关连）、`204`、`205`（响应头规范化为 `Content-Length: 0`，客户端按分帧消费线面字节但跳过传输解压且不产出正文）、`304`、`CONNECT` / `TRACE`（接受显式零长分帧但拒绝非空正文）与 `OPTIONS`；
+  - 增量流式与流水线边界：`chunked` 请求体即便为空也必须消费终止零块，未消费完请求体严禁复用连接；流水线仅在后续请求无正文且匹配缓冲响应路由时才允许在前序响应待写出期间继续执行，访问日志延迟至对应响应头真正写入 socket 后发射；客户端在 `awaiting_continue` 门控期间收到最终响应或非 2xx `CONNECT` 响应后必须强制关闭连接；
+  - 条件请求、范围、缓存与 Cookie：遵循 RFC 9110 §13.2.2 条件优先级（`If-Match`/`If-None-Match` 跨行零分配折叠且 `"*"` 须独占唯一行，重复日期条件首部忽略，未来 `mtime` 钳位至当前秒并取消日期 `If-Range` 强验证器资格）；`Cache-Control` 保留首个新鲜度指令并支持 `quoted-pair` 解转义与大数饱和；`Range` 自动合并重叠/相邻区间（多段 `Range` 遇已编码表示回退完整 200，`multipart/byteranges` 相邻元数据段合并）；`Set-Cookie` 先做受检总长求和再扫描语法，按 `(name, domain, path, partitioned)` 四元存储键原地替换并擦除后续同键阴影行。
+- **HTTP/2 与 HPACK / 优先级语义**：
+  - 连接前言、`SETTINGS` 事务与流控：首帧必须是非 ACK `SETTINGS`；`SETTINGS` 帧先在分离候选副本上校验全部条目及窗口极值增量后再原子提交；`closed` 流忽略含 `0` 增量的任何 `WINDOW_UPDATE`；入站 `DATA` padding 校验优先于流状态短路，且必须在预留完输出与事件容量后才扣减连接接收窗口（保证分配异常整帧可重试），迟到丢弃帧扣减后立即归还连接窗口，流移除时将未释放的事件窗口债务转移保留在连接级窗口以防连接窗口永久萎缩；出站 `submit_data` 在按窗口裁剪前缀前先对完整输入块校验已声明的 `Content-Length` 边界；
+  - 帧约束、流状态机与两阶段 `GOAWAY` 排空：严格区分流级与连接级错误（RFC 9113 §5.4）；携带 `PRIORITY` 标志但不足 5B 的 `HEADERS` 判为连接级 `FRAME_SIZE_ERROR`（异常或拒绝时回滚已入队优先级事件），长度非 5B 的独立 `PRIORITY` 在活跃流发 `RST_STREAM`、在 `idle`/`closed` 流升级为连接级 `GOAWAY`；本端拒绝在客户端未发 `HEADERS` 或服务端未解码完初始首部块前发送 `RST_STREAM`（允许对本地已关闭且未发过重置的流补发唯一一次 `PROTOCOL_ERROR` 重置）；对端重复 `RST_STREAM` 触发 `GOAWAY(STREAM_CLOSED)`，客户端收到 `REFUSED_STREAM` 仅在未收到任何 1xx/最终响应头时才允许重放；服务端优雅排空首阶段发送 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，RTT 期间限制新流预算防扣留 ACK 续命，致命 `GOAWAY` 先预留空间再标记失败且通告 ID 单调不增；已关闭流环形历史在淘汰本端已重置奇数流时推进水位线，安全忽略更早的迟到帧；
+  - HPACK、Server Push 与优先级：入站 HPACK 动态表在扩容与驱逐前先将名值构造为独立拥有条目（防自别名悬垂），开启首部块事务快照支持异常无损回滚，等待 `CONTINUATION` 期间被移除的流将未完成块零分配转移至废弃流草稿继续保持连接级 HPACK 同步；出站 HPACK 不插入动态表条目，对未全索引的敏感首部自动标记 `never_indexed`，`HEADERS + CONTINUATION` 序列经输出检查点原子写入与回滚；服务端 `PUSH_PROMISE` 仅限 `GET`/`HEAD`，`reserved (local)` 流在发出首个响应头前不占并发槽且禁发 `ALTSVC`，已连接隧道流收到 `PUSH_PROMISE` 先解码同步 HPACK 再对父流与预留流双向发 `RST_STREAM`；`PRIORITY_UPDATE` 强制 `活跃流 + 空闲流优先级记录 <= max_concurrent_streams`；流租约在仍有窗口债务或挂起事件时登记至定长零分配账本延迟释放。
+- **全双工会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、SSE）与优雅关闭**：
+  - 读写、心跳与关闭共享会话状态但保持单向线性通道互斥（抢占失败的租约置空指针防析构误清在途标志）；响应完成不等于请求上传完成，任一方向错误、超时或半关闭必须协同唤醒并排空另一方向及定时器后才释放传输；
+  - WebSocket（RFC 6455 / RFC 8441 / RFC 7692）：客户端握手统一校验子协议与 `permessage-deflate`（HTTP/2 Extended `CONNECT` 规范化全小写 `"websocket"`，仅当 `END_STREAM` 直接落在 `2xx` `HEADERS` 上时拒绝握手，落在后续 `DATA` 上视为正常隧道关闭）；未分片单帧消息直接零拷贝借用帧负载；写通道仅在完整消息边界之间让行控制帧；`permessage-deflate` 8-bit 发送窗口采用 `-9 + Z_HUFFMAN_ONLY`，解压遇 `BFINAL=1` 调用 `inflateResetKeep` 保留滑动窗口，禁用单帧压缩时绕过字典更新防侧信道泄漏；客户端 `close()` 独占读写关三通道，退役前先锁定首个中止原因；
+  - Lingering Close：关闭连接的 HTTP/1 最终响应与 `GOAWAY` 结束的 HTTP/2 会话在有界时间内（纳入超时扫描器）执行单向 TLS `close_notify`（预置 `SSL_RECEIVED_SHUTDOWN`）、半关闭 TCP 发送端并在底层 socket 上直接丢弃有界未读密文而不再解密，防止触发 TCP RST 抹掉最终响应。
 
-## 运行时、连接池与生命周期
+## 安全、防洪预算与 Web 核心设计
 
-线程与连接：
-
-- 生产 `application` 是进程级单例，通过 `ruvia::app()` 获取，不可自行构造、复制或移动；配置与生命周期入口唯一。
-- `core` 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner（`current_worker_guard` 严禁单线程并发嵌套运行多个 worker；附着外部 `asio::io_context` 时通过自定义 Asio `service` 强制独占 `claim()` 并在 `service::shutdown()` 阶段自动退役 worker 状态，防止句柄暴露悬垂 `io_context&`）。`event_loop_pool` 与 Web 组合复用同一承载，Web 不另建线程、事件循环或启停主链。
-- 每个业务 worker 独占一个 standalone Asio 事件循环，在本 worker 上独立 bind/listen 全部监听端点；n 个业务 worker 不另配网络接入线程（阻塞池和信号线程另计）。
-- Web 只拥有 worker-local 业务状态、能力、监听器、连接 I/O 和接入/退役策略，通过生命周期扩展点接入 `core`。待接受 socket 从创建起归发起 accept 的 origin worker，全部请求、TCP I/O、TLS、协议定时器和连接生命周期均留在该 worker，不设独立 acceptor、跨 worker 连接交接或连接交接队列。
-- 平台监听模型：
-  - POSIX（Linux 等）：使用 `SO_REUSEADDR` + `SO_REUSEPORT`，缺失或设置失败则启动失败；每个 worker 直接接受本 worker 的监听器。
-  - Windows：每个 worker 使用 `SO_REUSEADDR` 独立绑定监听 socket，全部 ready 后在共享监听句柄矩阵上发起原生 `AcceptEx`，不使用单监听回退（不保证严格均衡，也不阻止其他进程复用端口）。监听 IOCP 收到属于其他 worker 的完成时，只向 origin worker 的预留有界完成槽（容量由 worker 与监听器矩阵确定，不占用普通业务队列）发布结果并唤醒，禁止在当前线程处理或销毁 origin 的 socket、业务状态及 PMR。
-- 跨线程调度、唤醒与通道：
-  - 跨线程业务调度走有界队列（`worker_dispatcher` 构造期预分配 $2 \times \text{capacity}$ 节点池，`drain()` 锁内整链摘取 `ready` 队列并在锁外批量执行，确保有界准入未满时 `free` 链表永非空且运行期零堆分配），禁止直接操作其他 worker 的连接或状态；`post_factory` 先预留有界准入再同步执行工厂，非平凡 `post` 在调用用户构造/移动前先保存 `worker_handle` 快照以防重入退役清空原句柄；调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次；
-  - 跨线程唤醒（`worker_notification`）采用原子锁存与非阻塞原生写，已存在未决锁存时自动合并（`coalesced`）避免唤醒风暴，内嵌单槽 `worker_notification_wait_resource` 绑定异步等待实现零堆分配，且 `close()` 在 Windows 下保持管道 `HANDLE` 存活至 IOCP 取消读取完成后才退役；析构前须确保生产者静默且 owner worker 已显式 `close()` 并 `join` 挂起等待；worker 内侵入式唤醒（`worker_signal`）在构造冷等待操作时即递增 `reserved_waits_` 且仅限未启动态移动，存在未决或预留等待时析构直接 `std::terminate()`；
-  - 已持有资源的冷路径异步清理使用 `event_loop::defer_cleanup` 获取退役保护租约，绕过普通业务队列有界准入但保证在事件循环释放物理上下文前执行完毕；已接纳挂起协程的延迟恢复（`defer_resume`）不受有界队列满拒绝，在本 worker 线程上零类型擦除直达事件循环下一轮次；
-  - 跨 worker 有界 `channel` 在构造期预分配槽位，预留（`reserved_`）与已入队（`queued_`）合并计入容量上限防超发；单次异步交付（`one_shot`）将停机钩子作为首个成员以确保最后解链，并在互斥锁外执行结果值的移动提取或析构；投递结果（`worker_delivery_result`）在因队列满、关闭或停机被拒时完整保留并向调用方退回未消费的值或可调用对象，等待结果（`worker_wait_result`）在构造时固定结果类别且禁用赋值；跨 worker 投递的数据须持有独立所有权，确需共享可变数据时须明确同步与一致性语义，优先使用不可变快照。
-
-协程、结构化并发、租约与连接池：
-
-- 协程保持 lazy 和 structured ownership。公开协程统一使用单一模板 `ruvia::task<t_type>`（`void` 通过 `task_promise<void>` 复用同一主模板而不单独偏特化，且仅允许右值 `&&` 执行 `co_await`）；异步发起与协程挂起的双向竞争统一由 `suspend_race_state` 裁决（严禁在协程真正挂起前从 `await_suspend` 内联恢复 continuation，且负载移动抛异常时回滚至原状态）；超对齐（over-aligned）局部变量必须存放在独立拥有的堆存储中，禁止直接置于协程栈帧以规避编译器帧对齐缺陷。
-- 未启动任务可丢弃；已启动任务必须完成。取消后必须 `co_await` / `join`，禁止销毁挂起帧或静默 detach。`event_loop::start` 启动的 `root_task` 由事件循环持有协程帧直至完成（严禁在所属事件循环线程上同步 `wait()` 自锁，且须在销毁可能借用调用方 PMR 的 moved-from 中间结果对象后才 `publish_completion()`），放弃 `root_task` 句柄绝不销毁挂起帧，未消费异常统一路由至循环的 failure sink。
-- 结构化并发（`task_scope` 与 `operation_scope`）：`task_scope` 绑定地址稳定的左值 `worker_handle`，`spawn` 在调用分配器 `new_object` 前先递增 `active_`（若分配抛异常，先在局部作用域销毁冷子任务帧再递减 `active_` 并尝试唤醒 `join`，防止 `join` 提前退役外部宿主使冷帧析构悬垂），单次 `join()` 启动后立即封闭 `spawn` 准入并等待在途准入及全部子任务退役（析构时若有活跃子任务或未决 `join` 则 `std::terminate()`，未经 `join` 消费的已完成子任务异常转发至 `report_unhandled_failure`）；`operation_scope` 在关闭时通过栈内嵌 `drain_guard` 挂载 `retiring` 节点以防冷任务销毁或能力清理回调重入期间过早唤醒 `joiner`（最后解链恢复 `joiner` 后立即返回，不再触碰可能已被内联销毁的 `scope`），`close_and_join()` 等待已启动帧、线性租约及能力清理回调全部完成，且 `scoped_capability_registration` 须声明在宿主负载成员之后以确保先解链再析构负载。
-- 取消令牌（`stop_token`）与 worker 定时器队列：
-  - `stop_token` 只引用一个取消状态（`stop_state` 由进程级 mimalloc 分配，支持最末持有者在任意线程释放；`request_stop()` 在锁外执行回调并通过栈局部 `destroyed` 指针感知回调自销毁，仅在 `!destroyed` 时写入 `completed_` 以防悬垂写回，跨线程解链等待运行中回调返回而回调自解链绝不自等待）；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。`operation_options` 派生（`with_options`）替换明确提供的用户 token（不隐式累加），而超时覆盖只允许收紧（tighten）已有截止期；客户端关闭仍通过自身生命周期独立终止操作；
-  - 外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）或带代际计数（`slot + generation`）的 `worker_timer_cancellation` 投递回所属 worker 线程执行；每个 worker 由单一底层 `asio::steady_timer` 与最小堆驱动全部业务定时器（跨线程无通知取消直接 CAS 置零 `active_generation_` 免唤醒；定时器队列停止后 `schedule_timer` 返回 `worker_stopping`，不存储回调且不绑定注册项），且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
-- 线性 lease 在任务启动时占用，不得并发或失败后复用。
-- 连接池与脏连接回收契约（`slot_pool` / `pool_lease_scheduler`）：
-  - 数据库、Redis 与出站客户端连接池均保持 worker-local 且地址稳定，槽位在构造期预分配，统一管理租约排队、按非零 `waiter_id` / `operation_id` 寻址的取消（`pool_lease_scheduler` 跨线程取消经 `defer_if_attached` 投递回所属 worker，同线程取消与 `release()` 槽位移交均经 `defer_resume` 延迟至下一轮事件循环恢复，严禁内联同步恢复；后续取消或 `close()` 不得推翻 `release()` 已提交的槽位移交）与单槽截止期定时器；
-  - 借出连接槽仅在操作正常完成，或错误明确承诺底层协议流已排空、连接处于空闲态、未关闭 `autocommit` 且不在未决事务中（如 `reusable_connection()` 为真）时，才允许归还复用或转交等待者；
-  - 任何超时、取消、网络 I/O 异常、半关闭、协议失步或事务内未捕获退出，必须在释放租约前立即关闭并淘汰该底层连接（`db_slot_socket` 以 POSIX `F_DUPFD_CLOEXEC` / Windows `WSADuplicateSocketW` 复制驱动 socket，建连期每次等待恢复后即刻关闭复制句柄以防驱动重用相同句柄值，多方向 `async_wait` 部分启动抛异常时保持挂起直至已提交回调全部归零；`close_slot` 若检测到仍有活跃等待 `wait_active_` 则仅取消等待，待协程栈展开后再先关 `wait_socket_`、后关驱动连接以确保驱动释放最末套接字引用），严禁将未排空或携带残留事务/会话状态的脏连接放回池中。
-- 阻塞或 CPU 密集工作显式卸载到常驻有界线程池（`blocking_pool`）：
-  - 构造期预分配 `queue_capacity_ + thread_count_` 个节点池（确保准入通过时 `free_head_` 永非空且运行期零堆分配），互斥锁内仅传递节点指针，用户可调用对象的移动、执行与析构（含 `stop()` 丢弃排队任务时的析构）严格在锁外进行以防析构重入死锁或栈递归；
-  - 卸载任务运行在外部线程，只携带自有数据（按值或移动捕获），严禁触碰 `context`、请求 arena 或任何 worker 局部状态；池内任务严禁同步等待或 `co_await` 同一阻塞池的子任务完成，防止固定线程耗尽导致自锁死锁；
-  - 统计与错误语义严格区分队列满导致的过载拒绝（`rejected` / `queue_full`）与停机导致的丢弃（`discarded` / `pool_stopped`）；停机恢复等待者并丢弃迟到结果，不等待仍在运行的卸载任务。
-
-启动与停机：
-
-- 监听配置中重复端点必须拒绝，不能因端口复用静默成功。`worker_group` 按 `start()`（全员就绪屏障）→ `serve()`（全员服务屏障）→ `request_stop()` → `join(primary)` 推进：各 worker 在准备阶段独立绑定监听，全部 ready 后发布 Windows 共享监听矩阵，全部启动 hook 和服务 barrier 成功后才发起 accept；任一阶段失败、成员异常或成员提前自停均立即关闭全组准入并回滚全部监听与资源，不留下部分服务；`join(primary)` 幂等返回主故障（调用方传入的 `primary` 或按注册顺序的首个成员故障）供重抛，其余成员故障折叠等价项后上报。
-- 停机分阶段：停止接入 → 排空（关闭空闲和未完成请求头的连接，已接纳请求在 `drain_timeout` 内完成，HTTP/2 发送 `GOAWAY` 排空，WebSocket 以 1001 发起关闭；`connection_drain` 在连接准入/释放热路径采用 `relaxed` 无锁原子计数，仅在冷屏障边界加锁，且 `wait_until` 按每次最多 `1h` 窗口分段等待以规避标准库时钟转换溢出）→ 强制关闭剩余连接 → 最终退役。
-- 停止接入先封闭 accept 投递并取消重试：POSIX 关闭本 worker 监听器唤醒 pending accept；Windows 精确取消每个 pending `AcceptEx`，保持共享监听句柄和全部 IOCP owner 存活，直到原生完成已转递、全部 origin 消费完成且通知与定时器已 join，才由各 owner 关闭自身监听器并 finalize。冷启动取消及未启动 worker 不等待不存在的接收器。
-- teardown 先终止 I/O，再 join 全部后台操作。`worker_runtime_hooks` 中除 `startup_` 与 `serve_` 外，其余停机/清理钩子（`stop_admission_`、`finalize_`、`failure_`、`shutdown_`）严禁抛出异常，且 `finalize_` 允许其目标在移动或析构时重入。外部生产者静默、跨线程 channel 双方退役确认及后台任务完成前，`core` 保持 owner 事件循环存活；若 `event_loop_pool::join()` 在 `start()` 前被调用，则创建短生命周期临时 owner 线程排空已接纳任务并运行停止回调（在池自身 worker 线程上调用 `join()` 立即抛 `std::logic_error`）。用户 hook 和 `join` 由生命周期调用线程执行。
-
-## Web 核心设计
-
-- `controller` 是不继承框架类型的 `final` 类，由 `RUVIA_ROUTES_BEGIN(type)` … `RUVIA_ROUTES_END` 宏声明路由并在 `main` 前自动注册；注册去重后封存，不维护手工清单。
-- 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用（`next`）通过三态控制块（`fresh` / `invoked` / `expired`，每跳控制块与 `next` 经 `next_hop_layout` 合并为单次请求 arena 对齐分配）强制 single-shot（在 `respond()` 后或重复调用 `next()` 立即记录 `500` 错误终止下探）并在当前中间件栈帧退出后立即失效以防逃逸。前缀作用域中间件（`use_at`）按百分比解码并归一化尾斜杠后的完整路径段匹配（如 `/admin` 覆盖 `/%61dmin/x` 但不匹配 `/administrator`），归属关系在启动期编译进路由计划，仅跨边界的参数化路由在分发期检查请求路径。
-- `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker（`worker_capabilities` 保证 `worker_states_` 在 Redis/DB 连接前最先初始化、在 `http_clients_.join()` 与后端关闭后最后销毁，启动异常时立即 `close_now()` 并逆序回滚已初始化状态）。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。内存测试门面（`test_app`）在首次 `request()` 时封闭配置并驱动真实 worker 能力启停（禁止初始化重入，启动失败进入粘性 `failed` 态并在后续调用时原样重抛首次异常）。
-- 上下文（`context` 与 `web_worker_context`）只暴露 typed capability（`web_worker_context` 直接借用 worker 的客户端注册表与停止令牌，启动后台任务零所有权复制，worker 退役前 `join` 全部已投递任务）；callback 由应用拥有。
-- 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`（`security_headers_middleware` 写入 `policy` 层使后续替换响应或异常响应仍保留安全首部，且 `Strict-Transport-Security` 严格仅在 `https` 传输下按 RFC 6797 §7.2 发射）；构造响应时通过 `take_draft_or_new()` 原位移动接管 `draft` 实例并仅在未显式设置时补充默认 `Content-Type`（消除新建空响应再拷贝 `draft` 字段的开销）；`http_response_headers` 优先匹配内置静态首部表或紧邻连续的 `name`/`value` 稳定视图实现零分配，覆写拥有型首部时若新旧 `name+value` 总长度相等且无重叠则直接原地覆写，追加同名多行时同步将首槽标记 `append_` 以支持后续单值覆盖 $O(1)$ 判定是否需折叠多行，`remove_header` 先将首个匹配描述符暂存至栈局部再扫描后续行以防入参 `key` 借用被删首部自身存储悬垂，跨表合并/赋值（`transfer_from`）优先走无交集 `try_append_disjoint` 直追快路径，仅冲突时才克隆 `staged` 副本解决冲突后再无分配 `commit`，替换不自动继承旧响应字段。1xx 临时响应（`inform` 与 `send_continue`）共享 `output_active_` 单向通道互斥并经 `inline_http_header_views<16>` 栈内联构造视图；流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止（流式/WebSocket/隧道升级路由一旦 `output_committed`，若中间件捕获了下游异常存入 `context.exception()`，分发层必须强制重抛该异常以关闭连接，严禁忽略异常将截断流作为完整响应结束）。
-- `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查（表单解析对非字符串标量字段在无转义时直接原地解析视图而不分配 `std::pmr::string`）；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠防止自包含结构移动时先销毁自身存储。
-- ORM 与直接查询保持独立公开路线，不混用内部实现。映射结果的标量及容器元素必须递归拥有数据；借用字段读取只在显式持有原始结果的路线提供。数值查询谓词保持字面量精度（不将 `double` 隐式窄化为 `float`）；带分页的关联集合加载（`prepare_entity_read`）先按根实体主键子查询选定分页根 ID 再过滤展开结果（子查询清空 `ctes_` 直接引用外层 `WITH` 绑定以防挥发性/DML CTE 重复求值，并拒绝与 `GROUP BY`、集合运算、`DISTINCT ON` 或 `SKIP LOCKED` 混用）。
-- 数据库与 Redis 韧性：
-  - 数据库建连、流水线共享与驱动控制：建连前通过异步 Resolver 预解析去重地址列表，为 PostgreSQL 生成等长 `host`/`hostaddr` 平行列表（跳过 libpq 同步 DNS 同时保留逻辑主机名校验 TLS，固定 `client_encoding=UTF8` 与 `gssencmode=disable`，首次 `PQconnectPoll` 前先等待 socket 可写以保留多地址回退能力，TLS 建连后核验 `PQsslInUse == 1`）；事务外查询/执行可按驱动契约共享流水线连接（当存在更早排队的独占请求 `oldest_exclusive_arrival` 时，`may_share` 立即停止将晚到查询并入活跃流水线组防饥饿；流水线组队首 flight 已被放弃时标记 `stalled()` 暂停接纳新成员，连接无进展起算点 `stretch_start_` 跨读者角色交接连续计量 I/O 超时防交接续命，新成员截止期更早时主动取消等待收紧超时，非读者跟随者取消/超时经 `abandon` 仅置空 `record.member_` 吸收孤儿结果而不中断兄弟查询，读者在 `hand_off` 前顺带推进已缓冲就绪的跟随者结果）；服务端预处理语句缓存 `db_statement_cache` 以 `(sql, param_types)` 为键实行“二次命中才 prepare”的抗扫描准入，通过 `(index, generation)` 代际句柄与 128 条 LRU 淘汰交还驱动在服务端释放；PostgreSQL 在 `PQflush` 写等待期间同步调用 `PQconsumeInput` 防死锁，凭 `PG_DIAG_SOURCE_FUNCTION` 识别执行前失效的 `26000`/`0A000` 陈旧语句并在读完当前 `Sync` 后仅在事务外透明重跑一次，流式查询以无名语句在 Pipeline 模式下配合 `PQsendPipelineSync` 运行以复位 `SingleRowMode`，`db_migrator` 使用独立专用连接；MariaDB 单遍扫描分类独占语句与存储过程调用，强制拒绝 `LOCAL INFILE` 请求防读取宿主本地文件，仅当参数二进制绑定与字面量语义完全等价时才走预处理绑定，行集读毕后立即释放超 64 KiB 的宽列缓冲，且丢弃未缓冲流式 `MYSQL_RES` 前先置 `handle = nullptr` 脱钩以防 `mysql_free_result` 同步阻塞排空或悬垂访问；
-  - 事务与流式查询生命周期：事务启动计划（`db_transaction_start_plan`）通过编译期静态字面量表生成控制语句（PostgreSQL 单条 `BEGIN ...` 合并隔离级别与读写模式，MariaDB 先 `SET TRANSACTION` 再 `START TRANSACTION`），事务内独占连接租约且 `db_transaction` 严禁读写共享查询结果缓存（防未提交写入泄漏或被旧缓存行覆盖；事务内语句失败后先 `swap` 释放 SQL 与参数缓冲再异步 `ROLLBACK` 并回收槽位）；`db_transaction` 与 `db_stream_result` 借用堆上地址稳定的内部状态（移动外层句柄不使冷任务或运行中帧失效；`db_stream_result` 在自然读尽、显式 `close()`、异常或析构四个出口精确归还连接一次，自然读尽 `finish_closed()` 后再次 `close()` 保持幂等，而 `query_stream()` 遇到无结果集 SQL 读毕状态后直接归还干净连接槽不关连），并发启动重叠操作抛出 `std::logic_error` 但绝不中止当前已持有事务的在途语句；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
-  - 编译期 SQL 字面量（`fixed_string`）在编译期拒绝 NUL 字节、推导或验证数据库方言（MariaDB `?` vs PostgreSQL `$n`，正确跳过注释、字符串与 dollar-quoted 标签/含 `$` 标识符）并断言占位符数与实参个数严格匹配；查询编译器对 PostgreSQL 绑定参数默认发送为无类型（由上下文推导），仅在多态函数参数、全绑定参数算术/位运算/NULL 谓词/`COALESCE`/`NULLIF`/`GREATEST`/`LEAST` 或 `int4` 专属槽位按表生成精确 `::type` 转换；运行期 PostgreSQL 字符串参数严禁包含内嵌 NUL 或超出 `INT_MAX` 长度，内联 `double` 参数强制校验有限值（`std::isfinite`）；
-  - 单次 SQL 执行与迁移（`db_migration`）严格限制为单条语句，迁移 ID 在启动期做大小写不敏感去重校验并拒绝尾随空格；迁移历史表在 PostgreSQL 下使用 `TIMESTAMPTZ`、在 MariaDB 下使用 `utf8mb4_bin` 与 `DATETIME`（规避 2038 年上限与会话时区改写）且 `CHECK (migration_id <> '')` 保持匿名（防 MySQL schema 级约束命名冲突）；PostgreSQL 迁移默认将 DDL 与迁移记录写入置于同一事务（仅不支持事务的 DDL 显式声明 `unwrapped`），且必须识别已执行迁移内容被篡改；存储过程异常 `SQLSTATE` 强制要求 5 位大写字母数字且严禁使用代表成功的 `"00000"`；
-  - Redis 连接池隔离、Pub/Sub 与批处理：同一别名下常规请求/响应池与按需惰性建连的独立阻塞命令池（`blocking_pool_size_per_worker_`）物理隔离，防止阻塞命令耗尽常规连接；配置了 `username_` 时即使无口令也强制发送三元 `AUTH <username> ""`（防 ACL `nopass` 用户误以 `default` 身份连接）；写出命令后写缓冲按 `max(保留阈值, 4 * 本次请求字节)` 摊销保留，完整响应解析完毕且无流水线余量时若 `reader->buf` 超出 `maxbuf` 则立即 `sdsRemoveFreeSpace` 释放；有界阻塞命令在命令写出时按“服务端阻塞时长 + 宽限期”武装截止期（不因槽位获取或建连耗时缩减等待窗口），无限期阻塞等待强制要求显式 `stop_token` 或操作超时；独立订阅连接（`redis_subscription_connection`）跳过普通池空闲探测，构造时必须先 `link` 入链使其可按 ID 寻址后再 `arm` `stop_token`（应对已触发 token 的内联取消）；RESP 响应同时受总字节（`max_reply_bytes_`）与数组嵌套深度（`max_array_depth_`）约束；RediSearch `NUMERIC` 索引与谓词强制校验有限值且绝对值 $\le 2^{53}-1$（防 `double` 整数精度丢失），并保留 `__ruvia_` 影子字段前缀；Redis ORM 写/删 Lua 脚本在执行任何 `HSET`/`HDEL`/`DEL` 前先完成 `TYPE == 'hash'`、`__ruvia_entity == '1'` 归属标记与全部必填字段非缺失校验（防 Lua 运行期错误不回滚已执行写操作），实体 TTL 限制在 $(0, 2^{53}-1]\text{ ms}$ 内且禁止与 `persist` 共存；批处理（`redis_batch`）在返回前完成参数拥有化，事务（`transaction`）严禁含阻塞命令或同步屏障，非事务 `pipeline` 仅允许携带具备明确超时或可取消 `stop_token` 的 `WAIT` / `WAITAOF` 屏障；
-  - 数据库查询结果缓存（Redis 承载，`RUVIAQC2` 格式）：默认缓存作用域对 `(namespace, alias, driver, host, port, database, username, tls_server_name)` 八元组计算带长度前缀的 SHA-256，自定义缓存 `id` 按结果形状（`db_cache_shape`）分键隔离并在按 `id` 失效时一次性展开删除全部形状键；编码时每行（含零列行）前置非零行标记 `\2`，解码在 `reserve` 前强制校验 `columns <= remaining / 8` 与 `count <= remaining / (columns + 1)`（防伪造巨额行数触发预分配 DoS）并将底层缓冲 `rebind` 后由字段零拷贝借用；缓存读写共享同一操作的剩余截止期与组合取消令牌（`stop_group`），遇到取消或停机（`cancelled` / `closing`）时必须立即上抛，不得被容错开关静默吞掉，截止期超时统一按查询超时处理。
-- 出站客户端（`http_client` / `websocket_client`）：
-  - 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层在构造期预解析 IP 字面量端点（`literal_endpoint_`，连接时直接跳过 DNS Resolver）并支持 Happy Eyeballs（RFC 8305：以首个解析地址族为首交错去重 IPv6/IPv4 端点，按 250ms 阶梯并发尝试并在首个连接胜出或取消时立即关闭其余在途 socket），且已启用的客户端 TCP 套接字策略（如 `no_delay` / `keep_alive`）应用失败时建连直接失败而不静默降级；
-  - 强制执行两级出站结果内存预算（已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`，空 `http_client_response_bytes` 不持有存储且不占用保留配额；全量收集 `collect_all_` 发现响应体超限时立即丢弃并释放已缓冲前缀 `discard_response_body()`，防止无用半截数据滞留占用预算）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
-  - 连接通告（`ORIGIN` / `Alt-Svc`）仅作有界只读观测，绝不自动改变已注册 origin、连接归并、TLS 身份或缓存策略；其底层内存池（`http_client_advertisement_memory`）独立跟踪引用计数与保留字节，客户端退役后延迟至全部外部持有的通告对象在所属 worker 释放完毕才自毁；
-  - 出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划及无 DNS 同源判定（IPv6 字面量按二进制地址比较；相对路径在点段消解前先校验原始 URI 语法以防被 `..` 消去的段掩盖非法字节，并按 RFC 3986 §5.2.4 逐段消解以保留空路径段如 `"/a//." -> "/a//"`），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行；已复用的 HTTP/1 连接遭遇 `io_error` 时，仅在同时满足“幂等方法、非流式上传、非隧道、尚未收到任何 `1xx` 或最终响应头且未被放弃”时才透明重试一次；客户端隧道（`http_client_tunnel`）在双端正常完成后允许幂等 `finish()`，而 `abort_malformed()` 即使在 `complete_` 已标记后仍强制携带 `protocol_error` 通知连接池废弃连接/流。
+- **歧义即拒绝（Fail Closed）与安全基线**：
+  - 消息边界、目标路由、编码格式或访问权限有歧义时一律拒绝；无根路径、点段逃逸、空字节、非法百分比编码及非 `http(s)` 的 absolute-form 目标直接拒绝；连接无法承载目标 origin（含明文 `https`、`IPvFuture`、尾随点 IPv4 字面量，以及 `reg-name` 解码 `unreserved` 百分比编码后与证书不匹配）时按 RFC 9110 §7.4 返回 421；
+  - 配置损坏或已设置但格式非法的环境变量立即报错，严禁用默认值静默掩盖；文件路径拒绝内嵌 `\0`，Windows 下经 `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS)` 严格宽化，系统错误码统一转为 UTF-8；对外错误响应脱敏（未知异常绝不回显 `what()`，无应用错误处理器时强制上报服务端诊断），日志与制品严禁包含真实凭据；
+  - 静态文件在构造期建立不可变索引，拒绝隐藏段、符号链接越界与非普通文件；`context::static_file` 严禁对已由路由解码的相对路径二次百分比解码（防 `"%252E%252E"` 双重解码穿越）；非常驻文件读取前后校验身份快照（防 TOCTOU 与同尺寸原地改写）；
+  - 可信代理转发首部逆序定位首个不可信跳作为客户端边界（仅采信该边界跳的 `proto`）；Auto-HTTPS 308 重定向强制附加 `Cache-Control: private` 防 `Host` 共享缓存投毒；CORS 遇到重复/多值 `Origin` 绝不生成授权首部；安全首部写入跨响应替换的 `policy` 层，HSTS 严格仅在 `https` 下发射；
+  - Session 与凭证安全：服务端 `session` 在响应头 commit 时自动轮换 ID（连续 `clear()` 保持首次捕获的旧 ID 不丢失，`clear()` 后再 `set()` 自动升级为轮换删除旧会话防孤儿残留），响应头开始发送后禁止任何写操作；签名 Cookie 前置 4B 大端名称长度帧（`lenPrefix || name || value`）防拼接碰撞，凭证对比使用常量时间比较；
+  - TLS 安全（RFC 9846 / RFC 9525）：读盘前完成配置与 SNI 去重预检，经临时 `SSL_CTX` 一次性提取引用计数句柄并拦截交互式终端口令回调，私钥口令副本主动擦除；仅协商 TLS 1.2（ECDHE + AEAD，禁重协商）或 TLS 1.3；主机名严格匹配 SAN（数据库驱动握手内强制覆盖 `verify_cb`）；mTLS 强制绑定非空 `session_id_context`，客户端证书区分“无证书”与空 Subject DN 并经内存 `BIO` 按 RFC 2253 无截断渲染；连接出站记录数受硬上限约束（跨写 `BIO` 替换持续绑定，达限阻断输出）；Ticket 密钥仅在相邻周期保留 `previous_` 供解密，析构时经 `OPENSSL_cleanse` 擦除。
+- **多维资源预算、背压与防洪防慢速攻击**：
+  - 实时内存预算：每个 worker 强制执行两级入站缓冲上限（worker 级与单连接级）及客户端两级出站结果预算（已保留结果与在途分配，全量收集超限时立即丢弃并释放已缓冲前缀）；容量过载（入站缓冲耗尽、阻塞池满/停机）统一映射为 `503 Service Unavailable`；
+  - 协议洪水防线：HTTP/2 严格限制自上次输出排空以来未排空的非 ACK `PING`/`SETTINGS` 数量（防 CVE-2019-9515 出站 ACK 膨胀）、对端 `RST_STREAM` 超出已完成响应数的净差值（防 CVE-2023-44487 Rapid-Reset 洪水）以及单连接累计畸形请求头流上限，超限立即触发 `GOAWAY(ENHANCE_YOUR_CALM)`；
+  - 压缩炸弹防线：限制最大编码层数（超限回 415），多层编解码对每个中间表示施加字节上限并在下一阶段完成前释放上一阶段缓冲，Zstandard 双向锁定 8 MiB 窗口上限（`windowLog = 23`）；
+  - 双轨超时约束：服务端区分基于最后成功 I/O 的阶段无活动超时（新连接首请求与半截请求头按 `reading_initial` 计，复用连接等待首字节按 `idle` 计）与不可被慢速涓流刷新的绝对完成截止期；客户端 `request_timeout` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期。
+- **Web 路由、中间件、Model/ORM、数据后端与出站客户端契约**：
+  - `controller` 与满足 `ruvia::middleware` 概念的中间件均为不继承框架基类的 per-worker `final` 类型；中间件 `next` 通过与控制块单次合并分配的三态状态机强制 single-shot（在 `respond()` 后或重复调用 `next()` 立即记 500 终止下探）并在栈帧退出时失效；流式/升级路由一旦 `output_committed`，若中间件捕获了下游异常必须强制重抛以关闭连接，严禁将截断流作为完整响应结束；
+  - `model_type` 必填与可空独立，数值转换拒绝 `bool`/字符充当整数并执行精确范围检查；ORM 与直接查询路线独立，带分页的关联集合加载先按根主键子查询选定分页根 ID（清空子查询 CTE 直接引用外层 `WITH` 防重复求值，拒绝与分组/集合运算/`SKIP LOCKED` 混用）；
+  - 数据库与 Redis：建连前异步预解析 DNS（PostgreSQL 生成等长 `host`/`hostaddr` 平行列表、固定 `UTF8` 客户端编码、首轮 `PQconnectPoll` 前先等可写并核验 `PQsslInUse`）；服务端预处理语句缓存以 `(sql, param_types)` 为键实行“二次命中才 prepare”的抗扫描准入与代际句柄 LRU 淘汰；事务内严禁读写共享查询缓存，语句失败先释放缓冲再异步 `ROLLBACK`；迁移限制单条语句、校验历史篡改并保持跨方言时间/排序规则一致；Redis 常规池与惰性阻塞池物理隔离，命名无口令用户强制发 `AUTH <user> ""`，有界阻塞命令在写出时按“阻塞时长 + 宽限期”武装截止期，独立订阅连接先入链寻址再武装 `stop_token`，RediSearch `NUMERIC` 强制校验有限值且绝对值 $\le 2^{53}-1$，Lua 脚本在写操作前完成类型、归属与必填字段全量校验；查询缓存作用域覆盖 8 维连接身份，解码在 `reserve` 前按行标记校验剩余字节上界防预分配 DoS，遇到取消或停机必须立即上抛；
+  - 出站客户端：outbound origin 启动前固定，构造期预解析 IP 字面量端点并支持 Happy Eyeballs（RFC 8305：首地址族优先交错去重、250ms 阶梯并发并在胜出或取消时即刻关闭其余在途 socket）；复用 HTTP/1 连接遭遇 `io_error` 仅在同时满足“幂等方法、非流式上传、非隧道、未收到任何 1xx/响应头且未放弃”时才透明重试一次；连接通告（`ORIGIN` / `Alt-Svc`）仅作有界只读观测，其内存池按引用计数延迟至外部持有对象全部释放后自毁。
 
 ## README 内容规范
 
@@ -212,4 +169,3 @@
 - 无关改动导致构建或测试失败时保留现场、报告具体失败及验证限制，不借机扩大修改范围。
 - 每轮修改结束汇报结果，自动提交并推送到任务对应的分支；只提交本任务改动，不夹带用户或并行任务的修改，不强推或回滚无关提交，并如实报告提交、推送与 CI 状态。除非用户特别说明，否则不创建、修改、删除或重发 Git Tag 与 Release。推送后不等待 CI 完成，不以 CI 结果阻塞交付；未取得结果时标注“CI 未核对”。
 - HTTP/1、HTTP/2 在 `main` 分支维护。
-
