@@ -3,6 +3,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <memory_resource>
@@ -49,17 +51,25 @@ public:
         return failures_.load(std::memory_order_relaxed);
     }
 
-    void record_failure() noexcept {
-        failures_.fetch_add(1, std::memory_order_relaxed);
-    }
+    // Counts a failed refresh pass or adoption and reports its cause through
+    // the rate-limited unhandled-failure sink; the last complete snapshot
+    // stays published.
+    void record_failure(std::exception_ptr failure) noexcept;
 
     // The coordinator constructs workers one at a time before any of them
     // starts, so a plain flag suffices: the first worker to ask owns the walk.
     [[nodiscard]] bool claim_refresh() noexcept;
 
-    // Cold path, once per worker per interval: the published snapshot when it
-    // is not `adopted`, otherwise null. A worker holds its adopted snapshot,
-    // so a matching address always names the same live snapshot.
+    // Advances with every publish, after the snapshot is in place. A worker
+    // compares it with the generation it adopted and takes the publisher lock
+    // only once it changed.
+    [[nodiscard]] std::uint64_t published_generation() const noexcept {
+        return generation_.load(std::memory_order_acquire);
+    }
+
+    // The published snapshot when it is not `adopted`, otherwise null. A
+    // worker holds its adopted snapshot, so a matching address always names
+    // the same live snapshot.
     [[nodiscard]] document_root_snapshot published_unless(const static_root* adopted) const;
 
     // One rebuild pass on the claiming worker. A changed tree is published; a
@@ -79,6 +89,7 @@ private:
     // Guarded by mutex_ for readers. Only refresh() replaces it, on the
     // claiming worker, so that pass reads it without the lock.
     document_root_snapshot current_;
+    std::atomic<std::uint64_t> generation_{0};
     bool refresh_claimed_{false};
     std::atomic<std::size_t> failures_{0};
 };
@@ -117,6 +128,8 @@ private:
     std::pmr::memory_resource* resource_;
     generation_owner current_;
     std::pmr::vector<generation_owner> retired_;
+    // The publisher generation current_ was adopted at.
+    std::uint64_t adopted_generation_{0};
     bool refreshes_;
 };
 

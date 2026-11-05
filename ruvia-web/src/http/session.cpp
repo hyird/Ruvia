@@ -60,39 +60,19 @@ task<void> detail::session_access::commit(context& context_value) {
 #include <memory_resource>
 #include <optional>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "http/secure_token.h"
+#include "util/inline_text_concat.h"
 
 namespace ruvia {
 namespace {
 
-struct session_key_buffer final {
-    static constexpr std::size_t inline_capacity = 128;
-    std::array<char, inline_capacity> inline_;
-    std::pmr::string heap_;
-    std::size_t size_{0};
-
-    session_key_buffer(std::string_view prefix, std::string_view id, std::pmr::memory_resource* resource)
-        : heap_(resource) {
-        size_ = prefix.size() + id.size();
-        if (size_ <= inline_capacity) {
-            prefix.copy(inline_.data(), prefix.size());
-            id.copy(inline_.data() + prefix.size(), id.size());
-        } else {
-            heap_.reserve(size_);
-            heap_.append(prefix);
-            heap_.append(id);
-        }
-    }
-
-    [[nodiscard]] std::string_view view() const noexcept {
-        return heap_.empty() ? std::string_view(inline_.data(), size_) : std::string_view(heap_);
-    }
-};
+// "<key prefix><session id>", inline for typical key sizes.
+using session_key = detail::inline_text_concat<128>;
 
 }  // namespace
 
@@ -128,7 +108,7 @@ session_middleware::session_middleware()
     : session_middleware(session_config{}) {}
 
 session_middleware::session_middleware(const session_config& config)
-    : session_middleware(validate(config), detail::registration_resource()) {}
+    : session_middleware(validate(config), process_resource()) {}
 
 task<void> session_middleware::handle(context& c, next& next_value) {
     detail::session_access::bind(c, this);
@@ -136,7 +116,7 @@ task<void> session_middleware::handle(context& c, next& next_value) {
     if (cookie && detail::is_valid_session_id(*cookie)) {
         detail::session_access::observe_presented_id(c, *cookie);
         auto get_task = [&] {
-            const session_key_buffer key(key_prefix_, *cookie, c.pool());
+            const session_key key({key_prefix_, *cookie}, c.pool());
             return c.redis(redis_alias_).get(key.view());
         }();
         if (auto stored = co_await std::move(get_task)) {
@@ -168,7 +148,7 @@ task<void> session_middleware::commit(context& c) const {
         detail::append_expired_session_cookie_header(staged, cookie_name_, secure);
         if (cleared->old_id_.has_value()) {
             auto del_task = [&] {
-                const session_key_buffer key(key_prefix_, *cleared->old_id_, c.pool());
+                const session_key key({key_prefix_, *cleared->old_id_}, c.pool());
                 return c.redis(redis_alias_).del(key.view());
             }();
             (void)(co_await std::move(del_task));
@@ -190,11 +170,11 @@ task<void> session_middleware::commit(context& c) const {
     const auto new_id = detail::generate_secure_token(id_buffer);
     detail::append_session_cookie_header(staged, cookie_name_, new_id, secure);
 
-    const session_key_buffer key(key_prefix_, new_id, c.pool());
+    const session_key key({key_prefix_, new_id}, c.pool());
     bool applied = false;
     if (!old_id.empty()) {
         auto eval_task = [&] {
-            const session_key_buffer old_key(key_prefix_, old_id, c.pool());
+            const session_key old_key({key_prefix_, old_id}, c.pool());
             // session_middleware::validate requires a positive TTL.
             std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
             const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));

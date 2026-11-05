@@ -60,7 +60,7 @@ int main() {
 
 应用回调（`app_hook`、访问/故障日志回调、错误/404 处理器）独占目标；空函数指针与 `nullptr` 一样构造空回调。清空、替换或析构时先将 owner 置空，再析构目标，因此目标的资源释放可以再次清空同一 owner。目标析构中的重入仅支持清空，不得向该 owner 安装新目标。
 
-`application::on_access()` 与 `on_connection_failure()` 替换或清空配置时，先在锁内发布新回调及其内部视图，再解锁析构旧目标；旧目标析构可以调用 `stop()` 或查询应用状态，不会因重新进入配置锁而死锁。运行期间仍拒绝修改这两类回调。
+`application::on_access()` 与 `on_connection_failure()` 替换或清空配置时，先在锁内发布新回调及其内部视图，再解锁析构旧目标；`on_start(nullptr)` / `on_stop(nullptr)` 清空钩子列表、`on_error(nullptr)` / `on_not_found(nullptr)` 清空全局处理器时同样在解锁后析构被清空的目标。旧目标析构可以调用 `stop()` 或查询应用状态，不会因重新进入配置锁而死锁。运行期间仍拒绝修改这些回调。
 
 ---
 
@@ -80,7 +80,7 @@ int main() {
 | `request_body_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求体单次读取超时 |
 | `header_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `30s`） | 请求头整体完成截止时间 |
 | `body_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `120s`） | 请求体整体完成截止时间 |
-| `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 响应写入超时 |
+| `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 写入无进展超时：每次 socket 写入期间独立计时，只有写入进展续期（读到的数据不续期），不是整体截止期。覆盖 HTTP/1 响应、HTTP/1 升级连接（WebSocket 消息、控制帧与关闭帧，`CONNECT` 隧道数据，与是否启用 WebSocket 心跳无关）以及 HTTP/2 连接的全部帧输出（含 RFC 8441 WebSocket 与 `CONNECT` 隧道），与读方向当前处于空闲、读取请求体还是长连接阶段无关：对端停止读取时关闭连接 |
 | `max_connections_per_worker_` | `std::optional<std::size_t>`（默认 `1024`） | 单个 worker 允许的最大并发连接数 |
 | `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数；HTTP/2 达到上限时按上述两阶段 `GOAWAY` 排空，往返期间在途的流仍被处理（产品上限：最多再接纳 128 条，往返最长等待同上） |
 | `max_buffered_body_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | 缓冲式路由默认允许的最大请求体字节数 |
@@ -95,8 +95,8 @@ int main() {
 
 - 服务器主动结束、而对端仍可能发来数据时采用逗留关闭：HTTP/1 发送要求关闭连接的最终响应（`Connection: close`、请求被拒绝、排空中）后，以及 HTTP/2 以 `GOAWAY` 结束会话（排空完成、空闲超时、连接错误）后，TLS 先发送 `close_notify`，再半关闭 TCP 发送方向，读取并丢弃对端剩余输入，直到对端结束输入、累计 2 秒或丢弃 4 MiB 先发生为止，然后关闭 TCP。这样未读输入不会使 TCP 以 RST 结束连接而冲掉最后的响应。2 秒与 4 MiB 是固定的产品上限。
 - 等待请求头时发生空闲超时、请求头超时或排空，以及对端正常结束输入时，TLS 发送 `close_notify` 后关闭。HTTP/2 对端结束输入（FIN 或 `close_notify`）时先发送最终 `GOAWAY(NO_ERROR)` 再关闭；该连接上仍在处理的流被取消，不再完成其响应。
-- HTTP/2 连接超时（写入阶段除外）先进入 `GOAWAY` 排空，但不再获得第二个完整超时周期：往返等待达到上述 `min(1 秒, drain_timeout_ / 2)` 时发出最终 `GOAWAY`，取消仍未结束的流，并以逗留关闭结束连接（TLS 发送 `close_notify`）。若届时仍有写入未完成（对端不读取），自超时起 2 秒（产品上限）后直接关闭连接，不发送关闭告警。
-- 写超时、HTTP/1 读取请求体超时与处理器无读写超过 `idle_timeout_`、传输错误以及 `drain_timeout_` 到期后的强制关闭立即关闭连接，不发送关闭告警。逗留中的连接计入 `active_connections_`，受 `drain_timeout_` 约束。
+- HTTP/2 连接超时（写入超时除外）先进入 `GOAWAY` 排空，但不再获得第二个完整超时周期：往返等待达到上述 `min(1 秒, drain_timeout_ / 2)` 时发出最终 `GOAWAY`，取消仍未结束的流，并以逗留关闭结束连接（TLS 发送 `close_notify`）。若届时仍有写入未完成（对端不读取），自超时起 2 秒（产品上限）后直接关闭连接，不发送关闭告警。
+- 写超时（HTTP/1 响应、WebSocket 与 `CONNECT` 隧道的写入，以及 HTTP/2 连接的写入）、HTTP/1 读取请求体超时与处理器无读写超过 `idle_timeout_`、传输错误以及 `drain_timeout_` 到期后的强制关闭立即关闭连接，不发送关闭告警（停滞的写入无法再携带 `GOAWAY` 或关闭告警）。逗留中的连接计入 `active_connections_`，受 `drain_timeout_` 约束。
 
 #### `ruvia::listen_config` 与 `ruvia::tls_config`
 
@@ -407,6 +407,8 @@ const auto& user = c.request_state<current_user>();
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
 
+每个 worker 预分配 `capacity_per_worker_`（默认 `8192`）个固定窗口计数槽。一次查找或插入只探测该 key 哈希位置起的固定窗口（`min(capacity_per_worker_, 32)` 个槽），单次请求的开销与表容量无关；窗口内全是其他 key 的未过期计数时，该请求按规则的 `overflow_policy_` 处理（默认 `deny`），即使表的其他部分仍有空位。容量需要为活跃客户端数留出余量。
+
 会话仅接受固定 48 位小写十六进制 ID，其他长度或字符按不存在的会话处理，不读取或修改其拼接的 Redis key。已有合法 ID 与 `key_prefix_ + ID` 存储格式保持不变；旧的非标准 ID 不再被识别。固定长度防止不同前缀通过变长 ID 穿透命名空间；使用同一 Redis 数据库和相同前缀则共享会话命名空间，隔离责任由配置方承担。
 
 CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字段，例如 `X-App-CSRF` 或 `CSRF-Token`。构造时拒绝 CORS-safelisted、浏览器保留及已知自动生成/代理字段，如 `Accept`、`Content-Type`、`Origin`、`Sec-*`、`X-Forwarded-*`；旧配置需更换字段并同步前端。这里依赖 [Fetch 的自定义请求头与预检边界](https://fetch.spec.whatwg.org/#cors-safelisted-request-header)，不是给任意等值字段赋予认证意义。部署方须保证代理不注入所选 token 字段，且仅向可信 origin 授予携带凭据的 CORS 权限；该中间件不替代用户认证，也不隔离已经被应用信任的跨源脚本。
@@ -432,9 +434,9 @@ CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字�
 | 宏 | 说明 |
 | --- | --- |
 | `RUVIA_REQUIRED_FIELD(field, type, ...)` | 必填字段（缺失则校验失败） |
-| `RUVIA_REQUIRED_FIELD_NAME(wire_name, field, type, ...)` | 指定外部序列化字段名 `wire_name` 的必填字段 |
+| `RUVIA_REQUIRED_FIELD_NAME(wire_name, field, type, ...)` | 指定外部序列化字段名 `wire_name` 的必填字段（`wire_name` 须为合法 UTF-8，否则编译失败；其 JSON 键在编译期完成转义） |
 | `RUVIA_OPTIONAL_FIELD(field, type, ...)` | 可选字段（仅允许字段缺失；若需允许 JSON `null` 须额外加 `RUVIA_NULLABLE`） |
-| `RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...)` | 指定外部序列化字段名 `wire_name` 的可选字段 |
+| `RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...)` | 指定外部序列化字段名 `wire_name` 的可选字段（约束同上） |
 | `RUVIA_NULLABLE` | 允许字段值为 `null`（通过 `m.is_null<"field">()` 判断） |
 | `RUVIA_DEFAULT(value)` | 反序列化时若字段缺失（非 `null`），自动填充默认值 `value`（仅用于可选字段；用于 `RUVIA_REQUIRED_FIELD` 时编译失败） |
 | `RUVIA_INITIAL(value)` | 在 C++ 中默认构造模型实例时将该字段初始化为 `value` |
@@ -446,7 +448,7 @@ CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字�
 - `RUVIA_MAX(limit, message)`：数值上限或字符串 UTF-8 字节长度上限
 - `RUVIA_EMAIL(message)`：电子邮件格式校验
 - `RUVIA_ONE_OF(message, val1, val2, ...)`：枚举白名单校验
-- `RUVIA_PATTERN(pattern, message)`：整串锚定正则模式校验
+- `RUVIA_PATTERN(pattern, message)`：整串锚定正则模式校验（字符类在编译期折叠为字节集合，每个输入字节 O(1) 判定；回溯按固定步数预算有界，超出即判定不匹配）
 - `RUVIA_CUSTOM(predicate, message)`：自定义谓词函数校验
 
 ```cpp
@@ -505,11 +507,11 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 
 - **JSON / Form 编解码**：
   - `T ruvia::from_json<T>(std::string_view json, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，模型字段校验失败抛携带 issues 的 `ruvia::http_error`）
-  - `std::pmr::string ruvia::to_json(const T& value, model_options options = {})`
+  - `std::pmr::string ruvia::to_json(const T& value, model_options options = {})`（无短转义形式的控制字符输出为小写 `\u00xx`）
   - `T ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，字段校验失败抛携带 issues 的 `ruvia::http_error`）
 - **零拷贝动态 JSON 视图（`"ruvia/web/model.h"`）**：
   - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）
-  - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。
+  - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。`get<T>()` 的结果可能借用 token 字节，因此只能在左值 token 上调用，右值 token 上调用编译失败。
   - 移动构造保留 token 的借用/拥有方式；移动赋值保留目标 PMR 并拥有化结果。成功移动或右值字段转移后，源 `json_value` 恢复为 `null`，源 `json_object` 恢复为 `{}`，源 PMR 不变，仍可查询、赋值或作为模型成员序列化；重置本身不分配。自移动赋值保持原值；跨资源拥有化失败时两端原值均保留。移动后重新取得借用视图，不继续使用旧视图。
 - **命令式校验器 `ruvia::validator`（`"ruvia/web/validation.h"`）**：
   - 提供 `.required(opt, field)`、`.min_length(opt, field, n)`、`.max_length(opt, field, n)`、`.range(opt, field, low, high)`、`.one_of(opt, field, list)`、`.add(field, code, message)`，最后调用 `.throw_if_invalid(validation_failure_options = {})` 抛出携带 issues 的 `ruvia::http_error`（默认 400 / `validation_failed`）。
@@ -524,7 +526,7 @@ Ruvia 提供三种静态文件服务方式：
 
 1. **单文件响应**：在路由中调用 `c.file({.path_ = "/path/to/file.pdf", .content_type_ = "application/pdf"})`。
 2. **不可变目录快照 `ruvia::static_root`**：启动前构造 `ruvia::static_root assets("public/", {.cache_control_ = "public, max-age=3600"})`，在路由中调用 `c.static_file(assets, {.relative_path_ = c.req().param("*").value_or("")})`。
-3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 刷新目录索引，并支持 `precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 自动预压缩热文件。
+3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 刷新目录索引，并支持 `precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 自动预压缩热文件。刷新是事务性的：某一轮重建或采用失败时继续服务上一份完整快照，`http_stats().document_root_refresh_failures_` 计数加一，失败原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。各 worker 只在发布代次变化时才取发布者的锁采用新快照。
 
 三者均内置路径穿越防护、点文件策略（`static_dotfile_policy::deny` 默认拒绝隐藏文件）、`ETag` / `Last-Modified` 条件请求（`304 Not Modified`）与 `Range` 分段响应（`206 Partial Content`）。`c.static_file()` 的 `relative_path_` 是已解码的文件路径，`/` 与 `\` 均为段分隔符；含 `.` 或 `..` 段、空的中间段、绝对路径或 NUL 时一律返回 `403`，不做解析或夹取。命名参数（如 `/files/:name`）可在单个段内解码出 `%2F` / `%5C`，因此 `sub%2F..%2Fsecret` 这类拼写同样被拒绝。
 

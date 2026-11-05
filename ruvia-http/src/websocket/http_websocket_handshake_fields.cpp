@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
@@ -71,28 +71,6 @@ namespace {
     return result;
 }
 
-[[nodiscard]] bool append_websocket_subprotocol_offers(const http_request& request,
-    websocket_subprotocol_set& protocols, bool& present) noexcept {
-    if (!request_has_known_header(request, request_header_kind::sec_websocket_protocol)) {
-        return true;
-    }
-    const auto headers = request.headers();
-    const auto last_index =
-        http_request_access::known_header_index(request, request_header_kind::sec_websocket_protocol);
-    const auto limit = std::min(headers.size(), last_index);
-    for (std::size_t i = 0; i < limit; ++i) {
-        if (http_request_access::header_kind(request, i) !=
-            request_header_kind::sec_websocket_protocol) {
-            continue;
-        }
-        present = true;
-        if (!protocols.append_offered_list(headers[i].value())) {
-            return false;
-        }
-    }
-    return true;
-}
-
 void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_value) noexcept {
     while (cursor_value < value.size() && (value[cursor_value] == ' ' || value[cursor_value] == '\t')) {
         ++cursor_value;
@@ -108,32 +86,24 @@ void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_va
     return cursor_value != start;
 }
 
+// RFC 6455 section 4.3 narrows quoted-string extension values: after
+// quoted-pair unescaping, the result still has to be a nonempty token.
 [[nodiscard]] bool consume_websocket_extension_quoted_token(
     std::string_view value, std::size_t& cursor_value) noexcept {
-    if (cursor_value == value.size() || value[cursor_value] != '"') {
-        return false;
-    }
-    ++cursor_value;
+    http_quoted_string_cursor quoted(value.substr(cursor_value));
     bool decoded_any = false;
-    while (cursor_value < value.size()) {
-        auto ch = value[cursor_value++];
-        if (ch == '"') {
-            return decoded_any;
-        }
-        if (ch == '\\') {
-            if (cursor_value == value.size()) {
-                return false;
-            }
-            ch = value[cursor_value++];
-        }
-        // RFC 6455 section 4.3 narrows quoted-string extension values:
-        // after quoted-pair unescaping, the result still has to be a token.
-        if (!is_http_token_char(static_cast<unsigned char>(ch))) {
+    unsigned char byte = 0;
+    while (quoted.next(byte)) {
+        if (!is_http_token_char(byte)) {
             return false;
         }
         decoded_any = true;
     }
-    return false;
+    if (!quoted.closed()) {
+        return false;
+    }
+    cursor_value += quoted.consumed();
+    return decoded_any;
 }
 
 }  // namespace
@@ -216,14 +186,12 @@ std::string_view choose_websocket_subprotocol(
 
 std::string_view choose_websocket_subprotocol(
     const http_request& request, std::span<const std::string_view> supported) noexcept {
-    if (supported.empty() ||
-        !request_has_known_header(request, request_header_kind::sec_websocket_protocol)) {
+    if (supported.empty()) {
         return {};
     }
     websocket_subprotocol_set offered;
-    bool present = false;
-    if (!append_websocket_subprotocol_offers(request, offered, present) || !present ||
-        offered.empty()) {
+    if (!http_request_access::visit_known_headers(request, request_header_kind::sec_websocket_protocol,
+            [&offered](std::string_view value) noexcept { return offered.append_offered_list(value); })) {
         return {};
     }
     return choose_websocket_subprotocol(offered, supported);
@@ -301,7 +269,7 @@ websocket_server_handshake make_websocket_server_handshake(
     const http_request& request, websocket_server_handshake_options options, std::pmr::memory_resource* resource) {
     detail::websocket_accept_key_type accept;
     detail::encode_websocket_accept(
-        accept, detail::request_known_header(request, detail::request_header_kind::sec_websocket_key));
+        accept, detail::http_request_access::known_header(request, detail::request_header_kind::sec_websocket_key));
     auto negotiation = detail::make_websocket_server_negotiation(request, options, resource);
     return websocket_server_handshake(accept, std::move(negotiation).take_subprotocol(),
         negotiation.compression(), std::move(negotiation).take_response_headers());

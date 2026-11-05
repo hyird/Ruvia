@@ -11,11 +11,10 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/detail/fnv1a.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_response_file.h"
-
-#include "util/fnv1a.h"
 
 namespace ruvia::detail {
 
@@ -252,12 +251,6 @@ template <typename char_value_type>
     }
     return guess_static_file_content_type_from_extension(
         std::string_view(lower.data(), extension.size()));
-}
-
-[[nodiscard]] inline std::string_view guess_static_file_content_type(
-    const std::filesystem::path& path) noexcept {
-    return guess_static_file_content_type_from_path_view(
-        std::basic_string_view<std::filesystem::path::value_type>(path.native()));
 }
 
 // Strong validator for one file snapshot: a quoted 64-bit FNV-1a digest of the

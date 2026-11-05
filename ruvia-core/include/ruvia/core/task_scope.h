@@ -84,7 +84,10 @@ public:
         bool started_{false};
     };
 
-    // Creation and starting the join both require the bound worker.
+    // Creation and starting the join both require the bound worker. The join
+    // rethrows the first child failure; each later child failure not
+    // equivalent to it (see equivalent_failures) is routed to
+    // report_unhandled_failure when that child completes.
     [[nodiscard]] join_operation join() &;
     join_operation join() && = delete;
 

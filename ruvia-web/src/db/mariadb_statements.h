@@ -100,9 +100,6 @@ private:
     state* state_{nullptr};
 };
 
-// Whether `sql` names one of the session tracking variables.
-[[nodiscard]] bool mariadb_names_session_tracking(std::string_view sql) noexcept;
-
 // The system variables a statement's parse or result depends on, as
 // session_track_system_variables lists them, with the two tracking variables
 // themselves, so that turning the schema's tracking off or changing this

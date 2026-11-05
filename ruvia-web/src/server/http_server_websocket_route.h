@@ -45,13 +45,13 @@ struct http1_websocket_upgrade_commit final {
             dispatch_.memory_.resource());
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake,
-                dispatch_.parsed_.body_plan_.expectations(), dispatch_.memory_.resource());
+                dispatch_.parsed_.body_plan_.expectations(), *dispatch_.memory_.resource());
             ec) {
             co_return std::nullopt;
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
         co_return websocket_upgrade_commit<stream_type>(
-            dispatch_.stream_, handshake.compression(), handshake.subprotocol(), dispatch_.memory_.resource());
+            dispatch_.stream_, handshake.compression(), handshake.subprotocol(), *dispatch_.memory_.resource());
     }
 };
 

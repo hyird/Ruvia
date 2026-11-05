@@ -1,7 +1,5 @@
 #include "ruvia/http/http_conditional_request.h"
 
-#include <algorithm>
-#include <cstddef>
 #include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
@@ -18,14 +16,14 @@ http_conditional_headers get_http_conditional_headers(const http_request& reques
         detail::http_request_access::has_repeated_known_header(
             request, detail::request_header_kind::if_unmodified_since)
             ? std::string_view{}
-            : detail::request_known_header(request, detail::request_header_kind::if_unmodified_since),
+            : detail::http_request_access::known_header(request, detail::request_header_kind::if_unmodified_since),
         detail::http_request_access::has_repeated_known_header(
             request, detail::request_header_kind::if_modified_since)
             ? std::string_view{}
-            : detail::request_known_header(request, detail::request_header_kind::if_modified_since),
-        detail::request_known_header(request, detail::request_header_kind::range),
-        detail::request_known_header(request, detail::request_header_kind::if_range),
-        detail::request_has_known_header(request, detail::request_header_kind::if_range)};
+            : detail::http_request_access::known_header(request, detail::request_header_kind::if_modified_since),
+        detail::http_request_access::known_header(request, detail::request_header_kind::range),
+        detail::http_request_access::known_header(request, detail::request_header_kind::if_range),
+        detail::http_request_access::has_known_header(request, detail::request_header_kind::if_range)};
 }
 
 void http_etag_field_condition::update(
@@ -51,50 +49,20 @@ void http_etag_field_condition::update(
 http_etag_preconditions get_http_etag_preconditions(
     const http_request& request, std::string_view etag) noexcept {
     http_etag_preconditions result;
-    const bool has_if_match = detail::request_has_known_header(request, detail::request_header_kind::if_match);
-    const bool has_if_none_match =
-        detail::request_has_known_header(request, detail::request_header_kind::if_none_match);
-    if (!has_if_match && !has_if_none_match) {
-        return result;
-    }
-    if ((!has_if_match ||
-            !detail::http_request_access::has_repeated_known_header(
-                request, detail::request_header_kind::if_match)) &&
-        (!has_if_none_match ||
-            !detail::http_request_access::has_repeated_known_header(
-                request, detail::request_header_kind::if_none_match))) {
-        if (has_if_match) {
-            result.if_match_.update(
-                detail::request_known_header(request, detail::request_header_kind::if_match), etag, true);
-        }
-        if (has_if_none_match) {
-            result.if_none_match_.update(
-                detail::request_known_header(request, detail::request_header_kind::if_none_match), etag, false);
-        }
-        return result;
-    }
-
     // Both conditions are RFC list fields. Multiple field lines are equivalent
     // to comma-joining their values (RFC 9110 §5.3), but the request keeps
-    // zero-copy views into separate wire lines. Fold them in one header scan and
+    // zero-copy views into separate wire lines. Fold them line by line and
     // retain whole-list validity without allocating a joined string.
-    const auto headers = request.headers();
-    const auto last_match = has_if_match ? detail::http_request_access::known_header_index(
-                                               request, detail::request_header_kind::if_match)
-                                         : std::size_t{0};
-    const auto last_none_match =
-        has_if_none_match ? detail::http_request_access::known_header_index(
-                                request, detail::request_header_kind::if_none_match)
-                          : std::size_t{0};
-    const auto limit = std::min(headers.size(), std::max(last_match, last_none_match));
-    for (std::size_t i = 0; i < limit; ++i) {
-        const auto kind = detail::http_request_access::header_kind(request, i);
-        if (has_if_match && kind == detail::request_header_kind::if_match) {
-            result.if_match_.update(headers[i].value(), etag, true);
-        } else if (has_if_none_match && kind == detail::request_header_kind::if_none_match) {
-            result.if_none_match_.update(headers[i].value(), etag, false);
-        }
-    }
+    (void)detail::http_request_access::visit_known_headers(
+        request, detail::request_header_kind::if_match, [&result, etag](std::string_view value) noexcept {
+            result.if_match_.update(value, etag, true);
+            return true;
+        });
+    (void)detail::http_request_access::visit_known_headers(
+        request, detail::request_header_kind::if_none_match, [&result, etag](std::string_view value) noexcept {
+            result.if_none_match_.update(value, etag, false);
+            return true;
+        });
     return result;
 }
 

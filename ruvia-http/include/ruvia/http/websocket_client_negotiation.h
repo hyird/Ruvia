@@ -93,7 +93,8 @@ private:
     websocket_client_deflate_offer deflate_;
     std::array<http_header, 3> fields_{};
     std::size_t field_count_{0};
-    bool has_subprotocols_{false};
+    // The owned Sec-WebSocket-Protocol request value; empty when none is offered.
+    std::string_view offered_subprotocols_{};
 };
 
 class http1_parsed_client_response_head;

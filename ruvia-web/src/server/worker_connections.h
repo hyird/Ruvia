@@ -101,8 +101,12 @@ private:
     void configure_tls(http_server_session_config& session);
     task<void> rotate_tls_ticket_keys();
     void accept_socket(std::size_t index, tcp_socket_type socket);
-    task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection);
-    task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection);
+    // `remote` is the peer accept_socket() read before the socket moved into
+    // the lease; absent when the socket no longer knew its peer.
+    task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection,
+        std::optional<asio::ip::tcp::endpoint> remote);
+    task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection,
+        std::optional<asio::ip::tcp::endpoint> remote);
     void report_session_failure(
         tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
     template <typename stream_type>

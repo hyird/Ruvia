@@ -72,7 +72,7 @@ ruvia::app().database({
 | `template <typename E> db_repository<E, db_handle> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
 | `db_query_result_cache query_result_cache() const` | （需 `RUVIA_ENABLE_REDIS`）获取查询结果缓存控制器 |
 
-查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。
+查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号；从旧版本升级后，先前写入的条目不再命中，随各自的过期时间失效。
 
 直接查询保留 raw 借用路线：`db_field::as<std::string_view>()` 与 `value()` 返回的文本视图只在所属行存储有效期间可用，不得从已经析构的 `db_rows` 中逸出。需要独立结果时，使用 `as<std::pmr::string>()` / `as<ruvia::string>()`；ORM 映射入口则在编译期要求 owning 类型，见第 3.1 节。
 
@@ -120,6 +120,8 @@ co_await tx.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2");
 co_await tx.commit();
 ```
 
+事务中的语句一旦失败（服务端拒绝、结果形状不符，或字符串参数含 NUL 字节等被驱动在编码时拒绝），事务即被回滚并归还连接，之后对该事务的调用会因其已不再活跃而失败。
+
 PostgreSQL 事务还额外支持：
 - **咨询锁（Advisory Locks）**：`co_await tx.advisory_lock(key)` / `try_advisory_lock(key)`
 - **服务端游标**：`declare_cursor(name, sql, params, scroll)`、`fetch_cursor(name, count)`、`close_cursor(name)`
@@ -140,6 +142,8 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 ```
 
 迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不再自动建列或把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
+
+迁移锁（MariaDB `GET_LOCK`、PostgreSQL 会话级咨询锁）归属取得它的会话，因此迁移器只使用一条连接，且该连接结束后不再重连：会话因传输失败而断开，或某条 `unwrapped` 迁移使连接停留在事务中（如单独执行 `BEGIN`、MariaDB 的 `SET autocommit = 0`）而在归还时被关闭后，后续迁移与历史记录都以 `db_error`（`io_error`）失败，不会在未持锁的新会话上继续执行。失败时迁移器不显式释放锁，而是关闭会话使锁随之释放。
 
 ---
 
@@ -319,6 +323,7 @@ ruvia::app()
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
 - 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.handle(options = {})` 获取 `redis_handle`；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
 - 每条连接复用回复解析根槽；嵌套值和字符串仍由当前操作指定的资源持有，失败或取消时随未完成的回复一起回收。
+- 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
 
 ### 4.2 `ruvia::redis_handle` 命令分类总览
 
@@ -340,6 +345,10 @@ ruvia::app()
 `redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。原先用空字符串清除过滤的调用须改为 `match_ = std::nullopt` 或 `match_.reset()`，不得再依赖空模式被忽略。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
 
 `redis_scan_options::count_` 与 `redis_x_read_group_options::count_` 使用 `std::optional<redis_positive_count>`：未指定不发送 `COUNT`，指定整数时在构造阶段检查 `1..INT64_MAX`，零、负数或超范围抛出 `std::invalid_argument`，无异常探测用 `redis_positive_count::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。
+
+返回字符串数组的方法（`lrange`、`zrange`、`smembers`、`hkeys`、`hvals`、`sinter`、`sunion`、`sdiff` 以及 `scan`／`sscan` 的 `values()`）要求每个元素都是字符串：回复中出现 nil 元素时抛出 `redis_error(protocol_error)`，不会静默丢弃而改变结果长度或位置。允许缺失值的 `mget`／`hmget` 仍以 `std::optional` 表示 nil。
+
+原始 `command()` 与批处理的 `command()` 按 Redis 文档语法识别 `XREAD`／`XREADGROUP` 在 `STREAMS` 之前的选项：`COUNT`、`BLOCK`，以及仅 `XREADGROUP` 支持的 `CLAIM`（Redis 8.4+）与 `NOACK`。含 `BLOCK` 的命令视为阻塞命令，走阻塞池且须由 `timeout_` 或可取消的 `stop_token_` 约束，不能进入 pipeline／transaction；其他未识别的选项同步抛出 `std::invalid_argument`，不会被猜测为非阻塞命令。依据 [XREADGROUP](https://redis.io/docs/latest/commands/xreadgroup/)。
 
 #### 写入与复制／落盘屏障
 

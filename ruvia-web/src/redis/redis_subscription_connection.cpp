@@ -10,8 +10,8 @@
 
 #include "ruvia/core/operation_timeout.h"
 
-#include "redis/redis_handle_helpers.h"
 #include "redis/redis_protocol.h"
+#include "redis/redis_reply_parsers.h"
 #include "redis/redis_types_access.h"
 #include "util/operation_lane_lease.h"
 
@@ -121,6 +121,9 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read() {
         if (error.code() == redis_error::code_type::cancelled || error.code() == redis_error::code_type::closing) {
             co_return std::nullopt;
         }
+        throw;
+    } catch (...) {
+        fail();
         throw;
     }
     // A rejected command (for example a denied channel) leaves the stream in

@@ -72,8 +72,19 @@ public:
     void peer_input_ended() noexcept;
     void set_inactivity_phase() noexcept;
     void touch_activity() noexcept;
+    // The connection's scanner entry: the reader times its phases, the
+    // writer runs the entry's write stall clock around each socket write.
+    [[nodiscard]] connection_scanner::entry& scanner_entry() const noexcept {
+        return session_.scanner_entry();
+    }
     void wake_writer() noexcept;
     void terminate(std::error_code error) noexcept;
+    // The one way a stream is reset outside the protocol's own event
+    // handling: queue RST_STREAM, stop the stream's waiters, release its DATA
+    // budget and wake the writer. A RST_STREAM that cannot be queued would
+    // leave the peer's stream open and counted against its concurrency limit,
+    // so that failure terminates the session.
+    void reset_stream_no_throw(std::uint32_t stream_id, http2_error_code error) noexcept;
     [[nodiscard]] task<void> finish();
 
     [[nodiscard]] std::pmr::memory_resource* worker_resource() const noexcept;
@@ -102,7 +113,6 @@ private:
     void arm_drain_timer() noexcept;
     void drain_timer_expired() noexcept;
     void finish_drain_if_ready() noexcept;
-    void reset_stream_no_throw(std::uint32_t stream_id, http2_error_code error) noexcept;
 
     asio::any_io_executor executor_;
     asio::ip::tcp::socket& socket_;

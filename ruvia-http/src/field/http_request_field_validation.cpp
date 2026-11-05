@@ -1,8 +1,9 @@
 #include "field/http_request_field_validation.h"
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_known_method.h"
 
 #include "coding/http_content_coding.h"
 #include "field/http_cors_fields.h"
@@ -21,6 +22,13 @@ namespace {
                                              : singleton_request_header_bit(kind);
 }
 
+// RFC 9110 section 5.6.6 parameter: no whitespace around '='.
+[[nodiscard]] bool is_exact_http_parameter(std::string_view part) noexcept {
+    const auto equals = part.find('=');
+    return equals != std::string_view::npos && is_valid_http_header_name(part.substr(0, equals)) &&
+           is_http_token_or_quoted_string(part.substr(equals + 1));
+}
+
 [[nodiscard]] bool http_expectation_item(std::string_view item) noexcept {
     item = http_trim_ows(item);
     if (item.empty()) {
@@ -29,60 +37,23 @@ namespace {
 
     const auto parameters_start = http_find_unquoted_delimiter(item, 0, ';');
     const auto leading = http_trim_ows(item.substr(0, parameters_start));
-    const auto equals = leading.find('=');
-    if (equals == std::string_view::npos) {
+    if (leading.find('=') == std::string_view::npos) {
         return parameters_start == item.size() && is_valid_http_header_name(leading);
     }
-
-    const auto name = leading.substr(0, equals);
-    const auto value = leading.substr(equals + 1);
-    if (!is_valid_http_header_name(name) || !is_http_token_or_quoted_string(value)) {
-        return false;
-    }
-
-    std::size_t start = parameters_start;
-    while (start < item.size()) {
-        ++start;
-        const auto end = start + http_find_unquoted_delimiter(item.substr(start), 0, ';');
-        const auto parameter = http_trim_ows(item.substr(start, end - start));
-        // RFC 9110 section 5.6.6: parameters = *( OWS ";" OWS [ parameter ] ).
-        if (parameter.empty()) {
-            start = end;
-            continue;
-        }
-        const auto parameter_equals = parameter.find('=');
-        if (parameter_equals == std::string_view::npos) {
-            return false;
-        }
-        const auto parameter_name = parameter.substr(0, parameter_equals);
-        const auto parameter_value = parameter.substr(parameter_equals + 1);
-        if (!is_valid_http_header_name(parameter_name) ||
-            !is_http_token_or_quoted_string(parameter_value)) {
-            return false;
-        }
-        start = end;
-    }
-    return true;
+    // RFC 9110 section 5.6.6: parameters = *( OWS ";" OWS [ parameter ] ).
+    return is_exact_http_parameter(leading) && http_all_parameters(item, [](std::string_view parameter) noexcept {
+        return parameter.empty() || is_exact_http_parameter(parameter);
+    });
 }
 
-// Recipient-side Expect grammar. Empty list members are tolerated by the generic
-// field-list parser, but every non-empty member still has to be a syntactically
-// valid expectation before product policy decides whether unsupported extensions
-// are rejected with 417 or ignored.
+// Recipient-side Expect grammar. Empty list members are ignored, but every
+// non-empty member still has to be a syntactically valid expectation before
+// product policy decides whether unsupported extensions are rejected with 417
+// or ignored.
 [[nodiscard]] bool is_valid_received_http_expect_field_value(std::string_view value) noexcept {
-    bool valid = true;
-    http_visit_comma_separated_quoted_field_items(value, [&valid](std::string_view item) noexcept {
-        item = http_trim_ows(item);
-        if (item.empty()) {
-            return true;
-        }
-        if (!http_expectation_item(item)) {
-            valid = false;
-            return false;
-        }
-        return true;
-    });
-    return valid;
+    return http_visit_list_members(value, http_field_list_role::recipient, [](std::string_view item) noexcept {
+        return http_expectation_item(item) ? http_field_list_parse_status::ok : http_field_list_parse_status::malformed;
+    }) == http_field_list_parse_status::ok;
 }
 
 [[nodiscard]] bool is_valid_te(
@@ -106,7 +77,7 @@ namespace {
         case request_header_kind::origin:
             return application_role == http_field_list_role::recipient || is_valid_http_origin_field_value(value);
         case request_header_kind::access_control_request_method:
-            return application_role == http_field_list_role::recipient || is_valid_http_cors_request_method(value);
+            return application_role == http_field_list_role::recipient || is_valid_http_method_token(value);
         case request_header_kind::access_control_request_headers:
             return application_role == http_field_list_role::recipient || is_valid_http_cors_request_header_names(value);
         case request_header_kind::content_type:

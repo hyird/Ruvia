@@ -128,28 +128,12 @@ public:
     root_task_state(worker_handle worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
         : completion_(std::move(worker_value), std::move(loop_value)) {}
 
-    [[nodiscard]] bool valid() const noexcept {
-        return completion_.valid();
+    // The type-independent completion protocol; only the result is typed here.
+    [[nodiscard]] root_task_completion& completion() noexcept {
+        return completion_;
     }
-
-    void wait() const {
-        completion_.wait();
-    }
-
-    void abandon() noexcept {
-        completion_.abandon();
-    }
-
-    void stage_failure(std::exception_ptr failure) noexcept {
-        completion_.stage_failure(std::move(failure));
-    }
-
-    void publish_completion() noexcept {
-        completion_.publish_completion();
-    }
-
-    void complete_failure(std::exception_ptr failure) noexcept {
-        completion_.complete_failure(std::move(failure));
+    [[nodiscard]] const root_task_completion& completion() const noexcept {
+        return completion_;
     }
 
     template <typename value_type>
@@ -207,11 +191,11 @@ public:
     }
 
     [[nodiscard]] bool valid() const noexcept {
-        return state_ && state_->valid();
+        return state_ && state_->completion().valid();
     }
 
     void wait() const {
-        require_state().wait();
+        require_state().completion().wait();
     }
 
     // User result moves run without the state mutex and may re-enter this
@@ -226,7 +210,7 @@ public:
             std::shared_ptr<detail::root_task_state<t_type>>& state_;
             const std::shared_ptr<detail::root_task_state<t_type>>& expected_;
             ~retire_state() {
-                if (state_ == expected_ && !expected_->valid()) {
+                if (state_ == expected_ && !expected_->completion().valid()) {
                     state_.reset();
                 }
             }
@@ -252,7 +236,7 @@ private:
 
     void reset() noexcept {
         if (state_) {
-            state_->abandon();
+            state_->completion().abandon();
             state_.reset();
         }
     }

@@ -9,8 +9,8 @@
 
 #include "ruvia/web/db/db_query.h"
 
-#include "db/db_pool_utils.h"
 #include "db/db_sql_format.h"
+#include "db/db_value_clone.h"
 
 namespace ruvia::detail {
 

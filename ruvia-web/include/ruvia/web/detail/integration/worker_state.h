@@ -98,8 +98,10 @@ private:
     destroy_instance_type destroy_instance_{nullptr};
 };
 
-template <typename definitions_type>
-void append_worker_state_definition(definitions_type& definitions, worker_state_definition&& definition) {
+// The single startup validation point for worker state recipes: the registry
+// only ever receives definitions that passed through here.
+inline void append_worker_state_definition(
+    std::pmr::vector<worker_state_definition>& definitions, worker_state_definition&& definition) {
     if (!definition.valid()) {
         throw std::invalid_argument("worker state definition is invalid");
     }
@@ -111,20 +113,6 @@ void append_worker_state_definition(definitions_type& definitions, worker_state_
     definitions.push_back(std::move(definition));
 }
 
-template <typename definitions_type>
-void validate_worker_state_definitions(const definitions_type& definitions) {
-    for (std::size_t index = 0; index < definitions.size(); ++index) {
-        if (!definitions[index].valid()) {
-            throw std::invalid_argument("worker state definition is invalid");
-        }
-        for (std::size_t previous = 0; previous < index; ++previous) {
-            if (definitions[previous].type_key() == definitions[index].type_key()) {
-                throw std::invalid_argument("worker state type is already registered");
-            }
-        }
-    }
-}
-
 // The per-worker instances. worker_capabilities::start()/stop() initialize and
 // destroy the registry on its worker; a throwing factory fails startup before
 // the worker dispatches callbacks or requests.
@@ -133,9 +121,10 @@ void validate_worker_state_definitions(const definitions_type& definitions) {
 // allocation-free binary search.
 class worker_state_registry final {
 public:
+    // `definitions` were validated by append_worker_state_definition.
     worker_state_registry(
         std::pmr::memory_resource* resource, std::span<const worker_state_definition> definitions)
-        : resource_(validated_resource(resource, definitions)),
+        : resource_(pmr_resource_or_default(resource)),
           definitions_(definitions),
           entries_(resource_),
           type_index_(resource_) {}
@@ -189,14 +178,6 @@ public:
     }
 
 private:
-    // Called from the first member initializer so malformed startup input cannot
-    // allocate container bookkeeping on standard libraries with debug proxies.
-    [[nodiscard]] static std::pmr::memory_resource* validated_resource(
-        std::pmr::memory_resource* resource, std::span<const worker_state_definition> definitions) {
-        validate_worker_state_definitions(definitions);
-        return pmr_resource_or_default(resource);
-    }
-
     struct instance_entry_type final {
         void* instance_{nullptr};
         worker_state_definition::destroy_instance_type destroy_{nullptr};

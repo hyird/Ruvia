@@ -135,6 +135,8 @@ public:
     // std::invalid_argument instead of silently replacing the first.
     application& on_error(http_error_handler handler);
     application& on_not_found(http_not_found_handler handler);
+    // Clearing retires the old handler after releasing the application
+    // configuration lock, as on_access() does.
     application& on_error(std::nullptr_t);
     application& on_not_found(std::nullptr_t);
     // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
@@ -191,6 +193,8 @@ public:
     // have drained (or server_config::drain_timeout_ passed), before runtime
     // join. Also runs when published startup is cancelled or a start hook fails.
     application& on_stop(app_hook hook);
+    // Clearing retires the old hooks after releasing the application
+    // configuration lock, as on_access() does.
     application& on_start(std::nullptr_t);
     application& on_stop(std::nullptr_t);
 #ifdef RUVIA_ENABLE_DATABASE

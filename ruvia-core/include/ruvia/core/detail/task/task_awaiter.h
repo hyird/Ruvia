@@ -13,10 +13,6 @@ template <typename t_type>
     return task<t_type>{std::coroutine_handle<task_promise<t_type>>::from_promise(*this)};
 }
 
-inline task<void> task_promise<void>::get_return_object() noexcept {
-    return task<void>{std::coroutine_handle<task_promise<void>>::from_promise(*this)};
-}
-
 // Serves value-returning tasks and task<void> alike: task_promise<void>::result() returns void,
 // so `return promise.result();` below is well-formed for it too. Keeping one
 // awaiter keeps the empty-task check and the suspend sequence stated once.

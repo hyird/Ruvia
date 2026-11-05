@@ -1,7 +1,6 @@
 #include "client/client_tcp_transport.h"
 
 #include <chrono>
-#include <stdexcept>
 #include <utility>
 #include <variant>
 
@@ -41,9 +40,7 @@ client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::cont
       stream_(io.get_executor(), tls) {
     // Owners build their transports eagerly, before any member that must be
     // retired, so a host this worker cannot look up rejects the client itself.
-    if (!literal_endpoint_.has_value() && !worker_.has_blocking_pool()) {
-        throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
-    }
+    require_client_host_lookup(endpoint_.host_, worker_);
 }
 
 client_tcp_transport::~client_tcp_transport() = default;

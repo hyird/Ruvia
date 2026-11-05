@@ -40,6 +40,11 @@ public:
     // keep their owners alive through protocol serialization.
     [[nodiscard]] http_client_request_view prepare_request(
         const http_client_request_storage& request, client_prepared_request_scratch& scratch);
+    // Stored and configured cookies belong to the fixed origin: false for a
+    // tunnel whose authority names another host or port.
+    [[nodiscard]] bool addresses_origin(const http_client_request_storage& request) const noexcept;
+    // Retains the Set-Cookie fields of a final head received for an origin
+    // request with `request_target`.
     void retain_response_cookies(std::string_view request_target, std::span<const http_header> headers);
 
 private:
@@ -64,7 +69,6 @@ private:
         // when received cookies are ignored, never replaced by a response.
         bool configured_{true};
     };
-    void add_cookie(std::string_view name, std::string_view value);
     void store_received_cookie(const client_received_cookie& cookie);
     void reserve_cookie_slot();
     void discard_expired(std::chrono::system_clock::time_point now);

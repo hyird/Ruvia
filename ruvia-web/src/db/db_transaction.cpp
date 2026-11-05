@@ -5,10 +5,11 @@
 #include "ruvia/web/detail/db/db_result_access.h"
 
 #include "db/db_pool.h"
-#include "db/db_pool_utils.h"
+#include "db/db_pool_dispatch.h"
 #include "db/db_prepared_statement.h"
 #include "db/db_query_execution.h"
 #include "db/db_sql_format.h"
+#include "db/db_value_clone.h"
 #include "integration/request_io_metrics.h"
 
 // An open transaction: it owns a pooled connection until commit, rollback, or
@@ -241,19 +242,20 @@ task<void> db_transaction::rollback_task(detail::request_io_metrics* io_metrics,
     co_await rollback_pool_transaction(lease_value.client_, lease_value.slot_, lease_value.resource_, lease_value.options_);
     operation.finish_closed();
 }
+
 task<void> db_transaction::savepoint(std::string_view name) & {
-    return run_savepoint_command("SAVEPOINT ", name);
+    return run_identifier_command("SAVEPOINT ", name);
 }
 
 task<void> db_transaction::rollback_to_savepoint(std::string_view name) & {
-    return run_savepoint_command("ROLLBACK TO SAVEPOINT ", name);
+    return run_identifier_command("ROLLBACK TO SAVEPOINT ", name);
 }
 
 task<void> db_transaction::release_savepoint(std::string_view name) & {
-    return run_savepoint_command("RELEASE SAVEPOINT ", name);
+    return run_identifier_command("RELEASE SAVEPOINT ", name);
 }
 
-task<void> db_transaction::run_savepoint_command(std::string_view prefix, std::string_view name) {
+task<void> db_transaction::run_identifier_command(std::string_view prefix, std::string_view name) {
     registration_.require_active();
     const auto& lease_value = state_->operation_.preparation_payload();
     const auto driver = detail::db_pool_driver(lease_value.client_);
@@ -264,18 +266,7 @@ task<void> db_transaction::run_savepoint_command(std::string_view prefix, std::s
     detail::append_db_identifier(sql, name, driver);
     operation_guard_type operation(state_->operation_);
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), savepoint_task(std::move(sql), io_metrics_, std::move(operation)));
-}
-
-task<void> db_transaction::savepoint_task(
-    std::pmr::string sql, detail::request_io_metrics* io_metrics, operation_guard_type pending) {
-    detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
-    operation_guard_type operation(std::move(pending));
-    operation.start();
-    auto& lease_value = operation.lease();
-    (void)co_await execute_transaction_pool(
-        lease_value.client_, lease_value.slot_, std::move(sql), {}, lease_value.resource_, lease_value.options_);
-    operation.finish_active();
+        registration_.scope(), execute_void_task(std::move(sql), {}, io_metrics_, std::move(operation)));
 }
 
 void db_transaction::require_postgresql_transaction(std::string_view feature) const {
@@ -345,11 +336,10 @@ task<bool> db_transaction::query_bool_task(std::pmr::string sql, std::pmr::vecto
 
 task<void> db_transaction::notify(std::string_view channel, std::string_view payload) & {
     require_postgresql_transaction("database notify");
-    if (channel.empty()) {
-        throw std::invalid_argument("database notify channel must not be empty");
-    }
-    const std::array<db_value, 2> params{db_value(channel), db_value(payload)};
-    return query_void_prepared("SELECT \"pg_notify\"($1::text, $2::text)", params);
+    auto statement = prepare_db_notify(channel, payload, state_->operation_.preparation_payload().resource_);
+    operation_guard_type operation(state_->operation_);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        query_void_task(std::move(statement.sql_), std::move(statement.params_), io_metrics_, std::move(operation)));
 }
 
 task<void> db_transaction::advisory_lock(std::int64_t key) & {
@@ -391,9 +381,7 @@ task<bool> db_transaction::try_advisory_lock(std::string_view key, std::int64_t 
 task<void> db_transaction::declare_cursor(
     std::string_view name, std::string_view sql, std::span<const db_value> params, bool scroll) & {
     require_postgresql_transaction("declare_cursor");
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
+    validate_db_sql_text(sql);
     const auto& lease_value = state_->operation_.preparation_payload();
     detail::validate_db_identifier(name, db_driver::postgresql);
     const std::string_view mode = scroll ? " SCROLL CURSOR FOR " : " NO SCROLL CURSOR FOR ";
@@ -429,7 +417,7 @@ task<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t 
 
 task<void> db_transaction::close_cursor(std::string_view name) & {
     require_postgresql_transaction("close_cursor");
-    return run_savepoint_command("CLOSE ", name);
+    return run_identifier_command("CLOSE ", name);
 }
 
 void db_transaction::reset() noexcept {

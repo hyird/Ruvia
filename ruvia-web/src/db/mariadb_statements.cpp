@@ -22,7 +22,7 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 
-#include "db/db_sql.h"
+#include "db/mariadb_sql.h"
 #include "db/mariadb_text.h"
 
 namespace ruvia::detail {
@@ -429,20 +429,6 @@ bool mariadb_statement_cache::client_utf8mb4() const noexcept {
            !state_->verify_ && state_->client_utf8mb4_;
 }
 
-bool mariadb_names_session_tracking(std::string_view sql) noexcept {
-    constexpr std::string_view name = "session_track";
-    for (auto underscore = sql.find('_'); underscore != std::string_view::npos;
-        underscore = sql.find('_', underscore + 1)) {
-        if (underscore < 7 || sql.size() - (underscore - 7) < name.size()) {
-            continue;
-        }
-        if (http_ascii_equals_ignore_case(sql.substr(underscore - 7, name.size()), name)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::optional<mariadb_statement_cache::handle> mariadb_statement_cache::find(
     std::string_view sql, std::span<const db_value> params, bool may_prepare) {
     auto& cache = data();
@@ -777,9 +763,7 @@ void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output, std:
         try {
             materialize_rows(cache, statement, *output, resource);
         } catch (...) {
-            db_result_access::rows(*output).clear();
-            db_result_access::fields(*output).clear();
-            db_result_access::column_names(*output).clear();
+            db_result_access::clear(*output);
             run.output_failure_ = std::current_exception();
         }
         // Buffers a much smaller result left over from a wide one are given

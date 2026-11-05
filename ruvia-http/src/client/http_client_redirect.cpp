@@ -7,7 +7,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_request_target.h"
 

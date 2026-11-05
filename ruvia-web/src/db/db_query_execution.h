@@ -87,17 +87,4 @@ template <bool with_count>
     return result_value;
 }
 
-[[noreturn]] inline void throw_db_query_timeout() {
-    throw db_error(db_error::code_type::timeout, std::nullopt, "database query cache operation timed out");
-}
-
-[[nodiscard]] inline operation_options db_required_options(
-    const operation_options& base, const operation_timeout& timeout) {
-    auto result_value = db_remaining_options(base, timeout);
-    if (result_value.timeout_.has_value() && result_value.timeout_->count() == 0) {
-        throw_db_query_timeout();
-    }
-    return result_value;
-}
-
 }  // namespace ruvia::detail

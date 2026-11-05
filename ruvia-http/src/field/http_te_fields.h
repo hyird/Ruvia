@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
 
@@ -59,8 +59,7 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
                 quality_seen = true;
                 return true;
             }
-            return mode == http_te_field_validation_mode::recipient &&
-                   is_valid_http_header_name(name) && is_http_token_or_quoted_string(value);
+            return mode == http_te_field_validation_mode::recipient && is_valid_http_transfer_parameter(parameter);
         });
 }
 
@@ -72,20 +71,13 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
         return true;
     }
 
-    bool valid = true;
-    http_visit_comma_separated_quoted_field_items(
-        value, [&valid, mode](std::string_view item) noexcept {
-            // RFC 9110 section 5.6.1 requires recipients to ignore empty list members.
-            if (item.empty() && mode == http_te_field_validation_mode::recipient) {
-                return true;
-            }
-            if (!is_valid_http_te_field_item(item, mode)) {
-                valid = false;
-                return false;
-            }
-            return true;
-        });
-    return valid;
+    // A client generating TE is held to the sender's no-empty-member rule.
+    const auto role = mode == http_te_field_validation_mode::recipient ? http_field_list_role::recipient
+                                                                       : http_field_list_role::sender;
+    return http_visit_list_members(value, role, [mode](std::string_view item) noexcept {
+        return is_valid_http_te_field_item(item, mode) ? http_field_list_parse_status::ok
+                                                       : http_field_list_parse_status::malformed;
+    }) == http_field_list_parse_status::ok;
 }
 
 [[nodiscard]] inline bool is_valid_received_http_te_field_value(std::string_view value) noexcept {
@@ -104,18 +96,13 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
 // This sender API requires a nonempty list without empty members.
 [[nodiscard]] inline bool is_valid_binary_http_te_field_value(
     std::string_view value, http_field_list_role role) noexcept {
-    bool valid = true;
     bool has_member = false;
-    http_visit_comma_separated_quoted_field_items(value, [&valid, &has_member, role](std::string_view member) noexcept {
-        if (member.empty() ? role == http_field_list_role::sender
-                           : !http_ascii_equals_ignore_case(member, "trailers")) {
-            valid = false;
-            return false;
-        }
-        has_member = has_member || !member.empty();
-        return true;
+    const auto status = http_visit_list_members(value, role, [&has_member](std::string_view member) noexcept {
+        has_member = true;
+        return http_ascii_equals_ignore_case(member, "trailers") ? http_field_list_parse_status::ok
+                                                                 : http_field_list_parse_status::malformed;
     });
-    return valid && (role == http_field_list_role::recipient || has_member);
+    return status == http_field_list_parse_status::ok && (role == http_field_list_role::recipient || has_member);
 }
 
 }  // namespace ruvia::detail

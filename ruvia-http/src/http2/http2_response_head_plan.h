@@ -55,7 +55,7 @@ public:
             return omit(body_plan);
         }
 
-        const auto value = response_known_header_value(response, response_header_content_length);
+        const auto value = http_response_header_state_access::known_header_value(response.headers(), response_header_content_length);
         http_content_length_state state;
         if (state.parse_field(value) != http_content_length_parse_status::ok) {
             return http2_response_head_plan_error::invalid_content_length;

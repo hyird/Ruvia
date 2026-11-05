@@ -5,7 +5,6 @@
 
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_schema.h"
-#include "ruvia/web/detail/db/db_utils.h"
 
 #include "util/pmr_owned_storage.h"
 

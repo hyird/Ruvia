@@ -388,6 +388,21 @@ task<void> exercise_committed_handoff(const worker_handle& worker, bool& success
               closed == worker_wait_status::closed;
 }
 
+task<void> exercise_close_defers_resumption(const worker_handle& worker, bool& success) {
+    pool_lease_scheduler scheduler(0, worker);
+    task_scope scope(worker);
+    std::optional<worker_wait_status> first;
+    std::optional<worker_wait_status> second;
+    scope.spawn(observe_waiter(scheduler, std::nullopt, {}, first));
+    scope.spawn(observe_waiter(scheduler, std::chrono::seconds(30), {}, second));
+    const bool closed_now = scheduler.close();
+    // Waiters observe closure only after the closing caller's turn.
+    const bool resumed_inline = first.has_value() || second.has_value();
+    co_await scope.join();
+    success = closed_now && !resumed_inline && first == worker_wait_status::closed &&
+              second == worker_wait_status::closed;
+}
+
 }  // namespace ruvia::test::lease_handoff
 
 int main() {
@@ -407,9 +422,11 @@ int main() {
     bool mixed_waiters_success = false;
     bool handoff_chain_success = false;
     bool committed_handoff_success = false;
+    bool close_deferred_success = false;
     ruvia::test::run_worker_tasks(attachment,
         ruvia::test::lease_handoff::exercise_long_chain(worker_value, handoff_chain_success),
         ruvia::test::lease_handoff::exercise_committed_handoff(worker_value, committed_handoff_success),
+        ruvia::test::lease_handoff::exercise_close_defers_resumption(worker_value, close_deferred_success),
         exercise_lease_and_close(lease_scheduler, io_context, lease_success),
         exercise_worker_bound_acquire_timeout(worker_timeout_scheduler, worker_timeout_success),
         exercise_nonpositive_timeout_does_not_steal_same_turn_release(
@@ -421,7 +438,7 @@ int main() {
     return lease_success && worker_timeout_success && nonpositive_timeout_success &&
                    saturated_timeout_success &&
                    cancellation_success && pmr_lifecycle_success && mixed_waiters_success &&
-                   handoff_chain_success && committed_handoff_success &&
+                   handoff_chain_success && committed_handoff_success && close_deferred_success &&
                    test_scheduler_owns_timeout_for_lazy_acquires() &&
                    test_scheduler_retains_worker_binding_for_lazy_acquires()
                ? 0

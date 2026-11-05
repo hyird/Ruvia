@@ -62,6 +62,11 @@ struct db_config_storage final {
     std::optional<std::chrono::milliseconds> write_timeout_;
     std::optional<std::chrono::milliseconds> query_timeout_;
     std::optional<std::chrono::milliseconds> acquire_timeout_;
+    // Whether a slot whose connection ended connects again on its next use.
+    // Off for a pool bound to the sessions it opened at startup (the
+    // migrator's): a statement on a lost session then fails rather than run
+    // on a new one that lacks the old one's session-scoped state.
+    bool reconnect_{true};
 
 private:
     struct validated_config_tag_type final {};
@@ -71,6 +76,12 @@ private:
     }
     [[nodiscard]] static std::uint16_t resolved_port(const db_config_storage& source) noexcept {
         return source.port_;
+    }
+    [[nodiscard]] static bool resolved_reconnect(const db_config&) noexcept {
+        return true;
+    }
+    [[nodiscard]] static bool resolved_reconnect(const db_config_storage& source) noexcept {
+        return source.reconnect_;
     }
     [[nodiscard]] static client_tls_config_storage tls_storage(
         const db_config& source, std::pmr::memory_resource* resource) {
@@ -96,7 +107,8 @@ private:
           read_timeout_(source_value.read_timeout_),
           write_timeout_(source_value.write_timeout_),
           query_timeout_(source_value.query_timeout_),
-          acquire_timeout_(source_value.acquire_timeout_) {}
+          acquire_timeout_(source_value.acquire_timeout_),
+          reconnect_(resolved_reconnect(source_value)) {}
 };
 
 #ifdef RUVIA_ENABLE_REDIS

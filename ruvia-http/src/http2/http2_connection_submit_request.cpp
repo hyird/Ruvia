@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <memory_resource>
 #include <utility>
 
@@ -9,7 +10,6 @@
 #include "field/http_expect_token.h"
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_flow_control.h"
 #include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_remote_receive_semantics.h"
@@ -132,55 +132,6 @@ namespace {
                fields.seen(request_header_kind::content_type));
 }
 
-void http2_encode_request_method(std::pmr::string& block, std::string_view method) {
-    if (method == "GET") {
-        hpack_encoder::encode_indexed(block, hpack_static_index::method_get);
-    } else if (method == "POST") {
-        hpack_encoder::encode_indexed(block, hpack_static_index::method_post);
-    } else {
-        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::method_get, method);
-    }
-}
-
-void http2_encode_request_scheme(std::pmr::string& block, std::string_view scheme) {
-    if (scheme == "http") {
-        hpack_encoder::encode_indexed(block, hpack_static_index::scheme_http);
-    } else if (scheme == "https") {
-        hpack_encoder::encode_indexed(block, hpack_static_index::scheme_https);
-    } else {
-        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::scheme_http, scheme);
-    }
-}
-
-void http2_encode_request_authority(std::pmr::string& block, std::string_view authority) {
-    if (authority.empty()) {
-        hpack_encoder::encode_indexed(block, hpack_static_index::authority);
-    } else {
-        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::authority, authority);
-    }
-}
-
-void http2_encode_request_path(std::pmr::string& block, std::string_view path) {
-    if (path == "/") {
-        hpack_encoder::encode_indexed(block, hpack_static_index::path_root);
-    } else if (path == "/index.html") {
-        hpack_encoder::encode_indexed(block, hpack_static_index::path_index_html);
-    } else {
-        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::path_root, path);
-    }
-}
-
-void http2_encode_outbound_request_headers(
-    std::pmr::string& block, std::span<const http_header_view> headers) {
-    std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
-    std::pmr::string lower_name_scratch(block.get_allocator().resource());
-    for (const auto& header : headers) {
-        hpack_encoder::encode_header(block,
-            http2_lower_header_name(header.name(), lower_name_stack, lower_name_scratch),
-            header.value());
-    }
-}
-
 }  // namespace
 
 std::variant<std::uint32_t, http2_request_head_submit_error>
@@ -228,33 +179,28 @@ http2_connection::submit_regular_request_head(std::string_view method,
         stream.assign_request_scheme(scheme);
         auto& block = local_header_block_;
         block.clear();
-        std::size_t reserve_bytes = 8U + (authority.has_value() ? authority->size() + 4U : 0U) +
-                                    path.size() + (emit_length ? content_length_value.size() + 4U : 0U);
-        for (const auto& header : headers) {
-            reserve_bytes += header.name().size() + header.value().size() + 6U;
-        }
-        if (reserve_bytes > 15U) {
-            block.reserve(reserve_bytes);
-        }
-        http2_encode_request_method(block, method);
-        http2_encode_request_scheme(block, scheme);
+        http2_reserve_field_block(block,
+            3 * hpack_literal_overhead_bytes + method.size() + scheme.size() + path.size() +
+                (authority.has_value() ? authority->size() + hpack_literal_overhead_bytes : 0U) +
+                (emit_length ? content_length_value.size() + hpack_literal_overhead_bytes : 0U),
+            headers);
+        hpack_encoder::encode_header(block, ":method", method);
+        hpack_encoder::encode_header(block, ":scheme", scheme);
         if (authority.has_value()) {
-            http2_encode_request_authority(block, *authority);
+            hpack_encoder::encode_header(block, ":authority", *authority);
         }
-        http2_encode_request_path(block, path);
-        http2_encode_outbound_request_headers(block, headers);
+        hpack_encoder::encode_header(block, ":path", path);
+        http2_encode_lowercase_fields(block, headers);
         if (expectation == http_client_request_expectation::continue_value) {
-            hpack_encoder::encode_header_with_name_index(
-                block, hpack_static_index::expect, http_continue_expectation_token);
+            hpack_encoder::encode_header(block, "expect", http_continue_expectation_token);
         }
         if (emit_length) {
-            hpack_encoder::encode_header_with_name_index(block, hpack_static_index::content_length,
-                content_length_value);
+            hpack_encoder::encode_header(block, "content-length", content_length_value);
         }
         // This is the commit point for the wire representation. Every operation
-        // above is retryable; append_response_header_frames pre-reserves the complete
+        // above is retryable; append_header_frames pre-reserves the complete
         // frame sequence, so a throwing resource cannot strand a created stream.
-        append_response_header_frames(stream, std::string_view(block), end_stream);
+        append_header_frames(stream, end_stream);
         if (without_content) {
             stream.begin_local_content_forbidden();
         } else if (expected_length) {
@@ -299,17 +245,12 @@ http2_connection::submit_connect_request_head(
 
         auto& block = local_header_block_;
         block.clear();
-        std::size_t reserve_bytes = 6U + authority.size();
-        for (const auto& header : headers) {
-            reserve_bytes += header.name().size() + header.value().size() + 6U;
-        }
-        if (reserve_bytes > 15U) {
-            block.reserve(reserve_bytes);
-        }
-        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::method_get, "CONNECT");
-        http2_encode_request_authority(block, authority);
-        http2_encode_outbound_request_headers(block, headers);
-        append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
+        http2_reserve_field_block(
+            block, 2 * hpack_literal_overhead_bytes + std::string_view("CONNECT").size() + authority.size(), headers);
+        hpack_encoder::encode_header(block, ":method", "CONNECT");
+        hpack_encoder::encode_header(block, ":authority", authority);
+        http2_encode_lowercase_fields(block, headers);
+        append_header_frames(stream, http2_end_stream::keep_open);
     });
 }
 
@@ -351,36 +292,33 @@ http2_connection::submit_extended_connect_request_head(
 
         auto& block = local_header_block_;
         block.clear();
-        std::size_t reserve_bytes =
-            16U + encoded_protocol.size() + scheme.size() + authority.size() + path.size();
-        for (const auto& header : headers) {
-            reserve_bytes += header.name().size() + header.value().size() + 6U;
-        }
-        if (reserve_bytes > 15U) {
-            block.reserve(reserve_bytes);
-        }
-        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::method_get, "CONNECT");
+        constexpr std::string_view protocol_name = ":protocol";
+        http2_reserve_field_block(block,
+            5 * hpack_literal_overhead_bytes + std::string_view("CONNECT").size() + protocol_name.size() +
+                encoded_protocol.size() + scheme.size() + authority.size() + path.size(),
+            headers);
+        hpack_encoder::encode_header(block, ":method", "CONNECT");
         // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
         // protocol-name matching is case-insensitive, so accept caller spelling but
         // never put a non-canonical websocket token on the wire or in stream state.
-        hpack_encoder::encode_header(block, ":protocol", encoded_protocol);
-        http2_encode_request_scheme(block, scheme);
-        http2_encode_request_authority(block, authority);
-        http2_encode_request_path(block, path);
-        http2_encode_outbound_request_headers(block, headers);
-        append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
+        hpack_encoder::encode_header(block, protocol_name, encoded_protocol);
+        hpack_encoder::encode_header(block, ":scheme", scheme);
+        hpack_encoder::encode_header(block, ":authority", authority);
+        hpack_encoder::encode_header(block, ":path", path);
+        http2_encode_lowercase_fields(block, headers);
+        append_header_frames(stream, http2_end_stream::keep_open);
     });
 }
 
 std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_push_promise(
     std::uint32_t associated_stream_id, http_push_request_view request) {
     using error_type = http2_push_submit_error;
-    const auto* parent_value = find_stream(associated_stream_id);
+    const auto* parent_value = streams_.find(associated_stream_id);
     if (role_ != http2_role::server || preface_phase_ != preface_phase_type::ready ||
         local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() ||
         (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) ||
         parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() ||
-        next_push_stream_id_ > 0x7fffffffU) {
+        next_push_stream_id_ > http2_max_stream_id) {
         return error_type::invalid_state;
     }
     if (!peer_settings_.enable_push()) {
@@ -407,31 +345,20 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     }
     auto& block = local_header_block_;
     block.clear();
-    std::size_t reserve_bytes =
-        (encoder_table_size_update_pending_ ? encoder_zero_table_size_update_.size() : 0U) +
-        8U + request.authority_.size() + request.path_.size();
-    for (const auto& header : request.headers_) {
-        reserve_bytes += header.name().size() + header.value().size() + 6U;
-    }
-    if (reserve_bytes > 15U) {
-        block.reserve(reserve_bytes);
-    }
-    // PUSH_PROMISE begins a field block and therefore carries pending HPACK
-    // table-size updates, just like HEADERS.
-    if (encoder_table_size_update_pending_) {
-        block.append(encoder_zero_table_size_update_);
-    }
-    http2_encode_request_method(block, request.method_);
-    http2_encode_request_scheme(block, request.scheme_);
-    http2_encode_request_authority(block, request.authority_);
-    http2_encode_request_path(block, request.path_);
-    http2_encode_outbound_request_headers(block, request.headers_);
+    http2_reserve_field_block(block,
+        4 * hpack_literal_overhead_bytes + request.method_.size() + request.scheme_.size() +
+            request.authority_.size() + request.path_.size(),
+        request.headers_);
+    hpack_encoder::encode_header(block, ":method", request.method_.view());
+    hpack_encoder::encode_header(block, ":scheme", request.scheme_.view());
+    hpack_encoder::encode_header(block, ":authority", request.authority_.view());
+    hpack_encoder::encode_header(block, ":path", request.path_.view());
+    http2_encode_lowercase_fields(block, request.headers_);
     auto* stream = create_stream(next_push_stream_id_);
     if (!stream) {
         http2_release_local_header_block(local_header_block_);
         return error_type::stream_limit;
     }
-    const auto checkpoint = output_.checkpoint();
     try {
         stream->assign_request_method(request.method_);
         stream->assign_request_scheme(request.scheme_);
@@ -463,33 +390,13 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         (void)stream->record_remote_head_end_stream();
         (void)stream->finalize_remote_content_head();
         stream->reserve_push(http2_push_reservation::local);
-        std::array<char, 4> promised;
-        http2_write32(promised.data(), next_push_stream_id_);
-        const std::size_t max_frame = peer_settings_.max_frame_size();
-        const auto encoded_bytes =
-            http2_header_frame_encoded_bytes(block.size(), max_frame, promised.size());
-        const auto encoded_segments = http2_header_frame_count(encoded_bytes, max_frame);
-        output_.reserve_additional(encoded_bytes);
-        output_.reserve_segments_additional(encoded_segments);
-        std::size_t offset = 0;
-        bool first = true;
-        while (offset < block.size()) {
-            const auto prefix = first ? std::string_view(promised.data(), promised.size()) : std::string_view{};
-            const auto count = std::min<std::size_t>(block.size() - offset, max_frame - prefix.size());
-            output_.append_frame(first ? http2_frame_type::push_promise : http2_frame_type::continuation,
-                offset + count == block.size() ? http2_flag_end_headers : 0, associated_stream_id,
-                prefix, std::string_view(block).substr(offset, count));
-            first = false;
-            offset += count;
-        }
+        append_field_block_frames(associated_stream_id, next_push_stream_id_, 0);
     } catch (...) {
         local_header_block_.clear();
-        output_.rollback_to(checkpoint);
         streams_.remove(next_push_stream_id_);
         throw;
     }
     http2_release_local_header_block(local_header_block_);
-    encoder_table_size_update_pending_ = false;
     const auto id = next_push_stream_id_;
     next_push_stream_id_ += 2;
     return id;

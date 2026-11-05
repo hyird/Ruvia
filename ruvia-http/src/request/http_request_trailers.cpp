@@ -1,8 +1,7 @@
 #include "ruvia/http/http_request_trailers.h"
 
-#include <array>
-
 #include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "request/http_request_trailer_field.h"
@@ -44,7 +43,7 @@ template <typename field_type>
 }  // namespace
 
 http_request_trailers::http_request_trailers(std::pmr::memory_resource* resource)
-    : fields_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
+    : fields_(detail::http_pmr_resource_or_default(resource)) {}
 
 std::optional<http_request_trailer_error> http_request_trailers::append(std::string_view name, std::string_view value) {
     const http_header_view field{name, value};
@@ -68,59 +67,38 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
     // The block is appended all-or-nothing, like append(): it extends the
     // retained section's field count and byte budget. Received fields that are
     // not permitted in request trailers are discarded (RFC 9112 section 7.1.2).
+    // Fields are appended during the single validating pass and rolled back
+    // when the block turns out invalid.
     const auto field_count = fields_.size();
-    auto budget = budget_;
-    static constexpr std::size_t inline_retained_capacity = 8;
-    std::array<http_header_view, inline_retained_capacity> inline_retained;
-    std::size_t retained_count = 0;
-    const auto preflight_status = detail::visit_http1_trailer_block(
-        block, detail::is_forbidden_http_request_trailer_name, budget,
-        [&inline_retained, &retained_count](std::string_view name, std::string_view value) noexcept {
-            if (retained_count < inline_retained.size()) {
-                inline_retained[retained_count] = http_header_view{name, value};
-            }
-            ++retained_count;
-            return true;
-        });
-    switch (preflight_status) {
-        case detail::http_trailer_block_status::ok:
-            break;
-        case detail::http_trailer_block_status::section_too_large:
-            return http_request_trailer_error::section_too_large;
-        case detail::http_trailer_block_status::invalid_field:
-        case detail::http_trailer_block_status::visitor_stopped:
-            return http_request_trailer_error::invalid_field;
-    }
-    if (retained_count == 0) {
-        budget_ = budget;
-        return std::nullopt;
-    }
     const auto roll_back = [&]() noexcept {
         fields_.erase(fields_.begin() + static_cast<std::ptrdiff_t>(field_count), fields_.end());
     };
+    auto budget = budget_;
+    auto status = detail::http_trailer_block_status::ok;
     try {
-        fields_.reserve(field_count + retained_count);
         auto* const resource = fields_.get_allocator().resource();
-        if (retained_count <= inline_retained.size()) {
-            for (std::size_t i = 0; i < retained_count; ++i) {
-                fields_.emplace_back(
-                    inline_retained[i].name(), inline_retained[i].value(), resource);
-            }
-        } else {
-            auto append_budget = budget_;
-            (void)detail::visit_http1_trailer_block(
-                block, detail::is_forbidden_http_request_trailer_name, append_budget,
-                [this, resource](std::string_view name, std::string_view value) {
-                    fields_.emplace_back(name, value, resource);
-                    return true;
-                });
-        }
-        budget_ = budget;
-        return std::nullopt;
+        status = detail::visit_http1_trailer_block(block, detail::is_forbidden_http_request_trailer_name, budget,
+            [this, resource](std::string_view name, std::string_view value) {
+                fields_.emplace_back(name, value, resource);
+                return true;
+            });
     } catch (...) {
         roll_back();
         throw;
     }
+    switch (status) {
+        case detail::http_trailer_block_status::ok:
+            budget_ = budget;
+            return std::nullopt;
+        case detail::http_trailer_block_status::section_too_large:
+            roll_back();
+            return http_request_trailer_error::section_too_large;
+        case detail::http_trailer_block_status::invalid_field:
+        case detail::http_trailer_block_status::visitor_stopped:
+            break;
+    }
+    roll_back();
+    return http_request_trailer_error::invalid_field;
 }
 
 std::optional<std::string_view> http_request_trailers::field(std::string_view name) const& noexcept {

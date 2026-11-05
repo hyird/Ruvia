@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "http2/http2_local_settings.h"
+#include "http2/http2_window_update.h"
 
 namespace ruvia::detail {
 
@@ -25,6 +26,10 @@ public:
         }
         send_window_ = static_cast<std::int32_t>(updated);
         return true;
+    }
+
+    [[nodiscard]] http2_window_update_result apply_window_update(std::uint32_t increment) noexcept {
+        return http2_apply_window_update(send_window_, increment);
     }
 
     void consume_send(std::size_t bytes_value) noexcept {

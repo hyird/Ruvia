@@ -8,9 +8,9 @@
 
 // Internal startup-time middleware descriptor.
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/router/route_handlers.h"
-#include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia {
@@ -162,7 +162,7 @@ public:
     }
 
 private:
-    std::pmr::string prefix_{registration_resource()};
+    std::pmr::string prefix_{process_resource()};
     controller_middleware_descriptor descriptor_;
     release_args_type release_args_{nullptr};
 };

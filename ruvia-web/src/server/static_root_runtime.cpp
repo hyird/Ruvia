@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 
@@ -45,6 +46,11 @@ bool document_root_publisher::claim_refresh() noexcept {
     return !std::exchange(refresh_claimed_, true);
 }
 
+void document_root_publisher::record_failure(std::exception_ptr failure) noexcept {
+    failures_.fetch_add(1, std::memory_order_relaxed);
+    ruvia::report_unhandled_failure("document root refresh", std::move(failure));
+}
+
 document_root_snapshot document_root_publisher::published_unless(const static_root* adopted) const {
     std::lock_guard lock(mutex_);
     if (current_.get() == adopted) {
@@ -57,6 +63,9 @@ void document_root_publisher::publish(document_root_snapshot snapshot) {
     {
         std::lock_guard lock(mutex_);
         current_.swap(snapshot);
+        // A worker that observes the new generation then takes the lock
+        // finds this snapshot, or a later one, in place.
+        generation_.fetch_add(1, std::memory_order_release);
     }
     // The superseded snapshot is released outside the lock; workers that
     // still lease it keep their own reference.
@@ -79,7 +88,7 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
             // instead of silently turning them into stale content. A rejected
             // offload (pool stopping) is not a refresh failure.
             if (rebuilt.failed()) {
-                record_failure();
+                record_failure(rebuilt.error());
             }
             co_return;
         }
@@ -87,7 +96,7 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
     } catch (...) {
         // The offload wrapper reports pool shutdown as a status, but creating
         // its one-shot channel or transporting a result can still throw.
-        record_failure();
+        record_failure(std::current_exception());
         co_return;
     }
 
@@ -111,13 +120,13 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
                 });
             if (!prepared.completed()) {
                 if (prepared.failed()) {
-                    record_failure();
+                    record_failure(prepared.error());
                 }
                 co_return;
             }
             candidate = std::move(prepared).value();
         } catch (...) {
-            record_failure();
+            record_failure(std::current_exception());
             co_return;
         }
         if (!http_server_worker_running(state)) {
@@ -128,7 +137,7 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
     try {
         publish(share_snapshot(std::move(candidate)));
     } catch (...) {
-        record_failure();
+        record_failure(std::current_exception());
     }
 }
 
@@ -143,6 +152,7 @@ static_root_runtime::static_root_runtime(http_server_options& options, const wor
       retired_(resource),
       refreshes_(publisher_ != nullptr && publisher_->claim_refresh()) {
     if (publisher_ != nullptr) {
+        adopted_generation_ = publisher_->published_generation();
         current_ = make_pmr_object<document_root_generation>(resource_, publisher_->published_unless(nullptr));
         options_.document_root_.publish(*current_);
     }
@@ -151,18 +161,21 @@ static_root_runtime::static_root_runtime(http_server_options& options, const wor
 static_root_runtime::~static_root_runtime() = default;
 
 void static_root_runtime::adopt_published() {
-    auto published = publisher_->published_unless(current_->root());
-    if (published == nullptr) {
+    const auto generation = publisher_->published_generation();
+    if (generation == adopted_generation_) {
         return;
     }
-    auto next = make_pmr_object<document_root_generation>(resource_, std::move(published));
-    if (current_->leased()) {
-        // Vector growth is the only fallible step. If it is rejected the
-        // worker keeps its current generation and retries next interval.
-        retired_.push_back(std::move(current_));
+    if (auto published = publisher_->published_unless(current_->root()); published != nullptr) {
+        auto next = make_pmr_object<document_root_generation>(resource_, std::move(published));
+        if (current_->leased()) {
+            // Vector growth is the only fallible step. If it is rejected the
+            // worker keeps its current generation and retries next interval.
+            retired_.push_back(std::move(current_));
+        }
+        current_ = std::move(next);
+        options_.document_root_.publish(*current_);
     }
-    current_ = std::move(next);
-    options_.document_root_.publish(*current_);
+    adopted_generation_ = generation;
 }
 
 task<void> static_root_runtime::refresh() {
@@ -194,7 +207,7 @@ task<void> static_root_runtime::refresh() {
         } catch (...) {
             // This worker keeps serving its last generation; the snapshot it
             // missed is still published and is retried next interval.
-            publisher_->record_failure();
+            publisher_->record_failure(std::current_exception());
         }
     }
 }

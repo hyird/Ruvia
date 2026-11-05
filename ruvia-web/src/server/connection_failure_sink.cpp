@@ -1,6 +1,4 @@
-#include <system_error>
-
-#include <asio/error.hpp>
+#include <exception>
 
 #include "ruvia/core/failure_report.h"
 
@@ -10,29 +8,15 @@
 namespace ruvia::detail {
 namespace {
 
-// Errors with which a connection ends without any fault on this side: the peer
-// reset, aborted, or closed it, the network gave up on a vanished peer, or this
-// server ended the I/O itself. operation_aborted is our cancellation of I/O in
-// flight; bad_descriptor is I/O started after our own close (stop, drain, or a
-// timeout that closes the socket). Only this server closes an inbound socket,
-// so neither code can come from anything else on the inbound transport.
-[[nodiscard]] bool is_connection_end(const std::error_code& error) noexcept {
-    return error == asio::error::connection_reset || error == asio::error::connection_aborted ||
-           error == asio::error::broken_pipe || error == asio::error::eof ||
-           error == asio::error::operation_aborted || error == asio::error::bad_descriptor ||
-           error == asio::error::timed_out || error == asio::error::not_connected ||
-           error == asio::error::shut_down;
-}
-
 // Only the connection's own transport can end it normally. A handler or
-// upstream failure is a real fault even when it carries one of the codes above:
-// an upstream request that timed out or was reset says nothing about the
-// inbound peer.
+// upstream failure is a real fault even when it carries one of the codes
+// is_inbound_connection_end() accepts: an upstream request that timed out or
+// was reset says nothing about the inbound peer.
 [[nodiscard]] bool is_connection_end(const std::exception_ptr& exception) noexcept {
     try {
         std::rethrow_exception(exception);
     } catch (const inbound_transport_error& error) {
-        return is_connection_end(error.code());
+        return is_inbound_connection_end(error.code());
     } catch (...) {
         return false;
     }

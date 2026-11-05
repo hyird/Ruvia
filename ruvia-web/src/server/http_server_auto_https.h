@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstdint>
-#include <cstring>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -47,49 +46,20 @@ inline http_response make_auto_https_redirect_response(
     const std::size_t total_size = scheme_prefix.size() + host.size() +
                                    (port_digits.empty() ? 0U : 1U + port_digits.size()) +
                                    path.size() + (has_query ? 1U + query.size() : 0U);
-    static constexpr std::size_t inline_location_capacity = 256;
-    if (total_size <= inline_location_capacity) {
-        std::array<char, inline_location_capacity> inline_location{};
-        std::size_t length = 0;
-        std::memcpy(inline_location.data() + length, scheme_prefix.data(), scheme_prefix.size());
-        length += scheme_prefix.size();
-        if (!host.empty()) {
-            std::memcpy(inline_location.data() + length, host.data(), host.size());
-            length += host.size();
-        }
-        if (!port_digits.empty()) {
-            inline_location[length++] = ':';
-            std::memcpy(inline_location.data() + length, port_digits.data(), port_digits.size());
-            length += port_digits.size();
-        }
-        std::memcpy(inline_location.data() + length, path.data(), path.size());
-        length += path.size();
-        if (has_query) {
-            inline_location[length++] = '?';
-            if (!query.empty()) {
-                std::memcpy(inline_location.data() + length, query.data(), query.size());
-                length += query.size();
-            }
-        }
-        response.header("Location", std::string_view(inline_location.data(), length));
-    } else {
-        std::pmr::string location(memory.allocator<char>());
-        location.reserve(total_size);
-        location.append(scheme_prefix);
-        location.append(host.data(), host.size());
-        if (!port_digits.empty()) {
-            location.push_back(':');
-            location.append(port_digits);
-        }
-        location.append(path.data(), path.size());
-        if (has_query) {
-            location.push_back('?');
-            if (!query.empty()) {
-                location.append(query.data(), query.size());
-            }
-        }
-        response.header("Location", location);
+    std::pmr::string location(memory.allocator<char>());
+    location.reserve(total_size);
+    location.append(scheme_prefix);
+    location.append(host);
+    if (!port_digits.empty()) {
+        location.push_back(':');
+        location.append(port_digits);
     }
+    location.append(path);
+    if (has_query) {
+        location.push_back('?');
+        location.append(query);
+    }
+    response.header("Location", location);
     // The Location is derived from the request's Host header, so this redirect
     // varies by Host. Mark it private so a shared cache never stores one Host's
     // redirect and serves it for another (a Host-header cache-poisoning open

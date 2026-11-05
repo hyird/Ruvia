@@ -4,22 +4,18 @@
 namespace ruvia::detail {
 
 void http2_connection::lease_submitted_request(
-    const std::variant<std::uint32_t, http2_request_head_submit_error>& result) {
+    const std::variant<std::uint32_t, http2_request_head_submit_error>& result) noexcept {
     const auto* submitted = std::get_if<std::uint32_t>(&result);
     if (submitted == nullptr) {
         return;
     }
-    try {
-        pin_stream(*submitted);
-    } catch (...) {
-        abandon_stream_lease(*submitted);
-        throw;
-    }
+    // Pinning only marks the stream, so a submitted request is always leased.
+    pin_stream(*submitted);
 }
 
 void http2_connection::release_stream_lease(std::uint32_t stream_id) {
-    const auto* stream = find_stream(stream_id);
-    if ((stream != nullptr && stream->window_debt() != 0) || has_pending_events(stream_id)) {
+    const auto* stream = streams_.find(stream_id);
+    if (stream != nullptr && (stream->window_debt() != 0 || stream->has_pending_events())) {
         leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::after_credits);
         return;
     }
@@ -32,7 +28,7 @@ void http2_connection::release_stream_lease_after_remote_end(std::uint32_t strea
 }
 
 void http2_connection::abandon_stream_lease_checked(std::uint32_t stream_id) {
-    const auto* stream = find_stream(stream_id);
+    const auto* stream = streams_.find(stream_id);
     if (stream == nullptr) {
         leases_.erase_release(stream_id);
         return;
@@ -41,14 +37,6 @@ void http2_connection::abandon_stream_lease_checked(std::uint32_t stream_id) {
         (void)submit_reset(stream_id, http2_error_code::cancel);
     }
     release_stream_lease(stream_id);
-}
-
-void http2_connection::abandon_stream_lease(std::uint32_t stream_id) noexcept {
-    try {
-        abandon_stream_lease_checked(stream_id);
-    } catch (...) {
-        leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::abandon);
-    }
 }
 
 void http2_connection::abandon_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept {
@@ -68,6 +56,14 @@ bool http2_connection::acknowledge_received_data(std::uint32_t stream_id, std::u
     return true;
 }
 
+void http2_connection::abandon_stream_lease(std::uint32_t stream_id) noexcept {
+    try {
+        abandon_stream_lease_checked(stream_id);
+    } catch (...) {
+        leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::abandon);
+    }
+}
+
 void http2_connection::retry_deferred_stream_lease(std::uint32_t stream_id) noexcept {
     const auto* pending = leases_.release(stream_id);
     if (pending == nullptr) {
@@ -83,11 +79,11 @@ void http2_connection::retry_deferred_stream_lease(std::uint32_t stream_id) noex
         }
         return;
     }
-    const auto* stream = find_stream(stream_id);
-    if ((stream != nullptr && (stream->window_debt() != 0 ||
-                                  (pending->kind_ == kind_type::after_remote_end &&
-                                      !connection_error() && !http2_stream_is_closed(*stream)))) ||
-        has_pending_events(stream_id)) {
+    const auto* stream = streams_.find(stream_id);
+    if (stream != nullptr &&
+        (stream->window_debt() != 0 || stream->has_pending_events() ||
+            (pending->kind_ == kind_type::after_remote_end && !connection_error() &&
+                !http2_stream_is_closed(*stream)))) {
         return;
     }
     try {
@@ -111,11 +107,16 @@ void http2_connection::retry_deferred_stream_leases() noexcept {
             ++index;
         }
     }
+    // Credit-gated releases wait for the event, credit, or stream transition that
+    // satisfies them; only a failed abandon or a failed connection needs a sweep.
+    const bool connection_failed = connection_error().has_value();
     index = 0;
     while (index < leases_.release_count()) {
-        const auto stream_id = leases_.release_stream_at(index);
-        retry_deferred_stream_lease(stream_id);
-        if (index < leases_.release_count() && leases_.release_stream_at(index) == stream_id) {
+        const auto release = leases_.release_at(index);
+        if (connection_failed || release.kind_ == http2_stream_lease_ledger::release_kind_type::abandon) {
+            retry_deferred_stream_lease(release.stream_id_);
+        }
+        if (index < leases_.release_count() && leases_.release_at(index).stream_id_ == release.stream_id_) {
             ++index;
         }
     }

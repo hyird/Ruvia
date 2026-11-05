@@ -69,7 +69,8 @@ task<void> websocket_client_state::flush_output() {
             continue;
         }
         if (ending) {
-            // bounds it, a peer-initiated close starts the same guard here.
+            // close() arms the close-handshake guard before flushing; a
+            // peer-initiated close starts the same guard here.
             if (!close_handshake_timer_.registered()) {
                 arm(close_handshake_timer_, config_.lifecycle_.close_handshake_timeout_, client_abort_reason::timeout);
             }

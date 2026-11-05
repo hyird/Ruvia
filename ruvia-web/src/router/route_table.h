@@ -75,7 +75,7 @@ public:
     // take the next value (percent-encoded, non-empty), a trailing "*" takes
     // the final value (slashes preserved, may be empty). The pattern is the
     // route's identity -- an unregistered pattern, a value-count mismatch, a
-    // "."/".." segment, or a pattern starting with an empty segment (a "//"
+    // "."/".." value, or a pattern starting with an empty segment (a "//"
     // network-path reference) is a programming error and throws
     // std::invalid_argument. A root "*" value's leading slash becomes "%2F".
     [[nodiscard]] std::pmr::string url_for(std::string_view pattern,

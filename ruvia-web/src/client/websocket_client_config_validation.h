@@ -12,6 +12,7 @@
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
 #include "client/client_user_agent.h"
+#include "util/config_validation.h"
 #include "util/tcp_socket_policies.h"
 #include "websocket/websocket_lifecycle_validation.h"
 
@@ -35,14 +36,8 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
     if (config.max_message_bytes_ == 0) {
         throw std::invalid_argument("WebSocket client max message bytes must be greater than zero");
     }
-    if (config.connect_timeout_.count() <= 0) {
-        throw std::invalid_argument("WebSocket client connect timeout must be greater than zero");
-    }
-    for (const std::optional<std::chrono::milliseconds> timeout : {config.read_timeout_, config.write_timeout_}) {
-        if (timeout.has_value() && timeout->count() <= 0) {
-            throw std::invalid_argument("WebSocket client timeout must be greater than zero");
-        }
-    }
+    ensure_positive_optional_durations("WebSocket client timeouts must be greater than zero",
+        std::optional{config.connect_timeout_}, config.read_timeout_, config.write_timeout_);
     validate_websocket_lifecycle_options(config.lifecycle_);
     validate_client_tls_config(config.tls_);
     if (config.scheme_ == websocket_scheme::wss && config.tls_.mode_ == client_tls_mode::disabled) {

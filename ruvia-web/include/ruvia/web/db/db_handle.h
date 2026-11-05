@@ -223,9 +223,8 @@ private:
         detail::request_io_metrics* io_metrics, operation_guard_type operation);
     static task<void> commit_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
     static task<void> rollback_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
-    task<void> run_savepoint_command(std::string_view prefix, std::string_view name);
-    static task<void> savepoint_task(
-        std::pmr::string sql, detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    // A command naming one identifier: SAVEPOINT, RELEASE, CLOSE and the like.
+    task<void> run_identifier_command(std::string_view prefix, std::string_view name);
     void require_postgresql_transaction(std::string_view feature) const;
     task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params);
     task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params);

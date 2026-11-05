@@ -124,9 +124,6 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             }
             estimated_size += url_for_encoded_size(value, /*keep_slashes=*/false);
         } else {
-            if (is_url_for_dot_segment(segment)) {
-                throw std::invalid_argument("url_for pattern must not contain a '.' or '..' segment");
-            }
             estimated_size += segment.size();
         }
     }

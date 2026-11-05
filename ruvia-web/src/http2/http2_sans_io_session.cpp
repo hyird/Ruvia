@@ -6,20 +6,19 @@
 #include <memory_resource>
 #include <string_view>
 #include <system_error>
-#include <type_traits>
 #include <utility>
 
 #include <asio/any_io_executor.hpp>
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
-#include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/http/http_pmr_string.h"
 
 #include "http2/http2_data_output_budget.h"
 #include "http2/http2_sans_io_session_engine.h"
+#include "server/connection_scanner.h"
 #include "server/http_response_writer.h"
 
 namespace ruvia::detail {
@@ -36,28 +35,18 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
             }
 
             std::error_code write_error;
-            std::size_t written_bytes = 0;
-            bool write_done = false;
-            if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
-                write_done = try_plain_tcp_sync_write(stream,
-                    asio::buffer(write_scratch), write_scratch.size(),
-                    0, write_error, written_bytes);
-            }
-            if (!write_done) {
-                const auto write_completion = co_await ruvia::async_asio(
-                    [&stream, &write_scratch, written_bytes](auto handler) mutable {
-                        asio::async_write(stream,
-                            asio::buffer(write_scratch.data() + written_bytes,
-                                write_scratch.size() - written_bytes),
-                            std::move(handler));
-                    });
-                write_error = write_completion.error_code();
+            {
+                // The reader keeps the entry in its own phase (idle, a body
+                // read, or long_lived for an RFC 8441 tunnel); this clock
+                // lets write_timeout close a peer that stopped reading
+                // regardless. Every transfer renews it.
+                const connection_scanner::entry::write_scope write_stall_clock(engine.scanner_entry());
+                write_error = (co_await connection_gather_write(stream, write_scratch, {}, engine.scanner_entry())).error_;
             }
             if (write_error) {
                 engine.writer_write_failed(write_error);
                 continue;
             }
-            engine.touch_activity();
             engine.output_write_completed();
             // Leave room for the frame header and string capacity growth, but keep retention bounded.
             http_clear_pmr_string_retaining_small(

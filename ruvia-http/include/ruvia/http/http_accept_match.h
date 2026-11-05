@@ -14,7 +14,8 @@ namespace ruvia {
 
 // Validates one Content-Type field value, including RFC 9110's optional empty
 // semicolon-delimited parameter slots. Nonempty parameters require name=value
-// without whitespace around '='.
+// without whitespace around '='. A value with more than 64 nonempty parameters
+// is invalid.
 [[nodiscard]] bool is_valid_http_content_type_field_value(std::string_view value) noexcept;
 
 enum class http_accept_token_match_mode : std::uint8_t {
@@ -30,6 +31,8 @@ enum class http_accept_token_match_mode : std::uint8_t {
 // an optional q weight; unknown or additional parameters are unacceptable.
 // Media ranges permit empty parameter slots; these do not affect specificity
 // or quality. Nonempty parameters constrain the offered type, even after q.
+// A media range, or an offered type, with more than 64 nonempty parameters
+// (q included) is invalid and never matches.
 class http_accept_match final {
 public:
     void update_media_type(std::string_view field, std::string_view offered) noexcept;

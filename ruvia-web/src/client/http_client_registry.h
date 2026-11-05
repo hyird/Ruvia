@@ -43,13 +43,11 @@ public:
     [[nodiscard]] task<void> join();
     [[nodiscard]] http_client_handle get(::ruvia::operation_scope& scope) const;
     [[nodiscard]] http_client_handle get(std::string_view alias, ::ruvia::operation_scope& scope) const;
-    // The default alias's pool, for configuration and statistics reads that
-    // need no operation capability.
-    [[nodiscard]] http_client_pool& default_pool() const;
 
 private:
     using pool_owner_type = std::unique_ptr<http_client_pool, pmr_object_deleter<http_client_pool>>;
 
+    [[nodiscard]] http_client_pool& default_pool() const;
     void add(asio::io_context& io_context, const worker_handle& worker, http_client_config_storage config,
         const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     std::pmr::memory_resource* resource_;

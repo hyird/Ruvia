@@ -3,11 +3,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/http/http_status.h"
 
-#include "field/static_field_lookup.h"
+#include "http2/hpack_static_field_lookup.h"
 
 namespace ruvia::detail {
 
@@ -96,6 +97,16 @@ inline constexpr static_field_lookup<hpack_static_table> hpack_static_fields;
 
 [[nodiscard]] inline const hpack_static_header& hpack_static_header_at(std::uint32_t index) noexcept {
     return hpack_static_table[index - 1];
+}
+
+// One-based HPACK index of the first static-table entry named `name`, resolved at
+// compile time; a name absent from RFC 7541 Appendix A fails to compile.
+[[nodiscard]] consteval std::uint32_t hpack_static_name_index(std::string_view name) {
+    const auto match = hpack_static_fields.find(name, std::nullopt);
+    if (!match) {
+        throw std::invalid_argument("name is not in the HPACK static table");
+    }
+    return static_cast<std::uint32_t>(match->name_index_) + 1;
 }
 
 }  // namespace ruvia::detail

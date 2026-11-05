@@ -58,11 +58,10 @@ public:
         }
     }
 
-    [[nodiscard]] std::shared_ptr<void> try_acquire(
-        const std::shared_ptr<event_loop_state>& owner, bool root_admission = true) {
+    [[nodiscard]] std::shared_ptr<void> try_acquire(const std::shared_ptr<event_loop_state>& owner) {
         {
             const std::lock_guard lock(mutex_);
-            if (finalized_ || (root_admission && (root_admission_closed_ || sealed_))) {
+            if (finalized_ || root_admission_closed_ || sealed_) {
                 return {};
             }
             ++pending_;
@@ -145,8 +144,7 @@ private:
     move_only_function<void()> finalize_;
 };
 
-// The single Ruvia attachment claim on a caller-owned io_context
-// (event_loop_attachment.cpp).
+// The single Ruvia attachment claim on a caller-owned io_context.
 class external_context_claim final {
 public:
     explicit external_context_claim(asio::io_context& io_context);
@@ -190,23 +188,29 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     [[nodiscard]] worker_runtime& owned_runtime() noexcept {
         return *std::get_if<worker_runtime>(&context_ownership_);
     }
+    // Pool loops only: the runtime's first failure, without observing it.
+    [[nodiscard]] std::exception_ptr recorded_failure() noexcept {
+        return owned_runtime().recorded_failure();
+    }
 
     // Attached loops only: hooks the stop chain and hands the state to the
     // context service, which retires it at the latest when the context shuts
-    // down (event_loop_attachment.cpp).
+    // down.
     void attach(const std::shared_ptr<event_loop_state>& self);
     void install_shutdown_hook();
 
     void worker_stopping_complete() noexcept;
 
-    void report_failure(std::exception_ptr failure) noexcept;
+    // Delivers to the bound failure sink; only a state whose sink is not yet
+    // bound (pool construction rollback) reports under `unbound_context`.
+    void route_failure(std::exception_ptr failure, const char* unbound_context) noexcept;
     void report_attached_failure(std::exception_ptr failure) noexcept;
     [[noreturn]] void fail_teardown_start(std::exception_ptr failure) noexcept;
 
     void stop() noexcept;
     void finalize_stop() noexcept;
     // Asio service shutdown of an attached context: retires the worker before
-    // the context destroys its scheduler (event_loop_attachment.cpp).
+    // the context destroys its scheduler.
     void shutdown_external_context() noexcept;
 
     // First member: unlinks from the worker registry after every other member is gone.

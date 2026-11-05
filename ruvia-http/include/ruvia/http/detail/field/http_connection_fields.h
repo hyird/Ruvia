@@ -8,6 +8,7 @@
 #include <string_view>
 #include <type_traits>
 
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
@@ -17,34 +18,12 @@
 
 namespace ruvia::detail {
 
-// RFC 9110 section 5.6.1 deliberately gives senders and recipients different
-// list obligations: senders cannot generate empty members, while recipients
-// must ignore a reasonable number of them. The HTTP/1 head-size limit bounds
-// recipient work, so the tolerant path remains allocation-free and O(head).
-enum class http_field_list_role : std::uint8_t { recipient,
-    sender };
-
-enum class http_field_list_parse_status : std::uint8_t { ok,
-    malformed,
-    rejected };
-
-// Named reserved-field sets. Field names are case-insensitive (RFC 9110
-// section 5.1), so every set is matched through http_field_name_in.
+// Case-insensitive field-name set membership (RFC 9110 section 5.1).
 [[nodiscard]] inline bool http_field_name_in(
     std::string_view name, std::span<const std::string_view> fields) noexcept {
     return std::ranges::any_of(
         fields, [name](std::string_view field) noexcept { return http_ascii_equals_ignore_case(name, field); });
 }
-
-// Message framing (RFC 9110 sections 8.6 and 6.1): owned by the protocol
-// layer, never by an application field list.
-inline constexpr std::array<std::string_view, 2> http_message_framing_fields{
-    "content-length", "transfer-encoding"};
-
-// Connection-specific fields (RFC 9110 section 7.6.1). HTTP/2 forbids them
-// outright (RFC 9113 section 8.2.2).
-inline constexpr std::array<std::string_view, 5> http_connection_specific_fields{
-    "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"};
 
 // A successful CONNECT or extended-CONNECT tunnel carries no representation
 // (RFC 9110 section 9.3.6, RFC 9298 section 3): its head must not declare
@@ -217,27 +196,16 @@ public:
     [[nodiscard]] http_field_list_parse_status parse_field(
         std::string_view field_value, http_connection_field_role role) noexcept {
         auto parsed_bits = state_;
-        std::size_t start = 0;
-        while (start <= field_value.size()) {
-            const auto comma = field_value.find(',', start);
-            const auto end = comma == std::string_view::npos ? field_value.size() : comma;
-            const auto option = http_trim_ows(field_value.substr(start, end - start));
-            if (option.empty()) {
-                // An explicitly present but empty Connection field is useless
-                // and cannot be safely extended by a later generated option;
-                // the strict writer contract therefore rejects it as well as
-                // leading, trailing, and interior empty members.
-                if (role == http_connection_field_role::sender) {
-                    return http_field_list_parse_status::malformed;
-                }
-            } else {
-                if (!is_valid_http_header_name(option)) {
-                    return http_field_list_parse_status::malformed;
-                }
+        // An explicitly present but empty Connection field is useless and cannot
+        // be safely extended by a later generated option; the strict writer
+        // contract therefore rejects it as well as any empty member.
+        const auto status = http_visit_token_list(field_value,
+            role == http_connection_field_role::sender ? http_field_list_role::sender : http_field_list_role::recipient,
+            [&parsed_bits, role](std::string_view option) noexcept {
                 if (role == http_connection_field_role::sender
                         ? http_connection_option_conflicts_with_managed_field(option)
                         : http_connection_option_names_protected_field(option, role)) {
-                    return http_field_list_parse_status::rejected;
+                    return false;
                 }
                 if (http_ascii_equals_ignore_case(option, "close")) {
                     parsed_bits |= bit(http_connection_option::close);
@@ -248,15 +216,12 @@ public:
                 } else if (http_ascii_equals_ignore_case(option, "TE")) {
                     parsed_bits |= bit(http_connection_option::te);
                 }
-            }
-            if (comma == std::string_view::npos) {
-                break;
-            }
-            start = comma + 1;
+                return true;
+            });
+        if (status == http_field_list_parse_status::ok) {
+            state_ = static_cast<std::uint8_t>(parsed_bits | field_present_bit);
         }
-
-        state_ = static_cast<std::uint8_t>(parsed_bits | field_present_bit);
-        return http_field_list_parse_status::ok;
+        return status;
     }
 
     [[nodiscard]] bool has_field() const noexcept {
@@ -348,31 +313,21 @@ public:
     [[nodiscard]] http_field_list_parse_status parse_field(
         std::string_view field_value, http_field_list_role role, visitor_type&& visitor) noexcept {
         bool parsed_protocol = false;
-        std::size_t start = 0;
-        while (start <= field_value.size()) {
-            const auto comma = field_value.find(',', start);
-            const auto end = comma == std::string_view::npos ? field_value.size() : comma;
-            const auto item = http_trim_ows(field_value.substr(start, end - start));
-            if (item.empty()) {
-                if (role == http_field_list_role::sender) {
-                    return http_field_list_parse_status::malformed;
-                }
-            } else {
+        const auto status = http_visit_list_members(field_value, role,
+            [&parsed_protocol, &visitor](std::string_view member) noexcept {
                 http_upgrade_protocol protocol;
-                if (!http_parse_upgrade_protocol(item, protocol)) {
+                if (!http_parse_upgrade_protocol(member, protocol)) {
                     return http_field_list_parse_status::malformed;
                 }
                 if (!visitor(protocol)) {
                     return http_field_list_parse_status::rejected;
                 }
                 parsed_protocol = true;
-            }
-            if (comma == std::string_view::npos) {
-                break;
-            }
-            start = comma + 1;
+                return http_field_list_parse_status::ok;
+            });
+        if (status != http_field_list_parse_status::ok) {
+            return status;
         }
-
         if (parsed_protocol) {
             state_ = http_upgrade_field_state::present_with_protocol;
         } else if (state_ == http_upgrade_field_state::absent) {

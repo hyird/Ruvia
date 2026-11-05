@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_transfer_coding.h"
 
@@ -22,23 +22,7 @@ namespace ruvia::detail {
     }
 
     has_parameters = first_semicolon < item.size();
-    auto start = first_semicolon;
-    while (start < item.size()) {
-        ++start;
-        const auto end = start + http_find_unquoted_delimiter(item.substr(start), 0, ';');
-        const auto parameter = http_trim_ows(item.substr(start, end - start));
-        const auto equals = parameter.find('=');
-        if (equals == std::string_view::npos) {
-            return false;
-        }
-        const auto name = http_trim_ows(parameter.substr(0, equals));
-        const auto value = http_trim_ows(parameter.substr(equals + 1));
-        if (!is_valid_http_header_name(name) || !is_http_token_or_quoted_string(value)) {
-            return false;
-        }
-        start = end;
-    }
-    return true;
+    return http_all_parameters(item, is_valid_http_transfer_parameter);
 }
 
 template <http_temporary_owning_char_string item_type>

@@ -346,8 +346,8 @@ void worker_notification_state::complete_wait(
 
 namespace {
 
-// The only place a notification's state is built; both public constructors
-// hand their runtime's io_context and handle to this entry.
+// The only place a notification's state is built; every public constructor
+// hands its runtime's io_context and handle to this entry.
 [[nodiscard]] std::unique_ptr<worker_notification_state, pmr_object_deleter<worker_notification_state>>
 make_worker_notification_state(
     asio::io_context& io_context, const worker_handle& worker, worker_notification_options options) {

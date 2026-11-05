@@ -3,11 +3,11 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_field_syntax.h"
 
-// Shared quality parsing and accumulation (RFC 9110 section 12.4.2). Token
-// fields use one optional weight; media ranges extract q from their parameters.
+// Shared quality parsing (RFC 9110 section 12.4.2). Token fields use one
+// optional weight; media ranges extract q from their parameters.
 
 namespace ruvia::detail {
 
@@ -62,12 +62,6 @@ namespace ruvia::detail {
     }
     const auto parsed_value = http_parse_quality_value(qvalue);
     return parsed_value < 0 ? 0 : parsed_value;
-}
-
-inline void http_accumulate_accepted_quality(int candidate_value, int& accumulated) noexcept {
-    if (candidate_value > accumulated) {
-        accumulated = candidate_value;
-    }
 }
 
 }  // namespace ruvia::detail

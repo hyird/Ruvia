@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/web/detail/json/json_escape.h"
 #include "ruvia/web/detail/model/model_options.h"
 #include "ruvia/web/detail/model/parse/field_assign.h"
 
@@ -17,38 +18,52 @@ namespace ruvia::detail::model {
 template <typename... descriptor_types>
 class model_storage;
 
-template <fixed_string wire_name>
-[[nodiscard]] consteval std::array<char, wire_name.view().size() + 3>
-make_quoted_wire_name_colon() noexcept {
-    constexpr auto view = wire_name.view();
-    std::array<char, view.size() + 3> out{};
-    out[0] = '"';
-    for (std::size_t i = 0; i < view.size(); ++i) {
-        out[i + 1] = view[i];
+// Byte sinks for append_json_member_key: the first measures, the second fills
+// an exactly sized compile-time buffer.
+struct json_member_key_size_sink final {
+    std::size_t size_{0};
+
+    constexpr void push_back(char) noexcept {
+        ++size_;
     }
-    out[view.size() + 1] = '"';
-    out[view.size() + 2] = ':';
-    return out;
+    constexpr void append(std::string_view text) noexcept {
+        size_ += text.size();
+    }
+};
+
+template <std::size_t capacity>
+struct json_member_key_buffer final {
+    std::array<char, capacity> bytes_{};
+    std::size_t size_{0};
+
+    constexpr void push_back(char value) noexcept {
+        bytes_[size_++] = value;
+    }
+    constexpr void append(std::string_view text) noexcept {
+        for (const char value : text) {
+            push_back(value);
+        }
+    }
+};
+
+// Size of `,"<escaped wire name>":`, or 0 when the name is not well-formed UTF-8.
+template <fixed_string wire_name>
+[[nodiscard]] consteval std::size_t json_member_key_size() {
+    json_member_key_size_sink sink;
+    return append_json_member_key(sink, wire_name.view()) ? sink.size_ : 0;
 }
 
 template <fixed_string wire_name>
-[[nodiscard]] consteval std::array<char, wire_name.view().size() + 4>
-make_comma_quoted_wire_name_colon() noexcept {
-    constexpr auto view = wire_name.view();
-    std::array<char, view.size() + 4> out{};
-    out[0] = ',';
-    out[1] = '"';
-    for (std::size_t i = 0; i < view.size(); ++i) {
-        out[i + 2] = view[i];
-    }
-    out[view.size() + 2] = '"';
-    out[view.size() + 3] = ':';
-    return out;
+[[nodiscard]] consteval std::array<char, json_member_key_size<wire_name>()> make_json_member_key() {
+    json_member_key_buffer<json_member_key_size<wire_name>()> key;
+    (void)append_json_member_key(key, wire_name.view());
+    return key.bytes_;
 }
 
 template <typename field_value_type, bool is_required, typename options_type, fixed_string field_wire_name>
 class model_field final {
     static_assert(std::is_empty_v<options_type>, "model field options must be stateless metadata");
+    static_assert(json_member_key_size<field_wire_name>() != 0, "Ruvia model wire names must be well-formed UTF-8");
     // A default never satisfies a required input field, so accepting one would
     // silently ignore it.
     static_assert(!(is_required && options_type::has_default),
@@ -63,24 +78,11 @@ public:
     [[nodiscard]] constexpr std::string_view wire_name() const noexcept {
         return field_wire_name.view();
     }
-    [[nodiscard]] static consteval bool has_plain_wire_name() noexcept {
-        for (const char ch : field_wire_name.view()) {
-            const auto byte = static_cast<unsigned char>(ch);
-            if (byte < 0x20 || byte >= 0x80 || ch == '"' || ch == '\\') {
-                return false;
-            }
-        }
-        return true;
-    }
 
-    [[nodiscard]] static constexpr std::string_view quoted_wire_name_colon() noexcept {
-        return std::string_view(
-            quoted_wire_name_colon_storage_.data(), quoted_wire_name_colon_storage_.size());
-    }
-
-    [[nodiscard]] static constexpr std::string_view comma_quoted_wire_name_colon() noexcept {
-        return std::string_view(comma_quoted_wire_name_colon_storage_.data(),
-            comma_quoted_wire_name_colon_storage_.size());
+    // `,"<wire name>":` escaped at compile time; the first emitted member drops the comma.
+    [[nodiscard]] static constexpr std::string_view json_member_key(bool leading_comma) noexcept {
+        const std::string_view key(json_member_key_.data(), json_member_key_.size());
+        return leading_comma ? key : key.substr(1);
     }
 
     [[nodiscard]] detail::model_field_state state() const noexcept {
@@ -256,10 +258,7 @@ private:
         state_ = detail::model_field_state::missing;
     }
 
-    static constexpr auto quoted_wire_name_colon_storage_ =
-        make_quoted_wire_name_colon<field_wire_name>();
-    static constexpr auto comma_quoted_wire_name_colon_storage_ =
-        make_comma_quoted_wire_name_colon<field_wire_name>();
+    static constexpr auto json_member_key_ = make_json_member_key<field_wire_name>();
     detail::model_field_state state_{detail::model_field_state::missing};
     bool present_{false};
     std::optional<field_value_type> value_;

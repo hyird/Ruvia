@@ -45,13 +45,13 @@ public:
 
     server_websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
         connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options,
-        protocol_byte_limit message_limit, std::pmr::memory_resource* resource, std::string_view initial_bytes,
-        websocket_connection_options protocol_options, std::string_view subprotocol_value = {})
+        protocol_byte_limit message_limit, std::pmr::memory_resource& resource, std::string_view initial_bytes,
+        websocket_connection_options protocol_options, std::string_view subprotocol_value)
         : stream_(std::forward<stream_argument_type>(stream)),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
-          buffer_(std::pmr::polymorphic_allocator<char>(resource)),
+          buffer_(std::pmr::polymorphic_allocator<char>(&resource)),
           protocol_(buffer_, [&] {
               protocol_options.message_limit_ = message_limit;
               return protocol_options;
@@ -59,15 +59,15 @@ public:
           subprotocol_(subprotocol_value),
           write_lane_(worker_value),
           reader_done_signal_(worker_value),
-          background_tasks_(worker_value, {.resource_ = resource}) {
+          background_tasks_(worker_value, {.resource_ = &resource}) {
         buffer_.append(initial_bytes);
         scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk,
             &server_websocket_connection::drain_thunk);
     }
 
     server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
-        protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_connection_options,
-        std::string_view = {}) = delete;
+        protocol_byte_limit, std::pmr::memory_resource&, std::string_view, websocket_connection_options,
+        std::string_view) = delete;
     ~server_websocket_connection() = default;
 
     server_websocket_connection(const server_websocket_connection&) = delete;

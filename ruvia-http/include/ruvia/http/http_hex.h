@@ -9,7 +9,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/http/detail/util/http_encode_overlap.h"
+#include "ruvia/http/detail/util/http_address_overlap.h"
 
 namespace ruvia {
 

@@ -136,24 +136,12 @@ public:
                    : worker_services_.max_decoded_body_bytes_;
     }
 
-    [[nodiscard]] context_services with_route_body_limit(std::size_t limit) const noexcept {
-        auto services = *this;
-        services.request_services_.route_body_limit_ = limit;
-        return services;
-    }
-
     void bind_route_body_limit(std::size_t limit) noexcept {
         request_services_.route_body_limit_ = limit;
     }
 
     [[nodiscard]] request_io_metrics* io_metrics() const noexcept {
         return request_services_.io_metrics_;
-    }
-
-    [[nodiscard]] context_services with_io_metrics(request_io_metrics* metrics) const noexcept {
-        auto services = *this;
-        services.request_services_.io_metrics_ = metrics;
-        return services;
     }
 
     void bind_io_metrics(request_io_metrics* metrics) noexcept {
@@ -176,13 +164,6 @@ public:
     // also selects the not-found handler for the request path when the
     // handler asks for one. The route table is server-owned and outlives every
     // dispatched request.
-    [[nodiscard]] context_services with_routes(const route_table& routes_value) const noexcept {
-        auto services = *this;
-        services.worker_services_.routes_ = &routes_value;
-        return services;
-    }
-    context_services with_routes(route_table&&) const = delete;
-
     void bind_routes(const route_table& routes_value) noexcept {
         worker_services_.routes_ = &routes_value;
     }
@@ -192,8 +173,7 @@ public:
         return request_services_.body_source_;
     }
 
-    // Bind on a request-local copy: chaining value-producing overlays copies
-    // the worker and connection views again for each request-body capability.
+    // Bind on a request-local copy; the worker and connection views stay shared.
     void bind_streaming_request_body(body_reader& value) noexcept {
         request_services_.body_source_ = context_request_body_source::streaming(value);
     }
@@ -228,18 +208,6 @@ public:
         return request_services_.channels_.priority_update_;
     }
 
-    [[nodiscard]] context_services with_request_channels(const context_request_channels& channels) const noexcept {
-        auto services = *this;
-        services.request_services_.channels_ = channels;
-        return services;
-    }
-
-    [[nodiscard]] context_services with_interim_output(http_interim_response_output& output) const noexcept {
-        auto channels = request_services_.channels_;
-        channels.interim_output_ = &output;
-        return with_request_channels(channels);
-    }
-
     void bind_request_channels(const context_request_channels& channels) noexcept {
         request_services_.channels_ = channels;
     }
@@ -254,12 +222,6 @@ public:
 
     [[nodiscard]] constexpr const context_response_output& response_output() const noexcept {
         return request_services_.response_output_;
-    }
-
-    [[nodiscard]] context_services with_response_stream(response_stream_writer& value) const noexcept {
-        auto services = *this;
-        services.request_services_.response_output_ = context_response_output::response_stream(value);
-        return services;
     }
 
     void bind_response_stream(response_stream_writer& value) noexcept {

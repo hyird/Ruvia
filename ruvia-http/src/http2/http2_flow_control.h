@@ -25,52 +25,22 @@ namespace ruvia::detail {
     return data_bytes + frame_count * http2_frame_header_bytes;
 }
 
-// Match the field-block framing pass using the selected first-frame prefix.
+// `payload_bytes` covers the whole field-block run payload, including any first-frame
+// prefix. Every frame but the last is full, and an empty block still needs its
+// initial HEADERS or PUSH_PROMISE frame.
 [[nodiscard]] inline std::size_t http2_header_frame_encoded_bytes(
-    std::size_t header_bytes, std::size_t max_frame_size, std::size_t first_prefix_bytes) {
-    if (first_prefix_bytes > max_frame_size) {
-        throw std::length_error("HTTP/2 header prefix exceeds frame size");
+    std::size_t payload_bytes, std::size_t max_frame_size) {
+    const auto frame_count = std::max<std::size_t>(1, http2_data_frame_count(payload_bytes, max_frame_size));
+    if (frame_count > (std::numeric_limits<std::size_t>::max() - payload_bytes) / http2_frame_header_bytes) {
+        throw std::length_error("HTTP/2 header output size overflow");
     }
-    std::size_t encoded_bytes = 0;
-    std::size_t offset = 0;
-    bool first = true;
-    while (offset < header_bytes || (first && first_prefix_bytes != 0)) {
-        const auto prefix_bytes = first ? first_prefix_bytes : std::size_t{0};
-        const auto chunk = std::min(header_bytes - offset, max_frame_size - prefix_bytes);
-        const auto frame_bytes = http2_frame_header_bytes + prefix_bytes + chunk;
-        if (frame_bytes > std::numeric_limits<std::size_t>::max() - encoded_bytes) {
-            throw std::length_error("HTTP/2 header output size overflow");
-        }
-        encoded_bytes += frame_bytes;
-        offset += chunk;
-        first = false;
-    }
-    return encoded_bytes;
+    return payload_bytes + frame_count * http2_frame_header_bytes;
 }
 
 // Ceil the positive encoded size: a full final frame needs no extra slot.
 [[nodiscard]] inline std::size_t http2_header_frame_count(
     std::size_t encoded_bytes, std::size_t max_frame_size) noexcept {
     return encoded_bytes == 0 ? 0 : (encoded_bytes - 1) / (max_frame_size + http2_frame_header_bytes) + 1;
-}
-
-[[nodiscard]] inline http2_window_update_result http2_apply_stream_window_update(
-    http2_stream_state& stream, std::uint32_t increment) noexcept {
-    if (increment == 0) {
-        return http2_window_update_result::zero_increment;
-    }
-    return stream.add_send_window(static_cast<std::int64_t>(increment))
-               ? http2_window_update_result::ok
-               : http2_window_update_result::overflow;
-}
-
-inline void http2_credit_connection_receive_window(
-    std::int32_t& connection_window, std::int32_t bytes_value) noexcept {
-    connection_window += bytes_value;
-}
-
-inline void http2_credit_stream_receive_window(http2_stream_state& stream, std::int32_t bytes_value) noexcept {
-    stream.restore_receive_window(bytes_value);
 }
 
 [[nodiscard]] inline std::size_t http2_available_send_window(

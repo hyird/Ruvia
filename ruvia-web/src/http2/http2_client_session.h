@@ -7,6 +7,7 @@
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -17,6 +18,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_pmr_string.h"
@@ -43,6 +45,18 @@ struct http2_client_session_start_result final {
     return {.status_ = client_transport_status::io_failed, .error_ = std::make_error_code(std::errc::protocol_error)};
 }
 
+enum class http2_client_data_status : std::uint8_t {
+    // Every byte was submitted and its output reached the transport, or the
+    // session ended meanwhile; the caller judges that end itself.
+    submitted,
+    // The caller's stop condition held, or the session ended, before every
+    // byte was submitted.
+    stopped,
+    // The core refused the DATA: the stream no longer sends, or the input
+    // contradicts its declared length or state (std::logic_error).
+    rejected,
+};
+
 // The handler owns stream semantics above the connection: it consumes every
 // application event and observes each generation's terminal failure. Payload
 // producers wait on state_signal(), also notified for SETTINGS/WINDOW_UPDATE.
@@ -55,21 +69,26 @@ concept http2_client_session_handler = requires(handler_type& handler, http2_eve
 
 // The one HTTP/2 client connection driver shared by the HTTP client pool and
 // the WebSocket client: preface, the sole socket reader and writer, event
-// drain and generation-safe failure over a borrowed client_tcp_transport. The
-// writer transfers complete frame-bounded batches into its own storage, so a
-// feed() or submit during an in-flight write never invalidates the bytes being
+// drain, DATA submission under flow control, PING liveness and
+// generation-safe failure over a borrowed client_tcp_transport. The writer
+// transfers complete frame-bounded batches into its own storage, so a feed()
+// or submit during an in-flight write never invalidates the bytes being
 // written. Worker-affine and address-stable; the owner joins `tasks` before
 // retiring it.
 template <typename handler_type>
 class http2_client_session final {
 public:
+    // `ping_interval` bounds silence: no received frame for one interval sends
+    // a PING, and another silent interval fails the session with timeout.
     http2_client_session(handler_type& handler, client_tcp_transport& transport, task_scope& tasks,
         const worker_handle& worker_value, std::optional<std::chrono::milliseconds> write_timeout,
-        std::pmr::memory_resource* resource)
+        std::optional<std::chrono::milliseconds> ping_interval, std::pmr::memory_resource* resource)
         : handler_(handler),
           transport_(transport),
           tasks_(tasks),
+          worker_(worker_value),
           write_timeout_(write_timeout),
+          ping_interval_(ping_interval),
           resource_(resource),
           read_buffer_(resource),
           write_buffer_(resource),
@@ -79,7 +98,8 @@ public:
         static_assert(http2_client_session_handler<handler_type>);
     }
     http2_client_session(handler_type&, client_tcp_transport&, task_scope&, worker_handle&&,
-        std::optional<std::chrono::milliseconds>, std::pmr::memory_resource*) = delete;
+        std::optional<std::chrono::milliseconds>, std::optional<std::chrono::milliseconds>,
+        std::pmr::memory_resource*) = delete;
 
     http2_client_session(const http2_client_session&) = delete;
     http2_client_session& operator=(const http2_client_session&) = delete;
@@ -141,6 +161,11 @@ public:
             } catch (...) {
                 --session_tasks_;
                 throw;
+            }
+            if (ping_interval_) {
+                last_input_ = std::chrono::steady_clock::now();
+                ping_pending_ = false;
+                schedule_ping(generation, last_input_ + *ping_interval_);
             }
         } catch (...) {
             const auto failure = std::current_exception();
@@ -218,6 +243,60 @@ public:
         }
     }
 
+    // Submits `bytes` on `stream_id` in DATA frames of at most `chunk_bytes`,
+    // waiting for each batch to reach the transport and for send window.
+    // `stop()` is checked before each submission and after each wait.
+    // Exceptions other than the core's std::logic_error rejection propagate.
+    template <typename stop_type>
+    [[nodiscard]] task<http2_client_data_status> send_data(std::uint32_t stream_id, std::string_view bytes,
+        http2_end_stream end_stream, std::size_t chunk_bytes, stop_type stop) {
+        const auto generation = generation_;
+        while (!bytes.empty()) {
+            if (ended(generation) || stop()) {
+                co_return http2_client_data_status::stopped;
+            }
+            if (connection_->stream_aborted(stream_id)) {
+                co_return http2_client_data_status::rejected;
+            }
+            http2_data_submit_result submitted{};
+            try {
+                submitted = connection_->submit_data(stream_id, bytes, end_stream, chunk_bytes);
+            } catch (const std::logic_error&) {
+                co_return http2_client_data_status::rejected;
+            }
+            bytes.remove_prefix(submitted.consumed_bytes_);
+            wake_writer();
+            if (submitted.status_ == http2_data_submit_status::closed) {
+                co_return http2_client_data_status::rejected;
+            }
+            if (submitted.status_ == http2_data_submit_status::expectation_pending) {
+                // 100 (Continue) and the continue timeout both wake state waiters.
+                co_await state_signal_.wait();
+                continue;
+            }
+            co_await wait_output_flushed(stop);
+            while (submitted.status_ == http2_data_submit_status::backpressured && !ended(generation) && !stop()) {
+                const auto window = connection_->send_window_state(stream_id);
+                if (!window || window->available_ != 0 || connection_->stream_aborted(stream_id)) {
+                    break;
+                }
+                // WINDOW_UPDATE and SETTINGS may produce no stream event.
+                co_await state_signal_.wait();
+            }
+        }
+        co_return http2_client_data_status::submitted;
+    }
+
+    // Waits until every queued frame reached the transport, the session ended
+    // or `stop()` holds.
+    template <typename stop_type>
+    [[nodiscard]] task<void> wait_output_flushed(stop_type stop) {
+        const auto generation = generation_;
+        while (!ended(generation) && (connection_->wants_write() || writing_) && !stop()) {
+            co_await state_signal_.wait();
+        }
+    }
+
     // Drops the retired connection once no generation is running. Escaped
     // DATA credits stay valid; they only reference the memory resource.
     void reset() noexcept {
@@ -231,6 +310,58 @@ public:
 private:
     static constexpr std::size_t read_buffer_bytes = 16384;
     static constexpr std::size_t write_batch_bytes = 2 * http2_default_max_frame_size;
+
+    [[nodiscard]] bool ended(std::uint64_t generation) const noexcept {
+        return generation != generation_ || failed_ || !connection_.has_value();
+    }
+
+    void schedule_ping(std::uint64_t generation, std::chrono::steady_clock::time_point deadline) {
+        (void)worker_.schedule_timer(ping_timer_, deadline, [this, generation](worker_timer_outcome outcome) noexcept {
+            if (outcome == worker_timer_outcome::expired) {
+                check_liveness(generation);
+            }
+        });
+    }
+
+    // Any received frame, the PING ACK included, proves liveness (as Go's
+    // ReadIdleTimeout): one silent interval sends a PING, and the session
+    // fails only when no input arrived during the interval after it. Input is
+    // compared with when the PING was sent, not with the timer's firing time,
+    // which may trail its deadline.
+    void check_liveness(std::uint64_t generation) noexcept {
+        if (ended(generation) || session_tasks_ == 0) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        try {
+            if (ping_pending_ && last_input_ > ping_sent_at_) {
+                ping_pending_ = false;
+            }
+            if (ping_pending_) {
+                if (now - ping_sent_at_ >= *ping_interval_) {
+                    fail(generation,
+                        {.status_ = client_transport_status::aborted, .abort_ = client_abort_reason::timeout}, {});
+                } else {
+                    schedule_ping(generation, ping_sent_at_ + *ping_interval_);
+                }
+                return;
+            }
+            if (const auto idle_deadline = last_input_ + *ping_interval_; idle_deadline > now) {
+                schedule_ping(generation, idle_deadline);
+                return;
+            }
+            if (connection_->submit_ping() != http2_submit_status::accepted) {
+                // The connection already failed; the reader reports it.
+                return;
+            }
+            ping_pending_ = true;
+            ping_sent_at_ = now;
+            wake_writer();
+            schedule_ping(generation, now + *ping_interval_);
+        } catch (...) {
+            fail(generation, {}, std::current_exception());
+        }
+    }
 
     void take_output_batch(std::pmr::string& output) {
         output.clear();
@@ -266,6 +397,7 @@ private:
         }
         failed_ = true;
         draining_ = true;
+        ping_timer_.cancel();
         transport_.close();
         handler_.on_http2_failure(transport, std::move(failure));
         write_signal_.notify();
@@ -301,6 +433,9 @@ private:
                 }
                 if (generation_ != generation || failed_) {
                     co_return;
+                }
+                if (ping_interval_) {
+                    last_input_ = std::chrono::steady_clock::now();
                 }
                 if (!feed(std::string_view(input.data(), read.bytes_))) {
                     fail(generation, http2_client_protocol_failure(), {});
@@ -346,7 +481,9 @@ private:
     handler_type& handler_;
     client_tcp_transport& transport_;
     task_scope& tasks_;
+    const worker_handle& worker_;
     std::optional<std::chrono::milliseconds> write_timeout_;
+    std::optional<std::chrono::milliseconds> ping_interval_;
     std::pmr::memory_resource* resource_;
     std::optional<::ruvia::http2_connection> connection_;
     http_io_buffer read_buffer_;
@@ -355,9 +492,17 @@ private:
     worker_signal state_signal_;
     std::uint64_t generation_{0};
     std::size_t session_tasks_{0};
+    // When the reader last received bytes, while ping_interval_ is set.
+    std::chrono::steady_clock::time_point last_input_{};
+    // When the outstanding liveness PING was queued.
+    std::chrono::steady_clock::time_point ping_sent_at_{};
     bool failed_{false};
     bool draining_{false};
     bool writing_{false};
+    // A liveness PING is outstanding: no input arrived since ping_sent_at_.
+    bool ping_pending_{false};
+    // Last: destroyed first, before any state its completion reads.
+    worker_timer_registration ping_timer_;
 };
 
 }  // namespace ruvia::detail

@@ -188,7 +188,7 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     // registration order.
     if (primary == nullptr) {
         for (auto* member : members_) {
-            if (auto failure = member->failure(); failure != nullptr) {
+            if (auto failure = member->recorded_failure(); failure != nullptr) {
                 primary = std::move(failure);
                 break;
             }
@@ -196,6 +196,8 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     }
     // Workers commonly fail for one shared cause (an unreachable dependency),
     // so equivalent failures collapse into a single line with their count.
+    // Each member's failure is read once with ownership: it is returned as the
+    // primary, collapsed into it, or reported here.
     for (std::size_t index = 0; index != members_.size(); ++index) {
         const auto failure = members_[index]->failure();
         if (failure == nullptr || equivalent_failures(failure, primary)) {
@@ -203,14 +205,14 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
         }
         bool reported = false;
         for (std::size_t earlier = 0; earlier != index && !reported; ++earlier) {
-            reported = equivalent_failures(members_[earlier]->failure(), failure);
+            reported = equivalent_failures(members_[earlier]->recorded_failure(), failure);
         }
         if (reported) {
             continue;
         }
         std::size_t occurrences = 1;
         for (auto later = index + 1; later != members_.size(); ++later) {
-            if (equivalent_failures(members_[later]->failure(), failure)) {
+            if (equivalent_failures(members_[later]->recorded_failure(), failure)) {
                 ++occurrences;
             }
         }

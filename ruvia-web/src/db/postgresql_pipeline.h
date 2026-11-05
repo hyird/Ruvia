@@ -100,7 +100,6 @@ struct postgresql_pipeline_io final {
         state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
     [[nodiscard]] static bool advance(state_type& state, std::size_t slot, member_type& reader);
     [[nodiscard]] static db_socket_readiness wanted(pool_type& pool, std::size_t slot) noexcept;
-    static void check_wait(const db_socket_wait_result& result);
     static void exchange(state_type& state, std::size_t slot, db_socket_readiness ready);
     [[nodiscard]] static bool reusable(state_type& state, std::size_t slot) noexcept;
 };

@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/web/db/db_entity.h"
 
@@ -12,13 +13,12 @@ namespace ruvia::detail {
 
 template <typename entity_type, fixed_string name>
 consteval std::size_t db_relation_index() {
-    std::size_t result_value = std::tuple_size_v<typename entity_type::relations_type>;
-    for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
-        if constexpr (relation_type::name == name) {
-            result_value = i;
-        }
-    });
-    return result_value;
+    using relations_type = typename entity_type::relations_type;
+    return []<std::size_t... indexes>(std::index_sequence<indexes...>) consteval {
+        const std::array<std::string_view, sizeof...(indexes)> names{
+            std::tuple_element_t<indexes, relations_type>::name.view()...};
+        return fixed_name_index(names, name.view());
+    }(std::make_index_sequence<std::tuple_size_v<relations_type>>{});
 }
 
 template <typename entity_type, fixed_string name>

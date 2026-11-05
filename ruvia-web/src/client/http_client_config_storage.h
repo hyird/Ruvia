@@ -40,8 +40,11 @@ struct http_client_config_storage final {
     std::size_t max_cookie_bytes_;
     std::chrono::milliseconds connect_timeout_;
     std::optional<std::chrono::milliseconds> write_timeout_;
+    std::optional<std::chrono::milliseconds> read_timeout_;
     std::optional<std::chrono::milliseconds> request_timeout_;
     std::optional<std::chrono::milliseconds> acquire_timeout_;
+    std::optional<std::chrono::milliseconds> idle_timeout_;
+    std::optional<std::chrono::milliseconds> http2_ping_interval_;
     std::size_t max_response_bytes_;
     http_client_protocol protocol_;
     http_client_advertisement_config advertisements_;
@@ -50,7 +53,8 @@ struct http_client_config_storage final {
     client_tcp_config tcp_;
     http_client_received_cookie_policy received_cookies_;
     std::pmr::string user_agent_;
-    // Configured name/value cookie pairs, one allocation per pair.
+    // Configured name/value cookie pairs, one allocation per pair; a later
+    // configured entry replaces an earlier one of the same name in place.
     std::pmr::vector<http_header> cookies_;
 
     // Validating factory for the fixed origin. Owners that are never moved
@@ -123,8 +127,11 @@ private:
           max_cookie_bytes_(source_value.max_cookie_bytes_),
           connect_timeout_(source_value.connect_timeout_),
           write_timeout_(source_value.write_timeout_),
+          read_timeout_(source_value.read_timeout_),
           request_timeout_(source_value.request_timeout_),
           acquire_timeout_(source_value.acquire_timeout_),
+          idle_timeout_(source_value.idle_timeout_),
+          http2_ping_interval_(source_value.http2_ping_interval_),
           max_response_bytes_(source_value.max_response_bytes_),
           protocol_(source_value.protocol_),
           advertisements_(source_value.advertisements_),
@@ -145,6 +152,9 @@ private:
                 }
             }
             cookies_.emplace_back(cookie.name(), cookie.value(), resource);
+        }
+        if constexpr (std::same_as<source_type, http_client_config>) {
+            validate_http_client_configured_cookie_capacity(cookies_, max_cookies_, max_cookie_bytes_);
         }
     }
 };

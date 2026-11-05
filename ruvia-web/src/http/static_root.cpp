@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "ruvia/core/bytes.h"
+#include "ruvia/core/detail/fnv1a.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
@@ -30,7 +31,6 @@
 #include "http/static_root_options_validation.h"
 #include "server/http_file_open.h"
 #include "server/http_native_file.h"
-#include "util/fnv1a.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after
@@ -603,7 +603,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         detail::static_root_entry entry(upstream);
         entry.relative_path_ = std::move(relative);
         http_assign_native_path(entry.file_path_, file_path);
-        entry.content_type_ = detail::content_type_for(file_path, extension, config, upstream);
+        entry.content_type_ = detail::content_type_for(extension, config, upstream);
         entry.size_ = snapshot.size_;
         entry.identity_ = snapshot.identity_;
         entry.modified_token_ = snapshot.modified_token_;

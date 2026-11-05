@@ -1,7 +1,8 @@
 #pragma once
 
-// Definitions of db_pipeline.h, included by the driver translation units that
-// instantiate a pipeline, after db_pool.h.
+// Definitions of db_pipeline.h, included after db_pool.h by the driver
+// translation units that instantiate a pipeline and by db_pool.cpp, which runs
+// statements through it (run_pipelined).
 //
 // The io_type hooks, all static, each on a connected, leased slot of a group:
 //   statement_type prepare(pool_type&, std::string_view sql, std::span<const db_value>)
@@ -20,8 +21,6 @@
 //       turn instead, after which advance() is asked again.
 //   db_slot_socket::native_socket_type socket(pool_type&, std::size_t slot)
 //       The connection's socket for that wait; throws when it has none.
-//   void check_wait(const db_socket_wait_result&)
-//       Throws on a wait that failed the socket.
 //   void exchange(state_type&, std::size_t slot, db_socket_readiness ready)
 //       Continues the protocol after a readiness wake.
 //   bool reusable(state_type&, std::size_t slot) noexcept
@@ -37,10 +36,14 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
+#include <asio/error.hpp>
+
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/web/detail/db/db_result_access.h"
@@ -56,6 +59,16 @@ namespace ruvia::detail {
 [[nodiscard]] inline std::optional<std::chrono::milliseconds> db_io_timeout(
     const db_config_storage& config, db_socket_readiness wanted) noexcept {
     return has_db_socket_readiness(wanted, db_socket_readiness::write) ? config.write_timeout_ : config.read_timeout_;
+}
+
+// A socket error ends the connection. A cancelled wait does not: it expired,
+// or it was woken to be armed again.
+inline void check_db_socket_wait(const db_socket_wait_result& result, db_driver driver, std::string_view name) {
+    if (result.error_ && result.error_ != asio::error::operation_aborted) {
+        throw db_error(db_error::code_type::io_error, driver,
+            std::string(name).append(" socket wait failed: ").append(error_code_text(result.error_)),
+            result.error_.value());
+    }
 }
 
 template <typename io_type>
@@ -799,7 +812,7 @@ private:
         auto& state = pool_.state();
         auto& group = state.group(member_.slot_);
         group.wait_deadline_.reset();
-        io_type::check_wait(result);
+        check_db_socket_wait(result, io_type::driver_type::driver, io_type::driver_type::name);
         if (result.ready_ != db_socket_readiness::none) {
             group.stretch_start_.reset();
             io_type::exchange(state, member_.slot_, result.ready_);

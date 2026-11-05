@@ -42,7 +42,7 @@ bool http2_connection::process_window_update(
         switch (http2_apply_window_update(connection_send_window_, increment)) {
             case http2_window_update_result::ok:
                 if (receive_frame_metadata_) {
-                    events_.push_back(http2_event(http2_received_window_update{
+                    publish_event(http2_event(http2_received_window_update{
                         .stream_id_ = header_value.stream_id_, .increment_ = increment}));
                 }
                 return true;
@@ -74,19 +74,17 @@ bool http2_connection::process_window_update(
         // A skipped/released identifier is closed, not idle: ignored as above.
         return true;
     }
-    switch (http2_apply_stream_window_update(*stream, increment)) {
+    switch (stream->apply_window_update(increment)) {
         case http2_window_update_result::ok:
             if (receive_frame_metadata_) {
-                events_.push_back(http2_event(http2_received_window_update{
+                publish_event(http2_event(http2_received_window_update{
                     .stream_id_ = header_value.stream_id_, .increment_ = increment}));
             }
             return true;
         case http2_window_update_result::zero_increment:
-            reset_stream(header_value.stream_id_, http2_error_code::protocol_error);
-            return true;
+            return reset_stream_for_peer_error(header_value.stream_id_, http2_error_code::protocol_error);
         case http2_window_update_result::overflow:
-            reset_stream(header_value.stream_id_, http2_error_code::flow_control_error);
-            return true;
+            return reset_stream_for_peer_error(header_value.stream_id_, http2_error_code::flow_control_error);
     }
     return true;
 }
@@ -113,7 +111,7 @@ void http2_connection::flush_window_debt(http2_stream_state& stream) {
 }
 
 bool http2_connection::release_received_data(std::uint32_t stream_id, std::uint32_t bytes_value) {
-    auto* stream = find_stream(stream_id);
+    auto* stream = streams_.find(stream_id);
     if (stream == nullptr) {
         return false;  // debt (if any) died with the stream; nothing left to credit
     }
@@ -193,13 +191,12 @@ void http2_connection::queue_consumed_data_credit(http2_stream_state* stream, st
     auto* out = buffer;
     if (connection_receive_credit_.ready()) {
         const auto increment = connection_receive_credit_.take();
-        http2_credit_connection_receive_window(
-            connection_receive_window_, static_cast<std::int32_t>(increment));
+        connection_receive_window_ += static_cast<std::int32_t>(increment);
         out = http2_write_window_update(out, 0, increment);
     }
     if (stream_can_receive && stream->receive_window_credit().ready()) {
         const auto increment = stream->receive_window_credit().take();
-        http2_credit_stream_receive_window(*stream, static_cast<std::int32_t>(increment));
+        stream->restore_receive_window(static_cast<std::int32_t>(increment));
         out = http2_write_window_update(out, stream->id(), increment);
     }
     if (out != buffer) {

@@ -66,49 +66,30 @@ template <typename number_type>
     return parsed_value;
 }
 
+// Form mode of decode_url_component always yields a value (WHATWG keeps a
+// malformed '%' literally) and returns `input` itself when nothing needs
+// decoding, so a decoded view's address tells whether `storage` holds it.
+[[nodiscard]] inline std::string_view decode_form_value(
+    std::string_view input, form_value_encoding encoding, std::pmr::string& storage) {
+    if (encoding == form_value_encoding::decoded) {
+        return input;
+    }
+    return *ruvia::decode_url_component(input, storage, url_decode_mode::form);
+}
+
 template <typename t_type>
+    requires is_form_field<t_type>
 [[nodiscard]] std::optional<t_type> parse_form_value(resolved_pmr_resource_tag, std::string_view input,
-    form_value_encoding encoding, [[maybe_unused]] std::pmr::memory_resource* resource,
-    [[maybe_unused]] model_string_storage string_storage) {
+    form_value_encoding encoding, std::pmr::memory_resource* resource, model_string_storage string_storage) {
     using field_type = std::remove_cvref_t<t_type>;
 
-    if constexpr (std::is_same_v<field_type, std::string_view>) {
-        if (encoding == form_value_encoding::url_encoded &&
-            ruvia::has_url_encoding(input, url_decode_mode::form)) {
-            return std::nullopt;
-        }
-        return input;
-    } else if constexpr (is_ruvia_scalar<field_type>) {
-        std::array<char, 128> stack_buffer{};
-        std::optional<std::pmr::string> heap_storage;
-        auto decoded = input;
-        if (encoding == form_value_encoding::url_encoded &&
-            ruvia::has_url_encoding(input, url_decode_mode::form)) {
-            if (input.size() <= stack_buffer.size()) {
-                std::size_t len = 0;
-                for (std::size_t i = 0; i < input.size(); ++i) {
-                    char c = input[i];
-                    if (c == '+') {
-                        c = ' ';
-                    } else if (c == '%') {
-                        if (const auto byte = http_try_decode_percent_byte(input, i)) {
-                            c = static_cast<char>(*byte);
-                            i += 2;
-                        }
-                    }
-                    stack_buffer[len++] = c;
-                }
-                decoded = std::string_view(stack_buffer.data(), len);
-            } else {
-                auto& storage = heap_storage.emplace(resource);
-                const auto decoded_value =
-                    ruvia::decode_url_component(input, storage, url_decode_mode::form);
-                if (!decoded_value.has_value()) {
-                    return std::nullopt;
-                }
-                decoded = *decoded_value;
-            }
-        }
+    if constexpr (is_ruvia_scalar<field_type>) {
+        // Decoded scalar text only lives until conversion; typical values stay
+        // in this stack buffer.
+        std::array<std::byte, 128> stack_bytes;
+        std::pmr::monotonic_buffer_resource stack_resource(stack_bytes.data(), stack_bytes.size(), resource);
+        std::pmr::string decoded_storage(&stack_resource);
+        const auto decoded = decode_form_value(input, encoding, decoded_storage);
         using scalar_type = model_scalar_value_type<field_type>;
         if constexpr (std::is_same_v<scalar_type, bool>) {
             const auto parsed_value = parse_form_bool(decoded);
@@ -123,31 +104,17 @@ template <typename t_type>
             }
             return field_type(*parsed_value);
         }
-    } else if constexpr (is_ruvia_string<field_type>) {
-        if (encoding != form_value_encoding::url_encoded ||
-            !ruvia::has_url_encoding(input, url_decode_mode::form)) {
-            if (string_storage == model_string_storage::owned) {
-                return field_type(input, ::ruvia::model_options{.resource_ = resource});
-            }
-            return model_value_factory::make_string(input, resource);
-        }
-        std::pmr::string decoded_storage(resource);
-        const auto decoded_value =
-            ruvia::decode_url_component(input, decoded_storage, url_decode_mode::form);
-        if (!decoded_value.has_value()) {
-            return std::nullopt;
-        }
-        if (decoded_value->data() == input.data()) {
-            if (string_storage == model_string_storage::owned) {
-                return field_type(input, ::ruvia::model_options{.resource_ = resource});
-            }
-            return model_value_factory::make_string(input, resource);
-        }
-        field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
-        value.assign_owned(std::move(decoded_storage));
-        return value;
     } else {
-        return std::nullopt;
+        std::pmr::string decoded_storage(resource);
+        if (decode_form_value(input, encoding, decoded_storage).data() != input.data()) {
+            field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
+            value.assign_owned(std::move(decoded_storage));
+            return value;
+        }
+        if (string_storage == model_string_storage::owned) {
+            return field_type(input, ::ruvia::model_options{.resource_ = resource});
+        }
+        return model_value_factory::make_string(input, resource);
     }
 }
 

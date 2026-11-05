@@ -102,50 +102,6 @@ using detail::parse_port_value;
     });
 }
 
-[[nodiscard]] std::optional<std::uint16_t> parse_serialized_origin_h16(
-    std::string_view group) noexcept {
-    if (group.empty() || group.size() > 4 || (group.size() > 1 && group.front() == '0')) {
-        return std::nullopt;
-    }
-    std::uint16_t value = 0;
-    for (const auto digit : group) {
-        // The serialized form spells hex digits in lowercase only.
-        const auto nibble = http_decode_hex_nibble(digit);
-        if (nibble < 0 || (digit >= 'A' && digit <= 'F')) {
-            return std::nullopt;
-        }
-        value = static_cast<std::uint16_t>(value * 16U + static_cast<unsigned>(nibble));
-    }
-    return value;
-}
-
-[[nodiscard]] bool parse_serialized_origin_ipv6_groups(std::string_view side,
-    std::array<std::uint16_t, 8>& pieces, std::size_t& count) noexcept {
-    count = 0;
-    if (side.empty()) {
-        return true;
-    }
-    std::size_t offset = 0;
-    for (;;) {
-        const auto separator = side.find(':', offset);
-        const auto group = side.substr(offset,
-            separator == std::string_view::npos ? std::string_view::npos : separator - offset);
-        const auto value = parse_serialized_origin_h16(group);
-        if (!value.has_value() || count >= pieces.size()) {
-            return false;
-        }
-        pieces[count] = *value;
-        ++count;
-        if (separator == std::string_view::npos) {
-            return true;
-        }
-        offset = separator + 1;
-        if (offset == side.size()) {
-            return false;
-        }
-    }
-}
-
 [[nodiscard]] std::size_t find_serialized_origin_ipv6_compression_index(
     const std::array<std::uint16_t, 8>& pieces) noexcept {
     constexpr std::size_t no_compression = 8;
@@ -241,29 +197,11 @@ using detail::parse_port_value;
                literal.begin());
 }
 
+// The canonical re-serialization (lowercase, no leading zeros, longest-run
+// "::", no dotted IPv4) is the gate; the RFC 3986 parser only supplies pieces.
 [[nodiscard]] bool is_valid_serialized_origin_ipv6(std::string_view literal) noexcept {
-    std::array<std::uint16_t, 8> pieces{};
-    const auto compression = literal.find("::");
-    if (compression == std::string_view::npos) {
-        std::size_t groups = 0;
-        return parse_serialized_origin_ipv6_groups(literal, pieces, groups) &&
-               groups == pieces.size() && is_canonical_serialized_origin_ipv6(literal, pieces);
-    }
-    if (literal.find("::", compression + 2) != std::string_view::npos) {
-        return false;
-    }
-    std::size_t left_groups = 0;
-    std::size_t right_groups = 0;
-    std::array<std::uint16_t, 8> right_pieces{};
-    if (!parse_serialized_origin_ipv6_groups(literal.substr(0, compression), pieces, left_groups) ||
-        !parse_serialized_origin_ipv6_groups(literal.substr(compression + 2), right_pieces, right_groups) ||
-        left_groups + right_groups > 7) {
-        return false;
-    }
-    for (std::size_t i = 0; i < right_groups; ++i) {
-        pieces[pieces.size() - right_groups + i] = right_pieces[i];
-    }
-    return is_canonical_serialized_origin_ipv6(literal, pieces);
+    const auto pieces = detail::parse_ipv6_address(literal);
+    return pieces.has_value() && is_canonical_serialized_origin_ipv6(literal, *pieces);
 }
 
 [[nodiscard]] std::variant<std::uint16_t, std::errc> parse_serialized_origin_port(std::string_view value) noexcept {

@@ -1,7 +1,7 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
@@ -15,6 +15,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_priority.h"
@@ -59,10 +60,23 @@ public:
         // Borrowed from the request or push driver while registered.
         const operation_timeout* timeout_{nullptr};
         std::string_view request_target_;
+        // Read inactivity deadline while the stream waits for peer input. Unset
+        // before the request head is submitted, once the response completed and
+        // while this client's consumer holds the stream's receive credit.
+        std::optional<std::chrono::steady_clock::time_point> read_deadline_;
+        // When timer_ fires. An earlier deadline reschedules it; a later one is
+        // rechecked when it fires.
+        std::optional<std::chrono::steady_clock::time_point> timer_at_;
         bool complete_{false};
         // Caller-owned buffered suffix or its socket output is still pending.
         bool request_body_pending_{false};
         bool retryable_{false};
+        // The request addresses the fixed origin, whose jar retains the
+        // response's Set-Cookie fields.
+        bool addresses_origin_{true};
+        // Read inactivity and total deadline; its completion finds the stream
+        // by request_id_ through the registry.
+        worker_timer_registration timer_;
 
         [[nodiscard]] bool failed() const noexcept {
             return error_.has_value() || failure_ != nullptr;
@@ -89,6 +103,12 @@ public:
     // Terminal close of the current connection; a running HTTP/2 session
     // fails through its single transition so every stream is woken.
     void close() noexcept;
+    // Starts the idle bound of a connected HTTP/1 connection between exchanges
+    // or an HTTP/2 connection without streams; its expiry closes the
+    // connection unless it is in use again. A bound that cannot be armed
+    // closes the connection at once.
+    void begin_idle() noexcept;
+    void end_idle() noexcept;
     // Applies the retention policy to both buffers. Only between exchanges,
     // when no transport operation borrows their storage.
     void retain_idle_buffers() noexcept;
@@ -111,13 +131,15 @@ public:
     // an http2_only client.)
     [[nodiscard]] task<bool> execute_http2(const http_client_request_storage& request,
         const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value);
+    // Registers a stream whose timeout_ is set and arms its deadline timer.
     void register_http2_stream(http2_stream& stream);
     void remove_http2_stream(http2_stream& stream) noexcept;
     void cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason,
         http2_error_code error = http2_error_code::cancel) noexcept;
     [[nodiscard]] std::uint64_t next_http2_request_id() noexcept;
     void reprioritize(http_client_response_state& state_value, http_priority priority);
-    // Wakes the writer to flush WINDOW_UPDATE for released DATA credit.
+    // Wakes the writer to flush WINDOW_UPDATE for released DATA credit; the
+    // stream's read inactivity bound restarts as the peer may send again.
     void release_response_data(http_client_response_state& state_value) noexcept;
 
     // http2_client_session handler.
@@ -148,8 +170,15 @@ private:
         http2_state_waiter* next_{};
     };
     [[nodiscard]] http2_stream* find_http2_stream(std::uint32_t stream_id) noexcept;
+    [[nodiscard]] http2_stream* find_http2_request(std::uint64_t request_id) noexcept;
     [[nodiscard]] bool http2_exchange_complete(const http2_stream& stream) noexcept;
     void fail_http2_stream(http2_stream& stream, std::exception_ptr failure, bool reset_stream) noexcept;
+    // Peer input for the stream restarts its read inactivity bound.
+    void restart_http2_stream_read(http2_stream& stream);
+    // Arms timer_ for the earlier of the total and read deadlines.
+    void schedule_http2_stream_timer(http2_stream& stream);
+    void expire_http2_stream_timer(std::uint64_t request_id) noexcept;
+    void close_idle() noexcept;
     void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
     void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
@@ -166,6 +195,8 @@ private:
     http2_stream* last_http2_stream_{nullptr};
     std::uint64_t next_http2_request_id_{0};
     http2_state_waiter* state_waiters_{};
+    // Last: destroyed first, so its completion never sees a retiring connection.
+    worker_timer_registration idle_timer_;
 };
 
 }  // namespace ruvia::detail

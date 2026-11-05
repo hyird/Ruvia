@@ -5,9 +5,34 @@
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/detail/model/macro/macro_field_ops.h"
+#include "ruvia/web/detail/model/model_options.h"
+#include "ruvia/web/detail/model/model_schema.h"
 #include "ruvia/web/detail/model/model_storage.h"
 #include "ruvia/web/fixed_string.h"
+
+// The closure is a structural NTTP even when invoking its factory needs runtime
+// state. Let the compiler infer constexpr only for expressions that support it.
+#define RUVIA_DEFAULT(value) ::ruvia::detail::model::default_value<[]() { return value; }>
+#define RUVIA_INITIAL(value) ::ruvia::detail::model::initial<[]() { return value; }>
+#define RUVIA_NULLABLE ::ruvia::detail::model::nullable
+#define RUVIA_OMIT_EMPTY ::ruvia::detail::model::omit_empty
+#define RUVIA_EMIT_NULL ::ruvia::detail::model::emit_null
+
+#define RUVIA_REQUIRED_FIELD(field, type, ...)                                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{#field}, type, true __VA_OPT__(, ) __VA_ARGS__>
+
+#define RUVIA_REQUIRED_FIELD_NAME(wire_name, field, type, ...)                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{wire_name}, type, true __VA_OPT__(, ) __VA_ARGS__>
+
+#define RUVIA_OPTIONAL_FIELD(field, type, ...)                                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{#field}, type, false __VA_OPT__(, ) __VA_ARGS__>
+
+#define RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...)                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{wire_name}, type, false __VA_OPT__(, ) __VA_ARGS__>
 
 // Field descriptors are forwarded directly into a C++ variadic template. No
 // preprocessor argument counter or FOR_EACH expansion participates in model

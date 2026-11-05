@@ -176,13 +176,12 @@ void install_context_callbacks(SSL_CTX& context, tls_context_policy* policy) noe
 
 thread_local native_tls_context_scope* native_tls_context_scope::current_ = nullptr;
 
-native_tls_context_scope::native_tls_context_scope(std::string_view host, std::uint64_t record_limit)
-    : host_(host),
-      record_limit_(record_limit),
-      previous_(current_) {
-    // 构造通知只安装回调和 ex_data；不查询未初始化的 context 参数或 SSL 状态。
-    static const bool initialized = [] {
-        context_index = SSL_CTX_get_ex_new_index(0, nullptr, new_context, nullptr, free_context_policy);
+// Registers, once per process, the ex_data slots that carry the policy on
+// every context, connection and BIO.
+void register_tls_policy_indexes() {
+    static const bool registered = [] {
+        context_index = SSL_CTX_get_ex_new_index(
+            0, nullptr, native_tls_context_scope::new_context, nullptr, free_context_policy);
         record_index = SSL_get_ex_new_index(0, nullptr, nullptr, copy_record_state, free_record_state);
         bio_index = BIO_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
         if (context_index < 0 || record_index < 0 || bio_index < 0) {
@@ -190,7 +189,15 @@ native_tls_context_scope::native_tls_context_scope(std::string_view host, std::u
         }
         return true;
     }();
-    (void)initialized;
+    (void)registered;
+}
+
+native_tls_context_scope::native_tls_context_scope(std::string_view host, std::uint64_t record_limit)
+    : host_(host),
+      record_limit_(record_limit),
+      previous_(current_) {
+    // 构造通知只安装回调和 ex_data；不查询未初始化的 context 参数或 SSL 状态。
+    register_tls_policy_indexes();
     current_ = host_.empty() ? nullptr : this;
 }
 
@@ -231,7 +238,7 @@ void validate_tls_record_limit(std::uint64_t limit) {
 
 void apply_tls_protocol_policy(SSL_CTX& context, std::uint64_t record_limit) {
     validate_tls_record_limit(record_limit);
-    native_tls_context_scope initialize({}, record_limit);
+    register_tls_policy_indexes();
     auto owner = make_pmr_object<tls_context_policy>(process_resource(), std::string_view{}, record_limit);
     auto* previous = static_cast<tls_context_policy*>(SSL_CTX_get_ex_data(&context, context_index));
     if (SSL_CTX_set_ex_data(&context, context_index, owner.get()) != 1) {

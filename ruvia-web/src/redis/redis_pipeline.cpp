@@ -4,10 +4,10 @@
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "integration/request_io_metrics.h"
-#include "redis/redis_handle_helpers.h"
-#include "redis/redis_registry.h"
+#include "redis/redis_command_routing.h"
+#include "redis/redis_pool.h"
+#include "redis/redis_reply_parsers.h"
 #include "redis/redis_types_access.h"
-#include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 
@@ -66,9 +66,8 @@ template <redis_batch_mode mode>
 redis_batch<mode>& redis_batch<mode>::command(std::span<const std::string_view> args) {
     require_ready();
     const bool barrier = validate_redis_pooled_command(args, false, mode == redis_batch_mode::pipeline);
-    if (barrier && !options_.stop_token_.stoppable() && !options_.timeout_.has_value()) {
-        throw std::invalid_argument(
-            "redis barrier pipeline requires a stop_token or finite operation timeout");
+    if (barrier) {
+        require_bounded_redis_wait(options_, "redis barrier pipeline requires a stop_token or finite operation timeout");
     }
     return append_owned(make_owned_redis_command(resource(), args));
 }

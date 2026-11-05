@@ -1,7 +1,7 @@
 #pragma once
 
-#include <filesystem>
 #include <memory_resource>
+#include <string>
 #include <string_view>
 
 #include "http/static_root_config_storage.h"
@@ -17,8 +17,7 @@ namespace ruvia::detail {
 [[nodiscard]] bool file_type_allowed(
     std::string_view extension, const static_root_config_storage& config);
 
-[[nodiscard]] std::pmr::string content_type_for(const std::filesystem::path& path,
-    std::string_view extension, const static_root_config_storage& config,
-    std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::string content_type_for(std::string_view extension,
+    const static_root_config_storage& config, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

@@ -154,10 +154,10 @@ public:
         return std::string_view(buffer.data(), length);
     }
 
+    // Cold path for paths beyond the issue sink's stack buffer; size_hint() is exact.
     void render(std::pmr::string& output) const {
-        output.clear();
-        output.reserve(size_hint());
-        append_to(output);
+        output.resize(size_hint());
+        output.resize(render_to(output).size());
     }
 
 private:
@@ -184,23 +184,6 @@ private:
         }
     }
 
-    void append_to(std::pmr::string& output) const {
-        if (parent_ == nullptr) {
-            return;
-        }
-        parent_->append_to(output);
-        if (indexed_) {
-            output.push_back('[');
-            http_append_unsigned(output, index_);
-            output.push_back(']');
-            return;
-        }
-        if (!output.empty()) {
-            output.push_back('.');
-        }
-        output.append(field_);
-    }
-
     const model_path* parent_{nullptr};
     std::string_view field_{};
     std::size_t index_{0};
@@ -222,7 +205,7 @@ public:
         }
         static constexpr std::size_t inline_capacity = 128;
         if (path.size_hint() <= inline_capacity) {
-            std::array<char, inline_capacity> buffer{};
+            std::array<char, inline_capacity> buffer;
             validator_.add(path.render_to(buffer), code, message);
             return;
         }

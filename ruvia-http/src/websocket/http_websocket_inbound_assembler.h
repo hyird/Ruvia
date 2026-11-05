@@ -7,10 +7,10 @@
 #include <variant>
 
 #include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_utf8.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
-#include "util/http_utf8.h"
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_frame_view.h"
 
@@ -199,8 +199,7 @@ public:
                 return websocket_inbound_result::make_failure(
                     websocket_protocol_failure::protocol_error);
             }
-            if (websocket_append_exceeds_limit(
-                    message_.size(), frame.payload().size(), message_limit)) {
+            if (message_limit.addition_exceeds(message_.size(), frame.payload().size())) {
                 return websocket_inbound_result::make_failure(
                     websocket_protocol_failure::message_too_large);
             }
@@ -229,10 +228,7 @@ public:
                 return websocket_inbound_result::make_failure(
                     websocket_protocol_failure::protocol_error);
             }
-            if (websocket_message_exceeds_limit(frame.payload().size(), message_limit)) {
-                return websocket_inbound_result::make_failure(
-                    websocket_protocol_failure::message_too_large);
-            }
+            // websocket_try_read_frame already bounded this first frame by the message limit.
             const auto opcode = static_cast<websocket_opcode>(frame.kind());
             if (frame.final()) {
                 const auto message = websocket_message::borrow(opcode, frame.payload());

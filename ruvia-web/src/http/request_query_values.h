@@ -79,11 +79,13 @@ private:
     std::pmr::vector<std::string_view> values_;
 };
 
+// Field views borrow the request query string or decoded bytes in the request
+// arena, so neither moves once published.
 class request_query_cache final {
 public:
-    request_query_cache(std::pmr::vector<std::pmr::string>&& storage, request_name_value_list&& fields_value) noexcept
-        : storage_(std::move(storage)),
-          fields_(std::move(fields_value)) {}
+    request_query_cache(request_name_value_list&& fields_value, std::pmr::memory_resource* arena) noexcept
+        : fields_(std::move(fields_value)),
+          arena_(arena) {}
 
     [[nodiscard]] const request_name_value_list& fields() const& noexcept {
         return fields_;
@@ -94,17 +96,16 @@ public:
         if (!values_) {
             // Construct completely before publishing any spans. A failed
             // allocation leaves the scalar cache intact and permits a retry.
-            values_.emplace(fields_, storage_.get_allocator().resource());
+            values_.emplace(fields_, arena_);
         }
         return *values_;
     }
     const request_query_values& values() && = delete;
 
 private:
-    // Both views borrow these decoded strings. No owner or index grows after
-    // publishing views; member order destroys borrowers before their storage.
-    std::pmr::vector<std::pmr::string> storage_;
+    // Member order destroys the index before the fields it borrows.
     request_name_value_list fields_;
+    std::pmr::memory_resource* arena_;
     std::optional<request_query_values> values_;
 };
 

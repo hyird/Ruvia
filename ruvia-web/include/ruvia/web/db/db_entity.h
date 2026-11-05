@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -401,13 +402,9 @@ class db_entity_storage final {
     template <fixed_string name>
     static consteval std::size_t relation_index() {
         constexpr auto result_value = []<std::size_t... indexes>(std::index_sequence<indexes...>) consteval {
-            constexpr bool matches[] = {std::tuple_element_t<indexes, relations_tuple_type>::name == name...};
-            for (std::size_t index = 0; index < sizeof...(indexes); ++index) {
-                if (matches[index]) {
-                    return index;
-                }
-            }
-            return sizeof...(indexes);
+            const std::array<std::string_view, sizeof...(indexes)> names{
+                std::tuple_element_t<indexes, relations_tuple_type>::name.view()...};
+            return ::ruvia::detail::fixed_name_index(names, name.view());
         }(std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{});
         static_assert(result_value < std::tuple_size_v<relations_tuple_type>, "unknown database entity relation");
         return result_value;

@@ -9,11 +9,11 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
 
 #include "coding/http_zlib_stream.h"
-#include "util/http_text_overlap.h"
 
 // The one RFC 7692 whole-message deflate and inflate loop, shared by
 // per-connection codecs and the shared no-context-takeover codec set. Context
@@ -37,7 +37,7 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool websocket_deflate_message(zlib_deflate_stream& deflater, std::string_view input,
     std::pmr::string& out, std::pmr::memory_resource* resource = nullptr) {
     std::optional<std::pmr::string> owned_input;
-    if (http_text_overlaps(input, {out.data(), out.size() + 1})) {
+    if (http_text_aliases_string(input, out)) {
         input = owned_input.emplace(
             input, resource != nullptr ? resource : out.get_allocator().resource());
     }
@@ -97,7 +97,6 @@ namespace ruvia::detail {
         // Preserve the LZ77 window across streams, including takeover
         // history, while discarding the terminated stream's padding bits.
         if (status == Z_STREAM_END && inflateResetKeep(&stream) != Z_OK) {
-            inflater.rethrow_allocation_failure();
             return websocket_inflate_result::error;
         }
         if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == size) {
@@ -116,7 +115,7 @@ namespace ruvia::detail {
     std::pmr::memory_resource* resource = nullptr) {
     static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
     std::optional<std::pmr::string> owned_input;
-    if (http_text_overlaps(input, {out.data(), out.size() + 1})) {
+    if (http_text_aliases_string(input, out)) {
         input = owned_input.emplace(
             input, resource != nullptr ? resource : out.get_allocator().resource());
     }

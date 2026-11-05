@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/web/detail/json/json_array_elements.h"
+#include "ruvia/web/detail/json/json_containers.h"
 #include "ruvia/web/detail/json/json_escape.h"
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
@@ -96,7 +96,7 @@ template <typename visitor_type>
 
 [[nodiscard]] std::optional<std::string_view> jwt_parse_json_numeric_date(std::string_view& value) noexcept {
     skip_json_whitespace(value);
-    const auto length = scan_json_number_token_length(value);
+    const auto length = scan_json_number_token(value).length_;
     if (length == 0) {
         return std::nullopt;
     }
@@ -110,11 +110,15 @@ template <typename visitor_type>
 
 [[nodiscard]] std::optional<std::pmr::string> jwt_decode_json_string_value(
     std::string_view& value, std::pmr::memory_resource* resource) {
-    const auto parsed_value = parse_json_string(value);
+    std::pmr::string decoded(resource);
+    const auto parsed_value = parse_json_string(value, &decoded);
     if (!parsed_value.has_value()) {
         return std::nullopt;
     }
-    return decode_json_string(*parsed_value, resource);
+    if (parsed_value->encoding() == json_string_encoding::literal) {
+        decoded.assign(parsed_value->raw());
+    }
+    return decoded;
 }
 
 void jwt_append_json_member(
@@ -123,9 +127,9 @@ void jwt_append_json_member(
         out.push_back(',');
     }
     first = false;
-    append_json_string<json_hex_case::lower>(out, name);
+    append_json_string(out, name);
     out.push_back(':');
-    append_json_string<json_hex_case::lower>(out, value);
+    append_json_string(out, value);
 }
 
 void jwt_append_json_numeric_date(
@@ -134,7 +138,7 @@ void jwt_append_json_numeric_date(
         out.push_back(',');
     }
     first = false;
-    append_json_string<json_hex_case::lower>(out, name);
+    append_json_string(out, name);
     out.push_back(':');
     out.append(value);
 }
@@ -147,16 +151,11 @@ void jwt_validate_jose_header(std::string_view json,
     const bool valid = visit_unique_jwt_json_object_fields(
         json, resource, [&](std::string_view name, std::string_view& value) {
             if (name == "alg") {
-                const auto parsed = parse_json_string(value);
+                const auto parsed = parse_json_string(value, &decoded_algorithm);
                 if (!parsed.has_value()) {
                     return false;
                 }
-                if (parsed->encoding() == json_string_encoding::literal) {
-                    algorithm = parsed->raw();
-                } else {
-                    decoded_algorithm = decode_json_string(*parsed, resource);
-                    algorithm = decoded_algorithm;
-                }
+                algorithm = json_string_text(*parsed, decoded_algorithm);
                 return true;
             }
             if (name == "crit" || name == "b64") {

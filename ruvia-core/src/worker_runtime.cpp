@@ -484,6 +484,11 @@ std::exception_ptr worker_runtime::failure() const noexcept {
     return impl_->failure_.observe();
 }
 
+std::exception_ptr worker_runtime::recorded_failure() const noexcept {
+    const std::lock_guard lock(impl_->mutex_);
+    return impl_->failure_.first();
+}
+
 worker_runtime_state worker_runtime::state() const noexcept {
     return impl_->lifecycle_.state();
 }

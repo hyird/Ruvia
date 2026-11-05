@@ -110,7 +110,7 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
     connection_plan_ = http1_request_connection_plan::http11_close();
     response_coding_qualities_ = {};
     progress_ = scan;
-    http_request_access::reset(request_);
+    request_.reset();
 
     const auto fail = [this](http_parse_error error) noexcept {
         // A rejected head leaves the message boundary unknown and its content
@@ -119,7 +119,7 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         // later target/framing semantic check fails; preserve it so an HTTP/1.0
         // error response is not silently upgraded to HTTP/1.1.
         const auto connection_plan = connection_plan_.require_close();
-        http_request_access::reset(request_);
+        request_.reset();
         progress_ = http1_server_request_parse_failure(error);
         connection_plan_ = connection_plan;
     };

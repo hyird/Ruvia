@@ -1,13 +1,13 @@
 #include <algorithm>
 #include <bit>
 
+#include "ruvia/core/detail/fnv1a.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
 #include "router/path_segments.h"
 #include "router/route_table.h"
-#include "util/fnv1a.h"
 
 namespace ruvia {
 

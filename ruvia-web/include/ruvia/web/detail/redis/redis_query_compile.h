@@ -94,6 +94,9 @@ struct redis_mapping final {
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_index(
     const redis_mapping& mapping, std::pmr::memory_resource* resource);
+// Drops the index compile_redis_index creates; its documents are kept.
+[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_drop_index(
+    const redis_mapping& mapping, std::pmr::memory_resource* resource);
 
 // The canonical ID when the predicate is exactly `primary key == literal`.
 [[nodiscard]] std::optional<std::string_view> redis_primary_key(

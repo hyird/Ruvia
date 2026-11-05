@@ -8,6 +8,7 @@
 
 #include "http2/http2_hpack.h"
 #include "http2/http2_hpack_static_table.h"
+#include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
@@ -135,19 +136,8 @@ void hpack_decoder::add_dynamic(std::string_view name, std::string_view value) {
     entry_type entry(resource_, name, value);
 
     // Reserve before eviction so push_back cannot throw after logical entries have
-    // been removed from the table. Grow geometrically rather than forcing an exact
-    // reallocation for every insertion.
-    if (dynamic_.size() == dynamic_.capacity()) {
-        const auto max_size = dynamic_.max_size();
-        if (dynamic_.size() == max_size) {
-            throw std::length_error("HPACK dynamic table is too large");
-        }
-        const auto required = dynamic_.size() + 1;
-        const auto doubled = dynamic_.capacity() > max_size / 2
-                                 ? max_size
-                                 : dynamic_.capacity() * 2;
-        dynamic_.reserve(std::max(required, doubled));
-    }
+    // been removed from the table.
+    reserve_geometric(dynamic_, dynamic_.size() + 1);
     evict_dynamic_to_fit(size);
     dynamic_.push_back(std::move(entry));
     dynamic_size_ += size;

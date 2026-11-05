@@ -13,7 +13,7 @@
 
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_frame_view.h"
-#include "websocket/http_websocket_payload_validation.h"
+#include "websocket/websocket_close_payload.h"
 
 namespace ruvia::detail {
 

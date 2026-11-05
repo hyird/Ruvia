@@ -213,9 +213,7 @@ task<http_response> context::not_found_task() {
         co_return co_await handler(*this);
     }
 
-    auto response = detail::make_default_error_response(arena(),
-        http_error_info({.status_ = http_status::not_found, .message_ = "route not found"}));
-    co_return response;
+    co_return detail::make_route_not_found_response(arena());
 }
 
 http_response context::streaming_head() {

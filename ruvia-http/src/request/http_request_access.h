@@ -51,14 +51,30 @@ struct http_request_access final {
         return slot < cached_header_slots && request.headers_.has_repeated_known_slot(slot);
     }
 
-    [[nodiscard]] static std::size_t known_header_index(
-        const http_request& request, request_header_kind name) noexcept {
+    // Visits the value of every field line of known kind `name` in wire order and
+    // returns false as soon as the visitor does. A non-repeated field is served
+    // from the cache; repeated fields scan only up to the cached last line.
+    template <typename visitor_type>
+    static bool visit_known_headers(
+        const http_request& request, request_header_kind name, visitor_type&& visitor) {
         const auto slot = known_header_slot(name);
-        return slot < cached_header_slots ? request.cached_headers_[slot] : std::size_t{0};
-    }
-
-    static void reset(http_request& request) noexcept {
-        request = make();
+        if (slot >= cached_header_slots) {
+            return true;
+        }
+        const auto headers = request.headers_.fields();
+        const std::size_t last_index = request.cached_headers_[slot];
+        if (last_index == 0 || last_index > headers.size()) {
+            return true;
+        }
+        if (!request.headers_.has_repeated_known_slot(slot)) {
+            return visitor(headers[last_index - 1].value());
+        }
+        for (std::size_t i = 0; i < last_index; ++i) {
+            if (request.headers_.kind_at(i) == name && !visitor(headers[i].value())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static void set_resource(http_request& request, std::pmr::memory_resource* resource) noexcept {
@@ -139,15 +155,5 @@ struct http_request_access final {
         request.body_ = body;
     }
 };
-
-[[nodiscard]] inline std::string_view request_known_header(
-    const http_request& request, request_header_kind name) noexcept {
-    return http_request_access::known_header(request, name);
-}
-
-[[nodiscard]] inline bool request_has_known_header(
-    const http_request& request, request_header_kind name) noexcept {
-    return http_request_access::has_known_header(request, name);
-}
 
 }  // namespace ruvia::detail

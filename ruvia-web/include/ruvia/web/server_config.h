@@ -79,10 +79,15 @@ struct server_config final {
     // Absolute phase deadlines: progress does not renew these limits.
     std::optional<std::chrono::milliseconds> header_completion_timeout_{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> body_completion_timeout_{std::chrono::seconds(120)};
-    // Inactivity while a response (a buffered response, or one write of a
-    // response stream) is being written. Successful transport writes renew
-    // this limit; it is not a deadline for completing the whole response.
-    // Time between response-stream writes is governed by idle_timeout_.
+    // Inactivity of a connection write in progress: a buffered response, one
+    // write of a response stream, a WebSocket or CONNECT tunnel write, or
+    // HTTP/2 frame output (its RFC 8441 WebSockets and tunnels included).
+    // Only write progress renews this limit -- input does not -- and it is not
+    // a deadline for completing the whole response. It applies whatever the
+    // read side is doing (idle, reading a body, a long-lived upgrade) and
+    // whether or not a WebSocket heartbeat is configured: a peer that stops
+    // reading has its connection closed. Time between response-stream writes
+    // is governed by idle_timeout_.
     std::optional<std::chrono::milliseconds> write_timeout_{std::chrono::seconds(60)};
     // Bounded by default so a connection flood cannot exhaust FDs or memory.
     // Excess accepted sockets are closed before TLS or HTTP protocol
@@ -388,7 +393,8 @@ struct http_server_stats final {
     // or adopted. The application runs one refresher however many workers it
     // has, so each failed pass counts once. The previous complete snapshot
     // remains active; this counter makes filesystem/permission failures
-    // observable without taking a worker down.
+    // observable without taking a worker down, and each failure's cause goes
+    // to the rate-limited unhandled-failure report (stderr).
     std::size_t document_root_refresh_failures_{0};
 };
 

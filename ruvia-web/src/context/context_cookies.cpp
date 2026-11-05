@@ -1,4 +1,3 @@
-#include <array>
 #include <string_view>
 #include <utility>
 
@@ -7,6 +6,7 @@
 
 #include "auth/cookie_signature.h"
 #include "context/context_response_state.h"
+#include "util/inline_text_concat.h"
 
 // Setting response cookies, including the two rules that make a cookie's name on
 // the wire differ from the name the application used: a __Host-/__Secure- prefix
@@ -31,44 +31,15 @@ void context_response_editor::set_signed_cookie(set_signed_cookie_options option
     const auto name = options.name_.view();
     const auto value = options.value_.view();
     const auto secret = options.secret_.view();
-    std::array<char, 128> wire_name_inline{};
-    std::pmr::string wire_name_heap(owner_->pool());
-    std::string_view wire_name = name;
-    if (options.attributes_.prefix_) {
-        const auto prefix = ruvia::http_cookie_prefix_text(*options.attributes_.prefix_);
-        const auto wire_size = prefix.size() + name.size();
-        if (wire_size <= wire_name_inline.size()) {
-            prefix.copy(wire_name_inline.data(), prefix.size());
-            name.copy(wire_name_inline.data() + prefix.size(), name.size());
-            wire_name = std::string_view(wire_name_inline.data(), wire_size);
-        } else {
-            wire_name_heap.reserve(wire_size);
-            wire_name_heap.append(prefix);
-            wire_name_heap.append(name);
-            wire_name = wire_name_heap;
-        }
-    }
+    const auto prefix = options.attributes_.prefix_
+                            ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_))
+                            : std::string_view{};
+    const detail::inline_text_concat<128> wire_name({prefix, name}, owner_->pool());
     char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, wire_name, value, owner_->pool());
-    const auto signed_size = value.size() + 1U + detail::cookie_signature_size;
-    std::array<char, 256> signed_inline{};
-    std::pmr::string signed_heap(owner_->pool());
-    std::string_view signed_view;
-    if (signed_size <= signed_inline.size()) {
-        if (!value.empty()) {
-            value.copy(signed_inline.data(), value.size());
-        }
-        signed_inline[value.size()] = '.';
-        std::char_traits<char>::copy(signed_inline.data() + value.size() + 1U, signature, sizeof(signature));
-        signed_view = std::string_view(signed_inline.data(), signed_size);
-    } else {
-        signed_heap.reserve(signed_size);
-        signed_heap.append(value);
-        signed_heap.push_back('.');
-        signed_heap.append(signature, sizeof(signature));
-        signed_view = signed_heap;
-    }
-    write_cookie(target(), name, signed_view, options.attributes_);
+    detail::write_cookie_signature(signature, secret, wire_name.view(), value, owner_->pool());
+    const detail::inline_text_concat<256> signed_value(
+        {value, ".", std::string_view(signature, sizeof(signature))}, owner_->pool());
+    write_cookie(target(), name, signed_value.view(), options.attributes_);
 }
 
 void context_response_editor::delete_cookie(delete_cookie_options options) {

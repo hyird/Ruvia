@@ -157,51 +157,49 @@ bool http_client_advertisement_queue::admit(std::size_t bytes_value) noexcept {
     }
     return true;
 }
-bool http_client_advertisement_queue::retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins) {
+void http_client_advertisement_queue::retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins) {
     require_current();
     if (!config_.receive_origins_) {
-        return false;
+        return;
     }
     if (origins.origins_.size() > (config_.max_retained_bytes_ / sizeof(std::pmr::string))) {
         ++dropped_;
-        return false;
+        return;
     }
     auto bytes_value = sizeof(http_client_advertisement_state) + origins.origins_.size() * sizeof(std::pmr::string);
     for (const auto& origin : origins.origins_) {
         if (origin.size() > config_.max_retained_bytes_ - std::min(bytes_value, config_.max_retained_bytes_)) {
             ++dropped_;
-            return false;
+            return;
         }
         bytes_value += origin.size();
     }
     if (!admit(bytes_value)) {
-        return false;
+        return;
     }
     auto owned = make_pmr_object<http_client_advertisement_state>(memory_->resource(), *memory_, slot, protocol, origins, bytes_value);
     http_client_advertisement advertisement(owned.release());
     pending_.push_back(std::move(advertisement));
-    return true;
 }
-bool http_client_advertisement_queue::retain(std::size_t slot, const http_alternative_service_advertisement& service) {
+void http_client_advertisement_queue::retain(std::size_t slot, const http_alternative_service_advertisement& service) {
     require_current();
     if (!config_.receive_alternative_services_) {
-        return false;
+        return;
     }
     auto bytes_value = sizeof(http_client_advertisement_state);
     for (const auto size : {service.origin_.size(), service.field_value_.size()}) {
         if (size > config_.max_retained_bytes_ - std::min(bytes_value, config_.max_retained_bytes_)) {
             ++dropped_;
-            return false;
+            return;
         }
         bytes_value += size;
     }
     if (!admit(bytes_value)) {
-        return false;
+        return;
     }
     auto owned = make_pmr_object<http_client_advertisement_state>(memory_->resource(), *memory_, slot, service, bytes_value);
     http_client_advertisement advertisement(owned.release());
     pending_.push_back(std::move(advertisement));
-    return true;
 }
 std::optional<http_client_advertisement> http_client_advertisement_queue::next() {
     require_current();

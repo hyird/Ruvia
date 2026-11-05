@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
+#include <span>
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
@@ -50,5 +52,37 @@ template <std::size_t left_n, std::size_t right_n>
         return std::ranges::equal(left.value_, right.value_);
     }
 }
+
+namespace detail {
+
+// Compile-time lookup shared by every schema keyed by fixed_string names
+// (model fields, entity columns, database relations).
+
+// Position of `name` in `names`, or names.size() when it is absent.
+[[nodiscard]] consteval std::size_t fixed_name_index(
+    std::span<const std::string_view> names, std::string_view name) noexcept {
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (names[index] == name) {
+            return index;
+        }
+    }
+    return names.size();
+}
+
+// Whether no two entries of `names` are equal under `equal`.
+template <typename equal_type = std::equal_to<>>
+[[nodiscard]] consteval bool fixed_names_distinct(
+    std::span<const std::string_view> names, equal_type equal = {}) noexcept {
+    for (std::size_t left = 0; left < names.size(); ++left) {
+        for (std::size_t right = left + 1; right < names.size(); ++right) {
+            if (equal(names[left], names[right])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+}  // namespace detail
 
 }  // namespace ruvia

@@ -1,21 +1,23 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http_response.h"
 
 #include "field/response_field_validation.h"
-#include "response/http_response_header_access.h"
+#include "response/http_response_header_storage.h"
 #include "response/http_response_static_headers.h"
-#include "response/response_header_index_cache.h"
 
 namespace ruvia {
 namespace {
@@ -180,14 +182,7 @@ void http_response_headers::transfer_from(
             staged.upsert_set_cookie_header_validated(value);
         } else if (detail::http_response_header_access::append(header_value)) {
             const auto matches_header = [&](const http_response_header& candidate) noexcept {
-                const auto candidate_known_bit =
-                    detail::http_response_header_access::known_bit(candidate);
-                const bool same_name =
-                    known_bit != 0
-                        ? candidate_known_bit == known_bit
-                        : (candidate_known_bit == 0 &&
-                              http_ascii_equals_ignore_case(candidate.name(), name));
-                return same_name && candidate.value() == value;
+                return detail::response_header_matches(candidate, name, known_bit) && candidate.value() == value;
             };
             const auto occurrence_through = [&] {
                 std::size_t count = 0;
@@ -216,13 +211,13 @@ void http_response_headers::transfer_from(
         } else if (mode == http_response_header_transfer::merge) {
             if (staged.find_header_for_read(name, known_bit) == nullptr) {
                 if (!header_value.owned_) {
-                    staged.set_static_header(header_value);
+                    staged.publish_header(header_value);
                 } else {
                     staged.set_header_validated(name, value, known_bit);
                 }
             }
         } else if (!header_value.owned_) {
-            staged.set_static_header(header_value);
+            staged.publish_header(header_value);
         } else {
             staged.set_header_validated(name, value, known_bit);
         }
@@ -235,8 +230,15 @@ void http_response_headers::record_known_header_index(std::uint32_t known_bit, s
         return;
     }
     known_header_bits_ |= known_bit;
-    detail::record_response_header_index(
-        known_header_indexes_, detail::response_known_header_slot(known_bit), index);
+    const auto slot = detail::response_known_header_slot(known_bit);
+    if (slot >= known_header_indexes_.size()) {
+        return;
+    }
+    // A slot holds the first occurrence's index + 1; 0 (unset) and -1 (index
+    // beyond int16) both fall back to a scan.
+    known_header_indexes_[slot] = index < static_cast<std::size_t>((std::numeric_limits<std::int16_t>::max)())
+                                      ? static_cast<std::int16_t>(index + 1)
+                                      : std::int16_t{-1};
 }
 
 http_response_header* http_response_headers::find_header_for_update(
@@ -249,11 +251,16 @@ const http_response_header* http_response_headers::find_header_for_read(
     if (known_bit != 0 && (known_header_bits_ & known_bit) == 0) {
         return nullptr;
     }
-    const auto* const first = begin();
-    const auto* const last = end();
-    const auto* const header_value = detail::find_response_header_indexed(
-        first, last, known_header_indexes_, detail::response_known_header_slot(known_bit), key, known_bit);
-    return header_value == last ? nullptr : header_value;
+    if (const auto slot = detail::response_known_header_slot(known_bit);
+        slot < known_header_indexes_.size() && known_header_indexes_[slot] > 0) {
+        return begin() + (known_header_indexes_[slot] - 1);
+    }
+    for (const auto& header_value : *this) {
+        if (detail::response_header_matches(header_value, key, known_bit)) {
+            return &header_value;
+        }
+    }
+    return nullptr;
 }
 
 http_response_header& http_response_headers::prepare_header_value_storage(
@@ -268,11 +275,6 @@ http_response_header& http_response_headers::prepare_header_value_storage(
     auto& header_value = add_uninitialized_value(key, value_size, known_bit);
     record_known_header_index(known_bit, index);
     return header_value;
-}
-
-std::string_view http_response_headers::known_header_value(std::uint32_t bit) const noexcept {
-    const auto* const header_value = find_header_for_read({}, bit);
-    return header_value == nullptr ? std::string_view{} : header_value->value();
 }
 
 std::optional<std::string_view> http_response_headers::header(std::string_view name) const& noexcept {
@@ -300,23 +302,25 @@ void http_response_headers::header(std::string_view key, std::string_view value)
 }
 
 void http_response_headers::content_type(http_content_type type) {
-    set_static_header(detail::static_content_type_header(type));
+    publish_header(detail::static_content_type_header(type));
 }
 
-void http_response_headers::set_static_header(http_response_header header_value) {
-    const auto known_bit = header_value.known_bit_;
-    if (auto* const existing = find_header_for_update(header_value.name(), known_bit)) {
-        const bool was_appended = detail::http_response_header_access::append(*existing);
-        release_header(*existing);
-        *existing = header_value;
-        if (was_appended) {
-            (void)collapse_response_headers(*existing, known_bit);
-        }
+http_response_header& http_response_headers::replace_header(
+    http_response_header& existing, http_response_header prepared) noexcept {
+    const bool was_appended = detail::http_response_header_access::append(existing);
+    release_header(existing);
+    existing = prepared;
+    return was_appended ? collapse_response_headers(existing, prepared.known_bit_) : existing;
+}
+
+void http_response_headers::publish_header(http_response_header prepared) {
+    const auto known_bit = prepared.known_bit_;
+    if (auto* const existing = find_header_for_update(prepared.name(), known_bit)) {
+        (void)replace_header(*existing, prepared);
         return;
     }
-
     const auto index = size();
-    (void)append_header(header_value);
+    (void)append_header(prepared);
     record_known_header_index(known_bit, index);
 }
 
@@ -411,12 +415,7 @@ http_response_header& http_response_headers::collapse_response_headers(
     auto* collapsed_retained = retained_address;
     auto* write = first;
     for (auto* read = first; read != last; ++read) {
-        const auto header_known_bit = detail::http_response_header_access::known_bit(*read);
-        const bool matches =
-            known_bit != 0 ? header_known_bit == known_bit
-                           : (header_known_bit == 0 &&
-                                 http_ascii_equals_ignore_case(read->name(), key));
-        if (matches && read != retained_address) {
+        if (read != retained_address && detail::response_header_matches(*read, key, known_bit)) {
             release_header(*read);
             continue;
         }
@@ -446,12 +445,7 @@ bool http_response_headers::remove_header_validated(std::string_view key, std::u
     http_response_header retired_key_header;
 
     for (auto* read = first; read != last; ++read) {
-        const auto header_known_bit = detail::http_response_header_access::known_bit(*read);
-        const bool matches =
-            known_bit != 0 ? header_known_bit == known_bit
-                           : (header_known_bit == 0 &&
-                                 http_ascii_equals_ignore_case(read->name(), key));
-        if (matches) {
+        if (detail::response_header_matches(*read, key, known_bit)) {
             if (!removed) {
                 retired_key_header = std::exchange(*read, http_response_header{});
                 key = retired_key_header.name();
@@ -491,6 +485,60 @@ void http_response_headers::header_stable_view(std::string_view key, std::string
     const auto index = size();
     add_stable_view(key, value, known_bit);
     record_known_header_index(known_bit, index);
+}
+
+void http_response_headers::add_vary_token(std::string_view token) {
+    // Vary is a list field (RFC 9110 section 12.5.5): wildcard and membership
+    // are decided across every line, not only the indexed first occurrence.
+    token = http_trim_ows(token);
+    if (token.empty()) {
+        return;
+    }
+    const bool wildcard_token = token == "*";
+
+    // The existing non-empty lines comma-joined in wire order, collected while
+    // checking membership. Short lists stay on the stack; the PMR string takes
+    // over once they outgrow it.
+    std::array<char, 256> inline_joined;
+    std::size_t inline_size = 0;
+    std::pmr::string spilled_joined(resource_);
+    const auto append_joined = [&](std::string_view piece) {
+        if (spilled_joined.empty() && piece.size() <= inline_joined.size() - inline_size) {
+            std::memcpy(inline_joined.data() + inline_size, piece.data(), piece.size());
+            inline_size += piece.size();
+            return;
+        }
+        if (spilled_joined.empty()) {
+            spilled_joined.assign(inline_joined.data(), inline_size);
+        }
+        spilled_joined.append(piece);
+    };
+    if ((known_header_bits_ & detail::response_header_vary) != 0) {
+        for (const auto& header_value : *this) {
+            if (detail::http_response_header_access::known_bit(header_value) != detail::response_header_vary) {
+                continue;
+            }
+            const auto value = header_value.value();
+            if (detail::http_has_token(value, "*") || (!wildcard_token && detail::http_has_token(value, token))) {
+                return;
+            }
+            if (!http_trim_ows(value).empty()) {
+                append_joined(value);
+                append_joined(", ");
+            }
+        }
+    }
+
+    if (wildcard_token) {
+        header("Vary", "*");
+        return;
+    }
+    if (!is_valid_http_header_name(token)) {
+        throw std::invalid_argument("invalid HTTP Vary header token");
+    }
+    append_joined(token);
+    header("Vary", spilled_joined.empty() ? std::string_view(inline_joined.data(), inline_size)
+                                          : std::string_view(spilled_joined));
 }
 
 }  // namespace ruvia

@@ -3,14 +3,16 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/hpack.h"
 #include "ruvia/http/http_ascii.h"
 
-#include "field/binary_field_name.h"
+#include "http2/http2_field_name.h"
 
 namespace ruvia::detail {
 
@@ -44,6 +46,36 @@ inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
         return scratch;
     }
     return name;
+}
+
+// Capacity estimate for the octets an HPACK literal field adds beyond its name and
+// value: the representation octet plus the name-length and value-length integers,
+// each at most two octets with a 7-bit prefix below 255 (RFC 7541 §5.1, §6.2), and
+// one spare octet. Longer fields only make the block grow on demand.
+inline constexpr std::size_t hpack_literal_overhead_bytes = 6;
+
+// Reserves `block` for its current bytes, `fixed_bytes` of separately estimated
+// representations, and every field of `fields` as a literal. reserve() never
+// shrinks, so an estimate within the small-string buffer allocates nothing.
+template <typename field_range_type>
+void http2_reserve_field_block(
+    std::pmr::string& block, std::size_t fixed_bytes, const field_range_type& fields) {
+    auto bytes = block.size() + fixed_bytes;
+    for (const auto& field : fields) {
+        bytes += field.name().size() + field.value().size() + hpack_literal_overhead_bytes;
+    }
+    block.reserve(bytes);
+}
+
+// HTTP/2 field names are lowercase on the wire (RFC 9113 §8.2.1).
+template <typename field_range_type>
+void http2_encode_lowercase_fields(std::pmr::string& block, const field_range_type& fields) {
+    std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
+    std::pmr::string lower_name_scratch(block.get_allocator().resource());
+    for (const auto& field : fields) {
+        hpack_encoder::encode_header(block,
+            http2_lower_header_name(field.name(), lower_name_stack, lower_name_scratch), field.value());
+    }
 }
 
 // Request TE values are validated with the other request-field semantics

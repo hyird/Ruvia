@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <memory_resource>
 
@@ -7,7 +8,6 @@
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/web/web_worker.h"
 
-#include "app/worker_post_counters.h"
 #include "integration/worker_client_registry_view.h"
 
 namespace ruvia::detail {
@@ -58,7 +58,9 @@ private:
     const worker_state_registry& worker_states_;
     task_scope& jobs_;
     const stop_token& stop_token_;
-    worker_post_counters post_counters_;
+    std::atomic_uint64_t accepted_{0};
+    std::atomic_uint64_t queue_full_{0};
+    std::atomic_uint64_t worker_stopping_{0};
     std::atomic_uint64_t completed_{0};
     std::atomic_uint64_t failed_count_{0};
     std::atomic_size_t outstanding_{0};

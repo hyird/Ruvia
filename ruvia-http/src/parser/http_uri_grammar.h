@@ -30,6 +30,12 @@ namespace ruvia::detail {
 [[nodiscard]] bool is_valid_uri_port(std::string_view value) noexcept;
 [[nodiscard]] bool is_uri_pchar(unsigned char byte) noexcept;
 
+// Split RFC 3986 host [ ":" port ] (host may be an IP-literal in brackets)
+// without validating either part. False when brackets are unbalanced, text
+// follows "]" without ":", or the port contains another ":".
+[[nodiscard]] bool split_uri_host_port(
+    std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept;
+
 // Parse a decimal port, rejecting anything that does not fit 16 bits.
 [[nodiscard]] std::variant<std::uint16_t, std::errc> parse_port_value(std::string_view value) noexcept;
 

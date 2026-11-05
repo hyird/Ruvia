@@ -1,12 +1,18 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace ruvia::detail {
+
+// IMF-fixdate month names (RFC 9110 section 5.6.7), in calendar order.
+inline constexpr std::array<std::string_view, 12> http_month_names{
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
 // UTC calendar fields for an HTTP-date, or no value outside years 0000-9999
 // (the four-digit IMF-fixdate year). Civil conversion is independent of the C

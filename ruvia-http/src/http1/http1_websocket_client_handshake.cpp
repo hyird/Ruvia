@@ -2,8 +2,8 @@
 #include <stdexcept>
 #include <variant>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_protocol_managed_fields.h"
@@ -36,18 +36,18 @@ bool is_reserved_handshake_header(std::string_view name, detail::request_header_
 }  // namespace
 
 void validate_http1_websocket_client_handshake_configuration(std::span<const http_header_view> headers) {
-    request_header_facts facts;
+    detail::http1_client_request_field_facts facts;
     http1_client_request_prepare_error error{};
     for (const auto& header : headers) {
         const auto kind = detail::classify_request_header(header.name());
         if (is_reserved_handshake_header(header.name(), kind)) {
             throw std::invalid_argument("invalid or reserved WebSocket handshake header");
         }
-        if (!analyze_header(header, kind, facts, error)) {
+        if (!detail::analyze_http1_client_request_field(header, kind, facts, error)) {
             throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
         }
     }
-    if (!finalize_headers(facts, error)) {
+    if (!detail::finish_http1_client_request_fields(facts, error)) {
         throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
     }
 }

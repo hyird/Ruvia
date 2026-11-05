@@ -1,8 +1,9 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <memory_resource>
+
+#include "size_class_lifo_bins.h"
 
 namespace ruvia::detail {
 
@@ -17,8 +18,6 @@ namespace ruvia::detail {
 class worker_block_cache final : public std::pmr::memory_resource {
 public:
     static constexpr std::size_t small_block_bytes = std::size_t{16} * 1024;
-    static constexpr std::size_t granularity_bytes = std::size_t{4} * 1024;
-    static constexpr std::size_t max_cached_block_bytes = std::size_t{1024} * 1024;
     static constexpr std::size_t block_alignment = 64;
 
     // upstream must outlive this cache.
@@ -35,7 +34,12 @@ public:
     }
 
 private:
-    static constexpr std::size_t bin_count = max_cached_block_bytes / granularity_bytes;
+    using bins_type = size_class_lifo_bins<std::size_t{4} * 1024, std::size_t{1024} * 1024>;
+
+    [[nodiscard]] static constexpr bool cacheable(std::size_t bytes_value, std::size_t alignment) noexcept {
+        return bytes_value > small_block_bytes && bytes_value <= bins_type::max_block_bytes &&
+               alignment <= block_alignment;
+    }
 
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override;
     void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override;
@@ -43,8 +47,7 @@ private:
 
     std::pmr::memory_resource* upstream_;
     std::size_t retained_budget_bytes_;
-    std::size_t cached_bytes_{0};
-    std::array<void*, bin_count> bins_{};
+    bins_type bins_;
 };
 
 }  // namespace ruvia::detail

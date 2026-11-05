@@ -113,10 +113,8 @@ std::optional<int> parse_cookie_date_month(std::string_view value) noexcept {
         return std::nullopt;
     }
     value = value.substr(0, 3);
-    constexpr std::array<std::string_view, 12> months{
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-    for (std::size_t index = 0; index < months.size(); ++index) {
-        if (http_ascii_equals_ignore_case(value, months[index])) {
+    for (std::size_t index = 0; index < detail::http_month_names.size(); ++index) {
+        if (http_ascii_equals_ignore_case(value, detail::http_month_names[index])) {
             return static_cast<int>(index + 1);
         }
     }

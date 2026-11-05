@@ -37,7 +37,6 @@ public:
         move_only_function<void()> shutdown_handler);
 
     void close() noexcept;
-    void defer_or_terminate(move_only_function<void()> task) noexcept;
     void stop_timers() noexcept;
     void detach() noexcept;
 

@@ -21,6 +21,25 @@ RUVIA_MODEL(json_token_holder,
 
 RUVIA_MODEL(json_validated_child,
     RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(3, "name too short")));
+
+// get<T>() may borrow the token's bytes, so only lvalue tokens offer it.
+template <typename token_type>
+concept token_offers_get = requires(token_type&& token) {
+    std::forward<token_type>(token).template get<ruvia::string>();
+};
+template <typename token_type>
+concept token_offers_field_get = requires(token_type&& token) {
+    std::forward<token_type>(token).template get<ruvia::string>("name");
+};
+static_assert(token_offers_get<const ruvia::json_value&>);
+static_assert(!token_offers_get<ruvia::json_value>);
+static_assert(!token_offers_get<const ruvia::json_value>);
+static_assert(token_offers_field_get<const ruvia::json_value&>);
+static_assert(!token_offers_field_get<ruvia::json_value>);
+static_assert(token_offers_field_get<const ruvia::json_object&>);
+static_assert(!token_offers_field_get<ruvia::json_object>);
+static_assert(!token_offers_field_get<const ruvia::json_object>);
+
 RUVIA_TEST(json_token_moves_preserve_complete_tokens_and_reset_sources) {
     const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
     const auto check = [&]<typename token_type>(std::string_view empty) {

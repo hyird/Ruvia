@@ -60,7 +60,6 @@ struct db_socket_wait_result final {
 // duplicate first so the driver's own close still ends the connection.
 struct db_slot_socket final {
     explicit db_slot_socket(asio::io_context& io_context);
-    db_slot_socket(db_slot_socket&& other) noexcept;
 
     db_slot_socket(const db_slot_socket&) = delete;
     db_slot_socket& operator=(const db_slot_socket&) = delete;

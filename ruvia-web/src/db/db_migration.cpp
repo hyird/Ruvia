@@ -10,18 +10,17 @@
 
 #include <asio/config.hpp>
 #include <asio/io_context.hpp>
-#include <openssl/evp.h>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/detail/db/db_utils.h"
+#include "ruvia/web/detail/db/db_number_format.h"
 
 #include "client/client_host_resolver.h"
 #include "db/db_config_validation.h"
-#include "db/db_migration_checksum.h"
+#include "db/db_digest.h"
 #include "db/db_migration_validation.h"
 #include "db/db_registry.h"
 #include "db/db_sql_format.h"
@@ -154,22 +153,22 @@ void append_migration_id(std::pmr::vector<std::pmr::string>& ids, std::string_vi
     return std::runtime_error(message.c_str());
 }
 
-}  // namespace
-
-std::pmr::string detail::migration_checksum(
-    std::string_view sql, std::pmr::memory_resource* resource) {
-    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    std::size_t digest_size = 0;
-    if (EVP_Q_digest(nullptr, "SHA256", nullptr, sql.data(), sql.size(), digest.data(), &digest_size) !=
-            1 ||
-        digest_size * 2 != migration_checksum_size) {
-        throw std::runtime_error("database migration checksum could not be computed");
-    }
-
-    std::pmr::string hex(pmr_resource_or_default(resource));
-    http_append_lower_hex(hex, std::span<const unsigned char>(digest.data(), digest_size));
+// A migration is identified by its id for the rest of a schema's life, so
+// editing one that has already run changes nothing: the id is on record and the
+// new text is skipped, silently, on every machine that already migrated. The
+// digest of the text is recorded alongside the id so that edit is reported
+// instead.
+//
+// SHA-256, lowercase hex. This is drift detection, not a security boundary --
+// nobody is choosing migration text to collide with -- but a digest with no
+// known collisions costs nothing here and leaves no judgement call.
+[[nodiscard]] std::pmr::string migration_checksum(std::string_view sql, std::pmr::memory_resource* resource) {
+    std::pmr::string hex(resource);
+    http_append_lower_hex(hex, detail::db_sha256_of(sql));
     return hex;
 }
+
+}  // namespace
 
 class detail::db_migration_runner final {
 public:
@@ -179,8 +178,13 @@ public:
         auto* resolved = pmr_resource_or_default(resource);
         const auto driver = config.driver_;
 
-        // Advisory locks and every migration statement must share one session.
+        // The lock is held by the session, so every migration statement and
+        // history row must run on the session that took it: one connection,
+        // which never reconnects. A statement that ends or poisons the session
+        // (a lost connection, a migration leaving a transaction open) fails
+        // every statement after it instead of running them unserialized.
         config.pool_size_per_worker_ = 1;
+        config.reconnect_ = false;
         if (!config.acquire_timeout_.has_value()) {
             config.acquire_timeout_ = config.query_timeout_;
         }
@@ -205,12 +209,10 @@ public:
             failure = std::current_exception();
         }
 
-        // Release explicitly only after a clean run. A failed statement has
-        // already closed the connection, and both lock flavours are held by the
-        // session, so the lock is gone with it; issuing the release now would
-        // silently reconnect and run it on a session that never held the lock
-        // -- a wasted round trip that PostgreSQL answers with a "you don't own
-        // a lock" warning. close_now() below covers the unreleased case.
+        // Release explicitly only after a clean run. After a failure the
+        // session may already be gone, or still be inside a transaction a
+        // failed statement left; closing it below releases the lock in every
+        // case, since both lock flavours end with their session.
         if (failure == nullptr) {
             try {
                 co_await release_lock(handle, driver, lock_name);
@@ -298,7 +300,7 @@ private:
         auto find_sql = build_find_migration_sql(options.table_, driver, resource);
         auto insert_sql = build_insert_migration_sql(options.table_, driver, resource);
         for (const auto& migration : migrations) {
-            const auto checksum = detail::migration_checksum(migration.sql(), resource);
+            const auto checksum = migration_checksum(migration.sql(), resource);
             std::array<db_value, 1> find_params{db_value{migration.id()}};
             auto existing = co_await handle.query(find_sql, std::span<const db_value>(find_params));
             if (!existing.empty()) {

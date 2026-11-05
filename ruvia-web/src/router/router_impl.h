@@ -40,7 +40,8 @@ public:
     void set_error_handler(http_error_handler_ref handler) noexcept;
     void set_not_found_handler(http_not_found_handler_ref handler) noexcept;
     // Path-prefix-scoped fallbacks (Hono sub-app scoping analog): wholesale
-    // replacement, normalized and ordered deepest prefix first.
+    // replacement with prefixes the caller already normalized and de-duplicated,
+    // ordered deepest prefix first.
     void set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers);
     void set_prefix_not_found_handlers(std::span<const http_prefix_not_found_handler> handlers);
     // Application-wide middleware, prepended to every route's chain. Each

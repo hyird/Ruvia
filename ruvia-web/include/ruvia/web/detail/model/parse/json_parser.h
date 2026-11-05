@@ -1,14 +1,17 @@
 #pragma once
 
 #include <cstddef>
+#include <limits>
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/web/detail/http/request/request_fields_access.h"
-#include "ruvia/web/detail/json/json_array_elements.h"
+#include "ruvia/web/detail/json/json_containers.h"
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_limits.h"
 #include "ruvia/web/detail/json/json_number.h"
@@ -42,6 +45,18 @@ public:
         }
         bytes_ -= bytes_value;
         return true;
+    }
+
+    // Charges one owned text of `bytes` plus its string object. `copies` counts
+    // the buffers an arena may retain for it: 1 for a single sized copy, more
+    // when the text is built by growth or yields a second representation.
+    [[nodiscard]] bool consume_owned_text(std::size_t bytes, std::size_t copies = 1) noexcept {
+        constexpr auto string_bytes = sizeof(std::pmr::string);
+        if (bytes > (std::numeric_limits<std::size_t>::max() - string_bytes) / copies) {
+            exhausted_ = true;
+            return false;
+        }
+        return consume_bytes(bytes * copies + string_bytes);
     }
 
     [[nodiscard]] bool consume_element() noexcept {
@@ -81,6 +96,12 @@ template <typename t_type>
     std::pmr::memory_resource* resource, std::size_t depth,
     model_string_storage string_storage, json_parse_budget& budget);
 
+// Defined with json_value/json_object in model.h.
+template <typename view_type>
+[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input,
+    std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
+    bool require_object, json_parse_budget& budget);
+
 struct model_parse_access final {
     template <typename model_type>
     [[nodiscard]] static std::optional<model_type> parse_value(std::string_view& input,
@@ -96,84 +117,32 @@ struct model_parse_access final {
         return value;
     }
 
+    // Binds every recognized field without checking field structure; the
+    // caller validates. Form input carries no syntax that can fail: values a
+    // field cannot hold mark that field invalid_type instead.
     template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> parse_json_borrowed(
-        std::string_view body, std::pmr::memory_resource* resource) {
-        auto value = parse_json_borrowed_partial<model_type>(body, resource);
-        if (!has_valid_structure(value)) {
-            return std::nullopt;
-        }
-        return value;
-    }
-
-    template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> parse_json_borrowed_partial(
-        std::string_view body, std::pmr::memory_resource* resource) {
-        json_parse_budget budget;
-        if (!budget.consume_bytes(sizeof(model_type))) {
-            return std::nullopt;
-        }
-        auto input = body;
-        auto value = parse_value<model_type>(input, resource, 0, model_string_storage::borrowed, budget);
-        skip_json_whitespace(input);
-        if (!value || !input.empty()) {
-            return std::nullopt;
-        }
+    [[nodiscard]] static model_type parse_form(const model_input& input, std::pmr::memory_resource* resource) {
+        auto value = model::model_access::empty<model_type>(resource);
+        materialize_form(value, input);
         return value;
     }
 
     template <typename model_type>
     [[nodiscard]] static std::optional<model_type> parse_form_owned(
         std::string_view body, std::pmr::memory_resource* resource) {
-        auto value = materialize_form_input<model_type>(
-            make_form_model_input(body, resource, model_string_storage::owned));
-        if (!has_valid_structure(value)) {
+        auto value = parse_form<model_type>(
+            form_body_input{.body_ = body, .string_storage_ = model_string_storage::owned}, resource);
+        if (!model_validation_access::structure_valid(value)) {
             return std::nullopt;
         }
         return value;
-    }
-
-    template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> parse_form_borrowed(
-        std::string_view body, std::pmr::memory_resource* resource) {
-        auto value = parse_form_borrowed_partial<model_type>(body, resource);
-        if (!has_valid_structure(value)) {
-            return std::nullopt;
-        }
-        return value;
-    }
-
-    template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> parse_form_borrowed_partial(
-        std::string_view body, std::pmr::memory_resource* resource) {
-        return materialize_form_input<model_type>(make_form_model_input(body, resource));
-    }
-
-    template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> parse_form_fields_partial(
-        const request_name_value_list& fields_value, std::pmr::memory_resource* resource) {
-        return materialize_form_input<model_type>(make_form_fields_model_input(fields_value, resource));
     }
 
 private:
     template <typename model_type>
-    [[nodiscard]] static bool has_valid_structure(const std::optional<model_type>& value) {
-        return value && model_validation_access::structure_valid(*value);
-    }
-
-    template <typename model_type>
     static void apply_defaults(model_type& value) {
         model::visit_model_fields(value, model::model_access::schema<model_type>(),
             [resource = value.resource()](const auto&, auto& slot) { slot.apply_default(resource); });
-    }
-
-    template <typename model_type>
-    [[nodiscard]] static std::optional<model_type> materialize_form_input(const model_input& input) {
-        auto value = model::model_access::empty<model_type>(input.resource());
-        if (!materialize_form(value, input)) {
-            return std::nullopt;
-        }
-        return value;
     }
 
     template <typename slot_type>
@@ -184,7 +153,6 @@ private:
             slot.mark_duplicate();
             return budget.skip_value(value_input, depth + 1);
         }
-        const auto original_input = value_input;
         using unwrapped_slot_type = std::remove_cvref_t<slot_type>;
         using value_type = typename unwrapped_slot_type::value_type;
         auto null_input = value_input;
@@ -207,16 +175,13 @@ private:
         if (budget.exhausted()) {
             return false;
         }
-        // Wrong-type values need a structural skip only when the
-        // value parser did not consume a complete JSON token.
-        if (value_input.data() == original_input.data()) {
-            // The fallback rescans the entire value. Count its
-            // elements once, while retaining byte charges for
-            // allocations that an arena may still own.
-            budget.restore_elements(element_checkpoint);
-            if (!budget.skip_value(value_input, depth + 1)) {
-                return false;
-            }
+        // A failed value parse leaves the cursor at the value, so the
+        // wrong-type value is skipped structurally. The skip rescans the whole
+        // value: count its elements once, while retaining byte charges for
+        // allocations that an arena may still own.
+        budget.restore_elements(element_checkpoint);
+        if (!budget.skip_value(value_input, depth + 1)) {
+            return false;
         }
         slot.mark_invalid_type();
         return true;
@@ -244,7 +209,7 @@ private:
             return visit_json_field(value, key, value_input, resource, depth, string_storage, budget);
         };
         const auto consume_key_allocation = [&budget](std::size_t bytes_value) noexcept {
-            return budget.consume_bytes(bytes_value) && budget.consume_bytes(sizeof(std::pmr::string));
+            return budget.consume_owned_text(bytes_value);
         };
         const bool valid = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource,
             depth, visit_field, consume_key_allocation);
@@ -277,52 +242,53 @@ private:
     }
 
     template <typename model_type>
-    [[nodiscard]] static bool visit_form_field(model_type& value, std::string_view key,
-        std::string_view field_value, form_value_encoding encoding,
-        const request_name_value_list* fields_value, bool case_insensitive,
-        std::pmr::memory_resource* resource, model_string_storage string_storage) {
-        if (case_insensitive) {
-            bool matched = false;
-            model::visit_model_fields(value, model::model_access::schema<model_type>(),
-                [&](const auto&, auto& slot) {
-                    if (matched || !request_name_value_list_access::names_equal(
-                                       *fields_value, key, slot.wire_name())) {
-                        return;
-                    }
-                    matched = true;
-                    bind_form_field_slot(slot, field_value, encoding, resource, string_storage);
-                });
-            return true;
-        }
+    static void bind_form_field(model_type& value, std::string_view key, std::string_view field_value,
+        form_value_encoding encoding, model_string_storage string_storage) {
         bool field_result = true;
         (void)model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(),
             key, field_result, [&](auto& slot) -> bool {
-                bind_form_field_slot(slot, field_value, encoding, resource, string_storage);
+                bind_form_field_slot(slot, field_value, encoding, value.resource(), string_storage);
                 return true;
             });
-        return field_result;
+    }
+
+    // Case-insensitive sources (HTTP headers) bind the first field whose wire
+    // name equals the name under the source's comparison.
+    template <typename model_type>
+    static void bind_form_field_ignore_case(model_type& value, const request_name_value_list& fields_value,
+        std::string_view key, std::string_view field_value) {
+        bool matched = false;
+        model::visit_model_fields(value, model::model_access::schema<model_type>(),
+            [&](const auto&, auto& slot) {
+                if (matched || !request_name_value_list_access::names_equal(fields_value, key, slot.wire_name())) {
+                    return;
+                }
+                matched = true;
+                bind_form_field_slot(slot, field_value, form_value_encoding::decoded, value.resource(),
+                    model_string_storage::borrowed);
+            });
     }
 
     template <typename model_type>
-    static bool materialize_form(model_type& value, const model_input& input) {
-        auto* const resource = value.resource();
-        const auto encoding = input.kind() == model_input_kind::form_fields
-                                  ? form_value_encoding::decoded
-                                  : form_value_encoding::url_encoded;
-        const auto* fields_value = input.fields();
-        const bool case_insensitive =
-            fields_value != nullptr && request_name_value_list_access::case_insensitive(*fields_value);
-        const auto string_storage = input.string_storage();
-        const bool valid = visit_model_input_form_fields(input,
-            [&value, resource, encoding, fields_value, case_insensitive, string_storage](
-                std::string_view key, std::string_view field_value) {
-                return visit_form_field(value, key, field_value, encoding, fields_value,
-                    case_insensitive, resource, string_storage);
-            });
-        if (valid) {
-            apply_defaults(value);
+    static void materialize_form(model_type& value, const model_input& input) {
+        if (const auto* body = std::get_if<form_body_input>(&input)) {
+            visit_form_body_fields(body->body_, value.resource(),
+                [&value, string_storage = body->string_storage_](std::string_view key, std::string_view field_value) {
+                    bind_form_field(value, key, field_value, form_value_encoding::url_encoded, string_storage);
+                });
+        } else {
+            const request_name_value_list& fields_value = std::get<1>(input);
+            const bool case_insensitive = request_name_value_list_access::case_insensitive(fields_value);
+            for (const auto& field : fields_value) {
+                if (case_insensitive) {
+                    bind_form_field_ignore_case(value, fields_value, field.name(), field.value());
+                } else {
+                    bind_form_field(value, field.name(), field.value(), form_value_encoding::decoded,
+                        model_string_storage::borrowed);
+                }
+            }
         }
-        return valid;
+        apply_defaults(value);
     }
 };
 
@@ -380,6 +346,7 @@ template <typename sequence_type>
     return value;
 }
 
+// Every branch commits `input` only when it returns a value.
 template <typename t_type>
 [[nodiscard]] std::optional<t_type> parse_json_value(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
@@ -390,53 +357,47 @@ template <typename t_type>
     }
     auto remaining = input;
     if constexpr (is_ruvia_string<field_type>) {
-        const auto parsed_value = parse_json_string(remaining);
-        if (!parsed_value.has_value()) {
+        std::pmr::string decoded(pmr_resource_or_default(resource));
+        const auto token = parse_json_string(remaining, &decoded);
+        if (!token.has_value()) {
             return std::nullopt;
         }
-        if ((string_storage == model_string_storage::owned ||
-                parsed_value->encoding() != json_string_encoding::literal) &&
-            (!budget.consume_bytes(parsed_value->raw().size()) ||
-                !budget.consume_bytes(parsed_value->raw().size() + sizeof(std::pmr::string)))) {
-            return std::nullopt;
-        }
-        if (parsed_value->encoding() == json_string_encoding::literal) {
-            input = remaining;
-            if (string_storage == model_string_storage::owned) {
-                return field_type(parsed_value->raw(), ::ruvia::model_options{.resource_ = resource});
+        if (token->encoding() == json_string_encoding::escaped) {
+            // Decoding grows its buffer geometrically, and an arena may retain
+            // every superseded buffer.
+            if (!budget.consume_owned_text(token->raw().size(), 2)) {
+                return std::nullopt;
             }
-            return model_value_factory::make_string(parsed_value->raw(), resource);
+            input = remaining;
+            field_type value = make_request_value<field_type>(resource);
+            value.assign_owned(std::move(decoded));
+            return value;
+        }
+        if (string_storage == model_string_storage::borrowed) {
+            input = remaining;
+            return model_value_factory::make_string(token->raw(), resource);
+        }
+        if (!budget.consume_owned_text(token->raw().size())) {
+            return std::nullopt;
         }
         input = remaining;
-        field_type value = make_request_value<field_type>(resource);
-        value.assign_owned(decode_json_string(*parsed_value, resource));
-        return value;
+        return field_type(token->raw(), ::ruvia::model_options{.resource_ = resource});
     } else if constexpr (is_ruvia_bytes<field_type>) {
-        // Escaped base64 may allocate both a decoded token and a byte value.
-        const auto token = parse_json_string(remaining);
-        if (!token || !budget.consume_bytes(token->raw().size()) ||
-            !budget.consume_bytes(token->raw().size() + sizeof(std::pmr::string))) {
+        std::pmr::string decoded(pmr_resource_or_default(resource));
+        const auto token = parse_json_string(remaining, &decoded);
+        // Escaped base64 may retain both decoded text and the byte value.
+        if (!token || !budget.consume_owned_text(token->raw().size(), 2)) {
             return std::nullopt;
         }
-        std::optional<bytes> value;
-        if (token->encoding() == json_string_encoding::literal) {
-            value = decode_model_binary(token->raw(), resource);
-        } else {
-            const auto decoded = decode_json_string(*token, resource);
-            value = decode_model_binary(decoded, resource);
-        }
+        auto value = decode_model_binary(json_string_text(*token, decoded), resource);
         if (!value) {
             return std::nullopt;
         }
         input = remaining;
         return value;
-    } else if constexpr (std::is_same_v<field_type, std::string_view>) {
-        const auto parsed_value = parse_json_string(remaining);
-        if (!parsed_value.has_value() || parsed_value->encoding() != json_string_encoding::literal) {
-            return std::nullopt;
-        }
-        input = remaining;
-        return parsed_value->raw();
+    } else if constexpr (is_ruvia_json_value<field_type> || is_ruvia_json_object<field_type>) {
+        return parse_json_view_value<field_type>(
+            input, resource, depth, string_storage, is_ruvia_json_object<field_type>, budget);
     } else if constexpr (is_ruvia_array<field_type> || is_ruvia_boxed_array<field_type>) {
         auto parsed_value = parse_json_sequence_value<field_type>(remaining, resource, depth, string_storage, budget);
         if (!parsed_value.has_value()) {
@@ -475,10 +436,11 @@ template <typename t_type>
     }
 }
 
-// One complete typed JSON value, including structural checks inside arrays.
-// Borrowed reads are used by JSON views; standalone codecs request owned data.
+// Exactly one JSON value (with surrounding whitespace) as `t_type`, within the
+// representation budget of `options`. Field structure inside the value is not
+// checked; see parse_json_document.
 template <typename t_type>
-[[nodiscard]] std::optional<t_type> parse_json_document(std::string_view input,
+[[nodiscard]] std::optional<t_type> parse_complete_json_value(std::string_view input,
     std::pmr::memory_resource* resource, model_string_storage string_storage,
     model_parse_options options = {}) {
     json_parse_budget budget(options);
@@ -487,10 +449,40 @@ template <typename t_type>
     }
     auto value = parse_json_value<t_type>(input, resource, 0, string_storage, budget);
     skip_json_whitespace(input);
-    if (!value || !input.empty() || !model_validation_access::value_structure_valid(*value)) {
+    if (!value || !input.empty()) {
         return std::nullopt;
     }
     return value;
+}
+
+// One complete typed JSON value, including structural checks inside arrays.
+// Borrowed reads are used by JSON views; standalone codecs request owned data.
+template <typename t_type>
+[[nodiscard]] std::optional<t_type> parse_json_document(std::string_view input,
+    std::pmr::memory_resource* resource, model_string_storage string_storage,
+    model_parse_options options = {}) {
+    auto value = parse_complete_json_value<t_type>(input, resource, string_storage, options);
+    if (!value || !model_validation_access::value_structure_valid(*value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+// Whether `body` is exactly one JSON value (an object when require_object),
+// with surrounding whitespace, within the limits of `options`. Dynamic tokens
+// validate their whole body this way and then borrow it unchanged.
+[[nodiscard]] inline bool is_complete_json_value(
+    std::string_view body, model_parse_options options, bool require_object) noexcept {
+    json_parse_budget budget(options);
+    skip_json_whitespace(body);
+    if (require_object && (body.empty() || body.front() != '{')) {
+        return false;
+    }
+    if (!budget.skip_value(body, 0)) {
+        return false;
+    }
+    skip_json_whitespace(body);
+    return body.empty();
 }
 
 }  // namespace ruvia::detail

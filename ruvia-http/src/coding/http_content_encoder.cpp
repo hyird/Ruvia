@@ -10,13 +10,13 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "coding/http_brotli_stream.h"
 #include "coding/http_zlib_stream.h"
 #include "coding/http_zstd_stream.h"
-#include "util/http_text_overlap.h"
 
 namespace ruvia {
 namespace {
@@ -198,7 +198,7 @@ void http_content_encoder::write(std::string_view input, std::pmr::string& outpu
                 output.append(input.data(), input.size());
             }
         } else if (!input.empty() || flush) {
-            if (detail::http_text_overlaps(input, {output.data(), output.size() + 1})) {
+            if (detail::http_text_aliases_string(input, output)) {
                 // Appending codec output can reallocate the caller's string
                 // before all input has been consumed. Own only this aliasing
                 // case; independent input keeps the direct encoding path.

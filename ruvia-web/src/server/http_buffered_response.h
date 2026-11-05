@@ -18,9 +18,8 @@ class http_response_coding_policy_disabled final {};
 
 // The response lifecycle has a state that is different from HTTP negotiation
 // failure: after a generated terminal error, coding application is deliberately
-// disabled. Keeping that state distinct from the protocol result removes the
-// old optional/reset channel that conflated "406 negotiation" with "do not
-// transform this error again".
+// disabled. That state stays distinct from the negotiation result, so "406
+// negotiation" and "do not transform this error again" are never conflated.
 class http_response_coding_policy final {
 public:
     [[nodiscard]] static http_response_coding_policy disabled() noexcept {

@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
@@ -24,9 +24,10 @@
 #include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_hpack.h"
+#include "http2/http2_hpack_static_table.h"
 #include "http2/http2_response_head_plan.h"
 #include "http2/http2_stream_state.h"
-#include "response/http_response_header_access.h"
+#include "response/http_response_header_storage.h"
 #include "server/http_date_cache.h"
 
 namespace ruvia::detail {
@@ -39,29 +40,32 @@ struct http2_known_header_encoding final {
     std::uint32_t hpack_name_index_{0};
 };
 
+// A known name that RFC 7541 Appendix A lists, paired with its static name index.
+[[nodiscard]] consteval http2_known_header_encoding http2_static_known_header(std::string_view name) {
+    return {.name_ = name, .hpack_name_index_ = hpack_static_name_index(name)};
+}
+
 [[nodiscard]] inline http2_known_header_encoding get_http2_known_header_encoding(
     std::uint32_t known_bit) noexcept {
     switch (known_bit) {
         case response_header_content_length:
-            return {.name_ = "content-length", .hpack_name_index_ = hpack_static_index::content_length};
+            return http2_static_known_header("content-length");
         case response_header_content_encoding:
-            return {
-                .name_ = "content-encoding", .hpack_name_index_ = hpack_static_index::content_encoding};
+            return http2_static_known_header("content-encoding");
         case response_header_content_type:
-            return {.name_ = "content-type", .hpack_name_index_ = hpack_static_index::content_type};
+            return http2_static_known_header("content-type");
         case response_header_vary:
-            return {.name_ = "vary", .hpack_name_index_ = hpack_static_index::vary};
+            return http2_static_known_header("vary");
         case response_header_date:
-            return {.name_ = "date", .hpack_name_index_ = hpack_static_index::date};
+            return http2_static_known_header("date");
         case response_header_server:
-            return {.name_ = "server", .hpack_name_index_ = hpack_static_index::server};
+            return http2_static_known_header("server");
         case response_header_cache_control:
-            return {.name_ = "cache-control", .hpack_name_index_ = hpack_static_index::cache_control};
+            return http2_static_known_header("cache-control");
         case response_header_allow:
-            return {.name_ = "allow", .hpack_name_index_ = hpack_static_index::allow};
+            return http2_static_known_header("allow");
         case response_header_access_control_allow_origin:
-            return {.name_ = "access-control-allow-origin",
-                .hpack_name_index_ = hpack_static_index::access_control_allow_origin};
+            return http2_static_known_header("access-control-allow-origin");
         case response_header_access_control_allow_credentials:
             return {.name_ = "access-control-allow-credentials"};
         case response_header_access_control_allow_methods:
@@ -73,17 +77,17 @@ struct http2_known_header_encoding final {
         case response_header_access_control_expose_headers:
             return {.name_ = "access-control-expose-headers"};
         case response_header_accept_ranges:
-            return {.name_ = "accept-ranges", .hpack_name_index_ = hpack_static_index::accept_ranges};
+            return http2_static_known_header("accept-ranges");
         case response_header_content_range:
-            return {.name_ = "content-range", .hpack_name_index_ = hpack_static_index::content_range};
+            return http2_static_known_header("content-range");
         case response_header_etag:
-            return {.name_ = "etag", .hpack_name_index_ = hpack_static_index::etag};
+            return http2_static_known_header("etag");
         case response_header_last_modified:
-            return {.name_ = "last-modified", .hpack_name_index_ = hpack_static_index::last_modified};
+            return http2_static_known_header("last-modified");
         case response_header_location:
-            return {.name_ = "location", .hpack_name_index_ = hpack_static_index::location};
+            return http2_static_known_header("location");
         case response_header_set_cookie:
-            return {.name_ = "set-cookie", .hpack_name_index_ = hpack_static_index::set_cookie};
+            return http2_static_known_header("set-cookie");
         default:
             return {};
     }
@@ -136,13 +140,9 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     try {
         header_block.clear();
         const auto headers = response.headers();
-        std::size_t reserve_bytes = 5U;
-        for (std::size_t i = 0; i < headers.size(); ++i) {
-            reserve_bytes += headers[i].name().size() + headers[i].value().size() + 6U;
-        }
-        if (reserve_bytes > 15U) {
-            header_block.reserve(reserve_bytes);
-        }
+        const auto status_token = http_status_code_token(response.status());
+        http2_reserve_field_block(header_block,
+            http_status_code_token_view(status_token).size() + hpack_literal_overhead_bytes, headers);
         hpack_encoder::encode_status(header_block, response.status());
         std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
         std::pmr::string lower_name_scratch(header_block.get_allocator());
@@ -166,11 +166,12 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     const auto known_bits = response_known_header_bits(response);
 
     const auto status_token = http_status_code_token(plan.body_plan().response_status());
+    const auto status_value = http_status_code_token_view(status_token);
     http2_header_list_size section_size;
-    if (!section_size.add(":status", http_status_code_token_view(status_token))) {
+    if (!section_size.add(":status", status_value)) {
         return false;
     }
-    std::size_t reserve_bytes = 5U;
+    std::size_t fixed_bytes = status_value.size() + hpack_literal_overhead_bytes;
     for (const auto& header : response.headers()) {
         const auto known_bit = http_response_header_access::known_bit(header);
         if (known_bit == response_header_content_length) {
@@ -179,9 +180,6 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         if (!section_size.add(header.name(), header.value())) {
             return false;
         }
-        const auto known = get_http2_known_header_encoding(known_bit);
-        reserve_bytes += (known.hpack_name_index_ != 0 ? 0U : header.name().size()) +
-                         header.value().size() + 6U;
     }
     std::string_view generated_date;
     if ((known_bits & response_header_date) == 0) {
@@ -190,7 +188,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
             if (!section_size.add("date", generated_date)) {
                 return false;
             }
-            reserve_bytes += generated_date.size() + 4U;
+            fixed_bytes += generated_date.size() + hpack_literal_overhead_bytes;
         }
     }
     std::array<char, http_max_unsigned_decimal_size> content_length_bytes;
@@ -200,14 +198,12 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         if (!section_size.add("content-length", content_length_value)) {
             return false;
         }
-        reserve_bytes += content_length_value.size() + 4U;
+        fixed_bytes += content_length_value.size() + hpack_literal_overhead_bytes;
     }
 
     try {
         header_block.clear();
-        if (reserve_bytes > 15U) {
-            header_block.reserve(reserve_bytes);
-        }
+        http2_reserve_field_block(header_block, fixed_bytes, response.headers());
         hpack_encoder::encode_status(header_block, plan.body_plan().response_status());
         std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
         std::pmr::string lower_name_scratch(header_block.get_allocator());
@@ -223,11 +219,11 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         }
         if (!generated_date.empty()) {
             hpack_encoder::encode_header_with_name_index(
-                header_block, hpack_static_index::date, generated_date);
+                header_block, hpack_static_name_index("date"), generated_date);
         }
         if (!content_length_value.empty()) {
             hpack_encoder::encode_header_with_name_index(
-                header_block, hpack_static_index::content_length, content_length_value);
+                header_block, hpack_static_name_index("content-length"), content_length_value);
         }
     } catch (...) {
         header_block.clear();
@@ -245,20 +241,8 @@ inline void append_http2_response_trailers(
     if (section.empty()) {
         return;
     }
-    std::size_t reserve_bytes = trailer_block.size();
-    for (const auto& trailer : section.fields()) {
-        reserve_bytes += trailer.name().size() + trailer.value().size() + 6U;
-    }
-    if (reserve_bytes > 15U) {
-        trailer_block.reserve(reserve_bytes);
-    }
-    std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
-    std::pmr::string lower_name_scratch(trailer_block.get_allocator());
-    for (const auto& trailer : section.fields()) {
-        hpack_encoder::encode_header(trailer_block,
-            http2_lower_header_name(trailer.name(), lower_name_stack, lower_name_scratch),
-            trailer.value());
-    }
+    http2_reserve_field_block(trailer_block, 0, section.fields());
+    http2_encode_lowercase_fields(trailer_block, section.fields());
 }
 
 // The HPACK decode callback for a client-role response trailer section, the

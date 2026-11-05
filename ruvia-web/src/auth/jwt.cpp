@@ -8,6 +8,7 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_base64.h"
+#include "ruvia/http/http_utf8.h"
 #include "ruvia/web/detail/json/json_escape.h"
 
 #include "auth/hmac.h"
@@ -41,8 +42,6 @@ struct jwt_token_parts final {
         token.substr(second + 1), token.substr(0, second)};
 }
 
-// Throws std::length_error when the encoded capacity cannot be represented by
-// std::size_t before allocating the result.
 void jwt_base64_url_encode_into(char* out, std::string_view input) noexcept {
     http_base64_encode(out,
         std::span(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()),
@@ -104,14 +103,15 @@ struct jwt_decoded_section final {
     return {};
 }
 
-[[nodiscard]] std::string_view jwt_encoded_header_prefix(jwt_algorithm algorithm) {
+// The base64url JOSE header jwt_sign emits: {"alg":"<name>","typ":"JWT"}.
+[[nodiscard]] std::string_view jwt_encoded_header(jwt_algorithm algorithm) {
     switch (algorithm) {
         case jwt_algorithm::hs256:
-            return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.";
+            return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
         case jwt_algorithm::hs384:
-            return "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.";
+            return "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9";
         case jwt_algorithm::hs512:
-            return "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.";
+            return "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9";
     }
     throw std::invalid_argument("unsupported JWT algorithm");
 }
@@ -153,31 +153,16 @@ void validate_jwt_hmac_secret(std::size_t digest_size, std::string_view secret) 
 
 namespace {
 
-// The payload writer replaces each ill-formed UTF-8 subpart with U+FFFD, so
-// two distinct ill-formed names could serialize as one; only well-formed
-// names keep the raw uniqueness check equal to the signed one.
-[[nodiscard]] bool is_well_formed_utf8(std::string_view text) noexcept {
-    for (std::size_t i = 0; i < text.size();) {
-        if (static_cast<unsigned char>(text[i]) < 0x80) {
-            ++i;
-            continue;
-        }
-        const auto sequence = detail::scan_json_utf8_sequence(text, i);
-        if (!sequence.well_formed_) {
-            return false;
-        }
-        i += sequence.length_;
-    }
-    return true;
-}
-
 void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
     for (std::size_t i = 0; i < claims.size(); ++i) {
         const auto name = claims[i].name_.view();
         if (name.empty() || detail::jwt_is_reserved_claim(name)) {
             throw std::invalid_argument("JWT custom claim name is empty or reserved");
         }
-        if (!is_well_formed_utf8(name)) {
+        // The payload writer replaces each ill-formed UTF-8 subpart with U+FFFD, so
+        // two distinct ill-formed names could serialize as one; only well-formed
+        // names keep the raw uniqueness check equal to the signed one.
+        if (!detail::is_valid_utf8(name)) {
             throw std::invalid_argument("JWT custom claim name must be well-formed UTF-8");
         }
         for (std::size_t j = 0; j < i; ++j) {
@@ -315,7 +300,7 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     }
     const auto digest = detail::jwt_hmac_digest(options.algorithm_);
     detail::validate_jwt_hmac_secret(detail::hmac_digest_size(digest), options.secret_);
-    const auto header_prefix = detail::jwt_encoded_header_prefix(options.algorithm_);
+    const auto encoded_header = detail::jwt_encoded_header(options.algorithm_);
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto now = std::chrono::system_clock::now();
 
@@ -362,16 +347,17 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     const auto signature_size = http_base64_encoded_size(
         detail::hmac_digest_size(digest),
         http_base64_padding::forbidden);
-    if (encoded_payload_size > std::numeric_limits<std::size_t>::max() - 1 - header_prefix.size() ||
-        signature_size > std::numeric_limits<std::size_t>::max() -
-                             (header_prefix.size() + encoded_payload_size + 1)) {
+    const auto payload_offset = encoded_header.size() + 1;
+    if (encoded_payload_size > std::numeric_limits<std::size_t>::max() - 1 - payload_offset ||
+        signature_size > std::numeric_limits<std::size_t>::max() - (payload_offset + encoded_payload_size + 1)) {
         throw std::length_error("JWT token is too large");
     }
-    const auto signing_input_size = header_prefix.size() + encoded_payload_size;
+    const auto signing_input_size = payload_offset + encoded_payload_size;
     std::pmr::string token(resolved);
     token.resize(signing_input_size + 1 + signature_size);
-    header_prefix.copy(token.data(), header_prefix.size());
-    detail::jwt_base64_url_encode_into(token.data() + header_prefix.size(), payload.view());
+    encoded_header.copy(token.data(), encoded_header.size());
+    token[encoded_header.size()] = '.';
+    detail::jwt_base64_url_encode_into(token.data() + payload_offset, payload.view());
     token[signing_input_size] = '.';
     (void)detail::jwt_hmac_sign(options.algorithm_, options.secret_,
         std::string_view(token.data(), signing_input_size), token.data() + signing_input_size + 1);
@@ -395,7 +381,7 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     if (!detail::constant_time_bytes_equal(expected, parts.signature_)) {
         throw jwt_error(jwt_error::code_type::signature_mismatch, "JWT signature verification failed");
     }
-    if (parts.header_ != detail::jwt_encoded_header_prefix(options.algorithm_).substr(0, 36)) {
+    if (parts.header_ != detail::jwt_encoded_header(options.algorithm_)) {
         const detail::jwt_decoded_section header_value(parts.header_, resolved);
         detail::jwt_validate_jose_header(
             header_value.view(), detail::jwt_algorithm_name(options.algorithm_), resolved);
@@ -443,9 +429,9 @@ jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options) 
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
-    if (parts.header_ != detail::jwt_encoded_header_prefix(jwt_algorithm::hs256).substr(0, 36) &&
-        parts.header_ != detail::jwt_encoded_header_prefix(jwt_algorithm::hs384).substr(0, 36) &&
-        parts.header_ != detail::jwt_encoded_header_prefix(jwt_algorithm::hs512).substr(0, 36)) {
+    if (parts.header_ != detail::jwt_encoded_header(jwt_algorithm::hs256) &&
+        parts.header_ != detail::jwt_encoded_header(jwt_algorithm::hs384) &&
+        parts.header_ != detail::jwt_encoded_header(jwt_algorithm::hs512)) {
         const detail::jwt_decoded_section header_value(parts.header_, resolved);
         detail::jwt_validate_jose_header(header_value.view(), std::nullopt, resolved);
     }

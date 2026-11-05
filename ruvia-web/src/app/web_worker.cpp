@@ -148,18 +148,25 @@ web_worker_post_result web_worker_dispatch::post(job_type job) {
             reservation.release()->start(std::move(job));
         };
     });
-    post_counters_.record(status);
-    if (status == post_status::accepted) {
-        return web_worker_post_result::accept();
+    switch (status) {
+        case post_status::accepted:
+            accepted_.fetch_add(1, std::memory_order_relaxed);
+            return web_worker_post_result::accept();
+        case post_status::queue_full:
+            queue_full_.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case post_status::worker_stopping:
+            worker_stopping_.fetch_add(1, std::memory_order_relaxed);
+            break;
     }
     return web_worker_post_result::reject(status, std::move(job));
 }
 
 web_worker_stats web_worker_dispatch::stats() const noexcept {
     return web_worker_stats{
-        .accepted_ = post_counters_.accepted(),
-        .queue_full_ = post_counters_.queue_full(),
-        .worker_stopping_ = post_counters_.worker_stopping(),
+        .accepted_ = accepted_.load(std::memory_order_relaxed),
+        .queue_full_ = queue_full_.load(std::memory_order_relaxed),
+        .worker_stopping_ = worker_stopping_.load(std::memory_order_relaxed),
         .completed_ = completed_.load(std::memory_order_relaxed),
         .failed_ = failed_count_.load(std::memory_order_relaxed),
         .outstanding_ = outstanding_.load(std::memory_order_acquire),

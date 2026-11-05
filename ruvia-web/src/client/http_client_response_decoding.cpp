@@ -6,14 +6,20 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/operation_timeout.h"
+#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/web/http_client_types.h"
 
+#include "client/client_request_policy.h"
 #include "client/http_client_response_state.h"
 
 namespace ruvia::detail {
+namespace {
 
+// An encoded body must be collected to FIN before any bytes can be returned
+// to the consumer.
 void configure_http_client_response_decoding(http_client_response_state& state_value) {
     state_value.body_decode_required_ = false;
     state_value.content_coding_.reset();
@@ -51,6 +57,8 @@ void configure_http_client_response_decoding(http_client_response_state& state_v
     }
 }
 
+// Uses the parser-computed body plan and keeps decoded output bounded by the
+// response's configured byte limit.
 void decode_http_client_response_body(http_client_response_state& state_value,
     bool content_semantics_present, std::size_t max_decoded_bytes) {
     if (!content_semantics_present || !state_value.body_decode_required_) {
@@ -115,6 +123,57 @@ void decode_http_client_response_body(http_client_response_state& state_value,
         state_value.content_coding_.reset();
         state_value.discard_response_body();
         throw;
+    }
+}
+
+[[noreturn]] void throw_body_decoding_timeout() {
+    throw http_client_error(http_client_error::code_type::timeout, "HTTP response body decoding timed out");
+}
+
+}  // namespace
+
+void publish_http_client_final_head(
+    http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head) {
+    if (state_value.upload_ && !state_value.upload_->output_.ended_ &&
+        head.request_content_signal_ == http_client_request_content_signal::exchange_complete) {
+        state_value.upload_->output_.stop();
+    }
+    state_value.status_ = head.status_;
+    state_value.protocol_version_ = head.protocol_version_;
+    state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_.status());
+    // A received final head changes the jar before consumers can issue
+    // another request, regardless of body completion or abandonment.
+    if (head.origin_target_) {
+        policy.retain_response_cookies(*head.origin_target_, state_value.headers_);
+    }
+    auto* const tunnel = state_value.tunnel_ ? &*state_value.tunnel_ : nullptr;
+    if (tunnel != nullptr) {
+        if (head.opens_tunnel_ && tunnel->udp_ &&
+            validate_http_connect_udp_response(
+                state_value.protocol_version_, state_value.status_.status().value(), state_value.headers_)
+                .has_value()) {
+            throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
+        }
+        tunnel->accepted_ = head.opens_tunnel_;
+        if (!tunnel->accepted_) {
+            tunnel->output_.stop();
+        }
+    }
+    if (tunnel == nullptr || !tunnel->accepted_) {
+        configure_http_client_response_decoding(state_value);
+    }
+    state_value.head_ready_ = true;
+    state_value.head_signal_.notify();
+}
+
+void finish_http_client_response_body(http_client_response_state& state_value, const operation_timeout& timeout,
+    bool content_semantics_present, std::size_t max_decoded_bytes) {
+    if (timeout.expired()) {
+        throw_body_decoding_timeout();
+    }
+    decode_http_client_response_body(state_value, content_semantics_present, max_decoded_bytes);
+    if (timeout.expired()) {
+        throw_body_decoding_timeout();
     }
 }
 

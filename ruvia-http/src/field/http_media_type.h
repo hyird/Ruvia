@@ -1,12 +1,11 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 
 #include "field/http_quality_value.h"
 
@@ -16,17 +15,6 @@
 // type against an Accept media-range lives in http_accept_media_type.h.
 
 namespace ruvia::detail {
-
-[[nodiscard]] inline std::string_view http_media_type_only(std::string_view value) noexcept {
-    return http_header_token_before_parameters(value);
-}
-
-template <http_temporary_owning_char_string value_type>
-std::string_view http_media_type_only(value_type&&) = delete;
-
-[[nodiscard]] inline bool http_media_token(std::string_view token) noexcept {
-    return is_valid_http_header_name(token);
-}
 
 struct http_media_type_parts final {
     std::string_view type_;
@@ -83,9 +71,13 @@ struct http_media_type_parts final {
     }
 }
 
-// 常规参数缓存在栈上；超出的已验证后缀借用原字段，不以缓存容量限制参数数量。
-// 所有视图仅在原字段保持有效且不变时有效，解析与匹配都不分配内存。
+// Parameters are cached on the stack. A media type or media range with more
+// than max_parameters parameters is invalid, which bounds the per-member
+// duplicate-name check. Views stay valid only while the parsed field is
+// unchanged; parsing and matching never allocate.
 struct http_media_type_parameters final {
+    static constexpr std::size_t max_parameters = 64;
+
     struct parameter final {
         const char* name_data_;
         std::size_t name_size_;
@@ -100,45 +92,34 @@ struct http_media_type_parameters final {
             return {value_data_, value_size_};
         }
     };
-    // Only the cached prefix is initialized and read. Plain pointer/length slots
-    // avoid constructing string_views for unused cache slots.
-    std::array<parameter, 64> values_;
+    // Only the first size_ slots are initialized and read. Plain pointer/length
+    // slots avoid constructing string_views for unused slots.
+    std::array<parameter, max_parameters> values_;
     std::size_t size_{0};
-    std::string_view overflow_{};
 
     template <typename visitor_type>
     [[nodiscard]] bool visit(visitor_type&& visitor) const {
-        for (std::size_t i = 0; i < std::min(size_, values_.size()); ++i) {
+        for (std::size_t i = 0; i < size_; ++i) {
             if (!visitor(values_[i].name(), values_[i].value())) {
                 return false;
             }
         }
-        bool complete = true;
-        http_visit_semicolon_parameters_quoted_field(overflow_,
-            [&](std::string_view name, std::string_view value) {
-                complete = visitor(name, value);
-                return complete;
-            });
-        return complete;
+        return true;
     }
 
     [[nodiscard]] std::optional<std::string_view> find(std::string_view name) const noexcept {
-        std::optional<std::string_view> result;
-        (void)visit([&](std::string_view candidate, std::string_view value) noexcept {
-            if (http_ascii_equals_ignore_case(candidate, name)) {
-                result = value;
-                return false;
+        for (std::size_t i = 0; i < size_; ++i) {
+            if (http_ascii_equals_ignore_case(values_[i].name(), name)) {
+                return values_[i].value();
             }
-            return true;
-        });
-        return result;
+        }
+        return std::nullopt;
     }
 
     // A quality output selects Accept semantics: q is parsed as a weight,
     // including an invalid weight's zero quality, rather than a media parameter.
     [[nodiscard]] bool parse(std::string_view value, int* quality = nullptr) noexcept {
         size_ = 0;
-        overflow_ = {};
         if (quality != nullptr) {
             *quality = 1000;
         }
@@ -147,12 +128,12 @@ struct http_media_type_parameters final {
                 return true;
             }
             const auto equals = part.find('=');
-            if (equals == std::string_view::npos) {
+            if (equals == std::string_view::npos || size_ == values_.size()) {
                 return false;
             }
             const auto name = part.substr(0, equals);
             const auto parameter_value = part.substr(equals + 1);
-            if (!http_media_token(name) || parameter_value.empty() || parameter_value != http_trim_ows(parameter_value)) {
+            if (!is_valid_http_header_name(name) || parameter_value.empty() || parameter_value != http_trim_ows(parameter_value)) {
                 return false;
             }
             if (find(name).has_value()) {
@@ -164,15 +145,7 @@ struct http_media_type_parameters final {
             } else if (!is_http_token_or_quoted_string(parameter_value)) {
                 return false;
             }
-            if (size_ < values_.size()) {
-                values_[size_] = {name.data(), name.size(), parameter_value.data(), parameter_value.size()};
-            } else if (overflow_.empty()) {
-                overflow_ = part;
-            } else {
-                overflow_ = std::string_view(overflow_.data(),
-                    static_cast<std::size_t>(part.data() + part.size() - overflow_.data()));
-            }
-            ++size_;
+            values_[size_++] = {name.data(), name.size(), parameter_value.data(), parameter_value.size()};
             return true;
         });
     }
@@ -186,7 +159,7 @@ struct http_media_type_parameters final {
 
 [[nodiscard]] inline bool http_parse_media_type_parts(
     std::string_view value, bool allow_wildcard, http_media_type_parts& parts) noexcept {
-    value = http_media_type_only(value);
+    value = http_header_token_before_parameters(value);
     const auto slash = value.find('/');
     if (slash == std::string_view::npos) {
         return false;
@@ -202,8 +175,8 @@ struct http_media_type_parameters final {
     if (type_wildcard && !subtype_wildcard) {
         return false;
     }
-    return (type_wildcard || http_media_token(parts.type_)) &&
-           (subtype_wildcard || http_media_token(parts.subtype_));
+    return (type_wildcard || is_valid_http_header_name(parts.type_)) &&
+           (subtype_wildcard || is_valid_http_header_name(parts.subtype_));
 }
 
 template <http_temporary_owning_char_string value_type>

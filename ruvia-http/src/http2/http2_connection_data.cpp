@@ -54,7 +54,7 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         connection_receive_window_ -= flow_bytes;
     };
 
-    auto* stream = find_stream(header_value.stream_id_);
+    auto* stream = streams_.find(header_value.stream_id_);
     if (was_closed_by_peer_reset(header_value.stream_id_, stream)) {
         // This peer's RST_STREAM and later DATA are ordered on the same connection.
         // Unlike DATA that was already in flight when we sent a reset, this cannot be
@@ -95,27 +95,30 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         return false;
     }
 
+    // Returns false when the peer-error budget ends the connection instead.
     const auto reset_stream = [&](http2_error_code error, bool debit_stream_window) {
+        if (!admit_peer_error_reset()) {
+            return false;
+        }
         reserve_stream_error();
         debit_connection();
         if (debit_stream_window) {
             (void)stream->consume_receive_window(flow_bytes);
         }
-        output_.append_rst_stream(header_value.stream_id_, error);
+        append_peer_error_reset(header_value.stream_id_, error);
         close_stream(header_value.stream_id_, http2_stream_close_source::local, error);
         release_dropped_data_connection_window(flow_bytes);
+        return true;
     };
 
     const auto& remote = stream->remote_receive();
     if (remote.head_pending() != nullptr || remote.head_end_stream_pending() != nullptr) {
-        reset_stream(http2_error_code::protocol_error, false);
-        return true;
+        return reset_stream(http2_error_code::protocol_error, false);
     }
     if (remote.end_stream() != nullptr || remote.connect_pending_end_stream() != nullptr) {
         // END_STREAM closes only the peer's send half. Another DATA frame from this
         // peer is nevertheless a frame on a half-closed (remote) stream.
-        reset_stream(http2_error_code::stream_closed, false);
-        return true;
+        return reset_stream(http2_error_code::stream_closed, false);
     }
 
     const bool pending_connect_control = remote.connect_pending() != nullptr;
@@ -132,15 +135,13 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
                             (response_status != nullptr &&
                                 response_status->status() == http_status::reset_content));
     if (!pending_connect_control && !rejected_connect_terminal && !tunnel_data && !content_data) {
-        reset_stream(http2_error_code::stream_closed, false);
-        return true;
+        return reset_stream(http2_error_code::stream_closed, false);
     }
 
     // Check the stream window without mutating it so a flow-control reset can be
     // fully reserved before either receive window is consumed.
     if (flow_bytes > stream->receive_window()) {
-        reset_stream(http2_error_code::flow_control_error, false);
-        return true;
+        return reset_stream(http2_error_code::flow_control_error, false);
     }
 
     if (pending_connect_control || rejected_connect_terminal) {
@@ -163,7 +164,7 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         (void)stream->consume_receive_window(flow_bytes);
         if (early_tunnel_data) {
             stream->add_window_debt(static_cast<std::uint32_t>(flow_bytes));
-            events_.push_back(http2_event(http2_tunnel_data_record{
+            publish_event(http2_event(http2_tunnel_data_record{
                 header_value.stream_id_, data, static_cast<std::uint32_t>(flow_bytes)}));
         } else if (flow_bytes > 0) {
             queue_consumed_data_credit(
@@ -192,12 +193,10 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
     if (content_data) {
         content_accounting = candidate_content.account(data.size());
         if (content_accounting == http2_remote_content_accounting_result::counter_overflow) {
-            reset_stream(http2_error_code::cancel, true);
-            return true;
+            return reset_stream(http2_error_code::cancel, true);
         }
         if (content_accounting != http2_remote_content_accounting_result::accepted) {
-            reset_stream(http2_error_code::protocol_error, true);
-            return true;
+            return reset_stream(http2_error_code::protocol_error, true);
         }
         if (end_stream && !candidate_content.terminal_length_valid()) {
             // Preserve the already-received body chunk before reporting the
@@ -205,6 +204,9 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
             // pre-reserved publication batch; the close path flushes the matching
             // receive debt, so this branch must not return the same bytes again via
             // release_dropped_data_connection_window().
+            if (!admit_peer_error_reset()) {
+                return false;
+            }
             const bool publish_data = !discarded_content && !data.empty();
             reserve_stream_error(publish_data ? 1 : 0);
             if (!publish_data && flow_bytes > 0) {
@@ -216,13 +218,13 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
             if (flow_bytes > 0) {
                 if (publish_data) {
                     stream->add_window_debt(static_cast<std::uint32_t>(flow_bytes));
-                    events_.push_back(http2_event(http2_message_data_record{
+                    publish_event(http2_event(http2_message_data_record{
                         header_value.stream_id_, data, static_cast<std::uint32_t>(flow_bytes)}));
                 } else {
                     queue_consumed_data_credit(nullptr, static_cast<std::uint32_t>(flow_bytes));
                 }
             }
-            output_.append_rst_stream(header_value.stream_id_, http2_error_code::protocol_error);
+            append_peer_error_reset(header_value.stream_id_, http2_error_code::protocol_error);
             close_stream(
                 header_value.stream_id_, http2_stream_close_source::local, http2_error_code::protocol_error);
             return true;
@@ -263,9 +265,9 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
     // no-progress event for every tiny wire frame.
     if (deliver_data) {
         const auto flow_control_bytes = static_cast<std::uint32_t>(flow_bytes);
-        events_.push_back(tunnel_data
-                              ? http2_event(http2_tunnel_data_record{header_value.stream_id_, data, flow_control_bytes})
-                              : http2_event(http2_message_data_record{header_value.stream_id_, data, flow_control_bytes}));
+        publish_event(tunnel_data
+                          ? http2_event(http2_tunnel_data_record{header_value.stream_id_, data, flow_control_bytes})
+                          : http2_event(http2_message_data_record{header_value.stream_id_, data, flow_control_bytes}));
     }
     if (end_stream) {
         const bool remote_finished =
@@ -273,8 +275,8 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         if (!remote_finished) {
             std::terminate();
         }
-        events_.push_back(tunnel_data ? http2_event(http2_tunnel_end_event(header_value.stream_id_))
-                                      : http2_event(http2_message_end_record{header_value.stream_id_}));
+        publish_event(tunnel_data ? http2_event(http2_tunnel_end_event(header_value.stream_id_))
+                                  : http2_event(http2_message_end_record{header_value.stream_id_}));
         release_local_request_stream_if_closed(*stream);
     }
     return true;

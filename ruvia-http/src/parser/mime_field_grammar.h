@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 
 // The MIME entity grammar multipart bodies are validated against (RFC 2045
 // sections 5.1 and 5.3): which characters form a token, what a field name, field

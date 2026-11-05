@@ -5,11 +5,11 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/error.h"
 
 #include "http/secure_token.h"
@@ -84,7 +84,7 @@ csrf_protection::csrf_protection()
     : csrf_protection(csrf_protection_config{}) {}
 
 csrf_protection::csrf_protection(const csrf_protection_config& config)
-    : csrf_protection(validate(config), detail::registration_resource()) {}
+    : csrf_protection(validate(config), process_resource()) {}
 
 task<void> csrf_protection::handle(context& c, next& next_value) {
     const auto method = c.req().known_method();

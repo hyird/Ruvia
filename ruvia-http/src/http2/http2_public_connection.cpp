@@ -255,7 +255,7 @@ http_request http2_request_head_event::build_request(
     if (stream == nullptr) {
         throw std::logic_error("missing HTTP/2 request stream");
     }
-    return detail::http2_request_builder::build(*stream, resource, body);
+    return detail::build_http2_request(*stream, resource, body);
 }
 void http2_connection::impl_deleter_type::operator()(detail::http2_connection_owner_endpoint* value) const noexcept {
     if (value != nullptr) {
@@ -338,7 +338,6 @@ std::optional<http2_event> http2_connection::next_event() {
         },
         event->value());
     connection.consume_event();
-    connection.retry_deferred_stream_leases();
     return std::optional<http2_event>(std::move(result_value));
 }
 
@@ -385,8 +384,10 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
 
 http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id,
     std::string_view bytes_value, http2_end_stream end_stream, std::size_t max_payload_bytes) {
-    const auto result_value = impl_->connection_.submit_data(stream_id, bytes_value, end_stream, max_payload_bytes);
-    impl_->connection_.retry_deferred_stream_leases();
+    auto& connection = impl_->connection_;
+    const auto result_value = connection.submit_data(stream_id, bytes_value, end_stream, max_payload_bytes);
+    connection.retry_deferred_stream_lease(stream_id);
+    connection.retry_deferred_stream_leases();
     return result_value;
 }
 http2_request_content_release_status http2_connection::release_request_content(
@@ -419,15 +420,19 @@ http2_connection::submit_streaming_response_head(
 
 http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
     std::span<const http_header_view> trailers) {
-    const auto status = impl_->connection_.finish_request(stream_id, trailers);
-    impl_->connection_.retry_deferred_stream_leases();
+    auto& connection = impl_->connection_;
+    const auto status = connection.finish_request(stream_id, trailers);
+    connection.retry_deferred_stream_lease(stream_id);
+    connection.retry_deferred_stream_leases();
     return status;
 }
 
 http2_finish_status http2_connection::finish_response(
     std::uint32_t stream_id, const http_response_trailer_section& trailers) {
-    const auto status = impl_->connection_.finish_response(stream_id, trailers);
-    impl_->connection_.retry_deferred_stream_leases();
+    auto& connection = impl_->connection_;
+    const auto status = connection.finish_response(stream_id, trailers);
+    connection.retry_deferred_stream_lease(stream_id);
+    connection.retry_deferred_stream_leases();
     return status;
 }
 
@@ -437,14 +442,9 @@ std::variant<http2_request_head_event, http2_push_submit_error> http2_connection
     if ((id.index() != 0)) {
         return std::get<1>(id);
     }
-    try {
-        impl_->connection_.pin_stream(std::get<0>(id));
-        return http2_request_head_event(impl_.get(), std::get<0>(id), {},
-            http_request_content_indication::no_content, {});
-    } catch (...) {
-        impl_->connection_.abandon_stream_lease(std::get<0>(id));
-        throw;
-    }
+    impl_->connection_.pin_stream(std::get<0>(id));
+    return http2_request_head_event(impl_.get(), std::get<0>(id), {},
+        http_request_content_indication::no_content, {});
 }
 
 http2_submit_status http2_connection::submit_origin_advertisement(std::span<const std::string_view> origins) {
@@ -467,8 +467,12 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
         // submit_request_head() here rather than waiting for next_event().
         connection.release_stream_lease(stream_id);
     }
+    connection.retry_deferred_stream_lease(stream_id);
     connection.retry_deferred_stream_leases();
     return status;
+}
+http2_submit_status http2_connection::submit_ping() {
+    return impl_->connection_.submit_ping();
 }
 http2_received_data_acknowledge_status http2_connection::acknowledge(http2_received_data_credit&& credit) {
     if (!credit.valid() || credit.endpoint_ != impl_.get()) {

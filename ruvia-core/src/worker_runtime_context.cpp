@@ -42,10 +42,6 @@ void worker_runtime_context::close() noexcept {
     dispatcher_->close();
 }
 
-void worker_runtime_context::defer_or_terminate(move_only_function<void()> task_value) noexcept {
-    dispatcher_->defer_or_terminate(std::move(task_value));
-}
-
 void worker_runtime_context::stop_timers() noexcept {
     dispatcher_->stop_timers();
 }

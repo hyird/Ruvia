@@ -10,8 +10,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/http_number_format.h"
+
 #include "redis/redis_types_access.h"
-#include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 namespace {
@@ -92,13 +93,13 @@ std::size_t resp_bulk_serialized_size(std::size_t arg_bytes) {
 
 void append_resp_header(std::pmr::string& output, std::size_t arg_count) {
     output.push_back('*');
-    append_redis_number(output, static_cast<std::uint64_t>(arg_count));
+    http_append_unsigned(output, static_cast<std::uint64_t>(arg_count));
     output.append("\r\n", 2);
 }
 
 void append_resp_bulk(std::pmr::string& output, std::string_view arg) {
     output.push_back('$');
-    append_redis_number(output, static_cast<std::uint64_t>(arg.size()));
+    http_append_unsigned(output, static_cast<std::uint64_t>(arg.size()));
     output.append("\r\n", 2);
     if (!arg.empty()) {
         output.append(arg.data(), arg.size());

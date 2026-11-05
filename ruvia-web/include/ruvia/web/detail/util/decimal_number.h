@@ -11,6 +11,26 @@
 
 namespace ruvia::detail {
 
+// Converts a decimal whose grammar the caller has already validated (optional
+// '-', digits with an optional non-empty fraction, optional exponent; no '+',
+// whitespace or non-finite spellings). An all-zero significand is a signed
+// zero whatever its exponent; otherwise overflow or underflow is an error.
+template <std::floating_point t_type>
+    requires std::same_as<t_type, std::remove_cv_t<t_type>>
+[[nodiscard]] std::optional<t_type> convert_decimal_number(
+    std::string_view validated, bool nonzero_significand) noexcept {
+    if (!nonzero_significand) {
+        return validated.starts_with('-') ? -t_type{0} : t_type{0};
+    }
+    t_type value = 0;
+    const auto* end = validated.data() + validated.size();
+    const auto converted = std::from_chars(validated.data(), end, value, std::chars_format::general);
+    if (converted.ec != std::errc{} || converted.ptr != end) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 // Explicit inf/nan tokens are values; overflow or underflow of a finite
 // decimal is an error. Callers decide whether non-finite values are allowed.
 template <std::floating_point t_type = double>
@@ -67,17 +87,7 @@ template <std::floating_point t_type = double>
     if (index != text.size()) {
         return std::nullopt;
     }
-    if (!saw_non_zero) {
-        return negative ? -t_type{0} : t_type{0};
-    }
-
-    t_type value = 0;
-    const auto* end = text.data() + text.size();
-    const auto converted = std::from_chars(text.data(), end, value, std::chars_format::general);
-    if (converted.ec != std::errc{} || converted.ptr != end) {
-        return std::nullopt;
-    }
-    return value;
+    return convert_decimal_number<t_type>(text, saw_non_zero);
 }
 
 }  // namespace ruvia::detail

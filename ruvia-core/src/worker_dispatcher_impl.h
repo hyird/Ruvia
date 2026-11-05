@@ -89,18 +89,20 @@ public:
 
     [[nodiscard]] post_result_type post(move_only_function<void()> task);
     [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory);
-    void defer(move_only_function<void()> task);
+    // Queues `task` on the io_context; false, dropping it, once the context
+    // was detached. Off the worker the mutex orders the post before
+    // detach_context(), after which the context may be destroyed.
     [[nodiscard]] bool defer_if_attached(move_only_function<void()> task);
     // On this worker's own run_context() thread the callable goes straight to
-    // the io_context without the dispatcher mutex; elsewhere it takes the
-    // locked defer() path. Dispatch failure is terminal.
+    // the io_context without the dispatcher mutex or type erasure; elsewhere it
+    // takes defer_if_attached(). Dispatch failure is terminal.
     template <typename fn_type>
     void defer_or_terminate(fn_type&& fn) noexcept {
         try {
             if (running_on_worker()) {
                 asio::post(io_context_, std::forward<fn_type>(fn));
-            } else {
-                defer(move_only_function<void()>(std::forward<fn_type>(fn)));
+            } else if (!defer_if_attached(move_only_function<void()>(std::forward<fn_type>(fn)))) {
+                std::terminate();
             }
         } catch (...) {
             std::terminate();
@@ -177,7 +179,6 @@ private:
     [[nodiscard]] bool running_on_worker() const noexcept {
         return current_worker_dispatcher() == this && attached();
     }
-    [[nodiscard]] bool post_continuation(move_only_function<void()>& task);
     [[nodiscard]] idle_callbacks_type take_idle_callbacks_locked();
     static void notify_idle(idle_callbacks_type callbacks) noexcept;
     // Returns whether this call opened the (single) stopping batch.

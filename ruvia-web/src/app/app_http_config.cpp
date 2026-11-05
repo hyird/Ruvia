@@ -133,13 +133,18 @@ application& application::on_not_found(http_not_found_handler handler) {
 application& application::on_error(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change error handler while app is running",
-        [](detail::app_state& state_value) { state_value.configuration_.on_error(nullptr); });
+        [retired = http_error_handler()](detail::app_state& state_value) mutable {
+            // The cleared target retires with this lambda, after the app lock.
+            retired = state_value.configuration_.on_error(nullptr);
+        });
 }
 
 application& application::on_not_found(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change not found handler while app is running",
-        [](detail::app_state& state_value) { state_value.configuration_.on_not_found(nullptr); });
+        [retired = http_not_found_handler()](detail::app_state& state_value) mutable {
+            retired = state_value.configuration_.on_not_found(nullptr);
+        });
 }
 
 application& application::on_error(scoped_error_handler_options options) {

@@ -59,11 +59,12 @@ RUVIA_MODEL(character_class_rules,
     RUVIA_OPTIONAL_FIELD(pattern_digits, ruvia::string, RUVIA_PATTERN(R"(^[\d]$)", "invalid class")),
     RUVIA_OPTIONAL_FIELD(pattern_tail, ruvia::string, RUVIA_PATTERN("^[a-]$", "invalid class")),
     RUVIA_OPTIONAL_FIELD(pattern_escaped_dash, ruvia::string, RUVIA_PATTERN(R"(^[a\-z]$)", "invalid class")));
-inline constexpr auto budget_class_pattern = ruvia::fixed_string{"^[^aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]*$"};
+inline constexpr auto wide_class_pattern = ruvia::fixed_string{"^[^aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]*$"};
 
-RUVIA_MODEL(bounded_character_class_rules,
-    RUVIA_REQUIRED_FIELD(value, ruvia::string,
-        RUVIA_PATTERN(budget_class_pattern, "pattern match limit exceeded")));
+RUVIA_MODEL(bounded_pattern_rules,
+    RUVIA_OPTIONAL_FIELD(wide_class, ruvia::string, RUVIA_PATTERN(wide_class_pattern, "invalid class")),
+    RUVIA_OPTIONAL_FIELD(backtracking, ruvia::string,
+        RUVIA_PATTERN("^a*a*a*b$", "pattern match limit exceeded")));
 
 template <ruvia::fixed_string field_name>
 void check_character_class_rule(ruvia::testing::test_context& ruvia_ctx, std::string_view value, bool matches, std::string_view code) {
@@ -358,29 +359,35 @@ RUVIA_TEST(model_pattern_rules_preserve_class_escapes_and_literal_hyphens) {
     }
 }
 
-RUVIA_TEST(model_pattern_rules_bound_negated_class_matching_work) {
-    bounded_character_class_rules model;
-    model.set<"value">("bbbb");
+RUVIA_TEST(model_pattern_rules_bound_matching_work) {
+    // A class costs one lookup per input byte however many members it lists.
+    bounded_pattern_rules model;
+    model.set<"wide_class">(std::string(4096, 'b'));
+    validator class_result;
+    ruvia::validate_model(model, class_result);
+    RUVIA_CHECK(class_result.ok());
+    model.set<"wide_class">("ba");
+    validator class_mismatch;
+    ruvia::validate_model(model, class_mismatch);
+    RUVIA_CHECK_EQ(class_mismatch.issues().size(), std::size_t{1});
+    model.reset<"wide_class">();
+
+    model.set<"backtracking">("aaab");
     validator short_result;
     ruvia::validate_model(model, short_result);
     RUVIA_CHECK(short_result.ok());
 
-    // This input is within RUVIA_PATTERN's byte limit, but inspecting all 250
-    // repeated members per byte exceeds the shared matching work limit.
-    model.set<"value">(std::string(4096, 'b'));
+    // Cubic backtracking over a long non-matching input stops at the shared
+    // matching work limit instead of running unbounded, and fails closed.
+    model.set<"backtracking">(std::string(4096, 'a'));
     validator long_result;
     ruvia::validate_model(model, long_result);
     RUVIA_CHECK_EQ(long_result.issues().size(), std::size_t{1});
     if (long_result.issues().size() == 1) {
-        RUVIA_CHECK_EQ(long_result.issues()[0].field(), std::string_view("value"));
+        RUVIA_CHECK_EQ(long_result.issues()[0].field(), std::string_view("backtracking"));
         RUVIA_CHECK_EQ(long_result.issues()[0].code(), std::string_view("pattern"));
         RUVIA_CHECK_EQ(long_result.issues()[0].message(), std::string_view("pattern match limit exceeded"));
     }
-
-    model.set<"value">("b");
-    validator repeated_result;
-    ruvia::validate_model(model, repeated_result);
-    RUVIA_CHECK(repeated_result.ok());
 }
 
 RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {

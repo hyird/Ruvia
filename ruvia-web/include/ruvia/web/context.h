@@ -84,11 +84,8 @@ request_binding_handle<std::remove_cvref_t<t_type>> bind_validated_model(context
 [[noreturn]] void throw_invalid_json_content_type();
 [[noreturn]] void throw_invalid_json_body();
 [[noreturn]] void throw_invalid_form_content_type();
-[[noreturn]] void throw_invalid_form_body();
 [[noreturn]] void throw_invalid_query();
 [[noreturn]] void throw_invalid_param();
-[[noreturn]] void throw_invalid_header();
-[[noreturn]] void throw_invalid_cookie();
 
 class request_query_values;
 enum class static_file_selection_mode : std::uint8_t;

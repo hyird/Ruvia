@@ -52,10 +52,6 @@ private:
     // interim head; empty while more input is needed.
     [[nodiscard]] std::optional<http1_parsed_client_response_head> take_final_head(
         http_client_response_state& state_value, http1_client_response_parser& parser);
-    // Transfers parsed fields from the same response PMR without copying them,
-    // publishes status/body plan and cookies, then consumes the buffered head.
-    void publish_final_head(const http_client_request_storage& request, http_client_response_state& state_value,
-        http1_parsed_client_response_head& head);
     // Waits until the consumer drains the producer queue below the byte limit.
     [[nodiscard]] task<void> wait_for_body_space(
         http_client_response_state& state_value, const operation_timeout& timeout);
@@ -68,9 +64,9 @@ private:
     // One transport write of all `parts` (a head, or a framed upload chunk:
     // prefix, payload, suffix) under the write timeout.
     [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout);
-    // Appends at most `max_bytes` read from the transport to `target`; returns
-    // the read, which is not ok() at the peer's end of stream, and throws any
-    // other transport failure.
+    // Appends at most `max_bytes` read from the transport to `target` under the
+    // read inactivity bound; returns the read, which is not ok() at the peer's
+    // end of stream, and throws any other transport failure.
     [[nodiscard]] task<client_transport_result> read_append(
         http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout);
 

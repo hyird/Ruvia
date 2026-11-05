@@ -2,10 +2,15 @@
 
 #include <array>
 #include <cstring>
+#include <memory_resource>
+#include <optional>
+#include <span>
 #include <stdexcept>
+#include <string>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_handshake.h"
@@ -62,21 +67,16 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
     }).empty();
 }
 
-template <class fields, class name_type, class value_type>
-std::variant<websocket_client_negotiation_result_view, error_type> validate(const fields& fields_value,
-    name_type name, value_type value, std::string_view offered_subprotocols, bool has_subprotocols,
-    const websocket_client_deflate_offer& offer, bool extended) {
+std::variant<websocket_client_negotiation_result_view, error_type> validate(std::span<const http_header> fields_value,
+    std::string_view offered_subprotocols, const websocket_client_deflate_offer& offer, bool extended) {
     websocket_client_negotiation_result_view result;
     std::size_t selected = 0, extensions = 0;
     for (const auto& field : fields_value) {
-        auto n = name(field);
-        auto v = value(field);
-        const auto kind = detail::classify_request_header(n);
+        const auto kind = detail::classify_request_header(field.name());
         if (kind == detail::request_header_kind::sec_websocket_protocol) {
             ++selected;
-            result.selected_subprotocol_ = http_trim_ows(v);
-            if (selected > 1 || !has_subprotocols ||
-                !subprotocol_offered(offered_subprotocols, result.selected_subprotocol_)) {
+            result.selected_subprotocol_ = http_trim_ows(field.value());
+            if (selected > 1 || !subprotocol_offered(offered_subprotocols, result.selected_subprotocol_)) {
                 return error_type::subprotocol;
             }
         } else if (kind == detail::request_header_kind::sec_websocket_extensions) {
@@ -84,12 +84,12 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
             if (extensions > 1) {
                 return error_type::extensions;
             }
-            auto negotiation = parse_response_extension(http_trim_ows(v), offer);
+            auto negotiation = parse_response_extension(http_trim_ows(field.value()), offer);
             if (!negotiation) {
                 return error_type::extensions;
             }
             result.compression_ = *negotiation;
-        } else if (extended && detail::is_forbidden_http_binary_response_field(n)) {
+        } else if (extended && detail::is_forbidden_http_binary_response_field(field.name())) {
             // Connection-specific fields are malformed in HTTP/2 (RFC 9113
             // section 8.2.2). Sec-WebSocket-Accept is superseded by :protocol
             // and therefore not processed (RFC 8441 section 5).
@@ -98,11 +98,12 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
     }
     return result;
 }
-}  // namespace
-namespace {
+
+inline constexpr std::string_view version_header_name = "sec-websocket-version";
 inline constexpr std::string_view version_storage = "sec-websocket-version13";
 inline constexpr std::string_view protocol_header_name = "sec-websocket-protocol";
 inline constexpr std::string_view extensions_header_name = "sec-websocket-extensions";
+inline constexpr std::string_view client_window_bits_suffix = "; client_max_window_bits";
 
 [[nodiscard]] const std::string_view* static_deflate_extension_storage(
     const websocket_client_deflate_offer& deflate) noexcept {
@@ -130,9 +131,19 @@ inline constexpr std::string_view extensions_header_name = "sec-websocket-extens
     return &table[index];
 }
 
-template <class field_type>
-void validate_and_visit_config(
-    const websocket_client_negotiation_config_view& config, field_type&& field) {
+// The validated request-field plan of one client configuration.
+struct client_offer_plan final {
+    // Bytes of the comma-joined Sec-WebSocket-Protocol value; zero without subprotocols.
+    std::size_t subprotocol_bytes_{0};
+    // Name-prefixed static storage of a parameterless deflate offer.
+    const std::string_view* static_extension_{nullptr};
+    // A deflate offer carrying window parameters.
+    std::optional<detail::websocket_compression_extension> encoded_extension_;
+    // The offer lists client_max_window_bits without a value after encoded_extension_.
+    bool client_window_bits_suffix_{false};
+};
+
+[[nodiscard]] client_offer_plan make_client_offer_plan(const websocket_client_negotiation_config_view& config) {
     const auto& offer = config.deflate_.compression_;
     auto valid_window = [](std::optional<int> window_bits) {
         return !window_bits || (*window_bits >= 8 && *window_bits <= 15);
@@ -142,112 +153,113 @@ void validate_and_visit_config(
         throw std::invalid_argument("invalid WebSocket client deflate offer");
     }
     validate_websocket_deflater_config(config.deflate_.deflater_);
+    client_offer_plan plan;
     websocket_subprotocol_set seen;
-    std::size_t joined_bytes = 0;
     for (const auto protocol_view : config.subprotocols_) {
         if (!seen.append(protocol_view)) {
             throw std::invalid_argument("invalid WebSocket subprotocol");
         }
-        if (joined_bytes != 0) {
-            if (joined_bytes > max_http_header_bytes - 2) {
+        if (plan.subprotocol_bytes_ != 0) {
+            if (plan.subprotocol_bytes_ > max_http_header_bytes - 2) {
                 throw std::invalid_argument("WebSocket subprotocol field too large");
             }
-            joined_bytes += 2;
+            plan.subprotocol_bytes_ += 2;
         }
-        if (protocol_view.size() > max_http_header_bytes - joined_bytes) {
+        if (protocol_view.size() > max_http_header_bytes - plan.subprotocol_bytes_) {
             throw std::invalid_argument("WebSocket subprotocol field too large");
         }
-        joined_bytes += protocol_view.size();
+        plan.subprotocol_bytes_ += protocol_view.size();
     }
     // The generated Sec-WebSocket-* fields alone must fit the field section;
     // the handshake owner budgets the application headers it accepts.
     http_field_section_budget budget;
-    auto append = [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
+    auto add = [&budget](std::string_view name, std::size_t value_bytes) {
         if (!budget.add_field(name.size(), value_bytes)) {
             throw std::invalid_argument("WebSocket client fields too large");
         }
-        field(name, value, value_bytes);
     };
-    append("Sec-WebSocket-Version", "13", 2);
-    if (!config.subprotocols_.empty()) {
-        append("Sec-WebSocket-Protocol", {}, joined_bytes);
+    add(version_header_name, 2);
+    if (plan.subprotocol_bytes_ != 0) {
+        add(protocol_header_name, plan.subprotocol_bytes_);
     }
     if (offer.enabled_) {
-        if (const auto* const static_ext = static_deflate_extension_storage(config.deflate_)) {
-            append("Sec-WebSocket-Extensions", *static_ext,
-                static_ext->size() - extensions_header_name.size());
+        plan.static_extension_ = static_deflate_extension_storage(config.deflate_);
+        if (plan.static_extension_ != nullptr) {
+            add(extensions_header_name, plan.static_extension_->size() - extensions_header_name.size());
         } else {
-            const detail::websocket_compression_extension encoded(offer);
-            constexpr std::size_t client_window_bits_suffix_bytes = sizeof("; client_max_window_bits") - 1;
-            const std::size_t offer_bytes =
-                encoded.view().size() +
-                ((config.deflate_.offer_client_max_window_bits_ && !offer.client_max_window_bits_)
-                        ? client_window_bits_suffix_bytes
-                        : 0);
-            append("Sec-WebSocket-Extensions", encoded.view(), offer_bytes);
+            const auto& encoded = plan.encoded_extension_.emplace(offer);
+            plan.client_window_bits_suffix_ =
+                config.deflate_.offer_client_max_window_bits_ && !offer.client_max_window_bits_;
+            add(extensions_header_name,
+                encoded.view().size() + (plan.client_window_bits_suffix_ ? client_window_bits_suffix.size() : 0));
         }
     }
+    return plan;
+}
+
+[[nodiscard]] http_header make_subprotocol_field(
+    std::span<const std::string_view> subprotocols, std::size_t joined_bytes, std::pmr::memory_resource* memory) {
+    if (subprotocols.size() == 1U) {
+        return http_header(protocol_header_name, subprotocols.front(), memory);
+    }
+    static constexpr std::size_t inline_joined_capacity = 256;
+    if (joined_bytes <= inline_joined_capacity) {
+        std::array<char, inline_joined_capacity> joined_buffer;
+        std::size_t offset = 0;
+        for (const auto protocol_view : subprotocols) {
+            if (offset != 0) {
+                joined_buffer[offset++] = ',';
+                joined_buffer[offset++] = ' ';
+            }
+            std::memcpy(joined_buffer.data() + offset, protocol_view.data(), protocol_view.size());
+            offset += protocol_view.size();
+        }
+        return http_header(protocol_header_name, std::string_view(joined_buffer.data(), offset), memory);
+    }
+    std::pmr::string joined(memory);
+    joined.reserve(joined_bytes);
+    for (const auto protocol_view : subprotocols) {
+        if (!joined.empty()) {
+            joined.append(", ");
+        }
+        joined.append(protocol_view);
+    }
+    return http_header(protocol_header_name, joined, memory);
+}
+
+// The static offer (a private, storage-borrowing http_header) is built by the
+// constructor; this handles the encoded offers that need owned storage.
+[[nodiscard]] http_header make_extension_field(const client_offer_plan& plan, std::pmr::memory_resource* memory) {
+    const auto encoded = plan.encoded_extension_->view();
+    if (!plan.client_window_bits_suffix_) {
+        return http_header(extensions_header_name, encoded, memory);
+    }
+    std::array<char, 128> offer_buffer;
+    std::memcpy(offer_buffer.data(), encoded.data(), encoded.size());
+    std::memcpy(offer_buffer.data() + encoded.size(), client_window_bits_suffix.data(), client_window_bits_suffix.size());
+    return http_header(extensions_header_name,
+        std::string_view(offer_buffer.data(), encoded.size() + client_window_bits_suffix.size()), memory);
 }
 }  // namespace
 void websocket_client_negotiation::validate_configuration(websocket_client_negotiation_config_view config) {
-    validate_and_visit_config(config, [](std::string_view, std::string_view, std::size_t) {});
+    (void)make_client_offer_plan(config);
 }
 websocket_client_negotiation::websocket_client_negotiation(
     websocket_client_negotiation_config_view config, std::pmr::memory_resource* resource)
-    : resource_(resource ? resource : std::pmr::get_default_resource()),
+    : resource_(detail::http_pmr_resource_or_default(resource)),
       deflate_(config.deflate_) {
-    auto* const memory = resource_;
-    validate_and_visit_config(
-        config, [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
-            if (name == "Sec-WebSocket-Version") {
-                fields_[field_count_++] = http_header(version_storage.data(), 21, 2);
-            } else if (name == "Sec-WebSocket-Protocol") {
-                has_subprotocols_ = true;
-                if (config.subprotocols_.size() == 1U) {
-                    fields_[field_count_++] =
-                        http_header(protocol_header_name, config.subprotocols_.front(), memory);
-                    return;
-                }
-                static constexpr std::size_t inline_joined_capacity = 256;
-                if (value_bytes <= inline_joined_capacity) {
-                    std::array<char, inline_joined_capacity> joined_buffer;
-                    std::size_t offset = 0;
-                    for (const auto protocol_view : config.subprotocols_) {
-                        if (offset != 0) {
-                            joined_buffer[offset++] = ',';
-                            joined_buffer[offset++] = ' ';
-                        }
-                        std::memcpy(
-                            joined_buffer.data() + offset, protocol_view.data(), protocol_view.size());
-                        offset += protocol_view.size();
-                    }
-                    fields_[field_count_++] = http_header(protocol_header_name,
-                        std::string_view(joined_buffer.data(), offset), memory);
-                    return;
-                }
-                std::pmr::string joined(memory);
-                joined.reserve(value_bytes);
-                for (const auto protocol_view : config.subprotocols_) {
-                    if (!joined.empty()) {
-                        joined.append(", ");
-                    }
-                    joined.append(protocol_view);
-                }
-                fields_[field_count_++] = http_header(protocol_header_name, joined, memory);
-            } else if (value_bytes < value.size()) {
-                fields_[field_count_++] =
-                    http_header(value.data(), extensions_header_name.size(), value_bytes);
-            } else if (value_bytes > value.size()) {
-                static constexpr std::string_view suffix = "; client_max_window_bits";
-                std::array<char, 128> offer_buffer;
-                std::memcpy(offer_buffer.data(), value.data(), value.size());
-                std::memcpy(offer_buffer.data() + value.size(), suffix.data(), suffix.size());
-                fields_[field_count_++] = http_header(
-                    extensions_header_name, std::string_view(offer_buffer.data(), value_bytes), memory);
-            } else {
-                fields_[field_count_++] = http_header(extensions_header_name, value, memory);
-            }
-        });
+    const auto plan = make_client_offer_plan(config);
+    fields_[field_count_++] = http_header(version_storage.data(), version_header_name.size(), 2);
+    if (plan.subprotocol_bytes_ != 0) {
+        fields_[field_count_] = make_subprotocol_field(config.subprotocols_.view(), plan.subprotocol_bytes_, resource_);
+        offered_subprotocols_ = fields_[field_count_++].value();
+    }
+    if (config.deflate_.compression_.enabled_) {
+        fields_[field_count_++] = plan.static_extension_ != nullptr
+                                      ? http_header(plan.static_extension_->data(), extensions_header_name.size(),
+                                            plan.static_extension_->size() - extensions_header_name.size())
+                                      : make_extension_field(plan, resource_);
+    }
 }
 std::variant<websocket_client_negotiation_result_view, error_type>
 websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
@@ -257,11 +269,7 @@ websocket_client_negotiation::validate_fields(std::span<const http_header> field
 namespace detail {
 std::variant<websocket_client_negotiation_result_view, error_type> validate_websocket_client_selection(
     const websocket_client_negotiation& negotiation, std::span<const http_header> fields, bool extended) {
-    const auto offered =
-        negotiation.has_subprotocols_ ? negotiation.fields_[1].value() : std::string_view{};
-    return validate(
-        fields, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); },
-        offered, negotiation.has_subprotocols_, negotiation.deflate_, extended);
+    return validate(fields, negotiation.offered_subprotocols_, negotiation.deflate_, extended);
 }
 }  // namespace detail
 }  // namespace ruvia

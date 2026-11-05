@@ -11,28 +11,16 @@
 #include "ruvia/http/http_response_server.h"
 
 #include "http2/http2_sans_io_send_window.h"
+#include "http2/http2_sans_io_session_engine.h"
 #include "http2/http2_sans_io_stream_runtime.h"
 
 namespace ruvia::detail {
-namespace {
 
-void submit_reset_no_throw(
-    ruvia::http2_connection& connection, std::uint32_t stream_id, http2_error_code error) noexcept {
-    try {
-        (void)connection.submit_reset(stream_id, error);
-    } catch (...) {
-        // Failure to serialize RESET_STREAM is already rolled back by
-        // http2_connection. This writer reports the local failure through its typed
-        // result; the owning session may still retry during stream cleanup.
-    }
-}
-
-}  // namespace
-
-http2_buffered_response_writer::http2_buffered_response_writer(ruvia::http2_connection& connection,
-    http2_sans_io_stream_runtime_table& stream_runtimes, worker_signal& write_signal,
-    http2_data_output_budget& output_budget, response_file_io file_io) noexcept
-    : connection_(connection),
+http2_buffered_response_writer::http2_buffered_response_writer(http2_sans_io_session_engine& session,
+    ruvia::http2_connection& connection, http2_sans_io_stream_runtime_table& stream_runtimes,
+    worker_signal& write_signal, http2_data_output_budget& output_budget, response_file_io file_io) noexcept
+    : session_(session),
+      connection_(connection),
       stream_runtimes_(stream_runtimes),
       write_signal_(write_signal),
       output_budget_(output_budget),
@@ -93,9 +81,7 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
             co_return std::nullopt;
         }
         if (chunk.kind() == response_body_chunk::kind_type::failed) {
-            submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
-            output_budget_.release_and_reconcile(stream_id, connection_);
-            wake_writer();
+            session_.reset_stream_no_throw(stream_id, http2_error_code::internal_error);
             co_return std::nullopt;
         }
     }
@@ -110,12 +96,10 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
-        submit_reset_no_throw(connection_, stream_id,
+        session_.reset_stream_no_throw(stream_id,
             error == http2_response_head_submit_error::peer_stream_limit_reached
                 ? http2_error_code::cancel
                 : http2_error_code::internal_error);
-        output_budget_.release_and_reconcile(stream_id, connection_);
-        wake_writer();
         co_return std::nullopt;
     }
 
@@ -124,9 +108,7 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
     }
     const auto committed_status = submitted_head->body_plan().response_status();
     const auto fail_after_commit = [this, stream_id, committed_status]() noexcept -> std::optional<http_status_code> {
-        submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
-        output_budget_.release_and_reconcile(stream_id, connection_);
-        wake_writer();
+        session_.reset_stream_no_throw(stream_id, http2_error_code::internal_error);
         return committed_status;
     };
     if (!submitted_head->send_body()) {

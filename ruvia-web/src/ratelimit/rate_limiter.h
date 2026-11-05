@@ -53,6 +53,10 @@ struct rate_limit_scope final {
 // accommodates canonical peer strings carrying an IPv6 scope identifier.
 inline constexpr std::size_t rate_limit_max_key_bytes = 64;
 
+// Slots one lookup or insertion probes from a key's home slot. A key whose
+// window holds only live entries of other keys takes the overflow decision.
+inline constexpr std::size_t rate_limit_probe_window = 32;
+
 struct rate_limit_slot final {
     rate_limit_scope scope_{};
     // 0 marks an empty slot; occupied slots never hash to 0.

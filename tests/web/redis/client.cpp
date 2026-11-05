@@ -123,6 +123,36 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
     });
 }
 
+RUVIA_TEST(redis_stream_read_options_route_claim_as_blocking_and_reject_unknown_options) {
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io_context);
+    ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
+        auto redis = client.handle();
+        auto pipeline = redis.pipeline();
+        // CLAIM (Redis 8.4) takes a value; a BLOCK after it still blocks, so the
+        // command cannot join a pipeline.
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            pipeline.command("XREADGROUP", "GROUP", "g", "c", "CLAIM", "1000", "BLOCK", "0", "STREAMS", "s", ">");
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            pipeline.command("xreadgroup", "GROUP", "g", "c", "COUNT", "1", "claim", "5", "NOACK", "block", "10",
+                "STREAMS", "s", ">");
+        }));
+        pipeline.command("XREADGROUP", "GROUP", "g", "c", "CLAIM", "1000", "NOACK", "STREAMS", "s", ">");
+        pipeline.command("XREAD", "COUNT", "1", "STREAMS", "s", "0");
+        // An option outside the documented grammar is rejected rather than
+        // guessed non-blocking; CLAIM and NOACK belong to XREADGROUP only.
+        for (auto args : {std::initializer_list<std::string_view>{"XREADGROUP", "GROUP", "g", "c", "LATER", "STREAMS", "s", ">"},
+                 {"XREAD", "CLAIM", "1000", "BLOCK", "0", "STREAMS", "s", "0"},
+                 {"XREAD", "NOACK", "STREAMS", "s", "0"}}) {
+            const std::span<const std::string_view> command(args.begin(), args.size());
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.command(command); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { pipeline.command(command); }));
+        }
+        co_return;
+    });
+}
+
 RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
@@ -773,6 +803,35 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
             RUVIA_CHECK_EQ(score_seed.entries()[0].value(), std::string_view(member_name));
             RUVIA_CHECK_EQ(score_seed.entries()[0].score(), 1.5);
         }
+    });
+    peer.join();
+}
+
+RUVIA_TEST(redis_string_array_replies_reject_nil_elements) {
+    // LRANGE positions and set members are never nil; dropping one would
+    // silently shorten or shift the result.
+    scripted_redis_peer peer({"*3\r\n$1\r\na\r\n$-1\r\n$1\r\nc\r\n", "*1\r\n$-1\r\n",
+        "*2\r\n$1\r\n0\r\n*1\r\n$-1\r\n", "$1\r\nv\r\n"});
+    auto& io = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io);
+    ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
+    ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        auto redis = connected.handle();
+        const auto rejects_protocol = [&](auto&& operation) -> ruvia::task<void> {
+            bool rejected = false;
+            try {
+                (void)co_await std::move(operation);
+            } catch (const ruvia::redis_error& error) {
+                rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
+            }
+            RUVIA_CHECK(rejected);
+        };
+        co_await rejects_protocol(redis.lrange("list", 0, -1));
+        co_await rejects_protocol(redis.smembers("set"));
+        co_await rejects_protocol(redis.scan());
+        // The complete reply was consumed, so the connection stays in step.
+        const auto value = co_await redis.get("key");
+        RUVIA_CHECK(value && *value == "v");
     });
     peer.join();
 }

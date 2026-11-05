@@ -4,7 +4,7 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/multipart_parser.h"
 
 #include "parser/mime_field_grammar.h"
@@ -152,41 +152,30 @@ private:
             multipart_parse_error::invalid_content_disposition);
     }
 
-    const auto parameters = disposition->find(';');
-    if (parameters == std::string_view::npos) {
-        return http_multipart_part_header_parse_result::make_failure(
-            multipart_parse_error::missing_field_name);
-    }
-
+    // name and filename keep their wire spelling (token or validated
+    // quoted-string); the parser decodes quoted-pairs only when it must own them.
     std::optional<std::string_view> name;
     std::optional<std::string_view> filename;
     http_mime_parameter_names parameter_names;
-    auto remaining = disposition->substr(parameters + 1);
-    std::size_t start = 0;
-    while (start <= remaining.size()) {
-        const auto end = start + http_find_unquoted_delimiter(remaining.substr(start), 0, ';');
-        const auto parameter = http_trim_ows(remaining.substr(start, end - start));
+    const bool valid = http_all_parameters(*disposition, [&](std::string_view parameter) noexcept {
         std::string_view key;
         std::string_view value;
         if (!http_parse_mime_parameter(parameter, key, value, false) || !parameter_names.record(key)) {
-            return http_multipart_part_header_parse_result::make_failure(
-                multipart_parse_error::invalid_content_disposition);
+            return false;
         }
         // RFC 7578 section 4.2 forbids senders to use filename*; recipients get no
         // reject rule, so it falls through with the other unknown parameters.
-        const auto decoded = http_trim_quoted_field_value(value);
         if (http_ascii_equals_ignore_case(key, "name")) {
-            name = decoded;
+            name = value;
         } else if (http_ascii_equals_ignore_case(key, "filename")) {
-            filename = decoded;
+            filename = value;
         }
-
-        if (end >= remaining.size()) {
-            break;
-        }
-        start = end + 1;
+        return true;
+    });
+    if (!valid) {
+        return http_multipart_part_header_parse_result::make_failure(
+            multipart_parse_error::invalid_content_disposition);
     }
-
     if (!name) {
         return http_multipart_part_header_parse_result::make_failure(
             multipart_parse_error::missing_field_name);

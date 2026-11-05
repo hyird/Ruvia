@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -14,6 +15,7 @@
 #include "ruvia/core/task.h"
 
 #include "http/tls_tunnel_output.h"
+#include "server/connection_scanner.h"
 #include "server/inbound_transport_error.h"
 #include "tls/tls_stream_end.h"
 
@@ -22,9 +24,15 @@ namespace ruvia::detail {
 template <typename stream_type>
 class http_socket_tunnel_transport final {
 public:
-    explicit http_socket_tunnel_transport(stream_type& stream, tls_tunnel_output* tls_output)
+    // `write_scanner_entry` is the server connection's scanner entry: every
+    // write runs its write stall clock, so write_timeout closes a tunnel
+    // whose peer stopped reading while the reader stays long_lived. Null for
+    // an owner that bounds its writes itself (the client's operation timeout).
+    http_socket_tunnel_transport(
+        stream_type& stream, tls_tunnel_output* tls_output, connection_scanner::entry* write_scanner_entry)
         : stream_(stream),
-          tls_output_(tls_output) {
+          tls_output_(tls_output),
+          write_scanner_entry_(write_scanner_entry) {
         if constexpr (requires { stream_.next_layer(); }) {
             if (tls_output_ == nullptr) {
                 throw std::logic_error("TLS tunnel requires its ciphertext writer");
@@ -59,10 +67,19 @@ public:
         if (completed_bytes != nullptr) {
             *completed_bytes = 0;
         }
+        std::optional<connection_scanner::entry::write_scope> write_stall_clock;
+        if (write_scanner_entry_ != nullptr) {
+            write_stall_clock.emplace(*write_scanner_entry_);
+        }
         if constexpr (!requires { stream_.next_layer(); }) {
             if (!bytes_value.empty()) {
                 const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
-                    asio::async_write(stream_, asio::buffer(bytes_value), std::move(handler));
+                    if (write_scanner_entry_ != nullptr) {
+                        asio::async_write(stream_, asio::buffer(bytes_value),
+                            connection_write_progress(*write_scanner_entry_), std::move(handler));
+                    } else {
+                        asio::async_write(stream_, asio::buffer(bytes_value), std::move(handler));
+                    }
                 });
                 if (completed_bytes != nullptr) {
                     *completed_bytes = result_value.result();
@@ -72,6 +89,8 @@ public:
                 }
             }
         } else {
+            // The ciphertext writer drains each chunk before the next is
+            // encrypted, so a flushed chunk is the unit of progress.
             while (!bytes_value.empty()) {
                 const auto chunk = bytes_value.substr(0, 4096);
                 const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
@@ -85,6 +104,9 @@ public:
                 }
                 if (const auto error = co_await tls_output_->flush()) {
                     co_return error;
+                }
+                if (write_scanner_entry_ != nullptr) {
+                    write_scanner_entry_->note_write_progress();
                 }
                 bytes_value.remove_prefix(chunk.size());
             }
@@ -113,6 +135,7 @@ public:
 private:
     stream_type& stream_;
     tls_tunnel_output* tls_output_;
+    connection_scanner::entry* write_scanner_entry_;
 };
 
 }  // namespace ruvia::detail

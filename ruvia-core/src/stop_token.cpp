@@ -34,19 +34,17 @@ void stop_state::request_stop() noexcept {
         }
         node->next_ = nullptr;
         node->linked_ = false;
-        bool destroyed = false;
-        node->destroyed_ = &destroyed;
         running_ = node;
         lock.unlock();
+        // The callback may destroy the node, and an unlink waiting on another
+        // thread frees it once running_ moves on: the node is not touched again.
         node->callback_->invoke();
-        // A node the callback destroyed is never touched again. Otherwise the
-        // completion store is the last access: a destructor waiting on another
-        // thread may free the node as soon as it observes it.
-        if (!destroyed) {
-            node->completed_.store(true, std::memory_order_release);
-        }
         lock.lock();
         running_ = nullptr;
+        if (std::exchange(run_awaited_, false)) {
+            run_epoch_.fetch_add(1, std::memory_order_relaxed);
+            run_epoch_.notify_all();
+        }
     }
 }
 
@@ -82,15 +80,18 @@ void stop_state::unlink(stop_callback_node& node) noexcept {
     if (running_ != &node) {
         return;
     }
-    // Destroyed from inside its own run: the requester must not touch it again.
+    // Destroyed from inside its own run: waiting would deadlock, and the
+    // requester never touches the node after its run.
     if (requester_ == std::this_thread::get_id()) {
-        *node.destroyed_ = true;
         return;
     }
-    lock.unlock();
-    // Callbacks are short and post their real work, so the wait is brief.
-    while (!node.completed_.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
+    // The mutex orders the callback's effects before the observed running_ change.
+    while (running_ == &node) {
+        run_awaited_ = true;
+        const auto epoch = run_epoch_.load(std::memory_order_relaxed);
+        lock.unlock();
+        run_epoch_.wait(epoch, std::memory_order_relaxed);
+        lock.lock();
     }
 }
 

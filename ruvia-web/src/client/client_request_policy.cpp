@@ -7,7 +7,6 @@
 #include <limits>
 #include <optional>
 #include <ranges>
-#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -16,6 +15,7 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_set_cookie.h"
 
 #include "client/client_host.h"
@@ -141,40 +141,18 @@ client_request_policy::client_request_policy(const http_client_config_storage& c
     : config_(config),
       resource_(resource),
       cookies_(resource) {
+    // Storage validated, deduplicated and bounded the configured cookies.
     cookies_.reserve(config.cookies_.size());
     for (const auto& cookie : config.cookies_) {
-        add_cookie(cookie.name(), cookie.value());
+        cookies_.emplace_back(cookie.name(), cookie.value(), resource_);
+        cookie_bytes_ += storage_bytes(cookie.name(), cookie.value(), "/", {});
     }
 }
 
-void client_request_policy::add_cookie(std::string_view name, std::string_view value) {
-    if (!is_valid_http_header_name(name) || !::ruvia::is_valid_cookie_value(value)) {
-        throw std::invalid_argument("invalid HTTP client cookie");
-    }
-    const auto match = std::ranges::find_if(cookies_, [name](const stored_cookie& cookie) {
-        return cookie.configured_ && cookie.name_ == name && cookie.path_ == "/" &&
-               cookie.domain_.empty();
-    });
-    const auto replacement_bytes = storage_bytes(name, value, "/", {});
-    const auto replaced_bytes =
-        match == cookies_.end()
-            ? 0
-            : storage_bytes(match->name_, match->value_, match->path_, match->domain_);
-    if (!has_capacity(replaced_bytes, replacement_bytes, match == cookies_.end())) {
-        throw std::length_error("HTTP client cookie jar capacity exceeded");
-    }
-    if (match == cookies_.end()) {
-        reserve_cookie_slot();
-        cookies_.emplace_back(name, value, resource_);
-    } else if (match->value_ != value) {
-        if (value.size() <= match->value_.capacity()) {
-            match->value_.assign(value);
-        } else {
-            std::pmr::string replacement_value(value, resource_);
-            match->value_.swap(replacement_value);
-        }
-    }
-    cookie_bytes_ = cookie_bytes_ - replaced_bytes + replacement_bytes;
+bool client_request_policy::addresses_origin(const http_client_request_storage& request) const noexcept {
+    return !request.is_tunnel() ||
+           http_authorities_equal(borrowed_text(request.tunnel_authority()),
+               borrowed_text(std::string_view(config_.authority_)), config_.scheme_ == http_scheme::https ? 443 : 80);
 }
 
 std::size_t client_request_policy::storage_bytes(std::string_view name, std::string_view value,
@@ -303,8 +281,10 @@ http_client_request_view client_request_policy::prepare_request(
 
     // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
     // out; caller-written Cookie fields above remain the caller's choice.
-    // Empty jars have no expiry or path constraints to inspect.
-    if (!cookies_.empty() && request.method() != "TRACE") {
+    // Stored cookies belong to the fixed origin (RFC 6265 §5.4): a tunnel to
+    // another authority carries none. Empty jars have no expiry or path
+    // constraints to inspect.
+    if (!cookies_.empty() && request.method() != "TRACE" && addresses_origin(request)) {
         if (next_expiry_.has_value()) {
             const auto now = std::chrono::system_clock::now();
             if (now >= *next_expiry_) {

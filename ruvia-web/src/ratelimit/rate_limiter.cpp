@@ -4,9 +4,9 @@
 #include <limits>
 #include <span>
 
+#include "ruvia/core/detail/fnv1a.h"
 #include "ruvia/core/memory/pmr_object.h"
 
-#include "util/fnv1a.h"
 #include "util/steady_clock.h"
 
 namespace ruvia::detail {
@@ -123,7 +123,12 @@ std::optional<rate_limit_rejection> rate_limiter::allow(
     const auto start = static_cast<std::size_t>(hash) & mask;
     rate_limit_slot* reclaimable = nullptr;
 
-    for (std::size_t probe_value = 0; probe_value < slots_.size(); ++probe_value) {
+    // Slots never return to empty, so a key is installed and later found
+    // within the same bounded window from its home slot. A saturated window
+    // costs a fixed probe count instead of a scan of the whole table, like a
+    // pingora-limits estimator's fixed per-operation cost.
+    const auto probe_window = std::min(slots_.size(), rate_limit_probe_window);
+    for (std::size_t probe_value = 0; probe_value < probe_window; ++probe_value) {
         auto& slot = slots_[(start + probe_value) & mask];
         if (slot.key_hash_ == empty_hash) {
             auto& target = reclaimable == nullptr ? slot : *reclaimable;

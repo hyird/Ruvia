@@ -2,28 +2,47 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 namespace ruvia::detail::model {
 
+// Kinds a single pattern atom or class member decodes to; compilation folds
+// each into the byte set it matches.
 enum class pattern_atom_kind : unsigned char { literal,
-    any,
     digit,
     word,
-    space,
-    class_value };
+    space };
 
 enum class pattern_quantifier : unsigned char { one,
     zero_or_one,
     zero_or_more,
     one_or_more };
 
+// The bytes one compiled atom matches, as a 256-bit set.
+class pattern_byte_set final {
+public:
+    constexpr void insert(unsigned char byte) noexcept {
+        words_[byte >> 6] |= std::uint64_t{1} << (byte & 63U);
+    }
+
+    constexpr void invert() noexcept {
+        for (auto& word : words_) {
+            word = ~word;
+        }
+    }
+
+    [[nodiscard]] constexpr bool contains(char value) const noexcept {
+        const auto byte = static_cast<unsigned char>(value);
+        return ((words_[byte >> 6] >> (byte & 63U)) & 1U) != 0;
+    }
+
+private:
+    std::array<std::uint64_t, 4> words_{};
+};
+
 struct pattern_atom final {
-    pattern_atom_kind kind_{pattern_atom_kind::literal};
+    pattern_byte_set bytes_{};
     pattern_quantifier quantifier_{pattern_quantifier::one};
-    char literal_{'\0'};
-    std::size_t class_begin_{0};
-    std::size_t class_end_{0};
-    bool negate_class_{false};
 };
 
 template <std::size_t capacity>

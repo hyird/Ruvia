@@ -12,15 +12,10 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 
-#include <asio/error.hpp>
-
-#include "ruvia/core/failure_report.h"
 #include "ruvia/web/detail/db/db_result_access.h"
-#include "ruvia/web/detail/db/db_utils.h"
 
 #include "db/db_pipeline_impl.h"
 #include "db/db_pool.h"
@@ -138,15 +133,6 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
     return status != 0;
 }
 
-// A socket error ends the connection. A cancelled wait does not: it expired,
-// or it was woken to be armed again.
-void check_postgresql_wait(const db_socket_wait_result& result) {
-    if (result.error_ && result.error_ != asio::error::operation_aborted) {
-        throw db_error(db_error::code_type::io_error, db_driver::postgresql,
-            std::string("PostgreSQL socket wait failed: ").append(error_code_text(result.error_)), result.error_.value());
-    }
-}
-
 // After a readiness wake: reads what arrived and, while output is pending,
 // sends what libpq still holds. PQconsumeInput() never blocks, so it is
 // harmless after a write-readiness wake, and draining input keeps a server
@@ -178,7 +164,7 @@ struct postgresql_socket_wait final {
         if (wait_result.expired_) {
             throw pool_.timed_out();
         }
-        check_postgresql_wait(wait_result);
+        check_db_socket_wait(wait_result, db_driver::postgresql, postgresql_driver::name);
     }
 };
 
@@ -210,18 +196,6 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
     }
 }
 
-void validate_postgresql_statement(std::string_view sql, std::span<const db_value> params) {
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
-    if (sql.find('\0') != std::string_view::npos) {
-        throw std::invalid_argument("SQL must not contain NUL bytes");
-    }
-    if (!std::in_range<int>(params.size())) {
-        throw std::invalid_argument("too many PostgreSQL query parameters");
-    }
-}
-
 // A stream runs as the unnamed statement: libpq selects single-row mode only
 // for the command at the head of its queue, which a Parse sent ahead of it
 // would occupy. `sql` is NUL-terminated (db_pool's hook contract), so it
@@ -233,7 +207,6 @@ void validate_postgresql_statement(std::string_view sql, std::span<const db_valu
 // A non-pipeline stream followed by PQenterPipelineMode leaves that mode set.
 [[nodiscard]] bool send_stream_query(
     postgresql_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params) {
-    validate_postgresql_statement(sql, params);
     auto* connection = pool.slot(index).connection_;
     const postgresql_params encoded(params, pool.resource());
     if (PQenterPipelineMode(connection) == 0) {
@@ -391,9 +364,7 @@ void validate_postgresql_statement(std::string_view sql, std::span<const db_valu
             materialize_borrowed_result(*output, *result_value, resource);
             db_result_access::own_raw_result(*output, result_value.release(), &free_postgresql_result);
         } catch (...) {
-            db_result_access::rows(*output).clear();
-            db_result_access::fields(*output).clear();
-            db_result_access::column_names(*output).clear();
+            db_result_access::clear(*output);
             results.output_failure_ = std::current_exception();
         }
     }
@@ -464,7 +435,6 @@ template <typename result_type>
 task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
-    validate_postgresql_statement(sql, params);
     const postgresql_params encoded(params, pool.resource());
     auto* connection = pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
@@ -509,16 +479,10 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
     }
 }
 
-[[nodiscard]] operation_timeout postgresql_stream_deadline(
-    const postgresql_pool& pool, const operation_options& options) {
-    return operation_timeout(options.timeout_).constrained_by(pool.config().query_timeout_);
-}
-
 }  // namespace
 
 postgresql_pipeline_io::statement_type postgresql_pipeline_io::prepare(
     pool_type& pool, std::string_view sql, std::span<const db_value> params) {
-    validate_postgresql_statement(sql, params);
     return {sql, params, pool.resource()};
 }
 
@@ -603,10 +567,6 @@ bool postgresql_pipeline_io::advance(state_type& state, std::size_t index, membe
 db_socket_readiness postgresql_pipeline_io::wanted(pool_type& pool, std::size_t slot) noexcept {
     return pool.slot(slot).session_.pipeline_.io_.flush_pending_ ? db_socket_readiness::read | db_socket_readiness::write
                                                                  : db_socket_readiness::read;
-}
-
-void postgresql_pipeline_io::check_wait(const db_socket_wait_result& result) {
-    check_postgresql_wait(result);
 }
 
 void postgresql_pipeline_io::exchange(state_type& state, std::size_t index, db_socket_readiness) {
@@ -712,20 +672,6 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
     return run_cached_statement<db_exec_result>(pool, index, sql, params, resource, deadline_value);
 }
 
-task<db_rows> postgresql_driver::query_pipelined(pool_type& pool, std::pmr::string sql,
-    std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-    request_io_metrics* io_metrics) {
-    return run_pipelined<postgresql_pipeline_io, db_rows>(
-        pool, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
-}
-
-task<db_exec_result> postgresql_driver::execute_pipelined(pool_type& pool, std::pmr::string sql,
-    std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-    request_io_metrics* io_metrics) {
-    return run_pipelined<postgresql_pipeline_io, db_exec_result>(
-        pool, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
-}
-
 // Single-row mode reports whether the statement produced rows only with its
 // first result, so the stream starts optimistically and read_stream_row()
 // refuses a statement without a row set.
@@ -737,73 +683,45 @@ task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size
     co_return db_stream_start(resource);
 }
 
-task<std::optional<db_row>> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*,
+task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*&,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-    std::pmr::memory_resource* resource, const operation_options& options) {
-    if (index >= pool.config().pool_size_per_worker_) {
-        co_return std::nullopt;
-    }
+    std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     auto* connection = pool.slot(index).connection_;
-    auto cancellation = pool.cancel_on_stop(index, options.stop_token_);
-    bool slot_released = false;
-    try {
-        pool.throw_if_aborted(index);
-        const auto deadline_value = postgresql_stream_deadline(pool, options);
-        co_await wait_until_result_ready(pool, index, deadline_value);
-        postgresql_result_owner result_value(PQgetResult(connection));
-        if (result_value.get() == nullptr) {
-            throw postgresql_protocol_failure("PostgreSQL stream ended without its result");
-        }
-        const auto status = PQresultStatus(result_value.get());
-        if (status == PGRES_SINGLE_TUPLE) {
-            co_return materialize_stream_single_row(*result_value, fields, column_names, resource);
-        }
-        if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK || status == PGRES_EMPTY_QUERY) {
-            result_value.reset();
-            co_await wait_until_result_ready(pool, index, deadline_value);
-            result_value.reset(PQgetResult(connection));
-            if (result_value.get() != nullptr) {
-                throw postgresql_protocol_failure("PostgreSQL stream command boundary is missing");
-            }
-            co_await wait_until_result_ready(pool, index, deadline_value);
-            result_value.reset(PQgetResult(connection));
-            if (result_value.get() == nullptr || PQresultStatus(result_value.get()) != PGRES_PIPELINE_SYNC) {
-                throw postgresql_protocol_failure("PostgreSQL stream ended without its Sync");
-            }
-            if (PQexitPipelineMode(connection) == 0) {
-                throw postgresql_error(*connection, "PQexitPipelineMode", db_error::code_type::protocol_error);
-            }
-            slot_released = true;
-            cancellation.finish();
-            pool.release_slot(index);
-            if (status == PGRES_COMMAND_OK || status == PGRES_EMPTY_QUERY) {
-                throw std::invalid_argument("query_stream() requires row-producing SQL");
-            }
-            co_return std::nullopt;
-        }
+    co_await wait_until_result_ready(pool, index, deadline_value);
+    postgresql_result_owner result_value(PQgetResult(connection));
+    if (result_value.get() == nullptr) {
+        throw postgresql_protocol_failure("PostgreSQL stream ended without its result");
+    }
+    const auto status = PQresultStatus(result_value.get());
+    if (status == PGRES_SINGLE_TUPLE) {
+        co_return materialize_stream_single_row(*result_value, fields, column_names, resource);
+    }
+    if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK && status != PGRES_EMPTY_QUERY) {
         throw postgresql_error(
             *connection, "PostgreSQL stream", db_error::code_type::statement_failed, result_value.get());
-    } catch (...) {
-        if (!slot_released) {
-            pool.close_slot(index);
-            cancellation.finish();
-            pool.release_slot(index);
-        }
-        throw;
     }
+    result_value.reset();
+    co_await wait_until_result_ready(pool, index, deadline_value);
+    result_value.reset(PQgetResult(connection));
+    if (result_value.get() != nullptr) {
+        throw postgresql_protocol_failure("PostgreSQL stream command boundary is missing");
+    }
+    co_await wait_until_result_ready(pool, index, deadline_value);
+    result_value.reset(PQgetResult(connection));
+    if (result_value.get() == nullptr || PQresultStatus(result_value.get()) != PGRES_PIPELINE_SYNC) {
+        throw postgresql_protocol_failure("PostgreSQL stream ended without its Sync");
+    }
+    if (PQexitPipelineMode(connection) == 0) {
+        throw postgresql_error(*connection, "PQexitPipelineMode", db_error::code_type::protocol_error);
+    }
+    co_return status == PGRES_TUPLES_OK ? db_stream_end::exhausted : db_stream_end::no_row_set;
 }
 
-task<void> postgresql_driver::close_stream(
-    pool_type& pool, std::size_t index, void*, std::pmr::memory_resource*, const operation_options& options) {
-    auto cancellation = pool.cancel_on_stop(index, options.stop_token_);
-    // Abandoning a libpq single-row result still requires draining the whole
-    // command. Closing is bounded and keeps the worker non-blocking.
+// Abandoning a libpq single-row result still requires draining the whole
+// command. Closing the connection instead is bounded and keeps the worker
+// non-blocking.
+task<void> postgresql_driver::close_stream(pool_type& pool, std::size_t index, void*&, const operation_timeout&) {
     pool.close_slot(index);
-    cancellation.finish();
-    pool.release_slot(index);
-    if (options.stop_token_.stop_requested()) {
-        throw db_error(db_error::code_type::cancelled, db_driver::postgresql, "database operation cancelled");
-    }
     co_return;
 }
 

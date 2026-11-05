@@ -16,6 +16,20 @@
 namespace ruvia::detail {
 namespace {
 
+[[noreturn]] void throw_db_cache_timeout() {
+    throw db_error(db_error::code_type::timeout, std::nullopt, "database query cache operation timed out");
+}
+
+// The options of one Redis operation under the deadline it shares with the
+// query it caches.
+[[nodiscard]] operation_options db_cache_options(const operation_options& base, const operation_timeout& timeout) {
+    auto result_value = db_remaining_options(base, timeout);
+    if (result_value.timeout_.has_value() && result_value.timeout_->count() == 0) {
+        throw_db_cache_timeout();
+    }
+    return result_value;
+}
+
 bool is_fatal_redis_cache_error(const redis_error& error) noexcept {
     return error.code() == redis_error::code_type::cancelled ||
            error.code() == redis_error::code_type::closing;
@@ -27,7 +41,7 @@ void rethrow_or_timeout_redis_cache_error(
         throw;
     }
     if (deadline.expired()) {
-        throw_db_query_timeout();
+        throw_db_cache_timeout();
     }
     if (!ignore_errors) {
         throw;
@@ -43,7 +57,7 @@ task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, c
         rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
     }
     if (deadline_value.expired()) {
-        throw_db_query_timeout();
+        throw_db_cache_timeout();
     }
 }
 
@@ -60,7 +74,7 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
                 inline_views[i] = keys[i];
             }
             // DEL owns its arguments before returning its cold operation.
-            auto deletion = redis.with_options(db_required_options(options, deadline_value))
+            auto deletion = redis.with_options(db_cache_options(options, deadline_value))
                                 .del(std::span<const std::string_view>(inline_views.data(), keys.size()));
             return finish_delete_key_batch(std::move(deletion), deadline_value);
         }
@@ -69,7 +83,7 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
         for (const auto& key : keys) {
             heap_views.emplace_back(key);
         }
-        auto deletion = redis.with_options(db_required_options(options, deadline_value)).del(heap_views);
+        auto deletion = redis.with_options(db_cache_options(options, deadline_value)).del(heap_views);
         return finish_delete_key_batch(std::move(deletion), deadline_value);
     } catch (const redis_error& error) {
         rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
@@ -101,13 +115,13 @@ task<void> clear_keys(
     do {
         std::optional<redis_scan_result> result;
         try {
-            result.emplace(co_await redis.with_options(db_required_options(options, deadline_value))
+            result.emplace(co_await redis.with_options(db_cache_options(options, deadline_value))
                     .scan({.cursor_ = cursor, .match_ = std::string_view(pattern), .count_ = 256}));
         } catch (const redis_error& error) {
             rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
         }
         if (deadline_value.expired()) {
-            throw_db_query_timeout();
+            throw_db_cache_timeout();
         }
         cursor = result->next_cursor();
         auto deletion = delete_key_batch(redis, result->values(), resource, options, deadline_value);
@@ -120,12 +134,12 @@ task<void> clear_keys(
 }  // namespace
 
 db_query_cache_state::db_query_cache_state(const redis_handle& redis, const db_cache_config_storage& config,
-    std::string_view identity, std::pmr::memory_resource* resource)
+    std::pmr::string prefix, std::pmr::memory_resource* resource)
     : resource_(resource),
       duration_(config.duration_),
       always_enabled_(config.always_enabled_),
       ignore_errors_(config.ignore_errors_),
-      prefix_(db_cache_prefix(identity, resource)),
+      prefix_(std::move(prefix)),
       redis_(redis.with_options({})) {}
 
 db_query_cache_state::~db_query_cache_state() = default;
@@ -166,7 +180,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
     const auto started = std::chrono::steady_clock::now();
     std::optional<std::pmr::string> bytes_value;
     try {
-        bytes_value = co_await redis_.with_options(db_required_options(options, deadline)).get(key);
+        bytes_value = co_await redis_.with_options(db_cache_options(options, deadline)).get(key);
     } catch (const redis_error& error) {
         rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
     }
@@ -176,7 +190,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
             rows.emplace(decode_db_cache_rows(std::move(*bytes_value), resource_));
         } catch (const db_conversion_error&) {
             if (deadline.expired()) {
-                throw_db_query_timeout();
+                throw_db_cache_timeout();
             }
             if (!ignore_errors_) {
                 throw;
@@ -184,7 +198,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
         }
         if (rows.has_value()) {
             if (deadline.expired()) {
-                throw_db_query_timeout();
+                throw_db_cache_timeout();
             }
             co_return std::move(*rows);
         }
@@ -193,11 +207,11 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
         bytes_value.reset();
     }
     if (deadline.expired()) {
-        throw_db_query_timeout();
+        throw_db_cache_timeout();
     }
     auto rows = co_await std::move(database)(db_remaining_options(options, deadline));
     if (deadline.expired()) {
-        throw_db_query_timeout();
+        throw_db_cache_timeout();
     }
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
@@ -207,7 +221,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
             // not retain the key or serialized rows while it waits on IO.
             auto write = [&] {
                 const auto encoded_bytes = encode_db_cache_rows(rows, resource_);
-                return redis_.with_options(db_required_options(options, deadline))
+                return redis_.with_options(db_cache_options(options, deadline))
                     .set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)});
             }();
             std::pmr::string(key.get_allocator().resource()).swap(key);
@@ -216,7 +230,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
             rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
         }
         if (deadline.expired()) {
-            throw_db_query_timeout();
+            throw_db_cache_timeout();
         }
     }
     co_return rows;

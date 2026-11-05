@@ -6,7 +6,7 @@
 
 #include "db/db_config_validation.h"
 #include "db/db_pool.h"
-#include "db/db_pool_utils.h"
+#include "db/db_pool_dispatch.h"
 #include "db/db_prepared_statement.h"
 #include "db/db_query_execution.h"
 #include "integration/request_io_metrics.h"
@@ -211,11 +211,7 @@ task<void> db_handle::notify(std::string_view channel, std::string_view payload)
     if (query_driver() != db_driver::postgresql) {
         throw std::invalid_argument("database notify requires PostgreSQL");
     }
-    if (channel.empty()) {
-        throw std::invalid_argument("database notify channel must not be empty");
-    }
-    const std::array<db_value, 2> params{db_value(channel), db_value(payload)};
-    auto statement = prepare_db_statement("SELECT \"pg_notify\"($1::text, $2::text)", params, resource_);
+    auto statement = prepare_db_notify(channel, payload, resource_);
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(scope,
         discard_rows_task(detail::visit_db_pool(client_, [&](auto& client) {

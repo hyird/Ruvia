@@ -5,7 +5,7 @@
 #include <span>
 #include <stdexcept>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_base64.h"
 
 #include "websocket/http_websocket_accept_key.h"

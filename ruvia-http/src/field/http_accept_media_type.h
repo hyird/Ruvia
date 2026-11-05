@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 
 #include "field/http_media_type.h"
 #include "field/http_quality_value.h"

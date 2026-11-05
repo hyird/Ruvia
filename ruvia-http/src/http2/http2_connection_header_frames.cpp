@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <string_view>
 
@@ -74,10 +75,11 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
     // RFC 9113 §6.2 priority fields are advisory metadata. Queue them ahead of
     // every event this frame produces. A throwing frame stays retryable, and a
     // frame rejected with a connection error before it queued anything else
-    // reports nothing.
+    // reports nothing. The record names no stream, so retracting it leaves every
+    // stream's pending-event count intact.
     reserve_event_slots(1);
     const auto priority_event = events_.size();
-    events_.push_back(http2_event(priority));
+    publish_event(http2_event(priority));
     bool accepted = false;
     try {
         accepted = process_headers_fragment(header_value, fragment);
@@ -99,7 +101,7 @@ bool http2_connection::process_headers_fragment(const http2_frame_header& header
     bool created_peer_stream = false;
     const auto previous_last_stream_id = last_stream_id_;
     std::optional<discarded_header_action_type> discarded_action;
-    if (auto* existing = find_stream(header_value.stream_id_); existing != nullptr) {
+    if (auto* existing = streams_.find(header_value.stream_id_); existing != nullptr) {
         if (existing->is_aborted()) {
             if (existing->local_send().aborted()->source() == http2_stream_close_source::peer) {
                 // Frames sent after the peer's own RST are not an in-flight race: the
@@ -125,16 +127,10 @@ bool http2_connection::process_headers_fragment(const http2_frame_header& header
             return process_trailer_headers(*existing, header_value, fragment);
         } else if (role_ == http2_role::client) {
             if (existing->push_reservation() == http2_push_reservation::remote) {
-                std::size_t active_push = 0;
-                if (streams_.size() >= http2_local_settings::max_concurrent_streams) {
-                    streams_.for_each([&](const auto& item) {
-                        if ((item.id() & 1U) == 0 && !http2_stream_is_closed(item) &&
-                            item.push_reservation() == http2_push_reservation::none) {
-                            ++active_push;
-                        }
-                    });
-                }
-                if (active_push + 1 > http2_local_settings::max_concurrent_streams) {
+                const bool push_slot_available =
+                    streams_.size() < http2_local_settings::max_concurrent_streams ||
+                    open_streams_initiated_by(http2_role::server) < http2_local_settings::max_concurrent_streams;
+                if (!push_slot_available) {
                     discarded_action = discarded_header_action_type::refuse_stream;
                 } else {
                     stream = existing;
@@ -205,22 +201,14 @@ bool http2_connection::process_headers_fragment(const http2_frame_header& header
             bool concurrency_exceeded = false;
             if (streams_.size() + priorities_.size() >=
                 http2_local_settings::max_concurrent_streams) {
-                std::size_t prioritized_idle = 0, active = 0;
+                std::size_t prioritized_idle = 0;
                 for (const auto& [id, priority] : priorities_) {
                     if (id > header_value.stream_id_ && is_idle_stream_id(id)) {
                         ++prioritized_idle;
                     }
                 }
-                streams_.for_each([&](const auto& item) {
-                    // The advertised limit bounds streams the peer initiated (RFC 9113
-                    // 5.1.2); active server pushes count against the client's limit.
-                    if ((item.id() & 1U) != 0 && !http2_stream_is_closed(item) &&
-                        item.push_reservation() == http2_push_reservation::none) {
-                        ++active;
-                    }
-                });
-                concurrency_exceeded =
-                    prioritized_idle + active + 1 > http2_local_settings::max_concurrent_streams;
+                concurrency_exceeded = prioritized_idle + open_streams_initiated_by(http2_role::client) + 1 >
+                                       http2_local_settings::max_concurrent_streams;
             }
             new_peer_stream = true;
             if (const auto* round_trip = local_connection_state_.graceful_drain();
@@ -280,11 +268,11 @@ bool http2_connection::process_headers_fragment(const http2_frame_header& header
 
     bool recorded_head_end_stream = false;
     if ((header_value.flags_ & http2_flag_end_stream) != 0) {
+        // Only a stream awaiting its initial head reaches this point: an
+        // end-stream-pending head exists only while its own block is open, and
+        // CONTINUATION ordering rejects every other frame meanwhile.
         if (!stream->record_remote_head_end_stream()) {
-            output_.append_rst_stream(header_value.stream_id_, http2_error_code::protocol_error);
-            close_stream(
-                header_value.stream_id_, http2_stream_close_source::local, http2_error_code::protocol_error);
-            return true;
+            std::terminate();
         }
         recorded_head_end_stream = true;
     }
@@ -383,7 +371,7 @@ bool http2_connection::process_continuation(
         // still present. Its request views are owner-held and must remain immutable.
         stream = &*discarded_header_stream_;
     } else {
-        stream = find_stream(header_value.stream_id_);
+        stream = streams_.find(header_value.stream_id_);
         if (stream == nullptr || stream->is_aborted()) {
             append_goaway(http2_error_code::protocol_error, "missing live CONTINUATION stream");
             return false;

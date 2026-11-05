@@ -4,6 +4,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_hex.h"
@@ -12,6 +13,7 @@
 #include "ruvia/http/url_encoding.h"
 
 #include "field/http_te_fields.h"
+#include "parser/http_request_target.h"
 #include "parser/http_uri_grammar.h"
 #include "request/http_request_access.h"
 
@@ -166,7 +168,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
     }
     std::array<char, http_max_unsigned_decimal_size> port_buffer{};
     const auto port_digits = http_format_unsigned(port_buffer, target.port_.value());
-    std::pmr::string result_value(resource ? resource : std::pmr::get_default_resource());
+    std::pmr::string result_value(detail::http_pmr_resource_or_default(resource));
     result_value.reserve(prefix.size() + encoded_host_size + 1U + port_digits.size() + 1U);
     result_value.append(prefix);
     for (const unsigned char c : target.host_.view()) {
@@ -200,7 +202,7 @@ std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect
     if ((port.index() != 0) || !std::get<0>(port)) {
         return http_connect_udp_error::invalid_target;
     }
-    std::pmr::string host(resource ? resource : std::pmr::get_default_resource());
+    std::pmr::string host(detail::http_pmr_resource_or_default(resource));
     const auto decoded_host = decode_url_component(raw_host, host);
     if (!decoded_host || !valid_host(*decoded_host)) {
         return http_connect_udp_error::invalid_target;
@@ -233,10 +235,7 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
         return http_connect_udp_error::invalid_request;
     }
     if (found.host_) {
-        const std::uint16_t default_port =
-            http_ascii_equals_ignore_case(request.scheme_, "https")  ? 443
-            : http_ascii_equals_ignore_case(request.scheme_, "http") ? 80
-                                                                     : 0;
+        const auto default_port = detail::http_uri_scheme_default_port(request.scheme_);
         if (!http_authorities_equal(request.authority_, found.host_value_, default_port)) {
             return http_connect_udp_error::invalid_request;
         }
@@ -272,39 +271,29 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_response(
 }
 bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
     if (request.protocol_version() != http_protocol_version::http11 ||
-        request.known_method() != http_known_method::get ||
-        !detail::request_has_known_header(request, detail::request_header_kind::upgrade)) {
+        request.known_method() != http_known_method::get) {
         return false;
     }
     detail::http_upgrade_protocols upgrade_protocols;
     bool connect_udp = false;
-    const auto headers = request.headers();
-    const auto last_index =
-        detail::http_request_access::known_header_index(request, detail::request_header_kind::upgrade);
-    const auto limit = std::min(headers.size(), last_index);
-    for (std::size_t i = 0; i < limit; ++i) {
-        if (detail::http_request_access::header_kind(request, i) !=
-            detail::request_header_kind::upgrade) {
-            continue;
-        }
-        if (upgrade_protocols.parse_field(headers[i].value(), detail::http_field_list_role::recipient,
-                [&connect_udp](const detail::http_upgrade_protocol& protocol) noexcept {
-                    if (protocol.version_.empty() &&
-                        http_ascii_equals_ignore_case(protocol.name_, "connect-udp")) {
-                        connect_udp = true;
-                    }
-                    return true;
-                }) != detail::http_field_list_parse_status::ok) {
-            return false;
-        }
-    }
-    return upgrade_protocols.has_protocol() && connect_udp;
+    const bool valid = detail::http_request_access::visit_known_headers(
+        request, detail::request_header_kind::upgrade, [&](std::string_view value) noexcept {
+            return upgrade_protocols.parse_field(value, detail::http_field_list_role::recipient,
+                       [&connect_udp](const detail::http_upgrade_protocol& protocol) noexcept {
+                           if (protocol.version_.empty() &&
+                               http_ascii_equals_ignore_case(protocol.name_, "connect-udp")) {
+                               connect_udp = true;
+                           }
+                           return true;
+                       }) == detail::http_field_list_parse_status::ok;
+        });
+    return valid && upgrade_protocols.has_protocol() && connect_udp;
 }
 std::optional<http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept {
     const auto path = request.target_form() == http_request_target_form::absolute
                           ? request.path()
                           : request.target();
-    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .protocol_ = request.protocol(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::request_known_header(request, detail::request_header_kind::host) : request.authority(), .path_ = path, .headers_ = request.headers()});
+    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .protocol_ = request.protocol(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::http_request_access::known_header(request, detail::request_header_kind::host) : request.authority(), .path_ = path, .headers_ = request.headers()});
 }
 std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version) {
     if (version == http_protocol_version::http10 || !response.status().is_successful() ||

@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/request_header_kind.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {
@@ -77,7 +78,7 @@ public:
         if (count <= capacity_) {
             return;
         }
-        auto* owner_value = resource == nullptr ? std::pmr::get_default_resource() : resource;
+        auto* owner_value = http_pmr_resource_or_default(resource);
         auto* memory = static_cast<std::byte*>(owner_value->allocate(bytes_for(count), alignof(http_header_view)));
         auto* replacement = reinterpret_cast<http_header_view*>(memory);
         auto* replacement_kinds = reinterpret_cast<request_header_kind*>(replacement + count);

@@ -7,7 +7,7 @@
 namespace ruvia::detail {
 
 class http2_local_send_state;
-class http2_stream_lifecycle;
+class http2_stream_state;
 
 class http2_local_head_pending final {
 private:
@@ -77,7 +77,7 @@ private:
 // message-kind enum cannot contradict the active phase.
 class http2_local_send_state final {
 private:
-    friend class http2_stream_lifecycle;
+    friend class http2_stream_state;
 
     constexpr http2_local_send_state() noexcept
         : state_(http2_local_head_pending()) {}

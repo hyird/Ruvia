@@ -171,9 +171,7 @@ task<http_response> detail::route_table::handle_not_found(
     const http_request& request, request_memory& memory, const context_services& services) const {
     const auto not_found_handler = not_found_handler_for(request.path());
     if (not_found_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
-        auto response = make_default_error_response(memory.resource(),
-            http_error_info({.status_ = ruvia::http_status::not_found, .message_ = "route not found"}));
-        co_return response;
+        co_return make_route_not_found_response(memory.resource());
     }
 
     auto context_value = detail::context_access::make(memory, request, services);
@@ -182,9 +180,7 @@ task<http_response> detail::route_table::handle_not_found(
     // before; wrapping it in the chain must not change which layer answers it.
     auto terminal = [this, not_found_handler](context& terminal_context) -> task<http_response> {
         if (not_found_handler == nullptr) {
-            co_return make_default_error_response(terminal_context.arena(),
-                http_error_info(
-                    {.status_ = ruvia::http_status::not_found, .message_ = "route not found"}));
+            co_return make_route_not_found_response(terminal_context.arena());
         }
         std::exception_ptr exception;
         try {

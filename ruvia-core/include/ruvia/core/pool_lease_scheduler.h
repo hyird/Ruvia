@@ -54,6 +54,10 @@ public:
     // worker turn, never inline here. Later cancellation or close() cannot
     // replace that committed acquisition.
     void release(std::size_t slot) noexcept;
+    // Refuses new acquires and completes every queued acquire with closed;
+    // returns false when already closing. Like release(), the queued coroutines
+    // resume in a later worker turn, never inline here, so the caller finishes
+    // its own teardown before any waiter observes the closure.
     [[nodiscard]] bool close() noexcept;
     [[nodiscard]] bool closing() const noexcept;
 

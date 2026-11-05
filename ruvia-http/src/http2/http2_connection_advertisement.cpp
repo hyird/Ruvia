@@ -18,11 +18,11 @@ bool http2_connection::process_advertisement(const http2_frame_header& header_va
         auto advertisement = decode_http_origin_advertisement({payload_value.data(), payload_value.size()}, resource_);
         if ((advertisement.index() == 0)) {
             reserve_event_slots(1);
-            events_.push_back(http2_event(std::move(std::get<0>(advertisement))));
+            publish_event(http2_event(std::move(std::get<0>(advertisement))));
         }
     } else {
         if (header_value.stream_id_ != 0) {
-            const auto* stream = find_stream(header_value.stream_id_);
+            const auto* stream = streams_.find(header_value.stream_id_);
             if (stream == nullptr || http2_stream_is_closed(*stream) ||
                 stream->tunnel().not_connect() == nullptr) {
                 return true;
@@ -31,7 +31,7 @@ bool http2_connection::process_advertisement(const http2_frame_header& header_va
         auto advertisement = decode_http2_alternative_service(header_value.stream_id_, {payload_value.data(), payload_value.size()}, resource_);
         if ((advertisement.index() == 0)) {
             reserve_event_slots(1);
-            events_.push_back(http2_event(std::move(std::get<0>(advertisement))));
+            publish_event(http2_event(std::move(std::get<0>(advertisement))));
         }
     }
     return true;
@@ -62,7 +62,7 @@ http2_submit_status http2_connection::submit_alternative_service_advertisement(s
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_) {
         return http2_submit_status::closed;
     }
-    const auto* stream = stream_id != 0 ? find_stream(stream_id) : nullptr;
+    const auto* stream = stream_id != 0 ? streams_.find(stream_id) : nullptr;
     // A promised stream leaves reserved (local) with its first response
     // HEADERS, interim or final (RFC 9113 §8.4.2); only the still-reserved
     // stream may not carry ALTSVC (RFC 7838 §4).

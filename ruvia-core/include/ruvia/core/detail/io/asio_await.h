@@ -143,10 +143,22 @@ template <typename result_type, typename initiate_type>
 class asio_completion_awaiter;
 }  // namespace detail
 
+// Void completions carry only the error code: the result accessors and the
+// two-argument factory exist only for a non-void result_type.
 template <typename result_type>
 class asio_completion final {
+    using result_storage_type = std::conditional_t<std::is_void_v<result_type>, std::monostate, result_type>;
+
 public:
-    [[nodiscard]] static asio_completion completed(std::error_code error_code, result_type result_value) {
+    [[nodiscard]] static asio_completion completed(std::error_code error_code) noexcept
+        requires std::is_void_v<result_type>
+    {
+        return asio_completion(error_code, result_storage_type{});
+    }
+
+    [[nodiscard]] static asio_completion completed(std::error_code error_code, result_storage_type result_value)
+        requires(!std::is_void_v<result_type>)
+    {
         return asio_completion(error_code, std::move(result_value));
     }
 
@@ -162,31 +174,43 @@ public:
         return static_cast<bool>(error_code_);
     }
 
-    [[nodiscard]] const result_type& result() const& noexcept {
+    [[nodiscard]] const result_storage_type& result() const& noexcept
+        requires(!std::is_void_v<result_type>)
+    {
         return result_;
     }
-    const result_type& result() const&& = delete;
+    const result_storage_type& result() const&& = delete;
 
-    [[nodiscard]] result_type& result() & noexcept {
+    [[nodiscard]] result_storage_type& result() & noexcept
+        requires(!std::is_void_v<result_type>)
+    {
         return result_;
     }
-    result_type& result() && = delete;
+    result_storage_type& result() && = delete;
 
-    [[nodiscard]] result_type take_result() && {
+    [[nodiscard]] result_storage_type take_result() &&
+        requires(!std::is_void_v<result_type>)
+    {
         return std::move(result_);
     }
 
-    [[nodiscard]] const result_type& value() const& noexcept {
+    [[nodiscard]] const result_storage_type& value() const& noexcept
+        requires(!std::is_void_v<result_type>)
+    {
         return result_;
     }
-    const result_type& value() const&& = delete;
+    const result_storage_type& value() const&& = delete;
 
-    [[nodiscard]] result_type& value() & noexcept {
+    [[nodiscard]] result_storage_type& value() & noexcept
+        requires(!std::is_void_v<result_type>)
+    {
         return result_;
     }
-    result_type& value() && = delete;
+    result_storage_type& value() && = delete;
 
-    [[nodiscard]] result_type take_value() && {
+    [[nodiscard]] result_storage_type take_value() &&
+        requires(!std::is_void_v<result_type>)
+    {
         return std::move(result_);
     }
 
@@ -194,42 +218,13 @@ private:
     template <typename, typename>
     friend class detail::asio_completion_awaiter;
 
-    asio_completion(std::error_code error_code, result_type&& result_value) noexcept(
-        std::is_nothrow_move_constructible_v<result_type>)
+    asio_completion(std::error_code error_code, result_storage_type&& result_value) noexcept(
+        std::is_nothrow_move_constructible_v<result_storage_type>)
         : error_code_(error_code),
           result_(std::move(result_value)) {}
 
     std::error_code error_code_;
-    result_type result_;
-};
-
-template <>
-class asio_completion<void> final {
-public:
-    [[nodiscard]] static asio_completion completed(std::error_code error_code) noexcept {
-        return asio_completion(error_code);
-    }
-
-    [[nodiscard]] std::error_code error_code() const noexcept {
-        return error_code_;
-    }
-
-    [[nodiscard]] bool succeeded() const noexcept {
-        return !error_code_;
-    }
-
-    [[nodiscard]] bool failed() const noexcept {
-        return static_cast<bool>(error_code_);
-    }
-
-private:
-    template <typename, typename>
-    friend class detail::asio_completion_awaiter;
-
-    explicit asio_completion(std::error_code error_code) noexcept
-        : error_code_(error_code) {}
-
-    std::error_code error_code_;
+    [[no_unique_address]] result_storage_type result_;
 };
 
 }  // namespace ruvia

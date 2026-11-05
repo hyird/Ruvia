@@ -487,7 +487,7 @@ template <typename fn_type>
 // without a pool, a stop token that is already stopped, or a timeout that is
 // not positive rejects without submitting `fn`. Use std::move(result).value()
 // to turn a rejection into an exception and to rethrow the callable's own
-// exception; value() is rvalue-only because it consumes the result.
+// exception.
 template <typename fn_type>
 [[nodiscard]] auto run_blocking(worker_handle worker_value, operation_options options, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {

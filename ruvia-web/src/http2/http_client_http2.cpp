@@ -1,12 +1,14 @@
 #include <algorithm>
 #include <chrono>
+#include <optional>
+#include <span>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request_target.h"
 
@@ -32,12 +34,74 @@ http_client_connection::http2_stream* http_client_connection::find_http2_stream(
     return *match;
 }
 
+http_client_connection::http2_stream* http_client_connection::find_http2_request(std::uint64_t request_id) noexcept {
+    const auto match = std::ranges::find_if(
+        http2_streams_, [request_id](const http2_stream* stream) { return stream->request_id_ == request_id; });
+    return match == http2_streams_.end() ? nullptr : *match;
+}
+
+void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
+    const auto& read_timeout = pool_.config().read_timeout_;
+    if (!read_timeout || stream.complete_) {
+        return;
+    }
+    stream.read_deadline_ = worker_timer_deadline_after(*read_timeout);
+    schedule_http2_stream_timer(stream);
+}
+
+void http_client_connection::schedule_http2_stream_timer(http2_stream& stream) {
+    auto deadline = stream.timeout_->deadline();
+    if (stream.read_deadline_ && (!deadline || *stream.read_deadline_ < *deadline)) {
+        deadline = stream.read_deadline_;
+    }
+    // A pending earlier expiry rechecks both deadlines when it fires, so a
+    // read that only moves its deadline later costs no timer operation.
+    if (!deadline || (stream.timer_at_ && *stream.timer_at_ <= *deadline)) {
+        return;
+    }
+    stream.timer_.cancel();
+    stream.timer_at_.reset();
+    if (pool_.worker().schedule_timer(stream.timer_, *deadline,
+            [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired) {
+                    expire_http2_stream_timer(request_id);
+                }
+            }) == worker_timer_schedule_status::scheduled) {
+        stream.timer_at_ = deadline;
+    }
+}
+
+void http_client_connection::expire_http2_stream_timer(std::uint64_t request_id) noexcept {
+    auto* stream = find_http2_request(request_id);
+    if (stream == nullptr) {
+        return;
+    }
+    stream->timer_at_.reset();
+    if (stream->timeout_->expired() ||
+        (stream->read_deadline_ && *stream->read_deadline_ <= std::chrono::steady_clock::now())) {
+        cancel_http2_stream(request_id, client_abort_reason::timeout);
+        return;
+    }
+    try {
+        schedule_http2_stream_timer(*stream);
+    } catch (...) {
+        fail_http2_stream(*stream, std::current_exception(), true);
+    }
+}
+
 std::uint64_t http_client_connection::next_http2_request_id() noexcept {
     next_http2_request_id_ = next_http2_request_id_ + 1 == 0 ? 1 : next_http2_request_id_ + 1;
     return next_http2_request_id_;
 }
 
 void http_client_connection::register_http2_stream(http2_stream& stream) {
+    // A push stream is open on registration; a request reads once its head
+    // was submitted.
+    if (stream.stream_id_ != 0) {
+        restart_http2_stream_read(stream);
+    }
+    schedule_http2_stream_timer(stream);
+    end_idle();
     stream.registry_index_ = http2_streams_.size();
     http2_streams_.push_back(&stream);
     last_http2_stream_ = &stream;
@@ -74,46 +138,37 @@ void http_client_connection::release_response_data(http_client_response_state& s
     // has already retired. Its destructor also defers allocation failures.
     state_value.http2_data_credit_.reset();
     http2_.wake_writer();
+    // The returned credit lets the peer send again: the read is active.
+    if (auto* stream = find_http2_request(state_value.request_id_); stream != nullptr && stream->state_ == &state_value) {
+        try {
+            restart_http2_stream_read(*stream);
+        } catch (...) {
+            fail_http2_stream(*stream, std::current_exception(), true);
+        }
+    }
 }
 
 void http_client_connection::publish_http2_head(http2_stream& stream, http2_response_head_event& event) {
     auto& state_value = *stream.state_;
-    if (state_value.upload_ && !state_value.upload_->output_.ended_ &&
-        event.request_content_signal() == http_client_request_content_signal::exchange_complete) {
-        state_value.upload_->output_.stop();
-    }
+    const auto request_content_signal = event.request_content_signal();
     auto head = std::move(event).take_head();
-    state_value.status_ = head.received_status();
-    state_value.protocol_version_ = head.protocol_version();
-    state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_.status());
     const auto headers = head.headers();
     state_value.headers_.clear();
     state_value.headers_.reserve(headers.size());
     for (const auto& header : headers) {
         state_value.headers_.emplace_back(header.name(), header.value(), state_value.resource_);
     }
-    // Publish cookies with the final head, not again when its body completes.
-    pool_.policy().retain_response_cookies(stream.request_target_, state_value.headers_);
-    if (state_value.tunnel_) {
-        state_value.tunnel_->accepted_ =
-            state_value.response_body_plan_->content_semantics() == http_response_content_semantics::connect_tunnel;
-        if (state_value.tunnel_->accepted_ && state_value.tunnel_->udp_) {
-            if (validate_http_connect_udp_response(
-                    state_value.protocol_version_, state_value.status_.status().value(), state_value.headers_)
-                    .has_value()) {
-                throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
-            }
-        }
-        if (!state_value.tunnel_->accepted_) {
-            state_value.tunnel_->output_.stop();
-        }
-        stream.signal_.notify();
-    }
-    if (!state_value.tunnel_ || !state_value.tunnel_->accepted_) {
-        configure_http_client_response_decoding(state_value);
-    }
-    state_value.head_ready_ = true;
-    state_value.head_signal_.notify();
+    publish_http_client_final_head(state_value, pool_.policy(),
+        {.status_ = head.received_status(),
+            .protocol_version_ = head.protocol_version(),
+            .request_content_signal_ = request_content_signal,
+            .origin_target_ = stream.addresses_origin_ ? std::optional(stream.request_target_) : std::nullopt,
+            // RFC 9110 section 9.3.6 and RFC 8441 section 5: a 2xx to CONNECT,
+            // plain or extended, opens the tunnel.
+            .opens_tunnel_ = state_value.tunnel_.has_value() && head.received_status().status().is_successful()});
+    // The upload loop waits for tunnel acceptance.
+    stream.signal_.notify();
+    restart_http2_stream_read(stream);
 }
 
 void http_client_connection::consume_http2_data(
@@ -132,11 +187,12 @@ void http_client_connection::consume_http2_data(
             stream->signal_.notify();
             return;
         }
+        if (state_value.collect_all_ || !credit.valid()) {
+            restart_http2_stream_read(*stream);
+            return;
+        }
     } catch (...) {
         fail_http2_stream(*stream, std::current_exception(), true);
-        return;
-    }
-    if (state_value.collect_all_ || !credit.valid()) {
         return;
     }
     auto& retained_credit = state_value.http2_data_credit_;
@@ -145,6 +201,9 @@ void http_client_connection::consume_http2_data(
     } else {
         retained_credit->merge(std::move(credit));
     }
+    // The peer may now wait for this client's consumer to return the credit;
+    // release_response_data() restarts the read.
+    stream->read_deadline_.reset();
 }
 
 void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end) {
@@ -164,15 +223,10 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
         if (stream->timeout_ == nullptr) {
             std::terminate();
         }
-        if (stream->timeout_->expired()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP/2 response body decoding timed out");
-        }
-        decode_http_client_response_body(
-            state_value, content_semantics_present, pool_.config().max_response_bytes_);
-        if (stream->timeout_->expired()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP/2 response body decoding timed out");
-        }
+        finish_http_client_response_body(
+            state_value, *stream->timeout_, content_semantics_present, pool_.config().max_response_bytes_);
         stream->complete_ = true;
+        stream->read_deadline_.reset();
         // Response EOF is independent of the request send half (RFC 9113 8.1).
         // A consumer can finish reading now and still write/end its upload.
         state_value.complete_ = true;
@@ -185,9 +239,9 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
 
 void http_client_connection::on_http2_event(http2_event& event) {
     if (const auto* origins = event.origin_advertisement()) {
-        (void)pool_.advertisements().retain(index_, http_protocol_version::http2, *origins);
+        pool_.advertisements().retain(index_, http_protocol_version::http2, *origins);
     } else if (const auto* service = event.alternative_service_advertisement()) {
-        (void)pool_.advertisements().retain(index_, *service);
+        pool_.advertisements().retain(index_, *service);
     }
     if (const auto* push = event.push_promise()) {
         pool_.accept_http2_push(*this, *push);
@@ -197,13 +251,9 @@ void http_client_connection::on_http2_event(http2_event& event) {
             return;
         }
         try {
-            auto& state_value = *stream->state_;
-            state_value.retain_informational(interim->head().status(), interim->head().headers());
-            if (state_value.upload_ &&
-                interim->request_content_signal() == http_client_request_content_signal::continue_value) {
-                state_value.upload_->content_released_ = true;
-                stream->signal_.notify();
-            }
+            stream->state_->retain_informational(
+                interim->head().status(), interim->head().headers(), interim->request_content_signal());
+            restart_http2_stream_read(*stream);
         } catch (...) {
             fail_http2_stream(*stream, std::current_exception(), true);
         }
@@ -230,6 +280,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                 state_value.tunnel_->receive_ended_ = true;
                 state_value.data_signal_.notify();
             }
+            stream->read_deadline_.reset();
             stream->signal_.notify();
         }
     } else if (auto* end = event.message_end()) {
@@ -294,12 +345,11 @@ void http_client_connection::on_http2_failure(
 
 void http_client_connection::cancel_http2_stream(
     std::uint64_t request_id, client_abort_reason reason, http2_error_code error) noexcept {
-    const auto match = std::ranges::find_if(
-        http2_streams_, [request_id](const http2_stream* stream) { return stream->request_id_ == request_id; });
-    if (match == http2_streams_.end()) {
+    auto* const match = find_http2_request(request_id);
+    if (match == nullptr) {
         return;
     }
-    auto& stream = **match;
+    auto& stream = *match;
     if (http2_exchange_complete(stream) || stream.failed() || stream.retryable_) {
         return;
     }
@@ -318,7 +368,11 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
     if (!stream.retryable_ && stream.stream_id_ != 0 && !both_halves_closed) {
         http2_.submit_reset(stream.stream_id_);
     }
-    release_response_data(*stream.state_);
+    stream.timer_.cancel();
+    if (stream.state_->http2_data_credit_) {
+        stream.state_->http2_data_credit_.reset();
+        http2_.wake_writer();
+    }
     const auto index = stream.registry_index_;
     if (index >= http2_streams_.size() || http2_streams_[index] != &stream) {
         std::terminate();
@@ -336,6 +390,8 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
         // request opens a fresh connection.
         http2_.fail({.status_ = client_transport_status::io_failed,
             .error_ = std::make_error_code(std::errc::operation_canceled)});
+    } else if (http2_streams_.empty() && http2_.usable()) {
+        begin_idle();
     }
 }
 
@@ -412,7 +468,9 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                     .error_ = std::make_error_code(std::errc::operation_canceled)});
             }
             co_await wait_for_http2_session_stop(timeout, stop_token_value, state_value);
-            (void)co_await ensure_connected(timeout, timeout, stop_token_value, state_value);
+            // Waiting for the slot's reconnect is a connection acquisition.
+            const auto acquire_timeout = timeout.constrained_by(config.acquire_timeout_);
+            (void)co_await ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
             if (protocol_ != protocol_type::http2) {
                 co_return false;
             }
@@ -421,6 +479,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         http2_stream stream(pool_.worker(), state_value);
         stream.timeout_ = &timeout;
         stream.request_target_ = request.target();
+        stream.addresses_origin_ = pool_.policy().addresses_origin(request);
         stream.request_id_ = next_http2_request_id();
         state_value.transport_ = http_client_response_transport::http2;
         state_value.request_method_ = classify_http_method(request.method());
@@ -441,20 +500,18 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 reset();
             }
         } registration{*this, stream};
-        worker_timer_registration deadline_timer;
-        if (const auto deadline = timeout.deadline()) {
-            (void)pool_.worker().schedule_timer(deadline_timer, *deadline,
-                [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        cancel_http2_stream(request_id, client_abort_reason::timeout);
-                    }
-                });
-        }
         worker_cancellation_registration cancellation(pool_.cancellation_target(), stream.cancellation_id_);
         state_value.cancellation_id_ = cancellation.id();
         cancellation.arm(stop_token_value);
 
         auto& connection = http2_.connection();
+        const auto expectation = request.upload() != nullptr ? request.upload()->config_.expectation_
+                                                             : http_client_request_expectation::none;
+        // Prepared once per attempt: a wait for stream capacity resubmits the
+        // same head instead of rescanning the jar on every session wake.
+        client_prepared_request_scratch scratch(resource);
+        const auto source_value = pool_.policy().prepare_request(request, scratch);
+        const auto headers = static_cast<std::span<const http_header_view>>(source_value.headers_);
         for (;;) {
             if (stream.failed()) {
                 break;
@@ -463,31 +520,25 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 stream.error_ = http_client_error::code_type::timeout;
                 break;
             }
-            const auto expectation = request.upload() != nullptr ? request.upload()->config_.expectation_
-                                                                 : http_client_request_expectation::none;
-            const auto submitted = [&]() {
-                client_prepared_request_scratch scratch(resource);
-                const auto source_value = pool_.policy().prepare_request(request, scratch);
-                const auto headers = static_cast<std::span<const http_header_view>>(source_value.headers_);
-                return !request.is_tunnel()
-                           ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{
-                                 .method_ = source_value.method_,
-                                 .scheme_ = scheme,
-                                 .authority_ = borrowed_text(std::string_view(config.authority_)),
-                                 .target_ = source_value.target_,
-                                 .headers_ = headers,
-                                 .content_ = content,
-                                 .expectation_ = expectation})
-                       : request.tunnel_protocol().empty()
-                           ? connection.submit_request_head(http2_connect_request_head_view{
-                                 .authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers})
-                           : connection.submit_request_head(http2_extended_connect_request_head_view{
-                                 .protocol_ = borrowed_text(request.tunnel_protocol()),
-                                 .scheme_ = scheme,
-                                 .authority_ = borrowed_text(request.tunnel_authority()),
-                                 .target_ = source_value.target_,
-                                 .headers_ = headers});
-            }();
+            const auto submitted =
+                !request.is_tunnel()
+                    ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{
+                          .method_ = source_value.method_,
+                          .scheme_ = scheme,
+                          .authority_ = borrowed_text(std::string_view(config.authority_)),
+                          .target_ = source_value.target_,
+                          .headers_ = headers,
+                          .content_ = content,
+                          .expectation_ = expectation})
+                : request.tunnel_protocol().empty()
+                    ? connection.submit_request_head(http2_connect_request_head_view{
+                          .authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers})
+                    : connection.submit_request_head(http2_extended_connect_request_head_view{
+                          .protocol_ = borrowed_text(request.tunnel_protocol()),
+                          .scheme_ = scheme,
+                          .authority_ = borrowed_text(request.tunnel_authority()),
+                          .target_ = source_value.target_,
+                          .headers_ = headers});
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
                 stream.stream_id_ = *accepted;
                 state_value.stream_id_ = stream.stream_id_;
@@ -498,6 +549,8 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 } else {
                     http2_.wake_writer();
                 }
+                // The response read starts once the buffered request is sent.
+                restart_http2_stream_read(stream);
                 break;
             }
             const auto error = std::get<http2_request_head_submit_error>(submitted);
@@ -532,7 +585,6 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             }
             co_await stream.signal_.wait();
         }
-        deadline_timer.cancel();
         const bool retryable = stream.retryable_;
         const auto error = stream.error_;
         const auto failure = stream.failure_;
@@ -558,24 +610,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             std::rethrow_exception(failure);
         }
         if (error) {
-            switch (*error) {
-                case http_client_error::code_type::timeout:
-                    throw http_client_error(*error, "HTTP/2 request timed out");
-                case http_client_error::code_type::cancelled:
-                    throw http_client_error(*error, "HTTP/2 request cancelled");
-                case http_client_error::code_type::response_too_large:
-                    throw http_client_error(*error, "HTTP/2 response exceeds configured byte limit");
-                case http_client_error::code_type::closing:
-                    throw http_client_error(*error, "HTTP client pool is closing");
-                case http_client_error::code_type::tls_failed:
-                    throw http_client_error(*error, "HTTP/2 TLS connection failed");
-                case http_client_error::code_type::io_error:
-                    throw http_client_error(*error, "HTTP/2 connection failed");
-                case http_client_error::code_type::protocol_error:
-                    throw http_client_error(*error, "HTTP/2 protocol failed");
-                default:
-                    throw http_client_error(*error, "HTTP/2 stream failed");
-            }
+            throw http_client_error(*error, http_client_error_message(*error));
         }
         co_return true;
     }
@@ -584,62 +619,21 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
 
 task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
     std::string_view bytes, http2_end_stream end_stream, const http_client_output_queue* upload) {
+    const auto stopped = [&stream, upload] {
+        return stream.failed() || stream.retryable_ || (upload != nullptr && upload->stopped_);
+    };
     // Keep one frame-sized copy in the sans-I/O/session output while the caller
     // or upload queue retains the unsent suffix until it reaches the transport.
-    constexpr std::size_t submit_bytes = http2_default_max_frame_size;
-    const auto reject_error = upload != nullptr ? http_client_error::code_type::invalid_request
-                                                : http_client_error::code_type::protocol_error;
-    auto& connection = http2_.connection();
-    std::size_t offset = 0;
-    while (offset < bytes.size() && !stream.failed() && !stream.retryable_ &&
-           (upload == nullptr || !upload->stopped_)) {
-        http2_data_submit_result submitted{};
-        try {
-            submitted = connection.submit_data(
-                stream.stream_id_, bytes.substr(offset), end_stream, submit_bytes);
-        } catch (const std::logic_error&) {
-            stream.error_ = reject_error;
-            http2_.submit_reset(stream.stream_id_);
-            co_return false;
-        } catch (...) {
-            if (upload != nullptr) {
-                throw;
-            }
-            stream.error_ = reject_error;
-            http2_.submit_reset(stream.stream_id_);
-            co_return false;
-        }
-        offset += submitted.consumed_bytes_;
-        http2_.wake_writer();
-        if (submitted.status_ == http2_data_submit_status::expectation_pending) {
-            co_await stream.signal_.wait();
-            continue;
-        }
-        if (submitted.status_ == http2_data_submit_status::closed) {
-            if (upload != nullptr || !stream.complete_) {
-                stream.error_ = reject_error;
-                http2_.submit_reset(stream.stream_id_);
-            }
-            co_return false;
-        }
-        while (http2_.has_connection() && (connection.wants_write() || http2_.writing()) && !stream.failed() &&
-               !stream.retryable_ && (upload == nullptr || !upload->stopped_)) {
-            co_await http2_.state_signal().wait();
-        }
-        if (submitted.status_ == http2_data_submit_status::backpressured) {
-            while (http2_.has_connection() && !stream.failed() && !stream.retryable_ &&
-                   (upload == nullptr || !upload->stopped_)) {
-                const auto window = connection.send_window_state(stream.stream_id_);
-                if (!window || window->available_ != 0 || connection.stream_aborted(stream.stream_id_)) {
-                    break;
-                }
-                // WINDOW_UPDATE and SETTINGS may produce no stream event.
-                co_await http2_.state_signal().wait();
-            }
-        }
+    const auto status = co_await http2_.send_data(
+        stream.stream_id_, bytes, end_stream, http2_default_max_frame_size, stopped);
+    // A complete response may close the stream before its buffered request
+    // content was sent; that response stands.
+    if (status == http2_client_data_status::rejected && (upload != nullptr || !stream.complete_)) {
+        stream.error_ = upload != nullptr ? http_client_error::code_type::invalid_request
+                                          : http_client_error::code_type::protocol_error;
+        http2_.submit_reset(stream.stream_id_);
     }
-    co_return offset == bytes.size() && !stream.failed() && !stream.retryable_ &&
-        (upload == nullptr || !upload->stopped_);
+    co_return status == http2_client_data_status::submitted && !stopped();
 }
 
 task<void> http_client_connection::stream_http2_upload(
@@ -700,8 +694,6 @@ task<void> http_client_connection::stream_http2_upload(
                     const auto finished = connection.finish_request(stream.stream_id_, trailers.view());
                     finish_accepted = finished == http2_finish_status::accepted;
                 }
-            } catch (const std::invalid_argument&) {
-                finish_accepted = false;
             } catch (const std::logic_error&) {
                 finish_accepted = false;
             }
@@ -711,10 +703,8 @@ task<void> http_client_connection::stream_http2_upload(
                 break;
             }
             http2_.wake_writer();
-            while (http2_.has_connection() && (connection.wants_write() || http2_.writing()) && !stream.failed() &&
-                   !stream.retryable_ && !upload.stopped_) {
-                co_await http2_.state_signal().wait();
-            }
+            co_await http2_.wait_output_flushed(
+                [&stream, &upload] { return stream.failed() || stream.retryable_ || upload.stopped_; });
             if (!stream.failed() && !stream.retryable_ && !upload.stopped_) {
                 upload.finish();
             }
@@ -809,23 +799,16 @@ task<void> http_client_pool::run_http2_push(
     std::unique_ptr<http2_push_driver, pmr_object_deleter<http2_push_driver>> driver) {
     auto& stream = driver->stream_;
     auto& state_value = driver->state_;
-    worker_timer_registration timer;
     try {
-        if (const auto deadline = driver->timeout_.deadline()) {
-            (void)worker_.schedule_timer(timer, *deadline,
-                [raw = driver.get()](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        raw->connection_.cancel_http2_stream(raw->stream_.request_id_, client_abort_reason::timeout);
-                    }
-                });
-        }
+        // The registered stream's timer bounds the push (push_.timeout_ and
+        // read_timeout_).
         while (!stream.complete_ && !stream.failed()) {
             co_await stream.signal_.wait();
         }
-        timer.cancel();
         state_value.failure_ = stream.failure_;
         if (stream.error_) {
-            state_value.failure_ = std::make_exception_ptr(http_client_error(*stream.error_, "HTTP request failed"));
+            state_value.failure_ =
+                std::make_exception_ptr(http_client_error(*stream.error_, http_client_error_message(*stream.error_)));
         }
     } catch (...) {
         state_value.failure_ = std::current_exception();

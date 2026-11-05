@@ -9,25 +9,17 @@
 namespace ruvia::detail {
 
 struct streaming_access final {
-    using body_read_type = body_reader::read_type::invoke_type;
-    using stream_commit_type = response_stream_writer::commit_type;
-    using stream_write_type = response_stream_writer::write_type;
-    using stream_end_type = response_stream_writer::end_type;
-    using stream_sleep_type = response_stream_writer::sleep_type;
-    using stream_bind_context_type = response_stream_writer::bind_context_type;
-    using stream_release_context_type = response_stream_writer::release_context_type;
-    using stream_committed_type = response_stream_writer::committed_type;
-    using stream_aborted_type = response_stream_writer::aborted_type;
-    using stream_cancel_on_peer_eof_type = response_stream_writer::cancel_on_peer_eof_type;
-
-    [[nodiscard]] static body_reader make_body_reader(void* target, body_read_type read) noexcept {
+    [[nodiscard]] static body_reader make_body_reader(void* target, body_reader::read_type::invoke_type read) noexcept {
         return body_reader(target, read);
     }
 
-    [[nodiscard]] static response_stream_writer make_response_stream_writer(std::pmr::memory_resource& resource, void* target,
-        stream_commit_type commit, stream_write_type write, stream_end_type end, stream_sleep_type sleep, stream_bind_context_type bind_context,
-        stream_release_context_type release_context, stream_committed_type committed,
-        stream_aborted_type aborted, stream_cancel_on_peer_eof_type cancel_on_peer_eof) noexcept {
+    [[nodiscard]] static response_stream_writer make_response_stream_writer(std::pmr::memory_resource& resource,
+        void* target, response_stream_writer::commit_type commit, response_stream_writer::write_type write,
+        response_stream_writer::end_type end, response_stream_writer::sleep_type sleep,
+        response_stream_writer::bind_context_type bind_context,
+        response_stream_writer::release_context_type release_context,
+        response_stream_writer::committed_type committed, response_stream_writer::aborted_type aborted,
+        response_stream_writer::cancel_on_peer_eof_type cancel_on_peer_eof) noexcept {
         return response_stream_writer(
             resource, target, commit, write, end, sleep, bind_context, release_context, committed, aborted, cancel_on_peer_eof);
     }
@@ -40,10 +32,6 @@ struct streaming_access final {
 
     static void release_context(response_stream_writer& writer) noexcept {
         writer.release_context();
-    }
-
-    [[nodiscard]] static bool committed(const response_stream_writer& writer) noexcept {
-        return writer.committed();
     }
 };
 

@@ -26,18 +26,48 @@ namespace ruvia::detail {
         .message_ = "invalid static file path"});
 }
 
-[[nodiscard]] inline bool is_valid_encoded_request_path(std::string_view path) noexcept {
-    for (std::size_t i = 0; i < path.size(); ++i) {
-        if (path[i] != '%') {
-            continue;
+// Percent-decodes `input` in one pass into `output`, which holds at least
+// input.size() bytes, and returns the decoded size. Percent mode fails on a
+// malformed escape; form mode maps '+' to a space and keeps a '%' that starts
+// no valid escape as a literal byte (WHATWG percent-decode). With
+// `reject_encoded_separators`, an escape revealing '/' or '\\' fails too.
+[[nodiscard]] inline std::optional<std::size_t> decode_url_bytes(
+    std::string_view input, char* output, url_decode_mode mode, bool reject_encoded_separators) noexcept {
+    std::size_t size = 0;
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (mode == url_decode_mode::form && c == '+') {
+            c = ' ';
+        } else if (c == '%') {
+            if (const auto byte = http_try_decode_percent_byte(input, i)) {
+                if (reject_encoded_separators && (*byte == '/' || *byte == '\\')) {
+                    return std::nullopt;
+                }
+                c = static_cast<char>(*byte);
+                i += 2;
+            } else if (mode != url_decode_mode::form) {
+                return std::nullopt;
+            }
         }
-        const auto decoded = http_try_decode_percent_byte(path, i);
-        if (!decoded || *decoded == '/' || *decoded == '\\') {
-            return false;
-        }
-        i += 2;
+        output[size++] = c;
     }
-    return true;
+    return size;
+}
+
+// Returns `input` itself when it holds nothing to decode; otherwise the
+// decoded bytes are allocated from `arena`, which must keep them until it is
+// destroyed (a request arena never reclaims individual allocations).
+[[nodiscard]] inline std::optional<std::string_view> decode_url_component_in_arena(std::string_view input,
+    url_decode_mode mode, bool reject_encoded_separators, std::pmr::memory_resource* arena) {
+    if (!has_url_encoding(input, mode)) {
+        return input;
+    }
+    auto* const output = static_cast<char*>(arena->allocate(input.size(), alignof(char)));
+    const auto size = decode_url_bytes(input, output, mode, reject_encoded_separators);
+    if (!size) {
+        return std::nullopt;
+    }
+    return std::string_view(output, *size);
 }
 
 // Percent-decodes an encoded request path, or a wildcard tail of one, exactly
@@ -48,10 +78,16 @@ namespace ruvia::detail {
 // escape, yields nullopt.
 [[nodiscard]] inline std::optional<std::string_view> decode_request_path(
     std::string_view path, std::pmr::string& storage) {
-    if (!is_valid_encoded_request_path(path)) {
+    if (!has_url_encoding(path, url_decode_mode::percent)) {
+        return path;
+    }
+    storage.resize(path.size());
+    const auto size = decode_url_bytes(path, storage.data(), url_decode_mode::percent, true);
+    if (!size) {
         return std::nullopt;
     }
-    return decode_url_component(path, storage, url_decode_mode::percent);
+    storage.resize(*size);
+    return std::string_view(storage);
 }
 
 // Web static-file path policy: validate a decoded file path relative to the

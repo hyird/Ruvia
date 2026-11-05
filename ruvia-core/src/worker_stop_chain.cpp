@@ -55,7 +55,7 @@ bool worker_stop_chain::post_control(move_only_function<void()> control) noexcep
     if (work_released_) {
         return false;
     }
-    context_.defer_or_terminate(std::move(control));
+    worker_handle_access::defer_or_terminate(context_.handle(), std::move(control));
     return true;
 }
 
@@ -71,7 +71,7 @@ void worker_stop_chain::abandon() noexcept {
 }
 
 void worker_stop_chain::defer_stop_control_locked() noexcept {
-    context_.defer_or_terminate([this] { apply_stop(); });
+    worker_handle_access::defer_or_terminate(context_.handle(), [this] { apply_stop(); });
 }
 
 void worker_stop_chain::apply_stop() noexcept {

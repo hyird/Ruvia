@@ -13,13 +13,15 @@
 
 namespace ruvia::detail {
 
+// Every ORM entity key is `redis_entity_key_root + lower-hex(prefix) + ':' + id`.
+inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
+
 [[nodiscard]] inline std::pmr::string redis_entity_storage_prefix(
     std::string_view prefix, std::pmr::memory_resource* resource, std::size_t extra_capacity = 0) {
     resource = pmr_resource_or_default(resource);
-    constexpr std::string_view root = "ruvia:orm:";
     std::pmr::string result(resource);
-    result.reserve(root.size() + prefix.size() * 2U + 1U + extra_capacity);
-    result.append(root);
+    result.reserve(redis_entity_key_root.size() + prefix.size() * 2U + 1U + extra_capacity);
+    result.append(redis_entity_key_root);
     http_append_lower_hex(result, prefix);
     result.push_back(':');
     return result;
@@ -37,17 +39,16 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline bool redis_entity_key_matches(
     std::string_view prefix, std::string_view id, std::string_view key) noexcept {
-    constexpr std::string_view root = "ruvia:orm:";
     const std::size_t hex_size = prefix.size() * 2U;
-    const std::size_t prefix_end = root.size() + hex_size;
-    if (id.empty() || key.size() != prefix_end + 1U + id.size() || !key.starts_with(root) ||
+    const std::size_t prefix_end = redis_entity_key_root.size() + hex_size;
+    if (id.empty() || key.size() != prefix_end + 1U + id.size() || !key.starts_with(redis_entity_key_root) ||
         key[prefix_end] != ':' || key.substr(prefix_end + 1U) != id) {
         return false;
     }
     for (std::size_t i = 0; i < prefix.size(); ++i) {
         const auto byte = static_cast<unsigned char>(prefix[i]);
-        if (key[root.size() + i * 2U] != http_lower_hex_digit(byte >> 4U) ||
-            key[root.size() + i * 2U + 1U] != http_lower_hex_digit(byte)) {
+        if (key[redis_entity_key_root.size() + i * 2U] != http_lower_hex_digit(byte >> 4U) ||
+            key[redis_entity_key_root.size() + i * 2U + 1U] != http_lower_hex_digit(byte)) {
             return false;
         }
     }
@@ -75,20 +76,11 @@ template <typename entity_type>
 template <typename entity_type>
 [[nodiscard]] std::string_view redis_entity_id(
     const entity_type& entity, std::span<char, redis_scalar_scratch_size> scratch) {
-    validate_redis_entity<entity_type>();
-    std::string_view id;
-    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
-        if constexpr (column_type::options.primary_key_) {
-            if (!entity.template is_set<column_type::name>() || entity.template is_null<column_type::name>()) {
-                throw std::invalid_argument("Redis entity requires an ID");
-            }
-            id = encode_redis_scalar(entity.template get<column_type::name>(), scratch);
-        }
-    });
-    if (id.empty()) {
-        throw std::invalid_argument("Redis entity ID must not be empty");
+    const auto id = try_redis_entity_id(entity, scratch);
+    if (!id) {
+        throw std::invalid_argument("Redis entity requires an ID");
     }
-    return id;
+    return *id;
 }
 
 }  // namespace ruvia::detail

@@ -12,7 +12,7 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_number_format.h"
 
-#include "db/db_transaction_start.h"
+#include "db/db_pipeline_impl.h"
 
 namespace ruvia::detail {
 namespace {
@@ -54,6 +54,44 @@ namespace {
     }
 }
 
+// Both views refer to static SQL literals. The default transaction path keeps
+// the same single control operation and allocations as an unconfigured BEGIN.
+struct db_transaction_start_plan final {
+    std::string_view configure_{};
+    std::string_view begin_{};
+};
+
+[[nodiscard]] db_transaction_start_plan make_db_transaction_start_plan(
+    db_driver driver, db_transaction_options options) {
+    const auto isolation = static_cast<unsigned>(options.isolation_);
+    const auto access = static_cast<unsigned>(options.access_mode_);
+    if (isolation > static_cast<unsigned>(db_transaction_isolation::serializable) ||
+        access > static_cast<unsigned>(db_transaction_access_mode::read_only)) {
+        throw std::invalid_argument("unsupported transaction options");
+    }
+    if (driver == db_driver::postgresql) {
+        static constexpr std::array<std::array<std::string_view, 3>, 5> commands{{
+            {"BEGIN", "BEGIN READ WRITE", "BEGIN READ ONLY"},
+            {"BEGIN ISOLATION LEVEL READ UNCOMMITTED", "BEGIN ISOLATION LEVEL READ UNCOMMITTED READ WRITE", "BEGIN ISOLATION LEVEL READ UNCOMMITTED READ ONLY"},
+            {"BEGIN ISOLATION LEVEL READ COMMITTED", "BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE", "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"},
+            {"BEGIN ISOLATION LEVEL REPEATABLE READ", "BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE", "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"},
+            {"BEGIN ISOLATION LEVEL SERIALIZABLE", "BEGIN ISOLATION LEVEL SERIALIZABLE READ WRITE", "BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY"},
+        }};
+        return {.begin_ = commands[isolation][access]};
+    }
+    if (driver == db_driver::mariadb) {
+        static constexpr std::array<std::string_view, 5> configure{
+            "", "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED",
+            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"};
+        static constexpr std::array<std::string_view, 3> commands{
+            "START TRANSACTION", "START TRANSACTION READ WRITE", "START TRANSACTION READ ONLY"};
+        return {.configure_ = configure[isolation], .begin_ = commands[access]};
+    }
+    throw std::invalid_argument("transaction options require a database driver");
+}
+
 }  // namespace
 
 std::array<char, 6> format_db_port(std::uint16_t port) {
@@ -92,7 +130,7 @@ void db_pool<driver_type>::slot_policy::throw_aborted(const db_pool& pool, pool_
 
 template <typename driver_type>
 void db_pool<driver_type>::slot_policy::expire_slot(db_pool& pool, std::size_t index, db_deadline_kind kind) noexcept {
-    auto& slot = pool.slots_[index];
+    auto& slot = *pool.slots_[index];
     switch (kind) {
         case db_deadline_kind::resolve:
             slot.resolver_.cancel();
@@ -128,7 +166,7 @@ db_pool<driver_type>::db_pool(asio::io_context& io_context, const worker_handle&
     }
     slots_.reserve(config_.pool_size_per_worker_);
     for (std::size_t index = 0; index < config_.pool_size_per_worker_; ++index) {
-        slots_.emplace_back(io_context_, worker_, resource_);
+        slots_.push_back(make_pmr_object<slot_type>(resource_, io_context_, worker_, resource_));
     }
 }
 
@@ -152,7 +190,7 @@ template <typename driver_type>
 task<void> db_pool<driver_type>::connect() {
     const operation_timeout timeout(std::nullopt);
     for (std::size_t index = 0; index < slots_.size(); ++index) {
-        co_await connect_slot(index, timeout);
+        co_await open_slot(index, timeout);
     }
 }
 
@@ -170,7 +208,7 @@ void db_pool<driver_type>::release_slot(std::size_t index) noexcept {
     // A drained command can still leave a transaction open or autocommit off,
     // including a rejected stream and COMMIT/ROLLBACK with chaining enabled.
     // Apply the same isolation boundary before either scheduler reassigns it.
-    if (slots_[index].connected_ && !driver_type::reusable_connection(*slots_[index].connection_)) {
+    if (slot(index).connected_ && !driver_type::reusable_connection(*slot(index).connection_)) {
         close_slot(index);
     }
     if (!state_.take_released_slot(index)) {
@@ -221,7 +259,7 @@ db_pool<driver_type>::exclusive_wait::~exclusive_wait() {
 
 template <typename driver_type>
 void db_pool<driver_type>::close_slot(std::size_t index) noexcept {
-    auto& slot = slots_[index];
+    auto& slot = *slots_[index];
     slot.close_requested_ = true;
     slot.resolver_.cancel();
     if (slot.wait_active_) {
@@ -254,10 +292,19 @@ void db_pool<driver_type>::close_slot(std::size_t index) noexcept {
 
 template <typename driver_type>
 task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation_timeout& timeout) {
+    if (!config_.reconnect_ && !slot(index).connected_ && !leases_.closing()) {
+        throw db_error(db_error::code_type::io_error, driver_type::driver,
+            std::string(driver_type::name).append(" session ended, and this pool does not reconnect"));
+    }
+    co_await open_slot(index, timeout);
+}
+
+template <typename driver_type>
+task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_timeout& timeout) {
     if (leases_.closing()) {
         throw closing_error();
     }
-    auto& slot = slots_[index];
+    auto& slot = *slots_[index];
     if (slot.connected_) {
         co_return;
     }
@@ -289,7 +336,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
     if (!leases_.arm_deadline(index, deadline_value.deadline(), db_deadline_kind::resolve)) {
         throw resolve_timed_out();
     }
-    auto& slot = slots_[index];
+    auto& slot = *slots_[index];
     try {
         db_slot_active_wait_guard active_resolve(slot);
         client_resolve_result completion;
@@ -332,12 +379,12 @@ db_pool<driver_type>::slot_wait::slot_wait(db_pool& pool, std::size_t index, db_
       native_(native),
       wait_deadline_(wait_deadline),
       operation_deadline_(operation_deadline),
-      socket_wait_(pool.slots_[index].wait_socket_.wait(wanted)) {}
+      socket_wait_(pool.slots_[index]->wait_socket_.wait(wanted)) {}
 
 template <typename driver_type>
 db_pool<driver_type>::slot_wait::~slot_wait() {
     if (borrowed_) {
-        pool_.slots_[index_].wait_active_ = false;
+        pool_.slots_[index_]->wait_active_ = false;
     }
 }
 
@@ -345,7 +392,7 @@ template <typename driver_type>
 bool db_pool<driver_type>::slot_wait::await_ready() {
     auto& leases = pool_.leases_;
     leases.throw_if_aborted(index_);
-    auto& slot = pool_.slots_[index_];
+    auto& slot = *pool_.slots_[index_];
     if (kind_ == db_deadline_kind::socket) {
         if (const auto error = slot.wait_socket_.attach(native_); error) {
             throw db_error(db_error::code_type::io_error, driver_type::driver,
@@ -367,7 +414,7 @@ bool db_pool<driver_type>::slot_wait::await_ready() {
 template <typename driver_type>
 bool db_pool<driver_type>::slot_wait::await_suspend(std::coroutine_handle<> handle) noexcept {
     if (kind_ == db_deadline_kind::sleep) {
-        pool_.slots_[index_].deadline_continuation_ = handle;
+        pool_.slots_[index_]->deadline_continuation_ = handle;
         return true;
     }
     return socket_wait_.await_suspend(handle);
@@ -376,7 +423,7 @@ bool db_pool<driver_type>::slot_wait::await_suspend(std::coroutine_handle<> hand
 template <typename driver_type>
 db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
     auto& leases = pool_.leases_;
-    auto& slot = pool_.slots_[index_];
+    auto& slot = *pool_.slots_[index_];
     db_socket_wait_result result_value;
     std::exception_ptr wait_failure;
     if (borrowed_) {
@@ -427,7 +474,7 @@ db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
 template <typename driver_type>
 task<void> db_pool<driver_type>::retire_failed_transaction_slot(std::size_t index,
     std::pmr::memory_resource* resource, const operation_timeout& timeout, const std::exception_ptr& failure) {
-    if (slots_[index].connected_ && db_slot_reusable_after(failure)) {
+    if (slot(index).connected_ && db_slot_reusable_after(failure)) {
         try {
             co_await execute_control(index, "ROLLBACK", resource, timeout);
             co_return;
@@ -446,15 +493,13 @@ template <typename result_type>
 task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t index, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options,
     statement_hook_type<result_type> statement) {
-    if (index >= slots_.size()) {
-        throw std::logic_error("database transaction slot is invalid");
-    }
+    require_slot_index(index);
     const operation_timeout timeout(options.timeout_);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
     try {
         leases_.throw_if_aborted(index);
-        if (!slots_[index].connected_) {
+        if (!slot(index).connected_) {
             co_await connect_slot(index, timeout);
         }
         co_return co_await statement(*this, index, sql, std::span<const db_value>(params), resource,
@@ -474,14 +519,14 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
 template <typename driver_type>
 task<db_rows> db_pool<driver_type>::query(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics) {
-    return driver_type::query_pipelined(
+    return run_pipelined<typename driver_type::pipeline_io_type, db_rows>(
         *this, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
 template <typename driver_type>
 task<db_exec_result> db_pool<driver_type>::execute(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics) {
-    return driver_type::execute_pipelined(
+    return run_pipelined<typename driver_type::pipeline_io_type, db_exec_result>(
         *this, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
@@ -503,7 +548,7 @@ template <typename driver_type>
 task<void> db_pool<driver_type>::execute_control(std::size_t index, std::string_view sql,
     std::pmr::memory_resource* resource, const operation_timeout& timeout) {
     leases_.throw_if_aborted(index);
-    if (!slots_[index].connected_) {
+    if (!slot(index).connected_) {
         co_await connect_slot(index, timeout);
     }
     (void)co_await driver_type::execute(
@@ -540,9 +585,7 @@ task<db_transaction> db_pool<driver_type>::begin_transaction(std::pmr::memory_re
 template <typename driver_type>
 task<void> db_pool<driver_type>::finish_transaction(std::size_t index, std::string_view command,
     std::pmr::memory_resource* resource, const operation_options& options) {
-    if (index >= slots_.size()) {
-        throw std::logic_error("database transaction slot is invalid");
-    }
+    require_slot_index(index);
     const operation_timeout timeout(options.timeout_);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
@@ -575,11 +618,25 @@ task<void> db_pool<driver_type>::rollback_transaction(
 
 template <typename driver_type>
 void db_pool<driver_type>::abort_transaction(std::size_t slot) noexcept {
-    if (slot >= slots_.size()) {
-        return;
-    }
+    require_slot_index(slot);
     close_slot(slot);
     release_slot(slot);
+}
+
+template <typename driver_type>
+void db_pool<driver_type>::require_slot_index(std::size_t index) const noexcept {
+    if (index >= slots_.size()) {
+        std::terminate();
+    }
+}
+
+template <typename driver_type>
+void db_pool<driver_type>::fail_stream(
+    std::size_t index, void* result, typename leases_type::cancellation_guard& cancellation) noexcept {
+    driver_type::discard_stream(result);
+    close_slot(index);
+    cancellation.finish();
+    release_slot(index);
 }
 
 // An unbuffered statement holds its slot until the stream result ends. A
@@ -588,9 +645,6 @@ void db_pool<driver_type>::abort_transaction(std::size_t slot) noexcept {
 template <typename driver_type>
 task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options) {
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
     const operation_timeout timeout(options.timeout_);
     const auto index = co_await lease_acquire(*this, timeout, options.stop_token_);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
@@ -598,7 +652,7 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
     bool released = false;
     try {
         leases_.throw_if_aborted(index);
-        if (!slots_[index].connected_) {
+        if (!slot(index).connected_) {
             co_await connect_slot(index, timeout);
         }
         auto start = co_await driver_type::start_stream(*this, index, sql, std::span<const db_value>(params),
@@ -617,36 +671,60 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
         co_return stream_result;
     } catch (...) {
         if (!released) {
-            driver_type::discard_stream(pending_result);
-            close_slot(index);
-            cancellation.finish();
-            release_slot(index);
+            fail_stream(index, pending_result, cancellation);
         }
         throw;
     }
 }
 
+// Each read runs under its own deadline, like any statement. The slot goes
+// back exactly once: when the rows run out, or after a failure, which closes
+// the connection with whatever it was still reading.
 template <typename driver_type>
-task<std::optional<db_row>> db_pool<driver_type>::read_stream_row(std::size_t slot, void* result,
+task<std::optional<db_row>> db_pool<driver_type>::read_stream_row(std::size_t index, void* result,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
-    return driver_type::read_stream_row(*this, slot, result, fields, column_names, resource, options);
+    require_slot_index(index);
+    typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
+    std::optional<db_stream_step> step;
+    try {
+        leases_.throw_if_aborted(index);
+        step.emplace(co_await driver_type::read_stream_row(*this, index, result, fields, column_names, resource,
+            operation_timeout(options.timeout_).constrained_by(config_.query_timeout_)));
+    } catch (...) {
+        fail_stream(index, result, cancellation);
+        throw;
+    }
+    if (auto* row = std::get_if<db_row>(&*step)) {
+        co_return std::move(*row);
+    }
+    cancellation.finish();
+    release_slot(index);
+    if (std::get<db_stream_end>(*step) == db_stream_end::no_row_set) {
+        throw std::invalid_argument("query_stream() requires row-producing SQL");
+    }
+    co_return std::nullopt;
 }
 
 template <typename driver_type>
-task<void> db_pool<driver_type>::close_stream(
-    std::size_t slot, void* result, std::pmr::memory_resource* resource, const operation_options& options) {
-    if (slot >= slots_.size()) {
-        co_return;
+task<void> db_pool<driver_type>::close_stream(std::size_t index, void* result, const operation_options& options) {
+    require_slot_index(index);
+    typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
+    try {
+        leases_.throw_if_aborted(index);
+        co_await driver_type::close_stream(
+            *this, index, result, operation_timeout(options.timeout_).constrained_by(config_.query_timeout_));
+    } catch (...) {
+        fail_stream(index, result, cancellation);
+        throw;
     }
-    co_await driver_type::close_stream(*this, slot, result, resource, options);
+    cancellation.finish();
+    release_slot(index);
 }
 
 template <typename driver_type>
 void db_pool<driver_type>::abort_stream(std::size_t slot, void* result) noexcept {
-    if (slot >= slots_.size()) {
-        return;
-    }
+    require_slot_index(slot);
     driver_type::discard_stream(result);
     close_slot(slot);
     release_slot(slot);

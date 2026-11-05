@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
@@ -91,26 +91,12 @@ namespace ruvia::detail {
 template <typename forbidden_name_type>
 [[nodiscard]] inline bool is_valid_http_trailer_field_value(
     std::string_view value, http_field_list_role role, forbidden_name_type&& forbidden_name) noexcept {
-    const bool empty_field = http_trim_ows(value).empty();
-    bool valid = true;
-    http_visit_comma_separated_quoted_field_items(
-        value, [&valid, empty_field, role, &forbidden_name](std::string_view item) noexcept {
-            if (item.empty()) {
-                // RFC 9110 section 5.6.1.1: senders must not generate empty list
-                // elements, but `#field-name` itself can represent an empty list.
-                if (role == http_field_list_role::sender && !empty_field) {
-                    valid = false;
-                    return false;
-                }
-                return true;
-            }
-            if (!is_valid_http_header_name(item) || forbidden_name(item)) {
-                valid = false;
-                return false;
-            }
-            return true;
-        });
-    return valid;
+    // RFC 9110 section 5.6.1.1: senders must not generate empty list elements,
+    // but `#field-name` itself can represent an empty list.
+    const auto list_role = http_trim_ows(value).empty() ? http_field_list_role::recipient : role;
+    return http_visit_token_list(value, list_role, [&forbidden_name](std::string_view name) noexcept {
+        return !forbidden_name(name);
+    }) == http_field_list_parse_status::ok;
 }
 
 [[nodiscard]] inline bool is_valid_http_request_trailer_field_value(

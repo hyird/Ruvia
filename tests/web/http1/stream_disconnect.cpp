@@ -2,10 +2,12 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -22,10 +24,14 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/timer.h"
+#include "ruvia/http/hpack.h"
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/streaming.h"
+#include "ruvia/web/websocket.h"
 
 #include "test_harness.h"
 #include "test_tls_crypto.h"
@@ -36,6 +42,10 @@ using namespace std::chrono_literals;
 using clock_type = std::chrono::steady_clock;
 std::atomic<std::size_t> finished{}, cancelled{}, errors{}, context_cancelled{}, body_rejected{}, body_complete{};
 std::atomic<std::size_t> write_entered{};
+// Upgraded writes to a peer that stops reading, and how many of them failed.
+std::atomic<std::size_t> stalled_upgrade_writes{}, stalled_upgrade_failures{};
+// More than loopback socket buffers absorb, so the write stays blocked.
+constexpr std::size_t stalled_upgrade_bytes = std::size_t{16} << 20;
 ruvia::stop_source explicit_stop;
 std::atomic<bool> default_cancelled{};
 
@@ -53,6 +63,9 @@ class routes final {
     RUVIA_POST("/disconnect/echo", echo);
     RUVIA_POST("/disconnect/post-sse", post_sse);
     RUVIA_GET("/disconnect/health", health);
+    RUVIA_GET("/disconnect/h2-bulk", h2_bulk);
+    RUVIA_GET_WS("/disconnect/websocket-stall", websocket_stall);
+    RUVIA_CONNECT("stall.test:443", tunnel_stall);
     RUVIA_ROUTES_END
 
     ruvia::task<void> events(ruvia::context& c) {
@@ -142,6 +155,29 @@ class routes final {
     ruvia::task<ruvia::http_response> health(ruvia::context& c) {
         co_return c.text("healthy");
     }
+
+    ruvia::task<ruvia::http_response> h2_bulk(ruvia::context& c) {
+        co_return c.text(std::pmr::string(stalled_upgrade_bytes, 'b', c.allocator<char>()));
+    }
+
+    // The WebSocket route keeps its default lifecycle: no heartbeat.
+    ruvia::task<void> websocket_stall(ruvia::context& c) {
+        stalled_upgrade_writes.fetch_add(1);
+        try {
+            co_await c.websocket().binary(std::string(stalled_upgrade_bytes, 'w'));
+        } catch (const std::system_error&) {
+            stalled_upgrade_failures.fetch_add(1);
+        }
+    }
+
+    ruvia::task<void> tunnel_stall(ruvia::context& c) {
+        stalled_upgrade_writes.fetch_add(1);
+        try {
+            co_await c.tunnel().write(std::string(stalled_upgrade_bytes, 't'));
+        } catch (const std::system_error&) {
+            stalled_upgrade_failures.fetch_add(1);
+        }
+    }
 };
 
 template <typename predicate>
@@ -151,6 +187,50 @@ bool wait_until(predicate ready, std::chrono::milliseconds timeout = 2s) {
         std::this_thread::sleep_for(1ms);
     }
     return ready();
+}
+
+void append_http2_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags, std::uint32_t stream,
+    std::string_view payload) {
+    std::array<char, ruvia::http2_frame_header_bytes> header{};
+    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream)) {
+        throw std::logic_error("invalid HTTP/2 test frame");
+    }
+    wire.append(header.data(), header.size());
+    wire.append(payload);
+}
+
+void append_u32(std::string& out, std::uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<char>((value >> shift) & 0xff));
+    }
+}
+
+// A prior-knowledge HTTP/2 connection that opens every flow-control window to
+// its maximum, so the server's output is limited only by the socket, then
+// sends one request on stream 1: a large buffered GET or a CONNECT tunnel.
+std::string http2_request_without_reading(bool tunnel) {
+    constexpr std::uint32_t max_window = 0x7fffffffU;
+    std::string wire(ruvia::http2_client_preface);
+    std::string settings{0x00, 0x04};
+    append_u32(settings, max_window);
+    append_http2_frame(wire, ruvia::http2_frame_type::settings, 0, 0, settings);
+    std::string increment;
+    append_u32(increment, max_window - 65535U);
+    append_http2_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, increment);
+    std::pmr::unsynchronized_pool_resource resource;
+    std::pmr::string block(&resource);
+    if (tunnel) {
+        ruvia::hpack_encoder::encode_header(block, ":method", "CONNECT");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "stall.test:443");
+        append_http2_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+    } else {
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/disconnect/h2-bulk");
+        append_http2_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+    }
+    return wire;
 }
 
 // 异步客户端给每次 I/O 设置独立截止时间，回归失败不会挂住测试进程。
@@ -436,6 +516,42 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
                     racing.close(false, true);
                     RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
                 }
+                // write_timeout_ bounds every write of an upgraded connection
+                // as well: a WebSocket without heartbeat or a CONNECT tunnel
+                // whose peer stops reading is closed once its write makes no
+                // progress, long before idle_timeout_.
+                for (const auto upgrade : {std::string_view("GET /disconnect/websocket-stall HTTP/1.1\r\nHost: localhost\r\n"
+                                                            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
+                                                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"),
+                         std::string_view("CONNECT stall.test:443 HTTP/1.1\r\nHost: stall.test:443\r\n\r\n")}) {
+                    peer stalled(io, endpoint, tls);
+                    const auto writes_before = stalled_upgrade_writes.load();
+                    const auto failures_before = stalled_upgrade_failures.load();
+                    stalled.send(upgrade);
+                    const auto head = stalled.read_until("\r\n\r\n");
+                    RUVIA_CHECK(head.starts_with(upgrade.starts_with("GET") ? "HTTP/1.1 101 " : "HTTP/1.1 200 "));
+                    RUVIA_CHECK(wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }));
+                    RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }, 5s));
+                    RUVIA_CHECK(wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }));
+                    stalled.close(false, true);
+                }
+            }
+            // The HTTP/2 reader keeps its connection idle (or long_lived for
+            // a tunnel) while the writer is blocked; write_timeout_ still
+            // closes a connection whose peer stopped reading.
+            for (const bool tunnel : {false, true}) {
+                peer stalled(io, plain_endpoint, false);
+                const auto writes_before = stalled_upgrade_writes.load();
+                const auto failures_before = stalled_upgrade_failures.load();
+                stalled.send(http2_request_without_reading(tunnel));
+                if (tunnel) {
+                    RUVIA_CHECK(wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }));
+                }
+                RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }, 5s));
+                if (tunnel) {
+                    RUVIA_CHECK(wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }));
+                }
+                stalled.close(false, true);
             }
             peer explicit_peer(io, plain_endpoint, false);
             const auto explicit_before = cancelled.load();

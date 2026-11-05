@@ -2,10 +2,10 @@
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 
-namespace ruvia {
+namespace ruvia::detail {
 
-bool analyze_header(http_header_view header, detail::request_header_kind kind,
-    request_header_facts& facts, http1_client_request_prepare_error& error,
+bool analyze_http1_client_request_field(http_header_view header, detail::request_header_kind kind,
+    http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
     http_request_field_source source) noexcept {
     const auto name = header.name();
     const auto value = header.value();
@@ -72,8 +72,8 @@ bool analyze_header(http_header_view header, detail::request_header_kind kind,
     return true;
 }
 
-bool finalize_headers(
-    const request_header_facts& facts, http1_client_request_prepare_error& error) noexcept {
+bool finish_http1_client_request_fields(
+    const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept {
     if (facts.upgrade_protocols_.has_field() && !facts.connection_options_.upgrade()) {
         error = http1_client_request_prepare_error::upgrade_connection_option_required;
         return false;
@@ -85,14 +85,14 @@ bool finalize_headers(
     return true;
 }
 
-bool analyze_headers(std::span<const http_header_view> headers, request_header_facts& facts,
+bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts,
     http1_client_request_prepare_error& error, http_request_field_source source) noexcept {
     for (const auto& header : headers) {
-        if (!analyze_header(header, detail::classify_request_header(header.name()), facts, error, source)) {
+        if (!analyze_http1_client_request_field(header, detail::classify_request_header(header.name()), facts, error, source)) {
             return false;
         }
     }
-    return finalize_headers(facts, error);
+    return finish_http1_client_request_fields(facts, error);
 }
 
-}  // namespace ruvia
+}  // namespace ruvia::detail

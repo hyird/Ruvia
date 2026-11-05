@@ -55,23 +55,12 @@ public:
         return known_method_;
     }
 
-    // Releases owned header descriptors and clears all borrowed message views.
+    // Returns the request to its default-constructed state: releases owned header
+    // descriptors, clears all borrowed message views and forgets the PMR resource.
     // Useful when a runtime reuses a request object before its input storage or
     // PMR resource is retired.
     void reset() noexcept {
-        headers_ = {};
-        method_ = {};
-        known_method_ = http_known_method::unknown;
-        target_ = {};
-        scheme_ = {};
-        authority_ = {};
-        protocol_ = {};
-        path_ = {};
-        query_string_ = {};
-        protocol_version_ = http_protocol_version::http11;
-        target_form_ = http_request_target_form::origin;
-        cached_headers_.fill(0);
-        body_ = {};
+        *this = http_request();
     }
 
     [[nodiscard]] std::string_view target() const noexcept {

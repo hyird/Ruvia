@@ -1,5 +1,7 @@
 #include "ruvia/http/http_accept_match.h"
 
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
+
 #include "field/http_accept_media_type.h"
 #include "field/http_accept_token.h"
 #include "field/http_media_type.h"
@@ -7,7 +9,7 @@
 namespace ruvia {
 
 std::string_view http_media_type_only(borrowed_text value) noexcept {
-    return detail::http_media_type_only(value.view());
+    return detail::http_header_token_before_parameters(value.view());
 }
 
 bool is_valid_http_content_type_field_value(std::string_view value) noexcept {

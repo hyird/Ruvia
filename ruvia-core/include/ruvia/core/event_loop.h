@@ -129,7 +129,7 @@ public:
                 // Retire it before waking a caller that may reclaim its inputs.
                 task_.reset();
                 if (completion_ != nullptr) {
-                    completion_->complete_failure(
+                    completion_->completion().complete_failure(
                         std::make_exception_ptr(std::runtime_error("event loop is stopping")));
                 }
             }
@@ -161,7 +161,7 @@ public:
             root_completion& operator=(root_completion&&) = delete;
             ~root_completion() {
                 if (delivered_) {
-                    completion_->publish_completion();
+                    completion_->completion().publish_completion();
                 }
             }
             [[nodiscard]] executor_type get_executor() const noexcept {
@@ -171,17 +171,17 @@ public:
                 try {
                     if constexpr (std::is_void_v<t_type>) {
                         if (result_value != nullptr) {
-                            completion_->stage_failure(std::move(result_value));
+                            completion_->completion().stage_failure(std::move(result_value));
                         } else {
                             completion_->stage_value();
                         }
                     } else if (result_value.index() == 1) {
-                        completion_->stage_failure(std::get<1>(result_value));
+                        completion_->completion().stage_failure(std::get<1>(result_value));
                     } else {
                         completion_->stage_value(std::move(std::get<0>(result_value)));
                     }
                 } catch (...) {
-                    completion_->stage_failure(std::current_exception());
+                    completion_->completion().stage_failure(std::current_exception());
                 }
                 delivered_ = true;
             }
@@ -196,7 +196,7 @@ public:
             } catch (...) {
                 auto failed_completion = std::move(launch.completion_);
                 launch.release();
-                failed_completion->complete_failure(std::current_exception());
+                failed_completion->completion().complete_failure(std::current_exception());
             }
         });
         if (!posted.accepted()) {

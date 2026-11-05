@@ -11,7 +11,7 @@ namespace {
 
 struct controller_registry_state final {
     std::mutex mutex_;
-    std::pmr::vector<controller_registrar> registrars_{registration_resource()};
+    std::pmr::vector<controller_registrar> registrars_{process_resource()};
     bool sealed_{false};
 };
 
@@ -36,10 +36,6 @@ controller_store::~controller_store() = default;
 controller_store::controller_store(controller_store&&) noexcept = default;
 
 controller_store& controller_store::operator=(controller_store&&) noexcept = default;
-
-std::pmr::memory_resource* registration_resource() noexcept {
-    return process_resource();
-}
 
 std::size_t controller_store::size() const noexcept {
     return lifetimes_.size();
@@ -71,7 +67,7 @@ bool add_controller_registrar(controller_registrar registrar_value) {
 }
 
 std::pmr::vector<controller_registrar> seal_controller_registrars() {
-    std::pmr::vector<controller_registrar> registrars{registration_resource()};
+    std::pmr::vector<controller_registrar> registrars{process_resource()};
     auto& state_value = controller_registry();
     std::lock_guard lock(state_value.mutex_);
     state_value.sealed_ = true;

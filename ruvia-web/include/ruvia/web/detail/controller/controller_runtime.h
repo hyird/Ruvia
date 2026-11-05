@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/controller/controller_descriptors.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
@@ -167,7 +168,7 @@ class controller_registration_access final {
 
     template <route_modifier... modifier_types>
     [[nodiscard]] static middleware_list_type make_middlewares() {
-        middleware_list_type middlewares(registration_resource());
+        middleware_list_type middlewares(process_resource());
         if constexpr (sizeof...(modifier_types) > 0) {
             middlewares.reserve(sizeof...(modifier_types));
             (middlewares.push_back(make_route_modifier_descriptor<modifier_types>()), ...);

@@ -117,7 +117,7 @@ task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::so
         }
         offset += file_sent;
         remaining -= file_sent;
-        progress.touch();
+        progress.note_write_progress();
     }
     result.head_written_ = true;
     co_return result;

@@ -64,6 +64,8 @@ private:
     [[nodiscard]] task<void> flush_goaway();
     void check_failure() const;
     void require_live() const;
+    // A failure or the owner's abort ends every DATA and flush wait.
+    [[nodiscard]] bool stopping() const noexcept;
 
     websocket_client_state& owner_;
     task_scope drivers_;

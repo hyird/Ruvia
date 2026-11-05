@@ -154,7 +154,10 @@ application& application::on_start(app_hook hook) {
 application& application::on_start(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_start hook while app is running",
-        [](detail::app_state& state_value) { state_value.on_start_hooks_.clear(); });
+        [retired = std::pmr::vector<app_hook>(process_resource())](detail::app_state& state_value) mutable {
+            // The cleared targets retire with this lambda, after the app lock.
+            retired.swap(state_value.on_start_hooks_);
+        });
 }
 
 application& application::on_stop(app_hook hook) {
@@ -171,7 +174,9 @@ application& application::on_stop(app_hook hook) {
 application& application::on_stop(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_stop hook while app is running",
-        [](detail::app_state& state_value) { state_value.on_stop_hooks_.clear(); });
+        [retired = std::pmr::vector<app_hook>(process_resource())](detail::app_state& state_value) mutable {
+            retired.swap(state_value.on_stop_hooks_);
+        });
 }
 
 application& application::rate_limit(rate_limit_config config) {

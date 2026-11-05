@@ -3,8 +3,6 @@
 #include <memory_resource>
 #include <optional>
 #include <string>
-#include <utility>
-#include <vector>
 
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
@@ -15,16 +13,6 @@
 #include "http/request_query_values.h"
 
 namespace ruvia::detail {
-
-struct request_field_cache final {
-    request_field_cache(std::pmr::vector<std::pmr::string>&& owned_storage,
-        request_name_value_list&& owned_fields) noexcept
-        : storage_(std::move(owned_storage)),
-          fields_(std::move(owned_fields)) {}
-
-    std::pmr::vector<std::pmr::string> storage_;
-    request_name_value_list fields_;
-};
 
 // One arena object owns every request-local context value that is not a
 // borrowed pointer: lazy caches, response/session machines, and typed bindings.
@@ -49,7 +37,8 @@ public:
     std::optional<request_name_value_list> headers_;
     std::optional<request_query_cache> query_;
     std::optional<request_name_value_list> cookies_;
-    std::optional<request_field_cache> route_params_;
+    // Views borrow route storage, the request path, or decoded bytes in the request arena.
+    std::optional<request_name_value_list> route_params_;
     bool route_params_invalid_{false};
     bool route_params_unencoded_{false};
 };

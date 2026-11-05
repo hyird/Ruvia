@@ -13,30 +13,17 @@
 #include "http2/http2_frame_payload.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_window_update.h"
+#include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
 namespace {
-// Defense-in-depth budgets for the sans-I/O h2 core. The core has no clock, so these are
-// per-connection counters (not rates); both trip GOAWAY(ENHANCE_YOUR_CALM).
-//
-// PING flood: every non-ACK PING is echoed as an ACK into the outbound buffer. Cap the
-// number of inbound PINGs seen since the owner last drained output; the counter resets on
-// every output drain (take_output_batch = ACKs flushed), so healthy keepalive
-// never trips and only a peer piling on PINGs faster than we can flush the ACKs does.
-constexpr std::uint32_t http2_max_undrained_pings = 1000;
-// SETTINGS flood (CVE-2019-9515): every non-ACK SETTINGS frame is likewise echoed as a
-// SETTINGS ACK into the outbound buffer, so an unread peer piling on empty SETTINGS grows
-// output unboundedly exactly as a PING flood would. Same undrained-count budget, reset on
-// the same output drains; a peer legitimately re-tuning SETTINGS mid-connection sends only
-// a handful and never trips.
-constexpr std::uint32_t http2_max_undrained_settings = 1000;
-
-constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
 constexpr std::string_view http2_drain_debug = "connection draining";
-// Opaque payload of the graceful-drain PING (RFC 9113 §6.7 echoes it unchanged).
+// Opaque payloads of the locally originated PINGs (RFC 9113 §6.7 echoes them
+// unchanged); distinct values tell the graceful-drain round trip from liveness.
 constexpr std::string_view http2_drain_ping_payload = "ruviadrn";
-static_assert(http2_drain_ping_payload.size() == 8);
+constexpr std::string_view http2_liveness_ping_payload = "ruvialiv";
+static_assert(http2_drain_ping_payload.size() == 8 && http2_liveness_ping_payload.size() == 8);
 
 [[nodiscard]] std::size_t http2_goaway_encoded_bytes(std::string_view debug) {
     constexpr std::size_t goaway_fixed_payload_bytes = 8;
@@ -47,6 +34,14 @@ static_assert(http2_drain_ping_payload.size() == 8);
     return fixed_bytes + debug.size();
 }
 }  // namespace
+
+bool http2_connection::admit_undrained_control_frame() {
+    if (undrained_control_frames_ < max_undrained_control_frames) {
+        return true;
+    }
+    append_goaway(http2_error_code::enhance_your_calm, "excessive control frames");
+    return false;
+}
 
 http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push,
     bool receive_origin_advertisements, bool receive_frame_metadata)
@@ -60,7 +55,6 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
       peer_settings_(role),
       events_(std::make_move_iterator(static_cast<http2_event*>(nullptr)),
           std::make_move_iterator(static_cast<http2_event*>(nullptr)), resource),
-      pinned_streams_(std::size_t{0}, resource),
       role_(role),
       connection_send_window_(http2_default_initial_window_size),
       connection_receive_window_(static_cast<std::int32_t>(http2_local_settings::initial_window_size)) {
@@ -76,8 +70,7 @@ http2_output_batch_result http2_connection::take_output_batch(std::size_t max_by
     std::pmr::string& into, http2_data_output_observer_type observer, void* observer_context) {
     const auto result_value = output_.take_batch(max_bytes, into, observer, observer_context);
     if (result_value.status_ == http2_output_batch_status::taken && !output_.wants_write()) {
-        consecutive_pings_ = 0;
-        consecutive_settings_ = 0;
+        undrained_control_frames_ = 0;
     }
     return result_value;
 }
@@ -94,42 +87,46 @@ http2_event* http2_connection::peek_event() & noexcept {
 }
 
 bool http2_connection::has_pending_events(std::uint32_t stream_id) const noexcept {
-    for (std::size_t index = event_offset_; index < events_.size(); ++index) {
-        if (events_[index].references_stream(stream_id)) {
-            return true;
-        }
-    }
-    return false;
+    // A removed stream has no storage left for a queued event to read.
+    const auto* stream = streams_.find(stream_id);
+    return stream != nullptr && stream->has_pending_events();
 }
 
 void http2_connection::consume_event() noexcept {
     if (event_offset_ >= events_.size()) {
         std::terminate();
     }
-    ++event_offset_;
+    // Snapshot the ids first: a lease retry may publish events and reallocate the queue.
+    std::array<std::uint32_t, 2> stream_ids{};
+    std::size_t stream_count = 0;
+    events_[event_offset_++].for_each_referenced_stream([&](std::uint32_t stream_id) noexcept {
+        stream_ids[stream_count++] = stream_id;
+    });
+    // Only the consumed event's streams can newly satisfy a deferred lease release.
+    for (std::size_t index = 0; index < stream_count; ++index) {
+        if (auto* stream = streams_.find(stream_ids[index])) {
+            stream->remove_pending_event();
+        }
+        retry_deferred_stream_lease(stream_ids[index]);
+    }
+}
+
+void http2_connection::publish_event(http2_event event) {
+    events_.push_back(std::move(event));
+    events_.back().for_each_referenced_stream([this](std::uint32_t stream_id) noexcept {
+        if (auto* stream = streams_.find(stream_id)) {
+            stream->add_pending_event();
+        }
+    });
 }
 
 void http2_connection::reserve_event_slots(std::size_t count) {
-    const auto max_size = events_.max_size();
-    if (count > max_size - events_.size()) {
+    if (count > events_.max_size() - events_.size()) {
         throw std::length_error("HTTP/2 event queue size overflow");
     }
     // Reserve before state changes, without forcing a reallocation for every frame.
-    const auto required = events_.size() + count;
-    if (required > events_.capacity()) {
-        const auto doubled = events_.capacity() > max_size / 2
-                                 ? max_size
-                                 : events_.capacity() * 2;
-        events_.reserve(std::max(required, doubled));
-    }
+    reserve_geometric(events_, events_.size() + count);
 }
-
-// =============================================================================
-// Frame processing below is a 1:1 port of the retired coroutine session's pure
-// logic: inline async_write became append-to-output_, coroutine resume became
-// events / drained-data marking. The coroutine stack itself is deleted; this
-// core is the single h2 implementation for both server and client roles.
-// =============================================================================
 
 void http2_connection::append_goaway(http2_error_code error, std::string_view debug) {
     // RFC 9113 §6.8: "Endpoints MUST NOT increase the value they send in the last
@@ -250,8 +247,8 @@ bool http2_connection::apply_settings_payload(std::string_view payload_value) {
                                       initial_window_baseline;
     // Validate every intermediate window as well as the final setting before
     // publishing the candidate or changing any active stream.
-    if (!http2_apply_stream_send_window_delta(
-            streams_, initial_window_delta, minimum_window_delta, maximum_window_delta)) {
+    if (!streams_.apply_send_window_delta(
+            initial_window_delta, minimum_window_delta, maximum_window_delta)) {
         append_goaway(http2_error_code::flow_control_error, "stream window overflow");
         return false;
     }
@@ -264,7 +261,7 @@ bool http2_connection::apply_settings_payload(std::string_view payload_value) {
         encoder_table_size_update_pending_ = true;
     }
     candidate_value.complete_frame();
-    peer_settings_.replace_values_from(candidate_value);
+    peer_settings_ = candidate_value;
     return true;
 }
 
@@ -286,11 +283,9 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
         }
         return true;
     }
-    // Check the flood budget before applying this frame. The limit is based on
-    // ACKs that are still queued, so the frame that would exceed it must not
-    // consume any SETTINGS state before its fatal GOAWAY is constructed.
-    if (consecutive_settings_ >= http2_max_undrained_settings) {
-        append_goaway(http2_error_code::enhance_your_calm, "excessive SETTINGS");
+    // Check the control-output budget before applying this frame, so the frame
+    // that would exceed it consumes no SETTINGS state before its fatal GOAWAY.
+    if (!admit_undrained_control_frame()) {
         return false;
     }
     // The ACK is part of the SETTINGS transaction. Reserve it before changing
@@ -301,7 +296,6 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
     const auto previous_encoder_dynamic_table_size = encoder_dynamic_table_size_;
     const auto previous_encoder_table_size_update_pending = encoder_table_size_update_pending_;
     const auto previous_preface_phase = preface_phase_;
-    const auto previous_consecutive_settings = consecutive_settings_;
     const auto previous_initial_window_size = peer_settings_.initial_window_size();
     bool settings_applied = false;
     try {
@@ -317,14 +311,12 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
         if (preface_phase_ == preface_phase_type::awaiting_peer_settings) {
             preface_phase_ = preface_phase_type::ready;
         }
-        // SETTINGS flood budget (CVE-2019-9515): bound non-ACK SETTINGS seen since output
-        // was last drained, exactly like the PING flood, since each appends an ACK below.
-        ++consecutive_settings_;
         output_.append_frame(http2_frame_type::settings, http2_flag_ack, 0, {});
         if (receive_frame_metadata_) {
             // Last, after every throwing step: the view borrows the accepted input.
-            events_.push_back(http2_event(http2_received_settings(payload_value)));
+            publish_event(http2_event(http2_received_settings(payload_value)));
         }
+        ++undrained_control_frames_;
         return true;
     } catch (...) {
         if (settings_applied) {
@@ -332,15 +324,13 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
                 static_cast<std::int64_t>(peer_settings_.initial_window_size()) -
                 static_cast<std::int64_t>(previous_initial_window_size);
             const auto rollback_delta = -applied_initial_window_delta;
-            if (!http2_apply_stream_send_window_delta(
-                    streams_, rollback_delta, rollback_delta, rollback_delta)) {
+            if (!streams_.apply_send_window_delta(rollback_delta, rollback_delta, rollback_delta)) {
                 std::terminate();
             }
-            peer_settings_.replace_values_from(previous_settings);
+            peer_settings_ = previous_settings;
             encoder_dynamic_table_size_ = previous_encoder_dynamic_table_size;
             encoder_table_size_update_pending_ = previous_encoder_table_size_update_pending;
             preface_phase_ = previous_preface_phase;
-            consecutive_settings_ = previous_consecutive_settings;
             output_.rollback_to(output_checkpoint);
         }
         throw;
@@ -353,7 +343,7 @@ bool http2_connection::process_priority(const http2_frame_header& header_value, 
         return false;
     }
     if (payload_value.size() != 5) {
-        auto* const stream = find_stream(header_value.stream_id_);
+        auto* const stream = streams_.find(header_value.stream_id_);
         if (stream == nullptr || http2_stream_is_closed(*stream)) {
             // PRIORITY is allowed in every state, but RST_STREAM is not legal
             // on an idle or closed stream. Promote its mandatory stream
@@ -364,13 +354,12 @@ bool http2_connection::process_priority(const http2_frame_header& header_value, 
         // RFC 9113 section 6.3 makes malformed PRIORITY length a stream error,
         // unlike most fixed-size connection-control frames. Do not terminate
         // unrelated multiplexed streams for one bad advisory frame.
-        reset_stream(header_value.stream_id_, http2_error_code::frame_size_error);
-        return true;
+        return reset_stream_for_peer_error(header_value.stream_id_, http2_error_code::frame_size_error);
     }
     // RFC 9113 §6.3：已废弃的优先级树不参与协议状态或调度，元数据事件也不新增校验。
     if (receive_frame_metadata_) {
         reserve_event_slots(1);
-        events_.push_back(http2_event(http2_decode_priority_fields(
+        publish_event(http2_event(http2_decode_priority_fields(
             header_value.stream_id_, reinterpret_cast<const unsigned char*>(payload_value.data()))));
     }
     return true;
@@ -447,7 +436,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
     // first, so a throwing resource leaves both lifecycle sides retryable.
     finish_drain();
     peer_goaway_ = goaway;
-    events_.push_back(http2_event(goaway));
+    publish_event(http2_event(goaway));
 
     if (role_ == http2_role::server) {
         for (std::size_t i = 0; i < unprocessed_count; ++i) {
@@ -466,7 +455,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
                 close_notification_type::owner_already_knows)) {
             continue;
         }
-        events_.push_back(http2_event(http2_request_unprocessed_event(stream_id)));
+        publish_event(http2_event(http2_request_unprocessed_event(stream_id)));
     }
     return true;
 }
@@ -481,32 +470,42 @@ bool http2_connection::process_ping(const http2_frame_header& header_value, std:
         return false;
     }
     if ((header_value.flags_ & http2_flag_ack) != 0) {
-        // Only the drain PING is ever sent by this endpoint; its ACK completes the
-        // round trip that in-flight stream creation was given (RFC 9113 §6.8).
+        // The drain PING's ACK completes the round trip that in-flight stream
+        // creation was given (RFC 9113 §6.8). Any received frame, this ACK
+        // included, already proved liveness for submit_ping().
         if (payload_value == http2_drain_ping_payload) {
             finish_drain_round_trip();
+        } else if (payload_value == http2_liveness_ping_payload) {
+            liveness_ping_outstanding_ = false;
         }
         return true;
     }
-    // PING-flood budget: bound inbound PINGs seen since the owner last flushed output
-    // (see http2_max_undrained_pings). A peer echoing keepalive normally lets us drain the
-    // ACKs and resets the counter; one flooding PINGs without reading the ACKs trips.
-    if (consecutive_pings_ >= http2_max_undrained_pings) {
-        append_goaway(http2_error_code::enhance_your_calm, "excessive PING frames");
+    if (!admit_undrained_control_frame()) {
         return false;
     }
-    // The flood counter describes ACKs that are now queued. Reserve before either
-    // side effect so an allocation failure does not consume the peer's retryable
-    // PING or make the counter lie about the output buffer.
+    // Reserve before either side effect so an allocation failure does not
+    // consume the peer's retryable PING or make the budget lie about the output.
     output_.reserve_additional(http2_frame_header_bytes + payload_value.size());
     output_.append_frame(http2_frame_type::ping, http2_flag_ack, 0, payload_value);  // echo back
-    ++consecutive_pings_;
+    ++undrained_control_frames_;
     return true;
+}
+
+http2_submit_status http2_connection::submit_ping() {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return http2_submit_status::closed;
+    }
+    if (liveness_ping_outstanding_) {
+        return http2_submit_status::accepted;
+    }
+    output_.append_frame(http2_frame_type::ping, 0, 0, http2_liveness_ping_payload);
+    liveness_ping_outstanding_ = true;
+    return http2_submit_status::accepted;
 }
 
 http2_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
     if (role_ != http2_role::client || local_connection_state_.open() == nullptr || !stream_id ||
-        stream_id > 0x7fffffffU || ((stream_id & 1) == 0 && is_idle_stream_id(stream_id))) {
+        stream_id > http2_max_stream_id || ((stream_id & 1) == 0 && is_idle_stream_id(stream_id))) {
         return http2_submit_status::invalid_state;
     }
     std::array<char, 32> encoded{};
@@ -532,40 +531,42 @@ bool http2_connection::process_priority_update(const http2_frame_header& header_
         append_goaway(http2_error_code::frame_size_error, "PRIORITY_UPDATE frame payload too short");
         return false;
     }
-    const auto id = http2_read32(reinterpret_cast<const unsigned char*>(payload_value.data())) & 0x7fffffffU;
+    const auto id = http2_read31(reinterpret_cast<const unsigned char*>(payload_value.data()));
     if (!id || ((id & 1) == 0 && is_idle_stream_id(id))) {
         append_goaway(http2_error_code::protocol_error, "invalid prioritized stream");
         return false;
     }
-    std::erase_if(priorities_, [&](const auto& entry_value) {
-        const auto* stream = find_stream(entry_value.first);
-        return !is_idle_stream_id(entry_value.first) && (!stream || http2_stream_is_closed(*stream));
-    });
     const auto update = decode_http2_priority_update(std::span(payload_value.data(), payload_value.size()));
     if ((update.index() != 0)) {
         return true;  // A malformed Priority field does not prioritize a stream.
     }
-    std::size_t idle = 0;
-    for (const auto& entry : priorities_) {
-        if (is_idle_stream_id(entry.first)) {
-            ++idle;
-        }
+    const bool new_entry = !priorities_.contains(id);
+    if (new_entry) {
+        // Entries are removed when their stream closes. An id the peer skipped
+        // never opens, so its entry becomes unreachable once a higher stream
+        // opens; drop those only when the map would otherwise grow.
+        std::erase_if(priorities_, [&](const auto& entry_value) {
+            return !is_idle_stream_id(entry_value.first) && streams_.find(entry_value.first) == nullptr;
+        });
     }
-    const bool new_idle = is_idle_stream_id(id) && !priorities_.contains(id);
-    std::size_t active = 0;
-    streams_.for_each([&](const auto& stream) {
-        if ((stream.id() & 1U) != 0 && !http2_stream_is_closed(stream) &&
-            stream.push_reservation() == http2_push_reservation::none) {
-            ++active;
+    const bool new_idle = new_entry && is_idle_stream_id(id);
+    if (new_idle) {
+        // RFC 9218 §7.1: retained idle priorities plus active peer streams stay
+        // within the advertised concurrency limit.
+        std::size_t idle = 0;
+        for (const auto& entry : priorities_) {
+            if (is_idle_stream_id(entry.first)) {
+                ++idle;
+            }
         }
-    });
-    if (active + idle + (new_idle ? 1u : 0u) > http2_local_settings::max_concurrent_streams) {
-        append_goaway(http2_error_code::protocol_error, "too many prioritized idle streams");
-        return false;
+        if (idle + 1 + open_streams_initiated_by(http2_role::client) > http2_local_settings::max_concurrent_streams) {
+            append_goaway(http2_error_code::protocol_error, "too many prioritized idle streams");
+            return false;
+        }
     }
     http2_stream_state* active_stream = nullptr;
     if (!is_idle_stream_id(id)) {
-        active_stream = find_stream(id);
+        active_stream = streams_.find(id);
         if (!active_stream || http2_stream_is_closed(*active_stream) ||
             active_stream->local_send().end_stream_committed() != nullptr) {
             return true;
@@ -577,7 +578,7 @@ bool http2_connection::process_priority_update(const http2_frame_header& header_
     if (active_stream != nullptr) {
         active_stream->set_priority_update(fields);
     }
-    events_.push_back(http2_event(std::get<0>(update)));
+    publish_event(http2_event(std::get<0>(update)));
     return true;
 }
 
@@ -594,7 +595,7 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
     const auto type = static_cast<http2_frame_type>(header_value.type_);
     const bool known_frame = header_value.type_ <= 9 ||
                              (role_ == http2_role::client && type == http2_frame_type::alternative_service);
-    if (auto* stream = find_stream(header_value.stream_id_); stream && !stream->is_aborted()) {
+    if (auto* stream = streams_.find(header_value.stream_id_); stream && !stream->is_aborted()) {
         if (known_frame) {
             const auto reservation = stream->push_reservation();
             const bool permitted = type == http2_frame_type::rst_stream || type == http2_frame_type::priority ||
@@ -645,7 +646,7 @@ bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offs
             break;
         }
         const auto header_value = http2_parse_frame_header(buffer.substr(offset, http2_frame_header_bytes));
-        if (header_value.length_ > http2_max_frame_size || header_value.length_ > local_max_frame_size_) {
+        if (header_value.length_ > http2_local_settings::max_frame_size) {
             append_goaway(http2_error_code::frame_size_error, "frame too large");
             return false;
         }
@@ -662,6 +663,35 @@ bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offs
         }
     }
     return true;
+}
+
+std::optional<http2_feed_result> http2_connection::consume_client_magic(
+    std::string_view buffer, std::size_t& offset) {
+    // Server mode: the 24-byte client connection preface precedes the first frame
+    // (RFC 9113 §3.4). Consume and validate it before any frame parsing.
+    if (preface_phase_ != preface_phase_type::awaiting_client_magic) {
+        return std::nullopt;
+    }
+    if (buffer.size() - offset < http2_client_preface.size()) {
+        return http2_feed_result::need_input;
+    }
+    if (buffer.substr(offset, http2_client_preface.size()) != http2_client_preface) {
+        append_goaway(http2_error_code::protocol_error, "invalid connection preface");
+        return http2_feed_result::protocol_failure;
+    }
+    offset += http2_client_preface.size();
+    preface_phase_ = preface_phase_type::awaiting_peer_settings;
+    return std::nullopt;
+}
+
+http2_feed_result http2_connection::dispatch_input(std::string_view buffer, std::size_t& offset) {
+    if (const auto magic_result = consume_client_magic(buffer, offset)) {
+        return *magic_result;
+    }
+    if (!consume_frames(buffer, offset) || local_connection_state_.fatal_failure() != nullptr) {
+        return http2_feed_result::protocol_failure;
+    }
+    return offset < buffer.size() ? http2_feed_result::need_input : http2_feed_result::accepted;
 }
 
 http2_feed_result http2_connection::feed(std::string_view in) {
@@ -687,8 +717,8 @@ http2_feed_result http2_connection::feed(std::string_view in) {
     // documented contract. All prior events have been pulled (enforced above), so the
     // exhausted queue and its now-stale views can be reset. A retry keeps the prefix
     // and cursor intact until the retained uncommitted suffix has been dispatched.
-    const bool retrying_input = retry_input_;
-    if (!retrying_input && input_offset_ > 0) {
+    const auto retry_offset = std::exchange(retry_offset_, std::nullopt);
+    if (!retry_offset && input_offset_ > 0) {
         if (input_offset_ == input_.size()) {
             http_clear_pmr_string_retaining_small(input_);
             input_offset_ = 0;
@@ -701,91 +731,31 @@ http2_feed_result http2_connection::feed(std::string_view in) {
     event_offset_ = 0;
 
     if (input_.empty()) {
-        std::size_t offset = retrying_input ? std::min(retry_in_offset_, in.size()) : std::size_t{0};
+        // FAST PATH: parse over the caller's bytes; only an incomplete tail is owned.
+        std::size_t offset = retry_offset ? std::min(*retry_offset, in.size()) : std::size_t{0};
         try {
-            if (preface_phase_ == preface_phase_type::awaiting_client_magic) {
-                if (in.size() - offset < http2_client_preface.size()) {
-                    input_.append(in.data() + offset, in.size() - offset);
-                    retry_input_ = false;
-                    retry_in_offset_ = 0;
-                    return http2_feed_result::need_input;
-                }
-                if (in.substr(offset, http2_client_preface.size()) != http2_client_preface) {
-                    append_goaway(http2_error_code::protocol_error, "invalid connection preface");
-                    retry_input_ = false;
-                    retry_in_offset_ = 0;
-                    return http2_feed_result::protocol_failure;
-                }
-                offset += http2_client_preface.size();
-                preface_phase_ = preface_phase_type::awaiting_peer_settings;
-            }
-
-            if (!consume_frames(in, offset)) {
-                retry_input_ = false;
-                retry_in_offset_ = 0;
-                return http2_feed_result::protocol_failure;
-            }
-            if (local_connection_state_.fatal_failure() != nullptr) {
-                retry_input_ = false;
-                retry_in_offset_ = 0;
-                return http2_feed_result::protocol_failure;
-            }
-            if (offset < in.size()) {
+            const auto result_value = dispatch_input(in, offset);
+            if (result_value == http2_feed_result::need_input) {
                 input_.append(in.data() + offset, in.size() - offset);
-                retry_input_ = false;
-                retry_in_offset_ = 0;
-                return http2_feed_result::need_input;
             }
-            retry_input_ = false;
-            retry_in_offset_ = 0;
-            return http2_feed_result::accepted;
+            return result_value;
         } catch (...) {
-            retry_input_ = true;
-            retry_in_offset_ = offset;
+            retry_offset_ = offset;
             throw;
         }
     }
 
     // SLOW PATH: a buffered partial-frame tail is pending in input_. Own all new
     // bytes before dispatch. If dispatch throws, retain the cursor and do not
-    // append the caller's retry span a second time.
-    if (!retrying_input) {
+    // append the caller's retry span a second time. The consumed prefix is
+    // reclaimed at the start of the next feed, so event views stay valid until then.
+    if (!retry_offset) {
         input_.append(in.data(), in.size());
     }
-
     try {
-        // Server mode: the 24-byte client connection preface precedes the first frame
-        // (RFC 9113 §3.4). Consume + validate it before any frame parsing.
-        if (preface_phase_ == preface_phase_type::awaiting_client_magic) {
-            if (input_.size() - input_offset_ < http2_client_preface.size()) {
-                return http2_feed_result::need_input;  // wait for the full preface
-            }
-            if (std::string_view(input_.data() + input_offset_, http2_client_preface.size()) !=
-                http2_client_preface) {
-                append_goaway(http2_error_code::protocol_error, "invalid connection preface");
-                return http2_feed_result::protocol_failure;
-            }
-            input_offset_ += http2_client_preface.size();
-            preface_phase_ = preface_phase_type::awaiting_peer_settings;
-        }
-
-        if (!consume_frames(std::string_view(input_), input_offset_)) {
-            return http2_feed_result::protocol_failure;
-        }
-        // NOTE: the consumed prefix is reclaimed at the START of the next feed (see
-        // above), so body-chunk views handed out via events stay valid until then.
-        if (local_connection_state_.fatal_failure() != nullptr) {
-            return http2_feed_result::protocol_failure;
-        }
-        retry_input_ = false;
-        retry_in_offset_ = 0;
-        return input_offset_ < input_.size() ? http2_feed_result::need_input
-                                             : http2_feed_result::accepted;
+        return dispatch_input(std::string_view(input_), input_offset_);
     } catch (...) {
-        if (!retrying_input) {
-            retry_input_ = true;
-            retry_in_offset_ = 0;
-        }
+        retry_offset_ = std::size_t{0};
         throw;
     }
 }

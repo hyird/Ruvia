@@ -13,7 +13,7 @@
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_config_storage.h"
-#include "redis/redis_registry.h"
+#include "redis/redis_pool.h"
 #include "redis/redis_subscription_connection.h"
 
 namespace ruvia::detail {

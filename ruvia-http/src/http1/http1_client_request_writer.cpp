@@ -80,6 +80,7 @@ struct http1_client_request_prepare_result_access final {
 namespace ruvia {
 namespace {
 
+constexpr std::string_view crlf = "\r\n";
 constexpr std::string_view http11_request_line_suffix = " HTTP/1.1\r\n";
 constexpr std::string_view host_prefix = "Host: ";
 constexpr std::string_view content_length_prefix = "Content-Length: ";
@@ -163,7 +164,7 @@ struct request_head_write_plan final {
 }
 
 [[nodiscard]] std::pmr::string own_offered_upgrade_protocols(
-    std::span<const http_header_view> headers, const request_header_facts& facts,
+    std::span<const http_header_view> headers, const detail::http1_client_request_field_facts& facts,
     std::pmr::memory_resource* resource) {
     if (facts.upgrade_field_count_ == 0) {
         return std::pmr::string(resource);
@@ -185,14 +186,23 @@ struct request_head_write_plan final {
     return result;
 }
 
-[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(
-    std::string_view method, std::string_view target, http1_client_request_wire_policy policy,
-    http_known_method& known_method) noexcept {
+// Every request line, CONNECT included, rejects these wire policies first.
+[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_wire_policy(
+    http1_client_request_wire_policy policy) noexcept {
     if (!is_valid_http1_close_policy(policy.close_policy_)) {
         return http1_client_request_prepare_error::invalid_close_policy;
     }
     if (!is_valid_http_client_request_expectation(policy.expectation_)) {
         return http1_client_request_prepare_error::invalid_expectation;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(
+    std::string_view method, std::string_view target, http1_client_request_wire_policy policy,
+    http_known_method& known_method) noexcept {
+    if (const auto error = validate_wire_policy(policy)) {
+        return error;
     }
     if (!is_valid_http_method_token(method)) {
         return http1_client_request_prepare_error::invalid_method;
@@ -218,7 +228,7 @@ struct request_head_write_plan final {
             http1_client_request_prepare_error::invalid_header);
     }
     const bool connect = known_method == http_known_method::connect;
-    request_header_facts header_facts;
+    detail::http1_client_request_field_facts header_facts;
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
     const auto* content_bytes = content.borrowed_bytes();
     const bool explicit_content = content_bytes != nullptr || streaming != nullptr;
@@ -228,7 +238,7 @@ struct request_head_write_plan final {
                         : content_bytes ? std::optional<std::uint64_t>(content_bytes->value().size())
                                         : std::nullopt;
     const bool chunked = streaming && !length;
-    if (!analyze_headers(headers, header_facts, error, policy.field_source_)) {
+    if (!detail::analyze_http1_client_request_fields(headers, header_facts, error, policy.field_source_)) {
         return detail::http1_client_request_prepare_result_access::failure(error);
     }
     // A sender that will generate trailer fields SHOULD declare them (RFC 9110
@@ -363,13 +373,8 @@ struct request_head_write_plan final {
 [[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_connect_request(
     const http_origin_view* tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer,
     http1_client_request_wire_policy policy, std::pmr::memory_resource* resource) {
-    if (!is_valid_http1_close_policy(policy.close_policy_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_close_policy);
-    }
-    if (!is_valid_http_client_request_expectation(policy.expectation_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_expectation);
+    if (const auto error = validate_wire_policy(policy)) {
+        return detail::http1_client_request_prepare_result_access::failure(*error);
     }
     if (tunnel_origin == nullptr || tunnel_origin->port() == 0) {
         return detail::http1_client_request_prepare_result_access::failure(
@@ -506,10 +511,12 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
     http1_client_request_prepare_error>
 http1_client_request_writer::prepare_connect(borrowed_text authority,
     std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    if (!is_valid_http_connect_authority(authority.view())) {
+    // RFC 9110 section 9.3.6: the tunnel destination needs a non-empty port,
+    // and port zero is rejected by prepare_connect_request.
+    const auto parsed_value = parse_http_authority(authority);
+    if (!parsed_value || parsed_value->port_kind() != http_authority_port_kind::value) {
         return prepare_connect_request(nullptr, headers, head_buffer, policy, resource_);
     }
-    const auto parsed_value = parse_http_authority(authority.view());
     const auto tunnel_origin =
         http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
     return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy, resource_);

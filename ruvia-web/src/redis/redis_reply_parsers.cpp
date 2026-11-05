@@ -1,13 +1,22 @@
+#include "redis/redis_reply_parsers.h"
+
+#include <array>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/util/decimal_number.h"
 
-#include "redis/redis_handle_helpers.h"
+#include "redis/redis_command_args.h"
 #include "redis/redis_types_access.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {
 namespace {
@@ -25,6 +34,173 @@ namespace {
 }
 
 }  // namespace
+
+std::string_view redis_value_string(const redis_value& value) {
+    throw_if_redis_error(value);
+    if (value.kind() != redis_value::kind_type::string) {
+        throw redis_error(redis_error::code_type::protocol_error, "redis reply is not a string");
+    }
+    return value.string();
+}
+
+std::pmr::string take_redis_string(redis_value&& value, std::pmr::memory_resource* resource) {
+    (void)redis_value_string(value);
+    return rebind_owned_storage(redis_types_access::text(value), pmr_resource_or_default(resource));
+}
+
+std::int64_t redis_value_integer(const redis_value& value) {
+    throw_if_redis_error(value);
+    if (value.kind() != redis_value::kind_type::integer) {
+        throw redis_error(redis_error::code_type::protocol_error, "redis reply is not an integer");
+    }
+    return value.integer();
+}
+
+bool redis_value_integer_bool(const redis_value& value) {
+    const auto integer = redis_value_integer(value);
+    if (integer == 0) {
+        return false;
+    }
+    if (integer == 1) {
+        return true;
+    }
+    throw redis_error(redis_error::code_type::protocol_error, "redis boolean reply is not 0 or 1");
+}
+
+std::span<const redis_value> redis_value_array(const redis_value& value) {
+    throw_if_redis_error(value);
+    if (value.kind() != redis_value::kind_type::array) {
+        throw redis_error(redis_error::code_type::protocol_error, "redis reply is not an array");
+    }
+    return value.array();
+}
+
+std::span<redis_value> redis_value_array(redis_value& value) {
+    (void)redis_value_array(std::as_const(value));
+    return redis_types_access::elements(value);
+}
+
+void throw_if_redis_error(const redis_value& value) {
+    if (value.kind() == redis_value::kind_type::error) {
+        throw redis_error(redis_error::code_type::command_error, value.error());
+    }
+}
+
+void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_t index) {
+    if (value.kind() != redis_value::kind_type::error) {
+        return;
+    }
+    std::array<char, http_max_unsigned_decimal_size> index_digits;
+    const auto index_text = http_format_unsigned(index_digits, index);
+    std::string message;
+    message.reserve(26 + index_text.size() + value.error().size());
+    message.append("redis transaction reply ");
+    message.append(index_text);
+    message.append(": ");
+    message.append(value.error());
+    throw redis_error(redis_error::code_type::command_error, message);
+}
+
+std::optional<std::pmr::string> parse_redis_optional_string(redis_value&& value, std::pmr::memory_resource* resource) {
+    throw_if_redis_error(value);
+    if (value.null()) {
+        return std::nullopt;
+    }
+    return take_redis_string(std::move(value), resource);
+}
+
+std::int64_t parse_redis_integer(redis_value&& value, std::pmr::memory_resource*) {
+    return redis_value_integer(value);
+}
+
+bool parse_redis_integer_bool(redis_value&& value, std::pmr::memory_resource*) {
+    return redis_value_integer_bool(value);
+}
+
+void parse_redis_ok(redis_value&& value, std::pmr::memory_resource*) {
+    if (!http_ascii_equals_ignore_case(redis_value_string(value), "OK")) {
+        throw redis_error(redis_error::code_type::command_error, "unexpected redis status reply");
+    }
+}
+
+void parse_redis_pong(redis_value&& value, std::pmr::memory_resource*) {
+    if (!http_ascii_equals_ignore_case(redis_value_string(value), "PONG")) {
+        throw redis_error(redis_error::code_type::command_error, "unexpected redis ping reply");
+    }
+}
+
+std::pmr::vector<bool> parse_redis_bool_array(redis_value&& value, std::pmr::memory_resource* resource) {
+    const auto items = redis_value_array(std::as_const(value));
+    std::pmr::vector<bool> output(resource);
+    output.reserve(items.size());
+    for (const auto& item : items) {
+        output.emplace_back(redis_value_integer_bool(item));
+    }
+    return output;
+}
+
+std::pmr::vector<std::optional<std::pmr::string>> parse_redis_optional_string_array(
+    redis_value&& value, std::pmr::memory_resource* resource) {
+    const auto items = redis_value_array(value);
+    std::pmr::vector<std::optional<std::pmr::string>> output(resource);
+    output.reserve(items.size());
+    for (auto& item : items) {
+        output.emplace_back(parse_redis_optional_string(std::move(item), resource));
+    }
+    return output;
+}
+
+std::optional<double> parse_redis_optional_double(redis_value&& value, std::string_view context_value) {
+    throw_if_redis_error(value);
+    if (value.null()) {
+        return std::nullopt;
+    }
+    return parse_redis_double(redis_value_string(value), context_value);
+}
+
+redis_set_result parse_redis_set_reply(
+    redis_value&& value, std::pmr::memory_resource* resource, const redis_set_options& options) {
+    throw_if_redis_error(value);
+    const auto returns_previous = redis_set_returns_previous(options.previous_value_);
+    if (value.null()) {
+        const bool applied =
+            returns_previous &&
+            (!options.condition_.has_value() || *options.condition_ == redis_set_condition::if_absent);
+        return redis_types_access::set_result(applied);
+    }
+    if (!returns_previous) {
+        if (!http_ascii_equals_ignore_case(redis_value_string(value), "OK")) {
+            throw redis_error(redis_error::code_type::command_error, "unexpected redis set reply");
+        }
+        return redis_types_access::set_result(true);
+    }
+    const bool applied =
+        !options.condition_.has_value() || *options.condition_ != redis_set_condition::if_absent;
+    return redis_types_access::set_result(applied, take_redis_string(std::move(value), resource));
+}
+
+redis_ttl parse_redis_ttl(redis_value&& value, bool seconds_precision) {
+    const auto integer = redis_value_integer(value);
+    if (integer == -2) {
+        return redis_types_access::ttl(redis_ttl_state::missing);
+    }
+    if (integer == -1) {
+        return redis_types_access::ttl(redis_ttl_state::persistent);
+    }
+    if (integer < 0) {
+        throw redis_error(redis_error::code_type::protocol_error, "invalid redis TTL reply");
+    }
+    using milliseconds_type = std::chrono::milliseconds;
+    auto milliseconds = integer;
+    if (seconds_precision) {
+        constexpr auto scale = milliseconds_type(std::chrono::seconds(1)).count();
+        if (integer > milliseconds_type::max().count() / scale) {
+            throw redis_error(redis_error::code_type::protocol_error, "redis TTL reply exceeds milliseconds range");
+        }
+        milliseconds *= scale;
+    }
+    return redis_types_access::ttl(redis_ttl_state::expiring, milliseconds_type(milliseconds));
+}
 
 // Redis replies non-finite doubles textually: scores added as +inf/-inf come
 // back as "inf"/"-inf", and RESP3-style doubles may also be "nan". Every other
@@ -85,10 +261,7 @@ std::pmr::vector<std::pmr::string> parse_redis_string_array(
     std::pmr::vector<std::pmr::string> output(resource);
     output.reserve(items.size());
     for (auto& item : items) {
-        throw_if_redis_error(item);
-        if (!item.null()) {
-            output.emplace_back(take_redis_string(std::move(item), resource));
-        }
+        output.emplace_back(take_redis_string(std::move(item), resource));
     }
     return output;
 }

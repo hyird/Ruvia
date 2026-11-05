@@ -23,8 +23,9 @@ public:
     http_client_advertisement_queue(const http_client_advertisement_queue&) = delete;
     http_client_advertisement_queue& operator=(const http_client_advertisement_queue&) = delete;
 
-    [[nodiscard]] bool retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins);
-    [[nodiscard]] bool retain(std::size_t slot, const http_alternative_service_advertisement& service);
+    // Drops (counted by dropped()) an observation beyond the configured bounds.
+    void retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins);
+    void retain(std::size_t slot, const http_alternative_service_advertisement& service);
     [[nodiscard]] std::optional<http_client_advertisement> next();
     void retire() noexcept;
     [[nodiscard]] std::size_t dropped() const noexcept {

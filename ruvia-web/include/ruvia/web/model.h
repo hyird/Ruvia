@@ -1150,24 +1150,14 @@ template <typename left_type, typename right_type>
 
 }  // namespace ruvia
 
-#include "ruvia/web/detail/json/json_array_elements.h"
+#include "ruvia/web/detail/json/json_containers.h"
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/json/json_skip.h"
 #include "ruvia/web/detail/model/macro/macros.h"
 #include "ruvia/web/detail/model/parse/json_parser.h"
 #include "ruvia/web/detail/model/parse/json_writer.h"
-#include "ruvia/web/detail/model/parse/parser.h"
 #include "ruvia/web/detail/model/rule/rules.h"
-
-namespace ruvia::detail {
-
-template <typename view_type>
-[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
-    bool require_object, json_parse_budget& budget);
-
-}
 
 namespace ruvia {
 
@@ -1198,13 +1188,7 @@ public:
               pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static json_value parse(std::string_view body, model_parse_options options = {}) {
-        auto input = body;
-        detail::json_parse_budget budget(options);
-        if (!budget.skip_value(input, 0)) {
-            throw std::invalid_argument("invalid JSON value");
-        }
-        detail::skip_json_whitespace(input);
-        if (!input.empty()) {
+        if (!detail::is_complete_json_value(body, options, false)) {
             throw std::invalid_argument("invalid JSON value");
         }
         return json_value(
@@ -1292,13 +1276,21 @@ public:
         return resource_;
     }
 
+    // get<T>() results may borrow this token's bytes, so rvalue tokens are
+    // rejected rather than left to dangle.
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    [[nodiscard]] std::optional<t_type> get() const;
+    [[nodiscard]] std::optional<t_type> get() const&;
+    template <typename t_type>
+        requires detail::is_model_field<t_type>
+    std::optional<t_type> get() const&& = delete;
 
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    [[nodiscard]] std::optional<t_type> get(std::string_view field) const;
+    [[nodiscard]] std::optional<t_type> get(std::string_view field) const&;
+    template <typename t_type>
+        requires detail::is_model_field<t_type>
+    std::optional<t_type> get(std::string_view field) const&& = delete;
 
     // The callback receives a json_value borrowing this object's token; it is
     // valid only for the duration of the callback.
@@ -1362,14 +1354,7 @@ public:
               pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static json_object parse(std::string_view body, model_parse_options options = {}) {
-        auto input = body;
-        detail::json_parse_budget budget(options);
-        detail::skip_json_whitespace(input);
-        if (input.empty() || input.front() != '{' || !budget.skip_value(input, 0)) {
-            throw std::invalid_argument("invalid JSON object");
-        }
-        detail::skip_json_whitespace(input);
-        if (!input.empty()) {
+        if (!detail::is_complete_json_value(body, options, true)) {
             throw std::invalid_argument("invalid JSON object");
         }
         return json_object(
@@ -1421,9 +1406,14 @@ public:
         return view() == other.view();
     }
 
+    // The result may borrow this token's bytes, so rvalue tokens are rejected
+    // rather than left to dangle.
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    [[nodiscard]] std::optional<t_type> get(std::string_view field) const;
+    [[nodiscard]] std::optional<t_type> get(std::string_view field) const&;
+    template <typename t_type>
+        requires detail::is_model_field<t_type>
+    std::optional<t_type> get(std::string_view field) const&& = delete;
 
 private:
     friend class json_value;
@@ -1522,8 +1512,7 @@ template <typename view_type>
     const auto token = start.substr(0, start.size() - remaining.size());
     view_type value(model_options{.resource_ = resource});
     if (string_storage == model_string_storage::owned) {
-        if (!budget.consume_bytes(token.size()) ||
-            !budget.consume_bytes(token.size() + sizeof(std::pmr::string))) {
+        if (!budget.consume_owned_text(token.size())) {
             return std::nullopt;
         }
         value.assign_owned(token);
@@ -1532,40 +1521,6 @@ template <typename view_type>
     }
     input = remaining;
     return value;
-}
-
-template <>
-inline std::optional<json_value> parse_json_value<json_value>(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
-    json_parse_budget& budget) {
-    return parse_json_view_value<json_value>(input, resource, depth, string_storage, false, budget);
-}
-
-template <>
-inline std::optional<json_object> parse_json_value<json_object>(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
-    json_parse_budget& budget) {
-    return parse_json_view_value<json_object>(input, resource, depth, string_storage, true, budget);
-}
-
-template <>
-inline std::size_t json_size_hint_value<json_value>(const json_value& value) {
-    return value.view().size();
-}
-
-template <>
-inline std::size_t json_size_hint_value<json_object>(const json_object& value) {
-    return value.view().size();
-}
-
-template <>
-inline void append_json_value<json_value>(std::pmr::string& output, const json_value& value) {
-    output.append(value.view());
-}
-
-template <>
-inline void append_json_value<json_object>(std::pmr::string& output, const json_object& value) {
-    output.append(value.view());
 }
 
 }  // namespace ruvia::detail

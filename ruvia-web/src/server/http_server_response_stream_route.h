@@ -30,12 +30,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     std::pmr::string& pipeline_stash) {
     const auto body_and_pipeline = http_body_and_pipeline(request_head, request_bytes);
     http_lazy_buffered_body_route_state<stream_type> body_state;
-    std::exception_ptr body_setup_failure;
-    try {
-        prepare_http_lazy_buffered_body_route(body_state, d, body_limit_value, body_and_pipeline);
-    } catch (...) {
-        body_setup_failure = std::current_exception();
-    }
+    const auto body_setup_failure =
+        try_prepare_http_lazy_buffered_body_route(body_state, d, body_limit_value, body_and_pipeline);
     if (body_setup_failure != nullptr) {
         co_return co_await complete_failed_http_route(d.scanner_entry_, body_setup_failure, d.parsed_,
             d.routes_, d.request_memory_, d.base_route_services_, d.response_);
@@ -57,7 +53,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
         stream_plan,
         http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
-        body_state.body(), d.response_coding_, d.response_coding_availability_, &d.inbound_buffer_pool_);
+        body_state.body(), d.response_coding_, d.response_coding_availability_, d.inbound_buffer_pool_);
 
     // The handler stays in the session's idle deadman phase; the sink times
     // its own writes.

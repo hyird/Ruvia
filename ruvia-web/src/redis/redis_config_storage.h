@@ -26,19 +26,19 @@ struct redis_config_storage final {
         : redis_config_storage(validated_config_tag_type{}, source_value, pmr_resource_or_default(resource)) {}
 
     std::pmr::string host_;
-    std::uint16_t port_{6379};
+    std::uint16_t port_;
     std::pmr::string username_;
     std::pmr::string password_;
     client_tls_config_storage tls_;
-    std::uint32_t database_{0};
-    std::size_t pool_size_per_worker_{4};
-    std::size_t blocking_pool_size_per_worker_{1};
+    std::uint32_t database_;
+    std::size_t pool_size_per_worker_;
+    std::size_t blocking_pool_size_per_worker_;
     std::optional<std::chrono::milliseconds> connect_timeout_;
     std::optional<std::chrono::milliseconds> command_timeout_;
     std::optional<std::chrono::milliseconds> acquire_timeout_;
-    std::optional<std::size_t> max_reply_bytes_{64 * 1024 * 1024};
-    std::size_t max_array_depth_{64};
-    client_tcp_config tcp_{.keep_alive_ = tcp_keep_alive_policy::system_default};
+    std::optional<std::size_t> max_reply_bytes_;
+    std::size_t max_array_depth_;
+    client_tcp_config tcp_;
 
 private:
     struct validated_config_tag_type final {};

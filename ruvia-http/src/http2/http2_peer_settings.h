@@ -83,19 +83,8 @@ public:
         return enable_push_;
     }
 
-    // A complete SETTINGS frame is validated against a detached candidate and
-    // committed only after every entry has passed. The local role is immutable,
-    // so only the peer-controlled values need to be copied into the live state.
-    void replace_values_from(const http2_peer_settings& candidate_value) noexcept {
-        first_frame_ = candidate_value.first_frame_;
-        no_rfc7540_priorities_ = candidate_value.no_rfc7540_priorities_;
-        enable_push_ = candidate_value.enable_push_;
-        max_frame_size_ = candidate_value.max_frame_size_;
-        initial_window_size_ = candidate_value.initial_window_size_;
-        max_concurrent_streams_ = candidate_value.max_concurrent_streams_;
-        enable_connect_protocol_ = candidate_value.enable_connect_protocol_;
-    }
-
+    // A complete SETTINGS frame is validated against a detached copy and committed
+    // by assignment only after every entry has passed.
     [[nodiscard]] std::optional<http2_peer_setting_error> apply(
         http2_setting_id id, std::uint32_t value) noexcept {
         switch (id) {
@@ -150,7 +139,8 @@ public:
     }
 
 private:
-    const http2_role local_role_;
+    // Fixed at construction; no member function changes it.
+    http2_role local_role_;
     std::uint32_t max_frame_size_{http2_default_max_frame_size};
     // HEADER_TABLE_SIZE and MAX_HEADER_LIST_SIZE need no stored fields: the
     // encoder never indexes the HPACK dynamic table (static index + literal

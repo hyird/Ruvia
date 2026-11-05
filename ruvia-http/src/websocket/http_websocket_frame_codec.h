@@ -111,16 +111,6 @@ private:
     return is_websocket_control_frame_kind(frame.kind()) && (!frame.final() || payload_size > 125);
 }
 
-[[nodiscard]] inline bool websocket_message_exceeds_limit(
-    std::size_t payload_size, protocol_byte_limit message_limit) noexcept {
-    return message_limit.exceeds(payload_size);
-}
-
-[[nodiscard]] inline bool websocket_append_exceeds_limit(
-    std::size_t current_size, std::size_t append_size, protocol_byte_limit message_limit) noexcept {
-    return message_limit.addition_exceeds(current_size, append_size);
-}
-
 [[nodiscard]] inline bool websocket_frame_length_exceeds_limit(
     std::uint64_t payload_size, protocol_byte_limit message_limit) noexcept {
     if (payload_size > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {

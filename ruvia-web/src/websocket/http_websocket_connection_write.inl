@@ -24,18 +24,6 @@
 
 namespace ruvia::detail {
 
-struct websocket_write_progress final {
-    connection_scanner::entry* entry_;
-
-    [[nodiscard]] std::size_t operator()(
-        const std::error_code& ec, std::size_t bytes_transferred) const noexcept {
-        if (bytes_transferred != 0) {
-            entry_->touch();
-        }
-        return asio::transfer_all()(ec, bytes_transferred);
-    }
-};
-
 template <typename stream_type>
 task<void> server_websocket_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {
     require_current_worker();
@@ -186,9 +174,9 @@ auto server_websocket_connection<stream_type>::write_bytes(const websocket_outpu
             asio::buffer(plan.bytes().data(), plan.bytes().size()),
             asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
         return ruvia::async_asio([this, buffers](auto handler) mutable {
-            // Partial progress refreshes heartbeat transport activity.
-            asio::async_write(
-                stream_, buffers, websocket_write_progress{&scanner_entry_}, std::move(handler));
+            // Partial progress refreshes heartbeat transport activity and the
+            // write_timeout inactivity clock.
+            asio::async_write(stream_, buffers, connection_write_progress(scanner_entry_), std::move(handler));
         });
     }
 }
@@ -214,12 +202,15 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
             co_return;
         }
         if (size != 0 || (!native_stream && disposition == websocket_transport_disposition::end_transport)) {
-            const auto write_completion = co_await write_bytes(plan);
             std::error_code ec;
             if constexpr (native_stream) {
-                ec = write_completion.error_code();
+                // The server write_timeout_ bounds a native write stalled by a
+                // peer that stopped reading, whatever the reader's phase. An
+                // HTTP/2-adapted stream is bounded by its session's writer.
+                const connection_scanner::entry::write_scope write_stall_clock(scanner_entry_);
+                ec = (co_await write_bytes(plan)).error_code();
             } else {
-                ec = write_completion;
+                ec = co_await write_bytes(plan);
             }
             if (ec) {
                 close_stream();

@@ -57,8 +57,6 @@ public:
 
 private:
     friend class worker_runtime;
-    // Borrowed members in registration order.
-
     [[nodiscard]] bool launch(worker_runtime& member);
     [[nodiscard]] bool settle(bool reached, const char* phase);
     void member_failed(worker_runtime& member, std::exception_ptr failure) noexcept;
@@ -67,6 +65,7 @@ private:
     [[nodiscard]] std::exception_ptr observe_phase_failure() noexcept;
     [[noreturn]] void rethrow_phase_failure(std::exception_ptr fallback);
 
+    // Borrowed members in registration order.
     std::pmr::vector<worker_runtime*> members_;
     mutable std::mutex mutex_;
     std::condition_variable stop_changed_;

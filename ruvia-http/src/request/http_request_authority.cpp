@@ -41,27 +41,8 @@ std::optional<http_authority_view> parse_http_authority(borrowed_text text) noex
     std::string_view host;
     std::string_view port_text;
     bool has_port_delimiter = false;
-    if (value.front() == '[') {
-        const auto close = value.find(']');
-        if (close == std::string_view::npos) {
-            return std::nullopt;
-        }
-        host = value.substr(0, close + 1);
-        const auto remainder = value.substr(close + 1);
-        if (!remainder.empty()) {
-            if (remainder.front() != ':') {
-                return std::nullopt;
-            }
-            has_port_delimiter = true;
-            port_text = remainder.substr(1);
-        }
-    } else {
-        const auto colon = value.find(':');
-        host = colon == std::string_view::npos ? value : value.substr(0, colon);
-        if (colon != std::string_view::npos) {
-            has_port_delimiter = true;
-            port_text = value.substr(colon + 1);
-        }
+    if (!detail::split_uri_host_port(value, host, port_text, has_port_delimiter)) {
+        return std::nullopt;
     }
 
     if (!detail::is_valid_http_host(host)) {

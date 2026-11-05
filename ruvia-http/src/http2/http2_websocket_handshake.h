@@ -12,7 +12,9 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "http2/http2_header_rules.h"
 #include "http2/http2_hpack.h"
+#include "http2/http2_hpack_static_table.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_stream_state.h"
@@ -74,31 +76,26 @@ inline void http2_encode_websocket_handshake_headers(
             return field.name() == "date";
         });
         const auto date = has_date ? std::string_view{} : cached_date_value();
-        std::size_t reserve_bytes = 5U + (date.empty() ? 0U : date.size() + 4U) +
-                                    (negotiation.subprotocol().empty()
-                                            ? 0U
-                                            : 22U + negotiation.subprotocol().size() + 6U) +
-                                    (negotiation.extensions().empty()
-                                            ? 0U
-                                            : 24U + negotiation.extensions().size() + 6U);
-        for (const auto& field : fields_value) {
-            reserve_bytes += field.name().size() + field.value().size() + 6U;
-        }
-        if (reserve_bytes > 15U) {
-            header_block.reserve(reserve_bytes);
-        }
+        constexpr std::string_view subprotocol_name = "sec-websocket-protocol";
+        constexpr std::string_view extensions_name = "sec-websocket-extensions";
+        const auto subprotocol = negotiation.subprotocol();
+        const auto extensions = negotiation.extensions();
+        // :status 200 is one indexed octet.
+        http2_reserve_field_block(header_block,
+            1U + (date.empty() ? 0U : date.size() + hpack_literal_overhead_bytes) +
+                (subprotocol.empty() ? 0U : subprotocol_name.size() + subprotocol.size() + hpack_literal_overhead_bytes) +
+                (extensions.empty() ? 0U : extensions_name.size() + extensions.size() + hpack_literal_overhead_bytes),
+            fields_value);
         hpack_encoder::encode_status(header_block, http_status::ok);
         if (!date.empty()) {
             hpack_encoder::encode_header_with_name_index(
-                header_block, hpack_static_index::date, date);
+                header_block, hpack_static_name_index("date"), date);
         }
-        if (!negotiation.subprotocol().empty()) {
-            hpack_encoder::encode_header(
-                header_block, "sec-websocket-protocol", negotiation.subprotocol());
+        if (!subprotocol.empty()) {
+            hpack_encoder::encode_header(header_block, subprotocol_name, subprotocol);
         }
-        if (!negotiation.extensions().empty()) {
-            hpack_encoder::encode_header(
-                header_block, "sec-websocket-extensions", negotiation.extensions());
+        if (!extensions.empty()) {
+            hpack_encoder::encode_header(header_block, extensions_name, extensions);
         }
         for (const auto& field : fields_value) {
             hpack_encoder::encode_header(header_block, field.name(), field.value());

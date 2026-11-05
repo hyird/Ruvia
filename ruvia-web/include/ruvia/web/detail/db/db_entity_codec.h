@@ -20,8 +20,8 @@
 
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_rows.h"
+#include "ruvia/web/detail/db/db_number_format.h"
 #include "ruvia/web/detail/db/db_result_access.h"
-#include "ruvia/web/detail/db/db_utils.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 
 namespace ruvia::detail {

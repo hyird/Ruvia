@@ -99,9 +99,6 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
     if (http2_remote_peer_half_closed(stream) && !stream.remote_content().terminal_length_valid()) {
         return header_decode_status::protocol_error;
     }
-    // NOTE (sans-I/O): resolve_stream_route is deliberately NOT called here -- route
-    // resolution and body-mode selection are application policy the owner applies
-    // after pulling the message_head event.
     return header_decode_status::ok;
 }
 
@@ -148,7 +145,7 @@ bool http2_connection::start_discarded_header_block(
     }
     try {
         discarded_header_stream_.emplace(header_value.stream_id_, resource_);
-        if (const auto* existing = find_stream(header_value.stream_id_);
+        if (const auto* existing = streams_.find(header_value.stream_id_);
             existing != nullptr && !existing->request_method().empty()) {
             discarded_header_stream_->assign_request_method(existing->request_method());
         }
@@ -214,13 +211,20 @@ bool http2_connection::finish_discarded_header_block(std::string_view block) {
                status == header_decode_status::ok) {
         error = http2_error_code::refused_stream;
     }
-    auto* const live_stream = find_stream(stream_id);
+    if (!admit_peer_error_reset()) {
+        hpack_transaction.rollback();
+        http2_reset_header_block(*discarded_header_stream_);
+        discarded_header_stream_.reset();
+        discarded_header_action_ = discarded_header_action_type::ignore;
+        return false;
+    }
+    auto* const live_stream = streams_.find(stream_id);
     const bool has_live_stream = live_stream != nullptr;
     if (has_live_stream) {
         reserve_stream_close_effects();
     }
     output_.reserve_additional(http2_frame_header_bytes + 4);
-    output_.append_rst_stream(stream_id, error);
+    append_peer_error_reset(stream_id, error);
     hpack_transaction.commit();
     http2_reset_header_block(*discarded_header_stream_);
     if (has_live_stream) {
@@ -261,7 +265,7 @@ header_decode_status http2_connection::finish_trailer_block(http2_stream_state& 
     if (!stream.finish_remote_content()) {
         return header_decode_status::protocol_error;
     }
-    events_.push_back(http2_event(http2_message_end_record{stream.id()}));
+    publish_event(http2_event(http2_message_end_record{stream.id()}));
     release_local_request_stream_if_closed(stream);
     return header_decode_status::ok;
 }
@@ -281,12 +285,16 @@ bool http2_connection::handle_header_decode_failure(http2_stream_state& stream, 
         http2_reset_header_block(stream);
         return false;
     }
+    if (!admit_peer_error_reset()) {
+        http2_reset_header_block(stream);
+        return false;
+    }
     const auto malformed_request_count_after_this_stream =
         static_cast<std::uint64_t>(malformed_request_streams_) +
         static_cast<std::uint64_t>(malformed_request_head);
     const bool malformed_request_budget_exhausted =
         malformed_request_count_after_this_stream >= http2_max_malformed_request_streams;
-    const bool has_live_stream = find_stream(stream.id()) == &stream;
+    const bool has_live_stream = streams_.find(stream.id()) == &stream;
     if (has_live_stream) {
         reserve_stream_close_effects();
     }
@@ -298,7 +306,7 @@ bool http2_connection::handle_header_decode_failure(http2_stream_state& stream, 
     } else {
         output_.reserve_additional(reset_bytes);
     }
-    output_.append_rst_stream(stream.id(), http2_error_code::protocol_error);
+    append_peer_error_reset(stream.id(), http2_error_code::protocol_error);
     if (hpack_transaction != nullptr && hpack_transaction->active()) {
         hpack_transaction->commit();
     }
@@ -348,7 +356,7 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
                                             : std::nullopt;
     const bool body_open = !http2_remote_peer_half_closed(stream) &&
                            (role_ == http2_role::client || stream.tunnel().pending() == nullptr);
-    events_.push_back(http2_event(http2_message_head_record{stream.id(), request_content_signal, body_open}));
+    publish_event(http2_event(http2_message_head_record{stream.id(), request_content_signal, body_open}));
     if (role_ == http2_role::server && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but that fact alone says nothing about the
         // peer send half: it can remain open for a tunnel or already carry END_STREAM.
@@ -358,13 +366,13 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     }
     if (role_ == http2_role::client && stream.tunnel().open() != nullptr) {
         if (http2_remote_peer_half_closed(stream)) {
-            events_.push_back(http2_event(http2_tunnel_end_event(stream.id())));
+            publish_event(http2_event(http2_tunnel_end_event(stream.id())));
         }
         release_local_request_stream_if_closed(stream);
         return;
     }
     if (http2_remote_peer_half_closed(stream)) {
-        events_.push_back(http2_event(http2_message_end_record{stream.id()}));
+        publish_event(http2_event(http2_message_end_record{stream.id()}));
     }
     release_local_request_stream_if_closed(stream);
 }

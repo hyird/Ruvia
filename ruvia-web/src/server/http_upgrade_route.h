@@ -40,7 +40,7 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline websocket_connection_options make_server_websocket_connection_options(
     const http_server_options& options, websocket_compression negotiated,
-    const websocket_deflate_config& deflate = {}) noexcept {
+    const websocket_deflate_config& deflate) noexcept {
     // Directions without context takeover borrow the worker's codecs, which
     // outlive every connection, so they allocate no codec state here.
     return websocket_connection_options{
@@ -175,20 +175,11 @@ public:
     using stream_argument_type = typename server_websocket_connection<stream_type>::stream_argument_type;
 
     websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression,
-        std::string_view subprotocol = {},
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        requires(native_stream)
-        : stream_(&stream),
+        std::string_view subprotocol, std::pmr::memory_resource& resource)
+        : stream_(hold_stream(std::forward<stream_argument_type>(stream))),
           compression_(compression),
-          subprotocol_(subprotocol, resource != nullptr ? resource : std::pmr::get_default_resource()) {}
+          subprotocol_(subprotocol, &resource) {}
 
-    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression,
-        std::string_view subprotocol = {},
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        requires(!native_stream)
-        : stream_(std::move(stream)),
-          compression_(compression),
-          subprotocol_(subprotocol, resource != nullptr ? resource : std::pmr::get_default_resource()) {}
     [[nodiscard]] stream_argument_type release_stream() noexcept {
         if constexpr (native_stream) {
             return *stream_;
@@ -206,7 +197,17 @@ public:
     }
 
 private:
-    std::conditional_t<native_stream, stream_type*, stream_type> stream_;
+    using held_stream_type = std::conditional_t<native_stream, stream_type*, stream_type>;
+
+    [[nodiscard]] static held_stream_type hold_stream(stream_argument_type stream) noexcept(native_stream) {
+        if constexpr (native_stream) {
+            return &stream;
+        } else {
+            return std::move(stream);
+        }
+    }
+
+    held_stream_type stream_;
     websocket_compression compression_{};
     std::pmr::string subprotocol_;
 };
@@ -239,7 +240,7 @@ struct websocket_upgrade_session_operation final {
         session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
             websocket_endpoint_.lifecycle(),
             protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
-            &inbound_, pending_frames_,
+            inbound_, pending_frames_,
             make_server_websocket_connection_options(
                 options_, committed->compression(), websocket_endpoint_.deflate()),
             committed->subprotocol());

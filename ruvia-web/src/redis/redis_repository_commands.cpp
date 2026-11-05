@@ -7,12 +7,13 @@
 #include <openssl/evp.h>
 
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "integration/request_io_metrics.h"
-#include "redis/redis_handle_helpers.h"
-#include "redis/redis_registry.h"
+#include "redis/redis_pool.h"
+#include "redis/redis_reply_parsers.h"
 
 namespace ruvia::detail {
 namespace {
@@ -115,7 +116,7 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view prefix, std:
     args.emplace_back(options.ttl_ ? "expire" : options.persist_ ? "persist"
                                                                  : "keep");
     if (options.ttl_) {
-        args.push_back(redis_milliseconds_string(*options.ttl_, resource));
+        http_append_signed(args.emplace_back(), static_cast<std::int64_t>(options.ttl_->count()));
     } else {
         args.emplace_back("0");
     }
@@ -180,12 +181,6 @@ void redis_orm_status_result(redis_value&& reply, std::pmr::memory_resource*) {
     }
 }
 
-std::span<const redis_value> redis_orm_array(const redis_value& reply) {
-    return redis_value_array(reply);
-}
-std::string_view redis_orm_string(const redis_value& reply) {
-    return redis_value_string(reply);
-}
 std::uint64_t redis_orm_count(const redis_value& reply) {
     const auto count = redis_value_integer(reply);
     if (count < 0) {

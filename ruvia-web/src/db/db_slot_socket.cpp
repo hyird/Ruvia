@@ -8,24 +8,15 @@
 #endif
 
 #include <system_error>
-#include <utility>
 
 namespace ruvia::detail {
 
 #if defined(_WIN32)
 db_slot_socket::db_slot_socket(asio::io_context& io_context)
     : socket_(io_context) {}
-
-db_slot_socket::db_slot_socket(db_slot_socket&& other) noexcept
-    : socket_(std::move(other.socket_)),
-      source_(std::exchange(other.source_, invalid_socket)) {}
 #else
 db_slot_socket::db_slot_socket(asio::io_context& io_context)
     : descriptor_(io_context) {}
-
-db_slot_socket::db_slot_socket(db_slot_socket&& other) noexcept
-    : descriptor_(std::move(other.descriptor_)),
-      source_(std::exchange(other.source_, invalid_socket)) {}
 #endif
 
 db_slot_socket::waitable_type& db_slot_socket::waitable() noexcept {

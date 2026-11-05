@@ -10,31 +10,41 @@
 
 namespace ruvia::detail {
 
+// Field views held inline up to `inline_capacity`, otherwise in one vector
+// sized up front; the chosen storage never changes after construction.
 template <std::size_t inline_capacity = 8>
 class inline_http_header_views final {
 public:
     template <typename fields_type>
+        requires requires(const fields_type& fields) { fields.size(); }
     inline_http_header_views(const fields_type& fields, std::pmr::memory_resource* resource)
-        : overflow_(resource),
-          size_(fields.size()) {
-        if (fields.size() <= inline_.size()) {
-            std::size_t i = 0;
-            for (const auto& field : fields) {
-                inline_[i++] = http_header_view{field.name(), field.value()};
-            }
-            return;
-        }
-        overflow_.reserve(fields.size());
+        : inline_http_header_views(fields.size(), resource) {
         for (const auto& field : fields) {
-            overflow_.emplace_back(field.name(), field.value());
+            push_back(http_header_view{field.name(), field.value()});
+        }
+    }
+
+    // Reserves room for `count` views; at most `count` push_back calls follow.
+    inline_http_header_views(std::size_t count, std::pmr::memory_resource* resource)
+        : overflow_(resource) {
+        if (count > inline_.size()) {
+            overflow_.reserve(count);
+        }
+    }
+
+    void push_back(http_header_view field) {
+        if (overflow_.capacity() != 0) {
+            overflow_.push_back(field);
+        } else {
+            inline_[size_++] = field;
         }
     }
 
     [[nodiscard]] std::span<const http_header_view> view() const noexcept {
-        if (size_ <= inline_.size()) {
-            return std::span<const http_header_view>(inline_.data(), size_);
+        if (overflow_.capacity() != 0) {
+            return overflow_;
         }
-        return overflow_;
+        return std::span<const http_header_view>(inline_.data(), size_);
     }
 
     [[nodiscard]] operator std::span<const http_header_view>() const noexcept {

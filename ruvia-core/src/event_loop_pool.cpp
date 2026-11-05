@@ -81,9 +81,8 @@ struct event_loop_pool::impl_type final {
                 return;
             }
         }
-        auto& runtime = loop.owned_runtime();
-        if (!runtime.fail(failure)) {
-            if (!equivalent_failures(failure, runtime.failure())) {
+        if (!loop.owned_runtime().fail(failure)) {
+            if (!equivalent_failures(failure, loop.recorded_failure())) {
                 report_unhandled_failure("additional event loop failure", failure);
             }
         }

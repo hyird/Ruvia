@@ -1,6 +1,6 @@
 #include <array>
 
-#include "ruvia/web/detail/util/registration_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/streaming.h"
 
 #include "router/router_impl.h"
@@ -45,7 +45,7 @@ namespace {
 struct scoped_controller_path final {
     static constexpr std::size_t inline_capacity = 256;
     std::array<char, inline_capacity> inline_{};
-    std::pmr::string heap_{registration_resource()};
+    std::pmr::string heap_{process_resource()};
     std::string_view view_{};
 
     scoped_controller_path(std::string_view prefix, std::string_view path) {
@@ -76,11 +76,11 @@ struct scoped_controller_path final {
     if (!joined.heap_.empty()) {
         return std::move(joined.heap_);
     }
-    return std::pmr::string(joined.view_, registration_resource());
+    return std::pmr::string(joined.view_, process_resource());
 }
 [[nodiscard]] std::pmr::vector<controller_middleware_descriptor> merge_middleware_descriptors(
     std::span<const controller_middleware_descriptor> base, std::span<const controller_middleware_descriptor> extra) {
-    std::pmr::vector<controller_middleware_descriptor> middlewares(registration_resource());
+    std::pmr::vector<controller_middleware_descriptor> middlewares(process_resource());
     middlewares.reserve(base.size() + extra.size());
     middlewares.insert(middlewares.end(), base.begin(), base.end());
     middlewares.insert(middlewares.end(), extra.begin(), extra.end());

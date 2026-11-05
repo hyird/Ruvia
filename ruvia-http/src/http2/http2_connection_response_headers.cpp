@@ -145,7 +145,7 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
         if (context_value.status_->status() == http_status::continue_value && stream.release_request_continue()) {
             signal = http_client_request_content_signal::continue_value;
         }
-        events_.push_back(http2_event(http2_informational_head_event(stream.id(), std::move(head), signal)));
+        publish_event(http2_event(http2_informational_head_event(stream.id(), std::move(head), signal)));
         return header_decode_status::ok;
     }
     (void)stream.cancel_pending_request_continue();

@@ -110,9 +110,6 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         return detail::http1_client_response_parse_result_access::need_more();
     }
     header_scan_offset_ = 0;
-    if (header_bytes > max_http_header_bytes) {
-        return fail(http1_client_response_parse_error::header_too_large);
-    }
 
     // Exclude only the final empty line: every field keeps its CRLF, matching
     // the request scanner even when the head contains no fields.

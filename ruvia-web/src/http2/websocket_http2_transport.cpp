@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -24,7 +26,9 @@ websocket_http2_transport::websocket_http2_transport(websocket_client_state& own
     const worker_handle& worker_value, std::pmr::memory_resource* resource)
     : owner_(owner_value),
       drivers_(worker_value, {.resource_ = resource}),
-      session_(*this, owner_value.transport_, drivers_, worker_value, owner_value.config_.write_timeout_, resource),
+      // The WebSocket heartbeat (lifecycle_.heartbeat_) owns liveness.
+      session_(*this, owner_value.transport_, drivers_, worker_value, owner_value.config_.write_timeout_, std::nullopt,
+          resource),
       received_(resource) {}
 
 task<void> websocket_http2_transport::connect() {
@@ -97,6 +101,10 @@ void websocket_http2_transport::require_live() const {
         throw websocket_client_error(
             websocket_client_error::code_type::io_error, "HTTP/2 WebSocket connection ended");
     }
+}
+
+bool websocket_http2_transport::stopping() const noexcept {
+    return failure_ != nullptr || owner_.abort_reason_ != client_abort_reason::none;
 }
 
 bool websocket_http2_transport::stop() noexcept {
@@ -243,22 +251,12 @@ void websocket_http2_transport::on_http2_failure(
 
 task<void> websocket_http2_transport::flush() {
     session_.wake_writer();
-    for (;;) {
-        check_failure();
-        if (session_.failed()) {
-            // A peer that ends the connection right after receiving the final
-            // bytes (e.g. after our END_STREAM) has still received them.
-            if (output_lost_) {
-                throw websocket_client_error(
-                    websocket_client_error::code_type::io_error, "HTTP/2 WebSocket connection ended");
-            }
-            co_return;
-        }
-        auto& connection = session_.connection();
-        if (!connection.wants_write() && !session_.writing()) {
-            co_return;
-        }
-        co_await session_.state_signal().wait();
+    co_await session_.wait_output_flushed([this] { return stopping(); });
+    check_failure();
+    // A peer that ends the connection right after receiving the final bytes
+    // (e.g. after our END_STREAM) has still received them.
+    if (session_.failed() && output_lost_) {
+        throw websocket_client_error(websocket_client_error::code_type::io_error, "HTTP/2 WebSocket connection ended");
     }
 }
 
@@ -285,43 +283,23 @@ task<std::size_t> websocket_http2_transport::read(std::span<char> output) {
 }
 
 task<void> websocket_http2_transport::write(std::string_view bytes_value, http2_end_stream end_stream) {
-    while (!bytes_value.empty()) {
-        require_live();
-        auto& connection = session_.connection();
-        if (connection.stream_aborted(stream_id_)) {
-            throw websocket_client_error(websocket_client_error::code_type::protocol_error,
-                "HTTP/2 WebSocket stream is closed");
-        }
-        http2_data_submit_result submitted{};
-        try {
-            submitted = connection.submit_data(
-                stream_id_, bytes_value, end_stream, websocket_http2_data_chunk_bytes);
-        } catch (...) {
-            throw websocket_client_error(websocket_client_error::code_type::protocol_error,
-                "could not submit HTTP/2 WebSocket DATA");
-        }
-        bytes_value.remove_prefix(submitted.consumed_bytes_);
-        if (submitted.status_ != http2_data_submit_status::complete &&
-            submitted.status_ != http2_data_submit_status::backpressured) {
-            throw websocket_client_error(websocket_client_error::code_type::protocol_error,
-                "could not submit HTTP/2 WebSocket DATA");
-        }
-        co_await flush();
-        if (submitted.status_ == http2_data_submit_status::backpressured) {
-            for (;;) {
-                require_live();
-                const auto window = connection.send_window_state(stream_id_);
-                if (!window || connection.stream_aborted(stream_id_)) {
-                    throw websocket_client_error(websocket_client_error::code_type::protocol_error,
-                        "HTTP/2 WebSocket stream is closed");
-                }
-                if (window->available_ != 0) {
-                    break;
-                }
-                co_await session_.state_signal().wait();
-            }
-        }
+    if (bytes_value.empty()) {
+        co_return;
     }
+    require_live();
+    const auto status = co_await session_.send_data(
+        stream_id_, bytes_value, end_stream, websocket_http2_data_chunk_bytes, [this] { return stopping(); });
+    switch (status) {
+        case http2_client_data_status::submitted:
+            co_await flush();
+            co_return;
+        case http2_client_data_status::stopped:
+            require_live();
+            break;
+        case http2_client_data_status::rejected:
+            break;
+    }
+    throw websocket_client_error(websocket_client_error::code_type::protocol_error, "HTTP/2 WebSocket stream is closed");
 }
 
 task<void> websocket_http2_transport::finish() {
@@ -335,7 +313,7 @@ task<void> websocket_http2_transport::finish() {
     http2_data_submit_result submitted{};
     try {
         submitted = session_.connection().submit_data(stream_id_, {}, http2_end_stream::end_stream, 0);
-    } catch (...) {
+    } catch (const std::logic_error&) {
         throw websocket_client_error(websocket_client_error::code_type::protocol_error,
             "could not conclude HTTP/2 WebSocket stream");
     }

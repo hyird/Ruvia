@@ -55,6 +55,8 @@ RUVIA_DB_ENTITY(record, "records", ruvia::db_column<"v", std::pmr::string>)
 
 constexpr std::string_view cache_id = "item";
 constexpr std::chrono::milliseconds cache_lifetime = std::chrono::minutes(1);
+// What every cache entry starts with, as the framework writes it.
+constexpr std::string_view cache_entry_magic = "RUVIAQC";
 
 // A RESP2 key-value store answering GET, SET, DEL and prefix SCAN on every accepted
 // connection. Without credentials or a database index the client sends no
@@ -458,7 +460,10 @@ RUVIA_TEST(db_query_result_cache_distinguishes_sql_parameter_values) {
 
 RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
     redis_store_peer redis_peer;
-    std::string empty("RUVIAQC2");
+    // The entry magic, then little-endian 64-bit row and column counts.
+    std::string empty(cache_entry_magic);
+    const auto row_count_offset = cache_entry_magic.size();
+    const auto column_count_offset = row_count_offset + 8;
     empty.append(16, '\0');
     redis_peer.poison_reads(empty);
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
@@ -482,7 +487,7 @@ RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
                 auto empty_rows = co_await query.get_raw_many();
                 RUVIA_CHECK(empty_rows.empty());
                 auto empty_with_schema = empty;
-                empty_with_schema[16] = 1;
+                empty_with_schema[column_count_offset] = 1;
                 empty_with_schema.push_back('\1');
                 empty_with_schema.append(7, '\0');
                 empty_with_schema.push_back('v');
@@ -490,7 +495,7 @@ RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
                 auto named_empty_rows = co_await query.get_raw_many();
                 RUVIA_CHECK(named_empty_rows.empty());
                 auto zero_columns = empty;
-                zero_columns[8] = 2;
+                zero_columns[row_count_offset] = 2;
                 zero_columns.append(2, '\2');
                 redis_peer.poison_reads(std::move(zero_columns));
                 auto rows = co_await query.get_raw_many();
@@ -527,7 +532,7 @@ RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
 // that ignores errors reads the database instead.
 RUVIA_TEST(db_query_result_cache_rejects_corrupt_zero_column_entries) {
     redis_store_peer redis_peer;
-    std::string corrupt("RUVIAQC2");
+    std::string corrupt(cache_entry_magic);
     corrupt.append(8, '\xff');
     corrupt.append(8, '\0');
     redis_peer.poison_reads(std::move(corrupt));

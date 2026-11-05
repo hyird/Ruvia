@@ -6,19 +6,21 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_known_method.h"
 
 #include "http2/http2_local_content_state.h"
+#include "http2/http2_local_send_state.h"
 #include "http2/http2_receive_window_credit.h"
 #include "http2/http2_remote_content_state.h"
+#include "http2/http2_remote_receive_state.h"
 #include "http2/http2_stream_flow_control.h"
-#include "http2/http2_stream_header_blocks.h"
-#include "http2/http2_stream_lifecycle.h"
 #include "http2/http2_stream_request_data.h"
 #include "http2/http2_stream_request_state.h"
 #include "http2/http2_tunnel_state.h"
@@ -44,22 +46,25 @@ class http2_stream_state final {
     http2_push_reservation push_reservation_{http2_push_reservation::none};
     http2_remote_content_state remote_content_;
     http2_local_content_state local_content_;
-    http2_stream_lifecycle lifecycle_;
+    http2_local_send_state local_send_;
+    http2_remote_receive_state remote_receive_;
+    bool peer_concurrency_slot_held_{false};
     http_request_expectations expectations_;
     http2_stream_request_state request_state_;
     http2_tunnel_state tunnel_state_;
     http2_stream_flow_control flow_control_;
     std::uint32_t window_debt_{0};
     http2_receive_window_credit receive_window_credit_;
-    http2_stream_header_blocks header_blocks_;
+    std::pmr::string remote_header_block_;
     http2_stream_request_data message_data_;
     http2_local_request_content_gate local_request_content_gate_{http2_local_request_content_gate::open};
     bool pinned_{false};
+    std::size_t pending_events_{0};
 
 public:
     explicit http2_stream_state(std::uint32_t stream_id, std::pmr::memory_resource* resource)
         : id_(stream_id),
-          header_blocks_(resource),
+          remote_header_block_(http_pmr_resource_or_default(resource)),
           message_data_(resource) {}
 
     void reserve_push(http2_push_reservation reservation) noexcept {
@@ -83,12 +88,31 @@ public:
     void set_pinned(bool pinned_value) noexcept {
         pinned_ = pinned_value;
     }
+
+    // Queued connection events naming this stream; an owner-lease release waits for zero.
+    [[nodiscard]] bool has_pending_events() const noexcept {
+        return pending_events_ != 0;
+    }
+    void add_pending_event() noexcept {
+        ++pending_events_;
+    }
+    void remove_pending_event() noexcept {
+        if (pending_events_ == 0) {
+            std::terminate();
+        }
+        --pending_events_;
+    }
+
     void set_send_window(std::int32_t window) noexcept {
         flow_control_.set_send_window(window);
     }
 
     [[nodiscard]] bool add_send_window(std::int64_t delta) noexcept {
         return flow_control_.add_send_window(delta);
+    }
+
+    [[nodiscard]] http2_window_update_result apply_window_update(std::uint32_t increment) noexcept {
+        return flow_control_.apply_window_update(increment);
     }
 
     [[nodiscard]] std::int32_t send_window() const noexcept {
@@ -137,12 +161,12 @@ public:
     }
 
     [[nodiscard]] std::pmr::string& remote_header_block() & noexcept {
-        return header_blocks_.remote();
+        return remote_header_block_;
     }
     [[nodiscard]] std::pmr::string& remote_header_block() && = delete;
 
     [[nodiscard]] const std::pmr::string& remote_header_block() const& noexcept {
-        return header_blocks_.remote();
+        return remote_header_block_;
     }
     [[nodiscard]] const std::pmr::string& remote_header_block() const&& = delete;
 
@@ -189,87 +213,102 @@ public:
     [[nodiscard]] const http2_local_content_state& local_content() const&& = delete;
 
     [[nodiscard]] bool is_aborted() const noexcept {
-        return lifecycle_.aborted();
+        return local_send_.aborted() != nullptr;
     }
 
     [[nodiscard]] const http2_local_send_state& local_send() const& noexcept {
-        return lifecycle_.local_send();
+        return local_send_;
     }
     [[nodiscard]] const http2_local_send_state& local_send() const&& = delete;
 
     [[nodiscard]] const http2_remote_receive_state& remote_receive() const& noexcept {
-        return lifecycle_.remote_receive();
+        return remote_receive_;
     }
     [[nodiscard]] const http2_remote_receive_state& remote_receive() const&& = delete;
 
     [[nodiscard]] bool hold_peer_concurrency_slot() noexcept {
-        return lifecycle_.hold_peer_concurrency_slot();
+        if (peer_concurrency_slot_held_) {
+            return false;
+        }
+        peer_concurrency_slot_held_ = true;
+        return true;
     }
 
     [[nodiscard]] bool release_peer_concurrency_slot() noexcept {
-        return lifecycle_.release_peer_concurrency_slot();
+        if (!peer_concurrency_slot_held_) {
+            return false;
+        }
+        peer_concurrency_slot_held_ = false;
+        return true;
     }
 
+    // Aborting closes both halves together; a stream is never half-aborted.
     [[nodiscard]] bool abort(http2_stream_close_source source_value) noexcept {
-        return lifecycle_.abort(source_value);
+        if (remote_receive_.aborted() != nullptr) {
+            return false;
+        }
+        if (!local_send_.abort(source_value)) {
+            return false;
+        }
+        return remote_receive_.abort();
     }
 
     [[nodiscard]] bool record_remote_head_end_stream() noexcept {
-        return lifecycle_.record_remote_head_end_stream();
+        return remote_receive_.record_head_end_stream();
     }
 
     [[nodiscard]] bool rollback_remote_head_end_stream_for_retry() noexcept {
-        return lifecycle_.rollback_remote_head_end_stream();
+        return remote_receive_.rollback_head_end_stream();
     }
 
     [[nodiscard]] bool finalize_remote_content_head() noexcept {
         if (tunnel_state_.not_connect() == nullptr) {
             return false;
         }
-        return lifecycle_.finalize_remote_content_head();
+        return remote_receive_.finalize_content_head();
     }
 
     [[nodiscard]] bool finalize_remote_connect_head() noexcept {
         if (tunnel_state_.pending() == nullptr) {
             return false;
         }
-        return lifecycle_.finalize_remote_connect_head();
+        return remote_receive_.finalize_connect_head();
     }
 
     [[nodiscard]] bool finish_remote_content() noexcept {
-        return lifecycle_.finish_remote_content();
+        return remote_receive_.finish_content();
     }
 
     [[nodiscard]] bool mark_remote_connect_tunnel_data() noexcept {
         if (tunnel_state_.pending() == nullptr) {
             return false;
         }
-        return lifecycle_.mark_remote_connect_tunnel_data();
+        return remote_receive_.mark_connect_tunnel_data();
     }
 
     [[nodiscard]] bool finish_remote_pending_connect() noexcept {
         if (tunnel_state_.pending() == nullptr) {
             return false;
         }
-        return lifecycle_.finish_remote_pending_connect();
+        return remote_receive_.finish_pending_connect();
     }
 
     [[nodiscard]] bool finish_remote_tunnel() noexcept {
         if (tunnel_state_.open() == nullptr) {
             return false;
         }
-        return lifecycle_.finish_remote_tunnel();
+        return remote_receive_.finish_tunnel();
     }
 
     [[nodiscard]] bool finish_remote_rejected_connect() noexcept {
         if (tunnel_state_.rejected() == nullptr) {
             return false;
         }
-        return lifecycle_.finish_remote_rejected_connect();
+        return remote_receive_.finish_rejected_connect();
     }
 
     [[nodiscard]] bool begin_local_request_content() noexcept {
-        return lifecycle_.begin_local_request_content();
+        return local_send_.begin_request_content();
     }
 
     void await_request_continue() noexcept {
@@ -301,36 +340,36 @@ public:
     }
 
     [[nodiscard]] bool begin_local_response_content() noexcept {
-        return lifecycle_.begin_local_response_content();
+        return local_send_.begin_response_content();
     }
 
     [[nodiscard]] bool commit_local_head_end_stream() noexcept {
-        return lifecycle_.commit_local_head_end_stream();
+        return local_send_.commit_head_end_stream();
     }
 
     [[nodiscard]] bool begin_local_connect_request() noexcept {
         if (tunnel_state_.pending() == nullptr) {
             return false;
         }
-        return lifecycle_.begin_local_connect_request();
+        return local_send_.begin_connect_request();
     }
 
     [[nodiscard]] bool open_local_connect_tunnel() noexcept {
         if (tunnel_state_.open() == nullptr) {
             return false;
         }
-        return lifecycle_.open_local_connect_tunnel();
+        return local_send_.open_tunnel();
     }
 
     [[nodiscard]] bool reject_local_connect() noexcept {
         if (tunnel_state_.rejected() == nullptr) {
             return false;
         }
-        return lifecycle_.reject_local_connect();
+        return local_send_.reject_connect();
     }
 
     [[nodiscard]] bool commit_local_end_stream() noexcept {
-        return lifecycle_.commit_local_end_stream();
+        return local_send_.commit_end_stream();
     }
 
     void parse_request_expectation_field(std::string_view value) noexcept {
@@ -346,7 +385,7 @@ public:
         // An open receive half can still be metadata-only, known-empty, or
         // awaiting only an empty END_STREAM frame.
         const bool content_can_follow =
-            lifecycle_.remote_receive().content_open() != nullptr &&
+            remote_receive_.content_open() != nullptr &&
             (remote_content_.allowed_without_length() != nullptr ||
                 (known_length != nullptr &&
                     known_length->received_bytes() < known_length->declared_length()));
@@ -524,23 +563,23 @@ public:
     }
 
     [[nodiscard]] bool accept_connect() noexcept {
-        if (tunnel_state_.pending() == nullptr || !lifecycle_.can_accept_remote_connect()) {
+        if (tunnel_state_.pending() == nullptr || !remote_receive_.can_accept_connect()) {
             return false;
         }
         if (!tunnel_state_.accept()) {
             return false;
         }
-        return lifecycle_.accept_remote_connect();
+        return remote_receive_.accept_connect();
     }
 
     [[nodiscard]] bool reject_connect() noexcept {
-        if (tunnel_state_.pending() == nullptr || !lifecycle_.can_reject_remote_connect()) {
+        if (tunnel_state_.pending() == nullptr || !remote_receive_.can_reject_connect()) {
             return false;
         }
         if (!tunnel_state_.reject()) {
             return false;
         }
-        return lifecycle_.reject_remote_connect();
+        return remote_receive_.reject_connect();
     }
 
     [[nodiscard]] const http2_tunnel_state& tunnel() const& noexcept {
@@ -587,7 +626,9 @@ public:
         : stream_(&stream),
           remote_content_(stream.remote_content_),
           local_content_(stream.local_content_),
-          lifecycle_(stream.lifecycle_),
+          local_send_(stream.local_send_),
+          remote_receive_(stream.remote_receive_),
+          peer_concurrency_slot_held_(stream.peer_concurrency_slot_held_),
           expectations_(stream.expectations_),
           request_state_(stream.request_state_),
           tunnel_state_(stream.tunnel_state_),
@@ -624,7 +665,9 @@ public:
         }
         stream_->remote_content_ = remote_content_;
         stream_->local_content_ = local_content_;
-        stream_->lifecycle_ = lifecycle_;
+        stream_->local_send_ = local_send_;
+        stream_->remote_receive_ = remote_receive_;
+        stream_->peer_concurrency_slot_held_ = peer_concurrency_slot_held_;
         stream_->expectations_ = expectations_;
         stream_->request_state_ = request_state_;
         stream_->tunnel_state_ = tunnel_state_;
@@ -637,7 +680,9 @@ private:
     std::optional<http2_stream_request_data> message_data_;
     http2_remote_content_state remote_content_;
     http2_local_content_state local_content_;
-    http2_stream_lifecycle lifecycle_;
+    http2_local_send_state local_send_;
+    http2_remote_receive_state remote_receive_;
+    bool peer_concurrency_slot_held_;
     http_request_expectations expectations_;
     http2_stream_request_state request_state_;
     http2_tunnel_state tunnel_state_;

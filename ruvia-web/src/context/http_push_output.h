@@ -10,7 +10,10 @@ public:
     http_push_output(void* target, submit_type submit) noexcept
         : target_(target),
           submit_(submit) {}
-    [[nodiscard]] bool push(http_push_request_view request);
+    // Header-list bounds are enforced by the HTTP/2 submit path.
+    [[nodiscard]] bool push(http_push_request_view request) {
+        return submit_(target_, request);
+    }
 
 private:
     void* target_;

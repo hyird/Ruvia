@@ -16,7 +16,6 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/web/detail/middleware/middleware_descriptor.h"
 #include "ruvia/web/detail/router/route_handlers.h"
-#include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
@@ -62,11 +61,11 @@ private:
 
     template <typename t_type>
     t_type& emplace() {
-        auto* raw = construct_pmr_object<t_type>(registration_resource());
+        auto* raw = construct_pmr_object<t_type>(process_resource());
         try {
             add_lifetime(raw, &controller_store::destroy<t_type>);
         } catch (...) {
-            destroy_pmr_object(raw, registration_resource());
+            destroy_pmr_object(raw, process_resource());
             throw;
         }
         return *raw;
@@ -107,10 +106,10 @@ private:
 
     template <typename t_type>
     static void destroy(void* target) noexcept {
-        destroy_pmr_object(static_cast<t_type*>(target), registration_resource());
+        destroy_pmr_object(static_cast<t_type*>(target), process_resource());
     }
 
-    std::pmr::vector<controller_lifetime> lifetimes_{registration_resource()};
+    std::pmr::vector<controller_lifetime> lifetimes_{process_resource()};
 };
 
 class controller_route_builder final {
@@ -124,7 +123,7 @@ private:
     friend class controller_registration_access;
 
     // Middlewares come from make_middlewares(), already allocated from
-    // registration_resource(), and are stored as-is.
+    // process_resource(), and are stored as-is.
     controller_route_builder(
         router& router_value, std::string_view prefix, std::pmr::vector<controller_middleware_descriptor> middlewares);
 

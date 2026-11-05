@@ -3,6 +3,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstddef>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <memory_resource>
@@ -12,6 +13,10 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include <asio/io_context.hpp>
 
@@ -417,6 +422,95 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     }
 }
 
+#ifndef _WIN32
+ruvia::task<void> fail_distinct() {
+    throw std::logic_error("second child failed");
+    co_return;
+}
+
+ruvia::task<void> join_distinct_failures(ruvia::worker_handle worker_value, bool& first_rethrown) {
+    ruvia::task_scope scope(worker_value);
+    scope.spawn(fail());
+    scope.spawn(fail());
+    scope.spawn(fail_distinct());
+    try {
+        co_await scope.join();
+    } catch (const std::runtime_error& error) {
+        first_rethrown = std::string_view(error.what()) == "child failed";
+    }
+}
+
+// Redirects stderr, where the unhandled-failure diagnostic writes, into a
+// temporary file for the guard's lifetime.
+class stderr_capture final {
+public:
+    stderr_capture()
+        : sink_(std::tmpfile()),
+          saved_(::dup(STDERR_FILENO)) {
+        std::fflush(stderr);
+        if (sink_ != nullptr && saved_ >= 0) {
+            redirected_ = ::dup2(::fileno(sink_), STDERR_FILENO) >= 0;
+        }
+    }
+    stderr_capture(const stderr_capture&) = delete;
+    stderr_capture& operator=(const stderr_capture&) = delete;
+    ~stderr_capture() {
+        restore();
+        if (sink_ != nullptr) {
+            std::fclose(sink_);
+        }
+    }
+
+    // Restores stderr and returns everything written while redirected.
+    [[nodiscard]] std::string finish() {
+        restore();
+        std::string text;
+        if (sink_ == nullptr) {
+            return text;
+        }
+        std::rewind(sink_);
+        char chunk[256];
+        std::size_t read_bytes = 0;
+        while ((read_bytes = std::fread(chunk, 1, sizeof(chunk), sink_)) != 0) {
+            text.append(chunk, read_bytes);
+        }
+        return text;
+    }
+
+private:
+    void restore() noexcept {
+        std::fflush(stderr);
+        if (redirected_) {
+            static_cast<void>(::dup2(saved_, STDERR_FILENO));
+            redirected_ = false;
+        }
+        if (saved_ >= 0) {
+            ::close(saved_);
+            saved_ = -1;
+        }
+    }
+
+    std::FILE* sink_;
+    int saved_;
+    bool redirected_{false};
+};
+
+// join rethrows the first child failure; a later, distinct one must still reach
+// the unhandled-failure diagnostic, and one equivalent to the first must not
+// be reported again.
+bool verify_additional_child_failures_are_reported() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+    bool first_rethrown = false;
+    stderr_capture capture;
+    ruvia::test::run_worker_tasks(attachment, join_distinct_failures(attachment.loop().handle(), first_rethrown));
+    const auto text = capture.finish();
+    return first_rethrown &&
+           text.find("ruvia: additional task scope child failed: second child failed") != std::string::npos &&
+           text.find("additional task scope child failed: child failed") == std::string::npos;
+}
+#endif
+
 }  // namespace ruvia::test::task_scope_tests
 
 int main() {
@@ -445,8 +539,12 @@ int main() {
             worker_value, reentrant_stop_join_safe),
         ruvia::test::task_scope_tests::verify_reentrant_join_on_failed_allocation(worker_value, reentrant_failed_spawn_safe),
         ruvia::test::task_scope_tests::verify_join_waits_for_node_deallocation(worker_value, reentrant_deallocation_safe));
+    bool additional_failures_reported = true;
+#ifndef _WIN32
+    additional_failures_reported = ruvia::test::task_scope_tests::verify_additional_child_failures_are_reported();
+#endif
     return success && reentrant_spawn_safe && reentrant_stop_join_safe &&
-                   reentrant_failed_spawn_safe && reentrant_deallocation_safe
+                   reentrant_failed_spawn_safe && reentrant_deallocation_safe && additional_failures_reported
                ? 0
                : 1;
 }

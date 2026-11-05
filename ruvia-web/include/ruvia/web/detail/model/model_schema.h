@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/web/detail/model/model_field.h"
 #include "ruvia/web/detail/model/rule/rule_pack.h"
 #include "ruvia/web/model.h"
@@ -95,76 +96,32 @@ consteval void validate_model_schema(model_schema<descriptor_types...>) {
 
 template <fixed_string field, typename... descriptor_types>
 [[nodiscard]] consteval std::size_t model_field_index() {
-    constexpr std::size_t matches = (std::size_t{field == descriptor_types::source_name} + ... + 0);
-    static_assert(matches == 1, "unknown or duplicate Ruvia model field");
-
-    constexpr std::array<bool, sizeof...(descriptor_types)> fields_value{
-        field == descriptor_types::source_name...};
-    for (std::size_t index = 0; index < fields_value.size(); ++index) {
-        if (fields_value[index]) {
-            return index;
-        }
-    }
-    return 0;
+    static_assert((std::size_t{field == descriptor_types::source_name} + ... + 0) == 1,
+        "unknown or duplicate Ruvia model field");
+    const std::array<std::string_view, sizeof...(descriptor_types)> names{descriptor_types::source_name.view()...};
+    return fixed_name_index(names, field.view());
 }
 
 template <typename... descriptor_types>
 [[nodiscard]] consteval bool unique_model_field_names() {
-    constexpr std::array<std::string_view, sizeof...(descriptor_types)> names{
-        descriptor_types::source_name.view()...};
-    for (std::size_t left = 0; left < names.size(); ++left) {
-        for (std::size_t right = left + 1; right < names.size(); ++right) {
-            if (names[left] == names[right]) {
-                return false;
-            }
-        }
-    }
-    return true;
+    const std::array<std::string_view, sizeof...(descriptor_types)> names{descriptor_types::source_name.view()...};
+    return fixed_names_distinct(names);
 }
 
 template <typename... descriptor_types>
 [[nodiscard]] consteval bool unique_model_wire_names() {
-    constexpr std::array<std::string_view, sizeof...(descriptor_types)> names{
-        descriptor_types::wire_name.view()...};
-    for (std::size_t left = 0; left < names.size(); ++left) {
-        for (std::size_t right = left + 1; right < names.size(); ++right) {
-            if (names[left] == names[right]) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-[[nodiscard]] constexpr bool model_wire_names_equal_ignore_ascii_case(
-    std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    const auto fold = [](char value) noexcept {
-        return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
-    };
-    for (std::size_t index = 0; index < left.size(); ++index) {
-        if (fold(left[index]) != fold(right[index])) {
-            return false;
-        }
-    }
-    return true;
+    const std::array<std::string_view, sizeof...(descriptor_types)> names{descriptor_types::wire_name.view()...};
+    return fixed_names_distinct(names);
 }
 
 // Case-insensitive sources (HTTP headers) bind at most one field per name, so
 // their schemas must not declare ASCII-case-equivalent wire names.
 template <typename... descriptor_types>
 [[nodiscard]] consteval bool unique_model_wire_names_ignore_ascii_case(model_schema<descriptor_types...>) {
-    constexpr std::array<std::string_view, sizeof...(descriptor_types)> names{
-        descriptor_types::wire_name.view()...};
-    for (std::size_t left = 0; left < names.size(); ++left) {
-        for (std::size_t right = left + 1; right < names.size(); ++right) {
-            if (model_wire_names_equal_ignore_ascii_case(names[left], names[right])) {
-                return false;
-            }
-        }
-    }
-    return true;
+    const std::array<std::string_view, sizeof...(descriptor_types)> names{descriptor_types::wire_name.view()...};
+    return fixed_names_distinct(names, [](std::string_view left, std::string_view right) {
+        return http_ascii_equals_ignore_case(left, right);
+    });
 }
 
 template <typename model_type, typename... descriptor_types, typename visitor_type, std::size_t... indices>

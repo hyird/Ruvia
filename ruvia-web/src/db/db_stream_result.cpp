@@ -3,7 +3,7 @@
 #include "ruvia/web/db/db.h"
 
 #include "db/db_pool.h"
-#include "db/db_pool_utils.h"
+#include "db/db_pool_dispatch.h"
 #include "integration/request_io_metrics.h"
 
 // A streaming query result: the rows arrive one at a time from a pooled
@@ -22,10 +22,9 @@ task<std::optional<db_row>> read_pool_stream(detail::db_pool_ref_type pool, std:
     });
 }
 
-task<void> close_pool_stream(detail::db_pool_ref_type pool, std::size_t slot, void* result_value,
-    std::pmr::memory_resource* resource, const operation_options& options) {
-    return detail::visit_db_pool(
-        pool, [&](auto& client) { return client.close_stream(slot, result_value, resource, options); });
+task<void> close_pool_stream(
+    detail::db_pool_ref_type pool, std::size_t slot, void* result_value, const operation_options& options) {
+    return detail::visit_db_pool(pool, [&](auto& client) { return client.close_stream(slot, result_value, options); });
 }
 
 void abort_pool_stream(detail::db_pool_ref_type pool, std::size_t slot, void* result_value) noexcept {
@@ -125,7 +124,7 @@ task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, 
     }
     operation.start();
     auto& lease_value = operation.lease();
-    co_await close_pool_stream(lease_value.client_, lease_value.slot_, lease_value.result_, lease_value.resource_, lease_value.options_);
+    co_await close_pool_stream(lease_value.client_, lease_value.slot_, lease_value.result_, lease_value.options_);
     operation.finish_closed();
 }
 

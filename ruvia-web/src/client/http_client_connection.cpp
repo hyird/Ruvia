@@ -38,19 +38,6 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
         .alpn_ = select_client_alpn(config.protocol_)};
 }
 
-[[noreturn]] void throw_connect_acquire_failure(worker_wait_status status) {
-    if (status == worker_wait_status::timed_out) {
-        throw http_client_error(http_client_error::code_type::timeout, "HTTP client connect wait timed out");
-    }
-    if (status == worker_wait_status::cancelled) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP client connect wait cancelled");
-    }
-    if (status == worker_wait_status::closed) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closing");
-    }
-    std::terminate();
-}
-
 }  // namespace
 
 http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index)
@@ -58,7 +45,8 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
           pool.wire_counters(), pool.resource()),
       read_buffer_(pool.resource()),
       write_buffer_(pool.resource()),
-      http2_(*this, transport_, pool.tasks(), pool.worker(), pool.config().write_timeout_, pool.resource()),
+      http2_(*this, transport_, pool.tasks(), pool.worker(), pool.config().write_timeout_,
+          pool.config().http2_ping_interval_, pool.resource()),
       connect_scheduler_(1, pool.worker(), pool.resource()),
       http1_scheduler_(1, pool.worker(), pool.resource()),
       pool_(pool),
@@ -77,7 +65,7 @@ std::size_t http_client_connection::available_http2_request_streams() const noex
 
 void http_client_connection::throw_if_aborted() const {
     if (const auto reason = transport_.abort_reason(); reason != client_abort_reason::none) {
-        throw http_client_error(http_client_abort_error(reason), http_client_abort_message(reason));
+        throw_http_client_abort(reason);
     }
 }
 
@@ -92,6 +80,7 @@ void http_client_connection::abort_http1_response() noexcept {
 }
 
 void http_client_connection::close() noexcept {
+    end_idle();
     if (http1_response_ != nullptr) {
         if (auto* output = http1_response_->output()) {
             output->stop();
@@ -111,6 +100,36 @@ void http_client_connection::close() noexcept {
     }
     read_buffer_.clear();
     write_buffer_.clear();
+}
+
+void http_client_connection::begin_idle() noexcept {
+    const auto& idle_timeout = pool_.config().idle_timeout_;
+    if (!idle_timeout || !connected_ || idle_timer_.registered()) {
+        return;
+    }
+    try {
+        (void)pool_.worker().schedule_timer(idle_timer_, worker_timer_deadline_after(*idle_timeout),
+            [this](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired) {
+                    close_idle();
+                }
+            });
+    } catch (...) {
+        // An idle connection without its bound is not kept.
+        close();
+    }
+}
+
+void http_client_connection::end_idle() noexcept {
+    idle_timer_.cancel();
+}
+
+void http_client_connection::close_idle() noexcept {
+    // Every use of the connection ends the idle bound first; these hold only
+    // for a connection nothing reused.
+    if (connected_ && http1_response_ == nullptr && http2_streams_.empty()) {
+        close();
+    }
 }
 
 void http_client_connection::retain_idle_buffers() noexcept {
@@ -170,7 +189,7 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     http_client_response_state& response) {
     const auto acquired = co_await connect_scheduler_.acquire(acquire_timeout.remaining(), stop_token_value);
     if (!acquired.has_value()) {
-        throw_connect_acquire_failure(acquired.status());
+        throw_http_client_wait_failure(acquired.status(), "HTTP client connect wait");
     }
     const auto connect_slot = acquired.value();
     struct connect_lease final {
@@ -183,6 +202,7 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     if (response.abandoned_) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP response was abandoned");
     }
+    end_idle();
     if (retired_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client connection is retired");
     }

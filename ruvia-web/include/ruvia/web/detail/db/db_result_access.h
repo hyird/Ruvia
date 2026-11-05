@@ -51,6 +51,14 @@ struct db_result_access final {
         return row.column_names();
     }
 
+    // Leaves a result whose rows could not be kept empty, so a failed
+    // materialization never hands out part of a result.
+    static void clear(db_rows& result_value) noexcept {
+        result_value.rows_.clear();
+        result_value.fields_.clear();
+        result_value.column_names_.clear();
+    }
+
     static void own_raw_result(db_rows& result_value, void* raw, void (*release)(void*) noexcept) noexcept {
         if (raw == nullptr || release == nullptr ||
             std::holds_alternative<db_rows::owned_raw_result_type>(result_value.raw_result_)) {

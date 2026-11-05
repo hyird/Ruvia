@@ -12,6 +12,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -65,6 +66,17 @@ struct db_stream_start final {
     bool returns_rows_{true};
 };
 
+// How a stream ended. Either way the driver has read the statement to its end,
+// released its result handle, and left the connection idle.
+enum class db_stream_end : std::uint8_t {
+    exhausted,
+    // The statement produced no row set, which only its first result tells.
+    no_row_set,
+};
+
+// One read of a stream: its next row, or how it ended.
+using db_stream_step = std::variant<db_row, db_stream_end>;
+
 template <typename driver_type>
 class db_pool;
 
@@ -74,34 +86,37 @@ class db_pool;
 
 // The driver hooks. Statement hooks run on a connected, leased slot under a
 // deadline already constrained by the query timeout. `sql` views are
-// NUL-terminated, and string parameters own their NUL-terminated storage for
-// the entire hook call. Hooks throw on failure. A statement_failed db_error or a
-// std::invalid_argument promises that the command has been drained and the
-// connection is idle -- a hook that cannot get there closes the slot before
-// throwing -- so the pool keeps the connection; any other failure closes it.
+// NUL-terminated and contain no other NUL, and string parameters own their
+// NUL-terminated storage for the entire hook call: raw SQL is checked once
+// where it enters (prepare_db_statement), compiled SQL is built that way, and
+// parameters are checked where they are encoded for the client library. Hooks
+// throw on failure. A statement_failed db_error or a std::invalid_argument
+// promises that the command has been drained and the connection is idle -- a
+// hook that cannot get there closes the slot before throwing -- so the pool
+// keeps the connection; any other failure closes it.
 //
-// Outside transactions, query() and execute() run through the driver's own
-// query_pipelined() and execute_pipelined(), which share connections between
-// callers (db_pipeline.h); state_type is that pipeline's per-pool state and
-// session_type keeps the group of each connection. The state may keep a lease
-// that release_slot() gives back for a caller of its own (take_released_slot()
-// returns true), hears when a caller stops waiting for a lease, and is closed
-// by close_now().
+// Outside transactions, query() and execute() run through the driver's
+// pipeline (pipeline_io_type, db_pipeline.h), which shares connections between
+// callers; state_type is that pipeline's per-pool state and session_type keeps
+// the group of each connection. The state may keep a lease that release_slot()
+// gives back for a caller of its own (take_released_slot() returns true),
+// hears when a caller stops waiting for a lease, and is closed by close_now().
 // Before any lease is reassigned, reusable_connection() must confirm that the
 // drained connection is outside a transaction and safe for unrelated callers.
+//
+// Stream hooks are protocol steps only: the pool owns a stream's cancellation,
+// deadline and the release of its slot. A stream's `result` handle is the
+// driver's; a hook that frees it sets it to null, and after a hook throws the
+// pool discards what is left of it (discard_stream()) and closes the slot.
 struct mariadb_driver final {
     using connection_type = st_mysql;
     using pool_type = db_pool<mariadb_driver>;
     using session_type = mariadb_session;
-    using state_type = db_pipeline_state<mariadb_pipeline_io>;
+    using pipeline_io_type = mariadb_pipeline_io;
+    using state_type = db_pipeline_state<pipeline_io_type>;
     static constexpr db_driver driver = db_driver::mariadb;
     static constexpr std::string_view name{"MariaDB"};
 
-    static task<db_rows> query_pipelined(pool_type& pool, std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics);
-    static task<db_exec_result> execute_pipelined(pool_type& pool, std::pmr::string sql,
-        std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-        request_io_metrics* io_metrics);
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
@@ -111,11 +126,11 @@ struct mariadb_driver final {
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
-    static task<std::optional<db_row>> read_stream_row(pool_type& pool, std::size_t slot, void* result,
+    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
         std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-        std::pmr::memory_resource* resource, const operation_options& options);
-    static task<void> close_stream(pool_type& pool, std::size_t slot, void* result,
-        std::pmr::memory_resource* resource, const operation_options& options);
+        std::pmr::memory_resource* resource, const operation_timeout& deadline);
+    // Ends a stream before its rows ran out; on return the connection is idle.
+    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_timeout& deadline);
     static void discard_stream(void* result) noexcept;
 };
 
@@ -123,15 +138,11 @@ struct postgresql_driver final {
     using connection_type = pg_conn;
     using pool_type = db_pool<postgresql_driver>;
     using session_type = postgresql_session;
-    using state_type = db_pipeline_state<postgresql_pipeline_io>;
+    using pipeline_io_type = postgresql_pipeline_io;
+    using state_type = db_pipeline_state<pipeline_io_type>;
     static constexpr db_driver driver = db_driver::postgresql;
     static constexpr std::string_view name{"PostgreSQL"};
 
-    static task<db_rows> query_pipelined(pool_type& pool, std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics);
-    static task<db_exec_result> execute_pipelined(pool_type& pool, std::pmr::string sql,
-        std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-        request_io_metrics* io_metrics);
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
@@ -141,16 +152,18 @@ struct postgresql_driver final {
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
-    static task<std::optional<db_row>> read_stream_row(pool_type& pool, std::size_t slot, void* result,
+    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
         std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-        std::pmr::memory_resource* resource, const operation_options& options);
-    static task<void> close_stream(pool_type& pool, std::size_t slot, void* result,
-        std::pmr::memory_resource* resource, const operation_options& options);
+        std::pmr::memory_resource* resource, const operation_timeout& deadline);
+    // Ends a stream before its rows ran out; on return the connection is idle
+    // or closed.
+    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_timeout& deadline);
     static void discard_stream(void* result) noexcept;
 };
 
 // One pooled connection. The driver owns the native socket; db_slot_socket
-// waits on a Ruvia-owned duplicate of it.
+// waits on a Ruvia-owned duplicate of it. Pending Asio handlers, deadline
+// continuations and pipeline records address the slot, so it never moves.
 template <typename driver_type>
 struct db_slot final {
     db_slot(asio::io_context& io_context, const worker_handle& worker, std::pmr::memory_resource* resource)
@@ -164,8 +177,8 @@ struct db_slot final {
         }
     }
 
-    db_slot(db_slot&&) noexcept = default;
-    db_slot& operator=(db_slot&&) noexcept = default;
+    db_slot(const db_slot&) = delete;
+    db_slot& operator=(const db_slot&) = delete;
 
     client_host_resolver resolver_;
     typename driver_type::connection_type* connection_{nullptr};
@@ -245,8 +258,7 @@ public:
     task<std::optional<db_row>> read_stream_row(std::size_t slot, void* result,
         std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
         std::pmr::memory_resource* resource, const operation_options& options);
-    task<void> close_stream(std::size_t slot, void* result, std::pmr::memory_resource* resource,
-        const operation_options& options);
+    task<void> close_stream(std::size_t slot, void* result, const operation_options& options);
     void abort_stream(std::size_t slot, void* result) noexcept;
     task<db_rows> query_on_transaction_slot(std::size_t slot, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options);
@@ -271,7 +283,7 @@ public:
         return worker_;
     }
     [[nodiscard]] slot_type& slot(std::size_t index) noexcept {
-        return slots_[index];
+        return *slots_[index];
     }
     // Lease services for driver hooks. A driver never waits for a lease: the
     // pool's own waits (lease_acquire) are the only callers the lease scheduler
@@ -292,10 +304,6 @@ public:
     [[nodiscard]] std::optional<std::size_t> try_lease() {
         return leases_.try_acquire();
     }
-    // Closes the leased slot when `stop` is requested, until finished.
-    [[nodiscard]] typename leases_type::cancellation_guard cancel_on_stop(std::size_t index, const stop_token& stop) {
-        return typename leases_type::cancellation_guard(leases_, index, stop);
-    }
     [[nodiscard]] typename driver_type::state_type& state() noexcept {
         return state_;
     }
@@ -312,7 +320,9 @@ public:
     // Gives a lease back, unless the driver state keeps it for a caller of its
     // own. Every lease this pool hands out ends here.
     void release_slot(std::size_t index) noexcept;
-    // Connects a leased slot unless it is connected; a failure closes it.
+    // Connects a leased slot unless it is connected; a failure closes it. A
+    // pool that does not reconnect (db_config_storage::reconnect_) fails here
+    // for a slot whose connection ended.
     task<void> connect_slot(std::size_t index, const operation_timeout& timeout);
     // Closes the slot's connection now, or -- while a wait still borrows it --
     // wakes that wait so the driving coroutine finishes the close.
@@ -427,13 +437,21 @@ private:
         std::pmr::memory_resource* resource, const operation_options& options);
     task<void> retire_failed_transaction_slot(std::size_t index, std::pmr::memory_resource* resource,
         const operation_timeout& timeout, const std::exception_ptr& failure);
+    task<void> open_slot(std::size_t index, const operation_timeout& timeout);
+    // Discards what a failed stream left, closes its connection and gives its
+    // lease back.
+    void fail_stream(std::size_t index, void* result, typename leases_type::cancellation_guard& cancellation) noexcept;
+    // Every lease names a slot of this pool; any other index breaks the lease
+    // lifecycle, which nothing can unwind from.
+    void require_slot_index(std::size_t index) const noexcept;
 
     asio::io_context& io_context_;
     db_config_storage config_;
     std::pmr::memory_resource* resource_;
     const worker_handle& worker_;
     // Declared before the lease pool: pending deadline timers address slots.
-    std::pmr::vector<slot_type> slots_;
+    // Each slot is allocated once and stays put while the pool lives.
+    std::pmr::vector<std::unique_ptr<slot_type, pmr_object_deleter<slot_type>>> slots_;
     leases_type leases_;
     std::uint64_t arrivals_{0};
     exclusive_wait* oldest_exclusive_{nullptr};

@@ -89,6 +89,13 @@ struct http_client_config final {
     // Bound of each transport write. An ordinary HTTP/1 request head and
     // immediate content share one write; streamed upload chunks remain separate.
     std::optional<std::chrono::milliseconds> write_timeout_{30000};
+    // Inactivity bound of a response read, restarted by every read that
+    // receives bytes: the HTTP/1 response head, body or tunnel bytes, or an
+    // HTTP/2 stream's head or DATA. A response read that waits for this
+    // client's consumer to drain buffered body (HTTP/2: to return flow-control
+    // credit) is not inactive. Reads during a streaming upload are bounded too.
+    // Expiry fails the response with timeout within request_timeout_.
+    std::optional<std::chrono::milliseconds> read_timeout_{30000};
     // Total deadline of one exchange, from slot acquisition through connect,
     // request transfer, response head and the complete body, including the
     // time the body producer waits for a slow consumer (read(), pipe_to()) to
@@ -96,8 +103,16 @@ struct http_client_config final {
     // with timeout and discards its connection. An operation's own timeout
     // replaces it; nullopt leaves the exchange unbounded.
     std::optional<std::chrono::milliseconds> request_timeout_{30000};
-    // Bound of the wait for a free connection slot, within request_timeout_.
+    // Bound of the wait for a free connection slot, within request_timeout_,
+    // including the wait for the slot's reconnect.
     std::optional<std::chrono::milliseconds> acquire_timeout_{5000};
+    // A pooled HTTP/1 connection between exchanges, or an HTTP/2 connection
+    // without streams, closes once idle this long.
+    std::optional<std::chrono::milliseconds> idle_timeout_{90000};
+    // HTTP/2 connection liveness: after this long without any received frame
+    // the client sends a PING, and fails the connection with timeout if
+    // another interval passes without input; nullopt sends no PING.
+    std::optional<std::chrono::milliseconds> http2_ping_interval_{};
     std::size_t max_response_bytes_{default_max_buffered_body_bytes};
     http_client_protocol protocol_{http_client_protocol::negotiate};
     http_client_advertisement_config advertisements_{};
@@ -110,8 +125,11 @@ struct http_client_config final {
     // User-Agent field; a caller field replaces it and an empty value sends
     // none. Must be a valid header field value.
     borrowed_text user_agent_{"Ruvia"};
-    // Client-stored like retained cookies: never sent with TRACE (RFC 9110 §9.3.8).
-    // Explicit caller Cookie fields are combined independently of the stored jar.
+    // Client-stored like retained cookies: never sent with TRACE (RFC 9110
+    // §9.3.8) or with a tunnel to another authority (RFC 6265 §5.4). A later
+    // entry replaces an earlier one of the same name; max_cookies_ and
+    // max_cookie_bytes_ bound the result. Explicit caller Cookie fields are
+    // combined independently of the stored jar.
     std::vector<http_header_view> cookies_{};
 };
 

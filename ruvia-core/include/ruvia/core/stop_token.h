@@ -116,6 +116,12 @@ private:
     // thread running it.
     stop_callback_node* running_{nullptr};
     std::thread::id requester_;
+    // An unlink on another thread blocks on run_epoch_ until the running
+    // callback returns. The wait lives here, not in the node: the requester
+    // must not touch a node after its run, since the waiter may free it, while
+    // the state outlives both through the node's and the requester's references.
+    bool run_awaited_{false};
+    std::atomic<std::uint32_t> run_epoch_{0};
 };
 
 inline stop_state_ref::stop_state_ref(const stop_state_ref& other) noexcept
@@ -204,10 +210,6 @@ private:
     stop_callback_node* previous_{nullptr};
     stop_callback_node* next_{nullptr};
     bool linked_{false};
-    // While running: the requester's flag recording that the callback
-    // destroyed this node from inside its own run.
-    bool* destroyed_{nullptr};
-    std::atomic<bool> completed_{false};
     // Initialize last: link() publishes every field request_stop() may access.
     // Its result stays stable even if another thread immediately unlinks us.
     const bool linked_at_registration_;

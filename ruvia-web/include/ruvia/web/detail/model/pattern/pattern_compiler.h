@@ -22,21 +22,24 @@ template <std::size_t capacity>
     const char c = pattern[cursor_value];
     if (c == '[') {
         ++cursor_value;
-        atom.kind_ = pattern_atom_kind::class_value;
+        bool negate = false;
         if (cursor_value < end && pattern[cursor_value] == '^') {
-            atom.negate_class_ = true;
+            negate = true;
             ++cursor_value;
         }
-        atom.class_begin_ = cursor_value;
+        const auto class_begin = cursor_value;
         for (; cursor_value < end; ++cursor_value) {
             if (pattern[cursor_value] == '\\') {
                 ++cursor_value;
                 continue;
             }
             if (pattern[cursor_value] == ']') {
-                atom.class_end_ = cursor_value++;
-                if (!valid_pattern_class(pattern, atom.class_begin_, atom.class_end_)) {
+                const auto class_end = cursor_value++;
+                if (!compile_pattern_class(pattern, class_begin, class_end, atom.bytes_)) {
                     return false;
+                }
+                if (negate) {
+                    atom.bytes_.invert();
                 }
                 plan.atoms_[plan.count_++] = atom;
                 return true;
@@ -45,28 +48,25 @@ template <std::size_t capacity>
         return false;
     }
 
+    pattern_class_member member;
     if (c == '\\') {
         if (cursor_value + 1 >= end) {
             return false;
         }
         const char escaped = pattern[++cursor_value];
-        if (!decode_pattern_escape(escaped, atom.kind_)) {
+        if (!decode_pattern_escape(escaped, member.kind_)) {
             return false;
         }
-        atom.literal_ = escaped;
-        ++cursor_value;
-        plan.atoms_[plan.count_++] = atom;
-        return true;
-    }
-
-    if (is_pattern_meta(c)) {
-        if (c != '.') {
-            return false;
-        }
-        atom.kind_ = pattern_atom_kind::any;
+        member.first_ = static_cast<unsigned char>(escaped);
+        member.last_ = member.first_;
+        insert_pattern_member(atom.bytes_, member);
+    } else if (c == '.') {
+        atom.bytes_.insert(static_cast<unsigned char>('\n'));
+        atom.bytes_.invert();
+    } else if (is_pattern_meta(c)) {
+        return false;
     } else {
-        atom.kind_ = pattern_atom_kind::literal;
-        atom.literal_ = c;
+        atom.bytes_.insert(static_cast<unsigned char>(c));
     }
     ++cursor_value;
     plan.atoms_[plan.count_++] = atom;

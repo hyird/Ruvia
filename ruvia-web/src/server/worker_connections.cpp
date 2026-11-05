@@ -35,7 +35,7 @@
 #include "ruvia/http/http_ascii.h"
 
 #include "context/context_services.h"
-#include "http2/cleartext_upgrade.h"
+#include "http2/http2_sans_io_session.h"
 #include "integration/worker_capabilities.h"
 #include "ratelimit/rate_limit_key.h"
 #include "server/http_connection_close.h"
@@ -43,7 +43,7 @@
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_handshake.h"
 #include "server/http_server_tls_identity.h"
-#include "server/windows_accept_domain.h"
+#include "server/tcp_accept_error.h"
 #include "tls/tls_protocol_policy.h"
 #include "tls/tls_served_certificate.h"
 #include "util/tcp_socket_policies.h"
@@ -194,7 +194,8 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
     const auto count = std::min(tls->sni_identities_.size(), listener_value.sni_contexts_.size());
     for (std::size_t i = 0; i < count; ++i) {
         if (http_ascii_equals_ignore_case(tls->sni_identities_[i].host_, server_name)) {
-            // for a name that has its own certificate: fail the handshake.
+            // A name with its own certificate must be served with it: failing
+            // to switch to its context fails the handshake.
             if (SSL_set_SSL_CTX(ssl, listener_value.sni_contexts_[i].native_handle()) == nullptr) {
                 return SSL_TLSEXT_ERR_ALERT_FATAL;
             }
@@ -219,13 +220,12 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
 }
 
 // Names the peer for the session's services and its failure report. Both stay
-// empty when the socket no longer knows its peer.
-void resolve_remote_endpoint(tcp_socket_type& socket, std::pmr::string& address, std::uint16_t& port) {
-    std::error_code remote_ec;
-    const auto remote_endpoint = socket.remote_endpoint(remote_ec);
-    if (!remote_ec) {
-        assign_remote_address(address, remote_endpoint.address());
-        port = remote_endpoint.port();
+// empty when the socket no longer knew its peer.
+void name_remote_endpoint(
+    const std::optional<asio::ip::tcp::endpoint>& remote, std::pmr::string& address, std::uint16_t& port) {
+    if (remote.has_value()) {
+        assign_remote_address(address, remote->address());
+        port = remote->port();
     }
 }
 
@@ -508,13 +508,13 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
 // carries none of the TLS stream, handshake and certificate state. Both keep
 // the remote address outside their try so the failure report can name the
 // peer; it stays empty if the failure happened before the address was resolved.
-task<void> worker_connections::run_session(
-    http_server_session_config& listener_value, accepted_connection_lease connection) {
+task<void> worker_connections::run_session(http_server_session_config& listener_value,
+    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote) {
     auto& socket = connection.socket();
     std::pmr::string remote_address(memory_.allocator<char>());
     std::uint16_t remote_port = 0;
     try {
-        resolve_remote_endpoint(socket, remote_address, remote_port);
+        name_remote_endpoint(remote, remote_address, remote_port);
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
             capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
         // Plain TCP has no close alert: only a lingering close differs from an
@@ -529,13 +529,13 @@ task<void> worker_connections::run_session(
     }
 }
 
-task<void> worker_connections::run_tls_session(
-    http_server_session_config& listener_value, accepted_connection_lease connection) {
+task<void> worker_connections::run_tls_session(http_server_session_config& listener_value,
+    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote) {
     auto& socket = connection.socket();
     std::pmr::string remote_address(memory_.allocator<char>());
     std::uint16_t remote_port = 0;
     try {
-        resolve_remote_endpoint(socket, remote_address, remote_port);
+        name_remote_endpoint(remote, remote_address, remote_port);
         // A draining worker admits no new request, and a handshake leads only to one.
         if (!http_server_worker_running(state_)) {
             co_return;
@@ -588,8 +588,8 @@ task<http_connection_close> worker_connections::run_http2(stream_type& stream, t
     context_services services) {
     connection_scanner::entry scanner_entry;
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, socket);
-    co_return co_await run_http2_server_session(http2_server_session_setup<stream_type>{
-        .stream_ = stream, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = services});
+    co_return co_await run_http2_sans_io_session(
+        stream, routes_, memory_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
 }
 
 void worker_connections::report_session_failure(
@@ -618,18 +618,25 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
         return;
     }
 
+    // Read the peer before the socket moves into the lease: a failure to
+    // start the session destroys the lease, and its socket, with it.
+    std::optional<asio::ip::tcp::endpoint> remote;
+    std::error_code remote_error;
+    if (auto endpoint = socket.remote_endpoint(remote_error); !remote_error) {
+        remote = endpoint;
+    }
     try {
         configure_accepted_socket(socket);
         accepted_connection_lease connection(std::move(socket), drain_);
         auto& listener_value = listeners_[listener_index]->session_;
-        tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection))
-                                                     : run_session(listener_value, std::move(connection)));
+        tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection), remote)
+                                                     : run_session(listener_value, std::move(connection), remote));
     } catch (...) {
         auto failure = std::current_exception();
         std::pmr::string remote_address(memory_.allocator<char>());
         std::uint16_t remote_port = 0;
         try {
-            resolve_remote_endpoint(socket, remote_address, remote_port);
+            name_remote_endpoint(remote, remote_address, remote_port);
         } catch (...) {
             remote_address.clear();
         }

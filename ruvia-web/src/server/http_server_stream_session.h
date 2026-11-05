@@ -18,7 +18,7 @@
 
 #include "context/context_services.h"
 #include "http/http_protocol_error_info.h"
-#include "http2/cleartext_upgrade.h"
+#include "http2/http2_server_session_entry.h"
 #include "router/route_context.h"
 #include "server/http1_interim_response_sink.h"
 #include "server/http1_request_sequence.h"
@@ -645,7 +645,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                                           : co_await tail.finish_prepare(preparation, response, options_,
                                                 routes_value, request_memory_value, services);
                 if (prepared.recovered_) {
-                    connection_plan = require_http1_final_response_commit(response, connection_plan);
+                    connection_plan = http1_commit_final_response(response, connection_plan);
                     request_completion = request_completion->with_buffered_connection_plan(connection_plan);
                     connection_plan = request_completion->connection_plan();
                 }

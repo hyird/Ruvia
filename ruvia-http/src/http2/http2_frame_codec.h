@@ -39,12 +39,13 @@ inline char* http2_write32(char* out, std::uint32_t value) noexcept {
     return out;
 }
 
-// RFC 9113 §4.1 frame header through the public encoder; callers have already
-// bounded `length` and `stream_id`, so a rejected header is an invariant violation.
+// RFC 9113 §4.1 frame header through the public encoder. Callers have already
+// bounded `length` and `stream_id`, so a rejected header is an invariant violation;
+// no value is masked into range.
 inline char* http2_write_frame_header(char* out, std::uint32_t length, http2_frame_type type,
     std::uint8_t flags, std::uint32_t stream_id) noexcept {
     if (!encode_http2_frame_header(
-            std::span<char>(out, http2_frame_header_bytes), length, type, flags, stream_id & 0x7fffffffU)) {
+            std::span<char>(out, http2_frame_header_bytes), length, type, flags, stream_id)) {
         std::terminate();
     }
     return out + http2_frame_header_bytes;
@@ -63,13 +64,19 @@ inline char* http2_write_settings_entry(char* out, http2_setting_id id, std::uin
 
 inline char* http2_write_window_update(
     char* out, std::uint32_t stream_id, std::uint32_t increment) noexcept {
+    if (increment == 0 || increment > http2_max_stream_id) {
+        std::terminate();
+    }
     out = http2_write_frame_header(out, 4, http2_frame_type::window_update, 0, stream_id);
-    return http2_write32(out, increment & 0x7fffffffU);
+    return http2_write32(out, increment);
 }
 
 inline char* http2_write_goaway_payload(
     char* out, std::uint32_t last_stream_id, http2_error_code error) noexcept {
-    out = http2_write32(out, last_stream_id & 0x7fffffffU);
+    if (last_stream_id > http2_max_stream_id) {
+        std::terminate();
+    }
+    out = http2_write32(out, last_stream_id);
     return http2_write32(out, static_cast<std::uint32_t>(error));
 }
 

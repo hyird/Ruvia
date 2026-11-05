@@ -65,21 +65,22 @@ public:
     http2_event(http2_event&&) noexcept = default;
     http2_event& operator=(http2_event&&) = delete;
 
-    [[nodiscard]] bool references_stream(std::uint32_t stream_id) const noexcept {
-        return std::visit(
-            [stream_id](const auto& event) noexcept {
+    // Visits each stream id whose storage the owner may read when taking this event.
+    template <typename visitor_type>
+    void for_each_referenced_stream(visitor_type&& visitor) const noexcept {
+        std::visit(
+            [&visitor](const auto& event) noexcept {
                 using event_type = std::decay_t<decltype(event)>;
                 if constexpr (std::is_same_v<event_type, http2_push_promise_event>) {
-                    return event.promised_stream_id_ == stream_id || event.associated_stream_id_ == stream_id;
+                    visitor(event.associated_stream_id_);
+                    visitor(event.promised_stream_id_);
                 } else if constexpr (requires { event.stream_id(); }) {
-                    return event.stream_id() == stream_id;
+                    visitor(event.stream_id());
                 } else if constexpr (std::is_same_v<event_type, http2_message_head_record> ||
                                      std::is_same_v<event_type, http2_message_data_record> ||
                                      std::is_same_v<event_type, http2_message_end_record> ||
                                      std::is_same_v<event_type, http2_tunnel_data_record>) {
-                    return event.stream_id_ == stream_id;
-                } else {
-                    return false;
+                    visitor(event.stream_id_);
                 }
             },
             value_);

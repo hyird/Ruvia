@@ -12,7 +12,6 @@
 #include <utility>
 
 #include <asio.hpp>
-#include <asio/ssl/error.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/stop_token.h"
@@ -24,14 +23,6 @@
 #include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
-
-[[nodiscard]] inline bool http1_peer_transport_ended(const std::error_code& error) noexcept {
-    return error == asio::error::eof || error == asio::error::connection_reset ||
-           error == asio::error::connection_aborted || error == asio::error::broken_pipe ||
-           error == asio::error::operation_aborted || error == asio::error::bad_descriptor ||
-           error == asio::error::timed_out || error == asio::error::not_connected ||
-           error == asio::error::shut_down || error == asio::ssl::error::stream_truncated;
-}
 
 // 仅由 cancel_on_peer_eof() 显式启用，且要求请求体已完整消费。
 // 正常完成不创建监控、不触发取消；route 负责 cancel/join 后再释放 transport。
@@ -78,7 +69,7 @@ public:
     }
 
     void write_failed(const std::error_code& error) noexcept {
-        peer_aborted_ = peer_aborted_ || http1_peer_transport_ended(error);
+        peer_aborted_ = peer_aborted_ || is_inbound_connection_end(error);
         request_stop();
         cancel();
     }
@@ -148,7 +139,7 @@ private:
                     if (closing_ && error == asio::error::operation_aborted) {
                         co_return;
                     }
-                    if (http1_peer_transport_ended(error)) {
+                    if (is_inbound_connection_end(error)) {
                         peer_aborted_ = true;
                         request_stop();
                         co_return;

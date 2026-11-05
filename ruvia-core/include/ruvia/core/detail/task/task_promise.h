@@ -240,10 +240,35 @@ private:
     std::variant<task_promise_pending, completed_type, task_promise_failure> state_;
 };
 
-// Coroutine protocol requires separate return_value / return_void declarations.
-// These are signature adapters, not separate ownership or completion engines.
+// The coroutine protocol forbids declaring both return_value and return_void,
+// so this base is the only part of the promise that differs between value and
+// void tasks; every other promise member is stated once in task_promise.
 template <typename t_type>
-class task_promise final {
+class task_promise_return {
+public:
+    template <typename u_type>
+        requires std::constructible_from<t_type, u_type>
+    void return_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type>) {
+        state_.complete(std::forward<u_type>(value));
+    }
+
+protected:
+    task_promise_result<t_type> state_;
+};
+
+template <>
+class task_promise_return<void> {
+public:
+    void return_void() noexcept {
+        state_.complete();
+    }
+
+protected:
+    task_promise_result<void> state_;
+};
+
+template <typename t_type>
+class task_promise final : public task_promise_return<t_type> {
 public:
     static_assert(!std::is_reference_v<t_type>, "ruvia::task does not support reference result types");
     task_promise() noexcept = default;
@@ -263,16 +288,12 @@ public:
         return {};
     }
 
-    template <typename u_type>
-        requires std::constructible_from<t_type, u_type>
-    void return_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type>) {
-        state_.complete(std::forward<u_type>(value));
-    }
     void unhandled_exception() noexcept {
-        state_.fail();
+        this->state_.fail();
     }
-    [[nodiscard]] t_type result() & {
-        return state_.result();
+    // No [[nodiscard]]: the attribute is not portable on the void return.
+    t_type result() & {
+        return this->state_.result();
     }
 
 private:
@@ -285,49 +306,6 @@ private:
     friend class ruvia::task_scope;
     friend struct task_final_awaiter;
 
-    task_promise_result<t_type> state_;
-    task_frame_control control_;
-};
-
-template <>
-class task_promise<void> final {
-public:
-    task_promise() noexcept = default;
-    static void* operator new(std::size_t size) {
-        return task_frame_allocate<alignof(task_promise)>(size);
-    }
-    static void operator delete(void* pointer, std::size_t size) noexcept {
-        task_frame_deallocate_sized<alignof(task_promise)>(pointer, size);
-    }
-
-    [[nodiscard]] task<void> get_return_object() noexcept;
-    [[nodiscard]] std::suspend_always initial_suspend() const noexcept {
-        return {};
-    }
-    [[nodiscard]] task_final_awaiter final_suspend() noexcept {
-        return {};
-    }
-    void return_void() noexcept {
-        state_.complete();
-    }
-    void unhandled_exception() noexcept {
-        state_.fail();
-    }
-    void result() & {
-        state_.result();
-    }
-
-private:
-    template <typename>
-    friend class ruvia::task;
-    template <typename>
-    friend class task_awaiter;
-    template <typename, typename>
-    friend class task_completion_state;
-    friend class ruvia::task_scope;
-    friend struct task_final_awaiter;
-
-    task_promise_result<void> state_;
     task_frame_control control_;
 };
 

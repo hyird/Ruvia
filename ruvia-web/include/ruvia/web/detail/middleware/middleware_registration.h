@@ -8,7 +8,6 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 #include "ruvia/web/detail/middleware/middleware_descriptor.h"
-#include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia::detail {
@@ -37,12 +36,12 @@ template <middleware middleware_type>
 template <typename middleware_type, typename args_type>
 [[nodiscard]] void* create_middleware(const void* args) {
     if constexpr (std::tuple_size_v<args_type> == 0) {
-        return static_cast<void*>(construct_pmr_object<middleware_type>(registration_resource()));
+        return static_cast<void*>(construct_pmr_object<middleware_type>(process_resource()));
     } else {
         return std::apply(
             [](const auto&... values) {
                 return static_cast<void*>(
-                    construct_pmr_object<middleware_type>(registration_resource(), values...));
+                    construct_pmr_object<middleware_type>(process_resource(), values...));
             },
             *static_cast<const args_type*>(args));
     }
@@ -50,12 +49,12 @@ template <typename middleware_type, typename args_type>
 
 template <typename middleware_type>
 void destroy_middleware(void* target) noexcept {
-    destroy_pmr_object(static_cast<middleware_type*>(target), registration_resource());
+    destroy_pmr_object(static_cast<middleware_type*>(target), process_resource());
 }
 
 template <typename args_type>
 void release_middleware_args(const void* args) noexcept {
-    destroy_pmr_object(const_cast<args_type*>(static_cast<const args_type*>(args)), registration_resource());
+    destroy_pmr_object(const_cast<args_type*>(static_cast<const args_type*>(args)), process_resource());
 }
 
 template <typename middleware_type>
@@ -165,7 +164,7 @@ template <middleware middleware_type, typename... args_types>
     } else {
         using args_tuple_type = std::tuple<std::decay_t<args_types>...>;
         const auto* stored =
-            construct_pmr_object<args_tuple_type>(registration_resource(), std::forward<args_types>(args)...);
+            construct_pmr_object<args_tuple_type>(process_resource(), std::forward<args_types>(args)...);
         return owned_middleware_descriptor(
             describe_middleware<middleware_type, args_tuple_type>(stored), &release_middleware_args<args_tuple_type>);
     }

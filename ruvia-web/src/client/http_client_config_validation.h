@@ -1,5 +1,7 @@
 #pragma once
+#include <cstddef>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -68,48 +70,34 @@ inline void validate_http_client_config(const http_client_config& config) {
     detail::ensure_positive_size(
         config.max_response_bytes_, "http client response byte limit must be greater than zero");
     detail::ensure_positive_optional_durations("configured http client timeouts must be greater than zero",
-        std::optional{config.connect_timeout_}, config.write_timeout_, config.request_timeout_,
-        config.acquire_timeout_);
+        std::optional{config.connect_timeout_}, config.write_timeout_, config.read_timeout_, config.request_timeout_,
+        config.acquire_timeout_, config.idle_timeout_, config.http2_ping_interval_);
     validate_client_user_agent(config.user_agent_.view());
     validate_client_tcp_config(config.tcp_);
-    std::size_t unique_cookies = 0;
-    std::size_t cookie_bytes = 0;
-    for (std::size_t i = 0; i < config.cookies_.size(); ++i) {
-        const auto name = config.cookies_[i].name();
-        const auto value = config.cookies_[i].value();
-        if (!is_valid_http_header_name(name) || !::ruvia::is_valid_cookie_value(value)) {
+    // Every configured cookie is validated, including one a later entry with
+    // the same name replaces; capacity applies to the deduplicated set.
+    for (const auto& cookie : config.cookies_) {
+        if (!is_valid_http_header_name(cookie.name()) || !::ruvia::is_valid_cookie_value(cookie.value())) {
             throw std::invalid_argument("configured HTTP client cookie is invalid");
         }
-        bool overridden = false;
-        for (std::size_t j = i + 1; j < config.cookies_.size(); ++j) {
-            if (config.cookies_[j].name() == name) {
-                overridden = true;
-                break;
+    }
+}
+
+// Capacity of the deduplicated configured cookies, each stored with the
+// default "/" path like a retained cookie.
+inline void validate_http_client_configured_cookie_capacity(
+    std::span<const http_header> cookies, std::size_t max_cookies, std::size_t max_cookie_bytes) {
+    if (cookies.size() > max_cookies) {
+        throw std::invalid_argument("configured HTTP client cookies exceed the client cookie limit");
+    }
+    std::size_t cookie_bytes = 0;
+    for (const auto& cookie : cookies) {
+        for (const auto bytes : {cookie.name().size(), cookie.value().size(), std::size_t{1}}) {
+            if (bytes > max_cookie_bytes - cookie_bytes) {
+                throw std::invalid_argument("configured HTTP client cookies exceed the client byte limit");
             }
+            cookie_bytes += bytes;
         }
-        if (overridden) {
-            continue;
-        }
-        ++unique_cookies;
-        if (unique_cookies > config.max_cookies_) {
-            throw std::invalid_argument(
-                "configured HTTP client cookies exceed the client cookie limit");
-        }
-        if (name.size() > config.max_cookie_bytes_ - cookie_bytes) {
-            throw std::invalid_argument(
-                "configured HTTP client cookies exceed the client byte limit");
-        }
-        cookie_bytes += name.size();
-        if (value.size() > config.max_cookie_bytes_ - cookie_bytes) {
-            throw std::invalid_argument(
-                "configured HTTP client cookies exceed the client byte limit");
-        }
-        cookie_bytes += value.size();
-        if (cookie_bytes == config.max_cookie_bytes_) {
-            throw std::invalid_argument(
-                "configured HTTP client cookies exceed the client byte limit");
-        }
-        ++cookie_bytes;  // Every configured cookie is stored with the default "/" path.
     }
 }
 

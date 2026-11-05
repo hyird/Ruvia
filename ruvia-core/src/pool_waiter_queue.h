@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/core/pool_lease_scheduler.h"
+#include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia::detail {
@@ -101,29 +102,18 @@ public:
         return true;
     }
 
-    // Commit closure for the entire current queue before resuming any waiter.
-    // A resumed coroutine can re-enter the queue, so draining one waiter at a
-    // time would let that continuation acquire a slot on behalf of a waiter
-    // that should already have observed pool closure.
-    void close_all() noexcept {
-        pool_lease_acquire* closed_head = nullptr;
-        pool_lease_acquire* closed_tail = nullptr;
+    // Commit closure for the entire current queue and resume every waiter in a
+    // later worker turn, as release() does: closure runs inside the owner's own
+    // teardown, which must finish before any waiter observes it.
+    void close_all(const worker_handle& worker) noexcept {
         while (head_ != nullptr) {
             auto* waiter = head_;
             remove(*waiter);
             waiter->complete(worker_wait_status::closed);
-            if (closed_tail != nullptr) {
-                closed_tail->next_ = waiter;
-            } else {
-                closed_head = waiter;
+            waiter->cancel_registrations();
+            if (auto continuation = waiter->take_continuation()) {
+                worker.defer_resume(continuation);
             }
-            closed_tail = waiter;
-        }
-        while (closed_head != nullptr) {
-            auto* resume_waiter = closed_head;
-            closed_head = closed_head->next_;
-            resume_waiter->next_ = nullptr;
-            resume_waiter->resume();
         }
     }
 

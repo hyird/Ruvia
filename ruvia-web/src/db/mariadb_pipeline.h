@@ -13,7 +13,7 @@
 
 #include "db/db_pipeline.h"
 #include "db/db_slot_socket.h"
-#include "db/db_sql.h"
+#include "db/mariadb_sql.h"
 #include "db/mariadb_statements.h"
 
 struct st_mysql_res;
@@ -38,12 +38,13 @@ struct ma_charset_info_st;
 // A command is sent ahead of responses only when the statements before it
 // cannot change what it means. Its parameters are interpolated when it is
 // queued, in text every session reads alike; a statement whose interpolation
-// depends on the session (mariadb_interpolation_needs_session()) is
-// interpolated and sent once every response before it has been read, a SET of
-// sql_mode among them, and when its escape depends on the session's client
-// character set (mariadb_interpolation_needs_charset()), that is read from the
-// server first, unless session tracking says it is still utf8mb4. A LOAD ...
-// LOCAL INFILE (mariadb_exclusive_statement()) goes out alone, and nothing
+// depends on the session -- a backslash in its text or in a string parameter,
+// which NO_BACKSLASH_ESCAPES reads either way -- is interpolated and sent once
+// every response before it has been read, a SET of sql_mode among them, and
+// when its escape depends on the session's client character set
+// (mariadb_escape_needs_charset()), that is read from the server first, unless
+// session tracking says it is still utf8mb4. A LOAD ... LOCAL INFILE
+// (mariadb_statement_classification::exclusive_) goes out alone, and nothing
 // follows it until its response has been read.
 //
 // A statement found in the connection's statement cache runs prepared only
@@ -78,7 +79,7 @@ struct mariadb_flight final {
     // Sent once every response before it has been read, and followed by
     // nothing until its own response has been read.
     bool exclusive_{false};
-    // May run a stored procedure (mariadb_calls_routine()).
+    // May run a stored procedure (mariadb_statement_classification::calls_routine_).
     bool routine_{false};
     // Its use was counted in the statement cache: when the reader comes back
     // to it, it goes out as text.
@@ -168,7 +169,6 @@ struct mariadb_pipeline_io final {
         state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
     [[nodiscard]] static bool advance(state_type& state, std::size_t slot, member_type& reader);
     [[nodiscard]] static db_socket_readiness wanted(pool_type& pool, std::size_t slot) noexcept;
-    static void check_wait(const db_socket_wait_result& result);
     static void exchange(state_type& state, std::size_t slot, db_socket_readiness ready);
     [[nodiscard]] static bool reusable(state_type& state, std::size_t slot) noexcept;
 };

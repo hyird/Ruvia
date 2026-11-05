@@ -5,6 +5,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
@@ -89,13 +90,8 @@ inline void http1_mark_connection_close(http_response& response,
         if (!http_ascii_equals_ignore_case(header.name(), "Connection")) {
             continue;
         }
-        const auto field_value = header.value();
-        std::size_t start = 0;
-        while (start <= field_value.size()) {
-            const auto comma = field_value.find(',', start);
-            const auto end = comma == std::string_view::npos ? field_value.size() : comma;
-            const auto option = http_trim_ows(field_value.substr(start, end - start));
-            if (!option.empty() && !http_ascii_equals_ignore_case(option, "close") &&
+        detail::http_visit_comma_separated_quoted(header.value(), [&merged, base](std::string_view option) {
+            if (!http_ascii_equals_ignore_case(option, "close") &&
                 !http_ascii_equals_ignore_case(option, "keep-alive") &&
                 !http_ascii_equals_ignore_case(option, "Upgrade")) {
                 if (merged.empty()) {
@@ -104,11 +100,8 @@ inline void http1_mark_connection_close(http_response& response,
                 merged.append(", ");
                 merged.append(option);
             }
-            if (comma == std::string_view::npos) {
-                break;
-            }
-            start = comma + 1;
-        }
+            return true;
+        });
     }
     response.remove_header("Connection");
     if (merged.empty()) {

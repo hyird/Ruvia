@@ -54,9 +54,8 @@ struct pattern_class_member final {
     return true;
 }
 
-// The compiler and matcher share this grammar. Decode escaped atoms before
-// recognizing a range; a final '-' is a literal, and only single literal atoms
-// may be range endpoints.
+// Decode escaped atoms before recognizing a range; a final '-' is a literal,
+// and only single literal atoms may be range endpoints.
 [[nodiscard]] constexpr bool consume_pattern_class_member(std::string_view pattern, std::size_t end,
     std::size_t& cursor, pattern_class_member& member) noexcept {
     if (!consume_pattern_class_atom(pattern, end, cursor, member)) {
@@ -75,8 +74,35 @@ struct pattern_class_member final {
     return true;
 }
 
-[[nodiscard]] constexpr bool valid_pattern_class(std::string_view pattern, std::size_t begin,
-    std::size_t end) noexcept {
+constexpr void insert_pattern_member(pattern_byte_set& bytes, const pattern_class_member& member) noexcept {
+    for (unsigned byte = 0; byte < 256; ++byte) {
+        const auto value = static_cast<char>(byte);
+        bool matches = false;
+        switch (member.kind_) {
+            case pattern_atom_kind::literal:
+                matches = byte >= member.first_ && byte <= member.last_;
+                break;
+            case pattern_atom_kind::digit:
+                matches = is_pattern_digit(value);
+                break;
+            case pattern_atom_kind::word:
+                matches = is_pattern_word(value);
+                break;
+            case pattern_atom_kind::space:
+                matches = is_pattern_space(value);
+                break;
+        }
+        if (matches) {
+            bytes.insert(static_cast<unsigned char>(byte));
+        }
+    }
+}
+
+// Folds the class body in [begin, end) into `bytes`. Negation is applied by
+// the caller: a leading '[^' is stripped before the body, so any '^' here is an
+// ordinary member (e.g. "[^^]" excludes only the caret).
+[[nodiscard]] constexpr bool compile_pattern_class(std::string_view pattern, std::size_t begin,
+    std::size_t end, pattern_byte_set& bytes) noexcept {
     if (begin >= end) {
         return false;
     }
@@ -85,6 +111,7 @@ struct pattern_class_member final {
         if (!consume_pattern_class_member(pattern, end, cursor, member)) {
             return false;
         }
+        insert_pattern_member(bytes, member);
     }
     return true;
 }

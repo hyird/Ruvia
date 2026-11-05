@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/websocket/websocket_compression_extension.h"
 #include "ruvia/http/detail/websocket/websocket_switching_protocols_head_prefix.h"
 #include "ruvia/http/http1_request_body_plan.h"
@@ -69,18 +70,10 @@ public:
 
 private:
     [[nodiscard]] bool append_elements(std::string_view value, bool skip_duplicates) noexcept {
-        while (true) {
-            const auto comma = value.find(',');
-            const auto protocol = http_trim_ows(
-                comma == std::string_view::npos ? value : value.substr(0, comma));
-            if (!protocol.empty() && !(skip_duplicates && contains(protocol)) && !append(protocol)) {
-                return false;
-            }
-            if (comma == std::string_view::npos) {
-                return true;
-            }
-            value.remove_prefix(comma + 1);
-        }
+        return detail::http_visit_token_list(value, detail::http_field_list_role::recipient,
+                   [this, skip_duplicates](std::string_view protocol) noexcept {
+                       return (skip_duplicates && contains(protocol)) || append(protocol);
+                   }) == detail::http_field_list_parse_status::ok;
     }
 
     std::array<std::string_view, max_websocket_subprotocols> protocols_{};

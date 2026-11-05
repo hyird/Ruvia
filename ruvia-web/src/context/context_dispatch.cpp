@@ -19,6 +19,7 @@
 #include "ruvia/web/context.h"
 
 #include "context/context_services.h"
+#include "http/inline_http_header_views.h"
 #include "router/route_table.h"
 #include "server/http_request_admission.h"
 
@@ -92,31 +93,15 @@ task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr
     const std::string_view body = body_storage;
     std::array<char, http_max_unsigned_decimal_size> content_length_text;
     const auto content_length = http_format_unsigned(content_length_text, body.size());
-    const auto header_count = 2U + headers.size();
-    static constexpr std::size_t inline_header_capacity = 16;
-    std::array<http_header_view, inline_header_capacity> inline_headers{};
-    std::pmr::vector<http_header_view> heap_headers(memory.resource());
-    std::span<const http_header_view> active_headers;
-    if (header_count <= inline_header_capacity) {
-        std::size_t pos = 0;
-        inline_headers[pos++] = http_header_view("Host", "localhost");
-        for (const auto& header : headers) {
-            inline_headers[pos++] = http_header_view(header.name(), header.value());
-        }
-        inline_headers[pos++] = http_header_view("Content-Length", content_length);
-        active_headers = std::span<const http_header_view>(inline_headers.data(), pos);
-    } else {
-        heap_headers.reserve(header_count);
-        heap_headers.emplace_back("Host", "localhost");
-        for (const auto& header : headers) {
-            heap_headers.emplace_back(header.name(), header.value());
-        }
-        heap_headers.emplace_back("Content-Length", content_length);
-        active_headers = heap_headers;
+    detail::inline_http_header_views<16> active_headers(2U + headers.size(), memory.resource());
+    active_headers.push_back(http_header_view("Host", "localhost"));
+    for (const auto& header : headers) {
+        active_headers.push_back(http_header_view(header.name(), header.value()));
     }
+    active_headers.push_back(http_header_view("Content-Length", content_length));
     const auto request = [&]() {
         try {
-            return make_parsed_http_request(method, target, active_headers,
+            return make_parsed_http_request(method, target, active_headers.view(),
                 std::as_bytes(std::span(body.data(), body.size())), memory.resource());
         } catch (const http_protocol_error&) {
             throw std::invalid_argument("invalid subrequest");

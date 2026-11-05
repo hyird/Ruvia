@@ -57,14 +57,6 @@ worker_handle detail::worker_handle_access::make(
     return worker_handle(dispatcher);
 }
 
-void detail::worker_handle_access::defer(const worker_handle& worker_value, move_only_function<void()> task_value) {
-    const auto& dispatcher = worker_value.dispatcher_;
-    if (!dispatcher) {
-        throw std::runtime_error("worker stopped before internal continuation was scheduled");
-    }
-    dispatcher->defer(std::move(task_value));
-}
-
 bool detail::worker_handle_access::defer_if_attached(
     const worker_handle& worker_value, move_only_function<void()> task_value) {
     const auto& dispatcher = worker_value.dispatcher_;

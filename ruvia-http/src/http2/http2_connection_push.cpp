@@ -1,3 +1,4 @@
+#include <optional>
 #include <vector>
 
 #include "ruvia/http/http_header.h"
@@ -14,7 +15,7 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
         append_goaway(http2_error_code::protocol_error, "PUSH_PROMISE not permitted");
         return false;
     }
-    const auto* parent_value = find_stream(header_value.stream_id_);
+    const auto* parent_value = streams_.find(header_value.stream_id_);
     // RFC 9113 section 6.6: a PUSH_PROMISE on a stream that is neither open nor
     // half-closed (local) is a connection error, except when this endpoint sent
     // RST_STREAM on it. A normally completed stream was never reset, so only the
@@ -78,6 +79,19 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
     }
 }
 
+void http2_connection::refuse_promised_stream(std::uint32_t promised_id, http2_error_code error,
+    hpack_decoder::decode_transaction_type& hpack_transaction,
+    http2_stream_header_decode_transaction& stream_transaction) {
+    output_.reserve_segments_additional(1);
+    output_.reserve_additional(http2_frame_header_bytes + 4);
+    append_peer_error_reset(promised_id, error);
+    hpack_transaction.commit();
+    stream_transaction.commit();
+    closed_streams_.remember(promised_id, http2_stream_close_source::local, true);
+    last_peer_push_stream_id_ = promised_id;
+    last_stream_id_ = promised_id;
+}
+
 bool http2_connection::finish_push_promise(std::string_view block) {
     auto& scratch = *push_header_stream_;
     // PUSH_PROMISE represents a complete request without a request body.
@@ -89,44 +103,35 @@ bool http2_connection::finish_push_promise(std::string_view block) {
         append_goaway(http2_error_code::compression_error, "push field block decompression failed");
         return false;
     }
+    const auto promised_id = scratch.id();
+    std::optional<http2_error_code> refusal;
     if (push_reject_connected_tunnel_) {
         // RFC 9113 section 8.5: on a connected stream only DATA, RST_STREAM,
         // WINDOW_UPDATE and PRIORITY are allowed; any other frame is a stream
         // error. The block still had to be decoded so HPACK stays synchronized,
         // and the promised stream is reserved by the frame (section 6.6), so it
         // is cancelled explicitly instead of being left dangling.
-        const auto promised_id = scratch.id();
-        reserve_stream_close_effects();
-        output_.reserve_additional(http2_frame_header_bytes + 4);
-        output_.append_rst_stream(push_associated_stream_id_, http2_error_code::protocol_error);
-        output_.append_rst_stream(promised_id, http2_error_code::cancel);
-        hpack_transaction.commit();
-        stream_transaction.commit();
-        closed_streams_.remember(promised_id, http2_stream_close_source::local, true);
-        last_peer_push_stream_id_ = promised_id;
-        last_stream_id_ = promised_id;
-        close_stream(push_associated_stream_id_, http2_stream_close_source::local,
-            http2_error_code::protocol_error);
-        return true;
+        refusal = http2_error_code::cancel;
+    } else if (status != header_decode_status::ok ||
+               (scratch.request_method() != "GET" && scratch.request_method() != "HEAD")) {
+        refusal = http2_error_code::protocol_error;
+    } else if (const auto* graceful_drain = local_connection_state_.graceful_drain();
+        graceful_drain != nullptr && promised_id > graceful_drain->last_stream_id()) {
+        refusal = http2_error_code::refused_stream;
     }
-    if (status != header_decode_status::ok ||
-        (scratch.request_method() != "GET" && scratch.request_method() != "HEAD")) {
-        output_.append_rst_stream(scratch.id(), http2_error_code::protocol_error);
-        hpack_transaction.commit();
-        stream_transaction.commit();
-        closed_streams_.remember(scratch.id(), http2_stream_close_source::local, true);
-        last_peer_push_stream_id_ = scratch.id();
-        last_stream_id_ = scratch.id();
-        return true;
-    }
-    if (const auto* graceful_drain = local_connection_state_.graceful_drain();
-        graceful_drain != nullptr && scratch.id() > graceful_drain->last_stream_id()) {
-        output_.append_rst_stream(scratch.id(), http2_error_code::refused_stream);
-        hpack_transaction.commit();
-        stream_transaction.commit();
-        closed_streams_.remember(scratch.id(), http2_stream_close_source::local, true);
-        last_peer_push_stream_id_ = scratch.id();
-        last_stream_id_ = scratch.id();
+    if (refusal) {
+        if (!admit_peer_error_reset()) {
+            return false;
+        }
+        if (push_reject_connected_tunnel_) {
+            reserve_stream_close_effects();
+            append_peer_error_reset(push_associated_stream_id_, http2_error_code::protocol_error);
+        }
+        refuse_promised_stream(promised_id, *refusal, hpack_transaction, stream_transaction);
+        if (push_reject_connected_tunnel_) {
+            close_stream(push_associated_stream_id_, http2_stream_close_source::local,
+                http2_error_code::protocol_error);
+        }
         return true;
     }
     http_push_request request(resource_);
@@ -143,32 +148,30 @@ bool http2_connection::finish_push_promise(std::string_view block) {
         request.headers_.emplace_back("cookie", scratch.request_cookie(), resource_);
     }
     reserve_event_slots(1);
-    const auto id = scratch.id();
-    auto* stream = create_stream(id);
+    auto* stream = create_stream(promised_id);
     if (!stream) {
-        output_.append_rst_stream(id, http2_error_code::enhance_your_calm);
-        hpack_transaction.commit();
-        stream_transaction.commit();
-        closed_streams_.remember(id, http2_stream_close_source::local, true);
-        last_peer_push_stream_id_ = id;
-        last_stream_id_ = id;
+        if (!admit_peer_error_reset()) {
+            return false;
+        }
+        refuse_promised_stream(promised_id, http2_error_code::enhance_your_calm, hpack_transaction, stream_transaction);
         return true;
     }
     try {
-        pin_stream(id);
+        pin_stream(promised_id);
         stream->take_request_target_from(scratch);
         stream->begin_local_content_forbidden();
         (void)stream->commit_local_head_end_stream();
         stream->reserve_push(http2_push_reservation::remote);
-        events_.push_back(http2_event(http2_push_promise_event{push_associated_stream_id_, id, std::move(request)}));
+        publish_event(
+            http2_event(http2_push_promise_event{push_associated_stream_id_, promised_id, std::move(request)}));
     } catch (...) {
-        streams_.remove(id);
+        streams_.remove(promised_id);
         throw;
     }
     hpack_transaction.commit();
     stream_transaction.commit();
-    last_peer_push_stream_id_ = id;
-    last_stream_id_ = id;
+    last_peer_push_stream_id_ = promised_id;
+    last_stream_id_ = promised_id;
     // Transactions borrow scratch until their destructors run.
     return true;
 }

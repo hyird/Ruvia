@@ -38,6 +38,11 @@ bool counted_predicate(const ruvia::string& value) {
     return value.view() == "valid";
 }
 
+RUVIA_MODEL(codec_escaped_keys,
+    RUVIA_REQUIRED_FIELD_NAME("caf\xC3\xA9", accented, ruvia::int32),
+    RUVIA_REQUIRED_FIELD_NAME("tab\tkey", tabbed, ruvia::int32),
+    RUVIA_REQUIRED_FIELD_NAME("ctl\x1F", control, ruvia::int32));
+
 RUVIA_MODEL(codec_leaf,
     RUVIA_REQUIRED_FIELD_NAME("wire\"id", id, ruvia::uint64),
     RUVIA_OPTIONAL_FIELD(text, ruvia::string));
@@ -180,6 +185,16 @@ RUVIA_TEST(model_json_writer_replaces_ill_formed_utf8_with_replacement_character
     ruvia::array<ruvia::string> nested;
     nested.emplace_back(std::string_view("\xFF"));
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(nested)), std::string_view("[\"" + replacement + "\"]"));
+}
+
+RUVIA_TEST(model_json_member_keys_escape_controls_and_keep_utf8) {
+    codec_escaped_keys value;
+    value.set<"accented">(1).set<"tabbed">(2).set<"control">(3);
+    const auto output = ruvia::to_json(value);
+    RUVIA_CHECK_EQ(std::string_view(output),
+        std::string_view("{\"caf\xC3\xA9\":1,\"tab\\tkey\":2,\"ctl\\u001f\":3}"));
+    const auto reparsed = ruvia::from_json<codec_escaped_keys>(output);
+    RUVIA_CHECK(reparsed == value);
 }
 
 RUVIA_TEST(model_json_codec_rejects_nested_wrong_null_and_duplicate_fields) {
@@ -569,6 +584,17 @@ RUVIA_TEST(json_representation_budget_bounds_scalar_and_owned_string_results) {
     }));
     RUVIA_CHECK(!ruvia::testing::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 16384});
+    }));
+
+    // A literal string is retained as one sized copy and is charged once;
+    // decoding an escaped string grows its buffer, so it is charged twice.
+    constexpr std::size_t single_copy_budget = 4096 + 1024;
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = single_copy_budget});
+    }));
+    const std::string escaped = "\"\\n" + std::string(4094, 'x') + "\"";
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<ruvia::string>(escaped, {.max_representation_bytes_ = single_copy_budget});
     }));
 }
 

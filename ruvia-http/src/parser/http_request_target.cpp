@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/url_encoding.h"
@@ -81,30 +81,8 @@ bool is_valid_uri_authority(std::string_view value) noexcept {
     std::string_view host;
     std::string_view port;
     bool has_port = false;
-    if (!host_and_port.empty() && host_and_port.front() == '[') {
-        const auto close = host_and_port.find(']');
-        if (close == std::string_view::npos) {
-            return false;
-        }
-        host = host_and_port.substr(0, close + 1);
-        const auto remainder = host_and_port.substr(close + 1);
-        if (!remainder.empty()) {
-            if (remainder.front() != ':') {
-                return false;
-            }
-            has_port = true;
-            port = remainder.substr(1);
-        }
-    } else {
-        const auto delimiter = host_and_port.find(':');
-        host = delimiter == std::string_view::npos ? host_and_port : host_and_port.substr(0, delimiter);
-        if (delimiter != std::string_view::npos) {
-            has_port = true;
-            port = host_and_port.substr(delimiter + 1);
-            if ((port.find(':') != std::string_view::npos)) {
-                return false;
-            }
-        }
+    if (!split_uri_host_port(host_and_port, host, port, has_port)) {
+        return false;
     }
 
     return (host.empty() || is_valid_http_host(host)) && (!has_port || is_valid_uri_port(port));

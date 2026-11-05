@@ -2,8 +2,8 @@
 #include <optional>
 #include <utility>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_client_response_head.h"
 
 #include "client/http_client_response_head.h"

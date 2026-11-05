@@ -187,17 +187,7 @@ void worker_dispatcher::release_abandoned_node(std::size_t index) noexcept {
     }
 }
 
-void worker_dispatcher::defer(move_only_function<void()> task_value) {
-    if (!post_continuation(task_value)) {
-        throw std::runtime_error("worker execution context is detached");
-    }
-}
-
 bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value) {
-    return post_continuation(task_value);
-}
-
-bool worker_dispatcher::post_continuation(move_only_function<void()>& task_value) {
     if (!task_value) {
         throw std::invalid_argument("worker defer requires a callable task");
     }

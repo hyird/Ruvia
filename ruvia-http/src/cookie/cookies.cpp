@@ -9,11 +9,11 @@
 #include <string>
 #include <utility>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_number_format.h"
 
 #include "cookie/cookie_validation.h"
-#include "util/http_text_overlap.h"
 #include "util/http_wire_sink.h"
 
 namespace ruvia {
@@ -24,7 +24,7 @@ set_cookie_plan::set_cookie_plan(
       value_(value),
       path_(options.path_),
       domain_(options.domain_),
-      prefix_text_(options.prefix_ ? detail::cookie_prefix_text(*options.prefix_) : std::string_view{}),
+      prefix_text_(options.prefix_ ? http_cookie_prefix_text(*options.prefix_) : std::string_view{}),
       priority_text_(options.priority_ ? detail::cookie_priority_token(*options.priority_) : std::string_view{}),
       same_site_text_(options.same_site_ ? detail::cookie_same_site_token(*options.same_site_) : std::string_view{}),
       // max-age-av starts with a non-zero digit (RFC 6265 section 4.1.1);
@@ -100,7 +100,7 @@ set_cookie_plan::set_cookie_plan(
         add_size(std::string_view("; Partitioned").size());
     }
 
-    detail::validate_cookie(name, value, options);
+    detail::validate_cookie(name, value, options, secure_, partitioned_);
 }
 
 char* write_cookie_request_pair(char* out, std::string_view name, std::string_view value) {
@@ -217,11 +217,23 @@ std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept 
 
 bool cookie_prefix_requirements_met(
     cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept {
-    return detail::cookie_prefix_requirements_met(prefix, secure, path, domain);
+    switch (prefix) {
+        case cookie_prefix::secure:
+            return secure;
+        case cookie_prefix::host:
+            return secure && path == "/" && domain.empty();
+    }
+    return false;
 }
 
 std::string_view http_cookie_prefix_text(cookie_prefix prefix) noexcept {
-    return detail::cookie_prefix_text(prefix);
+    switch (prefix) {
+        case cookie_prefix::secure:
+            return "__Secure-";
+        case cookie_prefix::host:
+            return "__Host-";
+    }
+    return {};
 }
 
 }  // namespace ruvia

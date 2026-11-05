@@ -70,8 +70,8 @@ public:
     [[nodiscard]] std::size_t release_count() const noexcept {
         return release_count_;
     }
-    [[nodiscard]] std::uint32_t release_stream_at(std::size_t index) const noexcept {
-        return releases_[index].stream_id_;
+    [[nodiscard]] const release_type& release_at(std::size_t index) const noexcept {
+        return releases_[index];
     }
 
     void defer_credit(std::uint32_t stream_id, std::uint32_t bytes) noexcept {

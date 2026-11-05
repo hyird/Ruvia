@@ -2,10 +2,10 @@
 
 #include <stdexcept>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/util/registration_resource.h"
 
 #include "context/context_access.h"
 
@@ -90,7 +90,7 @@ security_headers_middleware::security_headers_middleware()
     : security_headers_middleware(security_headers_config{}) {}
 
 security_headers_middleware::security_headers_middleware(const security_headers_config& config)
-    : security_headers_middleware(config, detail::registration_resource()) {}
+    : security_headers_middleware(config, process_resource()) {}
 
 task<void> security_headers_middleware::handle(context& context_value, next& next_value) {
     const bool secure_transport = context_value.conn().scheme() == http_scheme::https;

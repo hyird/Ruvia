@@ -8,7 +8,7 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_response.h"
 
-#include "response/http_response_header_access.h"
+#include "response/http_response_header_storage.h"
 #include "util/http_wire_sink.h"
 // The two response fields Ruvia formats itself rather than taking as a value:
 // Allow, built from the method mask a route matched, and Content-Range in both
@@ -127,12 +127,7 @@ void http_response_headers::allow_methods(
                     release_header(prepared);
                     throw;
                 }
-                const bool was_appended = detail::http_response_header_access::append(*retained);
-                release_header(*retained);
-                *retained = prepared;
-                if (was_appended) {
-                    (void)collapse_response_headers(*retained, detail::response_header_allow);
-                }
+                (void)replace_header(*retained, prepared);
                 return;
             }
         }

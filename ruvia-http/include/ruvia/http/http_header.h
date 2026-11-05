@@ -15,6 +15,7 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 
@@ -26,7 +27,7 @@ class http_header final {
 public:
     http_header(std::string_view name, std::string_view value,
         std::pmr::memory_resource* resource = nullptr)
-        : resource_(resource != nullptr ? resource : std::pmr::get_default_resource()),
+        : resource_(detail::http_pmr_resource_or_default(resource)),
           name_size_(name.size()),
           value_size_(value.size()) {
         if (value.size() > (std::numeric_limits<std::size_t>::max)() - name.size()) {

@@ -55,7 +55,6 @@ static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_con
             const auto available_input = stream.avail_in;
             const int reset = inflateReset2(&stream, window_bits);
             if (reset != Z_OK) {
-                inflater.rethrow_allocation_failure();
                 throw http_content_codec_error("failed to reset zlib content decoder");
             }
             stream.next_in = next_input;

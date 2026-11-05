@@ -14,6 +14,7 @@
 #include "client/http_client_connection.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
+#include "client/http_client_transport_error.h"
 
 namespace ruvia::detail {
 namespace {
@@ -32,13 +33,7 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
         !response.informational_.empty() || response.abandoned_) {
         return false;
     }
-    try {
-        std::rethrow_exception(failure);
-    } catch (const http_client_error& error) {
-        return error.code() == http_client_error::code_type::io_error;
-    } catch (...) {
-        return false;
-    }
+    return is_http_client_io_error(failure);
 }
 
 [[nodiscard]] std::size_t http_client_scheduler_slots(const http_client_config_storage& config) noexcept {
@@ -48,42 +43,16 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
     return config.connection_count_ * config.max_concurrent_http2_streams_per_connection_;
 }
 
-[[noreturn]] void throw_http1_acquire_failure(worker_wait_status status) {
-    if (status == worker_wait_status::timed_out) {
-        throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 connection acquire timed out");
-    }
-    if (status == worker_wait_status::cancelled) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP/1 request cancelled");
-    }
-    if (status == worker_wait_status::closed) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closing");
-    }
-    std::terminate();
-}
-
 }  // namespace
 
 void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
-    switch (status) {
-        case worker_wait_status::timed_out:
-            throw http_client_error(
-                http_client_error::code_type::timeout, "http client connection pool acquire timed out");
-        case worker_wait_status::cancelled:
-            throw http_client_error(http_client_error::code_type::cancelled, "http client request cancelled");
-        case worker_wait_status::closed:
-            throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
-        case worker_wait_status::value:
-        case worker_wait_status::worker_stopping:
-            break;
-    }
-    std::terminate();
+    throw_http_client_wait_failure(status, "HTTP client connection pool acquire");
 }
 
 void http_client_slot_policy::throw_aborted(const http_client_pool&, pool_slot_abort_reason reason) {
-    if (reason == pool_slot_abort_reason::cancelled) {
-        throw http_client_error(http_client_error::code_type::cancelled, "http client request cancelled");
-    }
-    throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
+    const auto code = reason == pool_slot_abort_reason::cancelled ? http_client_error::code_type::cancelled
+                                                                  : http_client_error::code_type::closing;
+    throw http_client_error(code, http_client_error_message(code));
 }
 
 http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
@@ -408,7 +377,7 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
         const auto acquired =
             co_await connection_value.http1_scheduler_.acquire(acquire_timeout.remaining(), stop_token_value);
         if (!acquired.has_value()) {
-            throw_http1_acquire_failure(acquired.status());
+            throw_http_client_wait_failure(acquired.status(), "HTTP/1 connection acquire");
         }
         const auto slot = acquired.value();
         if (operation.buffered_) {
@@ -458,6 +427,7 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
                             failure = std::current_exception();
                         }
                         if (failure == nullptr) {
+                            connection_value.begin_idle();
                             break;
                         }
                         if (retried || !reused_http1 ||

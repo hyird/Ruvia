@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/web/detail/json/json_array_elements.h"
+#include "ruvia/web/detail/json/json_containers.h"
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_limits.h"
 #include "ruvia/web/detail/json/json_number.h"
@@ -28,33 +28,10 @@ template <typename element_budget_type>
 template <typename element_budget_type>
 [[nodiscard]] bool skip_json_object(std::string_view& input, std::size_t depth,
     element_budget_type& consume_element) noexcept {
-    if (depth > max_json_depth) {
-        return false;
-    }
-    if (!consume_json_char(input, '{')) {
-        return false;
-    }
-    skip_json_whitespace(input);
-    if (!input.empty() && input.front() == '}') {
-        input.remove_prefix(1);
-        return true;
-    }
-
-    while (parse_json_string(input).has_value()) {
-        if (!consume_json_char(input, ':') || !skip_json_value(input, depth + 1, consume_element)) {
-            return false;
-        }
-        skip_json_whitespace(input);
-        if (!input.empty() && input.front() == '}') {
-            input.remove_prefix(1);
-            return true;
-        }
-        if (!consume_json_char(input, ',')) {
-            return false;
-        }
-    }
-
-    return false;
+    return consume_json_object_members(input, depth, nullptr,
+        [depth, &consume_element](const json_string_token&, std::string_view& value) noexcept {
+            return skip_json_value(value, depth + 1, consume_element);
+        });
 }
 
 template <typename element_budget_type>

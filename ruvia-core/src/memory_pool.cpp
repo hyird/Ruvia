@@ -2,7 +2,6 @@
 
 #include <mimalloc.h>
 
-#include <array>
 #include <new>
 #include <stdexcept>
 
@@ -10,6 +9,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_handle.h"
 
+#include "size_class_lifo_bins.h"
 #include "worker_block_cache.h"
 
 namespace ruvia {
@@ -120,18 +120,15 @@ namespace {
 // memory. Blocks are allocated at the class ceiling, which keeps every cached
 // block large enough for any request that maps to its bin. Deallocation is
 // always sized, so every freed frame maps back to its class.
-constexpr std::size_t task_frame_cache_granularity = 128;
-constexpr std::size_t task_frame_cache_max_block_bytes = 16 * 1024;
+using task_frame_bins = size_class_lifo_bins<128, 16 * 1024>;
 constexpr std::size_t task_frame_cache_budget_bytes = 512 * 1024;
-constexpr std::size_t task_frame_cache_bin_count =
-    task_frame_cache_max_block_bytes / task_frame_cache_granularity;
 
 [[nodiscard]] constexpr std::size_t task_frame_class_bytes(std::size_t bytes_value) noexcept {
     // Large frames bypass the cache; rounding them could overflow.
-    if (bytes_value > task_frame_cache_max_block_bytes) {
+    if (bytes_value > task_frame_bins::max_block_bytes) {
         return bytes_value;
     }
-    return (bytes_value + task_frame_cache_granularity - 1) & ~(task_frame_cache_granularity - 1);
+    return task_frame_bins::class_bytes(bytes_value);
 }
 
 // True once this thread's cache has been destroyed. Coroutine frames can be
@@ -142,56 +139,18 @@ constexpr std::size_t task_frame_cache_bin_count =
 // allocator once it is set.
 thread_local bool task_frame_cache_destroyed = false;
 
-class task_frame_cache final {
-public:
-    task_frame_cache() noexcept = default;
-    task_frame_cache(const task_frame_cache&) = delete;
-    task_frame_cache& operator=(const task_frame_cache&) = delete;
-
+// Frees this thread's cached frames at thread exit.
+struct task_frame_cache final {
     ~task_frame_cache() {
         task_frame_cache_destroyed = true;
         release_all();
     }
 
     void release_all() noexcept {
-        for (void*& head : bins_) {
-            while (head != nullptr) {
-                void* next_value = *static_cast<void**>(head);
-                mi_free(head);
-                head = next_value;
-            }
-        }
-        cached_bytes_ = 0;
+        bins_.drain([](void* block, std::size_t) noexcept { mi_free(block); });
     }
 
-    [[nodiscard]] void* take_block(std::size_t class_bytes) noexcept {
-        void*& head = bins_[bin_index(class_bytes)];
-        void* block = head;
-        if (block != nullptr) {
-            head = *static_cast<void**>(block);
-            cached_bytes_ -= class_bytes;
-        }
-        return block;
-    }
-
-    [[nodiscard]] bool store_block(void* block, std::size_t class_bytes) noexcept {
-        if (cached_bytes_ + class_bytes > task_frame_cache_budget_bytes) {
-            return false;
-        }
-        void*& head = bins_[bin_index(class_bytes)];
-        *static_cast<void**>(block) = head;
-        head = block;
-        cached_bytes_ += class_bytes;
-        return true;
-    }
-
-private:
-    [[nodiscard]] static constexpr std::size_t bin_index(std::size_t class_bytes) noexcept {
-        return class_bytes / task_frame_cache_granularity - 1;
-    }
-
-    std::array<void*, task_frame_cache_bin_count> bins_{};
-    std::size_t cached_bytes_{0};
+    task_frame_bins bins_;
 };
 
 thread_local task_frame_cache frame_cache;
@@ -200,8 +159,8 @@ thread_local task_frame_cache frame_cache;
 
 void* task_frame_allocate(std::size_t bytes_value) {
     const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
-    if (!task_frame_cache_destroyed && class_bytes <= task_frame_cache_max_block_bytes) {
-        if (void* cached = frame_cache.take_block(class_bytes)) {
+    if (!task_frame_cache_destroyed && class_bytes <= task_frame_bins::max_block_bytes) {
+        if (void* cached = frame_cache.bins_.take(class_bytes)) {
             return cached;
         }
     }
@@ -210,8 +169,8 @@ void* task_frame_allocate(std::size_t bytes_value) {
 
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
     const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
-    if (!task_frame_cache_destroyed && class_bytes <= task_frame_cache_max_block_bytes &&
-        frame_cache.store_block(pointer, class_bytes)) {
+    if (!task_frame_cache_destroyed && class_bytes <= task_frame_bins::max_block_bytes &&
+        frame_cache.bins_.store(pointer, class_bytes, task_frame_cache_budget_bytes)) {
         return;
     }
     mi_free(pointer);

@@ -30,15 +30,8 @@ constexpr std::size_t http2_rapid_reset_goaway_bytes =
 
 }  // namespace
 
-bool http2_connection::is_pinned(std::uint32_t stream_id) const noexcept {
-    const auto* const stream = streams_.find(stream_id);
-    return stream != nullptr && stream->pinned();
-}
-
-void http2_connection::pin_stream(std::uint32_t stream_id) {
-    auto* const stream = streams_.find(stream_id);
-    if (stream != nullptr && !stream->pinned()) {
-        pinned_streams_.push_back(stream_id);
+void http2_connection::pin_stream(std::uint32_t stream_id) noexcept {
+    if (auto* const stream = streams_.find(stream_id)) {
         stream->set_pinned(true);
     }
 }
@@ -78,7 +71,6 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         if (!priorities_.empty()) {
             priorities_.erase(stream_id);
         }
-        std::erase(pinned_streams_, stream_id);
         return;  // never created, or already removed
     }
     if (stream->is_aborted()) {
@@ -89,7 +81,6 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         if (!priorities_.empty()) {
             priorities_.erase(stream_id);
         }
-        std::erase(pinned_streams_, stream_id);
         release_local_request_stream(*stream);
         streams_.remove(stream_id);
         return;
@@ -108,7 +99,6 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         if (!priorities_.empty()) {
             priorities_.erase(stream_id);
         }
-        std::erase(pinned_streams_, stream_id);
         streams_.remove(stream_id);
         return;
     }
@@ -126,13 +116,11 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         if (retained_stream->is_aborted()) {
             flush_window_debt(*retained_stream);
             release_local_request_stream(*retained_stream);
-            std::erase(pinned_streams_, stream_id);
             streams_.remove(stream_id);
             return;
         }
         retained_stream->set_pinned(false);
     }
-    std::erase(pinned_streams_, stream_id);
 }
 
 bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_close_source source_value,
@@ -164,7 +152,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     }
     (void)stream->abort(source_value);
     if (notification == close_notification_type::emit_event) {
-        events_.push_back(http2_event(http2_stream_closed_event(stream_id, source_value, error)));
+        publish_event(http2_event(http2_stream_closed_event(stream_id, source_value, error)));
     }
     // A public DATA credit is exact: a pinned closed stream remains the ledger
     // until the credit is acknowledged or its token is abandoned. Unpinned
@@ -262,7 +250,7 @@ bool http2_connection::process_rst_stream(const http2_frame_header& header_value
                        : close_stream(header_value.stream_id_, http2_stream_close_source::peer, error))) {
         closed_streams_.remember(header_value.stream_id_, http2_stream_close_source::peer);
     } else if (refused_request) {
-        events_.push_back(http2_event(http2_request_unprocessed_event(header_value.stream_id_)));
+        publish_event(http2_event(http2_request_unprocessed_event(header_value.stream_id_)));
     }
     ++peer_reset_streams_;
     if (rapid_reset_budget_exceeded) {
@@ -272,15 +260,70 @@ bool http2_connection::process_rst_stream(const http2_frame_header& header_value
     return true;
 }
 
-http2_stream_state* http2_connection::find_stream(std::uint32_t stream_id) noexcept {
-    return streams_.find(stream_id);
+bool http2_connection::admit_peer_error_reset() {
+    if (peer_error_resets_ >= max_peer_error_resets) {
+        append_goaway(http2_error_code::enhance_your_calm, "excessive stream errors");
+        return false;
+    }
+    return admit_undrained_control_frame();
+}
+
+void http2_connection::append_peer_error_reset(std::uint32_t stream_id, http2_error_code error) {
+    // append_rst_stream publishes one complete frame or leaves output unchanged.
+    output_.append_rst_stream(stream_id, error);
+    ++undrained_control_frames_;
+    ++peer_error_resets_;
+}
+
+bool http2_connection::reset_stream_for_peer_error(std::uint32_t stream_id, http2_error_code error) {
+    if (!admit_peer_error_reset()) {
+        return false;
+    }
+    const auto output_checkpoint = output_.checkpoint();
+    const auto undrained_control_frames = undrained_control_frames_;
+    const auto peer_error_resets = peer_error_resets_;
+    try {
+        append_peer_error_reset(stream_id, error);
+        (void)close_stream(stream_id, http2_stream_close_source::local, error);
+    } catch (...) {
+        output_.rollback_to(output_checkpoint);
+        undrained_control_frames_ = undrained_control_frames;
+        peer_error_resets_ = peer_error_resets;
+        throw;
+    }
+    return true;
+}
+
+bool http2_connection::reset_stream(std::uint32_t stream_id, http2_error_code error) {
+    const auto output_checkpoint = output_.checkpoint();
+    try {
+        output_.append_rst_stream(stream_id, error);
+        // A reset returns no send credit, so it cannot unblock other streams.
+        return close_stream_impl(stream_id, http2_stream_close_source::local, error,
+            close_notification_type::owner_already_knows);
+    } catch (...) {
+        output_.rollback_to(output_checkpoint);
+        throw;
+    }
+}
+
+std::size_t http2_connection::open_streams_initiated_by(http2_role initiator) noexcept {
+    const auto parity = initiator == http2_role::client ? 1U : 0U;
+    std::size_t count = 0;
+    streams_.for_each([&](const http2_stream_state& stream) {
+        if ((stream.id() & 1U) == parity && !http2_stream_is_closed(stream) &&
+            stream.push_reservation() == http2_push_reservation::none) {
+            ++count;
+        }
+    });
+    return count;
 }
 
 http2_stream_state* http2_connection::find_outbound_stream(std::uint32_t stream_id) noexcept {
     if (local_connection_state_.fatal_failure() != nullptr) {
         return nullptr;
     }
-    auto* stream = find_stream(stream_id);
+    auto* stream = streams_.find(stream_id);
     return stream != nullptr && !stream->is_aborted() ? stream : nullptr;
 }
 
@@ -298,7 +341,7 @@ std::optional<http2_request_head_submit_error> http2_connection::local_request_a
         std::terminate();
     }
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_.has_value() ||
-        next_local_stream_id_ > 0x7fffffffU) {
+        next_local_stream_id_ > http2_max_stream_id) {
         return http2_request_head_submit_error::connection_unavailable;
     }
     if (active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
@@ -354,11 +397,11 @@ void http2_connection::release_local_request_stream_if_closed(http2_stream_state
 }
 
 void http2_connection::retire_completed_local_push(std::uint32_t stream_id) {
-    if (role_ != http2_role::server || (stream_id & 1U) != 0 || has_pending_events(stream_id)) {
+    if (role_ != http2_role::server || (stream_id & 1U) != 0) {
         return;
     }
-    const auto* stream = find_stream(stream_id);
-    if (stream != nullptr && !stream->pinned() && http2_stream_is_closed(*stream)) {
+    const auto* stream = streams_.find(stream_id);
+    if (stream != nullptr && !stream->pinned() && !stream->has_pending_events() && http2_stream_is_closed(*stream)) {
         unpin_stream(stream_id);
     }
 }
@@ -367,7 +410,7 @@ bool http2_connection::is_idle_stream_id(std::uint32_t stream_id) const noexcept
     if (role_ == http2_role::client) {
         return (stream_id & 1U) == 0 ? stream_id > last_peer_push_stream_id_ : stream_id >= next_local_stream_id_;
     }
-    return (stream_id & 1U) == 0 ? stream_id >= next_push_stream_id_ : http2_is_idle_stream(stream_id, last_stream_id_);
+    return (stream_id & 1U) == 0 ? stream_id >= next_push_stream_id_ : stream_id > last_stream_id_;
 }
 
 http2_stream_state* http2_connection::stream(std::uint32_t stream_id) & noexcept {

@@ -36,6 +36,7 @@ class response_stream_writer;
 namespace detail {
 class http_client_pool;
 class http_client_registry;
+class http_client_response_handoff;
 class http_client_response_state;
 class http_client_advertisement_queue;
 struct http_client_advertisement_state;
@@ -224,6 +225,7 @@ private:
     friend class http_client_tunnel;
     friend class http_capsule_stream;
     friend class detail::http_capsule_stream_state;
+    friend class detail::http_client_response_handoff;
     friend class http_client_push;
     friend class http_client_request_body_writer;
 
@@ -386,7 +388,6 @@ private:
     friend class detail::http_client_pool;
     explicit http_client_push(http_client_response response) noexcept;
     void release() noexcept;
-    static task<http_client_response> receive_owned(http_client_response pin);
     http_client_response response_;
 };
 
@@ -446,7 +447,6 @@ private:
     friend class detail::http_client_pool;
     explicit http_client_exchange(http_client_response response) noexcept;
     void release() noexcept;
-    static task<http_client_response> receive_owned(http_client_response pin);
     http_client_response response_;
     http_client_request_body_writer body_;
 };

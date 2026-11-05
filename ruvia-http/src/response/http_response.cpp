@@ -1,6 +1,9 @@
 #include "ruvia/http/http_response.h"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -17,11 +20,73 @@
 #include "field/http_entity_tag.h"
 #include "field/response_field_validation.h"
 #include "response/http_response_content_semantics.h"
-#include "response/http_response_descriptor_stage.h"
-#include "response/http_response_header_access.h"
-#include "response/response_header_utils.h"
+#include "response/http_response_header_storage.h"
 
 namespace ruvia {
+
+// Owns only newly staged descriptors, never copies the existing header block.
+// Staging and reservation may throw and leave the block unchanged; publication
+// transfers every descriptor without allocation; unwinding releases the rest.
+class http_response_headers::descriptor_stage final {
+public:
+    explicit descriptor_stage(http_response_headers& owner_value) noexcept
+        : owner_(owner_value) {}
+    descriptor_stage(const descriptor_stage&) = delete;
+    descriptor_stage& operator=(const descriptor_stage&) = delete;
+
+    ~descriptor_stage() noexcept {
+        for (std::size_t slot = 0; slot < count_; ++slot) {
+            owner_.release_header(prepared_[slot]);
+        }
+    }
+
+    // Each staged field must be distinct.
+    void stage(std::string_view name, std::string_view value, std::uint32_t known_bit) {
+        const auto builtin = make_static_header(name, value, known_bit);
+        prepared_[count_] = builtin ? *builtin : owner_.make_owned_header(name, value, known_bit);
+        ++count_;
+    }
+
+    void stage_weak_etag(std::string_view strong_etag) {
+        auto prepared = owner_.make_uninitialized_header(
+            "ETag", strong_etag.size() + 2U, detail::response_header_etag);
+        auto* const out = detail::http_response_header_access::value_begin(prepared);
+        out[0] = 'W';
+        out[1] = '/';
+        std::memcpy(out + 2, strong_etag.data(), strong_etag.size());
+        prepared_[count_++] = prepared;
+    }
+
+    // Reserve a table slot for every staged field the block lacks, so publish
+    // cannot allocate. Removing fields before publish keeps the reservation valid.
+    void reserve() {
+        std::size_t missing_headers = 0;
+        for (std::size_t slot = 0; slot < count_; ++slot) {
+            const auto& prepared = prepared_[slot];
+            if (owner_.find_header_for_read(prepared.name(), detail::http_response_header_access::known_bit(prepared)) ==
+                nullptr) {
+                ++missing_headers;
+            }
+        }
+        owner_.reserve(owner_.size() + missing_headers);
+    }
+
+    // Replace each field in place, collapsing earlier appended lines, or append it.
+    void publish() noexcept {
+        for (std::size_t slot = 0; slot < count_; ++slot) {
+            // reserve() made room for every appended field, so this cannot throw.
+            owner_.publish_header(prepared_[slot]);
+        }
+        count_ = 0;
+    }
+
+private:
+    static constexpr std::size_t capacity = 3;
+
+    http_response_headers& owner_;
+    std::array<http_response_header, capacity> prepared_{};
+    std::size_t count_{0};
+};
 
 std::string_view http_response::body_bytes() const& noexcept {
     return detail::response_body(*this).bytes();
@@ -238,7 +303,7 @@ void http_response::apply_encoded_representation(
             fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
-    const auto current_etag = headers_.known_header_value(detail::response_header_etag);
+    const auto current_etag = detail::http_response_header_state_access::known_header_value(headers_, detail::response_header_etag);
     http_response_headers::descriptor_stage update(headers_);
     update.stage("Content-Encoding", content_encoding, detail::response_header_content_encoding);
     if (detail::http_is_strong_etag(current_etag)) {
@@ -285,10 +350,6 @@ void http_response::multipart_file_body(http_native_path_view_type file, http_co
     }
     body_.set_multipart(
         memory_resource(), file, size.value(), identity, std::move(plan), std::move(opened));
-}
-
-void http_response_headers::add_vary_token(std::string_view token) {
-    detail::add_vary_token(*this, resource_, token);
 }
 
 void http_response::content_range(

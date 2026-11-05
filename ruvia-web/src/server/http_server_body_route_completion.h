@@ -59,24 +59,19 @@ struct http_lazy_buffered_body_route_state final {
     }
 };
 
-template <typename stream_type>
-inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_state<stream_type>& state_value,
-    const http1_route_dispatch<stream_type>& d, protocol_byte_limit body_limit_value,
-    std::string_view body_and_pipeline) {
-    auto* resource = &d.inbound_buffer_pool_;
-    // Every HTTP/1 request's services carry its session's interim lane.
-    state_value.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(resource), resource,
-        body_and_pipeline, d.parsed_.body_plan_, body_limit_value, d.scanner_entry_,
-        *d.base_route_services_.interim_output());
-}
-
+// Returns the setup failure (allocation included) so the caller answers it
+// through the route failure path instead of unwinding the session.
 template <typename stream_type>
 [[nodiscard]] inline std::exception_ptr try_prepare_http_lazy_buffered_body_route(
     http_lazy_buffered_body_route_state<stream_type>& state_value,
     const http1_route_dispatch<stream_type>& d, protocol_byte_limit body_limit_value,
     std::string_view body_and_pipeline) {
     try {
-        prepare_http_lazy_buffered_body_route(state_value, d, body_limit_value, body_and_pipeline);
+        auto* resource = &d.inbound_buffer_pool_;
+        // Every HTTP/1 request's services carry its session's interim lane.
+        state_value.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(resource), resource,
+            body_and_pipeline, d.parsed_.body_plan_, body_limit_value, d.scanner_entry_,
+            *d.base_route_services_.interim_output());
         return nullptr;
     } catch (...) {
         return std::current_exception();

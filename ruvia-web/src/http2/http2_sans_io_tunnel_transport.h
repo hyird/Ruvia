@@ -26,6 +26,7 @@
 
 #include "http2/http2_data_output_budget.h"
 #include "http2/http2_sans_io_send_window.h"
+#include "http2/http2_sans_io_session_engine.h"
 #include "http2/http2_sans_io_stream_runtime.h"
 #include "server/inbound_transport_error.h"
 #include "tls/tls_stream_end.h"
@@ -36,10 +37,11 @@ namespace ruvia::detail {
 // Queued input retains its receive-window credit until the application consumes it.
 class http2_sans_io_tunnel_transport final {
 public:
-    http2_sans_io_tunnel_transport(ruvia::http2_connection& connection, std::uint32_t stream_id,
-        http2_sans_io_body_queue& body_queue, http2_sans_io_stream_signal& signal, worker_signal& write_signal,
-        http2_data_output_budget& output_budget) noexcept
-        : connection_(connection),
+    http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection,
+        std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, http2_sans_io_stream_signal& signal,
+        worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept
+        : engine_(&engine),
+          connection_(connection),
           stream_id_(stream_id),
           body_queue_(body_queue),
           signal_(signal),
@@ -127,17 +129,9 @@ public:
             return;
         }
         aborted_ = true;
-        try {
-            (void)connection_.submit_reset(
-                stream_id_, malformed ? http2_error_code::protocol_error : http2_error_code::cancel);
-        } catch (...) {
-            // abort() is best-effort teardown; callers cannot observe reset
-            // serialization failure on this noexcept cleanup path.
-        }
-        output_budget_.release_and_reconcile(stream_id_, connection_);
-        output_budget_.wake();
+        engine_->reset_stream_no_throw(
+            stream_id_, malformed ? http2_error_code::protocol_error : http2_error_code::cancel);
         signal_.wake();
-        wake_writer();
     }
 
 private:
@@ -145,6 +139,7 @@ private:
         write_signal_.notify();
     }
 
+    http2_sans_io_session_engine* engine_;
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
     http2_sans_io_body_queue& body_queue_;

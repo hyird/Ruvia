@@ -19,12 +19,12 @@
 namespace ruvia {
 namespace {
 
-// Reports through the loop's failure sink while the loop is alive, or to the
-// unhandled-failure diagnostic under `context` once it has retired.
+// Routes through the loop while it is alive, or to the unhandled-failure
+// diagnostic under `context` once it has retired.
 void report_through_loop(const std::weak_ptr<detail::event_loop_state>& loop, std::exception_ptr failure,
     const char* context) noexcept {
-    if (const auto state_value = loop.lock(); state_value && state_value->failure_sink_) {
-        state_value->failure_sink_(std::move(failure));
+    if (const auto state_value = loop.lock()) {
+        state_value->route_failure(std::move(failure), context);
         return;
     }
     report_unhandled_failure(context, std::move(failure));
@@ -182,13 +182,8 @@ public:
             start_callback(std::move(self));
             return;
         }
-        try {
-            worker_handle_access::defer(worker_,
-                [self = std::move(self)]() mutable noexcept { self->start_callback(std::move(self)); });
-        } catch (...) {
-            report(std::current_exception());
-            std::terminate();
-        }
+        worker_handle_access::defer_or_terminate(worker_,
+            [self = std::move(self)]() mutable noexcept { self->start_callback(std::move(self)); });
     }
 
 private:
@@ -303,12 +298,12 @@ void event_loop_state::worker_stopping_complete() noexcept {
     stop();
 }
 
-void event_loop_state::report_failure(std::exception_ptr failure) noexcept {
+void event_loop_state::route_failure(std::exception_ptr failure, const char* unbound_context) noexcept {
     if (failure_sink_) {
         failure_sink_(std::move(failure));
         return;
     }
-    report_attached_failure(std::move(failure));
+    report_unhandled_failure(unbound_context, std::move(failure));
 }
 
 void event_loop_state::report_attached_failure(std::exception_ptr failure) noexcept {
@@ -317,11 +312,7 @@ void event_loop_state::report_attached_failure(std::exception_ptr failure) noexc
 }
 
 void event_loop_state::fail_teardown_start(std::exception_ptr failure) noexcept {
-    if (failure_sink_) {
-        failure_sink_(std::move(failure));
-    } else {
-        report_unhandled_failure("event loop teardown startup", std::move(failure));
-    }
+    route_failure(std::move(failure), "event loop teardown startup");
     std::terminate();
 }
 
@@ -466,7 +457,7 @@ void event_loop::report_failure(std::exception_ptr failure) const noexcept {
         return;
     }
     if (state_) {
-        state_->report_failure(std::move(failure));
+        state_->route_failure(std::move(failure), "event loop failure");
     } else {
         report_unhandled_failure("invalid event loop failure", std::move(failure));
     }
@@ -572,7 +563,7 @@ event_loop_attachment attach_event_loop(
         std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
         io_context, options.queue_capacity_, options.blocking_pool_);
     const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
-    // root_task uses this sink directly; it must not call event_loop_state::report_failure,
+    // root_task uses this sink directly; it must not call event_loop_state::route_failure,
     // which would route back through this same sink.
     state_value->failure_sink_ = [weak_state](std::exception_ptr failure) {
         if (const auto locked_state = weak_state.lock()) {

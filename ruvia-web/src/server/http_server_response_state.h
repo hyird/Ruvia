@@ -10,19 +10,14 @@
 
 namespace ruvia::detail {
 
-// Commits a response the framework produced (an error or exception handler's
-// output). Failing to commit it leaves no response to fall back to.
-[[nodiscard]] inline http1_request_connection_plan require_http1_final_response_commit(
-    http_response& response, http1_request_connection_plan connection_plan) {
-    return http1_commit_final_response(response, connection_plan);
-}
-
 // Commits a framework response that ends the connection: a rejection, a
-// failed route, or a route response the connection cannot outlive.
+// failed route, or a route response the connection cannot outlive. The
+// response is the framework's own (an error or exception handler's output):
+// failing to commit it leaves no response to fall back to.
 [[nodiscard]] inline http1_session_request_completion close_with_framework_response(
     http_response& response, http1_request_connection_plan connection_plan) {
     return http1_session_request_completion::make_buffered_closing(
-        require_http1_final_response_commit(response, connection_plan.require_close()));
+        http1_commit_final_response(response, connection_plan.require_close()));
 }
 
 // Commits a route's buffered response. A response that breaks the HTTP/1

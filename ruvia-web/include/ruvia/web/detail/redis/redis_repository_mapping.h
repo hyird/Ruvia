@@ -11,6 +11,7 @@
 
 #include "ruvia/web/detail/redis/redis_entity_codec.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
+#include "ruvia/web/detail/redis/redis_reply_access.h"
 #include "ruvia/web/detail/redis/redis_repository_commands.h"
 #include "ruvia/web/entity_rows.h"
 
@@ -25,8 +26,8 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
     std::array<std::optional<std::string_view>, std::tuple_size_v<typename entity_type::columns_type>> values{};
     bool marker = false;
     for (std::size_t i = 0; i < fields_value.size(); i += 2) {
-        const auto name = redis_orm_string(fields_value[i]);
-        const auto value = redis_orm_string(fields_value[i + 1]);
+        const auto name = redis_value_string(fields_value[i]);
+        const auto value = redis_value_string(fields_value[i + 1]);
         if (name.starts_with("__ruvia_")) {
             if (name == "__ruvia_entity") {
                 if (marker || value != "1") {
@@ -75,7 +76,7 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
 template <typename entity_type>
 entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
     std::pmr::memory_resource* resource, std::string_view prefix) {
-    return decode_redis_entity<entity_type>(redis_orm_array(reply), key, resource, prefix);
+    return decode_redis_entity<entity_type>(redis_value_array(reply), key, resource, prefix);
 }
 
 template <typename entity_type>
@@ -83,7 +84,7 @@ struct redis_map_one final {
     std::pmr::string key_;
     std::pmr::string prefix_;
     std::optional<entity_type> operator()(redis_value&& reply, std::pmr::memory_resource* resource) const {
-        const auto fields_value = redis_orm_array(reply);
+        const auto fields_value = redis_value_array(reply);
         if (fields_value.empty()) {
             return std::nullopt;
         }
@@ -107,7 +108,7 @@ struct redis_map_search final {
         entity_rows<entity_type> rows(resource);
         rows.reserve(documents);
         for (std::size_t i = 1; i < values.size(); i += 2) {
-            const auto key = redis_orm_string(values[i]);
+            const auto key = redis_value_string(values[i]);
             // A document may expire between index matching and field loading.
             if (values[i + 1].null()) {
                 continue;
@@ -118,7 +119,7 @@ struct redis_map_search final {
     }
     std::pair<entity_rows<entity_type>, std::uint64_t> operator()(
         redis_value&& reply, std::pmr::memory_resource* resource) const {
-        return decode(redis_orm_array(reply), resource);
+        return decode(redis_value_array(reply), resource);
     }
 };
 
@@ -130,7 +131,7 @@ struct redis_map_many final {
     std::optional<std::uint64_t> unpaged_skip_;
     entity_rows<entity_type> operator()(
         redis_value&& reply, std::pmr::memory_resource* resource) const {
-        const auto values = redis_orm_array(reply);
+        const auto values = redis_value_array(reply);
         const auto documents = values.size() / 2;
         auto [rows, count] = search_.decode(values, resource);
         if (unpaged_skip_.has_value() && count > *unpaged_skip_ && count - *unpaged_skip_ > documents) {
@@ -158,7 +159,7 @@ struct redis_map_first final {
 
 struct redis_map_count final {
     std::uint64_t operator()(redis_value&& reply, std::pmr::memory_resource*) const {
-        const auto values = redis_orm_array(reply);
+        const auto values = redis_value_array(reply);
         if (values.size() != 1) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity count reply");
         }
@@ -168,7 +169,7 @@ struct redis_map_count final {
 
 struct redis_map_exists final {
     bool operator()(redis_value&& reply, std::pmr::memory_resource*) const {
-        const auto values = redis_orm_array(reply);
+        const auto values = redis_value_array(reply);
         if (values.size() != 1) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity exists reply");
         }

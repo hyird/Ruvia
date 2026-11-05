@@ -44,20 +44,16 @@ consteval std::size_t json_fixed_scalar_size_hint() noexcept {
 template <typename value_type>
 [[nodiscard]] std::size_t json_size_hint_value(const value_type& value) {
     using t_type = std::remove_cvref_t<value_type>;
-    if constexpr (is_ruvia_scalar<t_type>) {
-        return json_size_hint_value(value.value_);
-    } else if constexpr (std::is_same_v<t_type, bool>) {
-        return value ? 4 : 5;
-    } else if constexpr (std::is_integral_v<t_type>) {
-        return static_cast<std::size_t>(std::numeric_limits<t_type>::digits10) + 3;
-    } else if constexpr (std::is_floating_point_v<t_type>) {
-        return 32;
+    if constexpr (json_fixed_scalar_size_hint<t_type>() != 0) {
+        return json_fixed_scalar_size_hint<t_type>();
     } else if constexpr (is_ruvia_bytes<t_type>) {
         return http_base64_encoded_size(value.size()) + 2;
     } else if constexpr (is_ruvia_string<t_type>) {
         return json_string_size_hint(value.view());
     } else if constexpr (is_model<t_type>) {
         return model_json_access::size_hint(value);
+    } else if constexpr (is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type>) {
+        return value.view().size();
     } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
         if constexpr (is_ruvia_array<t_type>) {
             constexpr std::size_t item_hint = json_fixed_scalar_size_hint<typename t_type::value_type>();
@@ -124,6 +120,8 @@ void append_json_value(std::pmr::string& output, const value_type& value) {
         append_json_string(output, value.view());
     } else if constexpr (is_model<t_type>) {
         model_json_access::append(output, value);
+    } else if constexpr (is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type>) {
+        output.append(value.view());
     } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
         append_json_sequence(output, value);
     } else {
@@ -164,12 +162,7 @@ template <typename model_type>
 std::size_t model_json_access::size_hint(const model_type& value) {
     std::size_t size = 2;
     model::visit_serialized_fields(value, [&size](const auto& slot, auto kind, bool comma) {
-        using slot_type = std::remove_cvref_t<decltype(slot)>;
-        if constexpr (slot_type::has_plain_wire_name()) {
-            size += std::size_t{comma} + slot_type::quoted_wire_name_colon().size();
-        } else {
-            size += std::size_t{comma} + json_string_size_hint(slot.wire_name()) + 1;
-        }
+        size += slot.json_member_key(comma).size();
         size += kind == model::serialized_field_kind::value
                     ? json_size_hint_value(*slot.value())
                     : 4;
@@ -181,17 +174,7 @@ template <typename model_type>
 void model_json_access::append(std::pmr::string& output, const model_type& value) {
     output.push_back('{');
     model::visit_serialized_fields(value, [&output](const auto& slot, auto kind, bool comma) {
-        using slot_type = std::remove_cvref_t<decltype(slot)>;
-        if constexpr (slot_type::has_plain_wire_name()) {
-            output.append(comma ? slot_type::comma_quoted_wire_name_colon()
-                                : slot_type::quoted_wire_name_colon());
-        } else {
-            if (comma) {
-                output.push_back(',');
-            }
-            append_json_string(output, slot.wire_name());
-            output.push_back(':');
-        }
+        output.append(slot.json_member_key(comma));
         if (kind == model::serialized_field_kind::value) {
             append_json_value(output, *slot.value());
         } else {

@@ -185,12 +185,8 @@ void task_scope::resume_join_if_idle() noexcept {
 
 void task_scope::child_complete(void* raw) noexcept {
     auto* node_value = static_cast<node_type*>(raw);
-    try {
-        detail::worker_handle_access::defer(
-            node_value->scope_.worker_, [node_value] { node_value->scope_.finish(node_value); });
-    } catch (...) {
-        std::terminate();
-    }
+    detail::worker_handle_access::defer_or_terminate(
+        node_value->scope_.worker_, [node_value] { node_value->scope_.finish(node_value); });
 }
 
 void task_scope::finish(node_type* node_value) noexcept {
@@ -203,6 +199,9 @@ void task_scope::finish(node_type* node_value) noexcept {
             failure_ = std::current_exception();
             stop_requested_ = true;
             notify_stop = true;
+        } else if (!equivalent_failures(std::current_exception(), failure_)) {
+            // join rethrows only the first failure; later distinct ones have no other owner.
+            report_unhandled_failure("additional task scope child", std::current_exception());
         }
     }
     if (notify_stop) {

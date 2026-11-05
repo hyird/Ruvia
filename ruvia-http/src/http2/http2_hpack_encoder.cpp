@@ -1,11 +1,11 @@
 #include <limits>
 #include <stdexcept>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/hpack.h"
 
 #include "http2/http2_hpack.h"
 #include "http2/http2_hpack_static_table.h"
-#include "util/http_text_overlap.h"
 
 namespace ruvia {
 
@@ -124,15 +124,14 @@ void hpack_encoder::encode_header(
             {.never_indexed_ = never_indexed});
         return;
     }
-    const auto storage = std::string_view(out.data(), out.size() + 1);
-    if (detail::http_text_overlaps(name, storage) || detail::http_text_overlaps(value, storage)) {
+    if (detail::http_text_aliases_string(name, out) || detail::http_text_aliases_string(value, out)) {
         std::pmr::string owned_name("", out.get_allocator());
         std::pmr::string owned_value("", out.get_allocator());
-        if (detail::http_text_overlaps(name, storage)) {
+        if (detail::http_text_aliases_string(name, out)) {
             owned_name.assign(name);
             name = owned_name;
         }
-        if (detail::http_text_overlaps(value, storage)) {
+        if (detail::http_text_aliases_string(value, out)) {
             owned_value.assign(value);
             value = owned_value;
         }
@@ -145,7 +144,7 @@ void hpack_encoder::encode_header(
 void hpack_encoder::encode_header_with_name_index(std::pmr::string& out, hpack_index name_index,
     std::string_view value, hpack_header_with_name_index_options options) {
     validate_hpack_string_length(value);
-    if (detail::http_text_overlaps(value, std::string_view(out.data(), out.size() + 1))) {
+    if (detail::http_text_aliases_string(value, out)) {
         const std::pmr::string owned_value(value, out.get_allocator());
         encode_unindexed_literal(out, options.never_indexed_, name_index.value(), {}, owned_value);
         return;
@@ -154,35 +153,10 @@ void hpack_encoder::encode_header_with_name_index(std::pmr::string& out, hpack_i
 }
 
 void hpack_encoder::encode_status(std::pmr::string& out, http_status_code status) {
-    switch (status.value()) {
-        case http_status::ok.value():
-            encode_indexed(out, detail::hpack_static_index::status_ok);
-            return;
-        case http_status::no_content.value():
-            encode_indexed(out, detail::hpack_static_index::status_no_content);
-            return;
-        case http_status::partial_content.value():
-            encode_indexed(out, detail::hpack_static_index::status_partial_content);
-            return;
-        case http_status::not_modified.value():
-            encode_indexed(out, detail::hpack_static_index::status_not_modified);
-            return;
-        case http_status::bad_request.value():
-            encode_indexed(out, detail::hpack_static_index::status_bad_request);
-            return;
-        case http_status::not_found.value():
-            encode_indexed(out, detail::hpack_static_index::status_not_found);
-            return;
-        case http_status::internal_server_error.value():
-            encode_indexed(out, detail::hpack_static_index::status_internal_server_error);
-            return;
-        default:
-            break;
-    }
-
+    // The seven Appendix A :status entries encode fully indexed; every other code
+    // is a literal with the :status name index.
     const auto token = detail::http_status_code_token(status);
-    encode_header_with_name_index(
-        out, detail::hpack_static_index::status_ok, detail::http_status_code_token_view(token));
+    encode_header(out, ":status", detail::http_status_code_token_view(token));
 }
 
 }  // namespace ruvia

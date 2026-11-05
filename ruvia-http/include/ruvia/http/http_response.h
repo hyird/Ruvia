@@ -320,12 +320,16 @@ private:
     // Appends the source's fields in place when none can interact with an
     // existing field. Returns false, leaving this block unchanged, otherwise.
     [[nodiscard]] bool try_append_disjoint(const http_response_headers& source, http_response_header_transfer mode);
-    void set_static_header(http_response_header header);
+    // Replaces the field's line with `prepared`, or appends it; ownership of
+    // `prepared` transfers either way.
+    void publish_header(http_response_header prepared);
+    // Releases `existing`, adopts `prepared` in its slot, and collapses the
+    // field's other lines when `existing` was one of several.
+    http_response_header& replace_header(http_response_header& existing, http_response_header prepared) noexcept;
 
     // Field rules and the known-header index.
     void record_known_header_index(std::uint32_t known_bit, std::size_t index) noexcept;
     void rebuild_known_header_index() noexcept;
-    [[nodiscard]] std::string_view known_header_value(std::uint32_t bit) const noexcept;
     [[nodiscard]] http_response_header* find_header_for_update(
         std::string_view key, std::uint32_t known_bit) noexcept;
     [[nodiscard]] const http_response_header* find_header_for_read(

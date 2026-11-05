@@ -1,7 +1,5 @@
 #include "ruvia/web/detail/app/app_configuration.h"
 
-#include <array>
-#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -32,16 +30,6 @@ template <typename view_type, typename handlers_type, typename setter_type>
 void apply_prefix_handlers(
     const handlers_type& handlers, std::pmr::memory_resource* resource, setter_type&& setter) {
     if (handlers.empty()) {
-        return;
-    }
-    static constexpr std::size_t inline_capacity = 8;
-    if (handlers.size() <= inline_capacity) {
-        std::array<view_type, inline_capacity> inline_views{};
-        for (std::size_t i = 0; i < handlers.size(); ++i) {
-            inline_views[i] = {
-                std::string_view(handlers[i].first), callback_access::ref(handlers[i].second)};
-        }
-        setter(std::span<const view_type>(inline_views.data(), handlers.size()));
         return;
     }
     std::pmr::vector<view_type> views(resource);
@@ -93,8 +81,8 @@ void app_configuration::on_error(http_error_handler handler) {
     error_handler_ = std::move(handler);
 }
 
-void app_configuration::on_error(std::nullptr_t) noexcept {
-    error_handler_ = nullptr;
+http_error_handler app_configuration::on_error(std::nullptr_t) noexcept {
+    return std::exchange(error_handler_, nullptr);
 }
 
 void app_configuration::on_error(scoped_error_handler_options options) {
@@ -111,8 +99,8 @@ void app_configuration::on_not_found(http_not_found_handler handler) {
     not_found_handler_ = std::move(handler);
 }
 
-void app_configuration::on_not_found(std::nullptr_t) noexcept {
-    not_found_handler_ = nullptr;
+http_not_found_handler app_configuration::on_not_found(std::nullptr_t) noexcept {
+    return std::exchange(not_found_handler_, nullptr);
 }
 
 void app_configuration::on_not_found(scoped_not_found_handler_options options) {
@@ -133,26 +121,12 @@ void app_configuration::apply(
             routes_value.set_prefix_not_found_handlers(views);
         });
     if (!middlewares_.empty()) {
-        static constexpr std::size_t inline_capacity = 16;
-        if (middlewares_.size() <= inline_capacity) {
-            alignas(controller_middleware_descriptor) std::array<std::byte,
-                sizeof(controller_middleware_descriptor) * inline_capacity>
-                inline_storage{};
-            auto* const inline_descriptors =
-                reinterpret_cast<controller_middleware_descriptor*>(inline_storage.data());
-            for (std::size_t i = 0; i < middlewares_.size(); ++i) {
-                std::construct_at(inline_descriptors + i, middlewares_[i].descriptor());
-            }
-            routes_value.set_global_middlewares(std::span<const controller_middleware_descriptor>(
-                inline_descriptors, middlewares_.size()));
-        } else {
-            std::pmr::vector<controller_middleware_descriptor> descriptors(resource);
-            descriptors.reserve(middlewares_.size());
-            for (const auto& middleware_value : middlewares_) {
-                descriptors.push_back(middleware_value.descriptor());
-            }
-            routes_value.set_global_middlewares(descriptors);
+        std::pmr::vector<controller_middleware_descriptor> descriptors(resource);
+        descriptors.reserve(middlewares_.size());
+        for (const auto& middleware_value : middlewares_) {
+            descriptors.push_back(middleware_value.descriptor());
         }
+        routes_value.set_global_middlewares(descriptors);
     }
 }
 

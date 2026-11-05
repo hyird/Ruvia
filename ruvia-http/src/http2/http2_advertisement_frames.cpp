@@ -4,12 +4,14 @@
 #include <cstring>
 #include <variant>
 
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 
 #include "http2/http2_frame_codec.h"
+#include "http2/http2_frame_types.h"
 
 namespace ruvia {
 namespace {
@@ -21,7 +23,7 @@ std::size_t length(std::span<const char> bytes_value) {
 }
 // RFC 7838 §4: ALTSVC on stream 0 carries an origin; on a stream it does not.
 bool is_valid_alternative_service_stream(std::uint32_t stream_id, bool has_origin) {
-    return stream_id <= 0x7fffffffU && (stream_id == 0) == has_origin;
+    return stream_id <= detail::http2_max_stream_id && (stream_id == 0) == has_origin;
 }
 // Consumes the space of one length-prefixed origin from `remaining`; false when it does not fit.
 bool reserve_prefixed_origin(std::size_t& remaining, std::string_view origin) {
@@ -48,7 +50,7 @@ std::pmr::vector<char> make_http2_frame(http2_frame_type type, std::uint32_t str
 }  // namespace
 std::variant<http_origin_advertisement, error_type> decode_http_origin_advertisement(std::span<const char> payload_value,
     std::pmr::memory_resource* resource) {
-    resource = resource ? resource : std::pmr::get_default_resource();
+    resource = detail::http_pmr_resource_or_default(resource);
     std::size_t candidate_count = 0;
     for (auto scan = payload_value; !scan.empty();) {
         if (scan.size() < length_prefix_bytes) {
@@ -77,7 +79,7 @@ std::variant<http_origin_advertisement, error_type> decode_http_origin_advertise
 }
 std::variant<std::pmr::vector<char>, error_type> encode_http2_origin_frame(std::span<const std::string_view> origins,
     std::uint32_t maximum, std::pmr::memory_resource* resource) {
-    resource = resource ? resource : std::pmr::get_default_resource();
+    resource = detail::http_pmr_resource_or_default(resource);
     const auto payload_size = detail::http2_origin_payload_size(origins, maximum);
     if (payload_size.index() != 0) {
         return std::get<1>(payload_size);
@@ -88,7 +90,7 @@ std::variant<std::pmr::vector<char>, error_type> encode_http2_origin_frame(std::
 }
 std::variant<http_alternative_service_advertisement, error_type> decode_http2_alternative_service(std::uint32_t stream_id,
     std::span<const char> payload_value, std::pmr::memory_resource* resource) {
-    resource = resource ? resource : std::pmr::get_default_resource();
+    resource = detail::http_pmr_resource_or_default(resource);
     if (payload_value.size() < length_prefix_bytes) {
         return error_type::malformed_payload;
     }
@@ -116,7 +118,7 @@ std::variant<http_alternative_service_advertisement, error_type> decode_http2_al
 }
 std::variant<std::pmr::vector<char>, error_type> encode_http2_alternative_service_frame(std::uint32_t stream_id,
     std::string_view origin, std::string_view value, std::uint32_t maximum, std::pmr::memory_resource* resource) {
-    resource = resource ? resource : std::pmr::get_default_resource();
+    resource = detail::http_pmr_resource_or_default(resource);
     const auto payload_size = detail::http2_alternative_service_payload_size(stream_id, origin, value, maximum);
     if (payload_size.index() != 0) {
         return std::get<1>(payload_size);

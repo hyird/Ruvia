@@ -8,6 +8,7 @@
 #include "coding/http_content_codec.h"
 #include "coding/http_zlib_stream.h"
 #include "coding/http_zstd_stream.h"
+#include "coding/pmr_codec_slot.h"
 
 namespace ruvia {
 
@@ -77,27 +78,12 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
             return encode_http_content(coding_, input, options);
     }
 
-    if (impl_ == nullptr) {
-        auto* created = detail::construct_http_pmr_object<impl_type>(
-            detail::http_resolved_pmr_resource_tag{}, resource_, coding_, resource_);
-        if (!created->initialized()) {
-            detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, created, resource_);
-            throw http_content_codec_error("content encoder initialization failed");
-        }
-        impl_ = created;
-    }
     // Every exit, including a rethrown allocation failure, leaves the next
-    // representation a fresh stream. A state that cannot reset is dropped and
-    // recreated on the next call.
-    struct reset_after_use final {
-        http_content_encode_context& self_;
-        ~reset_after_use() {
-            if (!self_.impl_->reset()) {
-                detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, self_.impl_, self_.resource_);
-                self_.impl_ = nullptr;
-            }
-        }
-    } reset_guard{*this};
+    // representation a fresh stream.
+    if (detail::acquire_pmr_codec(impl_, resource_, coding_, resource_) == nullptr) {
+        throw http_content_codec_error("content encoder initialization failed");
+    }
+    const detail::pmr_codec_reset_guard reset_guard(impl_, resource_);
     return impl_->encode(input, options);
 }
 

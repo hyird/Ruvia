@@ -59,24 +59,12 @@ namespace detail {
         .message_ = "request body must be application/x-www-form-urlencoded"});
 }
 
-[[noreturn]] void throw_invalid_form_body() {
-    throw http_error({.status_ = http_status::bad_request, .message_ = "invalid form body"});
-}
-
 [[noreturn]] void throw_invalid_query() {
     throw http_error({.status_ = http_status::bad_request, .message_ = "invalid query"});
 }
 
 [[noreturn]] void throw_invalid_param() {
     throw http_error({.status_ = http_status::bad_request, .message_ = "invalid route parameter"});
-}
-
-[[noreturn]] void throw_invalid_header() {
-    throw http_error({.status_ = http_status::bad_request, .message_ = "invalid request header"});
-}
-
-[[noreturn]] void throw_invalid_cookie() {
-    throw http_error({.status_ = http_status::bad_request, .message_ = "invalid cookie"});
 }
 
 }  // namespace detail
@@ -89,120 +77,67 @@ namespace {
     return empty;
 }
 
-// Storage capacity is fixed by ensure_request_query before any view escapes.
-[[nodiscard]] std::string_view borrow_or_decode_query_component(
-    std::pmr::vector<std::pmr::string>& storage, std::string_view input) {
-    std::pmr::string decoded(storage.get_allocator().resource());
-    const auto component = *decode_url_component(input, decoded, url_decode_mode::form);
-    if (component.data() == input.data()) {
-        return component;
-    }
-    return storage.emplace_back(std::move(decoded));
-}
-// Storage capacity is fixed by ensure_request_query before any view escapes.
+// Unencoded names and values borrow the request query string; decoded ones
+// live in the request arena. Form decoding keeps an invalid '%' literally.
 void ensure_request_query(const context& context_value, const http_request& request,
     detail::context_request_storage& request_storage) {
     auto& cache = request_storage.query_;
     if (cache) {
         return;
     }
-    // Percent-encoding is validated while decoding each component. Unencoded
-    // names and values borrow the request query string instead of copying.
-    std::pmr::vector<std::pmr::string> storage(context_value.arena());
-    // Publish views only after capacity is fixed: moving a short string during
-    // vector growth invalidates views into its inline buffer. Count decoded
-    // owners exactly so unencoded fields do not reserve unused string storage.
-    std::size_t decoded_component_count = 0;
-    std::size_t pair_count = 0;
-    (void)visit_url_encoded_pairs(request.query_string(),
-        [&decoded_component_count, &pair_count](std::string_view name, std::string_view value) {
-            ++pair_count;
-            decoded_component_count += has_url_encoding(name, url_decode_mode::form);
-            decoded_component_count += has_url_encoding(value, url_decode_mode::form);
-        });
-    auto query = detail::request_name_value_list_access::make(context_value.arena());
-    detail::request_name_value_list_access::reserve(query, pair_count);
-    if (decoded_component_count == 0) {
-        (void)visit_url_encoded_pairs(
-            request.query_string(), [&query](std::string_view key, std::string_view value) {
-                detail::request_name_value_list_access::push_back(query, http_header_view{key, value});
-                return true;
-            });
-        cache.emplace(std::move(storage), std::move(query));
-        return;
-    }
-    storage.reserve(decoded_component_count);
-    (void)visit_url_encoded_pairs(request.query_string(),
-        [&storage, &query](std::string_view key, std::string_view value) {
-            const auto name = borrow_or_decode_query_component(storage, key);
-            const auto decoded_value = borrow_or_decode_query_component(storage, value);
-            detail::request_name_value_list_access::push_back(
-                query, http_header_view{name, decoded_value});
-            return true;
-        });
-    cache.emplace(std::move(storage), std::move(query));
+    auto* const arena = context_value.arena();
+    auto query = detail::request_name_value_list_access::make(arena);
+    (void)visit_url_encoded_pairs(request.query_string(), [&query, arena](std::string_view key, std::string_view value) {
+        const auto name = *detail::decode_url_component_in_arena(key, url_decode_mode::form, false, arena);
+        const auto decoded_value = *detail::decode_url_component_in_arena(value, url_decode_mode::form, false, arena);
+        detail::request_name_value_list_access::push_back(query, http_header_view{name, decoded_value});
+        return true;
+    });
+    cache.emplace(std::move(query), arena);
 }
 
-[[nodiscard]] std::size_t verify_unencoded_route_params(const std::string_view* param_names,
-    const std::string_view* param_values, std::size_t param_count,
-    detail::context_request_storage& request_storage) {
+// Counts encoded captures only; decoding validates them once, in ensure_route_params.
+[[nodiscard]] std::size_t count_encoded_route_params(const std::string_view* param_values,
+    std::size_t param_count, detail::context_request_storage& request_storage) {
     if (request_storage.route_params_unencoded_) {
         return 0;
     }
-    if (request_storage.route_params_invalid_) {
-        detail::throw_invalid_param();
-    }
-    std::size_t decoded_count = 0;
+    std::size_t encoded_count = 0;
     for (std::size_t i = 0; i < param_count; ++i) {
-        const auto value = param_values[i];
-        if (!has_url_encoding(value, url_decode_mode::percent)) {
-            continue;
-        }
-        const bool valid = param_names[i] == "*" ? detail::is_valid_encoded_request_path(value)
-                                                 : validate_url_encoding(value);
-        if (!valid) {
-            request_storage.route_params_invalid_ = true;
-            detail::throw_invalid_param();
-        }
-        ++decoded_count;
+        encoded_count += has_url_encoding(param_values[i], url_decode_mode::percent);
     }
-    if (decoded_count == 0) {
+    if (encoded_count == 0) {
         request_storage.route_params_unencoded_ = true;
     }
-    return decoded_count;
+    return encoded_count;
 }
 
+// Route names and unencoded captures borrow stable route/request storage; a
+// "*" capture rejects escapes revealing a path separator, as static paths do.
 void ensure_route_params(const context& context_value, const std::string_view* param_names,
     const std::string_view* param_values, std::size_t param_count,
-    detail::context_request_storage& request_storage, std::size_t decoded_count) {
+    detail::context_request_storage& request_storage) {
     auto& cache = request_storage.route_params_;
     if (cache) {
         return;
     }
-    // Route names and unencoded captures already borrow stable route/request
-    // storage. Own only decoded values. Invalid percent-escapes fail in decode
-    // rather than in a separate pre-scan of the same captures.
-    std::pmr::vector<std::pmr::string> storage(context_value.arena());
-    auto params = detail::request_name_value_list_access::make(context_value.arena());
-    if (decoded_count != 0) {
-        storage.reserve(decoded_count);
+    // A capture that failed to decode keeps failing without another decode.
+    if (request_storage.route_params_invalid_) {
+        detail::throw_invalid_param();
     }
+    auto* const arena = context_value.arena();
+    auto params = detail::request_name_value_list_access::make(arena);
     detail::request_name_value_list_access::reserve(params, param_count);
     for (std::size_t i = 0; i < param_count; ++i) {
-        auto value = param_values[i];
-        if (decoded_count != 0) {
-            std::pmr::string decoded(context_value.arena());
-            const auto decoded_value = decode_url_component(value, decoded, url_decode_mode::percent);
-            if (!decoded_value) {
-                detail::throw_invalid_param();
-            }
-            if (decoded_value->data() != value.data()) {
-                value = storage.emplace_back(std::move(decoded));
-            }
+        const auto value = detail::decode_url_component_in_arena(
+            param_values[i], url_decode_mode::percent, param_names[i] == "*", arena);
+        if (!value) {
+            request_storage.route_params_invalid_ = true;
+            detail::throw_invalid_param();
         }
-        detail::request_name_value_list_access::push_back(params, http_header_view{param_names[i], value});
+        detail::request_name_value_list_access::push_back(params, http_header_view{param_names[i], *value});
     }
-    cache.emplace(std::move(storage), std::move(params));
+    cache.emplace(std::move(params));
 }
 
 [[nodiscard]] std::string_view negotiation_header_name(context_request::negotiable_field field) noexcept {
@@ -236,6 +171,20 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     throw std::logic_error("unexpected multipart boundary parse result");
 }
 
+// Rejects an invalid or unsupported Content-Encoding; the result owns the codings span.
+[[nodiscard]] http_content_coding_field_result require_decodable_request_coding(
+    const http_request& request, detail::unsupported_request_content_coding::read_type read) {
+    auto parsed_coding = request_content_coding(request);
+    if (const auto* invalid = parsed_coding.invalid()) {
+        throw http_protocol_error(
+            invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
+    }
+    if (parsed_coding.unsupported() != nullptr) {
+        throw detail::unsupported_request_content_coding(read);
+    }
+    return parsed_coding;
+}
+
 task<std::string_view> read_request_text(const context& context_value) {
     if (const auto decoded = detail::context_access::decoded_body(context_value)) {
         co_return *decoded;
@@ -261,15 +210,8 @@ task<std::string_view> read_request_text(const context& context_value) {
     auto* const decode_resource = services.inbound_buffer_pool() != nullptr
                                       ? services.inbound_buffer_pool()
                                       : context_value.pool();
-    const auto parsed_coding = request_content_coding(request);
-    if (const auto* invalid = parsed_coding.invalid()) {
-        throw http_protocol_error(
-            invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
-    }
-    if (parsed_coding.unsupported() != nullptr) {
-        throw detail::unsupported_request_content_coding(
-            detail::unsupported_request_content_coding::read_type::decoded);
-    }
+    const auto parsed_coding = require_decodable_request_coding(
+        request, detail::unsupported_request_content_coding::read_type::decoded);
     const auto codings = parsed_coding.codings();
     if (codings.empty()) {
         detail::context_access::mark_body_identity(context_value);
@@ -474,13 +416,9 @@ const request_name_value_list& context_request::param_fields() const {
         return empty_request_fields();
     }
     auto& storage = context_->request_storage();
-    if (!storage.route_params_) {
-        const auto decoded_count = verify_unencoded_route_params(
-            context_->param_names_, context_->param_values_, context_->param_count_, storage);
-        ensure_route_params(*context_, context_->param_names_, context_->param_values_,
-            context_->param_count_, storage, decoded_count);
-    }
-    return storage.route_params_->fields_;
+    ensure_route_params(
+        *context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
+    return *storage.route_params_;
 }
 
 std::optional<std::string_view> context_request::param(std::string_view name) const {
@@ -489,11 +427,9 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
     }
     auto& storage = context_->request_storage();
     if (storage.route_params_) {
-        return storage.route_params_->fields_.get(name);
+        return storage.route_params_->get(name);
     }
-    const auto decoded_count = verify_unencoded_route_params(
-        context_->param_names_, context_->param_values_, context_->param_count_, storage);
-    if (decoded_count == 0) {
+    if (count_encoded_route_params(context_->param_values_, context_->param_count_, storage) == 0) {
         for (std::size_t i = context_->param_count_; i > 0; --i) {
             if (context_->param_names_[i - 1] == name) {
                 return context_->param_values_[i - 1];
@@ -502,8 +438,8 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
         return std::nullopt;
     }
     ensure_route_params(
-        *context_, context_->param_names_, context_->param_values_, context_->param_count_, storage, decoded_count);
-    return storage.route_params_->fields_.get(name);
+        *context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
+    return storage.route_params_->get(name);
 }
 
 std::optional<std::string_view> context_request::negotiate(
@@ -516,9 +452,6 @@ std::optional<std::string_view> context_request::negotiate(
     const bool encoding = field == negotiable_field::encoding;
     const auto header_name = negotiation_header_name(field);
     // Only Accept-Language needs prefix matching in the generic token parser.
-    if ((media_type || encoding) && !context_->request_.header(header_name).has_value()) {
-        return supported.front();
-    }
     const auto token_mode = field == negotiable_field::language
                                 ? http_accept_token_match_mode::language_prefix
                                 : http_accept_token_match_mode::exact;
@@ -642,14 +575,10 @@ multipart_reader context_request::multipart_reader() const {
     const auto boundary = get_multipart_boundary(context_->request_);
     // The reader parses raw body bytes as they arrive and decodes no content
     // coding, so only an identity body is accepted.
-    const auto parsed_coding = request_content_coding(context_->request_);
-    if (const auto* invalid = parsed_coding.invalid()) {
-        throw http_protocol_error(
-            invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
-    }
-    const auto coded = std::ranges::any_of(
-        parsed_coding.codings(), [](http_content_coding coding) { return coding != http_content_coding::identity; });
-    if (parsed_coding.unsupported() != nullptr || coded) {
+    const auto parsed_coding = require_decodable_request_coding(
+        context_->request_, detail::unsupported_request_content_coding::read_type::streaming);
+    if (std::ranges::any_of(parsed_coding.codings(),
+            [](http_content_coding coding) { return coding != http_content_coding::identity; })) {
         throw detail::unsupported_request_content_coding(
             detail::unsupported_request_content_coding::read_type::streaming);
     }

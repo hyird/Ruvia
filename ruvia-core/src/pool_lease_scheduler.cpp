@@ -113,7 +113,7 @@ public:
             return false;
         }
         closing_ = true;
-        waiter_state_->queue_.close_all();
+        waiter_state_->queue_.close_all(worker_);
         return true;
     }
 

@@ -1,7 +1,7 @@
 #include "ruvia/http/http_request.h"
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_accept_encoding.h"
@@ -46,7 +46,7 @@ std::optional<std::string_view> http_request::last_raw_query_value(
 }
 
 std::optional<std::string_view> http_request::cookie(std::string_view name) const noexcept {
-    if (!detail::request_has_known_header(*this, detail::request_header_kind::cookie)) {
+    if (!detail::http_request_access::has_known_header(*this, detail::request_header_kind::cookie)) {
         return std::nullopt;
     }
     // The last matching pair within one field line wins.
@@ -61,7 +61,7 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
         return result;
     };
     const auto last_cookie =
-        detail::request_known_header(*this, detail::request_header_kind::cookie);
+        detail::http_request_access::known_header(*this, detail::request_header_kind::cookie);
     if (auto value = find_in(last_cookie)) {
         return value;
     }
@@ -86,26 +86,12 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
 
 http_response_coding_selection http_response_coding_selection_for(const http_request& request) noexcept {
     http_response_coding_qualities qualities;
-    if (detail::request_has_known_header(request, detail::request_header_kind::accept_encoding)) {
-        if (!detail::http_request_access::has_repeated_known_header(
-                request, detail::request_header_kind::accept_encoding)) {
-            qualities.update(
-                detail::request_known_header(request, detail::request_header_kind::accept_encoding));
-        } else {
-            // Every field line contributes: RFC 9110 section 5.3 combines repeated
-            // list fields, and the request cache records only the last line.
-            const auto headers = request.headers();
-            const auto last_index = detail::http_request_access::known_header_index(
-                request, detail::request_header_kind::accept_encoding);
-            const auto limit = last_index <= headers.size() ? last_index : headers.size();
-            for (std::size_t i = 0; i < limit; ++i) {
-                if (detail::http_request_access::header_kind(request, i) ==
-                    detail::request_header_kind::accept_encoding) {
-                    qualities.update(headers[i].value());
-                }
-            }
-        }
-    }
+    // Every field line contributes: RFC 9110 section 5.3 combines repeated list fields.
+    (void)detail::http_request_access::visit_known_headers(
+        request, detail::request_header_kind::accept_encoding, [&qualities](std::string_view value) noexcept {
+            qualities.update(value);
+            return true;
+        });
     return http_response_coding_selection::select(qualities);
 }
 

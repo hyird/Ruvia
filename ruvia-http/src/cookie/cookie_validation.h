@@ -68,27 +68,6 @@ inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
     return {};
 }
 
-[[nodiscard]] inline std::string_view cookie_prefix_text(cookie_prefix prefix) noexcept {
-    switch (prefix) {
-        case cookie_prefix::secure:
-            return "__Secure-";
-        case cookie_prefix::host:
-            return "__Host-";
-    }
-    return {};
-}
-
-[[nodiscard]] inline bool cookie_prefix_requirements_met(
-    cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept {
-    switch (prefix) {
-        case cookie_prefix::secure:
-            return secure;
-        case cookie_prefix::host:
-            return secure && path == "/" && domain.empty();
-    }
-    return false;
-}
-
 [[nodiscard]] inline bool cookie_attribute_emitted(cookie_attribute_policy policy) {
     switch (policy) {
         case cookie_attribute_policy::omit:
@@ -99,19 +78,16 @@ inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
     throw std::invalid_argument("invalid cookie attribute policy");
 }
 
-inline void validate_cookie(
-    std::string_view name, std::string_view value, const cookie_options& options) {
-    const auto http_only = cookie_attribute_emitted(options.http_only_);
-    const auto secure = cookie_attribute_emitted(options.secure_);
-    const auto partitioned = cookie_attribute_emitted(options.partitioned_);
-    (void)http_only;
+// `secure` and `partitioned` are the already resolved attribute policies.
+inline void validate_cookie(std::string_view name, std::string_view value, const cookie_options& options,
+    bool secure, bool partitioned) {
     if (!is_valid_http_header_name(name)) {
         throw std::invalid_argument("invalid cookie name");
     }
     if (!::ruvia::is_valid_cookie_value(value)) {
         throw std::invalid_argument("invalid cookie value");
     }
-    const auto prefix_size = options.prefix_ ? cookie_prefix_text(*options.prefix_).size() : 0;
+    const auto prefix_size = options.prefix_ ? ::ruvia::http_cookie_prefix_text(*options.prefix_).size() : 0;
     if (prefix_size + name.size() + value.size() > max_cookie_name_value_bytes) {
         throw std::invalid_argument("cookie name and value exceed 4096 bytes");
     }
@@ -147,7 +123,7 @@ inline void validate_cookie(
     if (options.same_site_ == cookie_same_site::none && !secure) {
         throw std::invalid_argument("SameSite=None cookie requires Secure");
     }
-    if (options.prefix_ && cookie_prefix_text(*options.prefix_).empty()) {
+    if (options.prefix_ && ::ruvia::http_cookie_prefix_text(*options.prefix_).empty()) {
         throw std::invalid_argument("invalid cookie prefix");
     }
     if (partitioned && !secure) {
@@ -158,7 +134,7 @@ inline void validate_cookie(
     // this sender can actually be stored. A typed prefix is canonical and is the
     // outermost wire prefix, so it takes precedence over bytes in `name`.
     const auto prefix = options.prefix_ ? options.prefix_ : ::ruvia::cookie_name_prefix(name);
-    if (prefix && !detail::cookie_prefix_requirements_met(*prefix, secure, options.path_, options.domain_)) {
+    if (prefix && !::ruvia::cookie_prefix_requirements_met(*prefix, secure, options.path_, options.domain_)) {
         throw std::invalid_argument(*prefix == cookie_prefix::host
                                         ? "__Host- cookie requires Secure, Path=/, and no Domain"
                                         : "__Secure- cookie requires Secure");

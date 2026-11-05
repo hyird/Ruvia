@@ -1,7 +1,7 @@
 #include <algorithm>
 #include <array>
-#include <limits>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -9,7 +9,7 @@
 #include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
-#include "ruvia/http/hpack.h"
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_response_stream.h"
@@ -22,7 +22,6 @@
 #include "http2/http2_response_headers.h"
 #include "http2/http2_websocket_handshake.h"
 #include "response/http_response_content_semantics.h"
-#include "util/http_text_overlap.h"
 
 namespace ruvia::detail {
 namespace {
@@ -38,57 +37,62 @@ namespace {
 
 }  // namespace
 
-void http2_connection::append_response_header_frames(
-    http2_stream_state& stream, std::string_view header_block, http2_end_stream end_stream,
-    std::size_t additional_output_bytes, std::size_t additional_output_segments) {
+void http2_connection::append_field_block_frames(
+    std::uint32_t stream_id, std::optional<std::uint32_t> promised_stream_id, std::uint8_t first_flags) {
+    const std::string_view block(local_header_block_);
     const auto output_checkpoint = output_.checkpoint();
-    const auto previous_encoder_table_size_update_pending = encoder_table_size_update_pending_;
     try {
-        // A HEADERS + CONTINUATION run must be an uninterrupted frame sequence for the same
-        // stream (RFC 9113 §6.10). Appending them contiguously to the single outbound buffer
-        // guarantees that ordering.
-        const auto table_size_update = encoder_table_size_update_pending_
-                                           ? encoder_zero_table_size_update_
-                                           : std::string_view{};
+        // The first frame carries the PUSH_PROMISE promised stream id, then a pending
+        // dynamic table size update, which must open the field block (RFC 7541 §4.2).
+        // Every frame but the last is full, so the split points depend only on the
+        // total payload.
+        constexpr std::size_t promised_stream_id_bytes = 4;
+        std::array<char, promised_stream_id_bytes + encoder_zero_table_size_update_.size()> first_prefix_bytes;
+        std::size_t first_prefix_size = 0;
+        if (promised_stream_id.has_value()) {
+            http2_write32(first_prefix_bytes.data(), *promised_stream_id);
+            first_prefix_size = promised_stream_id_bytes;
+        }
+        if (encoder_table_size_update_pending_) {
+            std::ranges::copy(encoder_zero_table_size_update_, first_prefix_bytes.begin() + first_prefix_size);
+            first_prefix_size += encoder_zero_table_size_update_.size();
+        }
 
         const std::size_t max_frame = peer_settings_.max_frame_size();
-        const auto encoded_bytes =
-            http2_header_frame_encoded_bytes(header_block.size(), max_frame, table_size_update.size());
-        const auto encoded_segments = http2_header_frame_count(encoded_bytes, max_frame);
-        if (additional_output_bytes > std::numeric_limits<std::size_t>::max() - encoded_bytes ||
-            additional_output_segments > std::numeric_limits<std::size_t>::max() - encoded_segments) {
-            throw std::length_error("HTTP/2 response output size overflow");
-        }
-        output_.reserve_additional(encoded_bytes + additional_output_bytes);
-        output_.reserve_segments_additional(encoded_segments + additional_output_segments);
+        const auto encoded_bytes = http2_header_frame_encoded_bytes(first_prefix_size + block.size(), max_frame);
+        // A HEADERS or PUSH_PROMISE + CONTINUATION run must be an uninterrupted frame
+        // sequence (RFC 9113 §6.10); reserving it whole keeps the appends below atomic.
+        output_.reserve_additional(encoded_bytes);
+        output_.reserve_segments_additional(http2_header_frame_count(encoded_bytes, max_frame));
 
+        auto type = promised_stream_id.has_value() ? http2_frame_type::push_promise : http2_frame_type::headers;
+        auto flags = first_flags;
+        std::string_view prefix(first_prefix_bytes.data(), first_prefix_size);
         std::size_t offset = 0;
-        bool first = true;
-        while (offset < header_block.size() || (first && !table_size_update.empty())) {
-            const auto prefix = first ? table_size_update : std::string_view{};
-            const auto chunk =
-                std::min<std::size_t>(header_block.size() - offset, max_frame - prefix.size());
-            const bool last = offset + chunk == header_block.size();
-            const auto flags = static_cast<std::uint8_t>(
-                (last ? http2_flag_end_headers : 0) |
-                (first && http2_ends_stream(end_stream) ? http2_flag_end_stream : 0));
-            output_.append_frame(first ? http2_frame_type::headers : http2_frame_type::continuation,
-                flags, stream.id(), prefix, header_block.substr(offset, chunk));
+        do {
+            const auto chunk = std::min(block.size() - offset, max_frame - prefix.size());
+            const auto fragment = block.substr(offset, chunk);
             offset += chunk;
-            first = false;
-        }
-        if (!table_size_update.empty()) {
-            encoder_table_size_update_pending_ = false;
-        }
+            const auto end_headers = offset == block.size() ? http2_flag_end_headers : std::uint8_t{0};
+            output_.append_frame(type, static_cast<std::uint8_t>(flags | end_headers), stream_id, prefix, fragment);
+            type = http2_frame_type::continuation;
+            flags = 0;
+            prefix = {};
+        } while (offset < block.size());
     } catch (...) {
         // Header submission is one transaction. A throwing PMR resource must not leave
         // a partial frame run, consume a pending HPACK table-size update, or retain a
         // staged block that no longer has a matching stream state.
         output_.rollback_to(output_checkpoint);
-        encoder_table_size_update_pending_ = previous_encoder_table_size_update_pending;
         local_header_block_.clear();
         throw;
     }
+    encoder_table_size_update_pending_ = false;
+}
+
+void http2_connection::append_header_frames(http2_stream_state& stream, http2_end_stream end_stream) {
+    append_field_block_frames(
+        stream.id(), std::nullopt, http2_ends_stream(end_stream) ? http2_flag_end_stream : std::uint8_t{0});
     if (stream.push_reservation() == http2_push_reservation::local && stream.hold_peer_concurrency_slot()) {
         ++active_local_request_streams_;
     }
@@ -97,40 +101,74 @@ void http2_connection::append_response_header_frames(
 
 void http2_connection::commit_connect_response_head(
     http2_stream_state& stream, bool terminal_remote_half) {
-    append_response_header_frames(
-        stream, std::string_view(local_header_block_), http2_end_stream::keep_open);
+    append_header_frames(stream, http2_end_stream::keep_open);
     (void)stream.accept_connect();
     stream.begin_local_content_unbounded();
     (void)stream.open_local_connect_tunnel();
     http2_release_local_header_block(local_header_block_);
     if (terminal_remote_half) {
-        events_.push_back(http2_event(http2_tunnel_end_event(stream.id())));
+        publish_event(http2_event(http2_tunnel_end_event(stream.id())));
     }
+}
+
+std::optional<http2_response_head_submit_error> http2_connection::response_head_admission_error(
+    const http2_stream_state* stream, http_status_code status) const noexcept {
+    if (stream == nullptr) {
+        return http2_response_head_submit_error::closed;
+    }
+    // A 2xx answer to a pending CONNECT opens the tunnel; only the CONNECT and
+    // WebSocket handshake submissions commit one.
+    if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) ||
+        stream->local_send().head_pending() == nullptr ||
+        (status.is_successful() && stream->tunnel().pending() != nullptr)) {
+        return http2_response_head_submit_error::invalid_state;
+    }
+    if (stream->push_reservation() == http2_push_reservation::local &&
+        active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
+        return http2_response_head_submit_error::peer_stream_limit_reached;
+    }
+    return std::nullopt;
+}
+
+bool http2_connection::commit_final_response_head(http2_stream_state& stream, const http_response& response,
+    const http2_response_head_plan& head_plan, http2_end_stream end_stream,
+    std::optional<std::uint64_t> content_length) {
+    if (!append_http2_response_headers(local_header_block_, response, head_plan)) {
+        return false;
+    }
+    const auto stream_id = stream.id();
+    append_header_frames(stream, end_stream);
+    if (head_plan.body_plan().body_suppressed()) {
+        stream.begin_local_content_forbidden();
+    } else if (content_length.has_value()) {
+        stream.begin_local_content_known_length(*content_length);
+    } else {
+        stream.begin_local_content_unbounded();
+    }
+    if (http2_ends_stream(end_stream)) {
+        (void)stream.commit_local_head_end_stream();
+    } else {
+        (void)stream.begin_local_response_content();
+    }
+    if (stream.tunnel().pending() != nullptr) {
+        (void)stream.reject_connect();
+    }
+    http2_release_local_header_block(local_header_block_);
+    release_local_request_stream_if_closed(stream);
+    retire_completed_local_push(stream_id);
+    return true;
 }
 
 std::variant<http_buffered_response_write_plan, http2_response_head_submit_error>
 http2_connection::submit_response_head(
     std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
     auto* stream = find_outbound_stream(stream_id);
-    if (stream == nullptr) {
-        return http2_response_head_submit_error::closed;
-    }
-    if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) ||
-        stream->local_send().head_pending() == nullptr) {
-        return http2_response_head_submit_error::invalid_state;
+    if (const auto error = response_head_admission_error(stream, response.status())) {
+        return *error;
     }
     if (write_plan.body_plan().request_method() != stream->request_known_method() ||
         !write_plan.matches_response(response)) {
         return http2_response_head_submit_error::response_plan_mismatch;
-    }
-    if (stream->push_reservation() == http2_push_reservation::local &&
-        active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
-        return http2_response_head_submit_error::peer_stream_limit_reached;
-    }
-    const bool successful_connect =
-        response.status().is_successful() && stream->tunnel().pending() != nullptr;
-    if (successful_connect) {
-        return http2_response_head_submit_error::invalid_state;
     }
     if (http2_final_response_control_plan(response).has_value()) {
         return http2_response_head_submit_error::invalid_message;
@@ -147,28 +185,11 @@ http2_connection::submit_response_head(
                    ? http2_response_head_submit_error::response_plan_mismatch
                    : http2_response_head_submit_error::invalid_message;
     }
-    if (!append_http2_response_headers(local_header_block_, response, *head_plan)) {
-        return http2_response_head_submit_error::invalid_message;
-    }
     const auto end_stream =
         write_plan.send_body() ? http2_end_stream::keep_open : http2_end_stream::end_stream;
-    append_response_header_frames(*stream, std::string_view(local_header_block_), end_stream);
-    if (head_plan->body_plan().body_suppressed()) {
-        stream->begin_local_content_forbidden();
-    } else {
-        stream->begin_local_content_known_length(write_plan.content_length());
+    if (!commit_final_response_head(*stream, response, *head_plan, end_stream, write_plan.content_length())) {
+        return http2_response_head_submit_error::invalid_message;
     }
-    if (http2_ends_stream(end_stream)) {
-        (void)stream->commit_local_head_end_stream();
-    } else {
-        (void)stream->begin_local_response_content();
-    }
-    if (stream->tunnel().pending() != nullptr) {
-        (void)stream->reject_connect();
-    }
-    http2_release_local_header_block(local_header_block_);
-    release_local_request_stream_if_closed(*stream);
-    retire_completed_local_push(stream_id);
     return write_plan;
 }
 
@@ -177,18 +198,8 @@ http2_connection::submit_streaming_response_head(
     std::uint32_t stream_id, http_response head,
     http_response_trailer_intent trailer_intent) {
     auto* stream = find_outbound_stream(stream_id);
-    if (stream == nullptr) {
-        return http2_response_head_submit_error::closed;
-    }
-    if (stream->push_reservation() == http2_push_reservation::local &&
-        active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
-        return http2_response_head_submit_error::peer_stream_limit_reached;
-    }
-    const bool successful_connect =
-        head.status().is_successful() && stream->tunnel().pending() != nullptr;
-    if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) ||
-        stream->local_send().head_pending() == nullptr || successful_connect) {
-        return http2_response_head_submit_error::invalid_state;
+    if (const auto error = response_head_admission_error(stream, head.status())) {
+        return *error;
     }
     auto prepared_commit_plan = plan_http_response_stream_commit(http_response_stream_framing::http2_frames,
         stream->request_known_method(), head.status(), trailer_intent);
@@ -211,55 +222,35 @@ http2_connection::submit_streaming_response_head(
     if (head_plan == nullptr) {
         return http2_response_head_submit_error::invalid_message;
     }
-    if (!append_http2_response_headers(local_header_block_, stream_head.response(), *head_plan)) {
-        return http2_response_head_submit_error::invalid_message;
-    }
     const auto end_stream =
         commit_plan.head_disposition() == http_response_stream_head_disposition::message_ended
             ? http2_end_stream::end_stream
             : http2_end_stream::keep_open;
-    append_response_header_frames(*stream, std::string_view(local_header_block_), end_stream);
-    if (head_plan->body_plan().body_suppressed()) {
-        stream->begin_local_content_forbidden();
-    } else if (const auto content_length = head_plan->streaming_content_length()) {
-        stream->begin_local_content_known_length(*content_length);
-    } else {
-        stream->begin_local_content_unbounded();
+    if (!commit_final_response_head(*stream, stream_head.response(), *head_plan, end_stream,
+            head_plan->streaming_content_length())) {
+        return http2_response_head_submit_error::invalid_message;
     }
-    if (http2_ends_stream(end_stream)) {
-        (void)stream->commit_local_head_end_stream();
-    } else {
-        (void)stream->begin_local_response_content();
-    }
-    if (stream->tunnel().pending() != nullptr) {
-        (void)stream->reject_connect();
-    }
-    http2_release_local_header_block(local_header_block_);
-    release_local_request_stream_if_closed(*stream);
-    retire_completed_local_push(stream_id);
     return commit_plan;
 }
 
 http2_submit_status http2_connection::submit_interim_response_head(
     std::uint32_t stream_id, const http_interim_response_head& response) {
     auto* stream = find_outbound_stream(stream_id);
-    if (stream == nullptr) {
-        return http2_submit_status::closed;
-    }
-    if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) ||
-        stream->local_send().head_pending() == nullptr) {
-        return http2_submit_status::invalid_state;
-    }
-    if (stream->push_reservation() == http2_push_reservation::local &&
-        active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
-        return http2_submit_status::peer_capability_unavailable;
+    if (const auto error = response_head_admission_error(stream, response.status())) {
+        switch (*error) {
+            case http2_response_head_submit_error::closed:
+                return http2_submit_status::closed;
+            case http2_response_head_submit_error::peer_stream_limit_reached:
+                return http2_submit_status::peer_capability_unavailable;
+            default:
+                return http2_submit_status::invalid_state;
+        }
     }
     if (append_http2_interim_response_headers(local_header_block_, response) !=
         http2_interim_response_header_encode_status::ok) {
         return http2_submit_status::invalid_message;
     }
-    append_response_header_frames(
-        *stream, std::string_view(local_header_block_), http2_end_stream::keep_open);
+    append_header_frames(*stream, http2_end_stream::keep_open);
     http2_release_local_header_block(local_header_block_);
     return http2_submit_status::accepted;
 }
@@ -409,32 +400,22 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
         output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream_id, {});
     } else {
         http2_header_list_size size;
-        std::size_t reserve_bytes = 0;
         for (const auto& field : trailers) {
             if (!http2_is_valid_outbound_regular_header(field.name(), field.value()) ||
                 is_forbidden_http_request_trailer_name(field.name()) || !size.add(field.name(), field.value())) {
                 throw std::invalid_argument("invalid HTTP/2 request trailer");
             }
-            reserve_bytes += field.name().size() + field.value().size() + 6U;
         }
         auto& block = local_header_block_;
         try {
             block.clear();
-            if (reserve_bytes > 15U) {
-                block.reserve(reserve_bytes);
-            }
-            std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
-            std::pmr::string lower_name_scratch(resource_);
-            for (const auto& field : trailers) {
-                hpack_encoder::encode_header(block,
-                    http2_lower_header_name(field.name(), lower_name_stack, lower_name_scratch),
-                    field.value());
-            }
+            http2_reserve_field_block(block, 0, trailers);
+            http2_encode_lowercase_fields(block, trailers);
         } catch (...) {
             block.clear();
             throw;
         }
-        append_response_header_frames(*stream, std::string_view(block), http2_end_stream::end_stream);
+        append_header_frames(*stream, http2_end_stream::end_stream);
         http2_release_local_header_block(local_header_block_);
     }
     (void)stream->commit_local_end_stream();
@@ -467,7 +448,7 @@ http2_finish_status http2_connection::finish_response(
             trailer_block.clear();
             throw;
         }
-        append_response_header_frames(*stream, std::string_view(trailer_block), http2_end_stream::end_stream);
+        append_header_frames(*stream, http2_end_stream::end_stream);
         http2_release_local_header_block(local_header_block_);
     }
     (void)stream->commit_local_end_stream();
@@ -480,7 +461,7 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
     if (stream_id == 0) {
         return http2_submit_status::invalid_state;
     }
-    auto* stream = find_stream(stream_id);
+    auto* stream = streams_.find(stream_id);
     if (stream == nullptr) {
         const auto close_source = closed_streams_.source(stream_id);
         if (!close_source.has_value()) {
@@ -516,22 +497,7 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
         (http2_stream_is_closed(*stream) && error != http2_error_code::protocol_error)) {
         return http2_submit_status::invalid_state;
     }
-    return reset_stream(stream_id, error, close_notification_type::owner_already_knows)
-               ? http2_submit_status::accepted
-               : http2_submit_status::closed;
-}
-
-bool http2_connection::reset_stream(std::uint32_t stream_id, http2_error_code error,
-    close_notification_type notification) {
-    const auto output_checkpoint = output_.checkpoint();
-    try {
-        output_.append_rst_stream(stream_id, error);
-        // A reset returns no send credit, so it cannot unblock other streams.
-        return close_stream_impl(stream_id, http2_stream_close_source::local, error, notification);
-    } catch (...) {
-        output_.rollback_to(output_checkpoint);
-        throw;
-    }
+    return reset_stream(stream_id, error) ? http2_submit_status::accepted : http2_submit_status::closed;
 }
 
 }  // namespace ruvia::detail

@@ -82,7 +82,7 @@ bool file_type_allowed(std::string_view extension, const static_root_config_stor
     return std::ranges::binary_search(config.file_type_extensions_, value);
 }
 
-std::pmr::string content_type_for(const std::filesystem::path&, std::string_view extension,
+std::pmr::string content_type_for(std::string_view extension,
     const static_root_config_storage& config, std::pmr::memory_resource* resource) {
     if (const auto* const mime = find_static_mime_type(config.mime_types_, extension); mime != nullptr) {
         return std::pmr::string(mime->content_type_, resource);

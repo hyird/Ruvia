@@ -15,6 +15,7 @@
 #include "ruvia/http/http2_types.h"
 
 #include "http2/http2_frame_codec.h"
+#include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
@@ -84,24 +85,16 @@ public:
             segments_.resize(remaining);
             segment_offset_ = 0;
         }
-        const auto required = segments_.size() + additional;
-        if (required > segments_.capacity()) {
-            // Individual frame submissions share the same growth policy as a
-            // preflighted batch, so a burst does not reallocate for every frame.
-            const auto capacity = segments_.capacity();
-            const auto increment = capacity / 2;
-            const auto grown = capacity > segments_.max_size() - increment
-                                   ? segments_.max_size()
-                                   : capacity + increment;
-            segments_.reserve(std::max(required, grown));
-        }
+        // Individual frame submissions share the same growth policy as a
+        // preflighted batch, so a burst does not reallocate for every frame.
+        reserve_geometric(segments_, segments_.size() + additional);
     }
 
     void reserve_additional(std::size_t additional) {
         if (additional > bytes_.max_size() - bytes_.size()) {
             throw std::length_error("HTTP/2 output buffer size overflow");
         }
-        bytes_.reserve(bytes_.size() + additional);
+        reserve_geometric(bytes_, bytes_.size() + additional);
     }
 
     void append_frame(http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id,

@@ -11,12 +11,13 @@
 #include <string_view>
 #include <utility>
 
+#include <openssl/crypto.h>
+
 #include "ruvia/core/failure_report.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_pmr_string.h"
 
 #include "redis/redis_protocol.h"
-#include "redis/redis_types_access.h"
-#include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 namespace {
@@ -119,9 +120,12 @@ void redis_connection::ensure_reader() {
     reply_bytes_ = 0;
 }
 
-task<void> redis_connection::write_request(const operation_timeout& timeout) {
+task<void> redis_connection::write_request(const operation_timeout& timeout, redis_request_content content) {
     const auto serialized_bytes = write_buffer_.size();
     const auto written = co_await transport_.write(write_buffer_, timeout);
+    if (content == redis_request_content::credential) {
+        OPENSSL_cleanse(write_buffer_.data(), serialized_bytes);
+    }
     // The transport no longer borrows the buffer. Retention is amortized on
     // the request just sent so one oversized request does not pin its
     // capacity for the lifetime of this long-lived connection.
@@ -136,6 +140,9 @@ task<void> redis_connection::write_request(const operation_timeout& timeout) {
 }
 
 task<redis_value> redis_connection::read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource) {
+    if (!connected_) {
+        throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
+    }
     ensure_reader();
     reply_builder_->begin(pmr_resource_or_default(resource));
     for (;;) {
@@ -187,8 +194,13 @@ task<redis_value> redis_connection::read_reply(const operation_timeout& timeout,
         const auto received = co_await transport_.read_some(
             std::span<char>(read_buffer_.data(), read_capacity), timeout);
         // A cancellation or shutdown closed the connection and released its
-        // reader; report it before touching the reader again.
+        // reader; report it before touching the reader again. A close without
+        // an owner reason (a failed concurrent write) can still deliver a read
+        // that had already completed, so the reader itself is checked too.
         throw_if_aborted();
+        if (reader_ == nullptr) {
+            throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
+        }
         if (!received.ok()) {
             throw_redis_io_error(received);
         }
@@ -221,8 +233,8 @@ task<void> redis_connection::connect(const operation_timeout* operation_timeout_
         if (!connected.ok()) {
             throw_redis_connect_error(connected);
         }
-        ensure_reader();
         connected_ = true;
+        ensure_reader();
         co_await authenticate(deadline_value, command_timeout);
     } catch (...) {
         close();
@@ -232,42 +244,39 @@ task<void> redis_connection::connect(const operation_timeout* operation_timeout_
 
 task<void> redis_connection::authenticate(const operation_timeout& connect_timeout,
     std::optional<std::chrono::milliseconds> command_timeout) {
-    auto run_control = [this, &connect_timeout, command_timeout](
-                           std::span<const std::string_view> args) -> task<redis_value> {
-        write_buffer_.clear();
-        append_resp_command(write_buffer_, args);
-        const auto deadline_value = connect_timeout.constrained_by(command_timeout);
-        co_await write_request(deadline_value);
-
-        co_return co_await read_reply(deadline_value, resource_);
-    };
-
+    const auto deadline_value = connect_timeout.constrained_by(command_timeout);
     // An ACL user must authenticate by name even without a password (a
     // nopass user accepts any); skipping AUTH would connect as "default".
     if (!config_.username_.empty() || !config_.password_.empty()) {
-        auto reply = redis_types_access::null_value(resource_);
-        if (!config_.username_.empty()) {
-            std::array<std::string_view, 3> args{
-                "AUTH", std::string_view(config_.username_), std::string_view(config_.password_)};
-            reply = co_await run_control(args);
-        } else {
-            std::array<std::string_view, 2> args{"AUTH", std::string_view(config_.password_)};
-            reply = co_await run_control(args);
-        }
+        const std::string_view password(config_.password_);
+        const std::array<std::string_view, 3> user_args{"AUTH", std::string_view(config_.username_), password};
+        const std::array<std::string_view, 2> password_args{"AUTH", password};
+        const auto auth_args = config_.username_.empty() ? std::span<const std::string_view>(password_args)
+                                                         : std::span<const std::string_view>(user_args);
+        const auto reply =
+            co_await exchange_control_command(auth_args, deadline_value, redis_request_content::credential);
         if (reply.kind() == redis_value::kind_type::error) {
             throw redis_error(redis_error::code_type::auth_failed, reply.error());
         }
     }
 
     if (config_.database_ != 0) {
-        std::pmr::string db(resource_);
-        detail::append_redis_number(db, static_cast<std::uint64_t>(config_.database_));
-        std::array<std::string_view, 2> args{"SELECT", std::string_view(db)};
-        auto reply = co_await run_control(args);
+        std::array<char, http_max_unsigned_decimal_size> database_digits;
+        const std::array<std::string_view, 2> args{
+            "SELECT", http_format_unsigned(database_digits, config_.database_)};
+        const auto reply = co_await exchange_control_command(args, deadline_value, redis_request_content::ordinary);
         if (reply.kind() == redis_value::kind_type::error) {
             throw redis_error(redis_error::code_type::command_error, reply.error());
         }
     }
+}
+
+task<redis_value> redis_connection::exchange_control_command(
+    std::span<const std::string_view> args, operation_timeout deadline, redis_request_content content) {
+    write_buffer_.clear();
+    append_resp_command(write_buffer_, args);
+    co_await write_request(deadline, content);
+    co_return co_await read_reply(deadline, resource_);
 }
 
 }  // namespace ruvia::detail

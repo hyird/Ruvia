@@ -28,6 +28,7 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
+#include "client/http_client_response_handoff.h"
 #include "client/http_client_tunnel_state.h"
 #include "client/http_client_upload_state.h"
 
@@ -89,11 +90,13 @@ public:
     }
 
     // One retention path: consume response-owned fields or copy borrowed fields.
-    // Owned fields must already use this response's resource.
+    // Owned fields must already use this response's resource. A 100 (Continue)
+    // releases request content gated on it.
     template <typename fields_type>
         requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> ||
                  std::is_same_v<fields_type, std::pmr::vector<http_header>>)
-    void retain_informational(http_status_code status, fields_type&& fields_value) {
+    void retain_informational(http_status_code status, fields_type&& fields_value,
+        std::optional<http_client_request_content_signal> request_content_signal) {
         constexpr bool transferring = std::is_same_v<fields_type, std::pmr::vector<http_header>>;
         http_client_informational_response head(status, resource_);
         if constexpr (transferring) {
@@ -118,6 +121,10 @@ public:
         }
         informational_.push_back(std::move(head));
         informational_budget_ = budget;
+        if (upload_ && request_content_signal == http_client_request_content_signal::continue_value) {
+            upload_->content_released_ = true;
+            upload_->output_.notify_data();
+        }
     }
 
     [[nodiscard]] http_client_output_queue* output() noexcept {
@@ -172,12 +179,11 @@ public:
     std::uint64_t request_id_{0};
     std::uint64_t cancellation_id_{0};
     std::uint64_t stream_id_{0};
-    // Declared last so the operation scope closes while every field borrowed
-    // by a body coroutine is alive.
-    ::ruvia::operation_scope body_operation_scope_;
     std::optional<http_push_request> promised_request_{};
-    bool push_response_taken_{false};
-    ::ruvia::operation_scope push_response_scope_;
+    http_client_response_handoff push_response_;
+    // Declared after every field a body coroutine borrows, so the operation
+    // scope closes while they are alive.
+    ::ruvia::operation_scope body_operation_scope_;
 
 private:
     void promote_pending_data();

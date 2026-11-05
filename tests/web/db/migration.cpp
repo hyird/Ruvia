@@ -2,10 +2,12 @@
 
 #include <array>
 #include <chrono>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_types.h"
@@ -84,6 +86,38 @@ RUVIA_TEST(db_migrator_rejects_postgresql_history_without_a_digest_column) {
             {.column_ = "", .command_ = "ALTER TABLE"},
             {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}});
     check_unverifiable_history(ruvia_ctx, peer, ruvia::db_driver::postgresql, {});
+}
+
+// The migration lock belongs to the session that took it. A migration that
+// leaves that session unfit for sharing -- here an unwrapped BEGIN leaving a
+// transaction open -- ends it, and the history row must then fail rather than
+// be written on a new session that never held the lock.
+RUVIA_TEST(db_migrator_fails_once_its_locked_session_is_lost) {
+    using peer_type = ruvia::test::backend_startup_peer;
+    const std::array migrations{ruvia::db_migration(
+        {.id_ = "001", .sql_ = "BEGIN", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
+    peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>{
+        {{.column_ = "", .command_ = "SET"},
+            {.column_ = "pg_advisory_lock", .rows_ = {""}},
+            {.column_ = "", .command_ = "RESET"},
+            {.column_ = "", .command_ = "CREATE TABLE"},
+            {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}},
+            {.column_ = "checksum"},
+            {.column_ = "", .command_ = "BEGIN", .status_ = 'T'}},
+        // A replacement session, which never took the lock.
+        {{.column_ = "", .command_ = "INSERT 0 1"},
+            {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}}});
+    auto config = peer.config();
+    config.username_ = "test";
+    config.query_timeout_ = std::chrono::seconds(2);
+    std::optional<ruvia::db_error::code_type> failure;
+    try {
+        (void)ruvia::db_migrator::migrate(config, migrations);
+    } catch (const ruvia::db_error& error) {
+        failure = error.code();
+    }
+    RUVIA_CHECK(failure == ruvia::db_error::code_type::io_error);
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
 }
 
 // The migrator drives its own event loop, so it also brings the pool that loop

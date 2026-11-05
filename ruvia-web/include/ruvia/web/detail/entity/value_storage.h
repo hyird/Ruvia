@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
@@ -74,25 +75,13 @@ struct entity_value_slot {
 
 template <fixed_string name, typename... column_types>
 consteval std::size_t entity_column_index() {
-    constexpr bool matches[] = {column_types::name == name...};
-    for (std::size_t i = 0; i < sizeof...(column_types); ++i) {
-        if (matches[i]) {
-            return i;
-        }
-    }
-    return sizeof...(column_types);
+    const std::array<std::string_view, sizeof...(column_types)> names{column_types::name.view()...};
+    return fixed_name_index(names, name.view());
 }
 template <typename... column_types>
 consteval bool unique_entity_columns() {
-    constexpr std::string_view names[] = {column_types::name.view()...};
-    for (std::size_t i = 0; i < sizeof...(column_types); ++i) {
-        for (std::size_t j = i + 1; j < sizeof...(column_types); ++j) {
-            if (names[i] == names[j]) {
-                return false;
-            }
-        }
-    }
-    return true;
+    const std::array<std::string_view, sizeof...(column_types)> names{column_types::name.view()...};
+    return fixed_names_distinct(names);
 }
 
 // Visits every element of a descriptor tuple (entity columns, relations, join

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #include "ruvia/http/http_limits.h"
 
@@ -14,7 +15,6 @@ namespace ruvia::detail {
 // fixed capacities; they are intentionally not runtime knobs that can diverge.
 struct http2_local_settings final {
     static constexpr std::uint32_t header_table_size = 4096;
-    static constexpr std::uint32_t enable_push = 0;
     static constexpr std::uint32_t max_concurrent_streams = 128;
     static constexpr std::uint32_t initial_window_size = 1024 * 1024;
     static constexpr std::uint32_t max_frame_size = http2_default_max_frame_size;
@@ -26,9 +26,9 @@ struct http2_local_settings final {
     static constexpr std::size_t frame_bytes = http2_frame_header_bytes + payload_bytes;
 };
 
-static_assert(http2_local_settings::enable_push <= 1);
 static_assert(http2_local_settings::enable_connect_protocol <= 1);
-static_assert(http2_local_settings::initial_window_size <= 0x7fffffffU);
+static_assert(http2_local_settings::initial_window_size <=
+              static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()));
 static_assert(http2_local_settings::max_frame_size >= http2_default_max_frame_size);
 static_assert(http2_local_settings::max_frame_size <= http2_max_frame_size);
 

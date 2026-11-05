@@ -17,11 +17,11 @@
 // retains the suffix; no deferred DATA queue exists. Content-Length and terminal
 // intent are validated before output/window/state mutation.
 //
-// All protocol primitives it builds on (frame codec, HPACK, stream state, flow
-// control, input buffer, settings) are already pure and reused as-is. Generic frame
-// progression, the connection-global header-block lifecycle, and local submission
-// live in separate implementation units; http2_output_buffer is the sole owner of
-// outbound storage and its consumed cursor.
+// The protocol primitives it builds on (frame codec, HPACK, stream state, flow
+// control, settings) are pure as well. Generic frame progression, the
+// connection-global header-block lifecycle, and local submission live in separate
+// implementation units; http2_output_buffer is the sole owner of outbound storage
+// and its consumed cursor.
 
 #include <cstddef>
 #include <cstdint>
@@ -63,6 +63,8 @@
 #include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
+
+class http2_response_head_plan;
 
 class http2_connection final {
     // One role-aware receive phase owns connection startup. Keeping this as one enum
@@ -183,6 +185,11 @@ public:
     [[nodiscard]] http2_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
 
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
+    // Queues one liveness PING whose payload differs from the graceful-drain PING.
+    // At most one is outstanding: until its ACK arrives, further calls are accepted
+    // without queueing another frame. Liveness is any received frame; the ACK
+    // raises no event.
+    [[nodiscard]] http2_submit_status submit_ping();
 
     // --- lifecycle / timeout ---------------------------------------------------
     // A local connection error is terminal: its GOAWAY has been queued and the I/O
@@ -354,10 +361,10 @@ public:
     // (possibly-suspended) handler. Pin the stream before spawning its handler; while
     // pinned, a peer RST_STREAM/close only marks it reset (keeping the storage, and
     // emitting stream_closed so the owner can drop the response) instead of freeing it.
-    void pin_stream(std::uint32_t stream_id);
-    // Pins the stream of a successful client request-head submission. A pin
-    // failure abandons that stream, deferring cleanup if necessary, and rethrows.
-    void lease_submitted_request(const std::variant<std::uint32_t, http2_request_head_submit_error>& result);
+    void pin_stream(std::uint32_t stream_id) noexcept;
+    // Pins the stream of a successful client request-head submission.
+    void lease_submitted_request(
+        const std::variant<std::uint32_t, http2_request_head_submit_error>& result) noexcept;
     // Ends an owner lease. The stream is unpinned once its delivered DATA credit
     // and queued events are gone; until then the release stays deferred.
     void release_stream_lease(std::uint32_t stream_id);
@@ -366,8 +373,13 @@ public:
     // Destruction path of an unreleased lease: resets a live stream, then
     // releases it. Never throws; a failure is retried later.
     void abandon_stream_lease(std::uint32_t stream_id) noexcept;
-    // Applies deferred credits and lease releases whose conditions now hold. The
-    // owner calls this after every operation that can satisfy one.
+    // Applies the stream's deferred credit-gated release once its condition holds.
+    // Consuming an event, settling DATA credit, and the owner's stream transitions
+    // call this for the affected stream only.
+    void retry_deferred_stream_lease(std::uint32_t stream_id) noexcept;
+    // Retries the credits and releases whose earlier application failed, and every
+    // deferred release once the connection has failed. The owner calls this on each
+    // entry point; it scans no event queue.
     void retry_deferred_stream_leases() noexcept;
 
 private:
@@ -382,26 +394,44 @@ private:
     void unpin_stream(std::uint32_t stream_id);
     [[nodiscard]] bool release_received_data(std::uint32_t stream_id, std::uint32_t bytes);
     void abandon_stream_lease_checked(std::uint32_t stream_id);
-    void retry_deferred_stream_lease(std::uint32_t stream_id) noexcept;
 
-    // Emit a response header block as HEADERS + CONTINUATION frames (atomic sequence,
-    // RFC 9113 §6.10) into the outbound buffer, ending the stream when end_stream is set.
-    void append_response_header_frames(
-        http2_stream_state& stream, std::string_view header_block, http2_end_stream end_stream,
-        std::size_t additional_output_bytes = 0, std::size_t additional_output_segments = 0);
+    // Emits the staged local_header_block_ as one uninterrupted field-block run
+    // (RFC 9113 §6.10): HEADERS on `stream_id`, or PUSH_PROMISE when
+    // `promised_stream_id` is set, then CONTINUATION frames. A pending HPACK table
+    // size update is consumed only with the complete run; on failure the output and
+    // encoder state are unchanged and the staged block is cleared.
+    void append_field_block_frames(
+        std::uint32_t stream_id, std::optional<std::uint32_t> promised_stream_id, std::uint8_t first_flags);
+    // HEADERS run for `stream`; a reserved local push stream becomes active.
+    void append_header_frames(http2_stream_state& stream, http2_end_stream end_stream);
+    // Single check order for every server response head: closed, invalid state
+    // (including a 2xx for a pending CONNECT), then the pushed-stream slot.
+    [[nodiscard]] std::optional<http2_response_head_submit_error> response_head_admission_error(
+        const http2_stream_state* stream, http_status_code status) const noexcept;
+    // Encodes and emits an admitted final response head and opens its local content
+    // phase; nullopt `content_length` means unbounded. False when the section
+    // cannot be encoded, with nothing committed.
+    [[nodiscard]] bool commit_final_response_head(http2_stream_state& stream, const http_response& response,
+        const http2_response_head_plan& head_plan, http2_end_stream end_stream,
+        std::optional<std::uint64_t> content_length);
     void commit_connect_response_head(http2_stream_state& stream, bool terminal_remote_half);
     // Emit a preflighted, fully reserved DATA prefix and consume its send credit.
     void append_data_frames(http2_stream_state& stream, std::string_view data,
         http2_end_stream end_stream);
 
+    // Server role: consumes the client magic at `offset` (advanced past it). A
+    // value is the final feed() result: the magic is incomplete or invalid.
+    [[nodiscard]] std::optional<http2_feed_result> consume_client_magic(
+        std::string_view buffer, std::size_t& offset);
+    // Shared by feed()'s fast (parse over the caller's bytes) and slow (parse the
+    // buffered input_) paths; `offset` advances past each committed frame.
+    [[nodiscard]] http2_feed_result dispatch_input(std::string_view buffer, std::size_t& offset);
     // Consume complete frames from `buffer` starting at `offset` (advanced past each
     // consumed frame; a trailing partial frame is left for the caller). Returns false on
-    // a fatal protocol error (GOAWAY queued). Shared by feed()'s fast (parse over the
-    // caller's bytes) and slow (parse the buffered input_) paths.
+    // a fatal protocol error (GOAWAY queued).
     [[nodiscard]] bool consume_frames(std::string_view buffer, std::size_t& offset);
-    // Synchronous per-frame dispatch (ported 1:1 from process_frame/*; returns false
-    // on a fatal protocol error, having appended GOAWAY and transitioned the
-    // local connection state to fatal failure).
+    // Synchronous per-frame dispatch; returns false on a fatal protocol error, having
+    // appended GOAWAY and transitioned the local connection state to fatal failure.
     [[nodiscard]] bool process_frame(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_settings(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_ping(const http2_frame_header& header, std::string_view payload);
@@ -410,6 +440,12 @@ private:
     [[nodiscard]] bool process_rst_stream(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_push_promise(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool finish_push_promise(std::string_view block);
+    // Resets a decoded promise's stream after admit_peer_error_reset(): commits
+    // HPACK and scratch state, records the id as locally closed, and advances
+    // both stream-id high-water marks.
+    void refuse_promised_stream(std::uint32_t promised_id, http2_error_code error,
+        hpack_decoder::decode_transaction_type& hpack_transaction,
+        http2_stream_header_decode_transaction& stream_transaction);
     [[nodiscard]] bool process_advertisement(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_priority_update(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_priority(const http2_frame_header& header, std::string_view payload);
@@ -430,9 +466,8 @@ private:
     void queue_consumed_data_credit(http2_stream_state* stream, std::uint32_t bytes);
     [[nodiscard]] bool apply_settings_payload(std::string_view payload);
 
-    // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
-    // WITHOUT resolve_stream_route -- route resolution is application policy the owner runs
-    // after pulling message_head). Return the classification; the caller reacts.
+    // Request header-block decode and validation. Route resolution and body mode are
+    // owner policy applied after message_head. Return the classification; the caller reacts.
     [[nodiscard]] header_decode_status decode_header_block(http2_stream_state& stream,
         std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
     // Client role: decode a RESPONSE header block (:status + regular headers into the
@@ -480,7 +515,6 @@ private:
     [[nodiscard]] bool finish_discarded_header_block(std::string_view block);
     void detach_active_header_block(http2_stream_state& stream);
 
-    [[nodiscard]] http2_stream_state* find_stream(std::uint32_t stream_id) noexcept;
     [[nodiscard]] http2_stream_state* create_stream(std::uint32_t stream_id);
     [[nodiscard]] std::optional<http2_request_head_submit_error> local_request_admission_error()
         const noexcept;
@@ -508,9 +542,32 @@ private:
     void release_local_request_stream_if_closed(http2_stream_state& stream) noexcept;
     void retire_completed_local_push(std::uint32_t stream_id);
     void release_local_request_stream(http2_stream_state& stream) noexcept;
-    [[nodiscard]] bool is_pinned(std::uint32_t stream_id) const noexcept;
+    // Counts open streams initiated by `initiator` (client: odd ids, server: pushed
+    // even ids) that hold a concurrency slot; reserved promises do not (RFC 9113 §5.1.2).
+    [[nodiscard]] std::size_t open_streams_initiated_by(http2_role initiator) noexcept;
 
     void reserve_event_slots(std::size_t count);
+    // Appends an event into reserved capacity and counts it on every stream it names.
+    void publish_event(http2_event event);
+
+    // Output a peer can induce without reading ours is bounded by two budgets that
+    // end in GOAWAY(ENHANCE_YOUR_CALM). Every PING ACK, SETTINGS ACK and RST_STREAM
+    // answering a peer frame counts until output fully drains (Go x/net/http2
+    // maxQueuedControlFrames). Each such RST_STREAM also consumes a lifetime budget,
+    // as h2 max_local_error_reset_streams: a peer could otherwise open a stream,
+    // provoke its reset, and repeat without ever finishing a response.
+    static constexpr std::uint32_t max_undrained_control_frames = 1000;
+    static constexpr std::uint32_t max_peer_error_resets = 1024;
+    // False after queuing the fatal GOAWAY: no further control frame may be queued.
+    [[nodiscard]] bool admit_undrained_control_frame();
+    // False after queuing the fatal GOAWAY: the stream error must not be answered.
+    // Call before the first state change of the frame being rejected.
+    [[nodiscard]] bool admit_peer_error_reset();
+    // The single writer of RST_STREAM for a peer-induced stream error; requires a
+    // successful admit_peer_error_reset() and charges both budgets.
+    void append_peer_error_reset(std::uint32_t stream_id, http2_error_code error);
+    // admit_peer_error_reset(), then RST_STREAM and stream close as one transaction.
+    [[nodiscard]] bool reset_stream_for_peer_error(std::uint32_t stream_id, http2_error_code error);
 
     // Close a stream: mark closed, emit stream_closed (so the owner cancels any
     // handler), remove it, and remember it as closed.
@@ -520,8 +577,8 @@ private:
         http2_error_code error, close_notification_type notification);
     bool close_stream(std::uint32_t stream_id, http2_stream_close_source source, http2_error_code error);
     bool close_stream_by_owner(std::uint32_t stream_id);
-    bool reset_stream(std::uint32_t stream_id, http2_error_code error,
-        close_notification_type notification = close_notification_type::emit_event);
+    // Owner-requested reset: RST_STREAM and close as one transaction.
+    bool reset_stream(std::uint32_t stream_id, http2_error_code error);
     [[nodiscard]] bool was_closed_by_peer_reset(
         std::uint32_t stream_id, const http2_stream_state* retained_stream) const noexcept;
     // Preserve a removed stream's banked debt as batched connection credit.
@@ -532,19 +589,18 @@ private:
 
     // Inbound byte buffer (reused across feeds; input_offset_ = consumed cursor).
     // A slow-path feed owns the supplied span here before dispatching it. If a later
-    // frame throws, retry_input_ keeps that owned batch and its committed cursor so a
-    // retry of the same caller span resumes at the first uncommitted frame instead of
-    // appending and replaying the already committed prefix.
+    // frame throws, retry_offset_ keeps that owned batch (or, on the fast path, the
+    // caller-span cursor) so a retry of the same caller span resumes at the first
+    // uncommitted frame instead of appending and replaying the committed prefix.
     std::pmr::string input_;
     std::size_t input_offset_{0};
-    std::size_t retry_in_offset_{0};
-    bool retry_input_{false};
+    std::optional<std::size_t> retry_offset_;
     std::pmr::string local_header_block_;
     // Outbound serialization and consumed-prefix ownership are isolated from
     // connection state transitions.
     http2_output_buffer output_;
 
-    // pure protocol state (all reused as-is)
+    // protocol state
     http2_stream_table streams_;
     std::pmr::unordered_map<std::uint32_t, http_priority_fields> priorities_;
     http2_closed_stream_history closed_streams_;
@@ -573,14 +629,11 @@ private:
     std::optional<http2_stream_state> discarded_header_stream_;
     discarded_header_action_type discarded_header_action_{discarded_header_action_type::ignore};
 
-    // event queue drained by peek_event()/consume_event()
     std::pmr::vector<http2_event> events_;
     std::size_t event_offset_{0};
 
-    std::pmr::vector<std::uint32_t> pinned_streams_;
     http2_stream_lease_ledger leases_;
 
-    std::uint32_t local_max_frame_size_{http2_local_settings::max_frame_size};
     std::uint32_t last_stream_id_{0};
     http2_local_connection_state local_connection_state_;
     http2_role role_{http2_role::server};
@@ -598,8 +651,9 @@ private:
     std::uint32_t malformed_request_streams_{0};  // malformed server initial heads; never refilled
     std::uint32_t peer_reset_streams_{0};         // new stream aborts from peer RST_STREAM
     std::uint32_t completed_responses_{0};        // streams finished without reset (refills reset budget)
-    std::uint32_t consecutive_pings_{0};          // inbound PINGs since output was last drained
-    std::uint32_t consecutive_settings_{0};       // inbound non-ACK SETTINGS since output drained
+    std::uint32_t undrained_control_frames_{0};   // see max_undrained_control_frames
+    std::uint32_t peer_error_resets_{0};          // see max_peer_error_resets; never refilled
+    bool liveness_ping_outstanding_{false};
 };
 
 }  // namespace ruvia::detail

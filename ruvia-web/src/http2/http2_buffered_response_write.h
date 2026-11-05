@@ -18,16 +18,18 @@ class http_buffered_response_write_plan;
 }  // namespace ruvia
 
 namespace ruvia::detail {
+class http2_sans_io_session_engine;
 class http2_sans_io_stream_runtime_table;
 
 // Non-transport HTTP/2 buffered/file response driver. The session template owns
 // socket reads/writes and event dispatch; this object owns the single response
 // commit, DATA backpressure, the file body (through response_file_source), and
 // the typed terminal result chain. Keeping it non-template compiles that policy
-// once for plain and TLS sessions.
+// once for plain and TLS sessions. A stream it cannot complete is reset through
+// the owning session's single reset entry point.
 class http2_buffered_response_writer final {
 public:
-    http2_buffered_response_writer(ruvia::http2_connection& connection,
+    http2_buffered_response_writer(http2_sans_io_session_engine& session, ruvia::http2_connection& connection,
         http2_sans_io_stream_runtime_table& stream_runtimes, worker_signal& write_signal,
         http2_data_output_budget& output_budget, response_file_io file_io) noexcept;
 
@@ -48,6 +50,7 @@ private:
         std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream);
     void wake_writer() noexcept;
 
+    http2_sans_io_session_engine& session_;
     ruvia::http2_connection& connection_;
     http2_sans_io_stream_runtime_table& stream_runtimes_;
     worker_signal& write_signal_;

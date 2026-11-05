@@ -56,13 +56,23 @@ void connection_scanner::entry::touch() noexcept {
         last_active_ms_ = activity_now_ms();
     }
 }
+void connection_scanner::entry::note_write_progress() noexcept {
+    if (scanner_ != nullptr) {
+        last_active_ms_ = activity_now_ms();
+        write_progress_ms_ = last_active_ms_;
+    }
+}
 void connection_scanner::entry::set_phase(phase next_phase) noexcept {
     if (scanner_ == nullptr) {
         return;
     }
+    const bool write_started = next_phase == phase::writing && !write_pending();
     touch();
     if (phase_ != next_phase) {
         phase_started_ms_ = last_active_ms_;
+    }
+    if (write_started) {
+        write_progress_ms_ = last_active_ms_;
     }
     phase_ = next_phase;
     // A head read that completed before its cancel took effect returns the
@@ -85,6 +95,17 @@ connection_scanner::entry::phase_scope::~phase_scope() {
     entry_.phase_started_ms_ = phase_started_ms_;
     entry_.phase_ = phase_;
     entry_.reading_request_head_ = reading_request_head_;
+}
+connection_scanner::entry::write_scope::write_scope(entry& entry_value) noexcept
+    : entry_(entry_value) {
+    if (!entry_.write_pending()) {
+        entry_.note_write_progress();
+    }
+    ++entry_.write_scopes_;
+}
+connection_scanner::entry::write_scope::~write_scope() {
+    --entry_.write_scopes_;
+    entry_.touch();
 }
 bool connection_scanner::entry::enter_long_lived() noexcept {
     const bool draining = scanner_ != nullptr && scanner_->impl_->draining_;
@@ -374,7 +395,7 @@ bool connection_scanner::impl_type::active_since(const entry& entry_value, std::
     // A connection waiting for, or still reading, a request head has no
     // exchange; neither has an upgraded one between messages. Anything else
     // (a handshake, an admitted request, a response) is an exchange.
-    return entry_value.last_active_ms_ >= interval_start ||
+    return entry_value.last_active_ms_ >= interval_start || entry_value.write_pending() ||
            (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived);
 }
 void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
@@ -384,8 +405,10 @@ void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
             request_close(entry_value, close_deadline_after(now, options_.scan_interval_));
             return;
         }
-        // A stalled write cannot carry a graceful end (GOAWAY, close alert).
-        if (entry_value.phase_ != phase::writing && entry_value.has_drain_check()) {
+        // A stalled write cannot carry a graceful end (GOAWAY, close alert);
+        // a write still progressing is followed by the drain's own output.
+        if (entry_value.phase_ != phase::writing && !write_stalled(entry_value, now) &&
+            entry_value.has_drain_check()) {
             // The callback may retire the entry; record the request first.
             record_close_request(entry_value, close_deadline_after(now, connection_close_grace));
             entry_value.notify_drain();
@@ -416,6 +439,9 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
     if (entry_value.close_requested_) {
         return now >= entry_value.close_deadline_ms_;
     }
+    if (write_stalled(entry_value, now)) {
+        return true;
+    }
     // 活动时间独立采样，不能把配置的扫描间隔当成调度延迟的上界。
     const auto inactive_ms = now - entry_value.last_active_ms_;
     const auto phase_elapsed_ms = now - entry_value.phase_started_ms_;
@@ -427,13 +453,16 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
             return timeout_expired(options_.payload_read_timeout_, inactive_ms) ||
                    timeout_expired(options_.payload_read_completion_timeout_, phase_elapsed_ms);
         case phase::writing:
-            return timeout_expired(options_.write_timeout_, inactive_ms);
         case phase::long_lived:
             return false;
         case phase::idle:
         default:
             return timeout_expired(options_.idle_timeout_, inactive_ms);
     }
+}
+bool connection_scanner::impl_type::write_stalled(const entry& entry_value, std::int64_t now) const noexcept {
+    return entry_value.write_pending() &&
+           timeout_expired(options_.write_timeout_, now - entry_value.write_progress_ms_);
 }
 
 }  // namespace ruvia::detail

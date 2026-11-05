@@ -8,7 +8,7 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_set_cookie.h"
 
-#include "response/http_response_header_access.h"
+#include "response/http_response_header_storage.h"
 
 // Set-Cookie is the one response field that neither replaces nor appends by
 // field name: a second cookie for the same storage key (name, domain, path)

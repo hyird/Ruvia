@@ -21,7 +21,8 @@ namespace ruvia::detail {
 // One database alias's Redis-backed query-result cache (Redis builds only).
 class db_query_cache_state final {
 public:
-    db_query_cache_state(const redis_handle& redis, const db_cache_config_storage& config, std::string_view identity,
+    // `prefix` is the alias's db_cache_prefix().
+    db_query_cache_state(const redis_handle& redis, const db_cache_config_storage& config, std::pmr::string prefix,
         std::pmr::memory_resource* resource);
     ~db_query_cache_state();
     void close_now() noexcept;

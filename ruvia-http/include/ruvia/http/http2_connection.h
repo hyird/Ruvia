@@ -149,9 +149,8 @@ public:
     // limits, and returns zero for a server or unavailable client connection.
     [[nodiscard]] std::size_t available_request_streams(std::size_t local_limit) const noexcept;
 
-    // Submitted fields are encoded/owned before returning. If owner-lease
-    // allocation fails after HEADERS commit, cancellation follows the deferred
-    // release rules above and the original exception is rethrown.
+    // Submitted fields are encoded/owned before returning; a successful submission
+    // is leased to the owner until its terminal event or submit_reset().
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
         const http2_regular_request_head_view& request);
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
@@ -181,8 +180,6 @@ public:
     // a response head that later finds no slot gets peer_stream_limit_reached.
     // Commits a promise and returns the server request/storage lease used to
     // produce its response. Release or abandon it exactly like an incoming request.
-    // If materializing the lease fails after promise commit, the promised stream
-    // is cancelled using the deferred release rules above; the parent is unchanged.
     [[nodiscard]] std::variant<http2_request_head_event, http2_push_submit_error> submit_push_request(
         std::uint32_t associated_stream_id, http_push_request_view request);
 
@@ -232,6 +229,12 @@ public:
     // A PROTOCOL_ERROR reset may also be submitted for a malformed message after
     // both END_STREAM flags have closed the stream.
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
+    // Queues one PING (non-ACK) carrying an opaque payload distinct from the
+    // graceful-drain PING. Liveness is any received frame (the peer's ACK
+    // included); the ACK raises no event. While one is unacknowledged, further
+    // calls return accepted without queueing another frame. Returns closed after
+    // a connection error.
+    [[nodiscard]] http2_submit_status submit_ping();
     [[nodiscard]] http2_received_data_acknowledge_status acknowledge(http2_received_data_credit&& credit);
     // Payload bytes in serialized DATA frames still owned by the core output buffer.
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;

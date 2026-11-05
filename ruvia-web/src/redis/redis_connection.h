@@ -6,7 +6,9 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 
 #include <asio/io_context.hpp>
 #include <asio/ssl/context.hpp>
@@ -36,6 +38,11 @@ inline constexpr std::size_t redis_read_buffer_bytes = 8192;
 // similar-sized commands reuses one allocation while a single oversized
 // request is not pinned for the connection's lifetime.
 inline constexpr std::size_t redis_retained_write_buffer_bytes = std::size_t{64} * 1024;
+
+// A credential request (AUTH) is wiped from the write buffer once written, so
+// the retained buffer never holds a password after the write completes.
+enum class redis_request_content : bool { ordinary,
+    credential };
 
 // One Redis connection: the shared outbound transport plus the RESP request
 // and reply buffers. Pool slots and subscriptions each own one. Address-stable:
@@ -73,9 +80,12 @@ public:
     [[nodiscard]] std::pmr::string& write_buffer() noexcept {
         return write_buffer_;
     }
-    // Sends and then releases the serialized request.
-    task<void> write_request(const operation_timeout& timeout);
-    // Reads one complete reply, allocating its nodes from `resource`.
+    // Sends and then releases the serialized request, wiping it first when it
+    // carries a credential, whether or not the write succeeded.
+    task<void> write_request(
+        const operation_timeout& timeout, redis_request_content content = redis_request_content::ordinary);
+    // Reads one complete reply, allocating its nodes from `resource`. Throws
+    // redis_error(io_error) when the connection is or becomes closed.
     task<redis_value> read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource);
 
     void close() noexcept;
@@ -89,6 +99,9 @@ private:
     void ensure_reader();
     task<void> authenticate(const operation_timeout& connect_timeout,
         std::optional<std::chrono::milliseconds> command_timeout);
+    // One connection-setup command (AUTH, SELECT) and its reply.
+    task<redis_value> exchange_control_command(
+        std::span<const std::string_view> args, operation_timeout deadline, redis_request_content content);
 
     const redis_config_storage& config_;
     std::pmr::memory_resource* resource_;

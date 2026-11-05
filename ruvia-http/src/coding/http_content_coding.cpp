@@ -6,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -16,7 +16,7 @@
 
 #include "coding/http_content_codec.h"
 #include "request/http_request_access.h"
-#include "response/http_response_header_access.h"
+#include "response/http_response_header_storage.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,
@@ -79,46 +79,16 @@ std::optional<http_content_coding> http_content_coding_from_token(std::string_vi
 }  // namespace ruvia
 
 namespace ruvia::detail {
-namespace {
-
-// The one Content-Encoding list walk (RFC 9110 section 5.6.1): members are
-// comma-separated tokens; recipients ignore empty members, senders cannot
-// generate them. Returns false on invalid grammar, after which the visitor is
-// not called again.
-template <typename visitor_type>
-[[nodiscard]] bool visit_content_coding_members(
-    std::string_view value, http_field_list_role role, visitor_type&& visit) noexcept {
-    std::size_t begin = 0;
-    for (;;) {
-        const auto comma = value.find(',', begin);
-        const auto token = http_trim_ows(value.substr(
-            begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
-        if (token.empty()) {
-            if (role == http_field_list_role::sender) {
-                return false;
-            }
-        } else if (!is_valid_http_header_name(token)) {
-            return false;
-        } else {
-            visit(token);
-        }
-        if (comma == std::string_view::npos) {
-            return true;
-        }
-        begin = comma + 1;
-    }
-}
-
-}  // namespace
 
 void http_content_coding_field_parser::update(std::string_view value) noexcept {
     if (invalid_) {
         return;
     }
-    invalid_ = !visit_content_coding_members(value, http_field_list_role::recipient, [this](std::string_view token) noexcept {
+    // Content-Encoding members are tokens (RFC 9110 section 8.4.1).
+    invalid_ = http_visit_token_list(value, http_field_list_role::recipient, [this](std::string_view token) noexcept {
         const auto coding = http_content_coding_from_token(token);
         if (coding.has_value() && *coding == http_content_coding::identity) {
-            return;
+            return true;
         }
         if (codings_.size_ == max_content_codings) {
             // Keep scanning: later malformed members still invalidate the field.
@@ -131,7 +101,8 @@ void http_content_coding_field_parser::update(std::string_view value) noexcept {
         if (!coding.has_value()) {
             unknown_coding_ = true;
         }
-    });
+        return true;
+    }) != http_field_list_parse_status::ok;
 }
 
 http_content_coding_field_result http_content_coding_field_parser::finish() const noexcept {
@@ -148,7 +119,8 @@ http_content_coding_field_result http_content_coding_field_parser::finish() cons
 }
 
 bool is_valid_http_content_encoding_field_value(std::string_view value, http_field_list_role role) noexcept {
-    return visit_content_coding_members(value, role, [](std::string_view) noexcept {});
+    return http_visit_token_list(value, role, [](std::string_view) noexcept { return true; }) ==
+           http_field_list_parse_status::ok;
 }
 
 }  // namespace ruvia::detail
@@ -190,25 +162,11 @@ http_content_coding_field_result parse_http_content_coding_headers(
 
 http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
     detail::http_content_coding_field_parser parser;
-    if (!detail::request_has_known_header(request, detail::request_header_kind::content_encoding)) {
-        return parser.finish();
-    }
-    if (!detail::http_request_access::has_repeated_known_header(
-            request, detail::request_header_kind::content_encoding)) {
-        parser.update(
-            detail::request_known_header(request, detail::request_header_kind::content_encoding));
-        return parser.finish();
-    }
-    const auto headers = request.headers();
-    const auto last_index = detail::http_request_access::known_header_index(
-        request, detail::request_header_kind::content_encoding);
-    const auto limit = last_index <= headers.size() ? last_index : headers.size();
-    for (std::size_t i = 0; i < limit; ++i) {
-        if (detail::http_request_access::header_kind(request, i) ==
-            detail::request_header_kind::content_encoding) {
-            parser.update(headers[i].value());
-        }
-    }
+    (void)detail::http_request_access::visit_known_headers(
+        request, detail::request_header_kind::content_encoding, [&parser](std::string_view value) noexcept {
+            parser.update(value);
+            return true;
+        });
     return parser.finish();
 }
 
@@ -216,9 +174,10 @@ namespace {
 
 [[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_content_stage(
     http_content_coding coding, std::string_view input, http_content_decode_options options) {
+    // A zero-length coded representation carries no content: user agents treat
+    // it as empty rather than as a truncated coding stream. An out-of-range coding
+    // has no token and stays unsupported even for empty input.
     if (input.empty() && !http_content_coding_token(coding).empty()) {
-        // A zero-length coded representation carries no content: user agents
-        // treat it as empty rather than as a truncated coding stream.
         return std::pmr::string(detail::http_pmr_resource_or_default(options.resource_));
     }
     switch (coding) {

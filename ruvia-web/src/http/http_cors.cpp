@@ -55,8 +55,9 @@ void add_vary_tokens(http_response& response, const std::string_view* tokens, st
     return origin == "null" || ::ruvia::is_valid_http_serialized_origin(origin);
 }
 
-// Validate Origin, Access-Control-Request-Method and the complete
-// Access-Control-Request-Headers list in one pass over the request fields.
+// Validates Origin, Access-Control-Request-Method and the complete
+// Access-Control-Request-Headers list, and sizes the reflected header-name
+// list; reflect_cors_request_header_names then copies it in a second pass.
 struct cors_request_fields final {
     std::optional<std::string_view> origin_{};
     std::optional<std::string_view> requested_method_{};

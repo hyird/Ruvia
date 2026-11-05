@@ -7,6 +7,7 @@
 #include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_output_queue.h"
+#include "client/http_client_response_handoff.h"
 
 namespace ruvia::detail {
 class http_client_upload_state final {
@@ -25,8 +26,6 @@ public:
     // whether the response completed.
     std::exception_ptr failure_;
     bool content_released_{};
-    bool response_taken_{};
-    bool response_active_{};
-    ::ruvia::operation_scope response_scope_;
+    http_client_response_handoff response_;
 };
 }  // namespace ruvia::detail

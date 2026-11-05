@@ -565,13 +565,9 @@ public:
     }
 
     [[nodiscard]] task<void> drop_index() const {
-        auto* memory = resource();
-        detail::redis_orm_arguments_type args(memory);
-        args.reserve(2);
-        args.emplace_back("FT.DROPINDEX");
-        auto& name = args.emplace_back(mapping().prefix_);
-        name += ":idx";
-        return handle_.template command_mapped<void>(std::move(args), detail::redis_orm_status_result);
+        const auto memory = resource();
+        return handle_.template command_mapped<void>(
+            detail::compile_redis_drop_index(mapping(), memory), detail::redis_orm_status_result);
     }
 
 private:

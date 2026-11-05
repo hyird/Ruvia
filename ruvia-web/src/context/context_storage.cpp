@@ -1,9 +1,9 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/dotenv.h"
+#include "ruvia/web/streaming.h"
 
 #include "context/context_request_storage.h"
 #include "context/context_services.h"
-#include "http/streaming_access.h"
 #include "router/route_limits.h"
 #include "server/forwarded_headers.h"
 
@@ -149,7 +149,7 @@ bool detail::context_response_output::committed() const noexcept {
         return false;
     }
     if (const auto* stream = response_stream()) {
-        return detail::streaming_access::committed(stream->writer());
+        return stream->writer().committed();
     }
     return true;
 }

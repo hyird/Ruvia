@@ -4,7 +4,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/multipart_parser.h"
 
 #include "parser/mime_field_grammar.h"
@@ -12,44 +12,25 @@
 namespace ruvia {
 namespace {
 
-// Decodes a boundary parameter (token or quoted-string) into `decoded`; the
-// boundary rule itself is checked by multipart_boundary.
+// Decodes a validated boundary parameter (token or quoted-string) into
+// `decoded`; the boundary rule itself is checked by multipart_boundary.
 [[nodiscard]] std::optional<std::string_view> decode_multipart_boundary_parameter(
     std::string_view parameter, std::array<char, 70>& decoded) noexcept {
     std::size_t size = 0;
-    if (!parameter.empty() && parameter.front() == '"') {
-        if (parameter.size() < 2 || parameter.back() != '"') {
+    if (parameter.empty() || parameter.front() != '"') {
+        if (parameter.size() > decoded.size()) {
             return std::nullopt;
         }
-        parameter.remove_prefix(1);
-        parameter.remove_suffix(1);
-        for (std::size_t index = 0; index < parameter.size(); ++index) {
-            char byte = parameter[index];
-            if (byte == '\\') {
-                if (++index >= parameter.size()) {
-                    return std::nullopt;
-                }
-                byte = parameter[index];
-            } else if (byte == '"') {
-                return std::nullopt;
-            }
-            if (size >= decoded.size()) {
-                return std::nullopt;
-            }
-            decoded[size++] = byte;
-        }
-    } else {
-        if (parameter.empty()) {
-            return std::nullopt;
-        }
-        for (const char byte : parameter) {
-            if (!detail::http_mime_token_char(byte) || size >= decoded.size()) {
-                return std::nullopt;
-            }
-            decoded[size++] = byte;
-        }
+        return parameter;
     }
-
+    http_quoted_string_cursor cursor(parameter);
+    unsigned char byte = 0;
+    while (cursor.next(byte)) {
+        if (size >= decoded.size()) {
+            return std::nullopt;
+        }
+        decoded[size++] = static_cast<char>(byte);
+    }
     return std::string_view(decoded.data(), size);
 }
 
@@ -60,41 +41,29 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
             detail::http_header_token_before_parameters(content_type_value), "multipart/form-data")) {
         return multipart_boundary_parse_result::make_not_applicable();
     }
-    const auto media_end = content_type_value.find(';');
-    if (media_end == std::string_view::npos) {
-        return multipart_boundary_parse_result::make_failure();
-    }
-
     std::optional<multipart_boundary> boundary;
     std::array<char, 70> decoded{};
     detail::http_mime_parameter_names parameter_names;
-    const auto parameters = content_type_value.substr(media_end + 1);
-    std::size_t start = 0;
-    while (start <= parameters.size()) {
-        const auto end = start + http_find_unquoted_delimiter(parameters.substr(start), 0, ';');
-        const auto parameter = http_trim_ows(parameters.substr(start, end - start));
-        if (!parameter.empty()) {
-            std::string_view key;
-            std::string_view value;
-            if (!detail::http_parse_mime_parameter(parameter, key, value) || !parameter_names.record(key)) {
-                return multipart_boundary_parse_result::make_failure();
-            }
-            if (http_ascii_equals_ignore_case(key, "boundary")) {
-                const auto decoded_value = decode_multipart_boundary_parameter(value, decoded);
-                boundary = decoded_value.has_value() ? multipart_boundary::try_create(*decoded_value)
-                                                     : std::nullopt;
-                if (!boundary) {
-                    return multipart_boundary_parse_result::make_failure();
-                }
+    const bool valid = detail::http_all_parameters(content_type_value, [&](std::string_view parameter) {
+        if (parameter.empty()) {
+            return true;
+        }
+        std::string_view key;
+        std::string_view value;
+        if (!detail::http_parse_mime_parameter(parameter, key, value) || !parameter_names.record(key)) {
+            return false;
+        }
+        if (http_ascii_equals_ignore_case(key, "boundary")) {
+            const auto decoded_value = decode_multipart_boundary_parameter(value, decoded);
+            boundary = decoded_value.has_value() ? multipart_boundary::try_create(*decoded_value)
+                                                 : std::nullopt;
+            if (!boundary) {
+                return false;
             }
         }
-
-        if (end >= parameters.size()) {
-            break;
-        }
-        start = end + 1;
-    }
-    if (!boundary) {
+        return true;
+    });
+    if (!valid || !boundary) {
         return multipart_boundary_parse_result::make_failure();
     }
     return multipart_boundary_parse_result(std::move(*boundary));

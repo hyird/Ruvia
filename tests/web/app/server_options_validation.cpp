@@ -85,6 +85,39 @@ private:
     int* destroyed_;
 };
 
+// Destroying it re-enters the application lock through http_stats() and
+// workers(). It must not call stop(): on a stopped app that leaves a pending
+// stop which the next run() of the shared server fixture would consume.
+class reentrant_hook_target final {
+public:
+    explicit reentrant_hook_target(int& destroyed) noexcept
+        : destroyed_(&destroyed) {}
+
+    reentrant_hook_target(reentrant_hook_target&& other) noexcept
+        : destroyed_(std::exchange(other.destroyed_, nullptr)) {}
+
+    ~reentrant_hook_target() {
+        if (destroyed_ != nullptr) {
+            (void)ruvia::app().http_stats();
+            (void)ruvia::app().workers();
+            ++*destroyed_;
+        }
+    }
+
+    void operator()() const {}
+
+    ruvia::task<ruvia::http_response> operator()(ruvia::context& context, ruvia::http_error_info) const {
+        co_return context.text("error");
+    }
+
+    ruvia::task<ruvia::http_response> operator()(ruvia::context& context) const {
+        co_return context.text("not found");
+    }
+
+private:
+    int* destroyed_;
+};
+
 }  // namespace
 
 RUVIA_TEST(application_callback_replacement_retires_targets_outside_configuration_lock) {
@@ -102,6 +135,26 @@ RUVIA_TEST(application_callback_replacement_retires_targets_outside_configuratio
     RUVIA_CHECK_EQ(failure_destroyed, 1);
     app.on_connection_failure(nullptr);
     RUVIA_CHECK_EQ(failure_destroyed, 2);
+}
+
+RUVIA_TEST(clearing_hooks_and_fallbacks_retires_targets_outside_configuration_lock) {
+    int destroyed = 0;
+    auto& app = ruvia::app();
+    app.on_start(reentrant_hook_target(destroyed)).on_start(reentrant_hook_target(destroyed));
+    app.on_start(nullptr);
+    RUVIA_CHECK_EQ(destroyed, 2);
+
+    app.on_stop(reentrant_hook_target(destroyed));
+    app.on_stop(nullptr);
+    RUVIA_CHECK_EQ(destroyed, 3);
+
+    app.on_error(ruvia::http_error_handler(reentrant_hook_target(destroyed)));
+    app.on_error(nullptr);
+    RUVIA_CHECK_EQ(destroyed, 4);
+
+    app.on_not_found(ruvia::http_not_found_handler(reentrant_hook_target(destroyed)));
+    app.on_not_found(nullptr);
+    RUVIA_CHECK_EQ(destroyed, 5);
 }
 
 RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_construction) {

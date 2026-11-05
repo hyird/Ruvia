@@ -17,7 +17,7 @@
 #include "ruvia/http/http_status.h"
 
 #include "coding/http_content_length.h"
-#include "response/http_response_header_access.h"
+#include "response/http_response_header_storage.h"
 #include "server/http_date_cache.h"
 #include "util/http_wire_sink.h"
 
@@ -32,7 +32,7 @@ inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-E
         return std::nullopt;
     }
     http_content_length_state state;
-    if (state.parse_field(response_known_header_value(response, response_header_content_length)) !=
+    if (state.parse_field(http_response_header_state_access::known_header_value(response.headers(), response_header_content_length)) !=
         http_content_length_parse_status::ok) {
         throw http1_response_head_error("invalid explicit HTTP response Content-Length");
     }

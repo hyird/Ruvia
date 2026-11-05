@@ -6,13 +6,20 @@
 #include "ruvia/web/db/db_query.h"
 
 #include "db/db_pool.h"
-#include "db/db_pool_utils.h"
+#include "db/db_pool_dispatch.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache.h"
 #include "db/db_query_cache_state.h"
 #endif
 
 namespace ruvia::detail {
+namespace {
+
+[[noreturn]] void throw_db_plan_timeout(db_driver driver) {
+    throw db_error(db_error::code_type::timeout, driver, "database query timed out");
+}
+
+}  // namespace
 
 db_query_plan db_query_plan::prepare(const db_query& query, const db_query* count, const db_query_backend& backend) {
     const auto driver = db_pool_driver(backend.pool_);
@@ -56,11 +63,15 @@ task<db_rows> query_db_backend(const db_query_backend& backend, std::pmr::string
 template <bool with_count>
 task<db_query_result<with_count>> execute_db_query_plan(
     db_query_plan plan, db_query_backend backend, operation_options options) {
+    const auto driver = db_pool_driver(backend.pool_);
     const operation_timeout deadline_value(options.timeout_);
     std::array<std::optional<db_rows>, with_count ? 2 : 1> results;
     for (std::size_t index = 0; index < results.size(); ++index) {
         auto& step = index == 0 ? plan.first_ : plan.second_.value();
-        auto step_options = db_required_options(options, deadline_value);
+        if (deadline_value.expired()) {
+            throw_db_plan_timeout(driver);
+        }
+        auto step_options = db_remaining_options(options, deadline_value);
 #ifdef RUVIA_ENABLE_REDIS
         if (backend.cache_ != nullptr && step.cache_key_.has_value()) {
             // The cache runs only on pooled backends; a transaction never
@@ -83,7 +94,7 @@ task<db_query_result<with_count>> execute_db_query_plan(
             }
         }
         if (deadline_value.expired()) {
-            throw_db_query_timeout();
+            throw_db_plan_timeout(driver);
         }
     }
     if constexpr (with_count) {

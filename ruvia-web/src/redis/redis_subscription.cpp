@@ -4,7 +4,6 @@
 
 #include "ruvia/web/redis/redis_handle.h"
 
-#include "redis/redis_handle_helpers.h"
 #include "redis/redis_subscription_connection.h"
 
 namespace ruvia {
@@ -27,7 +26,7 @@ task<void> redis_subscription::send(
         throw std::invalid_argument("redis subscription requires at least one channel or pattern");
     }
     return make_scoped_operation(registration_.scope(),
-        connection_->send(detail::own_redis_args(command, names, connection_->resource())));
+        connection_->send(detail::make_owned_redis_command(connection_->resource(), command, names)));
 }
 
 task<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {

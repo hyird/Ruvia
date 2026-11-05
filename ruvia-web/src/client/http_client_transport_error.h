@@ -1,9 +1,11 @@
 #pragma once
 
+#include <exception>
 #include <string>
 #include <string_view>
 
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/worker_wait_result.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/client_tcp_transport.h"
@@ -44,24 +46,68 @@ namespace ruvia::detail {
                                                       : http_client_error::code_type::io_error;
 }
 
-[[nodiscard]] inline std::string_view http_client_abort_message(client_abort_reason reason) noexcept {
-    switch (reason) {
-        case client_abort_reason::timeout:
-            return "http client request timed out";
-        case client_abort_reason::cancelled:
-            return "http client request cancelled";
-        case client_abort_reason::none:
-        case client_abort_reason::closing:
+// The one message of each error class an exchange reports without a more
+// specific transport or protocol description.
+[[nodiscard]] inline std::string_view http_client_error_message(http_client_error::code_type code) noexcept {
+    switch (code) {
+        case http_client_error::code_type::timeout:
+            return "HTTP client request timed out";
+        case http_client_error::code_type::cancelled:
+            return "HTTP client request cancelled";
+        case http_client_error::code_type::closing:
+            return "HTTP client pool is closing";
+        case http_client_error::code_type::response_too_large:
+            return "HTTP response exceeds configured byte limit";
+        case http_client_error::code_type::tls_failed:
+            return "HTTP client TLS connection failed";
+        case http_client_error::code_type::io_error:
+            return "HTTP client connection failed";
+        case http_client_error::code_type::protocol_error:
+            return "HTTP protocol failed";
+        default:
+            return "HTTP request failed";
+    }
+}
+
+[[noreturn]] inline void throw_http_client_abort(client_abort_reason reason) {
+    const auto code = http_client_abort_error(reason);
+    throw http_client_error(code, http_client_error_message(code));
+}
+
+// A non-value wait outcome of the pool's slot, connect or HTTP/1 exchange
+// schedulers; `operation` names the wait in timeout and cancellation messages.
+[[noreturn]] inline void throw_http_client_wait_failure(worker_wait_status status, std::string_view operation) {
+    switch (status) {
+        case worker_wait_status::timed_out:
+            throw http_client_error(http_client_error::code_type::timeout, std::string(operation) + " timed out");
+        case worker_wait_status::cancelled:
+            throw http_client_error(http_client_error::code_type::cancelled, std::string(operation) + " cancelled");
+        case worker_wait_status::closed:
+            throw http_client_error(http_client_error::code_type::closing,
+                http_client_error_message(http_client_error::code_type::closing));
+        case worker_wait_status::value:
+        case worker_wait_status::worker_stopping:
             break;
     }
-    return "http client pool is closing";
+    std::terminate();
+}
+
+// True for a failure the transport reported as http_client_error(io_error).
+[[nodiscard]] inline bool is_http_client_io_error(const std::exception_ptr& failure) noexcept {
+    try {
+        std::rethrow_exception(failure);
+    } catch (const http_client_error& error) {
+        return error.code() == http_client_error::code_type::io_error;
+    } catch (...) {
+        return false;
+    }
 }
 
 // `eof_message` describes a peer close where the caller still needed bytes.
 [[noreturn]] inline void throw_http_client_transport_error(
     const client_transport_result& result, std::string_view eof_message) {
     if (result.status_ == client_transport_status::aborted) {
-        throw http_client_error(http_client_abort_error(result.abort_), http_client_abort_message(result.abort_));
+        throw_http_client_abort(result.abort_);
     }
     if (result.status_ == client_transport_status::eof) {
         throw http_client_error(http_client_error::code_type::io_error, eof_message);

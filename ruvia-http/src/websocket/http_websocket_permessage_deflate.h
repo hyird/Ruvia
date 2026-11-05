@@ -11,7 +11,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_request.h"
@@ -65,7 +65,6 @@ public:
                 return false;
             }
         } else if (!send_takeover_ && !deflater_->reset()) {
-            deflater_->rethrow_allocation_failure();
             return false;
         }
         return websocket_deflate_message(*deflater_, input, out, resource_);
@@ -85,7 +84,6 @@ public:
                 return websocket_inflate_result::error;
             }
         } else if (!receive_takeover_ && !inflater_->reset()) {
-            inflater_->rethrow_allocation_failure();
             return websocket_inflate_result::error;
         }
         return websocket_inflate_message(*inflater_, input, out, message_limit, resource_);
@@ -97,7 +95,6 @@ public:
     // The shared codecs already reset after every message.
     void discard_compression() {
         if (deflater_ != nullptr && !deflater_->reset()) {
-            deflater_->rethrow_allocation_failure();
             throw std::runtime_error("failed to reset discarded WebSocket compression");
         }
     }
@@ -117,50 +114,46 @@ private:
     bool receive_takeover_;
 };
 
-[[nodiscard]] constexpr bool websocket_deflate_negotiated(websocket_compression negotiation) noexcept {
-    return negotiation.enabled_;
-}
-
 // Decode RFC 7692 window parameters (8 through 15), including quoted tokens.
 // The negotiated send and receive bounds are independent of takeover policy.
 [[nodiscard]] inline std::optional<int> websocket_deflate_window_bits(
     std::string_view value) noexcept {
     value = http_trim_ows(value);
-    bool quoted = false;
-    if (!value.empty() && value.front() == '"') {
-        if (value.size() < 2 || value.back() != '"') {
-            return std::nullopt;
-        }
-        quoted = true;
-        value.remove_prefix(1);
-        value.remove_suffix(1);
-    }
-
     int parsed_value = 0;
     std::size_t digits = 0;
     bool leading_zero = false;
-    for (std::size_t i = 0; i < value.size(); ++i) {
-        auto ch = value[i];
-        if (quoted && ch == '\\') {
-            if (++i == value.size()) {
-                return std::nullopt;
-            }
-            ch = value[i];
-        } else if (ch == '"') {
-            return std::nullopt;
-        }
+    // RFC 7692 section 7.1.2 defines both max-window-bits parameters as
+    // decimal integers without leading zeroes. Apply that grammar after
+    // quoted-pair decoding as well as to tokens.
+    const auto append_digit = [&](unsigned char ch) noexcept {
         if (ch < '0' || ch > '9' || ++digits > 2) {
-            return std::nullopt;
+            return false;
         }
         if (digits == 1) {
             leading_zero = ch == '0';
         } else if (leading_zero) {
-            // RFC 7692 section 7.1.2 defines both max-window-bits
-            // parameters as decimal integers without leading zeroes. Apply
-            // that grammar after quoted-pair decoding as well as to tokens.
-            return std::nullopt;
+            return false;
         }
         parsed_value = parsed_value * 10 + (ch - '0');
+        return true;
+    };
+    if (!value.empty() && value.front() == '"') {
+        http_quoted_string_cursor quoted(value);
+        unsigned char byte = 0;
+        while (quoted.next(byte)) {
+            if (!append_digit(byte)) {
+                return std::nullopt;
+            }
+        }
+        if (!quoted.closed() || quoted.consumed() != value.size()) {
+            return std::nullopt;
+        }
+    } else {
+        for (const char ch : value) {
+            if (!append_digit(static_cast<unsigned char>(ch))) {
+                return std::nullopt;
+            }
+        }
     }
     return digits != 0 && parsed_value >= 8 && parsed_value <= 15 ? std::optional<int>(parsed_value) : std::nullopt;
 }
@@ -182,18 +175,13 @@ struct permessage_deflate_params final {
 // another extension or a malformed element; role policy is left to callers.
 [[nodiscard]] inline std::optional<permessage_deflate_params> parse_permessage_deflate_params(
     std::string_view element) noexcept {
-    const auto first_semicolon = http_find_unquoted_delimiter(element, 0, ';');
-    const auto name = http_trim_ows(element.substr(0, first_semicolon));
+    const auto name = http_header_token_before_parameters(element);
     if (!http_ascii_equals_ignore_case(name, "permessage-deflate")) {
         return std::nullopt;
     }
 
     permessage_deflate_params params;
-    std::size_t start = first_semicolon;
-    while (start < element.size()) {
-        ++start;
-        const auto end = start + http_find_unquoted_delimiter(element.substr(start), 0, ';');
-        const auto parameter = http_trim_ows(element.substr(start, end - start));
+    const bool valid = http_all_parameters(element, [&params](std::string_view parameter) noexcept {
         const auto equals = parameter.find('=');
         const bool has_value = equals != std::string_view::npos;
         const auto parameter_name = http_trim_ows(parameter.substr(0, equals));
@@ -205,52 +193,45 @@ struct permessage_deflate_params final {
                 if (http_ascii_equals_ignore_case(parameter_name, "server_max_window_bits")) {
                     // A missing or empty value fails window decoding.
                     if (params.server_max_window_bits_.has_value()) {
-                        return std::nullopt;
+                        return false;
                     }
                     params.server_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
-                    if (!params.server_max_window_bits_.has_value()) {
-                        return std::nullopt;
-                    }
-                    break;
+                    return params.server_max_window_bits_.has_value();
                 }
                 if (http_ascii_equals_ignore_case(parameter_name, "client_max_window_bits")) {
                     if (params.client_max_window_bits_present_) {
-                        return std::nullopt;
+                        return false;
                     }
                     params.client_max_window_bits_present_ = true;
                     if (has_value) {
                         params.client_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
-                        if (!params.client_max_window_bits_.has_value()) {
-                            return std::nullopt;
-                        }
+                        return params.client_max_window_bits_.has_value();
                     }
-                    break;
+                    return true;
                 }
-                return std::nullopt;
+                return false;
             case 26:
                 if (http_ascii_equals_ignore_case(parameter_name, "server_no_context_takeover")) {
                     if (params.server_no_context_takeover_ || has_value) {
-                        return std::nullopt;
+                        return false;
                     }
                     params.server_no_context_takeover_ = true;
-                    break;
+                    return true;
                 }
                 if (http_ascii_equals_ignore_case(parameter_name, "client_no_context_takeover")) {
                     if (params.client_no_context_takeover_ || has_value) {
-                        return std::nullopt;
+                        return false;
                     }
                     params.client_no_context_takeover_ = true;
-                    break;
+                    return true;
                 }
-                return std::nullopt;
+                return false;
             default:
                 // Includes an empty parameter, such as a trailing ';'.
-                return std::nullopt;
+                return false;
         }
-
-        start = end;
-    }
-    return params;
+    });
+    return valid ? std::optional(params) : std::nullopt;
 }
 
 // Server role: an offered client_max_window_bits, with or without a value, is
@@ -285,37 +266,27 @@ struct permessage_deflate_params final {
 [[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(
     const http_request& request, websocket_deflate_config config) {
     validate_websocket_deflater_config(config.deflater_);
-    if (!config.enabled_ ||
-        !request_has_known_header(request, request_header_kind::sec_websocket_extensions)) {
+    if (!config.enabled_) {
         return (websocket_compression{});
     }
     // RFC 6455 §9.1: extension declarations may be split across multiple
     // Sec-WebSocket-Extensions field lines, which RFC 9110 §5.3 makes equivalent to
-    // one comma-joined list. request.header() returns only the last line, so scan
-    // every line in order, validating the whole extension list while honoring the
-    // first acceptable permessage-deflate offer.
-    bool present = false;
+    // one comma-joined list. Scan every line in order, validating the whole
+    // extension list while honoring the first acceptable permessage-deflate offer.
     bool has_extension = false;
     websocket_compression negotiated{};
-    const auto headers = request.headers();
-    const auto last_index =
-        http_request_access::known_header_index(request, request_header_kind::sec_websocket_extensions);
-    const auto limit = std::min(headers.size(), last_index);
-    for (std::size_t i = 0; i < limit; ++i) {
-        if (http_request_access::header_kind(request, i) !=
-            request_header_kind::sec_websocket_extensions) {
-            continue;
-        }
-        present = true;
-        const auto value = headers[i].value();
-        if (!append_websocket_extension_list(value, has_extension)) {
-            return (websocket_compression{});
-        }
-        if (!websocket_deflate_negotiated(negotiated)) {
-            negotiated = websocket_scan_deflate_offers(value, config.context_takeover_);
-        }
-    }
-    return (!present || has_extension) ? negotiated : (websocket_compression{});
+    const bool valid = http_request_access::visit_known_headers(request,
+        request_header_kind::sec_websocket_extensions,
+        [&has_extension, &negotiated, &config](std::string_view value) noexcept {
+            if (!append_websocket_extension_list(value, has_extension)) {
+                return false;
+            }
+            if (!negotiated.enabled_) {
+                negotiated = websocket_scan_deflate_offers(value, config.context_takeover_);
+            }
+            return true;
+        });
+    return valid && has_extension ? negotiated : (websocket_compression{});
 }
 
 }  // namespace ruvia::detail

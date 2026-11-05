@@ -89,45 +89,14 @@ namespace {
     return out;
 }
 
-[[nodiscard]] std::string_view default_error_code_value(http_status_code status) noexcept {
-    switch (status.value()) {
-        case http_status::bad_request.value():
-            return "bad_request";
-        case http_status::unauthorized.value():
-            return "unauthorized";
-        case http_status::forbidden.value():
-            return "forbidden";
-        case http_status::not_found.value():
-            return "not_found";
-        case http_status::method_not_allowed.value():
-            return "method_not_allowed";
-        case http_status::conflict.value():
-            return "conflict";
-        case http_status::precondition_failed.value():
-            return "precondition_failed";
-        case http_status::content_too_large.value():
-            return "content_too_large";
-        case http_status::range_not_satisfiable.value():
-            return "range_not_satisfiable";
-        case http_status::expectation_failed.value():
-            return "expectation_failed";
-        case http_status::unprocessable_content.value():
-            return "unprocessable_content";
-        case http_status::too_many_requests.value():
-            return "too_many_requests";
-        case http_status::request_header_fields_too_large.value():
-            return "request_header_fields_too_large";
-        case http_status::internal_server_error.value():
-            return "internal_error";
-        case http_status::not_implemented.value():
-            return "not_implemented";
-        case http_status::service_unavailable.value():
-            return "service_unavailable";
-        case http_status::http_version_not_supported.value():
-            return "http_version_not_supported";
-        default:
-            return status.is_server_error() ? "internal_error" : "bad_request";
-    }
+// `error` is already normalized.
+[[nodiscard]] http_response make_normalized_error_response(
+    std::pmr::memory_resource* resource, http_error_info error) {
+    http_response response(resource);
+    response.status(error.status());
+    response.header_stable_view("Content-Type", "application/problem+json");
+    response.owned_body(serialize_error_response(error, resource));
+    return response;
 }
 
 }  // namespace
@@ -214,7 +183,44 @@ http_error_info http_error::info() const& noexcept {
 }
 
 std::string_view default_error_code(http_status_code status) noexcept {
-    return default_error_code_value(status);
+    switch (status.value()) {
+        case http_status::bad_request.value():
+            return "bad_request";
+        case http_status::unauthorized.value():
+            return "unauthorized";
+        case http_status::forbidden.value():
+            return "forbidden";
+        case http_status::not_found.value():
+            return "not_found";
+        case http_status::method_not_allowed.value():
+            return "method_not_allowed";
+        case http_status::conflict.value():
+            return "conflict";
+        case http_status::precondition_failed.value():
+            return "precondition_failed";
+        case http_status::content_too_large.value():
+            return "content_too_large";
+        case http_status::range_not_satisfiable.value():
+            return "range_not_satisfiable";
+        case http_status::expectation_failed.value():
+            return "expectation_failed";
+        case http_status::unprocessable_content.value():
+            return "unprocessable_content";
+        case http_status::too_many_requests.value():
+            return "too_many_requests";
+        case http_status::request_header_fields_too_large.value():
+            return "request_header_fields_too_large";
+        case http_status::internal_server_error.value():
+            return "internal_error";
+        case http_status::not_implemented.value():
+            return "not_implemented";
+        case http_status::service_unavailable.value():
+            return "service_unavailable";
+        case http_status::http_version_not_supported.value():
+            return "http_version_not_supported";
+        default:
+            return status.is_server_error() ? "internal_error" : "bad_request";
+    }
 }
 
 std::string exception_text(const std::exception_ptr& exception) {
@@ -234,15 +240,12 @@ std::string exception_text(const std::exception_ptr& exception) {
 
 http_response detail::make_default_error_response(
     std::pmr::memory_resource* resource, http_error_info error) {
-    error = normalize_http_error_info(error);
+    return make_normalized_error_response(resource, normalize_http_error_info(error));
+}
 
-    http_response response(resource);
-    response.status(error.status());
-    response.header_stable_view("Content-Type", "application/problem+json");
-
-    auto body = serialize_error_response(error, resource);
-    response.owned_body(std::move(body));
-    return response;
+http_response detail::make_route_not_found_response(std::pmr::memory_resource* resource) {
+    return make_default_error_response(
+        resource, http_error_info({.status_ = http_status::not_found, .message_ = "route not found"}));
 }
 
 // Running the application's error handler, or the default response when there
@@ -270,7 +273,7 @@ task<http_response> detail::invoke_error_handler(
         }
     }
 
-    co_return make_default_error_response(context_value.arena(), error);
+    co_return make_normalized_error_response(context_value.arena(), error);
 }
 
 }  // namespace ruvia

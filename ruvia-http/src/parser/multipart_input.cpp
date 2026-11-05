@@ -1,11 +1,10 @@
 #include <algorithm>
+#include <cstring>
 #include <utility>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/multipart_parser.h"
-
-#include "util/http_text_overlap.h"
-#include "util/pmr_string.h"
 
 // How a multipart parser's input is held: either a whole borrowed buffer the
 // caller owns, or a streaming buffer the parser appends to and compacts as it
@@ -105,11 +104,26 @@ void multipart_input_lifecycle::consume(std::size_t bytes_value) noexcept {
     }
 }
 
+// A fully consumed buffer is cleared outright; otherwise the unconsumed tail
+// moves to the front only once the consumed prefix passes the threshold, so
+// steady streaming amortizes the move instead of shifting on every consume.
 void multipart_input_lifecycle::compact_consumed_prefix() {
     auto* owned = owned_bytes();
-    if (owned != nullptr) {
-        detail::compact_consumed_prefix(*owned, offset_, compact_consumed_prefix_bytes);
+    if (owned == nullptr) {
+        return;
     }
+    if (offset_ >= owned->size()) {
+        owned->clear();
+        offset_ = 0;
+        return;
+    }
+    if (offset_ < compact_consumed_prefix_bytes) {
+        return;
+    }
+    const auto remaining = owned->size() - offset_;
+    std::memmove(owned->data(), owned->data() + offset_, remaining);
+    owned->resize(remaining);
+    offset_ = 0;
 }
 
 }  // namespace ruvia::detail

@@ -14,39 +14,6 @@
 
 namespace ruvia::detail {
 
-struct hpack_static_index final {
-    static constexpr std::uint32_t authority = 1;
-    static constexpr std::uint32_t method_get = 2;
-    static constexpr std::uint32_t method_post = 3;
-    static constexpr std::uint32_t path_root = 4;
-    static constexpr std::uint32_t path_index_html = 5;
-    static constexpr std::uint32_t scheme_http = 6;
-    static constexpr std::uint32_t scheme_https = 7;
-    static constexpr std::uint32_t status_ok = 8;
-    static constexpr std::uint32_t status_no_content = 9;
-    static constexpr std::uint32_t status_partial_content = 10;
-    static constexpr std::uint32_t status_not_modified = 11;
-    static constexpr std::uint32_t status_bad_request = 12;
-    static constexpr std::uint32_t status_not_found = 13;
-    static constexpr std::uint32_t status_internal_server_error = 14;
-    static constexpr std::uint32_t accept_ranges = 18;
-    static constexpr std::uint32_t access_control_allow_origin = 20;
-    static constexpr std::uint32_t allow = 22;
-    static constexpr std::uint32_t cache_control = 24;
-    static constexpr std::uint32_t content_encoding = 26;
-    static constexpr std::uint32_t content_length = 28;
-    static constexpr std::uint32_t content_range = 30;
-    static constexpr std::uint32_t content_type = 31;
-    static constexpr std::uint32_t date = 33;
-    static constexpr std::uint32_t etag = 34;
-    static constexpr std::uint32_t expect = 35;
-    static constexpr std::uint32_t last_modified = 44;
-    static constexpr std::uint32_t location = 46;
-    static constexpr std::uint32_t server = 54;
-    static constexpr std::uint32_t set_cookie = 55;
-    static constexpr std::uint32_t vary = 59;
-};
-
 // HPACK literal representation prefixes (RFC 7541 §6.2).
 inline constexpr std::uint8_t hpack_literal_without_indexing = 0x00;  // §6.2.2
 inline constexpr std::uint8_t hpack_literal_never_indexed = 0x10;     // §6.2.3

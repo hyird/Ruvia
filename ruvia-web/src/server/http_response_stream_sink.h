@@ -61,7 +61,7 @@ public:
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability,
-        std::pmr::memory_resource* inbound_resource = nullptr) noexcept
+        std::pmr::memory_resource& inbound_resource) noexcept
         : stream_(stream),
           head_(head),
           trailers_(memory.resource()),
@@ -74,13 +74,13 @@ public:
           request_body_(request_body),
           connection_plan_(plan.request_connection_plan().require_close()),
           compression_(memory.resource(), codecs, response_coding, response_coding_availability),
-          inbound_resource_(inbound_resource != nullptr ? inbound_resource : memory.resource()) {}
+          inbound_resource_(&inbound_resource) {}
 
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
         connection_scanner::entry&, worker_handle&&, const http_request&, const cors_options*,
         http1_response_stream_plan, http1_response_stream_plan,
         lazy_buffered_body<stream_type>&, http_response_coding_selection,
-        http_response_coding_availability, std::pmr::memory_resource* = nullptr) = delete;
+        http_response_coding_availability, std::pmr::memory_resource&) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -169,6 +169,11 @@ private:
         state_.mark_aborted();
     }
 
+    [[noreturn]] void fail_write(const std::error_code& error, const char* what) {
+        mark_write_failure(error);
+        throw inbound_transport_error(error, what);
+    }
+
     void bind_context(context* context_value) {
         interim_output_ = context_value != nullptr ? context_access::interim_output(*context_value) : nullptr;
         state_.bind_context(context_value);
@@ -184,8 +189,25 @@ private:
     [[nodiscard]] auto write_to_stream(const buffers_type& buffers) {
         return ruvia::async_asio([this, &buffers](auto handler) mutable {
             ensure_peer_writable();
-            asio::async_write(stream_, buffers, http_write_progress(scanner_entry_), std::move(handler));
+            asio::async_write(stream_, buffers, connection_write_progress(scanner_entry_), std::move(handler));
         });
+    }
+
+    // Copies a small TLS frame into the head buffer so it leaves as one
+    // record; otherwise `buffers` stays the equivalent gather write. Plain TCP
+    // sends the gather write as one segment already.
+    void coalesce_tls_frame(std::array<asio::const_buffer, 3>& buffers, std::string_view first,
+        std::string_view second, std::string_view third) noexcept {
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            return;
+        }
+        if (first.size() + second.size() + third.size() > response_head_retained_heap_bytes) {
+            return;
+        }
+        head_.reset();
+        if (try_coalesce_tls_frame(head_, {first, second, third})) {
+            buffers = {asio::buffer(head_.view()), asio::const_buffer{}, asio::const_buffer{}};
+        }
     }
 
     void start_peer_monitor() {
@@ -250,12 +272,10 @@ private:
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);
-            const auto completion = co_await write_to_stream(asio::buffer(head_.view()));
-            ec = completion.error_code();
+            ec = (co_await write_to_stream(asio::buffer(head_.view()))).error_code();
         }
         if (ec) {
-            mark_write_failure(ec);
-            throw inbound_transport_error(ec, "failed to write HTTP response stream head");
+            fail_write(ec, "failed to write HTTP response stream head");
         }
     }
 
@@ -295,65 +315,24 @@ private:
             co_return;
         }
 
+        const http1_chunk_header chunk_header(chunk.size());
+        std::array<asio::const_buffer, 3> buffers{};
         if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
-            std::error_code raw_ec;
-            {
-                const connection_scanner::entry::phase_scope write_phase(
-                    scanner_entry_, connection_scanner::phase::writing);
-                const auto completion = co_await write_to_stream(asio::buffer(chunk));
-                raw_ec = completion.error_code();
-            }
-            if (raw_ec) {
-                mark_write_failure(raw_ec);
-                throw inbound_transport_error(raw_ec, "failed to write HTTP response stream body");
-            }
-            co_return;
+            buffers[0] = asio::buffer(chunk);
+        } else {
+            buffers = {asio::buffer(chunk_header.view()), asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
+            coalesce_tls_frame(buffers, chunk_header.view(), chunk, http1_chunk_data_terminator);
         }
-
-        const http1_chunk_header chunk_header(chunk.size());
-        std::error_code write_ec;
-        if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
-            const auto frame_size =
-                chunk_header.view().size() + chunk.size() + http1_chunk_data_terminator.size();
-            if (frame_size <= response_head_retained_heap_bytes) {
-                bool coalesced = false;
-                try {
-                    head_.reset();
-                    head_.reserve_additional(frame_size);
-                    head_.append(chunk_header.view());
-                    head_.append(chunk);
-                    head_.append(http1_chunk_data_terminator);
-                    coalesced = true;
-                } catch (...) {
-                }
-                if (coalesced) {
-                    {
-                        const connection_scanner::entry::phase_scope write_phase(
-                            scanner_entry_, connection_scanner::phase::writing);
-                        const auto completion = co_await write_to_stream(asio::buffer(head_.view()));
-                        write_ec = completion.error_code();
-                    }
-                    if (write_ec) {
-                        mark_write_failure(write_ec);
-                        throw inbound_transport_error(write_ec, "failed to write HTTP response stream body");
-                    }
-                    co_return;
-                }
-            }
-        }
-        std::array<asio::const_buffer, 3> buffers{asio::buffer(chunk_header.view()),
-            asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
+        std::error_code ec;
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);
-            const auto completion = co_await write_to_stream(buffers);
-            write_ec = completion.error_code();
+            ec = (co_await write_to_stream(buffers)).error_code();
         }
-        if (write_ec) {
-            mark_write_failure(write_ec);
-            throw inbound_transport_error(write_ec, "failed to write HTTP response stream body");
+        if (ec) {
+            fail_write(ec, "failed to write HTTP response stream body");
         }
     }
 
@@ -399,48 +378,17 @@ private:
 
         // The protocol primitive owns the last-chunk and trailer-section delimiters;
         // this runtime layer only submits their byte views to the socket.
-        std::error_code ec;
-        if constexpr (!std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
-            const auto end_frame_size =
-                http1_last_chunk_prefix.size() + trailers_.size() + http1_trailer_section_terminator.size();
-            if (end_frame_size <= response_head_retained_heap_bytes) {
-                bool coalesced = false;
-                try {
-                    head_.reset();
-                    head_.reserve_additional(end_frame_size);
-                    head_.append(http1_last_chunk_prefix);
-                    head_.append(trailers_);
-                    head_.append(http1_trailer_section_terminator);
-                    coalesced = true;
-                } catch (...) {
-                }
-                if (coalesced) {
-                    {
-                        const connection_scanner::entry::phase_scope write_phase(
-                            scanner_entry_, connection_scanner::phase::writing);
-                        const auto completion = co_await write_to_stream(asio::buffer(head_.view()));
-                        ec = completion.error_code();
-                    }
-                    if (ec) {
-                        mark_write_failure(ec);
-                        throw inbound_transport_error(ec, "failed to write HTTP response stream end");
-                    }
-                    state_.mark_ended();
-                    co_return;
-                }
-            }
-        }
         std::array<asio::const_buffer, 3> buffers{asio::buffer(http1_last_chunk_prefix),
             asio::buffer(trailers_), asio::buffer(http1_trailer_section_terminator)};
+        coalesce_tls_frame(buffers, http1_last_chunk_prefix, trailers_, http1_trailer_section_terminator);
+        std::error_code ec;
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);
-            const auto completion = co_await write_to_stream(buffers);
-            ec = completion.error_code();
+            ec = (co_await write_to_stream(buffers)).error_code();
         }
         if (ec) {
-            mark_write_failure(ec);
-            throw inbound_transport_error(ec, "failed to write HTTP response stream end");
+            fail_write(ec, "failed to write HTTP response stream end");
         }
         state_.mark_ended();
     }

@@ -6,7 +6,6 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
-#include "ruvia/web/detail/util/registration_resource.h"
 
 #include "router/path_segments.h"
 #include "router/router_impl.h"
@@ -17,22 +16,14 @@ using namespace detail;
 
 namespace {
 
+// app_configuration already normalized, null-checked and de-duplicated the prefixes.
 template <typename stored_type, typename registration_type>
 void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<const registration_type> handlers) {
     auto* const resource = stored.get_allocator().resource();
     std::pmr::vector<stored_type> normalized(resource);
     normalized.reserve(handlers.size());
     for (const auto& registration : handlers) {
-        if (registration.handler_ == nullptr) {
-            throw std::invalid_argument("fallback handler must not be null");
-        }
-        const auto prefix = detail::normalize_fallback_prefix(registration.prefix_);
-        for (const auto& existing : normalized) {
-            if (detail::fallback_prefixes_equivalent(existing.prefix_, prefix)) {
-                throw std::invalid_argument("duplicate fallback prefix");
-            }
-        }
-        normalized.emplace_back(resource, prefix, registration.handler_);
+        normalized.emplace_back(resource, registration.prefix_, registration.handler_);
     }
     // Deepest prefix first: selection is a first-match scan. A nested scope
     // always has more segments; distinct scopes of equal depth cannot nest, so
@@ -47,10 +38,10 @@ void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<co
 
 detail::router::router(std::pmr::memory_resource* plan_resource)
     : plan_(make_pmr_object<compiled_route_plan>(plan_resource, plan_resource)),
-      route_hashes_(registration_resource()),
-      route_middleware_descriptors_(registration_resource()),
-      route_middleware_ranges_(registration_resource()),
-      global_middleware_descriptors_(registration_resource()) {}
+      route_hashes_(process_resource()),
+      route_middleware_descriptors_(process_resource()),
+      route_middleware_ranges_(process_resource()),
+      global_middleware_descriptors_(process_resource()) {}
 
 detail::router::~router() = default;
 

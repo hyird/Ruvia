@@ -110,6 +110,8 @@ public:
     // from its owner or from a thread currently dispatching its stop hooks
     // throws logic_error instead of waiting on itself.
     void join();
+    // The first failure, if any. Reading it takes ownership: destruction no
+    // longer reports a failure that was read here.
     [[nodiscard]] std::exception_ptr failure() const noexcept;
     [[nodiscard]] worker_runtime_state state() const noexcept;
     [[nodiscard]] asio::io_context& io_context() noexcept;
@@ -119,6 +121,8 @@ private:
     friend class worker_group;
     friend struct detail::event_loop_state;
     [[nodiscard]] worker_runtime_context& context() & noexcept;
+    // The first failure without taking ownership of it, for comparisons.
+    [[nodiscard]] std::exception_ptr recorded_failure() const noexcept;
     void bind_group(worker_group& group);
     void unbind_group(worker_group& group) noexcept;
 

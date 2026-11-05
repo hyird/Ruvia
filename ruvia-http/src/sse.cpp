@@ -7,42 +7,24 @@
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_number_format.h"
-
-#include "util/http_utf8.h"
+#include "ruvia/http/http_utf8.h"
 
 namespace ruvia {
 namespace {
 
-[[nodiscard]] std::size_t sse_data_encoded_size(std::string_view data) noexcept {
-    std::size_t total = 0;
+// Splits `data` at CR, LF or CRLF and passes each line to `visitor`; the
+// sizing pass and the encoder share this one line rule.
+template <typename visitor_type>
+void visit_sse_data_lines(std::string_view data, visitor_type&& visitor) {
     while (true) {
         const auto next_value = data.find_first_of("\r\n");
-        const auto line_size = next_value == std::string_view::npos ? data.size() : next_value;
-        total += 6U + line_size + 1U;
+        visitor(next_value == std::string_view::npos ? data : data.substr(0, next_value));
         if (next_value == std::string_view::npos) {
-            return total;
+            return;
         }
         auto advance = next_value + 1U;
         if (data[next_value] == '\r' && next_value + 1U < data.size() && data[next_value + 1U] == '\n') {
             advance = next_value + 2U;
-        }
-        data.remove_prefix(advance);
-    }
-}
-
-void append_sse_data(std::pmr::string& frame, std::string_view data) {
-    while (true) {
-        const auto next_value = data.find_first_of("\r\n");
-        const auto line = next_value == std::string_view::npos ? data : data.substr(0, next_value);
-        frame.append("data: ");
-        frame.append(line.data(), line.size());
-        frame.push_back('\n');
-        if (next_value == std::string_view::npos) {
-            return;
-        }
-        auto advance = next_value + 1;
-        if (data[next_value] == '\r' && next_value + 1 < data.size() && data[next_value + 1] == '\n') {
-            advance = next_value + 2;
         }
         data.remove_prefix(advance);
     }
@@ -84,7 +66,9 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
         total_size += 7U + retry_digits.size() + 1U;
     }
     if (message.data_.has_value()) {
-        total_size += sse_data_encoded_size(message.data_->view());
+        visit_sse_data_lines(message.data_->view(), [&total_size](std::string_view line) noexcept {
+            total_size += 6U + line.size() + 1U;
+        });
     }
 
     std::pmr::string frame(detail::http_pmr_resource_or_default(options.resource_));
@@ -108,7 +92,11 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
         frame.push_back('\n');
     }
     if (message.data_.has_value()) {
-        append_sse_data(frame, message.data_->view());
+        visit_sse_data_lines(message.data_->view(), [&frame](std::string_view line) {
+            frame.append("data: ");
+            frame.append(line.data(), line.size());
+            frame.push_back('\n');
+        });
     }
     frame.push_back('\n');
     return frame;

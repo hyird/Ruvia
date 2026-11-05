@@ -8,16 +8,16 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_utf8.h"
 
-#include "util/http_text_overlap.h"
-#include "util/http_utf8.h"
-#include "websocket/http_websocket_close_payload.h"
 #include "websocket/http_websocket_frame_reader.h"
 #include "websocket/http_websocket_inbound_assembler.h"
 #include "websocket/http_websocket_permessage_deflate.h"
+#include "websocket/websocket_close_payload.h"
 
 namespace ruvia {
 
@@ -87,7 +87,7 @@ public:
             throw std::invalid_argument("WebSocket client connection requires a mask key generator");
         }
         validate_websocket_deflater_config(options.deflater_);
-        if (detail::websocket_deflate_negotiated(compression)) {
+        if (compression.enabled_) {
             const bool server = role_ == websocket_connection_role::server;
             const bool send_takeover =
                 !(server ? compression.server_no_context_takeover_ : compression.client_no_context_takeover_);
@@ -132,7 +132,7 @@ public:
     void append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1 = false,
         ws_payload_storage storage = ws_payload_storage::copy) {
         std::optional<std::pmr::string> owned_payload;
-        if (detail::http_text_overlaps(payload_value, {out_buffer_.data(), out_buffer_.size() + 1})) {
+        if (detail::http_text_aliases_string(payload_value, out_buffer_)) {
             // output_plan() exposes a borrowed view. Copy only for this aliasing
             // case so reserve() below cannot invalidate its own append source; the
             // copy dies here, so it cannot be borrowed either.
@@ -227,7 +227,7 @@ public:
         if (!data_frame && !control_frame) {
             return websocket_frame_submit_status::invalid_opcode;
         }
-        if (data_frame && detail::websocket_message_exceeds_limit(payload_value.size(), message_limit_)) {
+        if (data_frame && message_limit_.exceeds(payload_value.size())) {
             return websocket_frame_submit_status::message_too_large;
         }
         if (opcode == websocket_opcode::text && !detail::is_valid_utf8(payload_value)) {

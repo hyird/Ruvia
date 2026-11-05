@@ -35,6 +35,7 @@ public:
     void rethrow_failure() const;
 
 private:
+    friend void register_tls_policy_indexes();
     static void new_context(void* parent, void*, CRYPTO_EX_DATA*, int index, long, void*) noexcept;
     static thread_local native_tls_context_scope* current_;
     std::string_view host_;

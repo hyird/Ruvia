@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "client/client_host_resolver.h"
-#include "db/db_pool_utils.h"
+#include "db/db_pool_dispatch.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache_state.h"
 #include "redis/redis_registry.h"
@@ -102,8 +102,8 @@ void detail::db_registry::attach_cache(std::size_t index, const worker_handle& w
     if (redis.worker().id() != worker_value.id()) {
         throw std::invalid_argument("database query cache Redis capability must belong to the same worker");
     }
-    const auto identity = db_cache_scope(policy.key_prefix_, alias, config, resource_);
-    entries_[index].cache_ = make_pmr_object<db_query_cache_state>(resource_, redis, policy, identity, resource_);
+    auto prefix = db_cache_prefix(policy.key_prefix_, alias, config, resource_);
+    entries_[index].cache_ = make_pmr_object<db_query_cache_state>(resource_, redis, policy, std::move(prefix), resource_);
 }
 #endif
 

@@ -33,7 +33,6 @@ class redis_handle;
 namespace detail {
 class redis_client_runtime;
 class redis_client_state;
-struct redis_command_executor;
 class redis_pool;
 struct request_io_metrics;
 struct redis_orm_script;
@@ -476,6 +475,8 @@ public:
 
     // 单次租约没有可依赖的前序写入历史；WAIT/WAITAOF 在此同步拒绝。
     // 将写入与屏障合并到同一非事务 pipeline，参见 pipeline()。
+    // XREAD/XREADGROUP 在 STREAMS 前只接受 COUNT、BLOCK 及 XREADGROUP 的 CLAIM、NOACK；
+    // 含 BLOCK 时走阻塞池，其他选项同步抛出 std::invalid_argument。
     [[nodiscard]] task<redis_value> command(std::span<const std::string_view> args) const;
     task<redis_value> command(
         std::initializer_list<std::string_view> args) const = delete;
@@ -800,9 +801,20 @@ private:
         return make_scoped_operation(registration_.scope(), std::move(task_value));
     }
 
+    // `reply_timeout` starts when the command is written (see redis_pool).
+    [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command,
+        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt) const;
+
+    // One scoped pooled command whose reply `mapper` decodes in the handle's
+    // memory domain, with the map_redis_command mapper contract.
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command,
+        mapper_type mapper, std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt) const {
+        return scoped(detail::map_redis_command<result_type>(
+            execute(pool, std::move(command), reply_timeout), resource_, std::move(mapper)));
+    }
+
     static void expire_capability(void* target) noexcept;
-    [[nodiscard]] detail::redis_command_executor executor() const;
-    [[nodiscard]] detail::redis_command_executor executor(detail::redis_pool& pool) const;
     [[nodiscard]] detail::redis_pool& pool() const noexcept;
     [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
     detail::redis_client_runtime* runtime_;

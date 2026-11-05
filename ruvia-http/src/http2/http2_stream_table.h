@@ -14,6 +14,7 @@
 #include "http2/http2_local_settings.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_stream_state.h"
+#include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
@@ -104,12 +105,8 @@ public:
         }
         auto stream = make_http_pmr_object<http2_stream_state>(resource_, stream_id, resource_);
         stream->set_send_window(peer_initial_window_size);
-        if (overflow_ids_.size() == overflow_ids_.capacity()) {
-            overflow_ids_.reserve(overflow_ids_.empty() ? 4 : overflow_ids_.capacity() * 2);
-        }
-        if (overflow_.size() == overflow_.capacity()) {
-            overflow_.reserve(overflow_.empty() ? 4 : overflow_.capacity() * 2);
-        }
+        reserve_geometric(overflow_ids_, overflow_ids_.size() + 1);
+        reserve_geometric(overflow_, overflow_.size() + 1);
         auto* result_value = stream.get();
         overflow_ids_.push_back(stream_id);
         overflow_.push_back(std::move(stream));
@@ -274,16 +271,5 @@ private:
     std::size_t snapshot_iteration_depth_{0};
     bool overflow_needs_compact_{false};
 };
-
-[[nodiscard]] inline bool http2_is_idle_stream(
-    std::uint32_t stream_id, std::uint32_t last_stream_id) noexcept {
-    return stream_id > last_stream_id || (stream_id & 1U) == 0;
-}
-
-inline bool http2_apply_stream_send_window_delta(
-    http2_stream_table& streams, std::int64_t delta,
-    std::int64_t minimum_delta, std::int64_t maximum_delta) noexcept {
-    return streams.apply_send_window_delta(delta, minimum_delta, maximum_delta);
-}
 
 }  // namespace ruvia::detail

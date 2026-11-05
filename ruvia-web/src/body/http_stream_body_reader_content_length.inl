@@ -20,6 +20,20 @@
 
 namespace ruvia::detail {
 
+// Reserves the next growth step of a known-length body whose first `filled`
+// bytes have arrived: double them, at least known_length_min_read_bytes, never
+// past the declared final size. Returns that final size, saturated at max_size().
+[[nodiscard]] inline std::size_t reserve_known_length_growth(
+    std::pmr::string& body, std::size_t filled, std::size_t remaining) {
+    const auto final_size = remaining > body.max_size() - filled ? body.max_size() : filled + remaining;
+    const auto doubled = filled > body.max_size() / 2 ? body.max_size() : filled * 2;
+    const auto target_capacity = std::min(final_size, std::max(doubled, known_length_min_read_bytes));
+    if (target_capacity > body.capacity()) {
+        body.reserve(target_capacity);
+    }
+    return final_size;
+}
+
 template <typename stream_type>
 task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     std::pmr::string& body, std::size_t content_length) {
@@ -44,16 +58,7 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
         if (remaining_after_preread == 0) {
             body.reserve(after_preread);
         } else {
-            const auto final_size = remaining_after_preread > body.max_size() - after_preread
-                                        ? body.max_size()
-                                        : after_preread + remaining_after_preread;
-            const auto doubled =
-                after_preread > body.max_size() / 2 ? body.max_size() : after_preread * 2;
-            const auto target_capacity =
-                std::min(final_size, std::max(doubled, known_length_min_read_bytes));
-            if (target_capacity > body.capacity()) {
-                body.reserve(target_capacity);
-            }
+            (void)reserve_known_length_growth(body, after_preread, remaining_after_preread);
         }
     }
     if (initial_unread != 0) {
@@ -86,12 +91,7 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
         }
         const auto remaining_body = content_length - delivered_bytes_;
         if (filled == body.size()) {
-            const auto final_size = remaining_body > body.max_size() - filled ? body.max_size() : filled + remaining_body;
-            const auto doubled = filled > body.max_size() / 2 ? body.max_size() : filled * 2;
-            const auto target_capacity = std::min(final_size, std::max(doubled, known_length_min_read_bytes));
-            if (target_capacity > body.capacity()) {
-                body.reserve(target_capacity);
-            }
+            const auto final_size = reserve_known_length_growth(body, filled, remaining_body);
             body.resize(std::min(final_size, body.capacity()));
         }
         const auto writable = std::min(remaining_body, body.size() - filled);

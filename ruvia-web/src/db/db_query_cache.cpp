@@ -3,22 +3,17 @@
 #include <array>
 #include <bit>
 #include <cstdint>
-#include <cstring>
-#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
 
-#include <openssl/evp.h>
-#include <openssl/sha.h>
-
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/db/db_result_access.h"
-#include "ruvia/web/detail/db/db_utils.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 
 #include "db/db_config_storage.h"
+#include "db/db_digest.h"
 #include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {
@@ -60,20 +55,12 @@ struct reader {
         return result_value;
     }
 };
-[[nodiscard]] std::array<unsigned char, SHA256_DIGEST_LENGTH> cache_digest(std::string_view bytes_value) {
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> hash;
-    if (!SHA256(reinterpret_cast<const unsigned char*>(bytes_value.data()), bytes_value.size(), hash.data())) {
-        throw std::runtime_error("database cache key digest failed");
-    }
-    return hash;
-}
-void append_digest(std::pmr::string& output, std::string_view bytes_value) {
-    const auto hash = cache_digest(bytes_value);
-    http_append_lower_hex(output, hash);
-}
-constexpr std::string_view cache_prefix = "ruvia:qc:v3:";
-constexpr std::size_t digest_text_bytes = 2 * SHA256_DIGEST_LENGTH;
-constexpr std::size_t full_prefix_bytes = cache_prefix.size() + digest_text_bytes + 1;
+
+// Leads every entry, so a value another writer put under a cache key is
+// refused before it is decoded.
+constexpr std::string_view db_cache_entry_magic = "RUVIAQC";
+constexpr std::string_view cache_prefix = "ruvia:qc:";
+constexpr std::size_t digest_text_bytes = 2 * db_sha256::digest_size;
 
 [[nodiscard]] std::pmr::string make_id_key_from_hex(std::string_view prefix, db_cache_shape shape,
     std::string_view digest_hex, std::pmr::memory_resource* resource) {
@@ -86,7 +73,7 @@ constexpr std::size_t full_prefix_bytes = cache_prefix.size() + digest_text_byte
 }
 
 [[nodiscard]] std::pmr::string make_id_key(std::string_view prefix, db_cache_shape shape,
-    const std::array<unsigned char, SHA256_DIGEST_LENGTH>& hash, std::pmr::memory_resource* resource) {
+    const db_sha256::digest_type& hash, std::pmr::memory_resource* resource) {
     std::array<char, digest_text_bytes> hex{};
     http_encode_lower_hex(hex.data(), hash);
     return make_id_key_from_hex(prefix, shape, std::string_view(hex.data(), hex.size()), resource);
@@ -98,74 +85,12 @@ void release_cache_storage(void* storage) noexcept {
     destroy_pmr_object(bytes, resource);
 }
 
-// SQL and parameters can be large. Feed the existing byte encoding directly
-// into SHA-256 instead of copying the entire input into a temporary string.
-class cache_key_hasher final {
-public:
-    cache_key_hasher() = default;
-    ~cache_key_hasher() {
-        if (context_ != nullptr) {
-            EVP_MD_CTX_free(context_);
-        }
-    }
-    cache_key_hasher(const cache_key_hasher&) = delete;
-    cache_key_hasher& operator=(const cache_key_hasher&) = delete;
-
-    void bytes(std::string_view value) {
-        if (value.empty()) {
-            return;
-        }
-        if (context_ == nullptr) {
-            if (value.size() <= buffer_.size() - buffered_) {
-                std::memcpy(buffer_.data() + buffered_, value.data(), value.size());
-                buffered_ += value.size();
-                return;
-            }
-            context_ = EVP_MD_CTX_new();
-            if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 ||
-                (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
-                throw std::runtime_error("database cache key digest failed");
-            }
-        }
-        if (EVP_DigestUpdate(context_, value.data(), value.size()) != 1) {
-            throw std::runtime_error("database cache key digest failed");
-        }
-    }
-    void number(std::uint64_t value) {
-        std::array<char, 8> encoded;
-        for (unsigned index = 0; index < encoded.size(); ++index) {
-            encoded[index] = static_cast<char>((value >> (index * 8)) & 255);
-        }
-        bytes({encoded.data(), encoded.size()});
-    }
-    void text(std::string_view value) {
-        number(value.size());
-        bytes(value);
-    }
-    void type(db_value_type value) {
-        const auto byte = static_cast<char>(value);
-        bytes({&byte, 1});
-    }
-    void append_result(std::pmr::string& output) {
-        std::array<unsigned char, SHA256_DIGEST_LENGTH> hash;
-        if (context_ == nullptr) {
-            if (!SHA256(buffer_.data(), buffered_, hash.data())) {
-                throw std::runtime_error("database cache key digest failed");
-            }
-        } else {
-            unsigned int size = 0;
-            if (EVP_DigestFinal_ex(context_, hash.data(), &size) != 1 || size != hash.size()) {
-                throw std::runtime_error("database cache key digest failed");
-            }
-        }
-        http_append_lower_hex(output, hash);
-    }
-
-private:
-    std::array<unsigned char, 512> buffer_;
-    std::size_t buffered_{0};
-    EVP_MD_CTX* context_{nullptr};
-};
+// SQL and parameters can be large, so their byte encoding streams into the
+// digest instead of being copied into a temporary string first.
+void digest_text(db_sha256& digest, std::string_view value) {
+    digest.update_u64_le(value.size());
+    digest.update(value);
+}
 
 }  // namespace
 
@@ -173,7 +98,7 @@ task<db_rows> db_cache_query::operator()(operation_options options) && {
     return query_db_backend(backend_, std::move(sql_), std::move(params_), options);
 }
 
-// Format RUVIAQC2: row count, column count, the column names once, then for
+// Format: the entry magic, row count, column count, the column names once, then for
 // every row a row marker followed, for every field, by a presence byte and its
 // text when present. All rows of one result share a single schema, so the
 // names are not repeated per row. The marker gives every row, including a
@@ -184,7 +109,7 @@ constexpr char db_cache_row_marker = '\2';
 std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_resource* resource) {
     const auto names = rows.empty() ? std::span<const std::pmr::string>{}
                                     : db_result_access::column_names(rows.front());
-    std::size_t total_bytes = 8U + 8U + 8U;
+    std::size_t total_bytes = db_cache_entry_magic.size() + 8U + 8U;
     for (const auto& name : names) {
         total_bytes += 8U + name.size();
     }
@@ -201,7 +126,7 @@ std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_reso
     }
     std::pmr::string out(resource);
     out.reserve(total_bytes);
-    out.append("RUVIAQC2");
+    out.append(db_cache_entry_magic);
     number(out, rows.size());
     number(out, names.size());
     for (const auto& name : names) {
@@ -220,10 +145,10 @@ std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_reso
     return out;
 }
 db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_resource* resource) {
-    if (!bytes_value.starts_with("RUVIAQC2")) {
+    if (!bytes_value.starts_with(db_cache_entry_magic)) {
         invalid_cache();
     }
-    reader reader_value{std::string_view(bytes_value).substr(8)};
+    reader reader_value{std::string_view(bytes_value).substr(db_cache_entry_magic.size())};
     const auto count = reader_value.number();
     const auto columns = reader_value.number();
     if (columns > reader_value.bytes_.size() / 8) {
@@ -285,34 +210,28 @@ db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_reso
     }
     return result_value;
 }
-std::pmr::string db_cache_scope(std::string_view name_space, std::string_view alias,
+std::pmr::string db_cache_prefix(std::string_view name_space, std::string_view alias,
     const db_config_storage& config, std::pmr::memory_resource* resource) {
     const auto server_name = config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{};
-    cache_key_hasher identity;
-    identity.text(name_space);
-    identity.text(alias);
-    identity.number(static_cast<std::uint64_t>(config.driver_));
-    identity.text(config.host_);
-    identity.number(config.port_);
-    identity.text(config.database_);
-    identity.text(config.username_);
-    identity.text(server_name);
-    std::pmr::string result(resource);
-    result.reserve(digest_text_bytes);
-    identity.append_result(result);
-    return result;
-}
-std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_resource* resource) {
+    db_sha256 identity;
+    digest_text(identity, name_space);
+    digest_text(identity, alias);
+    identity.update_u64_le(static_cast<std::uint64_t>(config.driver_));
+    digest_text(identity, config.host_);
+    identity.update_u64_le(config.port_);
+    digest_text(identity, config.database_);
+    digest_text(identity, config.username_);
+    digest_text(identity, server_name);
     std::pmr::string result_value(resource);
-    result_value.reserve(full_prefix_bytes);
+    result_value.reserve(cache_prefix.size() + digest_text_bytes + 1);
     result_value.append(cache_prefix);
-    append_digest(result_value, name_space);
+    http_append_lower_hex(result_value, identity.finish());
     result_value.push_back(':');
     return result_value;
 }
 void append_db_cache_id_keys(
     std::pmr::vector<std::pmr::string>& keys, std::string_view prefix, std::string_view id) {
-    const auto hash = cache_digest(id);
+    const auto hash = db_sha256_of(id);
     std::array<char, digest_text_bytes> hex{};
     http_encode_lower_hex(hex.data(), hash);
     const std::string_view hex_view(hex.data(), hex.size());
@@ -324,40 +243,41 @@ void append_db_cache_id_keys(
 std::pmr::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
     std::string_view sql, std::span<const db_value> params, db_driver driver, std::pmr::memory_resource* resource) {
     if (!id.empty()) {
-        return make_id_key(prefix, shape, cache_digest(id), resource);
+        return make_id_key(prefix, shape, db_sha256_of(id), resource);
     }
     std::pmr::string result_value(resource);
     result_value.reserve(prefix.size() + 4 + digest_text_bytes);
     result_value.append(prefix);
-    cache_key_hasher input;
-    input.number(static_cast<std::uint64_t>(driver));
-    input.text(sql);
-    input.number(params.size());
+    db_sha256 input;
+    input.update_u64_le(static_cast<std::uint64_t>(driver));
+    digest_text(input, sql);
+    input.update_u64_le(params.size());
     for (const auto& value : params) {
         const auto type = db_value_access::type(value);
-        input.type(type);
+        const auto type_byte = static_cast<char>(type);
+        input.update({&type_byte, 1});
         switch (type) {
             case db_value_type::null:
                 break;
             case db_value_type::string:
-                input.text(db_value_access::text(value));
+                digest_text(input, db_value_access::text(value));
                 break;
             case db_value_type::signed_value:
-                input.number(static_cast<std::uint64_t>(db_value_access::signed_value(value)));
+                input.update_u64_le(static_cast<std::uint64_t>(db_value_access::signed_value(value)));
                 break;
             case db_value_type::unsigned_value:
-                input.number(db_value_access::unsigned_value(value));
+                input.update_u64_le(db_value_access::unsigned_value(value));
                 break;
             case db_value_type::double_value:
-                input.number(std::bit_cast<std::uint64_t>(db_value_access::get_double_value(value)));
+                input.update_u64_le(std::bit_cast<std::uint64_t>(db_value_access::get_double_value(value)));
                 break;
             case db_value_type::bool_value:
-                input.number(db_value_access::get_bool_value(value));
+                input.update_u64_le(db_value_access::get_bool_value(value));
                 break;
         }
     }
     result_value.append("sql:");
-    input.append_result(result_value);
+    http_append_lower_hex(result_value, input.finish());
     return result_value;
 }
 }  // namespace ruvia::detail

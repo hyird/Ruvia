@@ -127,7 +127,7 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::stri
             continue;
         }
         if (encoded == nullptr) {
-            encoded = detail::url_text_aliases_storage(reference, storage) ? &aliased_output : &storage;
+            encoded = detail::http_text_aliases_string(reference, storage) ? &aliased_output : &storage;
             encoded->clear();
             encoded->reserve(encoded_uri_reference_size(reference, i, layout, fragment_seen));
             encoded->append(reference.substr(0, i));

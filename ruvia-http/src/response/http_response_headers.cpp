@@ -5,7 +5,7 @@
 
 #include "ruvia/http/http_response.h"
 
-#include "response/http_response_header_access.h"
+#include "response/http_response_header_storage.h"
 #include "response/http_response_static_headers.h"
 
 namespace ruvia {

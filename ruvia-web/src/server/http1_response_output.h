@@ -47,13 +47,6 @@ inline constexpr std::size_t pipelined_output_batch_bytes = std::size_t{16} * 10
 template <typename stream_type>
 class http1_response_output final {
 public:
-    // A write either accepts every byte or ends with an error.
-    struct written_type final {
-        std::error_code error_;
-        // Prefix of output-then-body the transport accepted.
-        std::size_t bytes_{};
-    };
-
     http1_response_output(stream_type& stream, http_response_head_buffer& output,
         http1_deferred_access_log& deferred_access, const access_log_sink& access_log,
         std::string_view remote_address, connection_scanner::entry& progress) noexcept
@@ -110,20 +103,7 @@ public:
     template <typename handler_type>
     void write_remaining(handler_type&& handler) {
         progress_->set_phase(connection_scanner::phase::writing);
-        const auto output = output_->view();
-        const auto written = written_.bytes_;
-        if (written >= output.size()) {
-            asio::async_write(*stream_, asio::buffer(body_.substr(written - output.size())),
-                http_write_progress(*progress_), std::forward<handler_type>(handler));
-            return;
-        }
-        const auto head = asio::buffer(output.substr(written));
-        if (body_.empty()) {
-            asio::async_write(*stream_, head, http_write_progress(*progress_), std::forward<handler_type>(handler));
-            return;
-        }
-        const std::array<asio::const_buffer, 2> remaining{head, asio::buffer(body_)};
-        asio::async_write(*stream_, remaining, http_write_progress(*progress_), std::forward<handler_type>(handler));
+        async_write_after(*stream_, output_->view(), body_, written_.bytes_, *progress_, std::forward<handler_type>(handler));
     }
 
     [[nodiscard]] auto async_write_remaining() {
@@ -139,7 +119,7 @@ public:
 
     // Reports the held-back responses whose heads were written, empties the
     // output and returns the write's outcome.
-    [[nodiscard]] written_type complete() noexcept {
+    [[nodiscard]] connection_write_outcome complete() noexcept {
         deferred_access_->complete(*access_log_, remote_address_, written_.bytes_);
         output_->reset();
         body_ = {};
@@ -171,7 +151,7 @@ private:
     std::string_view remote_address_;
     connection_scanner::entry* progress_;
     std::string_view body_;
-    written_type written_;
+    connection_write_outcome written_;
 };
 
 }  // namespace ruvia::detail

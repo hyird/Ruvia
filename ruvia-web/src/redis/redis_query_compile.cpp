@@ -14,8 +14,6 @@
 #include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/redis/redis_repository.h"
 
-#include "redis/redis_utils.h"
-
 namespace ruvia::detail {
 namespace {
 
@@ -637,13 +635,13 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
     }
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(sort_field_name.has_value() ? 11U : 8U);
-    emplace_redis_string(args, "FT.SEARCH");
+    args.emplace_back("FT.SEARCH");
     args.push_back(redis_index_name(mapping.prefix_, resource));
     args.emplace_back(std::move(query));
-    emplace_redis_string(args, "LIMIT");
+    args.emplace_back("LIMIT");
     if (count_only) {
-        emplace_redis_string(args, "0");
-        emplace_redis_string(args, "0");
+        args.emplace_back("0");
+        args.emplace_back("0");
     } else {
         std::pmr::string encoded_skip(resource), encoded_take(resource);
         http_append_unsigned(encoded_skip, skip);
@@ -652,13 +650,12 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
         args.emplace_back(std::move(encoded_take));
     }
     if (sort_field_name.has_value()) {
-        emplace_redis_string(args, "SORTBY");
+        args.emplace_back("SORTBY");
         args.push_back(std::move(*sort_field_name));
-        emplace_redis_string(
-            args, options.order_->direction_ == redis_order_direction::asc ? "ASC" : "DESC");
+        args.emplace_back(options.order_->direction_ == redis_order_direction::asc ? "ASC" : "DESC");
     }
-    emplace_redis_string(args, "DIALECT");
-    emplace_redis_string(args, "2");
+    args.emplace_back("DIALECT");
+    args.emplace_back("2");
     return args;
 }
 
@@ -679,44 +676,54 @@ std::pmr::vector<std::pmr::string> compile_redis_index(
     }
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(arg_count);
-    emplace_redis_string(args, "FT.CREATE");
+    args.emplace_back("FT.CREATE");
     args.push_back(redis_index_name(mapping.prefix_, resource));
-    emplace_redis_string(args, "ON");
-    emplace_redis_string(args, "HASH");
-    emplace_redis_string(args, "PREFIX");
-    emplace_redis_string(args, "1");
+    args.emplace_back("ON");
+    args.emplace_back("HASH");
+    args.emplace_back("PREFIX");
+    args.emplace_back("1");
     args.push_back(redis_entity_storage_prefix(mapping.prefix_, resource));
-    emplace_redis_string(args, "SCHEMA");
+    args.emplace_back("SCHEMA");
     for (const auto& definition : mapping.indexes_) {
         const std::string_view field = definition.column_;
         if (definition.kind_ == redis_index_kind::tag) {
             args.push_back(shadow_field(tag_shadow, field, resource));
-            emplace_redis_string(args, "AS");
-            emplace_redis_string(args, field);
-            emplace_redis_string(args, "TAG");
-            emplace_redis_string(args, "CASESENSITIVE");
+            args.emplace_back("AS");
+            args.emplace_back(field);
+            args.emplace_back("TAG");
+            args.emplace_back("CASESENSITIVE");
         } else {
-            emplace_redis_string(args, field);
-            emplace_redis_string(args, definition.kind_ == redis_index_kind::text ? "TEXT" : "NUMERIC");
+            args.emplace_back(field);
+            args.emplace_back(definition.kind_ == redis_index_kind::text ? "TEXT" : "NUMERIC");
             if (definition.sortable_) {
-                emplace_redis_string(args, "SORTABLE");
+                args.emplace_back("SORTABLE");
             }
         }
         auto presence = shadow_field(present_shadow, field, resource);
-        emplace_redis_string(args, presence);
-        emplace_redis_string(args, "AS");
+        args.emplace_back(presence);
+        args.emplace_back("AS");
         args.push_back(std::move(presence));
-        emplace_redis_string(args, "TAG");
-        emplace_redis_string(args, "CASESENSITIVE");
+        args.emplace_back("TAG");
+        args.emplace_back("CASESENSITIVE");
         if (definition.kind_ == redis_index_kind::tag && definition.sortable_) {
-            emplace_redis_string(args, field);
-            emplace_redis_string(args, "AS");
+            args.emplace_back(field);
+            args.emplace_back("AS");
             args.push_back(shadow_field(sort_shadow, field, resource));
-            emplace_redis_string(args, "TAG");
-            emplace_redis_string(args, "SORTABLE");
-            emplace_redis_string(args, "NOINDEX");
+            args.emplace_back("TAG");
+            args.emplace_back("SORTABLE");
+            args.emplace_back("NOINDEX");
         }
     }
+    return args;
+}
+
+std::pmr::vector<std::pmr::string> compile_redis_drop_index(
+    const redis_mapping& mapping, std::pmr::memory_resource* resource) {
+    resource = pmr_resource_or_default(resource);
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(2U);
+    args.emplace_back("FT.DROPINDEX");
+    args.push_back(redis_index_name(mapping.prefix_, resource));
     return args;
 }
 

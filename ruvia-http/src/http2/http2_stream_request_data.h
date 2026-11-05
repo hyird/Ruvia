@@ -14,6 +14,7 @@
 #include "ruvia/http/http_limits.h"
 
 #include "http2/http2_header_list.h"
+#include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
@@ -150,9 +151,9 @@ public:
             return false;
         }
 
+        // Reserve the whole crumb first so its separator cannot trigger a smaller growth.
+        reserve_geometric(cookie_, cookie_.size() + separator_bytes + value.size());
         if (has_existing_cookie) {
-            // Reserve the complete crumb before its separator can trigger a smaller growth.
-            cookie_.reserve(cookie_.size() + separator_bytes + value.size());
             cookie_.append(cookie_separator.data(), cookie_separator.size());
         }
         if (!value.empty()) {
@@ -180,9 +181,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] std::span<const http_header> trailers() const& noexcept {
-        return trailers_;
-    }
     [[nodiscard]] std::pmr::vector<http_header> take_trailers() & noexcept {
         return std::move(trailers_);
     }

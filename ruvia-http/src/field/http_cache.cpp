@@ -2,7 +2,7 @@
 
 #include <limits>
 
-#include "ruvia/http/detail/field/header_token_utils.h"  // http_trim_ows, http_ascii_equals_ignore_case
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 
 namespace ruvia {
 namespace {

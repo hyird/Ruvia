@@ -15,12 +15,9 @@ namespace ruvia {
 
 namespace {
 
-constexpr std::array<std::string_view, 12> month_names{
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-
 [[nodiscard]] int month_index(std::string_view value) noexcept {
-    for (std::size_t i = 0; i < month_names.size(); ++i) {
-        if (value == month_names[i]) {
+    for (std::size_t i = 0; i < detail::http_month_names.size(); ++i) {
+        if (value == detail::http_month_names[i]) {
             return static_cast<int>(i) + 1;
         }
     }
@@ -178,7 +175,7 @@ std::optional<std::array<char, http_imf_fixdate_size>> format_http_date(std::tim
     out[i++] = ' ';
     put2(utc->tm_mday);
     out[i++] = ' ';
-    put3(month_names[static_cast<std::size_t>(utc->tm_mon)]);
+    put3(detail::http_month_names[static_cast<std::size_t>(utc->tm_mon)]);
     out[i++] = ' ';
     out[i++] = static_cast<char>('0' + static_cast<int>((year / 1000) % 10));
     out[i++] = static_cast<char>('0' + static_cast<int>((year / 100) % 10));

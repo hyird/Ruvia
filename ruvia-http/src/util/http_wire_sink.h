@@ -10,11 +10,10 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_number_format.h"
-
-#include "util/http_text_overlap.h"
 
 // The single HTTP/1 wire-emission toolkit: sinks, the field-line emitter, and
 // the overlap-safe writer used by every pre-measured head/trailer writer.

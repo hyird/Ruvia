@@ -4,7 +4,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -12,6 +11,7 @@
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_hex.h"
 
 namespace ruvia {
@@ -63,15 +63,6 @@ inline void http_append_percent_byte(std::pmr::string& output, unsigned char byt
     output.push_back(http_upper_hex_digit(byte >> 4));
     output.push_back(http_upper_hex_digit(byte));
 }
-
-namespace detail {
-// Whether `text` points into `storage`'s bytes, so writing `storage` would
-// destroy the input of the transformation that reads `text`.
-[[nodiscard]] inline bool url_text_aliases_storage(std::string_view text, const std::pmr::string& storage) noexcept {
-    return !text.empty() && std::less_equal<>{}(storage.data(), text.data()) &&
-           std::less<>{}(text.data(), storage.data() + storage.size());
-}
-}  // namespace detail
 
 // Repairs an application-supplied RFC 3986 URI-reference (for example a
 // Location field value) by percent-encoding every byte that cannot appear
@@ -149,7 +140,7 @@ template <typename visitor_type>
         return input;
     }
     std::pmr::string output(storage.get_allocator());
-    auto& target = detail::url_text_aliases_storage(input, storage) ? output : storage;
+    auto& target = detail::http_text_aliases_string(input, storage) ? output : storage;
     target.clear();
     target.reserve(decoded_size);
     for (std::size_t i = 0; i < input.size(); ++i) {

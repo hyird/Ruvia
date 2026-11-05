@@ -27,10 +27,7 @@ void http_client_push::release() noexcept {
         if (!state_value->memory_domain().worker().is_current()) {
             std::terminate();
         }
-        state_value->push_response_scope_.close();
-        if (state_value->push_response_taken_) {
-            response_.consumer_ = false;
-        }
+        state_value->push_response_.release(response_);
     }
     response_.release();
 }
@@ -47,16 +44,11 @@ const http_push_request& http_client_push::request() const& {
 task<http_client_response> http_client_push::response() & {
     auto* state_value = response_.state_;
     (void)request();
-    if (state_value->push_response_taken_ || state_value->push_response_scope_.has_pending_operations()) {
+    // Unlike an exchange, a push admits no second receive, even a cold one.
+    if (state_value->push_response_.taken() || state_value->push_response_.has_pending_receive()) {
         throw std::logic_error("push response has already been transferred or is active");
     }
-    return ::ruvia::make_scoped_operation(state_value->push_response_scope_, receive_owned(http_client_response(state_value)));
-}
-task<http_client_response> http_client_push::receive_owned(http_client_response pin) {
-    auto& state = *pin.state_;
-    co_await state.await_head("HTTP push failed before its response head");
-    state.push_response_taken_ = true;
-    pin.consumer_ = true;
-    co_return std::move(pin);
+    return state_value->push_response_.receive(
+        http_client_response(state_value), "HTTP push failed before its response head");
 }
 }  // namespace ruvia

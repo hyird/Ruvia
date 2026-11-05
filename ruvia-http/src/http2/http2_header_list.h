@@ -17,6 +17,8 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 
+#include "util/geometric_reserve.h"
+
 namespace ruvia::detail {
 
 struct http2_stored_header_view final {
@@ -169,7 +171,7 @@ private:
     }
 
     void ensure_overflow_storage(std::size_t additional_bytes) {
-        overflow_storage_.reserve(storage_size_ + additional_bytes);
+        reserve_geometric(overflow_storage_, storage_size_ + additional_bytes);
         if (using_overflow_storage_) {
             return;
         }

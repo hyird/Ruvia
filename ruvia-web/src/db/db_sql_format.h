@@ -9,12 +9,12 @@
 
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
+#include "ruvia/http/http_utf8.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_schema.h"
-#include "ruvia/web/detail/db/db_utils.h"
+#include "ruvia/web/detail/db/db_number_format.h"
 #include "ruvia/web/detail/db/db_value_access.h"
-#include "ruvia/web/detail/json/json_byte_scan.h"
 
 namespace ruvia::detail {
 
@@ -37,7 +37,7 @@ inline void require_db_dialect(db_driver driver) {
             ++i;
             continue;
         }
-        const auto sequence = scan_json_utf8_sequence(name, i);
+        const auto sequence = scan_utf8_sequence(name, i);
         if (!sequence.well_formed_) {
             return false;
         }

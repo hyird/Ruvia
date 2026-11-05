@@ -250,7 +250,7 @@ template <typename t_type>
 
 template <typename t_type>
     requires detail::is_model_field<t_type>
-[[nodiscard]] inline std::optional<t_type> json_value::get() const {
+[[nodiscard]] inline std::optional<t_type> json_value::get() const& {
     auto parsed_value = detail::parse_json_document<t_type>(view(), resource_, detail::model_string_storage::borrowed);
     if (!parsed_value) {
         return std::nullopt;
@@ -267,7 +267,7 @@ template <typename t_type>
 
 template <typename t_type>
     requires detail::is_model_field<t_type>
-[[nodiscard]] inline std::optional<t_type> json_object::get(std::string_view field) const {
+[[nodiscard]] inline std::optional<t_type> json_object::get(std::string_view field) const& {
     auto* const resource = resource_;
     std::optional<t_type> result;
     bool last_match_failed = false;
@@ -307,11 +307,13 @@ template <typename t_type>
 
 template <typename t_type>
     requires detail::is_model_field<t_type>
-[[nodiscard]] inline std::optional<t_type> json_value::get(std::string_view field) const {
+[[nodiscard]] inline std::optional<t_type> json_value::get(std::string_view field) const& {
     if (!is_object()) {
         return std::nullopt;
     }
-    return json_object(resolved_pmr_resource_tag{}, view(), resource_).get<t_type>(field);
+    // Borrows this token's bytes, so results stay valid as long as *this.
+    const json_object object(resolved_pmr_resource_tag{}, view(), resource_);
+    return object.get<t_type>(field);
 }
 }  // namespace ruvia
 

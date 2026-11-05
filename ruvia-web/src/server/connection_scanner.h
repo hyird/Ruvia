@@ -8,7 +8,9 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <system_error>
 
+#include <asio/completion_condition.hpp>
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -95,6 +97,14 @@ public:
     // Connection-owned node. touch()/set_phase() sample monotonic activity time;
     // the scanner samples its comparison clock once per tick. Delayed scans
     // never backdate activity or shorten configured timeouts.
+    //
+    // Writes have their own stall clock, independent of the phase that times
+    // reads (downstream write_timeout bounds every write, as in Pingora): it
+    // runs while the entry is in the `writing` phase or a write_scope is open,
+    // and only write progress renews it. write_timeout closes a connection
+    // whose clock lapses, whatever its phase, so a full-duplex reader (HTTP/2)
+    // that keeps the entry idle, reading or long_lived cannot hide a peer that
+    // stopped reading.
     // Destruction detaches the entry and its checks, including during a periodic
     // callback. Destroying the scanner detaches its entries and checks.
     class entry final {
@@ -106,6 +116,9 @@ public:
         entry(entry&&) = delete;
         entry& operator=(entry&&) = delete;
         void touch() noexcept;
+        // Records transport progress of a write: activity that also renews
+        // the write stall clock.
+        void note_write_progress() noexcept;
         // Not for long_lived: an upgrade enters that phase via enter_long_lived().
         // Ends a request-head read started by read_request_head().
         void set_phase(phase next_phase) noexcept;
@@ -152,6 +165,20 @@ public:
             bool reading_request_head_;
         };
 
+        // Arms the write stall clock for one write without changing the
+        // phase, for a writer that runs beside the connection's reader. The
+        // clock starts when the outermost scope opens.
+        class write_scope final {
+        public:
+            explicit write_scope(entry& entry_value) noexcept;
+            ~write_scope();
+            write_scope(const write_scope&) = delete;
+            write_scope& operator=(const write_scope&) = delete;
+
+        private:
+            entry& entry_;
+        };
+
         // Moves an established upgrade into the untimed long_lived phase. Once
         // the scanner drains, the upgrade is not admitted and false tells the
         // caller not to start the session's handler: an upgrade with a drain
@@ -169,6 +196,11 @@ public:
         friend class periodic_check_registration;
         friend struct impl_type;
         [[nodiscard]] bool linked() const noexcept;
+        // A write is under way: the write stall clock runs, and a timeout
+        // cannot end the connection gracefully.
+        [[nodiscard]] bool write_pending() const noexcept {
+            return phase_ == phase::writing || write_scopes_ != 0;
+        }
         [[nodiscard]] bool has_drain_check() const noexcept;
         void notify_drain() noexcept;
         void remove_periodic_check(periodic_check_registration& registration) noexcept;
@@ -179,11 +211,15 @@ public:
         entry* next_{nullptr};
         std::int64_t last_active_ms_{0};
         std::int64_t phase_started_ms_{0};
+        // Last write progress, or the start of the write; the write stall
+        // clock's reference while write_pending().
+        std::int64_t write_progress_ms_{0};
         // Valid while close_requested_: when the scanner closes the socket.
         std::int64_t close_deadline_ms_{0};
         phase phase_{phase::idle};
         bool reading_request_head_{false};
         bool close_requested_{false};
+        std::uint32_t write_scopes_{0};
         periodic_check_registration* periodic_checks_{nullptr};
         periodic_check_registration* periodic_scan_next_{nullptr};
     };
@@ -231,6 +267,25 @@ private:
     std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
 };
 
+// asio::async_write completion condition that records each partial transfer on
+// the connection's scanner entry, so write_timeout measures inactivity rather
+// than the time to drain the whole write.
+class connection_write_progress final {
+public:
+    explicit connection_write_progress(connection_scanner::entry& entry) noexcept
+        : entry_(&entry) {}
+
+    [[nodiscard]] std::size_t operator()(const std::error_code& error, std::size_t bytes_transferred) const noexcept {
+        if (bytes_transferred != 0) {
+            entry_->note_write_progress();
+        }
+        return asio::transfer_all()(error, bytes_transferred);
+    }
+
+private:
+    connection_scanner::entry* entry_;
+};
+
 struct connection_scanner::impl_type final {
     explicit impl_type(connection_scanner* owner_value, worker_handle worker_value, connection_scanner_options options);
 
@@ -250,6 +305,8 @@ struct connection_scanner::impl_type final {
     // active since `interval_start`.
     [[nodiscard]] bool scan(std::int64_t interval_start) noexcept;
     [[nodiscard]] bool is_timed_out(const entry& entry, std::int64_t now) const noexcept;
+    // A write is pending and has made no progress for write_timeout.
+    [[nodiscard]] bool write_stalled(const entry& entry, std::int64_t now) const noexcept;
     [[nodiscard]] static bool active_since(const entry& entry, std::int64_t interval_start) noexcept;
     // Ends a timed-out connection: the first time gracefully when its owner
     // can (a pending request-head read, or a drain callback outside writing),

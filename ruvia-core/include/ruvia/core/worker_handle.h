@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/detail/fnv1a.h"
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_timer.h"
@@ -17,12 +18,7 @@ namespace ruvia {
 using worker_id_type = std::uint64_t;
 
 [[nodiscard]] constexpr std::uint64_t worker_selection_hash(std::string_view key) noexcept {
-    std::uint64_t hash = 14695981039346656037ull;
-    for (const unsigned char ch : key) {
-        hash ^= ch;
-        hash *= 1099511628211ull;
-    }
-    return hash;
+    return detail::fnv1a_accumulate(detail::fnv1a_offset_basis, key);
 }
 
 enum class post_status : std::uint8_t {
@@ -117,7 +113,6 @@ namespace detail {
 struct worker_handle_access {
     [[nodiscard]] static worker_handle make(
         const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept;
-    static void defer(const worker_handle& worker, move_only_function<void()> task);
     [[nodiscard]] static bool defer_if_attached(
         const worker_handle& worker, move_only_function<void()> task);
     static void defer_or_terminate(

@@ -90,6 +90,38 @@ bool is_valid_uri_port(std::string_view value) noexcept {
     return std::ranges::all_of(value, is_decimal_digit);
 }
 
+bool split_uri_host_port(
+    std::string_view value, std::string_view& host, std::string_view& port, bool& has_port) noexcept {
+    port = {};
+    has_port = false;
+    if (!value.empty() && value.front() == '[') {
+        const auto close = value.find(']');
+        if (close == std::string_view::npos) {
+            return false;
+        }
+        host = value.substr(0, close + 1);
+        const auto remainder = value.substr(close + 1);
+        if (remainder.empty()) {
+            return true;
+        }
+        if (remainder.front() != ':') {
+            return false;
+        }
+        has_port = true;
+        port = remainder.substr(1);
+        return true;
+    }
+    const auto delimiter = value.find(':');
+    if (delimiter == std::string_view::npos) {
+        host = value;
+        return true;
+    }
+    host = value.substr(0, delimiter);
+    has_port = true;
+    port = value.substr(delimiter + 1);
+    return port.find(':') == std::string_view::npos;
+}
+
 [[nodiscard]] bool is_uri_pchar(unsigned char byte) noexcept {
     return is_uri_userinfo_literal(byte) || byte == '@';
 }

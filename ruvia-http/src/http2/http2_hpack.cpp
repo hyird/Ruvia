@@ -8,7 +8,7 @@
 
 #include "ruvia/http/http_pmr_string.h"
 
-#include "field/hpack_huffman.h"
+#include "http2/hpack_huffman.h"
 
 namespace ruvia::detail {
 

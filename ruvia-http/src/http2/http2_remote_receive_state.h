@@ -5,7 +5,7 @@
 namespace ruvia::detail {
 
 class http2_remote_receive_state;
-class http2_stream_lifecycle;
+class http2_stream_state;
 
 // The initial/final field block has not selected the remote message semantics yet.
 // Client-role 1xx responses deliberately return to this same alternative.
@@ -109,7 +109,7 @@ private:
 // a pending/rejected CONNECT accepts empty framing DATA until the peer sends END_STREAM.
 class http2_remote_receive_state final {
 private:
-    friend class http2_stream_lifecycle;
+    friend class http2_stream_state;
 
     constexpr http2_remote_receive_state() noexcept
         : state_(http2_remote_head_pending()) {}

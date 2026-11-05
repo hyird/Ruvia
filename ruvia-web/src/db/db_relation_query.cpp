@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 
-#include "ruvia/web/detail/db/db_utils.h"
+#include "ruvia/web/detail/db/db_number_format.h"
 
 #include "query_storage.h"
 

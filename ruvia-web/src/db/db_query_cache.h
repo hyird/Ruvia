@@ -37,7 +37,10 @@ inline constexpr std::array<std::string_view, db_cache_shapes.size()> db_cache_s
 
 struct db_config_storage;
 
-[[nodiscard]] std::pmr::string db_cache_scope(std::string_view name_space, std::string_view alias,
+// The key prefix of one alias's cache entries: everything that decides what a
+// cached result means (namespace, alias, driver, server, database, user and
+// TLS server name) digested into one key part.
+[[nodiscard]] std::pmr::string db_cache_prefix(std::string_view name_space, std::string_view alias,
     const db_config_storage& config, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_resource* resource);
@@ -48,7 +51,6 @@ void append_db_cache_id_keys(std::pmr::vector<std::pmr::string>& keys, std::stri
 // Keyed by id and shape when the query names an id, otherwise by its SQL and parameters.
 [[nodiscard]] std::pmr::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
     std::string_view sql, std::span<const db_value> params, db_driver driver, std::pmr::memory_resource* resource);
-[[nodiscard]] std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_resource* resource);
 
 // The deferred database statement behind a cached step. On a cache hit it is
 // destroyed without starting; on a miss it runs once on the plan's backend.

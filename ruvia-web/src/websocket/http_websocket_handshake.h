@@ -22,10 +22,10 @@ namespace ruvia::detail {
 template <typename stream_type>
 task<std::error_code> write_websocket_handshake(stream_type& stream,
     const websocket_server_handshake& handshake, const http_request_expectations& expectations,
-    std::pmr::memory_resource* resource = nullptr) {
+    std::pmr::memory_resource& resource) {
     static constexpr std::size_t inline_head_capacity = 512;
     std::array<char, inline_head_capacity> inline_head;
-    std::pmr::string overflow_head(resource != nullptr ? resource : std::pmr::get_default_resource());
+    std::pmr::string overflow_head(&resource);
     std::size_t inline_size = 0;
     bool using_overflow = false;
     handshake.for_each_response_part([&](std::string_view part) {

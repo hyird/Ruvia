@@ -9,7 +9,6 @@
 #include "client/http_client_output_operation.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
-#include "util/operation_lane_lease.h"
 #include "util/pmr_owned_storage.h"
 namespace ruvia::detail {
 struct http_client_upload_end_input final {
@@ -86,11 +85,8 @@ void http_client_exchange::release() noexcept {
     auto& upload = *state_value->upload_;
     const bool abandon_upload = !upload.output_.ended_ && !upload.output_.stopped_;
     upload.output_.output_scope_.close();
-    upload.response_scope_.close();
-    if (upload.response_taken_) {
-        response_.consumer_ = false;
-    }
-    if (abandon_upload && upload.response_taken_ &&
+    upload.response_.release(response_);
+    if (abandon_upload && upload.response_.taken() &&
         !state_value->complete_ && state_value->pool_ != nullptr &&
         (state_value->transport_ == detail::http_client_response_transport::http1 ||
             state_value->transport_ == detail::http_client_response_transport::http2)) {
@@ -147,21 +143,11 @@ bool http_client_request_body_writer::complete() const noexcept {
 
 task<http_client_response> http_client_exchange::response() & {
     auto* state_value = response_.state_;
-    if (state_value == nullptr || state_value->upload_->response_taken_) {
+    if (state_value == nullptr || state_value->upload_->response_.taken()) {
         throw std::logic_error("HTTP exchange response has already been transferred");
     }
     state_value->require_owner_worker("HTTP exchange must run on its owner worker");
-    return ::ruvia::make_scoped_operation(state_value->upload_->response_scope_, receive_owned(http_client_response(state_value)));
-}
-task<http_client_response> http_client_exchange::receive_owned(http_client_response pin) {
-    auto& state_value = *pin.state_;
-    auto activity = detail::claim_operation_lane(state_value.upload_->response_active_, "HTTP exchange response operation is already active");
-    if (state_value.upload_->response_taken_) {
-        throw std::logic_error("HTTP exchange response has already been transferred");
-    }
-    co_await state_value.await_head("HTTP request failed before response head");
-    state_value.upload_->response_taken_ = true;
-    pin.consumer_ = true;
-    co_return std::move(pin);
+    return state_value->upload_->response_.receive(
+        http_client_response(state_value), "HTTP request failed before response head");
 }
 }  // namespace ruvia

@@ -15,12 +15,9 @@
 // section budget, which singleton fields it already carries, and the
 // connection and upgrade options it expresses.
 
-namespace ruvia {
+namespace ruvia::detail {
 
-// The line terminator both the sizing pass and the encoder count in bytes.
-inline constexpr std::string_view crlf = "\r\n";
-
-struct request_header_facts final {
+struct http1_client_request_field_facts final {
     // The caller's fields, charged by the shared field-section rule.
     http_field_section_budget section_;
     detail::request_field_state fields_{detail::request_field_framing::http1};
@@ -34,17 +31,17 @@ struct request_header_facts final {
     bool has_trailer_{false};
 };
 
-[[nodiscard]] bool analyze_header(http_header_view header, detail::request_header_kind kind,
-    request_header_facts& facts, http1_client_request_prepare_error& error,
+[[nodiscard]] bool analyze_http1_client_request_field(http_header_view header, detail::request_header_kind kind,
+    http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
     http_request_field_source source = http_request_field_source::generated) noexcept;
 
-[[nodiscard]] bool finalize_headers(
-    const request_header_facts& facts, http1_client_request_prepare_error& error) noexcept;
+[[nodiscard]] bool finish_http1_client_request_fields(
+    const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept;
 
 // Validate every field and collect the facts the encoder needs. Returns false
 // with `error` set on the first field that cannot be sent.
-[[nodiscard]] bool analyze_headers(std::span<const http_header_view> headers,
-    request_header_facts& facts, http1_client_request_prepare_error& error,
+[[nodiscard]] bool analyze_http1_client_request_fields(std::span<const http_header_view> headers,
+    http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
     http_request_field_source source) noexcept;
 
-}  // namespace ruvia
+}  // namespace ruvia::detail

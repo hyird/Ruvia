@@ -14,6 +14,9 @@ class context;
 
 // Each worker preallocates this many fixed-window key entries when either the
 // app-wide default rule or a route-specific rate-limit middleware is present.
+// A key probes a bounded window of entries from its hash position; a key
+// whose window holds only live entries of other keys takes the rule's
+// overflow policy even when other parts of the table are free.
 inline constexpr std::size_t default_rate_limit_capacity_per_worker = 8192;
 
 enum class rate_limit_overflow_policy : std::uint8_t {

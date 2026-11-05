@@ -11,6 +11,11 @@
 
 namespace ruvia {
 
+namespace detail {
+class zlib_deflate_stream;
+class zlib_inflate_stream;
+}  // namespace detail
+
 enum class websocket_inflate_result : std::uint8_t {
     ok,
     error,
@@ -52,17 +57,15 @@ public:
         std::string_view payload, std::pmr::string& out, protocol_byte_limit message_limit);
 
 private:
-    struct deflater;
-    struct inflater;
-
     static constexpr int min_window_bits = 8;
     static constexpr int max_window_bits = 15;
     static constexpr int compression_levels = 10;
 
     std::pmr::memory_resource* resource_;
-    std::array<deflater*, static_cast<std::size_t>((max_window_bits - min_window_bits + 1) * compression_levels)>
+    std::array<detail::zlib_deflate_stream*,
+        static_cast<std::size_t>((max_window_bits - min_window_bits + 1) * compression_levels)>
         deflaters_{};
-    inflater* inflater_{nullptr};
+    detail::zlib_inflate_stream* inflater_{nullptr};
 };
 
 }  // namespace ruvia
