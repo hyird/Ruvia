@@ -42,8 +42,13 @@ int main() {
                 })) {
                 throw std::runtime_error("object traversal did not complete");
             }
-            auto labels = object.get<ruvia::json_value>("labels");
-            if (!labels || !labels->for_each_element([](const ruvia::json_value& element) {
+            // get(name) reports absent / found / repeated; a repeated name is
+            // never resolved to one of its occurrences.
+            const auto labels = object.get<ruvia::json_value>("labels");
+            if (labels.status() != ruvia::unique_lookup_status::found) {
+                throw std::runtime_error("labels must appear exactly once");
+            }
+            if (!labels.value() || !labels.value()->for_each_element([](const ruvia::json_value& element) {
                     const auto label = element.get<ruvia::string>();
                     if (!label) {
                         return false;

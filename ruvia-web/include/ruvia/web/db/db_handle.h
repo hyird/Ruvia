@@ -51,6 +51,15 @@ struct request_io_metrics;
 // entry returns, so cold operations may be prepared while a statement runs.
 // Only starting overlapping operations throws std::logic_error; that rejected
 // operation does not abort the statement already holding the transaction.
+//
+// The transaction holds its connection under db_config::transaction_timeout_,
+// counted from begin_transaction() holding the connection, including the time
+// between operations. Each operation runs under the earlier of its own
+// deadline and the remaining transaction time. Once that has passed while no
+// operation runs, the connection is closed, so the server rolls back and
+// releases the transaction's locks; the next operation (commit() and
+// rollback() included) fails with db_error::code_type::timeout and ends the
+// transaction.
 class db_transaction final {
 public:
     db_transaction(const db_transaction&) = delete;

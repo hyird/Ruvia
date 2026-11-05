@@ -39,7 +39,7 @@ fs::path make_dotfile_root() {
         [&](ruvia::context& ctx) -> ruvia::task<void> {
             try {
                 found =
-                    ctx.static_file(root, {.relative_path_ = path}).status() == ruvia::http_status::ok;
+                    (co_await ctx.static_file(root, {.relative_path_ = path})).status() == ruvia::http_status::ok;
             } catch (const ruvia::http_error&) {
                 found = false;
             }
@@ -62,7 +62,7 @@ struct served_body final {
     static_cast<void>(context_request_test::with_context(
         ruvia::test_request::get("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
             try {
-                const auto response = ctx.static_file(root, {.relative_path_ = path});
+                const auto response = co_await ctx.static_file(root, {.relative_path_ = path});
                 result.status_ = response.status();
                 result.file_backed_ = response.file_body().has_value();
                 result.bytes_.assign(response.body_bytes());
@@ -143,7 +143,7 @@ RUVIA_TEST(static_root_without_resident_opt_in_stays_file_backed_and_fails_close
     static_cast<void>(context_request_test::with_context(
         ruvia::test_request::head("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
             try {
-                static_cast<void>(ctx.static_file(root, {.relative_path_ = "nested/page.txt"}));
+                static_cast<void>(co_await ctx.static_file(root, {.relative_path_ = "nested/page.txt"}));
             } catch (const ruvia::http_error& error) {
                 head_failed = error.info().status() == ruvia::http_status::internal_server_error;
             }

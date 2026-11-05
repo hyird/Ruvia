@@ -118,7 +118,8 @@ class prepared_http1_response_stream;
 // it honors an application-provided Connection: close and emits the version-
 // appropriate Connection field. Success retains the exact request version for
 // head serialization; a head this endpoint cannot send (for example a 426
-// without an Upgrade protocol) throws http1_response_head_error.
+// without an Upgrade protocol, or a Transfer-Encoding other than exactly
+// `chunked`) throws http1_response_head_error before the response changes.
 [[nodiscard]] http1_request_connection_plan http1_commit_final_response(
     http_response& response, http1_request_connection_plan plan);
 

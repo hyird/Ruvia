@@ -403,4 +403,21 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
         redis_value_string(items[1]), redis_value_string(items[3]));
 }
 
+// RESP2 answers PING on a subscribed connection with the push-shaped
+// ["pong", <argument>]; once the last subscription is gone the connection is
+// back in normal mode and answers +PONG, which is also the RESP3 reply. An
+// argument-less PING echoes an empty argument.
+bool is_redis_subscription_pong(const redis_value& value) {
+    if (value.kind() == redis_value::kind_type::string) {
+        return http_ascii_equals_ignore_case(value.string(), "PONG");
+    }
+    if (value.kind() != redis_value::kind_type::array) {
+        return false;
+    }
+    const auto items = value.array();
+    return items.size() == 2 && items[0].kind() == redis_value::kind_type::string &&
+           http_ascii_equals_ignore_case(items[0].string(), "pong") &&
+           items[1].kind() == redis_value::kind_type::string && items[1].string().empty();
+}
+
 }  // namespace ruvia::detail

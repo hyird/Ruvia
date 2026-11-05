@@ -67,6 +67,14 @@ struct redis_config final {
     // Must be greater than zero.
     std::size_t max_array_depth_{64};
     client_tcp_config tcp_{.keep_alive_ = tcp_keep_alive_policy::system_default};
+    // Liveness of a redis_subscription's dedicated connection while a read()
+    // waits: after one interval without input it sends PING (unless a command
+    // written since the last input is still awaiting its reply), and after one
+    // more interval without input it closes the subscription, failing the
+    // read with redis_error(timeout). Any received byte restarts the interval;
+    // PING replies are consumed and never surface as events. Absence disables
+    // the probe; a configured interval must be greater than zero.
+    std::optional<std::chrono::milliseconds> subscription_ping_interval_{std::chrono::seconds(30)};
 };
 
 class redis_block_wait final {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
@@ -28,6 +29,7 @@ class env;
 namespace ruvia::detail {
 
 class context_services;
+struct connection_failure_sink;
 class trusted_proxy_set;
 
 struct worker_capability_definitions final {
@@ -46,6 +48,10 @@ struct worker_capability_options final {
     const env* env_{nullptr};
     const trusted_proxy_set* trusted_proxies_{nullptr};
     bool precompressed_static_files_{false};
+    // The server write_timeout_ bounding a file response's open on the pool.
+    std::optional<std::chrono::milliseconds> file_io_timeout_{};
+    // The worker's connection failure outlet; required.
+    const connection_failure_sink* connection_failure_{nullptr};
 };
 
 // Owns every application capability attached to one worker. Construction,

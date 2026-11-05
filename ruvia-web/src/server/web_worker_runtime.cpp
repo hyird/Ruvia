@@ -47,6 +47,8 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .trusted_proxies_ =
                   options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
               .precompressed_static_files_ = options_.compression_.has_value(),
+              .file_io_timeout_ = options_.server_.write_timeout_,
+              .connection_failure_ = &options_.connection_failure_,
           }),
       connections_(io_context_, runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_),
       web_worker_dispatch_(std::allocate_shared<web_worker_dispatch>(

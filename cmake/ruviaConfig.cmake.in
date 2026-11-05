@@ -33,7 +33,21 @@ foreach(component IN ITEMS core http web)
 @RUVIA_WEB_FIND_DEPENDENCIES@    else()
         continue()
     endif()
+    set(imported TRUE)
+    if(TARGET ruvia::${component})
+        set(imported FALSE)
+    endif()
     include("${CMAKE_CURRENT_LIST_DIR}/ruvia-${component}-targets.cmake")
+    # The export keeps pgcommon/pgport out of ruvia::web; the archives are the
+    # ones this consumer's find_dependency(PostgreSQL) just resolved.
+    if(imported AND component STREQUAL "web" AND RUVIA_ENABLE_POSTGRESQL)
+        include("${CMAKE_CURRENT_LIST_DIR}/ruvia_postgresql_link_group.cmake")
+        ruvia_postgresql_link_group(postgresql_link_group)
+        if(postgresql_link_group)
+            set_property(TARGET ruvia::web APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "${postgresql_link_group}")
+        endif()
+    endif()
     set(ruvia_${component}_FOUND TRUE)
 endforeach()
 

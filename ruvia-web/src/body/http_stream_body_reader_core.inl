@@ -268,9 +268,12 @@ bool stream_body_reader<stream_type>::exceeds_limit(std::size_t bytes_value) con
 }
 
 template <typename stream_type>
-void stream_body_reader<stream_type>::mark_finished() noexcept {
+void stream_body_reader<stream_type>::mark_finished() {
     finished_ = true;
     scanner_entry_.set_phase(connection_scanner::phase::idle);
+    if (const auto observer = std::exchange(completion_observer_, nullptr)) {
+        observer(completion_target_);
+    }
 }
 
 }  // namespace ruvia::detail

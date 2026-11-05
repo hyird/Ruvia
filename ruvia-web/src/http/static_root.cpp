@@ -33,8 +33,8 @@
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after
 // that touch only the index. A request never walks or stats the tree: a
-// file-backed response opens its one indexed entry and checks the handle
-// against the indexed identity.
+// file-backed response opens its one indexed entry on the blocking pool and
+// checks the handle against the indexed identity.
 
 namespace ruvia {
 namespace {
@@ -149,21 +149,32 @@ void share_memory_variant(detail::static_root_entry& entry_value,
     stored.last_modified_ = source_value.last_modified_;
 }
 
-// Opens an indexed file the way every use does. On POSIX it is opened beneath
-// the retained root handle without following a symlink in any component, so
-// a path swapped after indexing cannot reach outside the root. Windows opens
-// the canonical path; the identity check against the index is its guard.
+// The path an indexed file is opened by: on POSIX the part beneath the
+// retained root handle (every entry path is the canonical root joined with
+// its relative path, so it starts right after the root and its separator),
+// on Windows the canonical path itself.
+[[nodiscard]] const http_native_path_char_type* static_root_open_path(
+    [[maybe_unused]] const detail::static_root_state& state_value, const http_native_path_char_type* file_path) noexcept {
+#if defined(__unix__)
+    const auto& root_path = state_value.root_;
+    return file_path + root_path.size() + (root_path.ends_with('/') ? 0 : 1);
+#else
+    return file_path;
+#endif
+}
+
+// Opens an indexed file the way every use does (static_root_entry_open is the
+// per-request form). On POSIX it is opened beneath the retained root handle
+// without following a symlink in any component, so a path swapped after
+// indexing cannot reach outside the root. Windows opens the canonical path;
+// the identity check against the index is its guard.
 [[nodiscard]] detail::native_file_handle open_static_root_file(const detail::static_root_state& state_value,
     const http_native_path_char_type* file_path, std::error_code& ec) noexcept {
 #if defined(__unix__)
-    // Every entry path is the canonical root joined with its relative path,
-    // so the relative part starts right after the root and its separator.
-    const auto& root_path = state_value.root_;
-    const auto prefix = root_path.size() + (root_path.ends_with('/') ? 0 : 1);
-    return detail::open_native_file_beneath(state_value.root_directory_.get(), file_path + prefix, ec);
+    return detail::open_native_file_beneath(
+        state_value.root_directory_->get(), static_root_open_path(state_value, file_path), ec);
 #else
-    static_cast<void>(state_value);
-    return detail::open_native_file(file_path, ec);
+    return detail::open_native_file(static_root_open_path(state_value, file_path), ec);
 #endif
 }
 
@@ -440,11 +451,25 @@ void detail::static_root_access::install_resident_bodies(
     }
 }
 
-http_response_file_handle detail::static_root_access::open_entry(
-    const static_root& root, const static_root_entry_view& entry) noexcept {
+detail::static_root_entry_open detail::static_root_access::entry_open(
+    const static_root& root, const static_root_entry_view& entry, bool checked) {
+    const auto& state_value = *root.state_;
+    http_native_path_string_type open_path(static_root_open_path(state_value, entry.file_path()), process_resource());
+#if defined(__unix__)
+    return static_root_entry_open(state_value.root_directory_, std::move(open_path), entry.identity(), entry.size(), checked);
+#else
+    return static_root_entry_open(std::move(open_path), entry.identity(), entry.size(), checked);
+#endif
+}
+
+http_response_file_handle detail::static_root_entry_open::operator()() const noexcept {
     std::error_code ec;
-    auto input = open_static_root_file(*root.state_, entry.file_path(), ec);
-    if (ec) {
+#if defined(__unix__)
+    auto input = detail::open_native_file_beneath(root_directory_->get(), open_path_.c_str(), ec);
+#else
+    auto input = detail::open_native_file(open_path_.c_str(), ec);
+#endif
+    if (ec || (checked_ && detail::validate_native_file(input.get(), identity_, size_))) {
         return {};
     }
     return adopt_response_file_handle(std::move(input));
@@ -509,7 +534,8 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (ec) {
             throw std::filesystem::filesystem_error("inspect static file root", canonical_root, ec);
         }
-        state_value.root_directory_ = std::move(root_directory);
+        state_value.root_directory_ = std::allocate_shared<detail::native_file_handle>(
+            std::pmr::polymorphic_allocator<detail::native_file_handle>(process_resource()), std::move(root_directory));
     }
 #endif
 

@@ -365,7 +365,11 @@ private:
 // interleaved with messages. One command and one read may be in flight at a
 // time (a second throws std::logic_error); unstarted operations may coexist.
 // Reads observe the subscription's stop token and operation timeout; a timeout
-// closes the subscription and throws redis_error(timeout).
+// closes the subscription and throws redis_error(timeout). While a read waits,
+// redis_config::subscription_ping_interval_ probes an idle connection with
+// PING; a peer that stays silent for one more interval closes the
+// subscription and the read throws redis_error(timeout). PING replies are
+// consumed internally and never returned by read().
 //
 // Worker-affine: use and destroy it on the owning worker before the handle's
 // scope ends. Destroying it with an operation in flight terminates.
@@ -431,7 +435,8 @@ public:
     // closed by abort(), its stop token or worker shutdown. The server ending
     // the connection throws redis_error(io_error); an error reply (for example
     // a denied channel) throws redis_error(command_error) and leaves the
-    // connection open; a malformed push closes it with protocol_error.
+    // connection open; a malformed push closes it with protocol_error; an
+    // unanswered idle probe closes it with timeout.
     // Requires a completed subscribe() first: std::logic_error otherwise.
     [[nodiscard]] task<std::optional<redis_pubsub_event>> read() &;
     task<std::optional<redis_pubsub_event>> read() && = delete;

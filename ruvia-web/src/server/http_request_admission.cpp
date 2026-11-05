@@ -133,6 +133,9 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     const auto client_address = connection.client().address();
     admission.tail_.bind_addresses(remote_address, client_address);
     admission.services_.bind_response_coding(input.coding_);
+    if (input.pinned_arrival_.has_value()) {
+        admission.services_.pin_arrival(*input.pinned_arrival_);
+    }
     if (resolved != nullptr) {
         admission.services_.bind_route_body_limit(resolved->route().max_request_body_bytes());
     }
@@ -163,7 +166,8 @@ http_request_admission admit_http_request(const http_request_admission_input& in
             copy_http_protocol_error_info(input.resource_, http_unsupported_expectation_error())));
     }
     if (policy.apply_rate_limit_) {
-        if (const auto rejection = decide_request_rate_limit(admission.services_.rate_limiter(), client_address)) {
+        if (const auto rejection = decide_request_rate_limit(
+                admission.services_.rate_limiter(), client_address, input.pinned_arrival_)) {
             return reject(http_request_rejection::rate_limited(*rejection));
         }
     }

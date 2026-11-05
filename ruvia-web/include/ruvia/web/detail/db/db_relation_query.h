@@ -399,10 +399,10 @@ private:
         const auto names = row.column_names();
         const auto resolve = [&](std::string_view name) {
             const auto lookup = find_unique_db_result_column(names, name);
-            if (lookup.state_ == db_result_column_lookup::state_type::repeated) {
+            if (lookup.state_ == unique_lookup_status::repeated) {
                 throw db_conversion_error(db_conversion_error::code_type::invalid_format, "duplicate entity projection name in a relation query");
             }
-            if (lookup.state_ == db_result_column_lookup::state_type::absent || lookup.index_ >= row.size()) {
+            if (lookup.state_ == unique_lookup_status::absent || lookup.index_ >= row.size()) {
                 throw db_conversion_error(db_conversion_error::code_type::missing_column, "relation query must select every mapped entity column");
             }
             return lookup.index_;

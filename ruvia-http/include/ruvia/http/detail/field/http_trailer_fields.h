@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
@@ -117,6 +118,11 @@ enum class http_trailer_block_status : std::uint8_t {
 // empty line that ends the trailer section; a final CRLF after the last field
 // is accepted for standalone validation. Values are exposed with field-line OWS
 // trimmed.
+// `obs_fold` decides whether a line starting with OWS continues the previous
+// field (RFC 9112 section 5.2). Rejected, such a line is malformed. Accepted,
+// the field is validated and charged as its HTTP unfolding (each obs-fold and
+// adjacent OWS is one SP), and the visitor receives the received value span
+// with its folds in place; the consumer unfolds it before interpretation.
 // `discarded_name` is the direction's sender trailer policy. The sender rule of
 // RFC 9110 section 6.5.1 does not make a received field invalid: a recipient
 // that removes the chunked coding may selectively discard received trailer
@@ -128,28 +134,54 @@ enum class http_trailer_block_status : std::uint8_t {
 // The visitor receives views borrowing `block` and returns false to stop.
 template <typename discarded_name_type, typename visitor_type>
 [[nodiscard]] http_trailer_block_status visit_http1_trailer_block(std::string_view block,
-    discarded_name_type&& discarded_name, http_field_section_budget& budget,
+    http1_trailer_obs_fold obs_fold, discarded_name_type&& discarded_name, http_field_section_budget& budget,
     visitor_type&& visitor) {
     if (block.size() > max_http_header_bytes) {
         return http_trailer_block_status::section_too_large;
     }
+    const auto line_at = [block](std::size_t begin, std::size_t end) noexcept {
+        return end == std::string_view::npos ? block.substr(begin) : block.substr(begin, end - begin);
+    };
     std::size_t cursor_value = 0;
     while (cursor_value < block.size()) {
-        const auto line_end = block.find("\r\n", cursor_value);
-        const auto line = line_end == std::string_view::npos
-                              ? block.substr(cursor_value)
-                              : block.substr(cursor_value, line_end - cursor_value);
+        auto line_end = block.find("\r\n", cursor_value);
+        const auto line = line_at(cursor_value, line_end);
         // Finding the separator also proves that the complete name is a token.
         const auto colon = http_token_prefix_size(line);
         if (colon == 0 || colon == line.size() || line[colon] != ':') {
             return http_trailer_block_status::invalid_field;
         }
         const auto name = line.substr(0, colon);
-        const auto value = http_trim_ows(line.substr(colon + 1));
-        if (!is_valid_http_field_value_bytes(value)) {
-            return http_trailer_block_status::invalid_field;
+        // The unfolded value spans the first to the last non-empty piece, each
+        // fold between them counting as one SP.
+        auto piece = http_trim_ows(line.substr(colon + 1));
+        auto value = piece;
+        std::size_t value_bytes = 0;
+        std::size_t pending_separators = 0;
+        for (;;) {
+            if (!is_valid_http_field_value_bytes(piece)) {
+                return http_trailer_block_status::invalid_field;
+            }
+            if (!piece.empty()) {
+                if (value_bytes == 0) {
+                    value = piece;
+                } else {
+                    value_bytes += pending_separators;
+                    value = std::string_view(value.data(), static_cast<std::size_t>(piece.data() - value.data()) + piece.size());
+                }
+                value_bytes += piece.size();
+                pending_separators = 0;
+            }
+            if (obs_fold == http1_trailer_obs_fold::reject || line_end == std::string_view::npos ||
+                line_end + 2 >= block.size() || !is_http_ows_char(block[line_end + 2])) {
+                break;
+            }
+            ++pending_separators;
+            const auto piece_begin = line_end + 2;
+            line_end = block.find("\r\n", piece_begin);
+            piece = http_trim_ows(line_at(piece_begin, line_end));
         }
-        if (!budget.add_field(name, value)) {
+        if (!budget.add_field(name.size(), value_bytes)) {
             return http_trailer_block_status::section_too_large;
         }
         if (!discarded_name(name) && !visitor(name, value)) {

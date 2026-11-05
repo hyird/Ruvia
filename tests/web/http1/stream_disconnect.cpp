@@ -16,6 +16,8 @@
 #include <thread>
 #include <vector>
 
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/stream.hpp>
@@ -40,14 +42,14 @@
 namespace stream_disconnect_test {
 using namespace std::chrono_literals;
 using clock_type = std::chrono::steady_clock;
-std::atomic<std::size_t> finished{}, cancelled{}, errors{}, context_cancelled{}, body_rejected{}, body_complete{};
+std::atomic<std::size_t> finished{}, cancelled{}, errors{}, context_cancelled{}, body_cancelled{}, body_complete{};
+std::atomic<std::size_t> pipeline_cancelled{};
 std::atomic<std::size_t> write_entered{};
 // Upgraded writes to a peer that stops reading, and how many of them failed.
 std::atomic<std::size_t> stalled_upgrade_writes{}, stalled_upgrade_failures{};
 // More than loopback socket buffers absorb, so the write stays blocked.
 constexpr std::size_t stalled_upgrade_bytes = std::size_t{16} << 20;
 ruvia::stop_source explicit_stop;
-std::atomic<bool> default_cancelled{};
 
 struct completion final {
     ~completion() {
@@ -59,10 +61,12 @@ class routes final {
     RUVIA_ROUTES_BEGIN(routes)
     RUVIA_GET("/disconnect/events", events);
     RUVIA_GET("/disconnect/pipeline", pipeline);
+    RUVIA_GET("/disconnect/pipeline-wait", pipeline_wait);
     RUVIA_GET("/disconnect/body", body);
     RUVIA_POST("/disconnect/echo", echo);
     RUVIA_POST("/disconnect/post-sse", post_sse);
     RUVIA_GET("/disconnect/health", health);
+    RUVIA_GET("/disconnect/slow", slow);
     RUVIA_GET("/disconnect/h2-bulk", h2_bulk);
     RUVIA_GET_WS("/disconnect/websocket-stall", websocket_stall);
     RUVIA_CONNECT("stall.test:443", tunnel_stall);
@@ -76,16 +80,9 @@ class routes final {
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
-        auto token = mode == "default" ? original : writer.cancel_on_peer_eof();
-        const ruvia::stop_group wait_stop(token, mode == "explicit" ? explicit_stop.token() : ruvia::stop_token{});
-        token = wait_stop.token();
+        const ruvia::stop_group wait_stop(original, mode == "explicit" ? explicit_stop.token() : ruvia::stop_token{});
+        const auto token = wait_stop.token();
         co_await writer.write({.data_ = "first"});
-        if (mode == "default") {
-            default_cancelled.store(co_await ruvia::sleep_for(c.worker(), 200ms, token) ==
-                                    ruvia::timer_sleep_result::stop_requested);
-            co_await writer.write({.data_ = "default-complete"});
-            co_return;
-        }
         if (mode == "write" || mode == "timeout") {
             // 大块写入让关闭、写完成和写超时竞争同一个连接生命周期。
             const std::string bulk(8 * 1024 * 1024, 'x');
@@ -93,6 +90,7 @@ class routes final {
             co_await c.stream().write(bulk);
             co_return;
         }
+        // 空闲等待：既无写入也无 writer.sleep()，只有读侧终止能及时唤醒。
         const auto result = mode == "writer" ? co_await writer.sleep(10s)
                                              : co_await ruvia::sleep_for(c.worker(), 10s, token);
         if (result == ruvia::timer_sleep_result::stop_requested) {
@@ -108,19 +106,32 @@ class routes final {
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
-        const auto token = writer.cancel_on_peer_eof();
         co_await writer.write("pipeline-first");
-        (void)co_await ruvia::sleep_for(c.worker(), 100ms, token);
+        if (co_await ruvia::sleep_for(c.worker(), 100ms, c.stop_token()) ==
+            ruvia::timer_sleep_result::stop_requested) {
+            pipeline_cancelled.fetch_add(1);
+        }
         co_await writer.write("pipeline-last");
     }
 
+    // A streamed request pipelined behind another: an idle wait on its stop.
+    ruvia::task<void> pipeline_wait(ruvia::context& c) {
+        auto& writer = c.stream();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write("wait-first");
+        if (co_await ruvia::sleep_for(c.worker(), 150ms, c.stop_token()) ==
+            ruvia::timer_sleep_result::stop_requested) {
+            pipeline_cancelled.fetch_add(1);
+        }
+        co_await writer.write("wait-last");
+    }
+
+    // The request body completes only after the handler starts; detection
+    // begins with the read that completes it, early commit or not.
     ruvia::task<void> body(ruvia::context& c) {
         auto& writer = c.stream();
-        try {
-            (void)writer.cancel_on_peer_eof();
-        } catch (const std::logic_error&) {
-            body_rejected.fetch_add(1);
-        }
         const bool early = c.req().query("early").has_value();
         if (early) {
             if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
@@ -130,12 +141,15 @@ class routes final {
             co_await writer.write("early");
         }
         const auto received = co_await c.req().text();
-        (void)writer.cancel_on_peer_eof();
         body_complete.fetch_add(1);
         if (!early && co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
         co_await writer.write(received);
+        if (c.req().query("wait").has_value() &&
+            co_await ruvia::sleep_for(c.worker(), 10s, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+            body_cancelled.fetch_add(1);
+        }
     }
 
     ruvia::task<void> post_sse(ruvia::context& c) {
@@ -154,6 +168,13 @@ class routes final {
 
     ruvia::task<ruvia::http_response> health(ruvia::context& c) {
         co_return c.text("healthy");
+    }
+
+    // A buffered response that leaves only after 100ms, so a client can end
+    // its request direction before the server writes anything.
+    ruvia::task<ruvia::http_response> slow(ruvia::context& c) {
+        (void)co_await ruvia::sleep_for(c.worker(), 100ms);
+        co_return c.text("slow-done");
     }
 
     ruvia::task<ruvia::http_response> h2_bulk(ruvia::context& c) {
@@ -322,6 +343,43 @@ public:
         asio::error_code ignored;
         stream_.next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
     }
+    // TLS 1.3 half-close: close_notify ends only the sending direction. The
+    // shutdown then waits for the server's close_notify; cancel that read so
+    // the response stays readable. Callers send it while the server stays
+    // quiet for far longer than the 20ms the close_notify write needs.
+    void send_close_notify() {
+        asio::cancellation_signal cancel;
+        bool completed = false;
+        asio::error_code error;
+        stream_.async_shutdown(asio::bind_cancellation_slot(cancel.slot(), [&](asio::error_code ec) {
+            error = ec;
+            completed = true;
+        }));
+        io_.restart();
+        io_.run_for(20ms);
+        if (!completed) {
+            cancel.emit(asio::cancellation_type::terminal);
+            wait_for_completion(completed, 2s);
+        }
+        if ((SSL_get_shutdown(stream_.native_handle()) & SSL_SENT_SHUTDOWN) == 0) {
+            throw std::runtime_error("TLS close_notify was not sent");
+        }
+        // The server may close first: answering with its close_notify, or,
+        // having abandoned a lone request, without one.
+        if (error && error != asio::error::operation_aborted && error != asio::error::eof &&
+            error != asio::ssl::error::stream_truncated) {
+            throw std::system_error(error);
+        }
+    }
+    // A clean end of the request direction: TCP FIN, or TLS close_notify. A
+    // bare TCP FIN under TLS is a truncation instead (half_close()).
+    void end_requests() {
+        if (tls_) {
+            send_close_notify();
+        } else {
+            half_close();
+        }
+    }
     void request_key_update() {
         if (SSL_key_update(stream_.native_handle(), SSL_KEY_UPDATE_REQUESTED) != 1) {
             throw std::runtime_error("TLS key update failed");
@@ -398,8 +456,106 @@ void check_pipeline_upload(ruvia::testing::test_context& ruvia_ctx, asio::io_con
     RUVIA_CHECK(output.find("HTTP/1.1 200 ") != std::string::npos);
 }
 
+// RFC 9112 section 9.6: a FIN behind pipelined requests closes only the
+// request direction. The stream in progress and every request received before
+// the FIN -- a streamed one idling on its stop included -- complete; then the
+// server closes without reading that end again as abandonment.
+void check_pipeline_half_close(ruvia::testing::test_context& ruvia_ctx, asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls, bool trailing_buffered) {
+    peer client(io, endpoint, tls);
+    const auto cancelled_before = pipeline_cancelled.load();
+    client.send("GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    RUVIA_CHECK(client.read_until("pipeline-first").find("pipeline-first") != std::string::npos);
+    // The streamed request is either the last one before the FIN, with no byte
+    // behind it, or followed by a buffered one.
+    client.send(std::string("GET /disconnect/pipeline-wait HTTP/1.1\r\nHost: localhost\r\n\r\n") +
+                (trailing_buffered ? "GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\n\r\n" : ""));
+    // Under TLS the TLS engine then reports the end to every later read at
+    // once, with no transport read: a pipelined stream must not re-read it.
+    client.end_requests();
+    // Read to the server's close: no Connection: close was requested, so only
+    // the request direction's end can close it before the 3s read deadline.
+    const auto begin = clock_type::now();
+    const auto output = client.read_until({}, 3s);
+    RUVIA_CHECK(clock_type::now() - begin < 2s);
+    const auto first_end = output.find("pipeline-last");
+    const auto waited_end = output.find("wait-last");
+    const auto health = output.find("healthy");
+    RUVIA_CHECK(first_end != std::string::npos);
+    RUVIA_CHECK(waited_end != std::string::npos && waited_end > first_end);
+    RUVIA_CHECK(output.find("0\r\n\r\n", waited_end) != std::string::npos);
+    if (trailing_buffered) {
+        RUVIA_CHECK(health != std::string::npos && health > waited_end);
+    } else {
+        RUVIA_CHECK(health == std::string::npos);
+    }
+    RUVIA_CHECK_EQ(pipeline_cancelled.load(), cancelled_before);
+}
+
 std::string request(std::string_view mode) {
     return "GET /disconnect/events?mode=" + std::string(mode) + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
+}
+
+// How the client ends a pipelined burst whose last request is a streamed
+// response idling on its stop.
+enum class pipeline_end { immediate,
+    after_last_started,
+    truncated };
+
+// A request received behind another one -- whatever route answered that one,
+// and whenever the end arrives -- treats a clean end of the request direction
+// as a half-close: it completes, then the server closes. A TLS truncation
+// (TCP FIN without close_notify) still ends it as abandonment.
+void check_pipelined_stream_end(ruvia::testing::test_context& ruvia_ctx, asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls, std::string_view leading_requests,
+    std::string_view leading_marker, pipeline_end end) {
+    peer client(io, endpoint, tls);
+    const auto cancelled_before = pipeline_cancelled.load();
+    client.send(std::string(leading_requests) + "GET /disconnect/pipeline-wait HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    std::string output;
+    if (end == pipeline_end::after_last_started) {
+        // The streamed request already runs, its predecessors done: the end
+        // arrives with nothing buffered behind any request.
+        output = client.read_until("wait-first");
+        RUVIA_CHECK(output.find("wait-first") != std::string::npos);
+        client.end_requests();
+    } else if (end == pipeline_end::truncated) {
+        client.half_close();
+    } else {
+        client.end_requests();
+    }
+    const auto begin = clock_type::now();
+    output += client.read_until({}, 3s);
+    RUVIA_CHECK(clock_type::now() - begin < 2s);
+    const auto leading_end = output.find(leading_marker);
+    RUVIA_CHECK(leading_end != std::string::npos);
+    const auto waited_end = output.find("wait-last");
+    if (end == pipeline_end::truncated) {
+        // The stream is abandoned: stopped in its wait, or failing its first
+        // write when the truncation is seen before it.
+        RUVIA_CHECK(waited_end == std::string::npos);
+        return;
+    }
+    RUVIA_CHECK(waited_end != std::string::npos && waited_end > leading_end);
+    RUVIA_CHECK(output.find("0\r\n\r\n", waited_end) != std::string::npos);
+    RUVIA_CHECK_EQ(pipeline_cancelled.load(), cancelled_before);
+}
+
+// A FIN (or close_notify) with no request before or behind the stream is the
+// client leaving (Go net/http, Pingora, nginx): the request stops and the
+// stream truncates.
+void check_single_stream_end(ruvia::testing::test_context& ruvia_ctx, asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls) {
+    peer client(io, endpoint, tls);
+    const auto before = cancelled.load();
+    const auto context_before = context_cancelled.load();
+    client.send(request("token"));
+    RUVIA_CHECK(client.read_until("data: first").find("data: first") != std::string::npos);
+    client.end_requests();
+    RUVIA_CHECK(wait_until([&] { return cancelled.load() == before + 1; }));
+    RUVIA_CHECK_EQ(context_cancelled.load(), context_before + 1);
+    RUVIA_CHECK(client.read_until("0\r\n\r\n", 500ms).find("0\r\n\r\n") == std::string::npos);
+    client.close();
 }
 
 std::size_t fd_count() {
@@ -418,7 +574,7 @@ std::size_t fd_count() {
 
 using namespace stream_disconnect_test;
 
-RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
+RUVIA_TEST(http1_stream_peer_close_stops_request_and_recycles_connections) {
     ruvia::test::tls_identity identity("localhost");
     const auto private_key = identity.ca_file_.parent_path() / "key.pem";
     {
@@ -461,29 +617,46 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
         if (ready) {
             for (const bool tls : {false, true}) {
                 const auto endpoint = tls ? tls_endpoint : plain_endpoint;
+                // An idle SSE (no write, no writer.sleep()) observes the client
+                // leaving through context::stop_token(): FIN, TLS close_notify, or RST.
+                struct close_kind final {
+                    bool notify_;
+                    bool reset_;
+                };
                 for (const auto mode : {"token", "writer"}) {
-                    for (const bool notify : {false, true}) {
+                    for (const auto kind : {close_kind{false, false}, close_kind{true, false}, close_kind{false, true}}) {
                         peer client(io, endpoint, tls);
                         const auto before = cancelled.load();
                         const auto context_before = context_cancelled.load();
                         client.send(request(mode));
                         RUVIA_CHECK(client.read_until("data: first").find("data: first") != std::string::npos);
                         const auto begin = clock_type::now();
-                        client.close(notify);
+                        client.close(kind.notify_, kind.reset_);
                         RUVIA_CHECK(wait_until([&] { return cancelled.load() == before + 1; }));
                         RUVIA_CHECK(clock_type::now() - begin < 2s);
-                        RUVIA_CHECK_EQ(context_cancelled.load(), context_before);
+                        RUVIA_CHECK_EQ(context_cancelled.load(), context_before + 1);
                         RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
                     }
                 }
                 peer body_client(io, endpoint, tls);
-                const auto rejected_before = body_rejected.load();
                 const auto complete_before = body_complete.load();
                 body_client.send("GET /disconnect/body HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\nConnection: close\r\n\r\n");
-                RUVIA_CHECK(wait_until([&] { return body_rejected.load() == rejected_before + 1; }));
+                std::this_thread::sleep_for(20ms);
                 body_client.send("hello-world");
                 RUVIA_CHECK(body_client.read_until("0\r\n\r\n").find("hello-world") != std::string::npos);
                 RUVIA_CHECK_EQ(body_complete.load(), complete_before + 1);
+                // Committed before its body arrived: the read completing the
+                // body starts detection, so the idle wait still ends on close.
+                peer waiting_body_client(io, endpoint, tls);
+                const auto body_cancelled_before = body_cancelled.load();
+                waiting_body_client.send("GET /disconnect/body?early=1&wait=1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\n");
+                RUVIA_CHECK(waiting_body_client.read_until("early").find("early") != std::string::npos);
+                waiting_body_client.send("hello-world");
+                RUVIA_CHECK(waiting_body_client.read_until("hello-world").find("hello-world") != std::string::npos);
+                const auto body_close_begin = clock_type::now();
+                waiting_body_client.close();
+                RUVIA_CHECK(wait_until([&] { return body_cancelled.load() == body_cancelled_before + 1; }));
+                RUVIA_CHECK(clock_type::now() - body_close_begin < 2s);
                 peer post_sse_client(io, endpoint, tls);
                 post_sse_client.send("POST /disconnect/post-sse HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"id\":\"1\"}");
                 const auto post_sse_output = post_sse_client.read_until("0\r\n\r\n");
@@ -498,12 +671,35 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
                 RUVIA_CHECK(early_output.find("healthy") == std::string::npos);
                 RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
 
+                const auto pipeline_cancelled_before = pipeline_cancelled.load();
                 for (const std::size_t size : {std::size_t{31}, std::size_t{256 * 1024}}) {
                     check_pipeline_upload(ruvia_ctx, io, endpoint, tls, size, false);
                     if (tls) {
                         check_pipeline_upload(ruvia_ctx, io, endpoint, true, size, true);
                     }
                 }
+                // Pipelined bytes arriving during the stream are retained, not
+                // read as the client leaving.
+                RUVIA_CHECK_EQ(pipeline_cancelled.load(), pipeline_cancelled_before);
+                for (const bool trailing_buffered : {false, true}) {
+                    check_pipeline_half_close(ruvia_ctx, io, endpoint, tls, trailing_buffered);
+                }
+                constexpr std::string_view slow_request = "GET /disconnect/slow HTTP/1.1\r\nHost: localhost\r\n\r\n";
+                const std::string two_buffered =
+                    std::string(slow_request) + "GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+                // [buffered, streamed] and [buffered, buffered, streamed]: no
+                // monitor ran before the stream, which still completes.
+                check_pipelined_stream_end(ruvia_ctx, io, endpoint, tls, slow_request, "slow-done", pipeline_end::immediate);
+                check_pipelined_stream_end(ruvia_ctx, io, endpoint, tls, two_buffered, "healthy", pipeline_end::immediate);
+                // [streamed, streamed] with the end after the first completed.
+                check_pipelined_stream_end(ruvia_ctx, io, endpoint, tls,
+                    "GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n", "pipeline-last",
+                    pipeline_end::after_last_started);
+                if (tls) {
+                    check_pipelined_stream_end(ruvia_ctx, io, endpoint, tls, slow_request, "slow-done", pipeline_end::truncated);
+                }
+                check_single_stream_end(ruvia_ctx, io, endpoint, tls);
+                RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
                 for (const auto mode : {"write", "timeout"}) {
                     peer racing(io, endpoint, tls);
                     const auto writes_before = write_entered.load();
@@ -563,19 +759,6 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
             RUVIA_CHECK_EQ(context_cancelled.load(), context_before);
             explicit_peer.close();
             RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
-            // 默认路径既不订阅 EOF，也不破坏 TCP 合法的请求方向半关闭。
-            peer default_peer(io, plain_endpoint, false);
-            const auto default_before = finished.load();
-            default_peer.send(request("default"));
-            RUVIA_CHECK(default_peer.read_until("data: first").find("data: first") != std::string::npos);
-            default_peer.half_close();
-            std::this_thread::sleep_for(50ms);
-            RUVIA_CHECK_EQ(finished.load(), default_before);
-            RUVIA_CHECK(!default_cancelled.load());
-            RUVIA_CHECK(default_peer.read_until("default-complete", 800ms).find("default-complete") != std::string::npos);
-            RUVIA_CHECK(!default_cancelled.load());
-            default_peer.close();
-            RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
 
             const auto fd_baseline = fd_count();
             std::size_t fd_peak = fd_baseline, active_peak = 0;
@@ -592,12 +775,14 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
                 active_peak = std::max(active_peak, app.http_stats().active_connections_);
                 fd_peak = std::max(fd_peak, fd_count());
                 const auto before = cancelled.load();
+                const auto context_before = context_cancelled.load();
                 const auto begin = clock_type::now();
                 for (auto& client : clients) {
                     client->close();
                 }
                 RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
                 RUVIA_CHECK_EQ(cancelled.load(), before + batch_size);
+                RUVIA_CHECK_EQ(context_cancelled.load(), context_before + batch_size);
                 recycle_max = std::max(recycle_max, std::chrono::duration_cast<std::chrono::milliseconds>(clock_type::now() - begin));
             }
             const auto fd_final = fd_count();
@@ -617,7 +802,6 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
                       << " refused=" << app.http_stats().connections_refused_
                       << " max_connections_per_worker=" << *ruvia::server_config{}.max_connections_per_worker_ << '\n';
             RUVIA_CHECK_EQ(app.http_stats().connections_refused_, std::size_t{0});
-            RUVIA_CHECK_EQ(context_cancelled.load(), std::size_t{0});
 
             // 在同一个有限等待上竞争 worker stop 和 peer EOF。
             peer stopping(io, plain_endpoint, false);

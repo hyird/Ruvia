@@ -10,6 +10,7 @@
 
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
@@ -1558,7 +1559,7 @@ RUVIA_TEST(http1_response_coding_folds_all_accept_encoding_field_lines) {
         "Accept-Encoding: identity;q=0, gzip;q=0.2\r\n"
         "Accept-Encoding: br;q=0.8\r\n\r\n");
     RUVIA_CHECK(parsed_value.complete());
-    const auto response_coding = parsed_value.state_.response_coding_selection();
+    const auto response_coding = ruvia::http_response_coding_selection_for(parsed_value.state_.request_);
     RUVIA_CHECK(response_coding.acceptable());
     RUVIA_CHECK(response_coding.coding() == ruvia::http_content_coding::brotli);
 }
@@ -1568,7 +1569,7 @@ RUVIA_TEST(http1_response_coding_rejects_when_every_coding_is_forbidden) {
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n");
     RUVIA_CHECK(parsed_value.complete());
-    const auto response_coding = parsed_value.state_.response_coding_selection();
+    const auto response_coding = ruvia::http_response_coding_selection_for(parsed_value.state_.request_);
     RUVIA_CHECK(!response_coding.acceptable());
 }
 

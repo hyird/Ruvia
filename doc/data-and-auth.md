@@ -31,6 +31,7 @@ ruvia::db_config config{
     .connect_timeout_ = std::chrono::seconds(5),
     .query_timeout_ = std::chrono::seconds(30),
     .acquire_timeout_ = std::chrono::seconds(5),
+    .transaction_timeout_ = std::chrono::seconds(60),
 };
 
 // 1. 注册到生产应用（每个业务 worker 独立持有 pool_size_per_worker_ 条连接）：
@@ -54,7 +55,14 @@ ruvia::app().database({
 
 数据库 TLS 复用 `client_tls_config`。`verify_identity` 在握手内完成证书链与 RFC 9525 subjectAltName 校验，先于发送登录或启动消息：DNS 名只匹配 DNS SAN，IP 只匹配 IP SAN，不回退到主题 CN；PostgreSQL 可用 `tls_.server_name_` 覆盖验证名，MariaDB 当前要求数字 IP 且不接受覆盖名。`max_outgoing_records_` 默认 `2^23`（范围 `1..2^23`），限制单连接发出的全部 TLS 记录并在到达上限时终止连接。系统 DNS 查询超时、取消、客户端关闭或 Worker 停机时不等待不可抢占的底层 `getaddrinfo` 返回。
 
-`read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算，流空闲时间不计入它。
+`read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算。两者都不晚于下述流的整体截止期。
+
+`transaction_timeout_`（默认 `60s`，`std::nullopt` 关闭，零或负值作为非法配置以 `std::invalid_argument` 拒绝）是一次连接租约的整体截止期，与每条语句自身的超时构成双轨：事务从 `begin_transaction()` 取得连接起（`BEGIN` 之前，不含等待空闲连接的时间）到 `commit()` / `rollback()` 结束，流式结果从 `query_stream()` 取得连接起到读尽或 `close()` 为止，两次操作之间的空闲时间也计入。其中每条语句（含 `BEGIN`、`COMMIT`、`ROLLBACK` 与每次流式 `read()` / `close()`）的截止期取其自身 operation timeout、`query_timeout_` 与租约剩余时间中最早者。到期时：
+
+- 语句正在执行：该语句以 `db_error`（`timeout`）失败，连接被关闭而不归还连接池，事务或流随之以失败结束，之后的调用因其已不再活跃而失败。
+- 调用方持有租约但没有操作在执行（如事务中等待远程 I/O）：worker 上由该截止期驱动的定时器（不轮询）立即关闭连接，服务端随之回滚事务并释放锁；之后对该事务或流的下一次调用（包括 `commit()`、`rollback()`、`read()`、`close()`）不再发送任何语句，以 `db_error`（`timeout`）失败并结束它。租约在此之前仍由持有者占用，析构或下一次调用后才回到连接池。
+
+迁移器沿用配置中的 `transaction_timeout_`（与 `query_timeout_` 相同，不另设）：`transactional` 迁移超过它时以 `timeout` 失败并关闭迁移会话，本次迁移随之终止且迁移锁随会话释放。需要长时间运行的事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。
 
 池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
 
@@ -125,6 +133,8 @@ co_await tx.commit();
 ```
 
 事务中的语句一旦失败（服务端拒绝、结果形状不符，或字符串参数含 NUL 字节等被驱动在编码时拒绝），事务即被回滚并归还连接，之后对该事务的调用会因其已不再活跃而失败。
+
+事务整体受 `db_config::transaction_timeout_`（默认 `60s`）约束，包括两次调用之间的空闲时间：不要在事务中等待远程 I/O，超过截止期后连接即被关闭、服务端回滚并释放锁，下一次调用（含 `commit()`）以 `db_error`（`timeout`）失败，详见第 1.1 节。
 
 PostgreSQL 事务还额外支持：
 - **咨询锁（Advisory Locks）**：`co_await tx.advisory_lock(key)` / `try_advisory_lock(key)`
@@ -347,6 +357,7 @@ ruvia::app()
 - 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.handle(options = {})` 获取 `redis_handle`；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
 - 每条连接复用回复解析根槽；嵌套值和字符串仍由当前操作指定的资源持有，失败或取消时随未完成的回复一起回收。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
+- `subscription_ping_interval_`（默认 30 秒，`std::nullopt` 关闭）是 Pub/Sub 订阅连接在 `read()` 等待期间的空闲探活间隔，语义见 4.3。
 
 ### 4.2 `ruvia::redis_handle` 命令分类总览
 
@@ -417,6 +428,17 @@ while (auto event = co_await sub.read()) {
 `read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，不再通过空字符串判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；原先按 `pattern().empty()` 分流的调用方改为检查 optional 是否有值。
 
 线上 `message` / `pmessage` 与四种确认字段的定义见 [Redis Pub/Sub 推送格式](https://redis.io/docs/latest/develop/pubsub/#format-of-pushed-messages)。
+
+#### 空闲探活（`redis_config::subscription_ping_interval_`）
+
+订阅连接平时只收不发，对端静默宕机或中间设备丢弃连接时 `read()` 会无限等待。`subscription_ping_interval_` 为订阅连接提供与 Pingora `h2_ping_interval`、Go `http2.Transport.ReadIdleTimeout` 同类的读空闲探活，默认 30 秒，`std::nullopt` 显式关闭，配置零或负值在构造客户端时抛出 `std::invalid_argument`：
+
+- 仅在 `read()` 等待期间计时，计时起点为本次 `read()` 开始；收到任何字节（包括半条回复）都会重置计时。计时器由最近到期时间事件驱动，读结束前取消，不轮询，也不比订阅本身活得更久。
+- 一个间隔内无任何输入时，若没有在途的用户命令，就在订阅连接上发送 `PING`；若在途命令（正在写出，或在最近一次输入之后写出、回复尚未到达）存在，则以该命令自身的回复作为存活证明，不再发送 `PING`。
+- 探测开始后又满一个间隔仍无任何输入，订阅关闭，等待中的 `read()` 抛出 `redis_error(timeout)`，之后 `read()` 返回 `std::nullopt`、命令抛出 `redis_error(closing)`。`PING` 本身须在一个间隔内写出，且不超过发起它的 `read()` 的整体截止期（`operation_options::timeout_`），写出超时同样按超时关闭订阅；`read()` 失败时先关闭连接唤醒在途 `PING` 写出再返回，因此 `PING` 不会把 `read()` 拖过其截止期。
+- `PING` 回复在内部消费，从不作为事件从 `read()` 返回：订阅状态下 RESP2 回复为 `["pong", ""]`，退订全部频道后连接回到普通模式，回复为 `+PONG`（与 RESP3 形式相同）；未发送 `PING` 时收到的此类回复仍按畸形推送关闭连接。
+- 一次只有一个 `PING` 写出；与用户命令共用写通道，用户命令遇到正在写出的 `PING` 时等待其完成，不会因此抛出 `std::logic_error`。启用 ACL 时订阅用户须允许 `PING`，否则其错误回复会以 `redis_error(command_error)` 出现在 `read()` 中，此时应关闭探活。
+- 探活只覆盖 `read()` 等待期间；需要整次读取截止期时仍使用 `operation_options::timeout_`，两者独立生效。
 
 ### 4.4 Redis HASH 实体与 RediSearch ORM（`RUVIA_REDIS_ENTITY`）
 

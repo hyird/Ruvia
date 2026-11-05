@@ -28,8 +28,8 @@ public:
         signal_.notify();
     }
 
-    // Only opt-in streaming consumers allocate a stop state. Other stream
-    // readers retain the existing worker-local wake/termination path.
+    // Only response-stream routes allocate a stop state, for their request
+    // stop. Other stream readers retain the worker-local wake/termination path.
     [[nodiscard]] stop_token terminal_stop_token() {
         if (!stop_source_) {
             stop_source_.emplace();

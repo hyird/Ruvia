@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <exception>
 #include <optional>
 #include <string_view>
@@ -12,13 +13,21 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline std::optional<rate_limit_rejection> decide_request_rate_limit(
-    rate_limiter* limiter, std::string_view remote_address) noexcept {
+// The instant a request's rate-limit decisions are made for: the arrival its
+// owner recorded (test_app supplies one), else a steady-clock reading taken
+// only once a rule is actually consulted.
+[[nodiscard]] inline std::chrono::steady_clock::time_point rate_limit_instant(
+    const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
+    return arrival.has_value() ? *arrival : std::chrono::steady_clock::now();
+}
+
+[[nodiscard]] inline std::optional<rate_limit_rejection> decide_request_rate_limit(rate_limiter* limiter,
+    std::string_view remote_address, const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
     if (limiter == nullptr || !limiter->has_default_rule()) {
         return std::nullopt;
     }
     char key_buffer[rate_limit_key_buffer_bytes];
-    return limiter->allow_default(rate_limit_key_for(remote_address, key_buffer));
+    return limiter->allow_default(rate_limit_key_for(remote_address, key_buffer), rate_limit_instant(arrival));
 }
 
 // Thrown by a route rate-limit middleware. Error dispatch answers it the way a

@@ -12,11 +12,12 @@ namespace ruvia {
 
 class context;
 
-// Each worker preallocates this many fixed-window key entries when either the
-// app-wide default rule or a route-specific rate-limit middleware is present.
-// A key probes a bounded window of entries from its hash position; a key
-// whose window holds only live entries of other keys takes the rule's
-// overflow policy even when other parts of the table are free.
+// Each worker preallocates this many sliding-window key entries when either
+// the app-wide default rule or a route-specific rate-limit middleware is
+// present. A key probes a bounded run of entries from its hash position; a
+// key whose run holds only live entries of other keys takes the rule's
+// overflow policy even when other parts of the table are free. An entry stays
+// live until two of its key's windows have passed without a request.
 inline constexpr std::size_t default_rate_limit_capacity_per_worker = 8192;
 
 enum class rate_limit_overflow_policy : std::uint8_t {
@@ -24,8 +25,18 @@ enum class rate_limit_overflow_policy : std::uint8_t {
     allow,
 };
 
-// Per-worker, per-address fixed-window rule. Configuration remains a plain
+// Per-worker, per-address sliding-window rule. Configuration remains a plain
 // value; each owner validates it once before publishing runtime state.
+// Each key's windows start at its first request and follow one another. A
+// request is admitted while
+//     previous * (unelapsed fraction of the current window) + current
+// stays below max_requests_, where current and previous count the requests
+// admitted in the current and the preceding window (a gap of two or more
+// windows leaves previous at zero). The previous window's count fades out
+// instead of vanishing at the boundary, so a client cannot spend one budget
+// at the end of a window and a second right after it. Refused requests are
+// not counted. A refusal's Retry-After is the earliest whole second at which
+// the estimate admits again; X-RateLimit-Reset is when it has fallen to zero.
 // Both app-wide and route rules key on the resolved client address: unscoped
 // IPv6 shares a /64 budget, IPv4-mapped IPv6 shares its dotted IPv4 host budget,
 // and scoped IPv6 keys on its full address plus numeric scope. Equivalent
@@ -65,7 +76,8 @@ void enforce_route_rate_limit(context& context_value, const void* declaration, c
 // route rule enforces both windows, never one shared counter. It does not
 // replace application::rate_limit() -- both apply, so the stricter is what a
 // caller meets, the same "narrower scope may only tighten" rule body_limit
-// follows. Worker-local, like the app-wide rule. A refused request is answered
+// follows. Worker-local, like the app-wide rule, and counted with the same
+// sliding-window estimate (see rate_limit_rule). A refused request is answered
 // like one the app-wide rule refuses: 429 through the application error
 // handler, with Retry-After and X-RateLimit-* fields.
 template <std::size_t max_requests, std::int64_t window_ms,

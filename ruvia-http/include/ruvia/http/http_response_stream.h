@@ -140,6 +140,10 @@ private:
     http_response_stream_commit_plan commit_plan_;
 };
 
+// An application Transfer-Encoding must be exactly the `chunked` coding (OWS
+// and ASCII case aside): it is a hint the framework's writer replaces with its
+// own framing. Any other value throws http1_response_head_error for an HTTP/1
+// framing and std::invalid_argument for HTTP/2 before the response changes.
 [[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
     http_response response, http_response_stream_commit_plan commit_plan);
 }  // namespace ruvia

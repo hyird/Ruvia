@@ -107,6 +107,8 @@ struct server_config final {
     // body read the next write waits on (on the blocking pool) is bounded by
     // the same limit: when it expires the response is answered with 503
     // before its head, or its connection (HTTP/1) or stream (HTTP/2) ends.
+    // So is the open context::file() and context::static_file() wait on: its
+    // task then throws a 503 file_read_unavailable http_error.
     std::optional<std::chrono::milliseconds> write_timeout_{std::chrono::seconds(60)};
     // Bounded by default so a connection flood cannot exhaust FDs or memory.
     // At the cap, a new connection takes the slot of the connection that has

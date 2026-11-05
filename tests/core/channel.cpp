@@ -745,7 +745,7 @@ int main() {
         if (empty_sender.valid() || !sender.valid() || !receiver.valid()) {
             return 1;
         }
-        auto [cap_sender, cap_receiver] = ruvia::make_channel<int>(worker_value, 2);
+        auto [cap_sender, cap_receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 2});
         if (!cap_sender.valid() || !cap_receiver.valid()) {
             return 1;
         }

@@ -20,6 +20,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
@@ -693,12 +694,22 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     break;
                 }
                 case http_request_endpoint::response_stream: {
+                    // RST_STREAM or the connection ending stops the request:
+                    // context::stop_token() combines it with the worker's stop.
+                    if (connection_.stream_aborted(stream_id)) {
+                        stream_signal->stop();
+                    }
+                    const stop_group request_stop(
+                        dispatch_services.get_stop_token(), stream_signal->terminal_stop_token());
+                    const auto request_stop_token = request_stop.token();
+                    auto stream_services = dispatch_services;
+                    stream_services.bind_stop_token(request_stop_token);
                     http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
                         *stream_runtime, write_signal_, *stream_signal, output_budget_,
                         worker_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
                         options.compression_ ? &*options.compression_ : nullptr, options.cors_ ? &*options.cors_ : nullptr);
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
-                        request_memory_value, dispatch_services,
+                        request_memory_value, stream_services,
                         [this, stream_id]() noexcept { return connection_.stream_aborted(stream_id); });
                     if (result_value.peer_aborted_before_commit() != nullptr) {
                         co_return;

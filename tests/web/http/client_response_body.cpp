@@ -1701,6 +1701,36 @@ RUVIA_TEST(http_client_sends_heads_beyond_the_retained_buffer_and_rejects_oversi
     run_operation(worker, io, operation);
 }
 
+RUVIA_TEST(http_client_rejects_connection_options_naming_request_origin_metadata) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    loopback_response_server server(io, worker.handle_, {"hop-by-hop"});
+    server.start();
+
+    auto operation = [&]() -> ruvia::task<void> {
+        ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(server.port()));
+        const std::array hop_by_hop{ruvia::http_header_view{"Connection", "X-Hop, Proxy-Authorization"},
+            ruvia::http_header_view{"X-Hop", "1"}};
+        auto accepted = co_await client.handle().send({.target_ = "/hop", .headers_ = hop_by_hop});
+        RUVIA_CHECK(accepted.status() == ruvia::http_status::ok);
+        (void)co_await accepted.body().read_all();
+        co_await server.wait();
+
+        for (const std::string_view nominated : {"Forwarded", "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"}) {
+            const std::array headers{ruvia::http_header_view{"Connection", nominated}};
+            std::optional<ruvia::http_client_error::code_type> rejected;
+            try {
+                (void)co_await client.handle().send({.target_ = "/origin", .headers_ = headers});
+            } catch (const ruvia::http_client_error& error) {
+                rejected = error.code();
+            }
+            RUVIA_CHECK(rejected == ruvia::http_client_error::code_type::invalid_request);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(client_shutdown_keeps_incomplete_response_error_observable) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);

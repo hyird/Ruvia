@@ -162,6 +162,10 @@ enum class http1_client_request_prepare_error : std::uint8_t {
     // only chunked request content can carry (RFC 9112 section 7.1.2).
     trailer_requires_chunked_content,
     expect_header_managed_by_writer,
+    // A malformed Connection list, or an option naming a field the next hop
+    // must still see: framing fields, Host, request-origin metadata
+    // (Forwarded, X-Forwarded-For, X-Forwarded-Proto, X-Forwarded-Host), or a
+    // field intended for all recipients (RFC 9110 section 7.6.1).
     invalid_connection,
     invalid_upgrade,
     upgrade_connection_option_required,

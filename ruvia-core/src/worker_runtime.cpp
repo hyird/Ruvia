@@ -479,7 +479,7 @@ void worker_runtime::join() {
     impl_->join();
 }
 
-std::exception_ptr worker_runtime::failure() const noexcept {
+std::exception_ptr worker_runtime::failure() noexcept {
     const std::lock_guard lock(impl_->mutex_);
     return impl_->failure_.observe();
 }

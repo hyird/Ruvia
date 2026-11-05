@@ -23,6 +23,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
@@ -85,7 +86,8 @@ class db_pool;
 [[nodiscard]] std::array<char, 6> format_db_port(std::uint16_t port);
 
 // The driver hooks. Statement hooks run on a connected, leased slot under a
-// deadline already constrained by the query timeout. `sql` views are
+// deadline already constrained by the query timeout and, on a transaction or
+// stream lease, by the lease deadline. `sql` views are
 // NUL-terminated and contain no other NUL, and string parameters own their
 // NUL-terminated storage for the entire hook call: raw SQL is checked once
 // where it enters (prepare_db_statement), compiled SQL is built that way, and
@@ -109,8 +111,9 @@ class db_pool;
 //
 // Stream hooks are protocol steps only: the pool owns a stream's cancellation,
 // deadline and the release of its slot. A stream's `result` handle is the
-// driver's; a hook that frees it sets it to null, and after a hook throws the
-// pool discards what is left of it (discard_stream()) and closes the slot.
+// driver's, kept in the slot (db_slot::stream_result_); a hook that frees it
+// sets it to null, and after a hook throws the pool discards what is left of
+// it (discard_stream()) and closes the slot.
 struct mariadb_driver final {
     using connection_type = st_mysql;
     using pool_type = db_pool<mariadb_driver>;
@@ -192,6 +195,12 @@ struct db_slot final {
     [[no_unique_address]] typename driver_type::session_type session_;
     // A sleep wait parks here until its deadline or a close resumes it.
     std::coroutine_handle<> deadline_continuation_{};
+    // The driver result of the stream holding this slot, null otherwise. The
+    // pool keeps it so an expiring lease can discard it before closing.
+    void* stream_result_{nullptr};
+    // Whole-lease deadline (db_config::transaction_timeout_) of the
+    // transaction or stream holding this slot; unbounded for any other lease.
+    operation_timeout lease_timeout_{std::nullopt};
     bool connected_{false};
     // Shutdown may request closure while an asynchronous wait still borrows
     // this slot and its socket. The transport stays alive until that wait
@@ -199,6 +208,14 @@ struct db_slot final {
     // it immediately would leave the queued Asio handler dangling.
     bool wait_active_{false};
     bool close_requested_{false};
+    // An operation of the transaction or stream holding this slot is running.
+    // Its deadline already ends no later than lease_timeout_, so the lease
+    // timer leaves it to that deadline.
+    bool lease_busy_{false};
+    // Fires at lease_timeout_ to close the connection of a lease its holder
+    // keeps idle. Declared last so it is unregistered before anything it
+    // reaches is destroyed.
+    worker_timer_registration lease_timer_;
 };
 
 // Marks a slot as borrowed by a suspended wait for the wait's duration.
@@ -252,6 +269,14 @@ public:
     // Outside a transaction, a driver that pipelines statements shares
     // connections between query() and execute() callers. `io_metrics` is the
     // request's counter block, or null outside a request.
+    //
+    // A transaction (begin_transaction() to commit/rollback) and a stream
+    // (stream() until its rows run out or it is closed) each hold one lease
+    // under config().transaction_timeout_: every operation on it runs under
+    // the earlier of its own deadline and the lease deadline, and a lease
+    // whose deadline passes between operations has its connection closed by
+    // the lease timer; its next operation fails with timeout and gives the
+    // slot back.
     task<db_rows> query(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options,
         request_io_metrics* io_metrics = nullptr);
@@ -260,11 +285,11 @@ public:
         request_io_metrics* io_metrics = nullptr);
     task<db_stream_result> stream(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options);
-    task<std::optional<db_row>> read_stream_row(std::size_t slot, void* result,
-        std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-        std::pmr::memory_resource* resource, const operation_options& options);
-    task<void> close_stream(std::size_t slot, void* result, const operation_options& options);
-    void abort_stream(std::size_t slot, void* result) noexcept;
+    task<std::optional<db_row>> read_stream_row(std::size_t slot, std::pmr::vector<db_field>& fields,
+        std::pmr::vector<std::pmr::string>& column_names, std::pmr::memory_resource* resource,
+        const operation_options& options);
+    task<void> close_stream(std::size_t slot, const operation_options& options);
+    void abort_stream(std::size_t slot) noexcept;
     task<db_rows> query_on_transaction_slot(std::size_t slot, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options);
     task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::pmr::string sql,
@@ -323,7 +348,8 @@ public:
     // at once, while the resumption that unlists it may come a turn later.
     [[nodiscard]] std::optional<std::uint64_t> oldest_exclusive_arrival() const noexcept;
     // Gives a lease back, unless the driver state keeps it for a caller of its
-    // own. Every lease this pool hands out ends here.
+    // own. Every lease this pool hands out ends here, and so does the lease
+    // deadline of a transaction or stream.
     void release_slot(std::size_t index) noexcept;
     // Runs once per new lease, before its first statement: closes the leased
     // slot's pooled connection when the server ended the session while it sat
@@ -452,9 +478,27 @@ private:
     task<void> retire_failed_transaction_slot(std::size_t index, std::pmr::memory_resource* resource,
         const operation_timeout& timeout, const std::exception_ptr& failure);
     task<void> open_slot(std::size_t index, const operation_timeout& timeout);
+    // Starts the lease deadline of a transaction or stream on its fresh lease,
+    // with its first operation running.
+    void start_lease(std::size_t index);
+    // Starts one operation on a transaction or stream lease: reports an
+    // aborted slot, then a lease whose deadline has passed.
+    void enter_lease_operation(std::size_t index);
+    // Leaves the lease held and idle after an operation succeeded; throws
+    // timeout when the lease deadline passed meanwhile, so the operation fails
+    // and its caller retires the lease.
+    void leave_lease_operation(std::size_t index);
+    // The earlier of an operation's own deadline and its lease deadline.
+    [[nodiscard]] operation_timeout lease_operation_timeout(
+        std::size_t index, const operation_timeout& timeout) const noexcept;
+    // Lease timer expiry: closes an idle lease's connection, so the server
+    // ends its transaction and releases its locks while the holder keeps the
+    // lease.
+    void expire_idle_lease(std::size_t index) noexcept;
+    [[nodiscard]] db_error lease_timed_out() const;
     // Discards what a failed stream left, closes its connection and gives its
     // lease back.
-    void fail_stream(std::size_t index, void* result, typename leases_type::cancellation_guard& cancellation) noexcept;
+    void fail_stream(std::size_t index, typename leases_type::cancellation_guard& cancellation) noexcept;
     // Every lease names a slot of this pool; any other index breaks the lease
     // lifecycle, which nothing can unwind from.
     void require_slot_index(std::size_t index) const noexcept;

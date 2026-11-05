@@ -108,7 +108,6 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
     // below cannot leave an earlier head_ready result beside the new request.
     body_plan_ = http1_request_body_plan(http_request_expectations{});
     connection_plan_ = http1_request_connection_plan::http11_close();
-    response_coding_qualities_ = {};
     progress_ = scan;
     request_.reset();
 
@@ -239,7 +238,6 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         }
     }
 
-    response_coding_qualities_ = block.response_coding_qualities_;
     auto expectations = block.expectations_;
     if (protocol_version == http_protocol_version::http10) {
         expectations.ignore_continue();

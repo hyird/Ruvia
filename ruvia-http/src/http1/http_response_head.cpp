@@ -62,10 +62,9 @@ void emit_response_head(const http_response& response, http_raw_wire_sink& sink_
 
     for (const auto& header : response.headers()) {
         const auto known_bit = http_response_header_access::known_bit(header);
-        // HTTP/1 framing belongs exclusively to http1_response_head_plan. A handler
-        // cannot override canonical chunked framing, invent Transfer-Encoding on
-        // an HTTP/1.0 response, or attach Content-Length to a body-open
-        // close-delimited stream.
+        // HTTP/1 framing belongs exclusively to http1_response_head_plan: the
+        // handler's Content-Length and Transfer-Encoding (only ever the
+        // replaceable chunked hint) yield to the plan's own framing fields.
         if (known_bit == response_header_transfer_encoding ||
             known_bit == response_header_content_length) {
             continue;
@@ -127,6 +126,9 @@ void append_http1_response_head(
     if (buffered != nullptr &&
         buffered->content_length() != body_plan.buffered_representation_length(response)) {
         throw std::invalid_argument("HTTP/1 response plan representation does not match response");
+    }
+    if (!detail::response_transfer_encoding_replaceable(response)) {
+        throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
     }
     const auto response_status = body_plan.response_status();
     const bool chunked_payload_plan = plan.chunked_stream() != nullptr &&

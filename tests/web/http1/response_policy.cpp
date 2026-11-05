@@ -256,9 +256,12 @@ class response_policy_routes final {
     }
 };
 
-// Sends `request`, half-closes once the response head has arrived, and returns
-// every byte the server wrote before closing, or nullopt when the connection
-// is still open after 5 s.
+// Sends `request` and returns every byte the server wrote before closing, or
+// nullopt when the connection is still open after 5 s. Responses end with the
+// connection (Connection: close, HTTP/1.0, or a failed CONNECT). Only an
+// upgraded exchange -- a 101 or a CONNECT 2xx -- half-closes once its head has
+// arrived, so that the tunnel or WebSocket ends; any other early FIN would
+// read as the client leaving a streamed response still in flight.
 [[nodiscard]] std::optional<std::string> exchange(
     const asio::ip::tcp::endpoint& server_endpoint, std::string_view request) {
     auto& io = ruvia::test::new_test_io_context();
@@ -273,8 +276,12 @@ class response_policy_routes final {
                 closed = true;
                 return;
             }
-            std::error_code ignored;
-            socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+            const bool upgraded = output.starts_with("HTTP/1.1 101 ") ||
+                                  (request.starts_with("CONNECT ") && output.starts_with("HTTP/1.1 2"));
+            if (upgraded) {
+                std::error_code ignored;
+                socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+            }
             asio::async_read(socket, asio::dynamic_buffer(output),
                 [&closed](const std::error_code&, std::size_t) { closed = true; });
         });

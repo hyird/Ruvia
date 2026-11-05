@@ -81,14 +81,6 @@ public:
                                        (connection_.stream_aborted(stream_id_) || stream_signal_.terminated()));
     }
 
-    [[nodiscard]] stop_token cancel_on_peer_eof() {
-        auto token = stream_signal_.terminal_stop_token();
-        if (connection_.stream_aborted(stream_id_)) {
-            stream_signal_.stop();
-        }
-        return token;
-    }
-
     task<stream_commit_result> commit() {
         if (state_.committed()) {
             throw std::logic_error("response stream is already committed");

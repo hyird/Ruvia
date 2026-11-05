@@ -261,8 +261,8 @@ constexpr http_response_coding_selection http_response_coding_selection::rank(
 class http_request;
 
 // Folds every Accept-Encoding field line of a received request into one
-// quality snapshot and selects among all producible codings. HTTP/1 servers
-// may instead use the parser's incrementally folded response_coding_selection().
+// quality snapshot and selects among all producible codings. This is the one
+// Accept-Encoding preference authority for HTTP/1, HTTP/2 and subrequests.
 [[nodiscard]] http_response_coding_selection http_response_coding_selection_for(const http_request& request) noexcept;
 
 }  // namespace ruvia

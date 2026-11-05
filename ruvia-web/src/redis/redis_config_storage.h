@@ -39,6 +39,7 @@ struct redis_config_storage final {
     std::optional<std::size_t> max_reply_bytes_;
     std::size_t max_array_depth_;
     client_tcp_config tcp_;
+    std::optional<std::chrono::milliseconds> subscription_ping_interval_;
 
 private:
     struct validated_config_tag_type final {};
@@ -87,7 +88,8 @@ private:
           acquire_timeout_(source_value.acquire_timeout_),
           max_reply_bytes_(source_value.max_reply_bytes_),
           max_array_depth_(source_value.max_array_depth_),
-          tcp_(source_value.tcp_) {}
+          tcp_(source_value.tcp_),
+          subscription_ping_interval_(source_value.subscription_ping_interval_) {}
 };
 
 using redis_definition_type = named_capability_definition<redis_config_storage>;

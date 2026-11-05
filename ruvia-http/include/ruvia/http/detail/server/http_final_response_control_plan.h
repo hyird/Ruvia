@@ -24,6 +24,21 @@ class http1_final_response_control;
 
 [[nodiscard]] std::optional<http2_final_response_control_plan_error> http2_final_response_control_plan(
     const http_response& response) noexcept;
+// The protocol writer alone frames a response (RFC 9112 section 6.1, RFC 9113
+// section 8.2.2), so an application Transfer-Encoding is accepted only as a
+// hint that names exactly the single `chunked` coding, which every writer
+// replaces with its own framing. Any other value claims a coding the writer
+// never applies and fails closed on both protocols.
+[[nodiscard]] inline bool response_transfer_encoding_replaceable(const http_response& response) noexcept {
+    if (!response_has_known_header(response, response_header_transfer_encoding)) {
+        return true;
+    }
+    return http_ascii_equals_ignore_case(
+        http_trim_ows(http_response_header_state_access::known_header_value(
+            response.headers(), response_header_transfer_encoding)),
+        "chunked");
+}
+
 class http1_final_response_control final {
 public:
     [[nodiscard]] http_connection_options connection_options() const noexcept {
@@ -54,6 +69,9 @@ private:
     const auto status_code = response.status();
     if (!status_code.is_final()) {
         throw http1_response_head_error("invalid final HTTP response status");
+    }
+    if (!response_transfer_encoding_replaceable(response)) {
+        throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
     }
 
     http_connection_options connection_options;
@@ -88,7 +106,9 @@ private:
 
 // Validate HTTP/2 control semantics before HPACK or stream state is mutated.
 // The success token proves that no connection-specific field exists; RFC 9113
-// section 8.2.2 requires rejection rather than silent filtering.
+// section 8.2.2 requires rejection rather than silent filtering. A replaceable
+// Transfer-Encoding hint is not application metadata but the framing the
+// HTTP/2 writer owns, so the encoder omits it like HTTP/1 replaces it.
 [[nodiscard]] inline std::optional<http2_final_response_control_plan_error>
 http2_final_response_control_plan(const http_response& response) noexcept {
     const auto status_code = response.status();
@@ -99,9 +119,9 @@ http2_final_response_control_plan(const http_response& response) noexcept {
         return http2_final_response_control_plan_error::upgrade_unavailable;
     }
     if (response_has_known_header(response,
-            response_header_connection | response_header_transfer_encoding |
-                response_header_upgrade | response_header_keep_alive |
-                response_header_proxy_connection)) {
+            response_header_connection | response_header_upgrade | response_header_keep_alive |
+                response_header_proxy_connection) ||
+        !response_transfer_encoding_replaceable(response)) {
         return http2_final_response_control_plan_error::connection_specific_field_forbidden;
     }
     return std::nullopt;

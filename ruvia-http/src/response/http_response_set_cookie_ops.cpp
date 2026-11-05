@@ -36,7 +36,7 @@ namespace {
     const auto parsed_value = parse_set_cookie(value);
     return parsed_value.has_value() && is_valid_http_header_name(parsed_value->name()) &&
            set_cookie_wire_name_matches(parsed_value->name(), wire_prefix, cookie_name) &&
-           parsed_value->has(http_set_cookie_attribute::path) == has_path &&
+           !parsed_value->path().empty() == has_path &&
            parsed_value->has(http_set_cookie_attribute::partitioned) == partitioned &&
            (!has_path || parsed_value->path() == path) &&
            http_ascii_equals_ignore_case(parsed_value->domain(), domain);
@@ -86,7 +86,7 @@ void http_response_headers::upsert_set_cookie_header_validated(std::string_view 
         return;
     }
 
-    const auto has_path = parsed_value->has(http_set_cookie_attribute::path);
+    const auto has_path = !parsed_value->path().empty();
     const auto partitioned = parsed_value->has(http_set_cookie_attribute::partitioned);
     auto* retained = find_set_cookie_header({}, cookie_name, has_path, parsed_value->path(), parsed_value->domain(), partitioned);
     if (retained == nullptr) {

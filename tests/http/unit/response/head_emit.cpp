@@ -506,16 +506,17 @@ RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) 
 }
 
 RUVIA_TEST(response_head_suppresses_auto_content_length) {
-    // A streaming/chunked writer owns framing itself. Caller-provided framing is
-    // replaced by one canonical chunked field and no Content-Length survives.
+    // A streaming/chunked writer owns framing itself. The handler's chunked
+    // hint is replaced by one canonical chunked field and no Content-Length
+    // survives.
     http_response response(std::pmr::new_delete_resource());
     response.body("hello");
-    response.header("Transfer-Encoding", "gzip, chunked");
+    response.header("Transfer-Encoding", "ChUnKeD");
     response.header("Content-Length", "999");
     const auto head = emit_chunked_stream_head(response);
     RUVIA_CHECK(!(head.find("Content-Length:") != std::string_view::npos));
     RUVIA_CHECK((head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
-    RUVIA_CHECK(!(head.find("gzip") != std::string_view::npos));
+    RUVIA_CHECK(!(head.find("ChUnKeD") != std::string_view::npos));
     RUVIA_CHECK_EQ(count_occurrences(head, "Transfer-Encoding: "), std::size_t{1});
 }
 
@@ -541,30 +542,40 @@ RUVIA_TEST(response_head_canonicalizes_managed_framing_fields_across_case) {
         }
         return out;
     };
+    const auto ascii_lower = [](std::string_view text) {
+        std::string out(text);
+        for (auto& c : out) {
+            if (c >= 'A' && c <= 'Z') {
+                c = static_cast<char>(c - 'A' + 'a');
+            }
+        }
+        return out;
+    };
 
     for (std::size_t sample = 0; sample < 512; ++sample) {
         http_response buffered(std::pmr::new_delete_resource());
         buffered.body("payload");
         buffered.header(random_case("Content-Length"), "999");
-        buffered.header(random_case("Transfer-Encoding"), "gzip, chunked");
+        buffered.header(random_case("Transfer-Encoding"), random_case("chunked"));
         buffered.header("X-Sample", std::to_string(sample));
         const auto buffered_head = emit_buffered_head(buffered);
         RUVIA_CHECK_EQ(count_occurrences(buffered_head, "Content-Length: "), std::size_t{1});
         RUVIA_CHECK((buffered_head.find("Content-Length: 7\r\n") != std::string_view::npos));
         RUVIA_CHECK(!(buffered_head.find("Content-Length: 999\r\n") != std::string_view::npos));
         RUVIA_CHECK(!(buffered_head.find("Transfer-Encoding:") != std::string_view::npos));
-        RUVIA_CHECK(!(buffered_head.find("gzip") != std::string_view::npos));
+        RUVIA_CHECK_EQ(count_occurrences(ascii_lower(buffered_head), "chunked"), std::size_t{0});
         RUVIA_CHECK(buffered_head.ends_with("\r\n\r\n"));
 
         http_response chunked(std::pmr::new_delete_resource());
         chunked.header(random_case("Content-Length"), "999");
-        chunked.header(random_case("Transfer-Encoding"), "gzip, chunked");
+        chunked.header(random_case("Transfer-Encoding"), random_case("chunked"));
         chunked.header("X-Sample", std::to_string(sample));
         const auto chunked_head = emit_chunked_stream_head(chunked);
         RUVIA_CHECK(!(chunked_head.find("Content-Length:") != std::string_view::npos));
         RUVIA_CHECK_EQ(count_occurrences(chunked_head, "Transfer-Encoding: "), std::size_t{1});
         RUVIA_CHECK((chunked_head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
-        RUVIA_CHECK(!(chunked_head.find("gzip") != std::string_view::npos));
+        RUVIA_CHECK_EQ(count_occurrences(ascii_lower(chunked_head), "transfer-encoding:"), std::size_t{1});
+        RUVIA_CHECK_EQ(count_occurrences(ascii_lower(chunked_head), "chunked"), std::size_t{1});
         RUVIA_CHECK(chunked_head.ends_with("\r\n\r\n"));
     }
 }
@@ -577,6 +588,89 @@ RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
         connection_plan_for(ruvia::http_protocol_version::http10));
 
     RUVIA_CHECK(throws_invalid([&] { (void)emit_head(response, plan); }));
+}
+
+// RFC 9112 section 6.1: the writer alone frames a response. A handler-set
+// Transfer-Encoding other than exactly `chunked` names a coding the writer
+// never applies, so every final head rejects it before any output or mutation.
+RUVIA_TEST(http1_response_head_rejects_transfer_encoding_other_than_chunked) {
+    const auto rejected_without_output = [](const http_response& response, const http1_response_head_plan& plan) {
+        ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
+        buffer.append("existing output");
+        const bool rejected = throws_head_error([&] { ruvia::append_http1_response_head(response, buffer, plan); });
+        return rejected && buffer.view() == std::string_view("existing output");
+    };
+    for (const std::string_view coding : {"gzip", "gzip, chunked", "identity", "", "chunked, chunked", "chunked;q=1"}) {
+        for (const auto status : {ruvia::http_status::ok, ruvia::http_status::no_content,
+                 ruvia::http_status::reset_content, ruvia::http_status::not_modified}) {
+            for (const auto method : {http_known_method::get, http_known_method::head}) {
+                http_response response(std::pmr::new_delete_resource());
+                response.status(status);
+                response.header("Transfer-Encoding", coding);
+                const auto body_plan = plan_http_response_body(method, response.status());
+                const auto buffered = get_http1_buffered_response_plan(
+                    ruvia::plan_buffered_http_response_write(method, response),
+                    connection_plan_for(ruvia::http_protocol_version::http11));
+                RUVIA_CHECK(rejected_without_output(response, buffered.head_plan()));
+                RUVIA_CHECK(rejected_without_output(response,
+                    http1_chunked_response_stream_head_plan(
+                        body_plan, connection_plan_for(ruvia::http_protocol_version::http11))));
+                RUVIA_CHECK(rejected_without_output(response,
+                    http1_close_delimited_response_stream_head_plan(
+                        body_plan, connection_plan_for(ruvia::http_protocol_version::http10))));
+            }
+        }
+
+        http_response committed(std::pmr::new_delete_resource());
+        committed.header("Transfer-Encoding", coding);
+        RUVIA_CHECK(throws_head_error([&] {
+            (void)ruvia::http1_commit_final_response(committed, ruvia::plan_http11_request_connection(true));
+        }));
+        RUVIA_CHECK(!committed.header("Connection").has_value());
+
+        for (const auto framing : {ruvia::http_response_stream_framing::http1_chunked,
+                 ruvia::http_response_stream_framing::http1_close_delimited,
+                 ruvia::http_response_stream_framing::http2_frames}) {
+            http_response streamed(std::pmr::new_delete_resource());
+            streamed.header("Transfer-Encoding", coding);
+            const auto plan = ruvia::plan_http_response_stream_commit(
+                framing, http_known_method::get, streamed.status(), ruvia::http_response_trailer_intent::none);
+            bool head_error = false;
+            bool invalid = false;
+            try {
+                (void)ruvia::prepare_http_response_stream_head(std::move(streamed), plan);
+            } catch (const ruvia::http1_response_head_error&) {
+                head_error = true;
+            } catch (const std::invalid_argument&) {
+                invalid = true;
+            }
+            if (framing == ruvia::http_response_stream_framing::http2_frames) {
+                RUVIA_CHECK(invalid);
+            } else {
+                RUVIA_CHECK(head_error);
+            }
+        }
+    }
+}
+
+// The chunked hint never reaches a wire that cannot carry it: only the HTTP/1
+// chunk writer keeps it, as its own canonical field.
+RUVIA_TEST(response_stream_head_replaces_chunked_transfer_encoding_hint_with_writer_framing) {
+    for (const auto framing : {ruvia::http_response_stream_framing::http1_chunked,
+             ruvia::http_response_stream_framing::http1_close_delimited,
+             ruvia::http_response_stream_framing::http2_frames}) {
+        http_response response(std::pmr::new_delete_resource());
+        response.header("Transfer-Encoding", "CHUNKED");
+        const auto plan = ruvia::plan_http_response_stream_commit(
+            framing, http_known_method::get, response.status(), ruvia::http_response_trailer_intent::none);
+        const auto prepared = ruvia::prepare_http_response_stream_head(std::move(response), plan);
+        const auto transfer_encoding = prepared.response().header("Transfer-Encoding");
+        if (framing == ruvia::http_response_stream_framing::http1_chunked) {
+            RUVIA_CHECK_EQ(transfer_encoding.value_or(""), std::string_view("chunked"));
+        } else {
+            RUVIA_CHECK(!transfer_encoding.has_value());
+        }
+    }
 }
 
 RUVIA_TEST(http1_chunked_stream_does_not_invent_framing_for_head) {

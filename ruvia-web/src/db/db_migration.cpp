@@ -183,6 +183,9 @@ public:
         // which never reconnects. A statement that ends or poisons the session
         // (a lost connection, a migration leaving a transaction open) fails
         // every statement after it instead of running them unserialized.
+        // transaction_timeout_ stays as configured, like query_timeout_: a
+        // transactional migration that outlives it fails with timeout and its
+        // session closes, ending the run with the lock released.
         config.pool_size_per_worker_ = 1;
         config.reconnect_ = false;
         if (!config.acquire_timeout_.has_value()) {

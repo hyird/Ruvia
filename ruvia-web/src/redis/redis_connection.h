@@ -85,8 +85,12 @@ public:
     task<void> write_request(
         const operation_timeout& timeout, redis_request_content content = redis_request_content::ordinary);
     // Reads one complete reply, allocating its nodes from `resource`. Throws
-    // redis_error(io_error) when the connection is or becomes closed.
-    task<redis_value> read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource);
+    // redis_error(io_error) when the connection is or becomes closed. A
+    // non-null `input_time` receives the time of every socket read that
+    // delivered bytes, so a subscription's idle clock restarts on partial
+    // replies too.
+    task<redis_value> read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource,
+        std::chrono::steady_clock::time_point* input_time = nullptr);
 
     void close() noexcept;
     // Cancellation/shutdown: records the reason so a resolve completing after

@@ -96,7 +96,7 @@ public:
         runtime_.join();
     }
 
-    [[nodiscard]] std::exception_ptr failure() const noexcept {
+    [[nodiscard]] std::exception_ptr failure() noexcept {
         return runtime_.failure();
     }
 

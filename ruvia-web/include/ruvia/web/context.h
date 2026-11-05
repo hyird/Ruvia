@@ -88,7 +88,6 @@ request_binding_handle<std::remove_cvref_t<t_type>> bind_validated_model(context
 [[noreturn]] void throw_invalid_param();
 
 class request_query_values;
-enum class static_file_selection_mode : std::uint8_t;
 struct context_access;
 class context_services;
 struct session_access;
@@ -466,17 +465,20 @@ private:
     target_type target_;
 };
 
+// Read only by the static_file() call: the relative path is resolved and the
+// content type copied into request storage before the task is returned.
 struct static_file_response_options final {
     borrowed_text relative_path_{};
     borrowed_text content_type_{};
 };
 
-// The file context::file() serves, borrowed for that call: UTF-8 text, or a
+// The file context::file() serves, read only by that call: UTF-8 text, or a
 // std::filesystem::path lvalue whose native string is used as is. Neither form
-// builds a std::filesystem::path per request; text is NUL-terminated (and
-// widened to UTF-16 on Windows) in the request arena. Like borrowed_text, it
-// refuses owning temporaries, so a path assembled per request has to be named
-// by the caller -- hoist it out of the handler when it is fixed.
+// builds a std::filesystem::path per request; file() copies the native form
+// once before returning its task, NUL-terminating text (and widening it to
+// UTF-16 on Windows). Like borrowed_text, it refuses owning temporaries, so a
+// path assembled per request has to be named by the caller -- hoist it out of
+// the handler when it is fixed.
 class borrowed_file_path final {
 public:
     constexpr borrowed_file_path() noexcept = default;
@@ -508,6 +510,8 @@ private:
     http_native_path_view_type native_{};
 };
 
+// Read only by the file() call: the path and content type are copied before
+// the task is returned.
 struct file_response_options final {
     borrowed_file_path path_{};
     borrowed_text content_type_{};
@@ -529,9 +533,6 @@ private:
         const std::string_view* param_names, const std::string_view* param_values,
         std::size_t param_count, std::uintptr_t route_rate_limit_scope,
         const detail::context_services& services);
-
-    [[nodiscard]] http_response static_file(const static_root& root, static_file_response_options options,
-        detail::static_file_selection_mode mode);
 
 public:
     // Sends a bodyless 1xx head before the final response. Fields are copied
@@ -614,9 +615,9 @@ public:
     // observe this token; CPU work and raw Asio waits without it are not preempted.
     // Connection phase timeouts close the socket independently.
     //
-    // HTTP/1 默认不会在 handler 挂起时检测 peer FIN。长驻 SSE 可显式调用
-    // sse_writer::cancel_on_peer_eof()，并把其返回的组合 token 传给业务等待；
-    // 此处返回的原 token 不变。该选项将合法写半关闭也视作放弃响应。
+    // 流式响应（stream()/stream_sse()）的 token 还观察客户端离开：HTTP/1 请求体
+    // 完整消费后对端 FIN/RST 或写失败，HTTP/2 本流 RST_STREAM 或连接终止。
+    // 缓冲响应路由不监测读侧终止。
     //
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept {
         return capabilities_.stop_token();
@@ -800,20 +801,41 @@ public:
 
     // File helpers honor If-Range only for matching strong ETags. Last-Modified
     // dates are weak and do not authorize a partial response.
+    //
+    // file() and static_file() open the file on this worker's blocking pool,
+    // never on the worker, and complete with the settled response: status,
+    // validators, Content-Length or Content-Range, and the opened handle the
+    // response owns. The pool wait is bounded by server_config::write_timeout_
+    // and stop_token(); a wait that cannot complete (no blocking pool, a full
+    // queue, the timeout) throws a 503 file_read_unavailable http_error, and
+    // a missing pool or a timed-out open is reported to the connection
+    // failure channel.
+    //
+    // Both own their options before they return: the path, relative path and
+    // content type are copied (and a static path resolved, its representation
+    // selected) by the call, so a stored task never reads the caller's
+    // storage. A path that cannot name a file (404), a rejected relative path
+    // (403), an unindexed name (404) or an unacceptable coding (406) throws at
+    // the call. Only static_file()'s `root` stays borrowed: it must outlive
+    // the returned task.
+    //
     // file() opens the file once and the response owns that handle; plain-TCP
     // transfers send from it without resolving the path again. The handle is
     // checked again right before sending: a file changed in place since file()
     // fails a single plain-TCP body before its head leaves and aborts any
     // other transfer before its bytes.
-    [[nodiscard]] http_response file(file_response_options options);
+    [[nodiscard]] task<http_response> file(file_response_options options);
 
     // relative_path_ is a decoded file path below the root, such as
     // req().param("*") of a wildcard route; it is never percent-decoded again.
     // '/' and '\\' separate segments. A "." or ".." segment, an empty interior
     // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
-    // whichever parameter it came from -- and an unindexed name 404.
-    [[nodiscard]] http_response static_file(
+    // whichever parameter it came from -- and an unindexed name 404. A file
+    // that is no longer the indexed one is 500 static_file_changed.
+    [[nodiscard]] task<http_response> static_file(
         const static_root& root, static_file_response_options options);
+    // A temporary root would be destroyed before the returned task reads it.
+    task<http_response> static_file(const static_root&&, static_file_response_options) = delete;
 
     [[nodiscard]] http_response error(http_error_info_options options) const;
     [[nodiscard]] http_response error(const http_error_info& info) const;

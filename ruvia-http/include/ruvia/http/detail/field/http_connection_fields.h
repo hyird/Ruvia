@@ -100,22 +100,31 @@ enum class http_connection_option : std::uint8_t {
 
 // A sender must not send an option naming a field intended for all recipients
 // of the content (RFC 9110 section 7.6.1), nor one naming a field that frames
-// (Content-Length, Transfer-Encoding) or routes (Host) the message: the
-// recipient list (http_connection_option_names_protected_field) rejects those.
+// (Content-Length, Transfer-Encoding) or routes the message: Host and the
+// request-origin metadata Forwarded (RFC 7239), X-Forwarded-For,
+// X-Forwarded-Proto and X-Forwarded-Host. A next hop honouring such an option
+// strips the field before routing or client-address decisions consume it, so
+// the nomination is refused as Pingora refuses it. Pseudo-header-shaped names
+// are not tokens and already fail the list grammar. The recipient list
+// (http_connection_option_names_protected_field) rejects the framing and Host
+// nominations.
 [[nodiscard]] inline bool http_connection_option_conflicts_with_managed_field(
     std::string_view option) noexcept {
     switch (classify_request_header(option)) {
         case request_header_kind::other:
+            if (http_ascii_equals_ignore_case(option, "X-Forwarded-Host")) {
+                return true;
+            }
             break;
         case request_header_kind::connection:
         case request_header_kind::upgrade:
-        case request_header_kind::forwarded:
-        case request_header_kind::x_forwarded_for:
-        case request_header_kind::x_forwarded_proto:
         case request_header_kind::sec_websocket_extensions:
         case request_header_kind::te:
         case request_header_kind::proxy_authorization:
             return false;
+        case request_header_kind::forwarded:
+        case request_header_kind::x_forwarded_for:
+        case request_header_kind::x_forwarded_proto:
         case request_header_kind::accept:
         case request_header_kind::accept_encoding:
         case request_header_kind::access_control_request_headers:
@@ -187,7 +196,7 @@ enum class http_connection_field_role : std::uint8_t {
 // lines extend the same state, so a caller cannot accidentally let a later
 // occurrence erase an earlier close/Upgrade/TE signal. A sender's options must
 // not name a field the protocol layer manages: a hop-by-hop declaration must
-// not strip framing or end-to-end metadata from the message. A recipient
+// not strip framing, routing or end-to-end metadata from the message. A recipient
 // rejects only options naming a protected field (see
 // http_connection_option_names_protected_field). Empty list members are
 // malformed for a sender and ignored by a recipient (RFC 9110 section 5.6.1).

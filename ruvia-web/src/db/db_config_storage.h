@@ -62,6 +62,7 @@ struct db_config_storage final {
     std::optional<std::chrono::milliseconds> write_timeout_;
     std::optional<std::chrono::milliseconds> query_timeout_;
     std::optional<std::chrono::milliseconds> acquire_timeout_;
+    std::optional<std::chrono::milliseconds> transaction_timeout_;
     // Whether a slot whose connection ended connects again on its next use.
     // Off for a pool bound to the sessions it opened at startup (the
     // migrator's): a statement on a lost session then fails rather than run
@@ -108,6 +109,7 @@ private:
           write_timeout_(source_value.write_timeout_),
           query_timeout_(source_value.query_timeout_),
           acquire_timeout_(source_value.acquire_timeout_),
+          transaction_timeout_(source_value.transaction_timeout_),
           reconnect_(resolved_reconnect(source_value)) {}
 };
 

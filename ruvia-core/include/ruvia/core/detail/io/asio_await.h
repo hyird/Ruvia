@@ -194,26 +194,6 @@ public:
         return std::move(result_);
     }
 
-    [[nodiscard]] const result_storage_type& value() const& noexcept
-        requires(!std::is_void_v<result_type>)
-    {
-        return result_;
-    }
-    const result_storage_type& value() const&& = delete;
-
-    [[nodiscard]] result_storage_type& value() & noexcept
-        requires(!std::is_void_v<result_type>)
-    {
-        return result_;
-    }
-    result_storage_type& value() && = delete;
-
-    [[nodiscard]] result_storage_type take_value() &&
-        requires(!std::is_void_v<result_type>)
-    {
-        return std::move(result_);
-    }
-
 private:
     template <typename, typename>
     friend class detail::asio_completion_awaiter;

@@ -1,6 +1,9 @@
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -8,11 +11,16 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
+#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
@@ -381,3 +389,259 @@ RUVIA_TEST(db_transaction_scalar_decode_failure_releases_slot_for_next_transacti
 }
 }  // namespace db_transaction_operation_test
 #endif
+
+namespace db_transaction_timeout_test {
+
+using peer_type = ruvia::test::backend_startup_peer;
+
+constexpr std::array drivers{
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    ruvia::db_driver::postgresql,
+#endif
+#ifdef RUVIA_ENABLE_MARIADB
+    ruvia::db_driver::mariadb,
+#endif
+};
+
+// What the peer answers, in order, on its one connection.
+enum class step {
+    begin,
+    // One row inside the transaction.
+    row,
+    // One row inside the transaction, held until release_replies().
+    held_row,
+    commit,
+    // Two rows outside a transaction, for a stream.
+    stream_rows,
+};
+
+[[nodiscard]] std::unique_ptr<peer_type> make_peer(ruvia::db_driver driver, std::initializer_list<step> steps) {
+    if (driver == ruvia::db_driver::postgresql) {
+        std::vector<peer_type::postgres_reply> replies;
+        for (const auto value : steps) {
+            switch (value) {
+                case step::begin:
+                    replies.push_back({.column_ = "", .command_ = "BEGIN", .status_ = 'T'});
+                    break;
+                case step::row:
+                    replies.push_back({.rows_ = {"kept"}, .status_ = 'T'});
+                    break;
+                case step::held_row:
+                    replies.push_back({.rows_ = {"late"}, .status_ = 'T', .deferred_ = true});
+                    break;
+                case step::commit:
+                    replies.push_back({.column_ = "", .command_ = "COMMIT"});
+                    break;
+                case step::stream_rows:
+                    replies.push_back({.rows_ = {"first", "second"}, .command_ = "SELECT 2"});
+                    break;
+            }
+        }
+        return std::make_unique<peer_type>(
+            peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
+    }
+    // MariaDB status 3: autocommit with a transaction open.
+    std::vector<peer_type::maria_reply> replies;
+    for (const auto value : steps) {
+        switch (value) {
+            case step::begin:
+                replies.push_back({.column_ = "", .status_ = 3});
+                break;
+            case step::row:
+                replies.push_back({.rows_ = {"kept"}, .status_ = 3});
+                break;
+            case step::held_row:
+                replies.push_back({.rows_ = {"late"}, .status_ = 3, .deferred_ = true});
+                break;
+            case step::commit:
+                replies.push_back({.column_ = "", .status_ = 2});
+                break;
+            case step::stream_rows:
+                replies.push_back({.rows_ = {"first", "second"}});
+                break;
+        }
+    }
+    return std::make_unique<peer_type>(std::move(replies), peer_type::after_startup::idle);
+}
+
+[[nodiscard]] bool sent_statement(peer_type& peer, ruvia::db_driver driver, std::string_view sql) {
+    if (driver == ruvia::db_driver::postgresql) {
+        const auto parses = peer.postgres_parses();
+        return std::ranges::any_of(parses, [&](const auto& parse) { return parse.sql_ == sql; });
+    }
+    const auto commands = peer.maria_commands();
+    return std::ranges::any_of(
+        commands, [&](const std::string& command) { return command.find(sql) != std::string::npos; });
+}
+
+// Waits for the peer's sessions to end on a blocking-pool thread, so the
+// worker keeps running the timers and closes under test meanwhile. The peer
+// outlives the wait: drive_client() joins the pool before returning.
+ruvia::task<void> await_disconnects(const ruvia::worker_handle& worker, peer_type& peer) {
+    auto waited = co_await ruvia::run_blocking(worker, [target = &peer] { target->wait_for_disconnects(); });
+    waited.value();
+}
+
+template <typename callback_type>
+void drive_client(peer_type& peer, ruvia::db_driver driver,
+    std::optional<std::chrono::milliseconds> transaction_timeout, callback_type&& callback) {
+    auto config = peer.config();
+    config.driver_ = driver;
+    config.transaction_timeout_ = transaction_timeout;
+    ruvia::blocking_pool waits({.thread_count_ = 1});
+    auto& context_value = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(context_value, {.queue_capacity_ = 8, .blocking_pool_ = &waits});
+    ruvia::db_client client(attachment.loop(), config);
+    try {
+        ruvia::test::drive_backend_client(attachment, client, std::forward<callback_type>(callback));
+    } catch (...) {
+        waits.join();
+        throw;
+    }
+    waits.join();
+}
+
+RUVIA_TEST(db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non_positive_values) {
+    using namespace ruvia;
+    RUVIA_CHECK(db_config{}.transaction_timeout_ == std::chrono::milliseconds(60000));
+    event_loop_pool pool({.loop_count_ = 1});
+    for (const auto driver : drivers) {
+        for (const auto value : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
+            const db_config config{.driver_ = driver, .transaction_timeout_ = value};
+            bool client_rejected = false;
+            bool migrator_rejected = false;
+            try {
+                db_client client(pool.loop(0), config);
+            } catch (const std::invalid_argument&) {
+                client_rejected = true;
+            }
+            try {
+                db_migrator migrator(config);
+            } catch (const std::invalid_argument&) {
+                migrator_rejected = true;
+            }
+            RUVIA_CHECK(client_rejected);
+            RUVIA_CHECK(migrator_rejected);
+        }
+    }
+    pool.join();
+}
+
+// The holder keeps the transaction while it awaits something else, such as a
+// remote call. The lease timer closes the session at the deadline, so the
+// server rolls back and releases the locks without waiting for the holder;
+// commit then reports the timeout and sends nothing.
+RUVIA_TEST(db_transaction_held_idle_past_its_deadline_closes_the_session_and_fails_commit) {
+    using namespace ruvia;
+    for (const auto driver : drivers) {
+        auto peer = make_peer(driver, {step::begin});
+        std::optional<db_error::code_type> code;
+        bool ended = false;
+        drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
+            auto transaction = co_await connected.handle().begin_transaction();
+            (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(300));
+            // Throws unless the session already ended while the transaction sat idle.
+            co_await await_disconnects(connected.worker(), *peer);
+            try {
+                co_await transaction.commit();
+            } catch (const db_error& error) {
+                code = error.code();
+            }
+            ended = !transaction.active();
+        });
+        RUVIA_CHECK(code == db_error::code_type::timeout);
+        RUVIA_CHECK(ended);
+        RUVIA_CHECK(!sent_statement(*peer, driver, "COMMIT"));
+    }
+}
+
+// Half the transaction's time passes idle; the statement then waits on a reply
+// that never comes. query_timeout_ (30 s) alone would let it wait on: it gets
+// only what is left of the transaction, fails with timeout, ends the
+// transaction and closes the connection instead of returning it to the pool.
+RUVIA_TEST(db_transaction_statement_is_bounded_by_the_remaining_transaction_time) {
+    using namespace ruvia;
+    constexpr auto lease = std::chrono::milliseconds(600);
+    for (const auto driver : drivers) {
+        auto peer = make_peer(driver, {step::begin, step::held_row});
+        std::optional<db_error::code_type> code;
+        std::chrono::steady_clock::duration statement_time{};
+        bool ended = false;
+        drive_client(*peer, driver, lease, [&](db_client& connected) -> task<void> {
+            auto transaction = co_await connected.handle().begin_transaction();
+            (void)co_await sleep_for(connected.worker(), lease / 2);
+            const auto started = std::chrono::steady_clock::now();
+            try {
+                (void)co_await transaction.query("SELECT v FROM records");
+            } catch (const db_error& error) {
+                code = error.code();
+            }
+            statement_time = std::chrono::steady_clock::now() - started;
+            ended = !transaction.active();
+            peer->release_replies();
+            // Throws unless the timed-out connection was closed.
+            co_await await_disconnects(connected.worker(), *peer);
+        });
+        RUVIA_CHECK(code == db_error::code_type::timeout);
+        RUVIA_CHECK(statement_time < lease);
+        RUVIA_CHECK(ended);
+    }
+}
+
+// Without a transaction deadline, idle time between operations ends nothing:
+// the same idle period that expires a 100 ms transaction above leaves this one
+// committing on its original session.
+RUVIA_TEST(db_transaction_without_a_deadline_keeps_its_session_while_idle) {
+    using namespace ruvia;
+    for (const auto driver : drivers) {
+        auto peer = make_peer(driver, {step::begin, step::row, step::commit});
+        std::string value;
+        bool committed = false;
+        drive_client(*peer, driver, std::nullopt, [&](db_client& connected) -> task<void> {
+            auto transaction = co_await connected.handle().begin_transaction();
+            (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(300));
+            const auto rows = co_await transaction.query("SELECT v FROM records");
+            if (!rows.empty()) {
+                value = rows.front()["v"].as<std::string_view>().value_or("");
+            }
+            co_await transaction.commit();
+            committed = !transaction.active();
+        });
+        RUVIA_CHECK(value == "kept");
+        RUVIA_CHECK(committed);
+        RUVIA_CHECK(sent_statement(*peer, driver, "COMMIT"));
+        RUVIA_CHECK_EQ(peer->startups(), std::size_t{1});
+    }
+}
+
+// A stream held between reads past its deadline loses its session the same
+// way; the next read reports the timeout and ends the stream.
+RUVIA_TEST(db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_the_next_read) {
+    using namespace ruvia;
+    for (const auto driver : drivers) {
+        auto peer = make_peer(driver, {step::stream_rows});
+        std::string first;
+        std::optional<db_error::code_type> code;
+        bool ended = false;
+        drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
+            auto stream = co_await connected.handle().query_stream("SELECT v FROM records");
+            if (const auto row = co_await stream.read(); row) {
+                first = (*row)["v"].as<std::string_view>().value_or("");
+            }
+            (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(300));
+            // Throws unless the session already ended while the stream sat idle.
+            co_await await_disconnects(connected.worker(), *peer);
+            try {
+                (void)co_await stream.read();
+            } catch (const db_error& error) {
+                code = error.code();
+            }
+            ended = !stream.active();
+        });
+        RUVIA_CHECK(first == "first");
+        RUVIA_CHECK(code == db_error::code_type::timeout);
+        RUVIA_CHECK(ended);
+    }
+}
+
+}  // namespace db_transaction_timeout_test

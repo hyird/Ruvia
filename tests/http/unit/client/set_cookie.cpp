@@ -32,7 +32,7 @@ RUVIA_TEST(set_cookie_parser_handles_deterministic_arbitrary_bytes) {
         RUVIA_CHECK(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(0)));
         RUVIA_CHECK(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(
             static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::secure) |
-            static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::path))));
+            static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::partitioned))));
     };
     constexpr std::string_view cookie_octets =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~";
@@ -77,7 +77,7 @@ RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
     RUVIA_CHECK(!parsed_value->same_site_none());
     RUVIA_CHECK(!parsed_value->has(static_cast<ruvia::http_set_cookie_attribute>(
         static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::secure) |
-        static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::path))));
+        static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::partitioned))));
 }
 
 RUVIA_TEST(set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
@@ -125,12 +125,11 @@ RUVIA_TEST(set_cookie_parser_follows_user_agent_domain_and_path_algorithm) {
 
     // Section 5.2.4: Path never rejects the cookie.
     const auto tab = ruvia::parse_set_cookie("a=b; Path=/a\tb");
-    RUVIA_CHECK(tab.has_value() && tab->path() == "/a\tb" && tab->has(ruvia::http_set_cookie_attribute::path));
+    RUVIA_CHECK(tab.has_value() && tab->path() == "/a\tb");
     const auto utf8 = ruvia::parse_set_cookie("a=b; Path=/caf\xc3\xa9");
     RUVIA_CHECK(utf8.has_value() && utf8->path() == "/caf\xc3\xa9");
     const auto relative = ruvia::parse_set_cookie("a=b; Path=/api; Path=relative");
-    RUVIA_CHECK(relative.has_value() && relative->path().empty() &&
-                !relative->has(ruvia::http_set_cookie_attribute::path));
+    RUVIA_CHECK(relative.has_value() && relative->path().empty());
 }
 
 RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
@@ -142,7 +141,6 @@ RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
         return;
     }
     RUVIA_CHECK(parsed_value->path().empty());
-    RUVIA_CHECK(!parsed_value->has(ruvia::http_set_cookie_attribute::path));
 }
 
 RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
@@ -151,16 +149,14 @@ RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
     if (!parsed_value) {
         return;
     }
-    RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::path));
     RUVIA_CHECK(parsed_value->path() == "/rel");
-    RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::same_site_none));
+    RUVIA_CHECK(parsed_value->same_site_none());
 
     const auto overridden = ruvia::parse_set_cookie("sid=abc; SameSite=None; SameSite=Lax");
     RUVIA_CHECK(overridden.has_value());
     if (!overridden) {
         return;
     }
-    RUVIA_CHECK(!overridden->has(ruvia::http_set_cookie_attribute::same_site_none));
     RUVIA_CHECK(parsed_value->same_site_none());
     RUVIA_CHECK(parsed_value->same_site() == ruvia::cookie_same_site::none);
     RUVIA_CHECK(!overridden->same_site_none());
@@ -169,7 +165,8 @@ RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
     RUVIA_CHECK(strict.has_value() && strict->same_site() == ruvia::cookie_same_site::strict);
     const auto unknown_same_site =
         ruvia::parse_set_cookie("sid=abc; SameSite=Strict; SameSite=Unknown");
-    RUVIA_CHECK(unknown_same_site.has_value() && !unknown_same_site->same_site().has_value());
+    RUVIA_CHECK(unknown_same_site.has_value() && !unknown_same_site->same_site().has_value() &&
+                !unknown_same_site->same_site_none());
 }
 
 RUVIA_TEST(set_cookie_parser_preserves_quoted_cookie_value) {

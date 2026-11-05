@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http1_server_semantics.h"
@@ -54,18 +55,31 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     } else {
         d.base_route_services_ = body_state.with_loader(d.base_route_services_);
     }
+    // The client closing the connection while the handler waits, or a failed
+    // write, stops the request: context::stop_token() combines it with the
+    // worker's stop, so every framework wait of the handler observes it.
+    stop_source peer_stop;
+    const stop_group request_stop(d.base_route_services_.get_stop_token(), peer_stop.token());
+    const auto request_stop_token = request_stop.token();
+    d.base_route_services_.bind_stop_token(request_stop_token);
     response_sink_type response_sink(d.stream_, d.memory_, *d.options_.codecs_, response_head, d.scanner_entry_,
         d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
         stream_plan,
         http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
         body_state.body(), d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,
-        d.inbound_buffer_pool_);
+        d.inbound_buffer_pool_, peer_stop, d.request_pipelined_);
 
     // The handler stays in the session's idle deadman phase; the sink times
     // its own writes.
     std::optional<response_stream_dispatch_result> dispatched;
     std::exception_ptr escaped_failure;
     try {
+        // This request arrived before the peer ended its request direction:
+        // that end is no abandonment of it, and the transport has no input left.
+        if (d.request_sequence_.request_input_ended()) {
+            response_sink.retire_peer_monitor();
+        }
+        response_sink.arm_peer_monitor();
         dispatched.emplace(co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
             resolved, d.request_memory_, d.base_route_services_,
             [&response_sink] { return response_sink.peer_aborted(); }));
@@ -74,6 +88,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     }
     // Even error recovery can throw. Drain the reader before the body, sink,
     // stream, or their borrowed request storage may be destroyed or reused.
+    response_sink.retire_peer_monitor();
     if (response_sink.peer_eof_monitoring()) {
         try {
             co_await response_sink.finish_peer_monitor();
@@ -92,6 +107,9 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
                 escaped_failure = monitor_failure;
             }
         }
+    }
+    if (response_sink.request_input_ended()) {
+        d.request_sequence_.mark_request_input_ended();
     }
     if (escaped_failure != nullptr) {
         if (!response_sink.committed()) {

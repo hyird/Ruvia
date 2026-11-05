@@ -78,7 +78,8 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
     auto status = detail::http_trailer_block_status::ok;
     try {
         auto* const resource = fields_.get_allocator().resource();
-        status = detail::visit_http1_trailer_block(block, detail::is_forbidden_http_request_trailer_name, budget,
+        status = detail::visit_http1_trailer_block(block, http1_trailer_obs_fold::reject,
+            detail::is_forbidden_http_request_trailer_name, budget,
             [this, resource](std::string_view name, std::string_view value) {
                 fields_.push_back(http_header::copy_with_lowercase_name(name, value, resource));
                 return true;

@@ -65,8 +65,8 @@ int main() {
         auto ok_val = ruvia::asio_completion<int>::completed({}, 17);
         const auto& const_val = ok_val;
         if (!ok_void.succeeded() || ok_void.failed() || err_void.succeeded() || !err_void.failed() ||
-            !ok_val.succeeded() || ok_val.failed() || const_val.value() != 17 || ok_val.value() != 17 ||
-            std::move(ok_val).take_value() != 17) {
+            !ok_val.succeeded() || ok_val.failed() || const_val.result() != 17 || ok_val.result() != 17 ||
+            std::move(ok_val).take_result() != 17) {
             return 1;
         }
     }

@@ -34,7 +34,6 @@ struct sleeping_stream_observation final {
     std::atomic<bool> sleep_elapsed_{};
     std::atomic<bool> sse_wait_cancelled_{};
     std::atomic<bool> sse_wait_failed_{};
-    std::atomic<bool> sse_context_stopped_{};
     std::atomic<bool> sse_wait_finished_{};
     std::atomic<int> head_loop_writes_{};
     std::atomic<bool> head_loop_aborted_{};
@@ -43,8 +42,7 @@ struct sleeping_stream_observation final {
     std::atomic<bool> head_loop_finished_{};
     std::atomic<bool> naive_loop_failed_{};
     std::atomic<bool> naive_loop_finished_{};
-    std::atomic<bool> head_trailer_pre_stopped_{};
-    std::atomic<bool> head_trailer_post_stopped_{};
+    std::atomic<bool> head_trailer_stopped_{};
     std::atomic<bool> head_trailer_sleep_stopped_{};
     std::atomic<bool> head_trailer_aborted_{};
     std::atomic<bool> head_trailer_done_{};
@@ -81,7 +79,7 @@ class sleeping_stream_routes final {
         }
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
-        const auto token = writer.cancel_on_peer_eof();
+        const auto token = context_value.stop_token();
         if (co_await writer.commit() == ruvia::stream_commit_result::body) {
             co_await writer.write({.data_ = "tick"});
             observed.head_loop_writes_ = 1;
@@ -139,21 +137,19 @@ class sleeping_stream_routes final {
     ruvia::task<void> head_trailer_only(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto& out = context_value.stream_text();
-        auto pre_token = out.cancel_on_peer_eof();
+        const auto token = context_value.stop_token();
         context_value.draft().header("Trailer", "X-Complete");
         const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
         if (co_await out.commit() == ruvia::stream_commit_result::body) {
             co_await out.end(trailers);
         }
-        auto post_token = out.cancel_on_peer_eof();
         try {
             static_cast<void>(co_await out.sleep(std::chrono::seconds(10)));
         } catch (const std::logic_error&) {
             observed.head_trailer_sleep_stopped_ = true;
         }
         observed.head_trailer_aborted_ = out.aborted();
-        observed.head_trailer_pre_stopped_ = pre_token.stop_requested();
-        observed.head_trailer_post_stopped_ = post_token.stop_requested();
+        observed.head_trailer_stopped_ = token.stop_requested();
         observed.head_trailer_done_ = true;
     }
 
@@ -223,8 +219,8 @@ class sleeping_stream_routes final {
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
-        const auto context_stop = context_value.stop_token();
-        const auto stop = writer.cancel_on_peer_eof();
+        // The request's own stop: RST_STREAM of this stream requests it.
+        const auto stop = context_value.stop_token();
         co_await writer.write({.data_ = "ready"});
         if (context_value.req().query("writer").has_value()) {
             try {
@@ -244,7 +240,6 @@ class sleeping_stream_routes final {
             observed.sse_wait_failed_ = true;
             throw;
         }
-        observed.sse_context_stopped_ = context_stop.stop_requested();
         observed.sse_wait_finished_ = true;
     }
 
@@ -458,14 +453,13 @@ RUVIA_TEST(http2_post_sse_reads_the_request_body_before_streaming) {
     RUVIA_CHECK_EQ(read_first_data(client), std::string("data: {\"id\":\"1\"}\n\n"));
 }
 
-// A quiet SSE producer waits on the public opt-in token, not on a transport
+// A quiet SSE producer waits on context::stop_token(), not on a transport
 // write or writer.sleep(). RST_STREAM must wake it without closing its sibling.
 RUVIA_TEST(http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     sleeping_stream_observed->sse_wait_cancelled_ = false;
     sleeping_stream_observed->sse_wait_failed_ = false;
-    sleeping_stream_observed->sse_context_stopped_ = false;
     sleeping_stream_observed->sse_wait_finished_ = false;
     const auto stats_before = ruvia::app().http_stats();
     std::pmr::unsynchronized_pool_resource resource;
@@ -515,7 +509,6 @@ RUVIA_TEST(http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
     RUVIA_CHECK(sleeping_stream_observed->sse_wait_finished_);
     RUVIA_CHECK(sleeping_stream_observed->sse_wait_cancelled_);
     RUVIA_CHECK(!sleeping_stream_observed->sse_wait_failed_);
-    RUVIA_CHECK(!sleeping_stream_observed->sse_context_stopped_);
 
     std::string sibling_body;
     append_frame(sibling_body, ruvia::http2_frame_type::data, 0x1, 3, "x");
@@ -871,8 +864,8 @@ RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
         }
         RUVIA_CHECK_EQ(response_heads, 1U);
         const auto error = ruvia::json_object::parse(body);
-        const auto status = error.get<ruvia::uint32>("status");
-        const auto code = error.get<ruvia::string>("code");
+        const auto status = error.get<ruvia::uint32>("status").value();
+        const auto code = error.get<ruvia::string>("code").value();
         RUVIA_CHECK(status && static_cast<std::uint32_t>(*status) == 413);
         RUVIA_CHECK(code && code->view() == "request_body_too_large");
     };
@@ -946,8 +939,7 @@ RUVIA_TEST(http2_head_stream_with_trailers_strips_trailer_header_and_stops_eof_t
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     auto& observed = *sleeping_stream_observed;
-    observed.head_trailer_pre_stopped_ = false;
-    observed.head_trailer_post_stopped_ = false;
+    observed.head_trailer_stopped_ = false;
     observed.head_trailer_sleep_stopped_ = false;
     observed.head_trailer_aborted_ = false;
     observed.head_trailer_done_ = false;
@@ -995,8 +987,7 @@ RUVIA_TEST(http2_head_stream_with_trailers_strips_trailer_header_and_stops_eof_t
     }
     RUVIA_CHECK(observed.head_trailer_done_.load());
     RUVIA_CHECK(!observed.head_trailer_aborted_.load());
-    RUVIA_CHECK(!observed.head_trailer_pre_stopped_.load());
-    RUVIA_CHECK(!observed.head_trailer_post_stopped_.load());
+    RUVIA_CHECK(!observed.head_trailer_stopped_.load());
     RUVIA_CHECK(observed.head_trailer_sleep_stopped_.load());
     server.finish();
 }

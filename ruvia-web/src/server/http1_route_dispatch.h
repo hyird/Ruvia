@@ -39,6 +39,9 @@ struct http1_route_dispatch final {
     http_response& response_;
     http1_request_sequence& request_sequence_;
     std::pmr::memory_resource& inbound_buffer_pool_;
+    // The request was already buffered behind the previous one when the
+    // session started it: the client sent it before that response finished.
+    bool request_pipelined_;
 };
 
 }  // namespace ruvia::detail

@@ -1614,6 +1614,103 @@ RUVIA_TEST(http2_public_response_head_validates_stable_representation_metadata) 
     }
 }
 
+// The handler's `chunked` Transfer-Encoding is the framework-owned framing hint
+// on HTTP/2 as on HTTP/1: the writer omits it, so the peer receives a valid
+// head instead of a connection-specific field (RFC 9113 section 8.2.2).
+RUVIA_TEST(http2_public_response_head_omits_chunked_transfer_encoding_hint) {
+    for (const auto status : {ruvia::http_status::ok, ruvia::http_status::no_content, ruvia::http_status::not_modified}) {
+        for (const bool streaming : {false, true}) {
+            std::pmr::unsynchronized_pool_resource resource;
+            auto client = prepared_client(&resource);
+            auto server = ruvia::http2_connection::server({.resource_ = &resource});
+            const auto wire = server_request_wire(&resource, {}, "GET");
+            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            auto request = server.next_event();
+            const auto request_end = server.next_event();
+            auto* request_head = request ? request->request_head() : nullptr;
+            RUVIA_CHECK(request_head != nullptr);
+            RUVIA_CHECK(request_end && request_end->message_end() != nullptr);
+
+            ruvia::http_response response(&resource);
+            response.status(status);
+            response.header("Transfer-Encoding", "ChUnKeD");
+            if (streaming) {
+                const auto committed = server.submit_streaming_response_head(1, std::move(response),
+                    ruvia::http_response_trailer_intent::none);
+                const auto* plan = std::get_if<ruvia::http_response_stream_commit_plan>(&committed);
+                RUVIA_CHECK(plan != nullptr);
+                if (plan != nullptr &&
+                    plan->head_disposition() == ruvia::http_response_stream_head_disposition::body_open) {
+                    RUVIA_CHECK(server.submit_data(1, {}, ruvia::http2_end_stream::end_stream, 65535).status_ ==
+                                ruvia::http2_data_submit_status::complete);
+                }
+            } else {
+                const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
+                RUVIA_CHECK(std::holds_alternative<ruvia::http_buffered_response_write_plan>(
+                    server.submit_response_head(1, response, plan)));
+            }
+            if (request_head != nullptr) {
+                (void)server.release(std::move(*request_head));
+            }
+
+            const auto response_wire = ruvia::testing::drain_output(server);
+            RUVIA_CHECK(client.feed(response_wire) == ruvia::http2_feed_result::accepted);
+            const auto head = client.next_event();
+            RUVIA_CHECK(head && head->response_head());
+            if (head && head->response_head()) {
+                const auto fields = head->response_head()->head().headers();
+                RUVIA_CHECK(std::none_of(fields.begin(), fields.end(),
+                    [](const auto& field) { return field.name() == "transfer-encoding"; }));
+            }
+            const auto end = client.next_event();
+            RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+            RUVIA_CHECK(!client.connection_error());
+        }
+    }
+}
+
+// Any other Transfer-Encoding claims a coding the writer never applies and
+// stays a rejected connection-specific field, with nothing queued.
+RUVIA_TEST(http2_public_response_head_rejects_transfer_encoding_other_than_chunked) {
+    for (const std::string_view coding : {"gzip", "gzip, chunked", "identity", "", "chunked, chunked"}) {
+        for (const bool streaming : {false, true}) {
+            std::pmr::monotonic_buffer_resource resource;
+            auto server = ruvia::http2_connection::server({.resource_ = &resource});
+            (void)ruvia::testing::drain_output(server);
+            const auto wire = server_request_wire(&resource, {});
+            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            auto request = server.next_event();
+            const auto end = server.next_event();
+            auto* request_head = request ? request->request_head() : nullptr;
+            RUVIA_CHECK(request_head != nullptr);
+            RUVIA_CHECK(end && end->message_end() != nullptr);
+            (void)ruvia::testing::drain_output(server);
+
+            ruvia::http_response response(&resource);
+            response.header("Transfer-Encoding", coding);
+            std::optional<ruvia::http2_response_head_submit_error> error;
+            if (streaming) {
+                const auto rejected = server.submit_streaming_response_head(1, std::move(response),
+                    ruvia::http_response_trailer_intent::none);
+                if (const auto* value = std::get_if<ruvia::http2_response_head_submit_error>(&rejected)) {
+                    error = *value;
+                }
+            } else {
+                const auto plan = ruvia::plan_buffered_http_response_write(ruvia::http_known_method::post, response);
+                const auto rejected = server.submit_response_head(1, response, plan);
+                if (const auto* value = std::get_if<ruvia::http2_response_head_submit_error>(&rejected)) {
+                    error = *value;
+                }
+            }
+            RUVIA_CHECK(error == ruvia::http2_response_head_submit_error::invalid_message);
+            RUVIA_CHECK(!server.wants_write());
+            if (request_head != nullptr) {
+                RUVIA_CHECK(server.release(std::move(*request_head)) == ruvia::http2_server_request_release_status::released);
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_dropped_request_preserves_outstanding_data_credit) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});

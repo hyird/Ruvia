@@ -6,6 +6,8 @@
 
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
+#include "ruvia/http/detail/server/http_final_response_control_plan.h"
+#include "ruvia/http/http1_response_head_error.h"
 
 namespace ruvia {
 
@@ -18,19 +20,26 @@ namespace ruvia {
         throw std::invalid_argument("response stream status does not permit trailers");
     }
     const auto framing = commit_plan.framing();
+    if (!detail::response_transfer_encoding_replaceable(response)) {
+        if (framing == http_response_stream_framing::http2_frames) {
+            throw std::invalid_argument("HTTP/2 response cannot carry a Transfer-Encoding other than chunked");
+        }
+        throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
+    }
     const auto body_plan = commit_plan.body_plan();
     const bool writer_owns_http1_chunked = framing == http_response_stream_framing::http1_chunked &&
                                            body_plan.transfer_encoding_allowed() &&
                                            !body_plan.body_suppressed();
 
     // Keep the prepared response metadata consistent with the wire plan. The
-    // framework's chunk writer is the only Transfer-Encoding producer; an
-    // HTTP/1.0 close-delimited body cannot retain either framing field. HEAD/304
-    // may retain Content-Length metadata because their body is suppressed.
+    // framework's chunk writer is the only Transfer-Encoding producer, so the
+    // handler's chunked hint survives only as that writer's own field; HTTP/2
+    // frames and an HTTP/1.0 close-delimited body carry none. An HTTP/1.0
+    // close-delimited body cannot retain Content-Length either. HEAD/304 may
+    // retain Content-Length metadata because their body is suppressed.
     if (writer_owns_http1_chunked) {
         response.remove_header("Content-Length");
-    } else if (framing == http_response_stream_framing::http1_chunked ||
-               framing == http_response_stream_framing::http1_close_delimited) {
+    } else {
         response.remove_header("Transfer-Encoding");
     }
     if (framing == http_response_stream_framing::http1_close_delimited && !body_plan.body_suppressed()) {

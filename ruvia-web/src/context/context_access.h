@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <optional>
@@ -31,7 +32,12 @@ struct context_access final {
             route_rate_limit_scope, services);
     }
 
-    [[nodiscard]] static http_response static_file_resolved(
+    // The response for an indexed entry already resolved below `root`. The
+    // representation is selected and the content type copied before the task
+    // is returned, so `relative` and `content_type_value` are read only by
+    // this call; `root` and `base_entry` (a view into it) must outlive the
+    // task, which opens a file-backed entry on the blocking pool.
+    [[nodiscard]] static task<http_response> static_file_resolved(
         context& context_value, const static_root& root, std::string_view relative,
         std::string_view content_type_value, static_root_entry_view base_entry,
         static_file_selection_mode mode);
@@ -98,6 +104,11 @@ struct context_access final {
 
     [[nodiscard]] static detail::rate_limiter* rate_limiter(context& context_value) noexcept {
         return context_value.services().rate_limiter();
+    }
+
+    [[nodiscard]] static const std::optional<std::chrono::steady_clock::time_point>& rate_limit_arrival(
+        context& context_value) noexcept {
+        return context_value.services().pinned_arrival();
     }
 
     [[nodiscard]] static std::uintptr_t route_rate_limit_scope(const context& context_value) noexcept {

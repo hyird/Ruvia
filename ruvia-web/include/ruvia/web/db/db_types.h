@@ -106,6 +106,19 @@ struct db_config final {
     std::optional<std::chrono::milliseconds> write_timeout_{};
     std::optional<std::chrono::milliseconds> query_timeout_{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquire_timeout_{std::chrono::seconds(5)};
+    // Overall deadline of one connection lease: a transaction from the moment
+    // begin_transaction() holds its connection (before BEGIN) through commit()
+    // or rollback(), and a streaming result from query_stream() until it is
+    // exhausted or closed. Every statement inside runs under the earlier of its
+    // own deadline (operation timeout and query_timeout_) and the remaining
+    // lease time. Expiry while a statement runs fails that statement with
+    // db_error::code_type::timeout and ends the transaction or stream. Expiry
+    // while the caller holds the lease between operations closes the
+    // connection at once, so the server rolls the transaction back and
+    // releases its locks; the next operation, commit() included, then fails
+    // with timeout. The connection is never returned to the pool after expiry.
+    // db_migrator applies the same value to transactional migrations.
+    std::optional<std::chrono::milliseconds> transaction_timeout_{std::chrono::seconds(60)};
 };
 
 // Query-result caching stores rows in Redis. The types are declared in every

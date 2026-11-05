@@ -121,9 +121,6 @@ namespace {
                 return http_parse_error::invalid_upgrade;
             }
             break;
-        case request_header_kind::accept_encoding:
-            block.response_coding_qualities_.update(value);
-            break;
         default:
             break;
     }

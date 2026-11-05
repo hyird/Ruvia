@@ -186,7 +186,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_document_root_refresh_tests 60
         web/http/document_root_refresh.cpp)
     # Owns an application with a short write timeout, a one-thread blocking
-    # pool and a connection-failure hook.
+    # pool and a connection-failure hook, then runs it without a pool.
     ruvia_add_web_standalone_test(ruvia_file_response_failure_tests 30
         web/http/file_response_failure.cpp)
 

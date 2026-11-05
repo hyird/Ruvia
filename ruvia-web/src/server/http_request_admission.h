@@ -58,6 +58,10 @@ struct http_request_admission_input final {
     const http_server_expectation_plan* expectation_{};
     // Start of the request for the access-log duration.
     std::chrono::steady_clock::time_point start_{std::chrono::steady_clock::now()};
+    // The arrival instant rate-limit decisions use, pinned by an owner that
+    // replays requests at chosen instants (test_app); empty reads the steady
+    // clock at each decision.
+    std::optional<std::chrono::steady_clock::time_point> pinned_arrival_{};
 };
 
 // Effective request-body ceiling. A route may only tighten the deployment limit.

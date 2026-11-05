@@ -18,10 +18,9 @@ struct streaming_access final {
         response_stream_writer::end_type end, response_stream_writer::sleep_type sleep,
         response_stream_writer::bind_context_type bind_context,
         response_stream_writer::release_context_type release_context,
-        response_stream_writer::committed_type committed, response_stream_writer::aborted_type aborted,
-        response_stream_writer::cancel_on_peer_eof_type cancel_on_peer_eof) noexcept {
+        response_stream_writer::committed_type committed, response_stream_writer::aborted_type aborted) noexcept {
         return response_stream_writer(
-            resource, target, commit, write, end, sleep, bind_context, release_context, committed, aborted, cancel_on_peer_eof);
+            resource, target, commit, write, end, sleep, bind_context, release_context, committed, aborted);
     }
 
     // The token is supplied by the caller rather than read from `context`:

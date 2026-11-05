@@ -265,51 +265,48 @@ template <typename t_type>
     return parsed_value;
 }
 
+// A repeated name makes the member ambiguous (RFC 8259 section 4 leaves its
+// meaning unpredictable), so the lookup reports it instead of choosing an
+// occurrence, as typed model parsing rejects it: the scan stops at the second
+// occurrence and neither value is parsed. A unique match is converted by
+// json_value::get<T>(), the single parse-and-validate path for dynamic tokens.
 template <typename t_type>
     requires detail::is_model_field<t_type>
-[[nodiscard]] inline std::optional<t_type> json_object::get(std::string_view field) const& {
-    auto* const resource = resource_;
-    std::optional<t_type> result;
-    bool last_match_failed = false;
+[[nodiscard]] inline json_field_lookup<t_type> json_object::get(std::string_view field) const& {
+    std::optional<std::string_view> match;
     const auto visited = detail::visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
-        resource, [&](std::string_view key, std::string_view value_view) {
+        resource_, [&match, field](std::string_view key, std::string_view value_view) {
             if (key != field) {
                 return true;
             }
-
-            detail::skip_json_whitespace(value_view);
-            auto value = detail::parse_json_document<t_type>(value_view, resource,
-                detail::model_string_storage::borrowed);
-            if (!value) {
-                result.reset();
-                last_match_failed = true;
-                return true;
+            if (match) {
+                return false;
             }
-            if constexpr (detail::model_validation_access::contains_model<t_type>()) {
-                validator validator_value({.resource_ = resource});
-                detail::model_validation_access::validate_value(*value, validator_value);
-                if (!validator_value.valid()) {
-                    result.reset();
-                    last_match_failed = true;
-                    return true;
-                }
-            }
-            result.emplace(std::move(*value));
-            last_match_failed = false;
+            match = value_view;
             return true;
         });
-
-    if (visited != detail::json_object_visit_result::complete || last_match_failed) {
-        return std::nullopt;
+    switch (visited) {
+        case detail::json_object_visit_result::stopped:
+            return json_field_lookup<t_type>(unique_lookup_status::repeated);
+        case detail::json_object_visit_result::invalid:
+            // Every construction path validates the complete object.
+            throw std::logic_error("json_object token is not a complete JSON object");
+        case detail::json_object_visit_result::complete:
+            break;
     }
-    return result;
+    if (!match) {
+        return json_field_lookup<t_type>(unique_lookup_status::absent);
+    }
+    detail::skip_json_whitespace(*match);
+    const json_value value(resolved_pmr_resource_tag{}, *match, resource_);
+    return json_field_lookup<t_type>(value.get<t_type>());
 }
 
 template <typename t_type>
     requires detail::is_model_field<t_type>
-[[nodiscard]] inline std::optional<t_type> json_value::get(std::string_view field) const& {
+[[nodiscard]] inline json_field_lookup<t_type> json_value::get(std::string_view field) const& {
     if (!is_object()) {
-        return std::nullopt;
+        return json_field_lookup<t_type>(unique_lookup_status::absent);
     }
     // Borrows this token's bytes, so results stay valid as long as *this.
     const json_object object(resolved_pmr_resource_tag{}, view(), resource_);

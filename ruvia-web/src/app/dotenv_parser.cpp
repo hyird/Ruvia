@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <istream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -62,6 +63,26 @@ namespace {
     return result_value;
 }
 
+// The complete set of escapes inside double quotes. As in POSIX sh double
+// quotes, a backslash before any other character is not an escape: the
+// backslash and that character are both kept literally.
+[[nodiscard]] std::optional<char> decode_double_quoted_escape(char escaped) noexcept {
+    switch (escaped) {
+        case 'n':
+            return '\n';
+        case 'r':
+            return '\r';
+        case 't':
+            return '\t';
+        case '"':
+            return '"';
+        case '\\':
+            return '\\';
+        default:
+            return std::nullopt;
+    }
+}
+
 [[nodiscard]] std::pmr::string parse_double_quoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
     std::size_t decoded_size = 0;
@@ -78,6 +99,9 @@ namespace {
                     location_message(path, line_number, "unfinished escape sequence").c_str());
             }
             ++index;
+            if (!decode_double_quoted_escape(value[index]).has_value()) {
+                ++decoded_size;
+            }
         }
         ++decoded_size;
     }
@@ -96,25 +120,11 @@ namespace {
             continue;
         }
         const char escaped = value[++index];
-        switch (escaped) {
-            case 'n':
-                result.push_back('\n');
-                break;
-            case 'r':
-                result.push_back('\r');
-                break;
-            case 't':
-                result.push_back('\t');
-                break;
-            case '"':
-                result.push_back('"');
-                break;
-            case '\\':
-                result.push_back('\\');
-                break;
-            default:
-                result.push_back(escaped);
-                break;
+        if (const auto decoded = decode_double_quoted_escape(escaped); decoded.has_value()) {
+            result.push_back(*decoded);
+        } else {
+            result.push_back('\\');
+            result.push_back(escaped);
         }
     }
     return result;
@@ -216,6 +226,13 @@ void strip_utf8_bom(std::string_view& line) noexcept {
 std::pmr::vector<env_variable> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path) {
     std::pmr::vector<env_variable> entries(process_resource());
+    // Indices into entries ordered by name: duplicate detection stays
+    // O(log N) per line and never borrows a name that a reallocation of
+    // entries could move (small-string storage relocates with the element).
+    std::pmr::vector<std::size_t> entries_by_name(process_resource());
+    const auto entry_name = [&entries](std::size_t index) noexcept {
+        return std::string_view(entries[index].name_);
+    };
     std::pmr::string line(process_resource());
     std::size_t line_number = 0;
 
@@ -232,7 +249,17 @@ std::pmr::vector<env_variable> read_dotenv_entries(
             continue;
         }
 
-        entries.push_back(parse_entry(view, path, line_number));
+        auto entry = parse_entry(view, path, line_number);
+        // One file assigning a name twice is ambiguous configuration; the
+        // existing-variable policy only arbitrates against other sources.
+        const auto slot = std::ranges::lower_bound(
+            entries_by_name, std::string_view(entry.name_), std::ranges::less{}, entry_name);
+        if (slot != entries_by_name.end() && entry_name(*slot) == std::string_view(entry.name_)) {
+            throw std::invalid_argument(
+                location_message(path, line_number, "duplicate variable name").c_str());
+        }
+        entries_by_name.insert(slot, entries.size());
+        entries.push_back(std::move(entry));
     }
 
     if (input.bad()) {

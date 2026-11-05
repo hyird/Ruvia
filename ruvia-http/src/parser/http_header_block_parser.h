@@ -9,7 +9,6 @@
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
@@ -91,7 +90,6 @@ struct parsed_request_header_block {
     http_connection_options connection_options_;
     http_content_length_state content_length_;
     request_field_state fields_{request_field_framing::http1};
-    http_response_coding_qualities response_coding_qualities_;
     http_transfer_encoding_state transfer_encoding_;
     http_request_expectations expectations_;
 };

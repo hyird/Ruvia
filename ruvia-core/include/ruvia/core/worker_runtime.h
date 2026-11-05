@@ -112,7 +112,7 @@ public:
     void join();
     // The first failure, if any. Reading it takes ownership: destruction no
     // longer reports a failure that was read here.
-    [[nodiscard]] std::exception_ptr failure() const noexcept;
+    [[nodiscard]] std::exception_ptr failure() noexcept;
     [[nodiscard]] worker_runtime_state state() const noexcept;
     [[nodiscard]] asio::io_context& io_context() noexcept;
     [[nodiscard]] const worker_handle& handle() const noexcept;

@@ -109,25 +109,14 @@ public:
     task<void> writeln(std::string_view chunk) &;
     task<void> writeln(std::string_view) && = delete;
 
-    /// 仅在正文阶段挂起生产者；正常超时返回 elapsed，真实请求/worker
-    /// 取消返回 stop_requested。提交前或响应完成后调用抛 logic_error。
+    /// 仅在正文阶段挂起生产者；正常超时返回 elapsed，context::stop_token()
+    /// 取消（含客户端断开）返回 stop_requested。提交前或响应完成后调用抛 logic_error。
     /// HTTP/2 对端终止仍作为传输错误报告。
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &;
     task<timer_sleep_result> sleep(std::chrono::milliseconds) && = delete;
 
-    /// 显式将 HTTP/1 peer EOF（包括合法的 TCP 写半关闭）视为放弃当前响应。
-    /// 仅在请求体完整消费后可启用，否则抛出 std::logic_error；不主动读取或丢弃请求体。
-    /// 返回与请求取消组合的 token，供订阅、数据库等异步等待使用；sleep() 也观察它。
-    /// 不改变 context::stop_token() 或此前复制的 token。HTTP/2 只观察当前流终止。
-    /// HTTP/1 自动监控在首次获取 token 时才创建取消状态；创建可能分配并抛出异常。
-    /// 检测由连接 owner 管理，响应结束前取消并等待其完成。后续请求字节完整保留；
-    /// 读前探缓冲达到既有请求头上限时暂停检测，不为探测分配无界存储。
-    /// 默认不开启；FIN 无法区分关闭整个客户端与仅关闭发送方向。
-    [[nodiscard]] stop_token cancel_on_peer_eof() &;
-    stop_token cancel_on_peer_eof() && = delete;
-
     /// 仅报告已观察到的真实失败或取消；正常完成不等于 aborted。
-    /// HTTP/1 默认只观察写失败，cancel_on_peer_eof() 额外观察读侧终止。
+    /// 观察写失败与读侧终止（HTTP/1 请求体完整消费后的 FIN/RST，HTTP/2 流终止）。
     /// false 不保证对端仍连接。
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_(target_);
@@ -155,11 +144,9 @@ private:
     using release_context_type = void (*)(void*) noexcept;
     using committed_type = bool (*)(void*) noexcept;
     using aborted_type = bool (*)(void*) noexcept;
-    using cancel_on_peer_eof_type = stop_token (*)(void*);
 
     response_stream_writer(std::pmr::memory_resource& resource, void* target, commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context,
-        release_context_type release_context, committed_type committed, aborted_type aborted,
-        cancel_on_peer_eof_type cancel_on_peer_eof) noexcept
+        release_context_type release_context, committed_type committed, aborted_type aborted) noexcept
         : resource_(&resource),
           target_(target),
           commit_(commit),
@@ -169,11 +156,10 @@ private:
           bind_context_(bind_context),
           release_context_(release_context),
           committed_(committed),
-          aborted_(aborted),
-          cancel_on_peer_eof_(cancel_on_peer_eof) {}
+          aborted_(aborted) {}
 
     // The context's stop token travels with the binding so sleep() observes
-    // worker shutdown and explicit subrequest cancellation.
+    // worker shutdown, the client leaving, and explicit subrequest cancellation.
     void bind_context(context& context_value, stop_token stop_token_value) {
         stop_token_ = std::move(stop_token_value);
         bind_context_(target_, &context_value);
@@ -202,9 +188,7 @@ private:
     release_context_type release_context_;
     committed_type committed_;
     aborted_type aborted_;
-    cancel_on_peer_eof_type cancel_on_peer_eof_;
     stop_token stop_token_;
-    std::optional<stop_group> peer_stop_;
     bool output_active_{false};
     ::ruvia::operation_scope operation_scope_;
 
@@ -223,9 +207,6 @@ public:
     task<void> write(const sse_message& message);
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration);
-
-    /// 与 response_stream_writer::cancel_on_peer_eof() 相同；将返回 token 传给业务等待。
-    [[nodiscard]] stop_token cancel_on_peer_eof();
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_ == nullptr || writer_->aborted();

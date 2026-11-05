@@ -39,6 +39,14 @@ private:
         // Commands without a typed convenience API still use the same bounded
         // pool, cancellation token, PMR result ownership, and error handling.
         auto created = co_await c.redis().command("XGROUP", "CREATE", stream_key, group_name, "0", "MKSTREAM");
+        // command() returns Redis error replies as values; BUSYGROUP means the
+        // group already exists and is reported, never recreated.
+        if (created.is_error()) {
+            if (created.error().starts_with("BUSYGROUP")) {
+                co_return c.error({.status_ = ruvia::http_status::conflict, .message_ = "consumer group already exists"});
+            }
+            co_return c.error({.status_ = ruvia::http_status::bad_gateway, .message_ = "consumer group setup failed"});
+        }
         co_return c.text(created.string());
     }
 

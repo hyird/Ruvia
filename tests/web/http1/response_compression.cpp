@@ -122,10 +122,10 @@ class response_compression_routes final {
     }
     ruvia::task<ruvia::http_response> zero_file(ruvia::context& context_value) {
         const auto path = file_dir() / "zero.txt";
-        co_return context_value.file({.path_ = path});
+        co_return co_await context_value.file({.path_ = path});
     }
     ruvia::task<ruvia::http_response> zero_static_file(ruvia::context& context_value) {
-        co_return context_value.static_file(*resident_root, {.relative_path_ = "zero.txt"});
+        co_return co_await context_value.static_file(*resident_root, {.relative_path_ = "zero.txt"});
     }
     ruvia::task<ruvia::http_response> head_comma_declared(ruvia::context& context_value) {
         const auto len = std::to_string(small_body.size());
@@ -211,15 +211,15 @@ class response_compression_routes final {
 
     ruvia::task<ruvia::http_response> file(ruvia::context& context_value) {
         static const std::filesystem::path path = file_dir() / "file.txt";
-        co_return context_value.file({.path_ = path});
+        co_return co_await context_value.file({.path_ = path});
     }
 
     ruvia::task<ruvia::http_response> static_file(ruvia::context& context_value) {
-        co_return context_value.static_file(*resident_root, {.relative_path_ = "resident.txt"});
+        co_return co_await context_value.static_file(*resident_root, {.relative_path_ = "resident.txt"});
     }
 
     ruvia::task<ruvia::http_response> coded_static_file(ruvia::context& context_value) {
-        co_return context_value.static_file(*coded_root, {.relative_path_ = "asset.txt"});
+        co_return co_await context_value.static_file(*coded_root, {.relative_path_ = "asset.txt"});
     }
 };
 

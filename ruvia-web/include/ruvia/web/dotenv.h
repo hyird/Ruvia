@@ -31,6 +31,13 @@ enum class dotenv_missing_file_policy : std::uint8_t {
     require,
 };
 
+// A dotenv file is parsed completely before any variable is applied, so a
+// rejected file changes nothing. Malformed entries throw std::invalid_argument
+// naming "<path>:<line>". Within double quotes only \n, \r, \t, \" and \\ are
+// escapes; as in POSIX sh, a backslash before any other character is kept
+// together with that character ("\q" yields \q). Assigning one name twice in
+// the same file is rejected as a duplicate variable name: the existing-variable
+// policy only arbitrates against variables from earlier loads.
 struct dotenv_options final {
     dotenv_existing_variable_policy existing_variables_{dotenv_existing_variable_policy::preserve};
     dotenv_missing_file_policy missing_file_{dotenv_missing_file_policy::ignore};

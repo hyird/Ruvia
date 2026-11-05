@@ -112,8 +112,10 @@ struct static_root_state final {
     bool has_sidecars_{false};
 #if defined(__unix__)
     // The indexed root, opened once: the index snapshot and each request
-    // open entries beneath it.
-    native_file_handle root_directory_;
+    // open entries beneath it. Shared with every static_root_entry_open, so
+    // an open still running on the blocking pool after its request gave up
+    // never uses a descriptor this snapshot already closed.
+    std::shared_ptr<const native_file_handle> root_directory_;
     // The directory instance root_directory_ names; the index was built from
     // the same one.
     native_directory_identity root_identity_{};
@@ -293,6 +295,49 @@ private:
     const std::pmr::string* resident_bytes_;
 };
 
+// One indexed file's open for a response, owning everything it reads: it runs
+// on the blocking pool and may outlive the request -- and the snapshot -- that
+// started it. On POSIX it opens beneath the snapshot's retained root directory
+// without following a symlink in any component; on Windows it opens the
+// canonical path, the identity check against the index being its guard.
+class static_root_entry_open final {
+public:
+    // The opened handle; empty when the open failed or, for a checked open,
+    // when the handle no longer holds the indexed identity and size.
+    [[nodiscard]] http_response_file_handle operator()() const noexcept;
+
+private:
+    friend class static_root_access;
+
+#if defined(__unix__)
+    static_root_entry_open(std::shared_ptr<const native_file_handle> root_directory,
+        http_native_path_string_type open_path, http_response_file_identity identity, std::uint64_t size,
+        bool checked) noexcept
+        : root_directory_(std::move(root_directory)),
+          open_path_(std::move(open_path)),
+          identity_(identity),
+          size_(size),
+          checked_(checked) {}
+#else
+    static_root_entry_open(http_native_path_string_type open_path, http_response_file_identity identity,
+        std::uint64_t size, bool checked) noexcept
+        : open_path_(std::move(open_path)),
+          identity_(identity),
+          size_(size),
+          checked_(checked) {}
+#endif
+
+#if defined(__unix__)
+    std::shared_ptr<const native_file_handle> root_directory_;
+#endif
+    // Beneath the root on POSIX, the canonical path on Windows; in the
+    // synchronized process resource, since the pool thread may free it.
+    http_native_path_string_type open_path_;
+    http_response_file_identity identity_;
+    std::uint64_t size_;
+    bool checked_;
+};
+
 class static_root_access final {
 public:
     [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> make(
@@ -330,11 +375,11 @@ public:
     // as indexed stays file-backed and keeps its identity check.
     static void install_resident_bodies(static_root& root, const static_root* previous,
         const static_root_resident_options& options);
-    // Opens the entry's file for a response whose identity check runs on the
-    // returned handle: beneath the root's directory handle without following
-    // symlinks on POSIX, by its canonical path on Windows. Empty when the open
-    // failed; the caller then answers without resolving the path again.
-    [[nodiscard]] static http_response_file_handle open_entry(
-        const static_root& root, const static_root_entry_view& entry) noexcept;
+    // The open of the entry's file for one response, run by the caller on the
+    // blocking pool. `checked` also verifies the opened handle against the
+    // indexed identity and size, for a response that sends none of its bytes
+    // and so is never checked by the transport.
+    [[nodiscard]] static static_root_entry_open entry_open(
+        const static_root& root, const static_root_entry_view& entry, bool checked);
 };
 }  // namespace ruvia::detail

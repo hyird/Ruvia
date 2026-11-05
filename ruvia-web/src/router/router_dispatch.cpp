@@ -119,7 +119,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 (method == http_known_method::get || method == http_known_method::head)) {
                 auto context_value = detail::context_access::make(memory, request, services);
                 detail::context_access::services(context_value).bind_routes(*this);
-                auto fallback_response = detail::context_access::static_file_resolved(
+                auto fallback_response = co_await detail::context_access::static_file_resolved(
                     context_value, *document_root.root(), fallback_probe.relative_, {},
                     *fallback_probe.entry_, static_file_mode);
                 auto terminal = [&fallback_response](context&) -> task<http_response> {

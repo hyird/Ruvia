@@ -107,7 +107,11 @@ public:
     [[nodiscard]] bool active() const noexcept;
     // Each read has one operation deadline, including any EOF/trailing-result
     // drain needed before returning nullopt. A separate close starts its own
-    // deadline; idle time between operations is not charged.
+    // deadline. Both end no later than the stream's overall deadline
+    // (db_config::transaction_timeout_), which runs from query_stream() until
+    // the stream ends and also counts the time between operations; once it has
+    // passed, the connection is closed and read() and close() fail with
+    // db_error::code_type::timeout.
     [[nodiscard]] task<std::optional<db_row>> read() &;
     task<std::optional<db_row>> read() && = delete;
     [[nodiscard]] task<void> close() &;
@@ -118,14 +122,14 @@ private:
     template <typename driver_type>
     friend class detail::db_pool;
 
+    // The driver's result handle lives in the pool slot, so the pool alone
+    // frees it, including when the stream's deadline expires between reads.
     struct lease_type final {
-        lease_type(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
-            std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
-            operation_options options) noexcept;
+        lease_type(detail::db_pool_ref_type client, std::size_t slot, std::pmr::vector<std::pmr::string> column_names,
+            std::pmr::memory_resource* resource, operation_options options) noexcept;
 
         detail::db_pool_ref_type client_;
         std::size_t slot_;
-        void* result_;
         std::pmr::memory_resource* resource_;
         std::pmr::vector<db_field> fields_;
         std::pmr::vector<std::pmr::string> column_names_;
@@ -139,9 +143,8 @@ private:
     using state_owner_type = std::unique_ptr<state_type, pmr_object_deleter<state_type>>;
 
     db_stream_result() noexcept = default;
-    db_stream_result(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
-        std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
-        operation_options options);
+    db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::pmr::vector<std::pmr::string> column_names,
+        std::pmr::memory_resource* resource, operation_options options);
     void reset() noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
     void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;

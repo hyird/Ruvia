@@ -50,7 +50,7 @@ class file_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> file(ruvia::context& context_value) {
-        auto response = context_value.file({.path_ = file_path()});
+        auto response = co_await context_value.file({.path_ = file_path()});
         // Make the exercised transport path observable, rather than assuming
         // that the file is above the context::file in-memory threshold.
         response.header("x-file-backed", response.file_body().has_value() ? "yes" : "no");
@@ -66,7 +66,7 @@ class file_routes final {
         // The client truncates the file once HEADERS arrive: the file was
         // validated before them, and the multipart boundary DATA is submitted
         // before the file range read fails and resets the stream.
-        co_return context_value.file({.path_ = file_path()});
+        co_return co_await context_value.file({.path_ = file_path()});
     }
 
     ruvia::task<ruvia::http_response> mutated_empty(ruvia::context& context_value) {
@@ -74,7 +74,7 @@ class file_routes final {
         {
             std::ofstream output(path, std::ios::binary | std::ios::trunc);
         }
-        auto response = context_value.file({.path_ = path});
+        auto response = co_await context_value.file({.path_ = path});
         {
             std::ofstream output(path, std::ios::binary | std::ios::trunc);
             output << "changed";
@@ -83,7 +83,7 @@ class file_routes final {
     }
 
     ruvia::task<ruvia::http_response> indexed_empty(ruvia::context& context_value) {
-        co_return context_value.static_file(*empty_root, {.relative_path_ = "body.bin"});
+        co_return co_await context_value.static_file(*empty_root, {.relative_path_ = "body.bin"});
     }
 
     ruvia::task<ruvia::http_response> ok_text(ruvia::context& context_value) {

@@ -61,9 +61,8 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 | `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
 | `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
 | `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
-| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 仅在正文阶段等待；请求取消或停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常 |
-| `bool aborted() const noexcept` | 只报告已观察到的真实失败/中止，正常完成（含 HEAD、304）为 `false` |
-| `stop_token cancel_on_peer_eof() &` | 显式启用读侧终止取消，返回供业务等待使用的组合 token，语义见下文 |
+| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 仅在正文阶段等待；`c.stop_token()` 取消（含客户端断开）或停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常 |
+| `bool aborted() const noexcept` | 只报告已观察到的真实失败/中止（写失败、客户端断开），正常完成（含 HEAD、304）为 `false` |
 | `task<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
 
 HTTP/2 服务端写循环直接等待 Worker 信号；没有输出时不创建额外的等待协程。
@@ -100,24 +99,21 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 | `task<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
 | `task<timer_sleep_result> sleep(std::chrono::milliseconds duration)` | 挂起等待指定时长 |
 | `bool aborted() const noexcept` | 只报告真实失败，正常 HEAD 完成不是取消 |
-| `stop_token cancel_on_peer_eof()` | 与 `response_stream_writer` 同名方法相同 |
 | `task<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
 
-#### 空闲 SSE 的断连取消
+#### 客户端断开即取消请求
 
-普通 HTTP/1 响应和 SSE **默认不改变 TCP 半关闭语义**。[RFC 9112 §9.6](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6) 明确指出：客户端的 TCP 半关闭既不界定请求消息的结束，也不表示客户端不再关心响应。业务选择 `cancel_on_peer_eof()` 后，明确接受将读侧 EOF 视为放弃当前响应；这适用于不使用写半关闭的 SSE 客户端，不适用于发送完请求后 `shutdown(SHUT_WR)`、仍要完整读取响应的客户端。
+流式响应路由（处理器返回 `ruvia::task<void>`）中，客户端关闭连接会停止 `c.stop_token()`，与 Go `net/http` 的后台读取、Pingora `read_body_or_idle` 及 nginx 默认 `proxy_ignore_client_abort off` 一致。该 token 已由 `db()`、`redis()`（含 Pub/Sub 订阅）、`http_client()`、`run_blocking()` 与 `sse.sleep()` / `stream.sleep()` 自动绑定，空闲 SSE 等待订阅消息时也能及时结束，无需显式启用。
 
-- HTTP/1 明文和 TLS 均使用连接所属事件循环上的异步 transport read。没有探测写入、心跳依赖或 socket 状态轮询。
-- 请求体必须已完整消费。没有请求体的 GET 可立即启用；带请求体时先 `co_await c.req().text()` 等完整读取，再启用。提前返回响应而未读完请求体时，调用抛出 `std::logic_error`；不自动排空、不抢占请求体读取。响应头提交后才读完请求体的情况仍遵守原先确定的关闭计划，不因此恢复连接复用。
-- HTTP/1 流已结束或中止后不能首次启用；有效启用后重复调用幂等。
-- 读到后续请求字节时保留原字节与顺序，不将“可读”误判为断开。预读达到既有请求头大小上限时暂停检测，直到当前响应结束；不支持在任意长度的待处理 pipeline 后仍保证即时发现 EOF，也不为此无限缓冲。
-- EOF、TLS `close_notify`、异常 TCP 断开及超时关闭触发当前流的取消。正常结束与异常退出都先取消并等待检测结束，再释放连接资源。HTTP/2 不新增读操作，返回的 token 观察对应 stream 的终止，不取消同连接其他 stream。
-- HTTP/2 请求方向正常的 `END_STREAM` 不取消响应；`RST_STREAM` 或使该流终止的连接关闭才取消。`GOAWAY` 仍遵循原有排空规则。
-- 网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理。本 API 不新增保活探测。
-- 返回值合并当前请求的原取消信号，`sse.sleep()` / `stream.sleep()` 也使用它；`c.stop_token()` 和此前取得的 token 不变。数据库、Redis、HTTP client 及自定义订阅继续使用各自已有的显式 token 参数，无第二套取消协议。
-- 取消是协作式的。必须将返回 token 传给正在等待的操作，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
+- HTTP/1 明文和 TLS：请求体完整消费后，框架在连接所属事件循环上发起一次异步 transport read 观察读侧终止；没有探测写入、心跳依赖或 socket 状态轮询。没有请求体的 GET 在分派时即开始；带请求体时在处理器读完请求体（如 `co_await c.req().text()`）的那次读取返回前开始。未读完的请求体字节仍在 socket 中时不检测，也不自动排空或抢占请求体读取。
+- 单独到达的请求（同一批输入中前面没有其他请求）遇 EOF、TLS `close_notify`；任何请求遇 TLS 截断（无 `close_notify` 的 TCP 结束）、TCP RST 或写失败，都停止 `c.stop_token()`，`aborted()` 随之为 `true`，之后的写入抛传输异常；当前流按截断结束并关闭连接。正常结束与异常退出都先取消并等待检测结束，再释放连接资源。
+- **TCP 写半关闭**：[RFC 9112 §9.6](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6) 指出客户端半关闭本身不表示放弃响应，但单个 FIN 无法区分“关闭整个客户端”与“仅关闭发送方向”。流式响应把单独到达请求之后的 FIN 视为客户端离开：只发送一个请求即 `shutdown(SHUT_WR)`、仍要读取完整流式响应的客户端会被截断，这类客户端应改为保持发送方向打开或使用缓冲响应路由。缓冲响应路由不受影响。
+- **Pipeline**：检测期间读到的后续请求字节按原顺序完整保留，不将“可读”误判为断开。pipeline 内的干净结束（TCP FIN 或 TLS `close_notify`）是请求方向半关闭，与 FIN 到达的时机无关：当前请求排在前一请求之后到达（客户端在前一响应结束前已发出它，无论前一路由是缓冲还是流式），或其后已有后续请求字节时，不取消当前响应；FIN 之前已收到的请求（包括流式响应，其 `c.stop_token()` 不因该 FIN 停止）照常处理，全部响应后关闭连接，不再读取 transport。TCP RST 与 TLS 截断仍中止。预读达到既有请求头大小上限时暂停检测，直到当前响应结束；不为探测无界缓冲。
+- HTTP/2 不新增读操作：本流 `RST_STREAM` 或使该流终止的连接关闭停止 `c.stop_token()`，不取消同连接其他 stream。请求方向正常的 `END_STREAM` 不取消响应；`GOAWAY` 仍遵循原有排空规则。
+- 网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理，不新增保活探测。
+- 取消是协作式的：未绑定 `c.stop_token()` 的自定义等待须显式传入它，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
 
-FlexEdge 的最小接入是：取得 SSE writer 后启用选项，将返回 token 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端，不假定 FlexEdge 私有 API 名称：
+FlexEdge 的最小接入：把 `c.stop_token()` 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端，不假定 FlexEdge 私有 API 名称：
 
 ```cpp
 #include <string>
@@ -133,7 +129,7 @@ ruvia::task<void> stream_subscription(
     if (co_await sse.commit() == ruvia::stream_commit_result::completed) {
         co_return;
     }
-    const auto stop = sse.cancel_on_peer_eof();
+    const auto stop = c.stop_token();
     co_await sse.write({.data_ = initial_snapshot, .event_ = "snapshot"});
     while (!stop.stop_requested()) {
         auto message = co_await subscription.receive(stop);
@@ -145,7 +141,7 @@ ruvia::task<void> stream_subscription(
 }
 ```
 
-在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。已有额外取消源时声明 `ruvia::stop_group group{stop, extra_stop};`，把 `group.token()` 传给等待，并让 group 存活到等待及取消后的 join 完成。不要用临时 group 返回 token，也不要停止整个 Worker 来取消单个 SSE。可运行示例见 [streaming.cpp](../examples/web/streaming.cpp)。
+在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。已有额外取消源时声明 `ruvia::stop_group group{stop, extra_stop};`，把 `group.token()` 传给等待，并让 group 存活到等待及取消后的 join 完成。不要用临时 group 返回 token，也不要停止整个 Worker 来取消单个 SSE。可运行示例见 [streaming.cpp](../examples/web/streaming.cpp) 与 [redis_pubsub.cpp](../examples/web/redis_pubsub.cpp)。
 
 ---
 
@@ -339,6 +335,8 @@ Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.htm
 未携带 `User-Agent` 字段的 HTTP 请求与 WebSocket 握手（HTTP/1.1 Upgrade 与 HTTP/2 Extended CONNECT）统一发送配置的 `http_client_config::user_agent_` / `websocket_client_config::user_agent_`（默认 `User-Agent: Ruvia`）；调用方在请求首部或 `websocket_client_config::headers_` 中提供的 `User-Agent` 字段替换该值，`user_agent_` 为空时不发送 `User-Agent`。
 
 存储与配置的 Cookie 只属于固定 origin（[RFC 6265 §5.4](https://www.rfc-editor.org/rfc/rfc6265.html#section-5.4)）：`open_tunnel()` 指向其他 authority 的 `CONNECT` / Extended CONNECT / `CONNECT-UDP` 请求不附带它们，该请求响应中的 `Set-Cookie` 也不写入 Cookie Jar；普通请求与 `open_udp_tunnel()`（authority 即 origin）不受影响。调用方在请求首部显式写入的 `Cookie` 字段照常发送。
+
+HTTP/1 请求首部中的 `Connection` 选项可列出 `close`、`keep-alive`、`TE`、`Upgrade`、`Proxy-Authorization` 与自定义逐跳字段，但不得点名分帧字段、`Host`、面向全部接收方的字段（[RFC 9110 §7.6.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-7.6.1)），也不得点名请求来源元数据 `Forwarded`、`X-Forwarded-For`、`X-Forwarded-Proto`、`X-Forwarded-Host`（同 Pingora 的受保护集合）：下一跳会把被点名字段当作逐跳字段移除，使其路由与客户端地址判定失去依据。此类请求在写出前以 `http_client_error::code_type::invalid_request` 失败，不发送任何字节。
 
 TLS 连接关闭时（响应要求关闭、`shutdown()` 退役空闲连接或 HTTP/2 会话、WebSocket 与 Redis 客户端关闭），客户端先以一次非阻塞写发送 `close_notify`（[RFC 9112 §9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.8)），不等待对端告警；关闭始终立即完成，挂起的读取不阻止告警，由关闭取消。告警只追加在已完整写出的 TLS 记录之后：仍有记录写入等待 socket 或只写出部分记录（来自写入，或来自读取对握手后消息的应答，例如 TLS 1.2 `HelloRequest` 引发的 `no_renegotiation` 告警）、记录写入失败或被取消，以及发生 TLS 错误后的关闭不发送告警，`CONNECT` 隧道由隧道自身负责 TLS 关闭。
 

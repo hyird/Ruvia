@@ -28,8 +28,8 @@ std::filesystem::path examples_root() {
     return std::filesystem::path(RUVIA_EXAMPLES_SOURCE_DIR);
 }
 
-// c.file() borrows its path: build it once, not per request. UTF-8 text such
-// as a std::string or a literal works too.
+// c.file() copies its path before returning its task; still build a fixed path
+// once, not per request. UTF-8 text such as a std::string or a literal works too.
 const std::filesystem::path& download_path() {
     static const std::filesystem::path path = examples_root() / "public" / "hello.txt";
     return path;
@@ -47,12 +47,14 @@ public:
     RUVIA_ROUTES_END
 
 private:
+    // file() and static_file() open the file on the blocking pool and
+    // complete with the settled response (status, validators, framing).
     ruvia::task<ruvia::http_response> download(ruvia::context& c) {
-        co_return c.file({.path_ = download_path(), .content_type_ = "text/plain; charset=utf-8"});
+        co_return co_await c.file({.path_ = download_path(), .content_type_ = "text/plain; charset=utf-8"});
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
-        co_return c.static_file(
+        co_return co_await c.static_file(
             *g_assets, {.relative_path_ = c.req().param("*").value_or("index.html")});
     }
 };
@@ -85,7 +87,8 @@ int main() {
         // .precompress_gzip_ refresh-builds gzip variants for changed text assets.
         // Configure resident files through .static_options_.resident_max_bytes_
         // and .static_options_.resident_budget_bytes_; zero disables them.
-        // The application blocking pool is enabled by default.
+        // The application blocking pool is enabled by default; file opens and
+        // reads run on it.
 
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8083})

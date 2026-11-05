@@ -12,17 +12,15 @@ namespace ruvia {
 
 enum class http_set_cookie_attribute : std::uint8_t {
     secure = 1U << 0,
-    path = 1U << 1,
-    same_site_none = 1U << 2,
-    partitioned = 1U << 3,
-    http_only = 1U << 4,
+    partitioned = 1U << 1,
+    http_only = 1U << 2,
 };
 
 // Borrowed, allocation-free Set-Cookie fields for outbound client runtimes,
 // following the RFC 6265 section 5.2 user-agent algorithm. A cookie without '=',
 // with an empty name, over 4096 name+value bytes, or with a control byte other
 // than HTAB is rejected. Unknown and oversized attributes are ignored. path() is
-// empty (and http_set_cookie_attribute::path unset) when the last Path value is
+// empty when the last Path value is
 // empty or does not start with '/', meaning the caller's default-path. An empty
 // Domain value is ignored; a leading '.' is removed, so domain() may be empty
 // (host-only) and is not validated beyond domain-matching by the caller. Expires follows RFC 6265 cookie-date token grammar, including its
@@ -64,7 +62,7 @@ public:
     }
 
     [[nodiscard]] constexpr bool same_site_none() const noexcept {
-        return has(http_set_cookie_attribute::same_site_none);
+        return same_site_ == cookie_same_site::none;
     }
 
     [[nodiscard]] constexpr std::optional<cookie_same_site> same_site() const noexcept {
@@ -80,10 +78,6 @@ private:
 
     constexpr void set(http_set_cookie_attribute attribute) noexcept {
         attributes_ |= static_cast<std::uint8_t>(attribute);
-    }
-
-    constexpr void clear(http_set_cookie_attribute attribute) noexcept {
-        attributes_ &= static_cast<std::uint8_t>(~static_cast<std::uint8_t>(attribute));
     }
 
     std::string_view name_;

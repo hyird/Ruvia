@@ -139,7 +139,8 @@ task<void> redis_connection::write_request(const operation_timeout& timeout, red
     }
 }
 
-task<redis_value> redis_connection::read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource) {
+task<redis_value> redis_connection::read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource,
+    std::chrono::steady_clock::time_point* input_time) {
     if (!connected_) {
         throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
     }
@@ -203,6 +204,9 @@ task<redis_value> redis_connection::read_reply(const operation_timeout& timeout,
         }
         if (!received.ok()) {
             throw_redis_io_error(received);
+        }
+        if (input_time != nullptr) {
+            *input_time = std::chrono::steady_clock::now();
         }
         if (redisReaderFeed(reader_.get(), read_buffer_.data(), received.bytes_) != REDIS_OK) {
             throw redis_error(

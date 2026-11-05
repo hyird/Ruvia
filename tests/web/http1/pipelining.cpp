@@ -90,7 +90,7 @@ class pipelining_routes final {
     }
 
     ruvia::task<ruvia::http_response> file(ruvia::context& c) {
-        co_return c.file({.path_ = pipelined_file_path()});
+        co_return co_await c.file({.path_ = pipelined_file_path()});
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {

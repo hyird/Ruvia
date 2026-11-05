@@ -112,6 +112,14 @@ public:
     [[nodiscard]] std::size_t pipeline_size() const noexcept {
         return initial_pipeline_remainder().size() + buffered_pipeline_remainder().size();
     }
+    // Runs `observer(target)` once, when a read completes the body, before that
+    // read returns; its exception fails the read. Once the body is complete no
+    // read touches the transport again, so the observer may start one.
+    using completion_observer_type = void (*)(void*);
+    void observe_completion(void* target, completion_observer_type observer) noexcept {
+        completion_target_ = target;
+        completion_observer_ = observer;
+    }
 
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read();
     task<std::string_view> read_all(std::pmr::string& body);
@@ -131,7 +139,7 @@ private:
     [[nodiscard]] std::span<char> transfer_output();
     void decode_transfer_append(std::string_view input, std::pmr::string& target);
     [[nodiscard]] bool exceeds_limit(std::size_t bytes) const noexcept;
-    void mark_finished() noexcept;
+    void mark_finished();
 
     stream_type& stream_;
     http_io_buffer buffer_;
@@ -157,6 +165,8 @@ private:
     bool failed_{false};
     bool continue_pending_{false};
     bool peer_eof_observed_{false};
+    void* completion_target_{};
+    completion_observer_type completion_observer_{};
 };
 
 }  // namespace ruvia::detail

@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <optional>
 #include <semaphore>
 #include <string>
@@ -22,15 +23,19 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/static_files.h"
 
 #include "test_harness.h"
 
 // A file body that fails before its head is sent is answered with an error
-// response, and only real faults reach the connection failure channel. A read
-// the response waits on is bounded by write_timeout_: a pool that cannot run
-// it (here: its single thread held by another request) does not pin the
-// connection. This executable owns its application because the write timeout,
-// the one-thread blocking pool and the failure hook are application-wide.
+// response, and only real faults reach the connection failure channel. The
+// open a file response waits on, and every read after it, is bounded by
+// write_timeout_: a pool that cannot run it (here: its single thread held by
+// another request) does not pin the request. Without a blocking pool a file
+// response -- context::file or a standalone static_root -- is a reported 503:
+// nothing opens the file on the worker. This executable owns its application
+// because the write timeout, the blocking pool and the failure hook are
+// application-wide.
 
 namespace file_response_failure_test {
 
@@ -52,11 +57,14 @@ std::atomic<bool> pool_held{false};
 std::atomic<bool> release_pool{false};
 std::atomic<std::size_t> reported_failures{0};
 std::atomic<std::size_t> reported_timeouts{0};
+std::atomic<std::size_t> reported_missing_pools{0};
+std::unique_ptr<ruvia::static_root> static_files;
 
 class file_failure_routes final {
     RUVIA_ROUTES_BEGIN(file_failure_routes)
     RUVIA_GET("/file-failure/hold-pool", hold_pool);
     RUVIA_GET("/file-failure/file", file);
+    RUVIA_GET("/file-failure/static", static_file);
     RUVIA_GET("/file-failure/changed", changed);
     RUVIA_ROUTES_END
 
@@ -75,7 +83,11 @@ class file_failure_routes final {
 
     ruvia::task<ruvia::http_response> file(ruvia::context& c) {
         const auto path = failure_dir() / "body.bin";
-        co_return c.file({.path_ = path});
+        co_return co_await c.file({.path_ = path});
+    }
+
+    ruvia::task<ruvia::http_response> static_file(ruvia::context& c) {
+        co_return co_await c.static_file(*static_files, {.relative_path_ = "asset.txt"});
     }
 
     // Framed from the file's snapshot, then truncated before the transport
@@ -83,7 +95,7 @@ class file_failure_routes final {
     ruvia::task<ruvia::http_response> changed(ruvia::context& c) {
         const auto path = failure_dir() / "changed.bin";
         write_file(path, std::string(4096, 'c'));
-        auto response = c.file({.path_ = path});
+        auto response = co_await c.file({.path_ = path});
         write_file(path, "x");
         co_return response;
     }
@@ -96,6 +108,8 @@ void record_failure(const ruvia::connection_failure_record& record) noexcept {
     } catch (const std::system_error& error) {
         if (error.code() == std::errc::timed_out) {
             reported_timeouts.fetch_add(1);
+        } else if (error.code() == std::errc::operation_not_supported) {
+            reported_missing_pools.fetch_add(1);
         }
     } catch (...) {
     }
@@ -146,11 +160,13 @@ template <typename predicate_type>
 
 using namespace file_response_failure_test;
 
-RUVIA_TEST(file_failures_before_the_head_get_an_error_response_and_stalled_reads_time_out) {
+RUVIA_TEST(file_failures_before_the_head_get_an_error_response_and_stalled_opens_time_out) {
     std::error_code ignored;
     std::filesystem::remove_all(failure_dir(), ignored);
-    std::filesystem::create_directories(failure_dir());
+    std::filesystem::create_directories(failure_dir() / "static");
     write_file(failure_dir() / "body.bin", std::string(4096, 'b'));
+    write_file(failure_dir() / "static" / "asset.txt", std::string(4096, 's'));
+    static_files = std::make_unique<ruvia::static_root>(failure_dir() / "static");
 
     asio::io_context io;
     asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
@@ -191,30 +207,31 @@ RUVIA_TEST(file_failures_before_the_head_get_an_error_response_and_stalled_reads
             RUVIA_CHECK_EQ(reported_failures.load(), std::size_t{0});
         }
 
-        // The pool's only thread is held, so the file read queues behind it.
-        // The connection still ends within write_timeout_ (with a 503 unless
-        // the write-stall scan closed the socket first), and the stalled read
-        // is reported as a fault.
+        // The pool's only thread is held, so the file's open queues behind it.
+        // The handler's wait still ends within write_timeout_ with a 503
+        // before any head, and the stalled open is reported as a fault.
         asio::ip::tcp::socket holder(io);
         holder.connect(endpoint);
         asio::write(holder, asio::buffer(get("/file-failure/hold-pool")));
         RUVIA_CHECK(wait_for([] { return pool_held.load(); }));
-        {
+        for (const std::string_view target : {"/file-failure/file", "/file-failure/static"}) {
+            const auto timeouts_before = reported_timeouts.load();
             asio::ip::tcp::socket socket(io);
             socket.connect(endpoint);
-            asio::write(socket, asio::buffer(get("/file-failure/file")));
+            asio::write(socket, asio::buffer(get(target)));
             const auto wire = read_to_close(socket, 5s);
             RUVIA_CHECK(wire.has_value());
             if (wire.has_value()) {
-                RUVIA_CHECK(wire->empty() || wire->starts_with("HTTP/1.1 503 "));
+                RUVIA_CHECK(wire->starts_with("HTTP/1.1 503 "));
+                RUVIA_CHECK(wire->find("file_read_unavailable") != std::string::npos);
             }
-            RUVIA_CHECK(wait_for([] { return reported_timeouts.load() != 0; }));
+            RUVIA_CHECK(wait_for([timeouts_before] { return reported_timeouts.load() > timeouts_before; }));
         }
         release_pool.store(true);
         const auto released = read_to_close(holder, 5s);
         RUVIA_CHECK(released.has_value() && released->starts_with("HTTP/1.1 200 "));
 
-        // With the pool free again the same file is served.
+        // With the pool free again the same files are served.
         {
             asio::ip::tcp::socket socket(io);
             socket.connect(endpoint);
@@ -223,11 +240,53 @@ RUVIA_TEST(file_failures_before_the_head_get_an_error_response_and_stalled_reads
             RUVIA_CHECK(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
                         wire->ends_with(std::string(4096, 'b')));
         }
+        {
+            asio::ip::tcp::socket socket(io);
+            socket.connect(endpoint);
+            asio::write(socket, asio::buffer(get("/file-failure/static")));
+            const auto wire = read_to_close(socket, 5s);
+            RUVIA_CHECK(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
+                        wire->ends_with(std::string(4096, 's')));
+        }
         RUVIA_CHECK(wait_for([&app] { return app.http_stats().active_connections_ == 0; }));
     }
     release_pool.store(true);
     app.stop();
     runner.join();
     RUVIA_CHECK(failure == nullptr);
+
+    // Without a blocking pool nothing opens a file on the worker, on any
+    // platform: context::file and a standalone static_root answer 503 before
+    // any head, and each missing pool is reported as a fault.
+    app.blocking_pool(nullptr);
+    std::thread pool_less_runner([&app, &failure] {
+        try {
+            app.run();
+        } catch (...) {
+            failure = std::current_exception();
+        }
+    });
+    const bool pool_less_ready = started.try_acquire_for(10s);
+    RUVIA_CHECK(pool_less_ready);
+    if (pool_less_ready) {
+        for (const std::string_view target : {"/file-failure/file", "/file-failure/static"}) {
+            const auto missing_before = reported_missing_pools.load();
+            asio::ip::tcp::socket socket(io);
+            socket.connect(endpoint);
+            asio::write(socket, asio::buffer(get(target)));
+            const auto wire = read_to_close(socket, 5s);
+            RUVIA_CHECK(wire.has_value());
+            if (wire.has_value()) {
+                RUVIA_CHECK(wire->starts_with("HTTP/1.1 503 "));
+                RUVIA_CHECK(wire->find("file_read_unavailable") != std::string::npos);
+            }
+            RUVIA_CHECK(wait_for([missing_before] { return reported_missing_pools.load() > missing_before; }));
+        }
+    }
+    app.stop();
+    pool_less_runner.join();
+    RUVIA_CHECK(failure == nullptr);
+    app.blocking_pool(ruvia::blocking_pool_options{});
+    static_files.reset();
     std::filesystem::remove_all(failure_dir(), ignored);
 }

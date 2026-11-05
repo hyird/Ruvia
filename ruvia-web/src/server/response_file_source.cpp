@@ -29,16 +29,16 @@ response_file_failure response_file_failure::read_failed(std::error_code error) 
 }
 
 response_file_failure response_file_failure::read_not_completed(blocking_status status) {
-    // A worker without a pool is a configuration fault, and a read still
-    // unfinished after the write timeout is a stalled filesystem. Overload and
-    // shutdown are not faults of this response.
+    // A worker without a pool is a configuration fault, and an open or read
+    // still unfinished after the write timeout is a stalled filesystem.
+    // Overload and shutdown are not faults of this response.
     std::exception_ptr fault;
     if (status == blocking_status::unavailable) {
         fault = std::make_exception_ptr(std::system_error(std::make_error_code(std::errc::operation_not_supported),
-            "file response body needs a blocking pool"));
+            "file response needs a blocking pool"));
     } else if (status == blocking_status::timed_out) {
         fault = std::make_exception_ptr(
-            std::system_error(std::make_error_code(std::errc::timed_out), "file response body read timed out"));
+            std::system_error(std::make_error_code(std::errc::timed_out), "file response I/O timed out"));
     }
     return response_file_failure(true, std::move(fault));
 }

@@ -712,7 +712,7 @@ bool test_cancellation_reaches_worker_with_saturated_or_closed_queue(bool close)
     auto queue = ruvia::make_worker_cancellation_target(owner_value, worker_value);
     ruvia::stop_source source;
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, ruvia::worker_cancellation_post(queue, 7));
+    source.token().register_callback(registration, ruvia::worker_cancellation_post(queue.get(), 7));
     unsigned normal_calls = 0;
     const auto accepted = worker_value.post([&normal_calls] { ++normal_calls; });
     if (!accepted.accepted()) {
@@ -747,7 +747,7 @@ bool test_queued_cancellation_releases_queue_after_owner_retirement() {
     std::weak_ptr weak_queue(queue);
     ruvia::stop_source source;
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, ruvia::worker_cancellation_post(queue, 9));
+    source.token().register_callback(registration, ruvia::worker_cancellation_post(queue.get(), 9));
     source.request_stop();
     registration.reset();
     queue->detach(*owner_value);
@@ -769,7 +769,7 @@ bool test_cancellation_after_endpoint_detach_does_not_touch_retired_owner() {
     auto queue = ruvia::make_worker_cancellation_target(*owner_value, worker_value);
     ruvia::stop_source source;
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, ruvia::worker_cancellation_post(queue, 11));
+    source.token().register_callback(registration, ruvia::worker_cancellation_post(queue.get(), 11));
     queue->detach(*owner_value);
     owner_value.reset();
     // Retiring the attachment detaches the endpoint before the stop request.

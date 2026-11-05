@@ -20,6 +20,7 @@
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http_accept_encoding.h"
 
 #include "context/context_services.h"
 #include "http/http_protocol_error_info.h"
@@ -215,6 +216,11 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         if (!http_server_worker_running(state_)) {
             co_return http_connection_close::notify;
         }
+        // Every request received before the peer ended its request direction
+        // has been served; the transport only repeats that end.
+        if (request_sequence.request_input_ended()) {
+            co_return http_connection_close::notify;
+        }
         // Idle wait for the next keep-alive request uses idle_timeout;
         // the connection's first request uses request_header_timeout.
         scanner_entry.read_request_head(session.served_keepalive_request_
@@ -314,6 +320,9 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
     auto& parsed_value = work_set.parsed_;
     auto& response_head = work_set.response_head_;
     auto& route_resolution_value = work_set.route_resolution_;
+    // The first request of an active period arrived alone; every later one was
+    // already (at least partly) buffered behind its predecessor: pipelined.
+    bool request_pipelined = false;
     for (;;) {
         // Pipelined responses held back for one coalesced write. Bound to the
         // work set, which keeps any held output until it is written.
@@ -410,7 +419,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     {
                         .request_ = parsed_value.request_,
                         .resolution_ = route_resolution_value,
-                        .coding_ = parsed_value.response_coding_selection(),
+                        .coding_ = http_response_coding_selection_for(parsed_value.request_),
                         .resource_ = request_memory_value.resource(),
                         .expectation_ = &expectation_plan,
                         .start_ = request_start,
@@ -479,6 +488,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     .response_ = response,
                     .request_sequence_ = request_sequence,
                     .inbound_buffer_pool_ = connection_buffers,
+                    .request_pipelined_ = request_pipelined,
                 };
 
                 const auto endpoint_kind = admission->endpoint();
@@ -585,6 +595,11 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             // no read for one, and a drain that begins during the read cancels
             // it. Bytes the read already returned are still parsed above.
             if (!http_server_worker_running(state_)) {
+                co_return http_connection_close::notify;
+            }
+            // The peer ended its request direction behind the requests already
+            // buffered: nothing more arrives, as a clean peer end would report.
+            if (request_sequence.request_input_ended()) {
                 co_return http_connection_close::notify;
             }
             scanner_entry.read_request_head(read_buffer.empty() && session.served_keepalive_request_
@@ -795,6 +810,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         if (read_buffer.empty()) {
             co_return http1_serve_handoff::await_request;
         }
+        request_pipelined = true;
     }
 }
 

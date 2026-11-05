@@ -1,9 +1,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/web/model.h"
@@ -39,6 +41,18 @@ static_assert(!token_offers_field_get<ruvia::json_value>);
 static_assert(token_offers_field_get<const ruvia::json_object&>);
 static_assert(!token_offers_field_get<ruvia::json_object>);
 static_assert(!token_offers_field_get<const ruvia::json_object>);
+
+// A lookup hands its value out by reference only from an lvalue and by move
+// from a mutable rvalue, so no reference into a temporary lookup escapes.
+using string_lookup = ruvia::json_field_lookup<ruvia::string>;
+template <typename lookup_type>
+concept lookup_offers_value = requires(lookup_type&& lookup) { std::forward<lookup_type>(lookup).value(); };
+static_assert(std::is_same_v<decltype(std::declval<const string_lookup&>().value()), const std::optional<ruvia::string>&>);
+static_assert(std::is_same_v<decltype(std::declval<string_lookup&>().value()), std::optional<ruvia::string>&>);
+static_assert(std::is_same_v<decltype(std::declval<string_lookup>().value()), std::optional<ruvia::string>>);
+static_assert(!lookup_offers_value<const string_lookup>);
+
+using lookup_status = ruvia::unique_lookup_status;
 
 RUVIA_TEST(json_token_moves_preserve_complete_tokens_and_reset_sources) {
     const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
@@ -126,7 +140,7 @@ RUVIA_TEST(json_object_default_represents_an_empty_object) {
     RUVIA_CHECK_EQ(object.view(), std::string_view("{}"));
     const auto parsed = ruvia::json_object::parse(object.view());
     RUVIA_CHECK(object == parsed);
-    RUVIA_CHECK(!object.get<ruvia::string>("missing"));
+    RUVIA_CHECK(object.get<ruvia::string>("missing").status() == lookup_status::absent);
     std::size_t fields = 0;
     RUVIA_CHECK(object.for_each_field([&](std::string_view, const ruvia::json_value&) {
         ++fields;
@@ -135,13 +149,40 @@ RUVIA_TEST(json_object_default_represents_an_empty_object) {
     RUVIA_CHECK_EQ(fields, std::size_t{0});
 }
 
-RUVIA_TEST(json_object_get_uses_last_match) {
-    auto json = ruvia::json_object::parse(R"({"name":"first","other":"x","name":"second"})",
+RUVIA_TEST(json_object_get_reports_a_repeated_field_name_without_a_value) {
+    const auto json = ruvia::json_object::parse(R"({"name":"first","other":"x","name":"second"})",
         {.resource_ = std::pmr::get_default_resource()});
+    const auto name = json.get<ruvia::string>("name");
+    RUVIA_CHECK(name.status() == lookup_status::repeated);
+    RUVIA_CHECK(!name.value().has_value());
+    const auto token = json.get<ruvia::json_value>("name");
+    RUVIA_CHECK(token.status() == lookup_status::repeated);
+    RUVIA_CHECK(!token.value().has_value());
+    const auto other = json.get<ruvia::string>("other");
+    RUVIA_CHECK(other.status() == lookup_status::found);
+    RUVIA_CHECK(other.value().has_value());
+    RUVIA_CHECK_EQ(other.value()->view(), std::string_view("x"));
+    RUVIA_CHECK(json.get<ruvia::string>("missing").status() == lookup_status::absent);
 
-    const auto value = json.get<ruvia::string>("name");
-    RUVIA_CHECK(value.has_value());
-    RUVIA_CHECK_EQ(value->view(), std::string_view("second"));
+    // Repetition is decided on decoded names and regardless of which
+    // occurrence would convert to the requested type.
+    const auto escaped = ruvia::json_object::parse(R"({"na\u006de":"first","name":"second"})");
+    RUVIA_CHECK(escaped.get<ruvia::string>("name").status() == lookup_status::repeated);
+    const auto mixed = ruvia::json_object::parse(R"({"count":"text","count":2})");
+    const auto count = mixed.get<ruvia::int32>("count");
+    RUVIA_CHECK(count.status() == lookup_status::repeated);
+    RUVIA_CHECK(!count.value().has_value());
+    const auto children = ruvia::json_object::parse(R"({"child":{"name":"ada"},"child":{"name":"bob"}})");
+    RUVIA_CHECK(children.get<json_object_child>("child").status() == lookup_status::repeated);
+    // A third occurrence does not change the answer.
+    const auto triple = ruvia::json_object::parse(R"({"k":1,"k":2,"k":3})");
+    RUVIA_CHECK(triple.get<ruvia::int32>("k").status() == lookup_status::repeated);
+
+    const auto value = ruvia::json_value::parse(R"({"name":"first","name":"second","id":7})");
+    RUVIA_CHECK(value.get<ruvia::string>("name").status() == lookup_status::repeated);
+    const auto id = value.get<ruvia::int32>("id").value();
+    RUVIA_CHECK(id.has_value());
+    RUVIA_CHECK_EQ(static_cast<std::int32_t>(*id), 7);
 }
 
 RUVIA_TEST(json_value_dynamic_traversal_decodes_keys_and_preserves_order) {
@@ -272,8 +313,13 @@ RUVIA_TEST(json_value_get_reads_root_scalars_and_arrays_and_models) {
     RUVIA_CHECK(!invalid_rule.get<json_validated_child>().has_value());
 
     auto obj_rule = ruvia::json_object::parse(R"({"good":{"name":"ada"},"bad":{"name":"ab"}})");
-    RUVIA_CHECK(obj_rule.get<json_validated_child>("good").has_value());
-    RUVIA_CHECK(!obj_rule.get<json_validated_child>("bad").has_value());
+    const auto good = obj_rule.get<json_validated_child>("good");
+    RUVIA_CHECK(good.status() == lookup_status::found);
+    RUVIA_CHECK(good.value().has_value());
+    // Present but failing the model's rules: found without a value.
+    const auto bad = obj_rule.get<json_validated_child>("bad");
+    RUVIA_CHECK(bad.status() == lookup_status::found);
+    RUVIA_CHECK(!bad.value().has_value());
 }
 RUVIA_TEST(json_value_dynamic_traversal_reclaims_decoded_key_on_exception) {
     ruvia::test::counting_memory_resource resource;
@@ -299,14 +345,21 @@ RUVIA_TEST(json_value_dynamic_traversal_reclaims_decoded_key_on_exception) {
 
 RUVIA_TEST(json_value_get_reads_object_fields_and_rejects_non_objects) {
     auto json =
-        ruvia::json_value::parse(R"({"age":1,"age":2})", {.resource_ = std::pmr::get_default_resource()});
+        ruvia::json_value::parse(R"({"name":"ada","age":2})", {.resource_ = std::pmr::get_default_resource()});
     const auto age = json.get<ruvia::int32>("age");
-    RUVIA_CHECK(age.has_value());
-    RUVIA_CHECK_EQ(static_cast<std::int32_t>(*age), 2);
-    RUVIA_CHECK(!json.get<ruvia::string>("missing").has_value());
+    RUVIA_CHECK(age.status() == lookup_status::found);
+    RUVIA_CHECK(age.value().has_value());
+    RUVIA_CHECK_EQ(static_cast<std::int32_t>(*age.value()), 2);
+    const auto mismatched = json.get<ruvia::int32>("name");
+    RUVIA_CHECK(mismatched.status() == lookup_status::found);
+    RUVIA_CHECK(!mismatched.value().has_value());
+    const auto missing = json.get<ruvia::string>("missing");
+    RUVIA_CHECK(missing.status() == lookup_status::absent);
+    RUVIA_CHECK(!missing.value().has_value());
 
+    // A non-object token has no members.
     auto array_value = ruvia::json_value::parse("[1]");
-    RUVIA_CHECK(!array_value.get<ruvia::int32>("age").has_value());
+    RUVIA_CHECK(array_value.get<ruvia::int32>("age").status() == lookup_status::absent);
 }
 
 RUVIA_TEST(json_dynamic_parse_enforces_cumulative_array_element_budget) {

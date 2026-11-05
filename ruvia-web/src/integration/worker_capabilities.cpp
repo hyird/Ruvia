@@ -17,6 +17,13 @@ namespace {
     return worker_value;
 }
 
+[[nodiscard]] worker_capability_options require_worker_capability_options(worker_capability_options options) {
+    if (options.connection_failure_ == nullptr) {
+        throw std::invalid_argument("worker capabilities require a connection failure outlet");
+    }
+    return options;
+}
+
 }  // namespace
 
 worker_capabilities::worker_capabilities(asio::io_context& io_context, const worker_handle& worker_value,
@@ -34,7 +41,7 @@ worker_capabilities::worker_capabilities(asio::io_context& io_context, const wor
       worker_states_(resource, definitions.worker_states_),
       rate_limiter_(
           options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_, resource),
-      options_(std::move(options)) {}
+      options_(require_worker_capability_options(std::move(options))) {}
 
 task<void> worker_capabilities::start() {
     worker_states_.initialize();
@@ -81,6 +88,8 @@ context_services worker_capabilities::make_context_services(const stop_token& st
                                 .max_decoded_body_bytes_ = options_.max_decoded_body_bytes_,
                                 .states_ = &worker_states_,
                                 .precompressed_static_files_ = options_.precompressed_static_files_,
+                                .file_io_timeout_ = options_.file_io_timeout_,
+                                .connection_failure_ = options_.connection_failure_,
                                 .trusted_proxies_ = options_.trusted_proxies_,
                             },
         stop_token_value);

@@ -26,6 +26,12 @@ namespace worker_runtime_test {
 
 using state = ruvia::worker_runtime_state;
 
+// Reading failure() marks it observed, so it is not offered on a const runtime.
+template <typename runtime_type>
+concept failure_readable_through_const = requires(const runtime_type& runtime_value) { runtime_value.failure(); };
+static_assert(!failure_readable_through_const<ruvia::worker_runtime>);
+static_assert(requires(ruvia::worker_runtime& runtime_value) { runtime_value.failure(); });
+
 RUVIA_TEST(worker_runtime_hook_moves_can_query_failure_during_configuration) {
     ruvia::worker_runtime runtime;
     bool armed = false;

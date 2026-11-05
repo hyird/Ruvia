@@ -107,13 +107,6 @@ private:
 template <typename target_type>
 class worker_cancellation_post final {
 public:
-    worker_cancellation_post(const std::shared_ptr<target_type>& target, std::uint64_t operation_id) noexcept
-        : target_(target.get()),
-          operation_id_(operation_id) {
-        if (!target_) {
-            std::terminate();
-        }
-    }
     worker_cancellation_post(target_type* target, std::uint64_t operation_id) noexcept
         : target_(target),
           operation_id_(operation_id) {

@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <istream>
@@ -25,6 +26,7 @@
 
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "test_harness.h"
@@ -39,13 +41,19 @@ namespace {
     return "*3\r\n" + bulk(kind) + bulk(name) + ":" + std::to_string(count) + "\r\n";
 }
 
+// Whether the peer answers PING: a deaf peer still receives and counts it.
+enum class ping_policy : bool { answer,
+    ignore };
+
 // Deterministic RESP Pub/Sub peer. Every session runs on the peer's own
 // thread; PUBLISH from any session fans out to the sessions subscribed to the
 // channel or to a matching "prefix*" pattern and replies with that count.
+// PING is answered like Redis: ["pong", ""] while subscribed, +PONG otherwise.
 class pubsub_peer final {
 public:
-    pubsub_peer()
-        : acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+    explicit pubsub_peer(ping_policy ping = ping_policy::answer)
+        : ping_(ping),
+          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           port_(acceptor_.local_endpoint().port()),
           work_(asio::make_work_guard(io_)),
           done_(asio::co_spawn(io_, accept_loop(), asio::use_future)),
@@ -69,6 +77,10 @@ public:
 
     [[nodiscard]] ruvia::redis_config config() const {
         return {.host_ = "127.0.0.1", .port_ = port_, .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = std::chrono::seconds(2), .command_timeout_ = std::chrono::seconds(2)};
+    }
+
+    [[nodiscard]] std::size_t pings() const noexcept {
+        return pings_.load();
     }
 
 private:
@@ -166,6 +178,10 @@ private:
                     const bool pattern = args.front() == "PSUBSCRIBE";
                     for (std::size_t index = 1; index < args.size(); ++index) {
                         const auto& name = args[index];
+                        // A command whose reply never comes.
+                        if (name == "unanswered") {
+                            continue;
+                        }
                         if (name == "denied") {
                             reply += "-NOPERM no permissions to access this channel\r\n";
                             continue;
@@ -200,6 +216,14 @@ private:
                             reply += push(kind, args[index], current->channels_.size() + current->patterns_.size());
                         }
                     }
+                } else if (args.front() == "PING") {
+                    ++pings_;
+                    if (ping_ == ping_policy::ignore) {
+                        continue;
+                    }
+                    reply = current->channels_.empty() && current->patterns_.empty()
+                                ? std::string("+PONG\r\n")
+                                : "*2\r\n" + bulk("pong") + bulk("");
                 } else {
                     reply = "-ERR unknown command\r\n";
                 }
@@ -216,6 +240,8 @@ private:
         }
     }
 
+    const ping_policy ping_;
+    std::atomic<std::size_t> pings_{0};
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     std::uint16_t port_;
@@ -510,6 +536,125 @@ ruvia::task<void> check_client_close_ends_pending_read(ruvia::redis_client& clie
     co_await client.shutdown();
 }
 
+constexpr auto idle_probe_interval = std::chrono::milliseconds(100);
+// Bounds every probe test so a probe that never fires fails instead of hanging.
+constexpr auto probe_test_timeout = std::chrono::seconds(5);
+
+[[nodiscard]] ruvia::redis_config probed_config(const pubsub_peer& peer) {
+    auto config = peer.config();
+    config.subscription_ping_interval_ = idle_probe_interval;
+    return config;
+}
+
+ruvia::task<void> check_silent_peer_fails_the_idle_probe(
+    ruvia::redis_client& client, const pubsub_peer& peer, ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    auto subscription = client.handle({.timeout_ = probe_test_timeout}).subscription();
+    const std::array<std::string_view, 1> channels{"silent"};
+    co_await subscription.subscribe(channels);
+    auto confirmed = co_await subscription.read();
+    RUVIA_CHECK(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "silent");
+    const auto started = std::chrono::steady_clock::now();
+    bool timed_out = false;
+    try {
+        (void)co_await subscription.read();
+    } catch (const ruvia::redis_error& error) {
+        timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    RUVIA_CHECK(timed_out);
+    // One interval before the PING and one more for its reply; the operation
+    // timeout would only end the read much later.
+    RUVIA_CHECK(elapsed >= 2 * idle_probe_interval);
+    RUVIA_CHECK(elapsed < probe_test_timeout / 2);
+    RUVIA_CHECK(peer.pings() == 1);
+    // Closed is terminal.
+    RUVIA_CHECK(!(co_await subscription.read()).has_value());
+    co_await client.shutdown();
+}
+
+ruvia::task<void> read_late_message(ruvia::redis_subscription& subscription, std::optional<std::string>& payload,
+    ruvia::testing::test_context& ruvia_ctx) {
+    auto event = co_await subscription.read();
+    RUVIA_CHECK(event && event->message() && !event->confirmation());
+    if (event && event->message()) {
+        payload.emplace(event->message()->payload());
+    }
+}
+
+ruvia::task<void> publish_after_idle_intervals(
+    ruvia::redis_handle redis, const ruvia::worker_handle& worker, ruvia::testing::test_context& ruvia_ctx) {
+    (void)co_await ruvia::sleep_for(worker, 5 * idle_probe_interval);
+    RUVIA_CHECK(co_await redis.publish("quiet", "late") == 1);
+}
+
+ruvia::task<void> check_answered_probes_keep_an_idle_subscription(
+    ruvia::redis_client& client, const pubsub_peer& peer, ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    auto subscription = client.handle({.timeout_ = probe_test_timeout}).subscription();
+    co_await subscription.subscribe("quiet");
+    auto confirmed = co_await subscription.read();
+    RUVIA_CHECK(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "quiet");
+    std::optional<std::string> payload;
+    ruvia::task_scope scope(client.worker());
+    scope.spawn(read_late_message(subscription, payload, ruvia_ctx));
+    scope.spawn(publish_after_idle_intervals(client.handle(), client.worker(), ruvia_ctx));
+    co_await scope.join();
+    // The read outlived several intervals and returned the message itself:
+    // every PING reply was consumed internally.
+    RUVIA_CHECK(payload == "late");
+    RUVIA_CHECK(peer.pings() >= 2);
+    co_await client.shutdown();
+}
+
+ruvia::task<void> check_unsubscribed_connection_consumes_plain_pong(
+    ruvia::redis_client& client, const pubsub_peer& peer, ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    const auto read_timeout = 4 * idle_probe_interval;
+    auto subscription = client.handle({.timeout_ = read_timeout}).subscription();
+    co_await subscription.subscribe("quiet");
+    auto confirmed = co_await subscription.read();
+    RUVIA_CHECK(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "quiet");
+    co_await subscription.unsubscribe();
+    auto left = co_await subscription.read();
+    RUVIA_CHECK(left && left->confirmation() && left->confirmation()->subscription_count() == 0);
+    // Without subscriptions the connection is back in normal mode and the
+    // peer answers +PONG; consuming it leaves only the operation timeout.
+    const auto started = std::chrono::steady_clock::now();
+    bool timed_out = false;
+    try {
+        (void)co_await subscription.read();
+    } catch (const ruvia::redis_error& error) {
+        timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+    }
+    RUVIA_CHECK(timed_out);
+    RUVIA_CHECK(std::chrono::steady_clock::now() - started >= read_timeout);
+    RUVIA_CHECK(peer.pings() >= 2);
+    co_await client.shutdown();
+}
+
+ruvia::task<void> check_unanswered_command_stands_in_for_the_ping(
+    ruvia::redis_client& client, const pubsub_peer& peer, ruvia::testing::test_context& ruvia_ctx) {
+    co_await client.connect();
+    auto subscription = client.handle({.timeout_ = probe_test_timeout}).subscription();
+    const std::array<std::string_view, 1> channels{"unanswered"};
+    co_await subscription.subscribe(channels);
+    const auto started = std::chrono::steady_clock::now();
+    bool timed_out = false;
+    try {
+        (void)co_await subscription.read();
+    } catch (const ruvia::redis_error& error) {
+        timed_out = error.code() == ruvia::redis_error::code_type::timeout;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    RUVIA_CHECK(timed_out);
+    RUVIA_CHECK(elapsed >= 2 * idle_probe_interval);
+    RUVIA_CHECK(elapsed < probe_test_timeout / 2);
+    // The SUBSCRIBE still owed its reply, so no PING was sent.
+    RUVIA_CHECK(peer.pings() == 0);
+    co_await client.shutdown();
+}
+
 }  // namespace
 
 RUVIA_TEST(redis_subscription_delivers_confirmations_and_messages_in_wire_order) {
@@ -608,5 +753,67 @@ RUVIA_TEST(redis_subscription_distinguishes_empty_channel_empty_pattern_and_nil)
     pool.start();
     pool.loop(0).start(check_empty_names_keep_their_wire_identity(client, ruvia_ctx)).get();
     pool.stop();
+    pool.join();
+}
+
+RUVIA_TEST(redis_subscription_idle_probe_fails_a_silent_peer) {
+    pubsub_peer peer(ping_policy::ignore);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), probed_config(peer));
+    pool.start();
+    pool.loop(0).start(check_silent_peer_fails_the_idle_probe(client, peer, ruvia_ctx)).get();
+    pool.stop();
+    pool.join();
+}
+
+RUVIA_TEST(redis_subscription_answered_probes_keep_an_idle_subscription) {
+    pubsub_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), probed_config(peer));
+    pool.start();
+    pool.loop(0).start(check_answered_probes_keep_an_idle_subscription(client, peer, ruvia_ctx)).get();
+    pool.stop();
+    pool.join();
+}
+
+RUVIA_TEST(redis_subscription_idle_probe_accepts_the_unsubscribed_pong) {
+    pubsub_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), probed_config(peer));
+    pool.start();
+    pool.loop(0).start(check_unsubscribed_connection_consumes_plain_pong(client, peer, ruvia_ctx)).get();
+    pool.stop();
+    pool.join();
+}
+
+RUVIA_TEST(redis_subscription_idle_probe_relies_on_an_unanswered_command) {
+    pubsub_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), probed_config(peer));
+    pool.start();
+    pool.loop(0).start(check_unanswered_command_stands_in_for_the_ping(client, peer, ruvia_ctx)).get();
+    pool.stop();
+    pool.join();
+}
+
+RUVIA_TEST(redis_subscription_ping_interval_must_be_positive_when_configured) {
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    for (const auto interval : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
+        ruvia::redis_config config{.tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+        config.subscription_ping_interval_ = interval;
+        bool rejected = false;
+        try {
+            ruvia::redis_client client(pool.loop(0), config);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    // Absence disables the probe and is accepted.
+    ruvia::redis_config disabled{.tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+    disabled.subscription_ping_interval_.reset();
+    {
+        ruvia::redis_client client(pool.loop(0), disabled);
+    }
     pool.join();
 }

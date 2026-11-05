@@ -308,12 +308,6 @@ public:
         rethrow_if_not_completed();
     }
 
-    [[nodiscard]] t_type take_value() &&
-        requires(!std::is_void_v<t_type>)
-    {
-        return std::move(*this).value();
-    }
-
 private:
     friend struct detail::blocking_result_access;
 

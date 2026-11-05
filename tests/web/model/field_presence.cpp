@@ -65,6 +65,15 @@ RUVIA_MODEL(form_unrepresentable_values,
     RUVIA_OPTIONAL_FIELD(object, ruvia::json_object),
     RUVIA_OPTIONAL_FIELD(note, ruvia::string));
 
+// Models spell value presence only as has_value; entity is_set means "assigned,
+// null included" and must not appear on models with a different meaning.
+template <typename model_type>
+concept model_offers_has_value = requires(const model_type& model) { model.template has_value<"optional">(); };
+template <typename model_type>
+concept model_offers_is_set = requires(const model_type& model) { model.template is_set<"optional">(); };
+static_assert(model_offers_has_value<nullable_response>);
+static_assert(!model_offers_is_set<nullable_response>);
+
 template <typename model_type>
 void check_presence_matrix(ruvia::testing::test_context& ruvia_ctx, bool required, bool nullable_value) {
     for (auto input : {R"({"value":42})", R"({"value":false})", R"({"value":[]})", R"({"value":{}})"}) {
@@ -322,11 +331,11 @@ RUVIA_TEST(model_nullable_response_emits_explicit_null_without_emitting_absence)
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(response)),
         std::string_view(R"({"required":"note","dynamic":null})"));
     response.set_null<"optional">().reset<"optional">().set<"optional">("val");
-    RUVIA_CHECK(response.is_set<"optional">() && response.has_value<"optional">());
+    RUVIA_CHECK(response.has_value<"optional">());
     response.set_null<"optional">();
-    RUVIA_CHECK(!response.is_set<"optional">() && !response.has_value<"optional">() && response.is_null<"optional">());
+    RUVIA_CHECK(!response.has_value<"optional">() && response.is_null<"optional">());
     response.reset<"optional">();
-    RUVIA_CHECK(!response.is_set<"optional">() && !response.has_value<"optional">() && !response.is_null<"optional">());
+    RUVIA_CHECK(!response.has_value<"optional">() && !response.is_null<"optional">());
 }
 
 RUVIA_TEST(model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclaim_memory) {
@@ -347,7 +356,7 @@ RUVIA_TEST(model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclaim
         RUVIA_CHECK_EQ(source.live_allocations(), std::size_t{0});
         RUVIA_CHECK(retained.is_present<"value">() && retained.is_present<"object">());
         RUVIA_CHECK(!retained.is_present<"note">() && retained.get<"note">().has_value());
-        RUVIA_CHECK(retained.get<"value">()->get<ruvia::string>("text")->view() == text);
+        RUVIA_CHECK(retained.get<"value">()->get<ruvia::string>("text").value()->view() == text);
         const auto baseline = destination.live_allocations();
         for (int index = 0; index < 32; ++index) {
             {
@@ -361,7 +370,7 @@ RUVIA_TEST(model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclaim
                     [&] { (void)ruvia::from_json<owned_values>(invalid, {.resource_ = &destination}); }));
                 RUVIA_CHECK_EQ(destination.live_allocations(), baseline);
             }
-            RUVIA_CHECK(retained.get<"object">()->get<ruvia::string>("text")->view() == text);
+            RUVIA_CHECK(retained.get<"object">()->get<ruvia::string>("text").value()->view() == text);
             RUVIA_CHECK_EQ(destination.live_allocations(), baseline);
         }
         RUVIA_CHECK(destination.deallocation_count() > 0);

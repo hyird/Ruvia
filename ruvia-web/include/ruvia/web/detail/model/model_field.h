@@ -98,10 +98,6 @@ public:
         return state_ == detail::model_field_state::null;
     }
 
-    [[nodiscard]] bool is_set() const noexcept {
-        return value_.has_value();
-    }
-
     [[nodiscard]] bool has_value() const noexcept {
         return value_.has_value();
     }

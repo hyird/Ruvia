@@ -19,6 +19,7 @@
 // services (db(), redis(), run_blocking()) need a running server; drive those
 // through a real loopback server instead.
 
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
@@ -128,6 +129,15 @@ public:
         return *this;
     }
 
+    // Pins the steady-clock instant the request arrives at for the app-wide
+    // and route rate limits, so a test places requests at exact window
+    // offsets instead of sleeping. Unpinned requests read the steady clock,
+    // as in a running server. Instants must not run backwards for one client.
+    test_request& arrival(std::chrono::steady_clock::time_point instant) {
+        arrival_ = instant;
+        return *this;
+    }
+
 private:
     friend class test_app;
 
@@ -142,6 +152,7 @@ private:
     std::string body_;
     std::string remote_address_{"127.0.0.1"};
     std::uint16_t remote_port_{0};
+    std::optional<std::chrono::steady_clock::time_point> arrival_{};
 };
 
 // One in-memory application instance. Construction is cheap; controllers are

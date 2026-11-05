@@ -82,17 +82,17 @@ private:
 
 template <typename callback_type>
 decltype(auto) with_static_context(const static_file_test_request& request, callback_type&& callback) {
-    using result_type = std::invoke_result_t<callback_type, ruvia::context&>;
+    using result_type = typename std::invoke_result_t<callback_type, ruvia::context&>::value_type;
     std::optional<std::conditional_t<std::is_void_v<result_type>, bool, result_type>> result;
     std::exception_ptr error;
     static_cast<void>(context_request_test::with_context(
         request.request(), [&](ruvia::context& context_value) -> ruvia::task<void> {
             try {
                 if constexpr (std::is_void_v<result_type>) {
-                    callback(context_value);
+                    co_await callback(context_value);
                     result.emplace(true);
                 } else {
-                    result.emplace(callback(context_value));
+                    result.emplace(co_await callback(context_value));
                 }
             } catch (...) {
                 error = std::current_exception();
@@ -114,11 +114,11 @@ decltype(auto) with_static_context(const static_file_test_request& request, call
 [[nodiscard]] ruvia::http_status_code static_file_status(
     const ruvia::static_root& root, std::string_view path) {
     static_file_test_request request;
-    return with_static_context(request, [&](ruvia::context& ctx) {
+    return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<ruvia::http_status_code> {
         try {
-            return ctx.static_file(root, {.relative_path_ = path}).status();
+            co_return (co_await ctx.static_file(root, {.relative_path_ = path})).status();
         } catch (const ruvia::http_error& error) {
-            return error.info().status();
+            co_return error.info().status();
         }
     });
 }
@@ -148,8 +148,8 @@ RUVIA_TEST(static_root_copies_public_mime_configuration_into_owned_storage) {
         ruvia::static_root root(dir, options);
         options.mime_types_.front().content_type_ = "application/x-changed";
         static_file_test_request request;
-        with_static_context(request, [&](ruvia::context& ctx) {
-            const auto response = ctx.static_file(root, {.relative_path_ = "payload.custom-resource"});
+        with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<void> {
+            const auto response = co_await ctx.static_file(root, {.relative_path_ = "payload.custom-resource"});
             RUVIA_CHECK_EQ(response.header("Content-Type"),
                 std::string_view("application/x-custom-resource-type"));
         });
@@ -213,8 +213,8 @@ RUVIA_TEST(static_root_serves_utf8_file_and_directory_urls) {
         static_file_test_request request;
         const std::string target = "/" + std::string(item.relative_url_);
         request.set_target(target);
-        with_static_context(request, [&](ruvia::context& context_value) {
-            const auto response = context_value.static_file(root, {.relative_path_ = item.relative_path_});
+        with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+            const auto response = co_await context_value.static_file(root, {.relative_path_ = item.relative_path_});
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
             RUVIA_CHECK_EQ(response.header("Content-Type"), std::optional<std::string_view>{item.content_type_});
             const auto file = response.file_body();
@@ -279,8 +279,8 @@ RUVIA_TEST(static_root_serves_every_default_file_type_with_its_media_type) {
         const auto relative_path = "file." + std::string(extension);
         static_file_test_request request;
         request.set_target("/" + relative_path);
-        with_static_context(request, [&](ruvia::context& context_value) {
-            const auto response = context_value.static_file(root, {.relative_path_ = relative_path});
+        with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+            const auto response = co_await context_value.static_file(root, {.relative_path_ = relative_path});
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
             RUVIA_CHECK_EQ(response.header("Content-Type"), std::optional<std::string_view>{content_type});
         });
@@ -314,13 +314,13 @@ RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_condi
              std::pair{false, cases[2]}, std::pair{true, cases[2]}}) {
         static_file_test_request request;
         request.add_header(item.condition_);
-        with_static_context(request, [&](ruvia::context& context_value) {
+        with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
             context_value.draft().status(item.status_);
             context_value.draft().header("X-Context", "preserved");
             std::optional<ruvia::http_response> response;
             try {
-                response.emplace(indexed ? context_value.static_file(root, {.relative_path_ = "payload.txt"})
-                                         : context_value.file({.path_ = path}));
+                response.emplace(indexed ? co_await context_value.static_file(root, {.relative_path_ = "payload.txt"})
+                                         : co_await context_value.file({.path_ = path}));
             } catch (const ruvia::http_error&) {
             }
             RUVIA_CHECK(response.has_value());
@@ -356,17 +356,20 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
 
     static_file_test_request request;
     request.set_method("GET");
-    with_static_context(request, [&](ruvia::context& context_value) {
-        auto response = [&] {
+    with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        // The root is borrowed until the task completes; it is destroyed only
+        // after the awaited response exists.
+        std::optional<ruvia::http_response> response;
+        {
             ruvia::static_root_options options;
             options.file_types_ =
                 ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
             ruvia::static_root handler_local_root(dir, std::move(options));
-            return context_value.static_file(
-                handler_local_root, {.relative_path_ = "payload.txt", .content_type_ = "text/plain"});
-        }();
+            response.emplace(co_await context_value.static_file(
+                handler_local_root, {.relative_path_ = "payload.txt", .content_type_ = "text/plain"}));
+        }
 
-        const auto file = response.file_body();
+        const auto file = response->file_body();
         RUVIA_CHECK(file.has_value());
         if (file.has_value()) {
             RUVIA_CHECK_EQ(read_file_response_body(*file), std::string("owned-static-path"));
@@ -454,11 +457,11 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
         if (!range.empty()) {
             request.add_header(http_header_view{"Range", range});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
             const auto response =
-                context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"});
+                co_await context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"});
             // Copy out before the request arena unwinds.
-            return std::pair<ruvia::http_status_code, std::string>(
+            co_return std::pair<ruvia::http_status_code, std::string>(
                 response.status(), std::string(response.header("Content-Range").value_or("")));
         });
     };
@@ -537,15 +540,15 @@ RUVIA_TEST(static_file_takes_decoded_path_and_stays_traversal_safe) {
     const auto serve = [&root](std::string_view path) {
         static_file_test_request request;
         request.set_method("GET");
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<ruvia::http_status_code> {
             ruvia::http_status_code status = ruvia::http_status::internal_server_error;
             try {
-                status = context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"})
+                status = (co_await context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"}))
                              .status();
             } catch (const ruvia::http_error& error) {
                 status = error.info().status();
             }
-            return status;
+            co_return status;
         });
     };
 
@@ -597,14 +600,14 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
 
     static_file_test_request request;
     request.set_method("GET");
-    with_static_context(request, [&](ruvia::context& context_value) {
+    with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         // No sidecar and no Accept-Encoding -> the identity file is served, but it must
         // STILL declare Vary: Accept-Encoding: the same URL would serve a compressed
         // variant to a capable client, so a shared cache keyed only on the URL must not
         // reuse this identity body for everyone (RFC 9110 12.5.5 / RFC 9111 4.1). The
         // identity body carries no Content-Encoding.
         const auto served =
-            context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
+            co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
         RUVIA_CHECK_EQ(served.status(), ruvia::http_status::ok);
         RUVIA_CHECK(
             (served.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos));
@@ -612,7 +615,7 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
 
         // context::file serves a single path with no encoding negotiation, so it must
         // NOT declare Vary: Accept-Encoding (which would needlessly fragment caches).
-        const auto direct = context_value.file({.path_ = file_path});
+        const auto direct = co_await context_value.file({.path_ = file_path});
         RUVIA_CHECK_EQ(direct.status(), ruvia::http_status::ok);
         RUVIA_CHECK(!direct.header("Vary").has_value());
         RUVIA_CHECK_EQ(direct.header("Content-Type").value_or(""),
@@ -647,12 +650,12 @@ RUVIA_TEST(context_file_serves_borrowed_utf8_text_paths) {
 
     static_file_test_request request;
     request.set_method("GET");
-    with_static_context(request, [&](ruvia::context& context_value) {
-        const auto status_of = [&](ruvia::borrowed_file_path path) {
+    with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        const auto status_of = [&](ruvia::borrowed_file_path path) -> ruvia::task<ruvia::http_status_code> {
             try {
-                return context_value.file({.path_ = path}).status();
+                co_return (co_await context_value.file({.path_ = path})).status();
             } catch (const ruvia::http_error& error) {
-                return error.info().status();
+                co_return error.info().status();
             }
         };
         const auto matches_borrowed_body = [](const ruvia::http_response& response) {
@@ -660,36 +663,103 @@ RUVIA_TEST(context_file_serves_borrowed_utf8_text_paths) {
                    response.file_body()->length() == std::string_view("borrowed").size();
         };
 
-        const auto from_text = context_value.file({.path_ = text});
+        const auto from_text = co_await context_value.file({.path_ = text});
         RUVIA_CHECK_EQ(from_text.status(), ruvia::http_status::ok);
         RUVIA_CHECK(matches_borrowed_body(from_text));
         RUVIA_CHECK_EQ(from_text.header("Content-Type").value_or(""),
             std::string_view("text/plain; charset=utf-8"));
 
-        const auto from_view = context_value.file({.path_ = std::string_view(padded).substr(0, text.size())});
+        const auto from_view = co_await context_value.file({.path_ = std::string_view(padded).substr(0, text.size())});
         RUVIA_CHECK_EQ(from_view.status(), ruvia::http_status::ok);
         RUVIA_CHECK(matches_borrowed_body(from_view));
 
-        const auto from_c_string = context_value.file({.path_ = text.c_str()});
+        const auto from_c_string = co_await context_value.file({.path_ = text.c_str()});
         RUVIA_CHECK_EQ(from_c_string.status(), ruvia::http_status::ok);
         RUVIA_CHECK(matches_borrowed_body(from_c_string));
 
-        const auto from_borrowed_text = context_value.file({.path_ = ruvia::borrowed_text(text)});
+        const auto from_borrowed_text = co_await context_value.file({.path_ = ruvia::borrowed_text(text)});
         RUVIA_CHECK_EQ(from_borrowed_text.status(), ruvia::http_status::ok);
         RUVIA_CHECK(matches_borrowed_body(from_borrowed_text));
 
-        const auto from_path = context_value.file({.path_ = file_path});
+        const auto from_path = co_await context_value.file({.path_ = file_path});
         RUVIA_CHECK_EQ(from_path.status(), ruvia::http_status::ok);
         RUVIA_CHECK(matches_borrowed_body(from_path));
 
         // Text that cannot name the file is a miss, not a truncated lookup.
         const std::string with_nul = text + std::string(1, '\0') + "x";
-        RUVIA_CHECK_EQ(status_of(with_nul), ruvia::http_status::not_found);
-        RUVIA_CHECK_EQ(status_of(""), ruvia::http_status::not_found);
-        RUVIA_CHECK_EQ(status_of(nullptr), ruvia::http_status::not_found);
-        RUVIA_CHECK_EQ(status_of(ruvia::borrowed_file_path{}), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(co_await status_of(with_nul), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(co_await status_of(""), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(co_await status_of(nullptr), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(co_await status_of(ruvia::borrowed_file_path{}), ruvia::http_status::not_found);
         const std::string invalid_utf8 = text + "\xff";
-        RUVIA_CHECK_EQ(status_of(invalid_utf8), ruvia::http_status::not_found);
+        RUVIA_CHECK_EQ(co_await status_of(invalid_utf8), ruvia::http_status::not_found);
+    });
+    fs::remove_all(dir);
+}
+
+// static_file() borrows its root until the returned task completes, so a
+// temporary root is rejected at compile time.
+template <typename root_type>
+concept static_file_accepts_root = requires(ruvia::context& context_value, root_type&& root) {
+    context_value.static_file(std::forward<root_type>(root), ruvia::static_file_response_options{});
+};
+static_assert(static_file_accepts_root<const ruvia::static_root&>);
+static_assert(!static_file_accepts_root<ruvia::static_root>);
+static_assert(!static_file_accepts_root<const ruvia::static_root>);
+
+// file() and static_file() own their options before returning: a stored task
+// awaited after its path, relative path and content type sources were
+// overwritten and destroyed still serves what the call named.
+RUVIA_TEST(file_and_static_file_own_their_options_before_returning) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_file_owned_options";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        out << "owned-options";
+    }
+    ruvia::static_root root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
+
+    static_file_test_request request;
+    request.set_method("GET");
+    with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        std::optional<ruvia::task<ruvia::http_response>> from_path;
+        std::optional<ruvia::task<ruvia::http_response>> from_text;
+        std::optional<ruvia::task<ruvia::http_response>> from_root;
+        {
+            auto path = dir / "data.txt";
+            const auto utf8 = path.u8string();
+            std::string text(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+            std::string path_type("text/x-owned-path");
+            std::string text_type("text/x-owned-text");
+            std::string relative("data.txt");
+            std::string root_type("text/x-owned-root");
+            from_path.emplace(context_value.file({.path_ = path, .content_type_ = path_type}));
+            from_text.emplace(context_value.file({.path_ = text, .content_type_ = text_type}));
+            from_root.emplace(
+                context_value.static_file(root, {.relative_path_ = relative, .content_type_ = root_type}));
+            // Overwrite every source before it is destroyed, so a task still
+            // reading one would name a different file or type.
+            path = dir / "missing.txt";
+            text.assign(text.size(), 'x');
+            path_type.assign(path_type.size(), 'x');
+            text_type.assign(text_type.size(), 'x');
+            relative.assign(relative.size(), 'x');
+            root_type.assign(root_type.size(), 'x');
+        }
+        const auto path_response = co_await std::move(*from_path);
+        const auto text_response = co_await std::move(*from_text);
+        const auto root_response = co_await std::move(*from_root);
+        const auto serves = [](const ruvia::http_response& response, std::string_view content_type) {
+            const auto file = response.file_body();
+            return response.status() == ruvia::http_status::ok &&
+                   response.header("Content-Type").value_or("") == content_type && file.has_value() &&
+                   read_file_response_body(*file) == "owned-options";
+        };
+        RUVIA_CHECK(serves(path_response, "text/x-owned-path"));
+        RUVIA_CHECK(serves(text_response, "text/x-owned-text"));
+        RUVIA_CHECK(serves(root_response, "text/x-owned-root"));
     });
     fs::remove_all(dir);
 }
@@ -712,11 +782,11 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
 
     static_file_test_request request;
     request.set_method("GET");
-    with_static_context(request, [&](ruvia::context& context_value) {
+    with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         context_value.draft().header("Vary", "Origin");
 
         const auto response =
-            context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
+            co_await context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});
         const auto vary = response.header("Vary").value_or("");
         // context response metadata is applied after the file's base headers. It
         // must not erase the negotiation dimension, or a shared cache can reuse an
@@ -754,10 +824,10 @@ RUVIA_TEST(static_file_if_range_dates_do_not_authorize_partial_responses) {
         if (if_range.has_value()) {
             request.add_header(http_header_view{"If-Range", *if_range});
         }
-        return with_static_context(request, [&](ruvia::context& ctx) {
+        return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
             const auto response =
-                ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            return std::pair<ruvia::http_status_code, std::string>(
+                co_await ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            co_return std::pair<ruvia::http_status_code, std::string>(
                 response.status(), std::string(response.header("Last-Modified").value_or("")));
         });
     };
@@ -817,8 +887,8 @@ RUVIA_TEST(file_if_range_same_second_updates_require_an_etag) {
             observation result{};
             (void)context_request_test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
                 const auto response = use_static
-                                          ? context.static_file(*root, {.relative_path_ = "data.txt"})
-                                          : context.file({.path_ = path});
+                                          ? co_await context.static_file(*root, {.relative_path_ = "data.txt"})
+                                          : co_await context.file({.path_ = path});
                 result = observation{
                     response.status(),
                     std::string(response.header("Last-Modified").value_or("")),
@@ -889,8 +959,8 @@ RUVIA_TEST(file_partial_responses_to_if_range_omit_repeated_representation_field
             }
             observation result{};
             (void)context_request_test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
-                const auto response = use_static ? context.static_file(*root, {.relative_path_ = "data.txt"})
-                                                 : context.file({.path_ = path, .content_type_ = "text/plain"});
+                const auto response = use_static ? co_await context.static_file(*root, {.relative_path_ = "data.txt"})
+                                                 : co_await context.file({.path_ = path, .content_type_ = "text/plain"});
                 result = observation{response.status(), copy(response.header("Content-Type")),
                     copy(response.header("Last-Modified")), copy(response.header("ETag")),
                     copy(response.header("Content-Range"))};
@@ -949,11 +1019,11 @@ RUVIA_TEST(static_file_historical_last_modified_supports_date_preconditions) {
         if (since) {
             request.add_header(ruvia::http_header_view{"If-Modified-Since", *since});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
             const auto response = snapshot
-                                      ? context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})
-                                      : context_value.file({.path_ = path, .content_type_ = "text/plain"});
-            return std::pair(response.status(), std::string(response.header("Last-Modified").value_or("")));
+                                      ? co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})
+                                      : co_await context_value.file({.path_ = path, .content_type_ = "text/plain"});
+            co_return std::pair(response.status(), std::string(response.header("Last-Modified").value_or("")));
         });
     };
     for (const auto snapshot : {false, true}) {
@@ -999,10 +1069,10 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
         if (if_range.has_value()) {
             request.add_header(http_header_view{"If-Range", *if_range});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
             const auto response =
-                context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            return std::pair<ruvia::http_status_code, std::string>(
+                co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            co_return std::pair<ruvia::http_status_code, std::string>(
                 response.status(), std::string(response.header("Last-Modified").value_or("")));
         });
     };
@@ -1054,8 +1124,8 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
         if (!if_range.empty()) {
             request.add_header(http_header_view{"If-Range", if_range});
         }
-        return with_static_context(request, [&](ruvia::context& ctx) {
-            return ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})
+        return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<ruvia::http_status_code> {
+            co_return (co_await ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"}))
                 .status();
         });
     };
@@ -1082,14 +1152,14 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
         if (!name.empty()) {
             request.add_header(http_header_view{name, value});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<conditional_result> {
             try {
                 const auto response =
-                    context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-                return conditional_result{response.status(), response.header("ETag").has_value(),
+                    co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+                co_return conditional_result{response.status(), response.header("ETag").has_value(),
                     response.header("Last-Modified").has_value()};
             } catch (const ruvia::http_error& error) {
-                return conditional_result{error.info().status(), false, false};
+                co_return conditional_result{error.info().status(), false, false};
             }
         });
     };
@@ -1155,18 +1225,18 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
         for (const auto& header : headers) {
             request.add_header(http_header_view{header.name_, header.value_});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
             ruvia::http_status_code status = ruvia::http_status::internal_server_error;
             std::string etag;
             try {
                 const auto response =
-                    context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+                    co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
                 status = response.status();
                 etag.assign(response.header("ETag").value_or(""));
             } catch (const ruvia::http_error& error) {
                 status = error.info().status();
             }
-            return std::pair<ruvia::http_status_code, std::string>(status, std::move(etag));
+            co_return std::pair<ruvia::http_status_code, std::string>(status, std::move(etag));
         });
     };
     const auto serve = [&serve_method](std::initializer_list<header> headers) {
@@ -1287,10 +1357,10 @@ RUVIA_TEST(static_file_conditional_request_serving) {
         if (!header_name.empty()) {
             request.add_header(http_header_view{header_name, header_value});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
             const auto response =
-                context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            return std::pair<ruvia::http_status_code, std::string>(
+                co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+            co_return std::pair<ruvia::http_status_code, std::string>(
                 response.status(), std::string(response.header("ETag").value_or("")));
         });
     };
@@ -1314,9 +1384,9 @@ RUVIA_TEST(static_file_conditional_request_serving) {
         static_file_test_request request;
         request.set_method("GET");
         request.add_header(http_header_view{"If-None-Match", etag});
-        with_static_context(request, [&](ruvia::context& context_value) {
+        with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
             const auto response =
-                context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
+                co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::not_modified);
             RUVIA_CHECK_EQ(response.header("ETag").value_or(""), std::string_view(etag));
             RUVIA_CHECK(!response.header("Content-Type").has_value());
@@ -1492,8 +1562,8 @@ RUVIA_TEST(static_file_if_modified_since_serving) {
         static_file_test_request request;
         request.set_method("GET");
         request.add_header(http_header_view{"If-Modified-Since", if_modified_since});
-        return with_static_context(request, [&](ruvia::context& context_value) {
-            return context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<ruvia::http_status_code> {
+            co_return (co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"}))
                 .status();
         });
     };
@@ -1522,12 +1592,12 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
     const auto serve_root = [](static_root& root) -> ruvia::http_status_code {
         static_file_test_request request;
         request.set_method("GET");
-        return with_static_context(request, [&](ruvia::context& context_value) {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<ruvia::http_status_code> {
             try {
-                return context_value.static_file(root, {.relative_path_ = "", .content_type_ = "text/html"})
+                co_return (co_await context_value.static_file(root, {.relative_path_ = "", .content_type_ = "text/html"}))
                     .status();
             } catch (const ruvia::http_error& error) {
-                return error.info().status();
+                co_return error.info().status();
             }
         });
     };
@@ -1588,11 +1658,11 @@ RUVIA_TEST(file_response_rejects_a_fifo_without_blocking_the_worker) {
     });
 
     static_file_test_request request;
-    const auto status = with_static_context(request, [&](ruvia::context& context_value) {
+    const auto status = with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<ruvia::http_status_code> {
         try {
-            return context_value.file({.path_ = fifo}).status();
+            co_return (co_await context_value.file({.path_ = fifo})).status();
         } catch (const ruvia::http_error& error) {
-            return error.info().status();
+            co_return error.info().status();
         }
     });
     {

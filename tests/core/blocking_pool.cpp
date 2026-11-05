@@ -68,7 +68,7 @@ task<void> exercise_completion_during_suspend(worker_handle worker, bool& succes
         auto result = co_await run_blocking(worker, [value] { return yielding_result(value); });
         const auto& const_result = result;
         if (!result.completed() || const_result.value().value_ != value ||
-            result.value().value_ != value || std::move(result).take_value().value_ != value) {
+            result.value().value_ != value || std::move(result).value().value_ != value) {
             co_return;
         }
     }

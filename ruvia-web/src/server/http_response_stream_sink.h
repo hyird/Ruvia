@@ -54,14 +54,16 @@ public:
     // assumes the request body is left unread; `consumed_plan` is the plan for
     // the same request once `request_body` reports its complete consumption,
     // which commit checks so a route that read its body before streaming keeps
-    // the connection reusable.
+    // the connection reusable. `request_stop` is the request's own stop source,
+    // which a peer close or a failed write requests; it outlives the sink.
+    // `request_pipelined` tells whether the request arrived behind another.
     response_stream_sink(stream_type& stream, worker_memory& memory, worker_codecs& codecs,
         http_response_head_buffer& head, connection_scanner::entry& scanner_entry,
         const worker_handle& worker_value, const http_request& request, const cors_options* cors,
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         const compression_config* compression,
-        std::pmr::memory_resource& inbound_resource) noexcept
+        std::pmr::memory_resource& inbound_resource, stop_source& request_stop, bool request_pipelined) noexcept
         : stream_(stream),
           head_(head),
           trailers_(memory.resource()),
@@ -74,13 +76,20 @@ public:
           request_body_(request_body),
           connection_plan_(plan.request_connection_plan().require_close()),
           compression_(memory.resource(), codecs, response_coding, compression),
-          inbound_resource_(&inbound_resource) {}
+          inbound_resource_(&inbound_resource),
+          request_stop_(request_stop),
+          request_pipelined_(request_pipelined) {
+        request_body_.reader().observe_completion(this, &arm_peer_monitor_on_body_completion);
+    }
 
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
         connection_scanner::entry&, worker_handle&&, const http_request&, const cors_options*,
         http1_response_stream_plan, http1_response_stream_plan,
         lazy_buffered_body<stream_type>&, http_response_coding_selection,
-        const compression_config*, std::pmr::memory_resource&) = delete;
+        const compression_config*, std::pmr::memory_resource&, stop_source&, bool) = delete;
+
+    response_stream_sink(const response_stream_sink&) = delete;
+    response_stream_sink& operator=(const response_stream_sink&) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -99,25 +108,42 @@ public:
         return connection_plan_;
     }
 
-    [[nodiscard]] stop_token cancel_on_peer_eof() {
-        if (!worker_.is_current()) {
-            throw std::logic_error("peer EOF monitoring must start on the connection worker");
+    // Read-side termination detection, like Go net/http's background read:
+    // it starts once the request body is complete, at dispatch or when the
+    // handler's read completes it, and never while body bytes are still unread
+    // on the transport. A finished stream does not start it.
+    void arm_peer_monitor() {
+        if (peer_monitor_ || peer_monitor_retired_ || state_.ended() || state_.aborted() ||
+            request_body_.consumption() != http1_request_body_consumption::complete) {
+            return;
         }
+        peer_monitor_.emplace(
+            stream_, worker_, inbound_resource_, request_stop_, request_pipelined_, request_body_.pipeline_size());
+        try {
+            peer_monitor_->start();
+        } catch (...) {
+            peer_monitor_.reset();
+            throw;
+        }
+    }
+
+    // Once the handler has returned: no later body consumption may start a
+    // monitor, and a running one stops reading. finish_peer_monitor() joins it.
+    void retire_peer_monitor() noexcept {
+        peer_monitor_retired_ = true;
+        request_body_.reader().observe_completion(nullptr, nullptr);
         if (peer_monitor_) {
-            return peer_monitor_->token();
+            peer_monitor_->cancel();
         }
-        if (state_.ended() || state_.aborted()) {
-            throw std::logic_error("peer EOF monitoring cannot start on a finished response stream");
-        }
-        if (request_body_.consumption() != http1_request_body_consumption::complete) {
-            throw std::logic_error("peer EOF monitoring requires a fully consumed request body");
-        }
-        start_peer_monitor();
-        return peer_monitor_->token();
     }
 
     [[nodiscard]] bool peer_aborted() const noexcept {
         return peer_monitor_ && peer_monitor_->peer_aborted();
+    }
+
+    // Read once finish_peer_monitor() has returned.
+    [[nodiscard]] bool request_input_ended() const noexcept {
+        return peer_monitor_ && peer_monitor_->request_input_ended();
     }
 
     [[nodiscard]] bool peer_eof_monitoring() const noexcept {
@@ -126,7 +152,6 @@ public:
 
     task<void> finish_peer_monitor() {
         if (peer_monitor_) {
-            peer_monitor_->cancel();
             co_await peer_monitor_->join();
         }
     }
@@ -163,6 +188,7 @@ private:
     }
 
     void mark_write_failure(const std::error_code& error) noexcept {
+        request_stop_.request_stop();
         if (peer_monitor_) {
             peer_monitor_->write_failed(error);
         }
@@ -209,14 +235,8 @@ private:
         }
     }
 
-    void start_peer_monitor() {
-        peer_monitor_.emplace(stream_, worker_, inbound_resource_, request_body_.pipeline_size());
-        try {
-            peer_monitor_->start();
-        } catch (...) {
-            peer_monitor_.reset();
-            throw;
-        }
+    static void arm_peer_monitor_on_body_completion(void* target) {
+        static_cast<response_stream_sink*>(target)->arm_peer_monitor();
     }
 
     task<void> commit_head(http_response_trailer_intent trailer_intent) {
@@ -405,7 +425,10 @@ private:
     response_stream_state state_;
     http_interim_response_output* interim_output_{};
     std::pmr::memory_resource* inbound_resource_;
+    stop_source& request_stop_;
+    bool request_pipelined_;
     std::optional<http1_peer_eof_monitor<stream_type>> peer_monitor_;
+    bool peer_monitor_retired_{false};
 };
 
 }  // namespace ruvia::detail

@@ -16,6 +16,9 @@ namespace ruvia::detail {
 // an optional saturating remaining-response budget, contributes one typed close policy
 // before a streamed head is committed, and records each completed route once.
 // A draining worker also closes the connection after its current response.
+// Once the peer has ended its request direction behind pipelined requests,
+// the sequence is those already received: they are served, then the
+// connection closes without reading the transport again.
 class http1_request_sequence final {
 public:
     http1_request_sequence(
@@ -64,6 +67,16 @@ public:
         record_completion();
     }
 
+    // A streamed response observed the peer's request-direction end (RFC 9112
+    // section 9.6) behind requests it retained for the session.
+    void mark_request_input_ended() noexcept {
+        request_input_ended_ = true;
+    }
+
+    [[nodiscard]] bool request_input_ended() const noexcept {
+        return request_input_ended_;
+    }
+
 private:
     [[nodiscard]] bool budget_ends_with_next_response() const noexcept {
         return requests_until_close_.has_value() && *requests_until_close_ == 1;
@@ -79,6 +92,7 @@ private:
 
     std::optional<std::size_t> requests_until_close_;
     const http_server_worker_state& worker_state_;
+    bool request_input_ended_{false};
 };
 
 }  // namespace ruvia::detail

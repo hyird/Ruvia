@@ -80,7 +80,7 @@ int main() {
 | `request_body_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求体单次读取超时。HTTP/2 按流计时：某条流超过该时长没有收到请求体 `DATA` 时，只以 `RST_STREAM(CANCEL)` 重置该流（不发送响应），连接与其他流不受影响，其他流或控制帧不续期 |
 | `header_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `30s`） | 请求头整体完成截止时间；HTTP/2 连接就绪（连接前言与 `SETTINGS`）同样受此截止期约束 |
 | `body_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `120s`） | 请求体整体完成截止时间。HTTP/2 按流计时：自该流请求头到达起计算，到期只重置该流 |
-| `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 写入无进展超时：每次 socket 写入期间独立计时，只有写入进展续期（读到的数据不续期），不是整体截止期。覆盖 HTTP/1 响应、HTTP/1 升级连接（WebSocket 消息、控制帧与关闭帧，`CONNECT` 隧道数据，与是否启用 WebSocket 心跳无关）以及 HTTP/2 连接的全部帧输出（含 RFC 8441 WebSocket 与 `CONNECT` 隧道），与读方向当前处于空闲、读取请求体还是长连接阶段无关：对端停止读取时关闭连接。HTTP/2 流等待对端流控窗口（发送窗口为 0）也受此限制：连续等待超过该时长的流以 `RST_STREAM(CANCEL)` 重置，只影响该流（与 Pingora 以写超时约束 h2 流控等待一致） |
+| `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 写入无进展超时：每次 socket 写入期间独立计时，只有写入进展续期（读到的数据不续期），不是整体截止期。覆盖 HTTP/1 响应、HTTP/1 升级连接（WebSocket 消息、控制帧与关闭帧，`CONNECT` 隧道数据，与是否启用 WebSocket 心跳无关）以及 HTTP/2 连接的全部帧输出（含 RFC 8441 WebSocket 与 `CONNECT` 隧道），与读方向当前处于空闲、读取请求体还是长连接阶段无关：对端停止读取时关闭连接。HTTP/2 流等待对端流控窗口（发送窗口为 0）也受此限制：连续等待超过该时长的流以 `RST_STREAM(CANCEL)` 重置，只影响该流（与 Pingora 以写超时约束 h2 流控等待一致）。阻塞池上的文件正文读取与 `c.file()` / `c.static_file()` 的打开等待同样以此为界，超时返回 `503 file_read_unavailable`（见 §6.1） |
 | `max_connections_per_worker_` | `std::optional<std::size_t>`（默认 `1024`） | 单个 worker 允许的最大并发连接数。达到上限时，新连接接管“请求间空闲最久”的连接的槽位（等待下一个请求的 HTTP/1 keep-alive 连接，或没有任何流的 HTTP/2 连接），后者的 socket 立即关闭（与 nginx 在 `worker_connections` 用尽时复用 keep-alive 连接的机制一致）；被淘汰连接的会话退出前 `active_connections_` 可能短暂超过上限，但打开的 socket 数不超过。没有空闲连接时，新 socket 在 TLS 与协议识别之前直接关闭（不伪造响应），并计入 `connections_refused_` |
 | `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数；HTTP/2 达到上限时按上述两阶段 `GOAWAY` 排空，往返期间在途的流仍被处理（产品上限：最多再接纳 128 条，往返最长等待同上） |
 | `max_buffered_body_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | 缓冲式路由默认允许的最大请求体字节数 |
@@ -174,6 +174,13 @@ ruvia::app().listen({
 - `dotenv_options`：
   - `existing_variables_`：`dotenv_existing_variable_policy::preserve`（默认，保留已有环境变量）或 `override`。
   - `missing_file_`：`dotenv_missing_file_policy::ignore`（默认）或 `require`。
+- 文件格式（整个文件先完整解析，任一行出错则抛出 `std::invalid_argument`（`invalid dotenv entry in <path>:<line>: <原因>`），不应用任何变量）：
+  - 空行与以 `#` 开头的行忽略；首行 UTF-8 BOM 被剥离；可选 `export ` 前缀。
+  - 变量名须匹配 `[A-Za-z_][A-Za-z0-9_]*`。同一文件内重复赋值同一变量名视为配置错误，在第二次赋值所在行报 `duplicate variable name`；`existing_variables_` 策略只裁决与此前加载结果的冲突，不影响该检查。
+  - 未加引号的值去除首尾空白，遇到行首或空白之后的 `#` 时截断为注释。
+  - 单引号值按字面保留，不处理任何转义。
+  - 双引号值仅定义 `\n`、`\r`、`\t`、`\"`、`\\` 五个转义；与 POSIX sh 双引号一致，反斜杠后跟其他任意字符时反斜杠与该字符一起按字面保留（`"\q"` 得到 `\q`，`"C:\Users"` 保持原样）。
+  - 引号闭合后只允许空白或 `#` 注释；不支持多行值与变量展开。
 - `ruvia::env`（通过 `app().env()` 或 `c.env()` 访问）：
   - `std::optional<std::string_view> get(std::string_view name) const& noexcept`
   - `template <typename T> std::optional<T> get(std::string_view name) const&`（支持 `std::string_view`、`bool`、整型、浮点型；变量存在但格式非法时抛出 `std::invalid_argument`）
@@ -241,7 +248,7 @@ for (const auto& worker : ruvia::app().workers()) {
 
 | 类别 | 宏名称 | 处理器成员函数签名 | 说明 |
 | --- | --- | --- | --- |
-| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 自动提供 `HEAD` 回退并将其列入 `Allow`；仍运行同一处理器与中间件，`c.req().method()` 为 `"HEAD"`。缓冲响应省略正文；流式/SSE 必须先 `co_await writer.commit()`，返回 `completed` 时停止正文生产（HEAD/304 为正常完成，`aborted()` 为 false，不取消 token），返回 `body` 才可写入。请求体消费/排空与响应完成独立，默认不创建读侧断连监控，也不破坏 pipeline 写半关闭语义。WebSocket 路由不提供 HEAD 回退 |
+| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 自动提供 `HEAD` 回退并将其列入 `Allow`；仍运行同一处理器与中间件，`c.req().method()` 为 `"HEAD"`。缓冲响应省略正文；流式/SSE 必须先 `co_await writer.commit()`，返回 `completed` 时停止正文生产（HEAD/304 为正常完成，`aborted()` 为 false，不取消 token），返回 `body` 才可写入。请求体消费/排空与响应完成独立；流式/SSE 在请求体完整消费后监测客户端断开并停止 `c.stop_token()`，pipeline 后续请求之后的写半关闭不取消当前响应（见 [streaming-websocket-client.md](streaming-websocket-client.md#客户端断开即取消请求)）。WebSocket 路由不提供 HEAD 回退 |
 | 缓冲或流式路由 | `RUVIA_POST(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `POST` 路由（附加 `ruvia::stream_body` 时流式消费请求体；返回 `task<void>` 时流式写出响应/SSE） |
 | 缓冲或流式路由 | `RUVIA_PUT(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `PUT` 路由（可附加 `ruvia::stream_body` 流式消费请求体） |
 | 缓冲或流式路由 | `RUVIA_DELETE(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `DELETE` 路由 |
@@ -326,8 +333,8 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 | `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::pmr::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
 | `template <typename T> http_response json(const T& value)` | 将 `RUVIA_MODEL` 或模型数组（`ruvia::array<T>` / `boxed_array<T>`）序列化为 `application/json` 响应 |
 | `http_response redirect(redirect_response_options options)` | 构造重定向响应（默认 `302 Found`）；绝对或 `//` 开头的 Location authority 含 `\` 时抛 `std::invalid_argument`，避免浏览器把反斜杠当路径分隔符而改变主机 |
-| `http_response file(file_response_options options)` | 构造磁盘文件响应，支持 Range 与条件请求 |
-| `http_response static_file(const static_root& root, static_file_response_options options)` | 从预构建的 `static_root` 快照构造响应 |
+| `task<http_response> file(file_response_options options)` | 在阻塞池上打开磁盘文件并构造响应（`co_return co_await c.file(...)`），支持 Range 与条件请求；任务完成时状态、校验器、长度与打开的句柄均已确定 |
+| `task<http_response> static_file(const static_root& root, static_file_response_options options)` | 从预构建的 `static_root` 快照构造响应（`co_await`）；文件型条目在阻塞池上于根目录之下打开 |
 | `http_response error(http_error_info_options options) const` / `error(const http_error_info& info) const` | 构造标准 JSON 错误响应（传入 `http_error_info` 时自动保留 `validation_issues`） |
 | `task<http_response> not_found()` | 调用当前匹配的 404 处理器生成响应 |
 | `void respond(http_response&&)` / `const http_response* response() const noexcept` / `bool committed() const noexcept` | 选择或替换尚未提交的缓冲响应 / 只读观察选定响应（不包含尚待应用的 policy，不是最终线上响应头） / 查询响应头或流升级是否已提交 |
@@ -419,7 +426,7 @@ const auto& user = c.request_state<current_user>();
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
 | `ruvia::body_limit<MaxBytes>` (`"ruvia/web/controller.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
-| `ruvia::rate_limit<MaxReqs, WindowMs>` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级固定窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数）；全局限流使用 `app().rate_limit({...})`；两者的拒绝都经 `on_error` 应答为 `429` |
+| `ruvia::rate_limit<MaxReqs, WindowMs>` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数）；全局限流使用 `app().rate_limit({...})`；两者的拒绝都经 `on_error` 应答为 `429` |
 | `ruvia::security_headers_middleware` (`"ruvia/web/security_headers.h"`) | 自动注入 `X-Content-Type-Options`、`X-Frame-Options`、`Strict-Transport-Security`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头（对 404 响应同样生效） |
 | `ruvia::csrf_protection` (`"ruvia/web/csrf.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
 | `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话 |
@@ -427,7 +434,9 @@ const auto& user = c.request_state<current_user>();
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
 
-每个 worker 预分配 `capacity_per_worker_`（默认 `8192`）个固定窗口计数槽。key 的起始槽位由每个 worker 启动时随机抽取密钥的 SipHash-1-3 计算，攻击者无法离线算出哪些 key 落入同一探测窗口；一次查找或插入只探测该起始槽位起的固定窗口（`min(capacity_per_worker_, 32)` 个槽），单次请求的开销与表容量无关；窗口内全是其他 key 的未过期计数时，该请求按规则的 `overflow_policy_` 处理（默认 `deny`），即使表的其他部分仍有空位。容量需要为活跃客户端数留出余量。
+两级限流按 key 计算滑动窗口估计值（与 pingora-limits 的 `Rate`、Cloudflare 的做法相同）：每个 key 的窗口从它的首个请求开始、按 `window_` 首尾相接地滚动，分别记录当前窗口与上一窗口已放行的请求数；请求在 `上一窗口计数 × 当前窗口尚未经过的比例 + 当前窗口计数 < max_requests_` 时放行并计入当前窗口，被拒绝的请求不计数。窗口滚动时当前计数转为上一窗口计数；距当前窗口起点已过两个或更多窗口时两者都清零。上一窗口的计数随时间线性淡出而不是在边界处一次清空，因此不再允许在一个窗口末尾用完配额、紧接着在下一窗口开头再用完一整份配额（此前的固定窗口在边界附近最多放行约两倍配额）；相邻请求间隔（按毫秒计）都大于 `window_ / max_requests_` 的流量始终放行，恰好以该间隔对齐窗口起点到达的请求会因估计值等于上限而被拒绝。拒绝时 `X-RateLimit-Remaining` 为 `0`；`Retry-After` 为估计值再次放行的最早时刻（向上取整到秒，按它等待不会早于真实放行时刻）；`X-RateLimit-Reset` 为估计值降到零、整份配额恢复的时刻（向上取整到秒，不小于 `Retry-After`）。表满时按 `overflow_policy_ = deny` 拒绝的请求两者均为 `1`。估计值的比较使用 128 位精确乘积，延迟按无符号毫秒计算后再向上取整到秒，因此即使 `window_` 接近 `std::chrono::milliseconds::max()`、`max_requests_` 取到 `std::size_t` 上限也不会溢出，最长约两个窗口的 `X-RateLimit-Reset` 也不会被截短。
+
+每个 worker 预分配 `capacity_per_worker_`（默认 `8192`）个滑动窗口计数槽。key 的起始槽位由每个 worker 启动时随机抽取密钥的 SipHash-1-3 计算，攻击者无法离线算出哪些 key 落入同一探测窗口；一次查找或插入只探测该起始槽位起的连续槽位（`min(capacity_per_worker_, 32)` 个），单次请求的开销与表容量无关；这些槽位全被其他 key 的未过期计数占用时，该请求按规则的 `overflow_policy_` 处理（默认 `deny`），即使表的其他部分仍有空位。槽位在其 key 当前窗口起点之后满两个窗口才过期、可被其他 key 复用；在此之前上一窗口计数仍参与估计。容量需要为活跃客户端数留出余量。
 
 会话仅接受固定 48 位小写十六进制 ID，其他长度或字符按不存在的会话处理，不读取或修改其拼接的 Redis key。已有合法 ID 与 `key_prefix_ + ID` 存储格式保持不变；旧的非标准 ID 不再被识别。固定长度防止不同前缀通过变长 ID 穿透命名空间；使用同一 Redis 数据库和相同前缀则共享会话命名空间，隔离责任由配置方承担。
 
@@ -494,7 +503,7 @@ RUVIA_MODEL(create_user_request,
 - `m.get<"username">()`：获取只读字段值；非空必填字段返回引用，其余字段返回只读 `std::optional` 引用。`ruvia::string` 可调用 `.view()`，标量包装可读取 `.value_` 或隐式转换。
 - `m.set<"username">("alice")`：设置字段值（支持链式调用）
 - `m.set_null<"nickname">()`：将 `RUVIA_NULLABLE` 字段置为 `null`（等价于 `m.set<"nickname">(nullptr)`，支持链式调用）
-- `m.is_set<"username">()` / `m.has_value<"username">()`：查询该字段当前是否持有有效非空值（含默认值、初始值、输入解析值或应用 `set` 赋值）；`m.is_present<"role">()` 查询原始输入中是否出现该字段，默认值及应用后续修改不改变输入来源记录；`m.is_null<"nickname">()` 查询当前字段是否为 `null`。
+- `m.has_value<"username">()`：查询该字段当前是否持有有效非空值（含默认值、初始值、输入解析值或应用 `set` 赋值），`null` 与缺失均返回 `false`；`m.is_present<"role">()` 查询原始输入中是否出现该字段，默认值及应用后续修改不改变输入来源记录；`m.is_null<"nickname">()` 查询当前字段是否为 `null`。模型不提供 `is_set`：`RUVIA_DB_ENTITY` / `RUVIA_REDIS_ENTITY` 的 `is_set` 表示“已赋值，`null` 也算”，与模型的 `has_value` 语义不同。
 - `m.ensure<"nested">()`：确保可原地修改的字段已初始化并返回可变引用。`json_value` 字段不提供此入口：用 `get()` 读取，用 `set<"field">(token)` 替换；声明 `RUVIA_NULLABLE` 后可用 `set<"field">(nullptr)` 或 `set_null<"field">()` 设置 null。这样 token 替换与字段 null 状态始终经过同一个检查入口。
 - `m.reset<"nickname">()`：将可选字段恢复为缺失状态并返回模型引用（支持链式调用）；必填字段不提供此入口，可空必填字段用 `set_null<"field">()` 或 `set(nullptr)` 设置 null。
 
@@ -531,7 +540,8 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
   - `T ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，字段校验失败抛携带 issues 的 `ruvia::http_error`）
 - **零拷贝动态 JSON 视图（`"ruvia/web/model.h"`）**：
   - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）
-  - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。`get<T>()` 的结果可能借用 token 字节，因此只能在左值 token 上调用，右值 token 上调用编译失败。
+  - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。`get<T>()` / `get<T>("key")` 的结果可能借用 token 字节，因此只能在左值 token 上调用，右值 token 上调用编译失败。
+  - `get<T>()` 把整个 token 转换为 `T`，返回 `std::optional<T>`。`get<T>("key")` 是成员查找，返回 `ruvia::json_field_lookup<T>`：`status()` 为 `ruvia::unique_lookup_status::absent`（无此成员，非对象 token 一律为此）、`found`（恰好一个成员名按转义解码后等于 `key`）或 `repeated`（同名成员出现两次及以上；RFC 8259 §4 未定义重复名语义，因此不选取任何一次出现，与模型类型化解析拒绝重复字段一致，扫描在第二次出现处立即停止）。`value()` 仅在 `found` 且成员值能转换为 `T`（模型类型还须通过字段校验）时有值；`found` 而 `value()` 为空表示成员存在但不是合法的 `T`。左值查找结果的 `value()` 返回引用，右值查找结果的 `value()` 按值移出 `std::optional<T>`（如 `if (auto port = obj.get<ruvia::uint32>("port").value())`），值同样不能比被查询的 token 活得久。
   - 移动构造保留 token 的借用/拥有方式；移动赋值保留目标 PMR 并拥有化结果。成功移动或右值字段转移后，源 `json_value` 恢复为 `null`，源 `json_object` 恢复为 `{}`，源 PMR 不变，仍可查询、赋值或作为模型成员序列化；重置本身不分配。自移动赋值保持原值；跨资源拥有化失败时两端原值均保留。移动后重新取得借用视图，不继续使用旧视图。
 - **命令式校验器 `ruvia::validator`（`"ruvia/web/validation.h"`）**：
   - 提供 `.required(opt, field)`、`.min_length(opt, field, n)`、`.max_length(opt, field, n)`、`.range(opt, field, low, high)`、`.one_of(opt, field, list)`、`.add(field, code, message)`，最后调用 `.throw_if_invalid(validation_failure_options = {})` 抛出携带 issues 的 `ruvia::http_error`（默认 400 / `validation_failed`）。
@@ -544,19 +554,19 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 
 Ruvia 提供三种静态文件服务方式：
 
-1. **单文件响应**：在路由中调用 `c.file({.path_ = "/path/to/file.pdf", .content_type_ = "application/pdf"})`。
-2. **不可变目录快照 `ruvia::static_root`**：启动前构造 `ruvia::static_root assets("public/", {.cache_control_ = "public, max-age=3600"})`，在路由中调用 `c.static_file(assets, {.relative_path_ = c.req().param("*").value_or("")})`。
+1. **单文件响应**：在路由中调用 `co_return co_await c.file({.path_ = "/path/to/file.pdf", .content_type_ = "application/pdf"})`。
+2. **不可变目录快照 `ruvia::static_root`**：启动前构造 `ruvia::static_root assets("public/", {.cache_control_ = "public, max-age=3600"})`，在路由中调用 `co_return co_await c.static_file(assets, {.relative_path_ = c.req().param("*").value_or("")})`。
 3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 刷新目录索引，并支持 `precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 自动预压缩热文件。刷新是事务性的：某一轮重建或采用失败时继续服务上一份完整快照，`http_stats().document_root_refresh_failures_` 计数加一，失败原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。各 worker 只在发布代次变化时才取发布者的锁采用新快照。
 
 三者均内置路径穿越防护、点文件策略（`static_dotfile_policy::deny` 默认拒绝隐藏文件）、`ETag` / `Last-Modified` 条件请求（`304 Not Modified`）与 `Range` 分段响应（`206 Partial Content`）。`c.static_file()` 的 `relative_path_` 是已解码的文件路径，`/` 与 `\` 均为段分隔符；含 `.` 或 `..` 段、空的中间段、绝对路径或 NUL 时一律返回 `403`，不做解析或夹取。命名参数（如 `/files/:name`）可在单个段内解码出 `%2F` / `%5C`，因此 `sub%2F..%2Fsecret` 这类拼写同样被拒绝。
 
 多个范围的请求返回 `multipart/byteranges`，各部分只带 `Content-Type` 与 `Content-Range`；选中预压缩变体（带 `Content-Encoding`）时多范围请求返回完整的 `200` 表示（单个范围仍是带 `Content-Encoding` 的单部分 `206`）。`If-Range` 匹配后的 `206` 只带必需字段（`ETag`、`Cache-Control`、`Vary`、`Content-Range` 或 multipart `Content-Type` 等）及描述所发字节的 `Content-Encoding`，不再重复 `Content-Type`、`Last-Modified`（RFC 9110 §15.3.7）。
 
-非 resident 文件响应会验证索引或构造时记录的文件身份，零字节文件也不例外：空文件在索引后被改写或删除，不能以旧 `Content-Length: 0` 成功提交。`c.file()` 与 `c.static_file()` 在处理器内打开文件一次，响应正文由同一句柄（读取时为其复制句柄）提供，传输层不再按路径重新解析。
+非 resident 文件响应会验证索引或构造时记录的文件身份，零字节文件也不例外：空文件在索引后被改写或删除，不能以旧 `Content-Length: 0` 成功提交。`c.file()` 与 `c.static_file()` 返回 `task<http_response>`：文件只打开一次，打开（`c.file()` 的打开与 `fstat` 快照、`static_root` 在根目录之下的按条目打开）在 worker 的阻塞池上执行，任何平台上 worker 都不做文件系统调用；任务完成时状态（`200/206/304/404/403/412/416/500/503`）、`ETag`、`Content-Length`、Range 处理与打开的句柄均已确定，中间件与处理器可直接检查。不发送文件字节的响应（`HEAD`、`304`、`412`、`416`）在池上打开时同时校验索引身份，文件已变化则返回 `500 static_file_changed`。响应正文由同一句柄（读取时为其复制句柄）提供，传输层不再按路径重新解析。两者在返回任务前即完成输入拥有化：路径、`relative_path_` 与 `content_type_` 由调用本身复制到请求存储（`static_file()` 同时完成路径规范化、索引查找与表示选择），保存任务后释放这些来源再 `co_await` 也安全；无法表示文件的路径（`404`）、被拒绝的相对路径（`403`）、未索引的名称（`404`）与不可接受的编码（`406`）在调用时即抛出。只有 `static_file()` 的 `root` 仍是借用，必须活到返回的任务完成；文档根请求的内部分发走同一条池上打开路径，并在等待期间持有快照租约。
 
-文件正文在所有平台、所有传输上走同一条读取链：打开与阻塞读取在阻塞池上执行，每轮最多预读 64 KiB，worker 不做同步文件读取；唯一例外是 Windows 明文 TCP 上大于 16 KiB 的单个范围，经内核 `TransmitFile` 按 64 KiB 分片发送，每片之后重新校验句柄身份，最后一个字节在校验通过后才发出。每次文件读取的等待以 `server_config::write_timeout_` 为界，超时后放弃等待（读取在池线程上自行结束并释放句柄与缓冲），连接不再被卡住的磁盘占用。
+文件正文在所有平台、所有传输上走同一条读取链：打开与阻塞读取在阻塞池上执行，每轮最多预读 64 KiB，worker 不做同步文件读取；唯一例外是 Windows 明文 TCP 上大于 16 KiB 的单个范围，经内核 `TransmitFile` 按 64 KiB 分片发送，每片之后重新校验句柄身份，最后一个字节在校验通过后才发出。处理器内的打开与每次文件读取的等待都以 `server_config::write_timeout_` 与请求的 `stop_token()` 为界，超时后放弃等待（打开或读取在池线程上自行结束并释放句柄与缓冲），请求与连接不再被卡住的磁盘占用。
 
-响应头之前读取并校验首个文件范围（multipart 正文也一样，先于首个边界）。提交前失败时连接或流仍得到错误响应：文件被删除、替换或改写、读取出错返回 `500 file_read_failed`；读取未完成（阻塞池队列满、未配置阻塞池、超过 `write_timeout_`）返回 `503 file_read_unavailable`；HTTP/1 随后关闭连接，HTTP/2 只结束该流（响应头已发出后则以 `RST_STREAM(INTERNAL_ERROR)` 结束）。真实故障（I/O 错误、句柄耗尽、读取超时、缺少阻塞池）经连接故障通道报告（`on_connection_failure()` 回调；未注册时走限流的未处理故障报告）；文件变化、队列满（计入 `blocking_pool_stats().rejected_`）与停机不报告。提交后失败按当前 HTTP 连接或流终止。resident 和已经复制到响应内的字节仍属于独立快照，不因后续磁盘变化失效。
+响应头之前读取并校验首个文件范围（multipart 正文也一样，先于首个边界）。提交前失败时连接或流仍得到错误响应：文件被删除、替换或改写、读取出错返回 `500 file_read_failed`；读取未完成（阻塞池队列满、未配置阻塞池、超过 `write_timeout_`）返回 `503 file_read_unavailable`；HTTP/1 随后关闭连接，HTTP/2 只结束该流（响应头已发出后则以 `RST_STREAM(INTERNAL_ERROR)` 结束）。`c.file()` / `c.static_file()` 的打开未完成时同样以 `503 file_read_unavailable` 回答：`co_await` 抛出该 `http_error`，经错误处理器得到响应。真实故障（I/O 错误、句柄耗尽、打开或读取超时、缺少阻塞池）经连接故障通道报告（`on_connection_failure()` 回调；未注册时走限流的未处理故障报告）；文件变化、队列满（计入 `blocking_pool_stats().rejected_`）与停机不报告。提交后失败按当前 HTTP 连接或流终止。resident 和已经复制到响应内的字节仍属于独立快照，不因后续磁盘变化失效。
 
 HTTP/2 文件正文在 `HEADERS` 之前只打开并校验、不预读；之后每块只在对端授予发送窗口后读取，至多读取窗口大小，每个连接同时最多 4 个流占用阻塞池读取或持有读取缓冲，等待窗口的流不持有缓冲。
 
@@ -580,3 +590,5 @@ auto res = app.request(
 // res.status() == ruvia::http_status::ok
 // res.body(), res.header("X-Example")
 ```
+
+`test_request::arrival(std::chrono::steady_clock::time_point)` 为请求固定到达时刻，全局与路由级限流都按该时刻计算窗口，测试可以把请求精确放在窗口边界前后，无需 `sleep`；未固定时与运行中的服务器一样读取 steady clock。同一客户端的到达时刻不得倒退。

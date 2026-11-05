@@ -10,7 +10,6 @@
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http1_request_connection_plan.h"
-#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
 
@@ -112,12 +111,6 @@ public:
     http1_request_body_plan body_plan_{http1_request_body_plan(http_request_expectations{})};
     http1_request_connection_plan connection_plan_{http1_request_connection_plan::http11_close()};
 
-    // Parsed once from the request head. Representation policy consumes this
-    // complete client preference later, without rescanning Accept-Encoding.
-    [[nodiscard]] http_response_coding_selection response_coding_selection() const noexcept {
-        return http_response_coding_selection::select(response_coding_qualities_);
-    }
-
 private:
     // The compact request owns its descriptor block across parse attempts.
     // Only this small progress value changes, so scan/head/error metadata
@@ -126,7 +119,6 @@ private:
         http1_server_request_parse_failure>;
 
     progress progress_{http1_server_need_request_head{}};
-    http_response_coding_qualities response_coding_qualities_;
 };
 
 }  // namespace ruvia

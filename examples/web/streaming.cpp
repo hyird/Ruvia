@@ -90,8 +90,8 @@ private:
         if (co_await events_value.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
-        // 显式接受 HTTP/1 写半关闭也结束 SSE；把同一 token 传给业务订阅等待。
-        const auto stop = events_value.cancel_on_peer_eof();
+        // 客户端断开（FIN/RST）会停止 c.stop_token()；把它传给业务订阅等待。
+        const auto stop = c.stop_token();
         co_await events_value.write({.data_ = "connected", .event_ = "open", .id_ = "1"});
         if (co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(20), stop) ==
             ruvia::timer_sleep_result::stop_requested) {

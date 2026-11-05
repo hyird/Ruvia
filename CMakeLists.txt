@@ -109,20 +109,20 @@ if(RUVIA_BUILD_WEB)
     if(RUVIA_ENABLE_POSTGRESQL)
         ruvia_find_package(WEB PostgreSQL)
         list(APPEND RUVIA_WEB_DEPENDENCIES PostgreSQL::PostgreSQL)
-        # vcpkg's static libpq splits frontend symbols between the cyclic
-        # pgcommon/pgport pair, which GNU linkers must rescan.
-        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            set(_ruvia_pgcommon_debug "${PostgreSQL_pgcommon_LIBRARY_DEBUG}")
-            if(NOT _ruvia_pgcommon_debug)
-                set(_ruvia_pgcommon_debug "${PostgreSQL_pgcommon_LIBRARY_RELEASE}")
-            endif()
-            set(_ruvia_pgport_debug "${PostgreSQL_pgport_LIBRARY_DEBUG}")
-            if(NOT _ruvia_pgport_debug)
-                set(_ruvia_pgport_debug "${PostgreSQL_pgport_LIBRARY_RELEASE}")
-            endif()
+        include(cmake/ruvia_postgresql_link_group.cmake)
+        ruvia_postgresql_link_group(_ruvia_postgresql_link_group)
+        if(_ruvia_postgresql_link_group)
+            # The group names this build's archives, so it stays out of the
+            # export; ruviaConfig.cmake rebuilds it from the consumer's own
+            # PostgreSQL with the same installed function.
             list(APPEND RUVIA_WEB_DEPENDENCIES
-                "$<LINK_GROUP:RESCAN,$<$<CONFIG:Debug>:${_ruvia_pgcommon_debug}>$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgcommon_LIBRARY_RELEASE}>,$<$<CONFIG:Debug>:${_ruvia_pgport_debug}>$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgport_LIBRARY_RELEASE}>>")
+                "$<BUILD_INTERFACE:${_ruvia_postgresql_link_group}>")
         endif()
+        install(
+            FILES cmake/ruvia_postgresql_link_group.cmake
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
+            COMPONENT web
+        )
     endif()
     if(RUVIA_ENABLE_REDIS)
         ruvia_find_package(WEB hiredis CONFIG)

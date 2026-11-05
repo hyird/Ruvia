@@ -172,9 +172,11 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         return false;
     }
     std::size_t fixed_bytes = status_value.size() + hpack_literal_overhead_bytes;
+    // http2_final_response_control_plan admitted a Transfer-Encoding only as the
+    // replaceable chunked hint, which HTTP/2 framing supersedes.
+    constexpr auto writer_framed_bits = response_header_content_length | response_header_transfer_encoding;
     for (const auto& header : response.headers()) {
-        const auto known_bit = http_response_header_access::known_bit(header);
-        if (known_bit == response_header_content_length) {
+        if ((http_response_header_access::known_bit(header) & writer_framed_bits) != 0) {
             continue;
         }
         if (!section_size.add(header.name(), header.value())) {
@@ -209,9 +211,10 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         std::pmr::string lower_name_scratch(header_block.get_allocator());
         for (const auto& header : response.headers()) {
             const auto known_bit = http_response_header_access::known_bit(header);
-            if (known_bit == response_header_content_length) {
+            if ((known_bit & writer_framed_bits) != 0) {
                 // Content-Length is emitted only from the prepared plan below, so
-                // HPACK cannot reinterpret raw application framing independently.
+                // HPACK cannot reinterpret raw application framing independently;
+                // the chunked Transfer-Encoding hint has no HTTP/2 form at all.
                 continue;
             }
             append_http2_encoded_response_header(header_block, header.name(), header.value(), known_bit,

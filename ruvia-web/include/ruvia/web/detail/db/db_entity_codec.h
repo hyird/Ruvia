@@ -259,10 +259,7 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
 
 // SQL permits repeated result names; a mapped column must name exactly one.
 struct db_result_column_lookup final {
-    enum class state_type : unsigned char { absent,
-        found,
-        repeated };
-    state_type state_{state_type::absent};
+    unique_lookup_status state_{unique_lookup_status::absent};
     std::size_t index_{0};
 };
 
@@ -271,10 +268,10 @@ struct db_result_column_lookup final {
     db_result_column_lookup result;
     for (std::size_t index = 0; index < names.size(); ++index) {
         if (names[index] == name) {
-            if (result.state_ == db_result_column_lookup::state_type::found) {
-                return {db_result_column_lookup::state_type::repeated, index};
+            if (result.state_ == unique_lookup_status::found) {
+                return {unique_lookup_status::repeated, index};
             }
-            result = {db_result_column_lookup::state_type::found, index};
+            result = {unique_lookup_status::found, index};
         }
     }
     return result;
@@ -310,11 +307,11 @@ public:
                     return;
                 }
                 const auto lookup = find_unique_db_result_column(names, column_type::name.view());
-                if (lookup.state_ == db_result_column_lookup::state_type::repeated) {
+                if (lookup.state_ == unique_lookup_status::repeated) {
                     throw db_conversion_error(
                         db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
                 }
-                indices_[i] = lookup.state_ == db_result_column_lookup::state_type::found ? lookup.index_ : missing_column;
+                indices_[i] = lookup.state_ == unique_lookup_status::found ? lookup.index_ : missing_column;
             });
             schema_ = names;
         }

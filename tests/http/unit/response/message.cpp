@@ -483,8 +483,8 @@ RUVIA_TEST(response_header_rejects_invalid_connection_control_lists) {
     for (const auto value : {"close,", ", Upgrade", "close;invalid", ""}) {
         RUVIA_CHECK(throws_invalid([&] { response.header("Connection", value); }));
     }
-    for (const auto value :
-        {"Content-Length", "Date", "Trailer", "Authorization", "Cookie", "Range"}) {
+    for (const auto value : {"Content-Length", "Date", "Trailer", "Authorization", "Cookie", "Range", "Forwarded",
+             "X-Forwarded-For", "X-Forwarded-Proto", "close, X-Forwarded-Host"}) {
         RUVIA_CHECK(throws_invalid([&] { response.header("Connection", value); }));
     }
     for (const auto value : {"websocket/", ", websocket", ""}) {

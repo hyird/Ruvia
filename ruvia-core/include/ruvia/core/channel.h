@@ -443,11 +443,4 @@ template <typename t_type>
     return std::pair(std::move(sender), channel_receiver<t_type>(std::move(state_value)));
 }
 
-template <typename t_type>
-[[nodiscard]] auto make_channel(
-    worker_handle worker_value, std::size_t capacity, std::pmr::memory_resource* resource = nullptr) {
-    return make_channel<t_type>(
-        std::move(worker_value), channel_options{.capacity_ = capacity, .resource_ = resource});
-}
-
 }  // namespace ruvia

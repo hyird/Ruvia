@@ -144,21 +144,6 @@ RUVIA_TEST(url_validate_encoding) {
     RUVIA_CHECK(validate_url_encoding(""));
 }
 
-RUVIA_TEST(url_components_equivalent) {
-    using m_type = ruvia::url_decode_mode;
-    using ruvia::url_components_equivalent;
-    RUVIA_CHECK(url_components_equivalent("%61pi", "api", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("api", "%61%70%69", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("%2f", "%2F", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("", "", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("a+b", "a%20b", m_type::form));
-    RUVIA_CHECK(!url_components_equivalent("a+b", "a%20b", m_type::percent));  // '+' literal
-    RUVIA_CHECK(!url_components_equivalent("%61pi", "apix", m_type::percent));
-    RUVIA_CHECK(!url_components_equivalent("apix", "%61pi", m_type::percent));
-    RUVIA_CHECK(!url_components_equivalent("%2", "%2", m_type::percent));    // truncated escape
-    RUVIA_CHECK(!url_components_equivalent("%zz", "%zz", m_type::percent));  // malformed escape
-}
-
 RUVIA_TEST(url_uri_paths_equivalent_and_ordered_by_canonical_form) {
     using ruvia::compare_uri_paths;
     using ruvia::uri_paths_equivalent;

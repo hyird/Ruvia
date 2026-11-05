@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -36,6 +37,7 @@ class http_interim_response_output;
 class http_connection_advertisement_output;
 class http_push_output;
 class route_table;
+struct connection_failure_sink;
 class tls_served_certificate;
 class worker_state_registry;
 
@@ -49,6 +51,12 @@ struct context_worker_services final {
     const route_table* routes_{};
     const worker_state_registry* states_{};
     bool precompressed_static_files_{};
+    // Bounds each blocking-pool wait of a file response's open, as the body
+    // reads the transport waits on are bounded: the server write_timeout_.
+    std::optional<std::chrono::milliseconds> file_io_timeout_{};
+    // Where a file response's real faults (no blocking pool, a stalled open)
+    // are reported; the worker's connection failure outlet, never null.
+    const connection_failure_sink* connection_failure_{};
     const trusted_proxy_set* trusted_proxies_{};
     // The serving worker's drain token; null outside a serving connection.
     const stop_token* drain_token_{};
@@ -85,6 +93,9 @@ struct context_request_services final {
     // Admission's Accept-Encoding selection for this request; empty for a
     // context created outside admission.
     std::optional<http_response_coding_selection> response_coding_{};
+    // The arrival instant the request's owner pinned for rate-limit decisions
+    // (test_app); empty when those decisions read the steady clock.
+    std::optional<std::chrono::steady_clock::time_point> pinned_arrival_{};
 };
 
 class context_services final {
@@ -157,6 +168,14 @@ public:
     [[nodiscard]] const stop_token& get_stop_token() const noexcept {
         return request_services_.stop_token_.get();
     }
+
+    // A transport that can observe the client leaving binds a request stop
+    // that also fires then, on a request-local copy; `token` must observe the previous one and
+    // outlive every context dispatched with these services.
+    void bind_stop_token(const stop_token& token) noexcept {
+        request_services_.stop_token_ = token;
+    }
+    void bind_stop_token(stop_token&&) = delete;
 
     // Requested when the serving worker starts draining, and at the latest
     // when it stops. A context outside a serving connection (in-memory test
@@ -265,6 +284,14 @@ public:
         return worker_services_.precompressed_static_files_;
     }
 
+    [[nodiscard]] constexpr std::optional<std::chrono::milliseconds> file_io_timeout() const noexcept {
+        return worker_services_.file_io_timeout_;
+    }
+
+    [[nodiscard]] const connection_failure_sink& connection_failure() const noexcept {
+        return *worker_services_.connection_failure_;
+    }
+
     // The request's Accept-Encoding selection as admission folded it, or
     // null for a context created outside admission. A failed negotiation is a
     // selection whose acceptable() is false.
@@ -274,6 +301,14 @@ public:
 
     void bind_response_coding(const http_response_coding_selection& selection) noexcept {
         request_services_.response_coding_ = selection;
+    }
+
+    [[nodiscard]] const std::optional<std::chrono::steady_clock::time_point>& pinned_arrival() const noexcept {
+        return request_services_.pinned_arrival_;
+    }
+
+    void pin_arrival(std::chrono::steady_clock::time_point arrival) noexcept {
+        request_services_.pinned_arrival_ = arrival;
     }
 
     [[nodiscard]] const worker_state_registry* worker_states() const noexcept {

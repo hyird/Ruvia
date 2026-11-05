@@ -122,6 +122,8 @@ struct test_app::impl_type final {
                     .trusted_proxies_ =
                         options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
                     .precompressed_static_files_ = options_.compression_.has_value(),
+                    .file_io_timeout_ = options_.server_.write_timeout_,
+                    .connection_failure_ = &options_.connection_failure_,
                 });
             event_loop_pool_.start();
             event_loop_.start(capabilities_->start()).get();
@@ -179,6 +181,7 @@ struct test_app::impl_type final {
                 .coding_ = http_response_coding_selection_for(parsed_value),
                 .resource_ = request_memory_value.resource(),
                 .start_ = request_start,
+                .pinned_arrival_ = request.arrival_,
             };
             const auto policy = detail::http_request_admission_policy::server(options_);
             auto admitted = co_await detail::admit_and_dispatch_buffered_request(

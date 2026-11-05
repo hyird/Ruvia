@@ -118,6 +118,61 @@ RUVIA_TEST(dotenv_options_use_explicit_policies) {
     std::filesystem::remove(second);
 }
 
+RUVIA_TEST(dotenv_double_quoted_undefined_escapes_keep_backslash) {
+    const auto path = write_temp_env("ruvia_dotenv_escapes.env",
+        R"(DOTENV_ESCAPE_DEFINED="a\nb\rc\td\"e\\f"
+DOTENV_ESCAPE_UNDEFINED="\q\$x\'y\0 C:\Users"
+DOTENV_ESCAPE_TRAILING="end\\"
+DOTENV_ESCAPE_SINGLE='\n\q'
+)");
+    auto& app = ruvia::app();
+    app.load_dotenv(path, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
+    const auto& env = app.env();
+    std::filesystem::remove(path);
+
+    RUVIA_CHECK_EQ(env.get("DOTENV_ESCAPE_DEFINED").value_or(""), std::string_view("a\nb\rc\td\"e\\f"));
+    RUVIA_CHECK_EQ(
+        env.get("DOTENV_ESCAPE_UNDEFINED").value_or(""), std::string_view(R"(\q\$x\'y\0 C:\Users)"));
+    RUVIA_CHECK_EQ(env.get("DOTENV_ESCAPE_TRAILING").value_or(""), std::string_view("end\\"));
+    RUVIA_CHECK_EQ(env.get("DOTENV_ESCAPE_SINGLE").value_or(""), std::string_view(R"(\n\q)"));
+}
+
+RUVIA_TEST(dotenv_duplicate_name_in_one_file_is_rejected) {
+    const auto earlier = write_temp_env("ruvia_dotenv_duplicate_earlier.env", "DOTENV_DUP=earlier\n");
+    const auto duplicate = write_temp_env("ruvia_dotenv_duplicate.env",
+        "DOTENV_DUP_OTHER=kept\nDOTENV_DUP=first\n\n# comment\nexport DOTENV_DUP = second\n");
+    const auto utf8_path = [](const std::filesystem::path& path) {
+        const auto text = path.u8string();
+        return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+    };
+    auto& app = ruvia::app();
+    const auto failure = [&app, &duplicate](ruvia::dotenv_options options) {
+        try {
+            app.load_dotenv(duplicate, options);
+        } catch (const std::invalid_argument& error) {
+            return std::string(error.what());
+        }
+        return std::string{};
+    };
+    const auto expected = "invalid dotenv entry in " + utf8_path(duplicate) + ":5: duplicate variable name";
+    const auto& env = app.env();
+
+    // The whole file is rejected before any entry is applied, whichever policy
+    // governs names that come from other sources.
+    RUVIA_CHECK_EQ(failure({}), expected);
+    RUVIA_CHECK(!env.get("DOTENV_DUP").has_value());
+    RUVIA_CHECK(!env.get("DOTENV_DUP_OTHER").has_value());
+
+    app.load_dotenv(earlier);
+    RUVIA_CHECK_EQ(
+        failure({.existing_variables_ = ruvia::dotenv_existing_variable_policy::override}), expected);
+    RUVIA_CHECK_EQ(env.get("DOTENV_DUP").value_or(""), std::string_view("earlier"));
+    RUVIA_CHECK(!env.get("DOTENV_DUP_OTHER").has_value());
+
+    std::filesystem::remove(earlier);
+    std::filesystem::remove(duplicate);
+}
+
 RUVIA_TEST(dotenv_errors_name_non_ascii_paths_in_utf8) {
     const auto directory = std::filesystem::temp_directory_path() /
                            std::filesystem::path(u8"ruvia-dotenv-\u914d\u7f6e-\u0442\u0435\u0441\u0442-\U0001F4C1");

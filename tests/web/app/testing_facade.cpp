@@ -529,15 +529,15 @@ private:
     }
 
     ruvia::task<ruvia::http_response> sub_file(ruvia::context& c) {
-        co_return c.file({.path_ = testing_facade_file_path()});
+        co_return co_await c.file({.path_ = testing_facade_file_path()});
     }
 
     ruvia::task<ruvia::http_response> sub_static(ruvia::context& c) {
-        co_return c.static_file(*testing_facade_static_root(), {.relative_path_ = "asset.txt"});
+        co_return co_await c.static_file(*testing_facade_static_root(), {.relative_path_ = "asset.txt"});
     }
 
     ruvia::task<ruvia::http_response> sub_static_named(ruvia::context& c) {
-        co_return c.static_file(
+        co_return co_await c.static_file(
             *testing_facade_static_root(), {.relative_path_ = c.req().param("name").value_or("")});
     }
 
@@ -1671,7 +1671,7 @@ RUVIA_TEST(testing_facade_subrequest_rejects_a_file_response_recovered_from_406)
     ruvia::test_app app;
     app.on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         if (error.status() == ruvia::http_status::not_acceptable) {
-            co_return c.file({.path_ = testing_facade_file_path()});
+            co_return co_await c.file({.path_ = testing_facade_file_path()});
         }
         c.draft().status(error.status());
         co_return c.text("err");

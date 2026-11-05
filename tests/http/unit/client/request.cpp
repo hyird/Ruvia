@@ -372,7 +372,8 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
 
     for (const std::string_view connection_options :
         {"Host", "close, content-length", "EXPECT, keep-alive", "Cache-Control", "Trailer",
-            "Authorization", "Cookie", "Range", "Transfer-Encoding", "close, transfer-encoding"}) {
+            "Authorization", "Cookie", "Range", "Transfer-Encoding", "close, transfer-encoding",
+            "Forwarded", "close, X-Forwarded-For", "x-forwarded-proto", "keep-alive, X-FORWARDED-HOST"}) {
         const ruvia::http_header_view connection("Connection", connection_options);
         http_client_request_view request;
         request.method_ = "POST";
@@ -383,10 +384,11 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
 
     const ruvia::http_header_view valid_headers[] = {
         {"Connection", "keep-alive"},
-        {"Connection", "Upgrade, TE, X-Hop"},
+        {"Connection", "Upgrade, TE, X-Hop, Proxy-Authorization"},
         {"Upgrade", "custom/1, websocket"},
         {"TE", "trailers"},
         {"X-Hop", "value"},
+        {"X-Forwarded-For", "192.0.2.1"},
     };
     http_client_request_view valid;
     valid.headers_ = valid_headers;
@@ -1077,6 +1079,7 @@ RUVIA_TEST(http1_client_forwarding_retains_security_ownership_and_singleton_rule
         ruvia::http_header_view{"Content-Encoding", ", gzip;level=9,"},
         ruvia::http_header_view{"Content-Encoding", ", bad coding,"},
         ruvia::http_header_view{"Connection", "Content-Type"},
+        ruvia::http_header_view{"Connection", "X-Forwarded-For"},
         ruvia::http_header_view{"Upgrade", ",websocket,"},
         ruvia::http_header_view{"TE", ",trailers,"}};
     for (unsigned entry = 0; entry != 4; ++entry) {

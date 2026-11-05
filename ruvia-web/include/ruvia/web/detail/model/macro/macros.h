@@ -81,10 +81,6 @@
             return fields_.template is_null<field>();                                                      \
         }                                                                                                  \
         template <::ruvia::fixed_string field>                                                             \
-        [[nodiscard]] bool is_set() const noexcept {                                                       \
-            return fields_.template is_set<field>();                                                       \
-        }                                                                                                  \
-        template <::ruvia::fixed_string field>                                                             \
         [[nodiscard]] bool has_value() const noexcept {                                                    \
             return fields_.template has_value<field>();                                                    \
         }                                                                                                  \

@@ -414,6 +414,37 @@ RUVIA_TEST(chunked_body_decoder_trailer_obs_fold_follows_the_configured_policy) 
     }
 }
 
+// A fold continues its field rather than adding one, so the field-count rule
+// counts folded fields once while the request policy still rejects them.
+RUVIA_TEST(chunked_body_decoder_counts_each_folded_trailer_as_one_field) {
+    const auto wire_with = [](std::size_t fields) {
+        std::string wire = "0\r\n";
+        for (std::size_t field = 0; field < fields; ++field) {
+            wire.append("X: a\r\n b\r\n");
+        }
+        wire.append("\r\n");
+        return wire;
+    };
+    const auto at_limit = wire_with(ruvia::max_http_header_fields);
+    http1_chunked_body_decoder response({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
+    const auto accepted = response.decode(at_limit);
+    RUVIA_CHECK(accepted.complete() != nullptr);
+    if (const auto* complete = accepted.complete()) {
+        RUVIA_CHECK_EQ(complete->consumed_bytes(), at_limit.size());
+    }
+    http1_chunked_body_decoder request;
+    const auto folded_request = request.decode(at_limit);
+    RUVIA_CHECK(folded_request.failure() != nullptr);
+
+    const auto over_limit = wire_with(ruvia::max_http_header_fields + 1);
+    http1_chunked_body_decoder over({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
+    const auto rejected = over.decode(over_limit);
+    RUVIA_CHECK(rejected.failure() != nullptr);
+    if (const auto* failure = rejected.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+    }
+}
+
 RUVIA_TEST(chunked_body_decoder_validates_config_quota_and_neutral_errors) {
     http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::unlimited()});
     constexpr std::string_view wire = "3\r\nabc\r\n0\r\n\r\n";

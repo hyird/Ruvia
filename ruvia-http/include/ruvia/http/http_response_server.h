@@ -48,7 +48,9 @@ private:
 // An explicit Date is preserved without consulting the clock; otherwise a
 // cached current Date is generated when a usable clock is available. A head
 // that breaks a message rule or the head size bound throws
-// http1_response_head_error.
+// http1_response_head_error. The plan owns framing: an application
+// Transfer-Encoding is accepted only as exactly `chunked` (OWS and ASCII case
+// aside) and is replaced by the plan's framing; any other value throws.
 void append_http1_response_head(
     const http_response& response, http_response_head_buffer& head,
     const http1_response_head_plan& plan);
@@ -78,7 +80,8 @@ http_response_trailer_section validate_http_response_trailers(headers_type&&) = 
 template <typename visitor_type>
 [[nodiscard]] inline bool visit_http_response_trailers(std::string_view block, visitor_type&& visitor) {
     auto budget = http_trailer_section_budget();
-    return detail::visit_http1_trailer_block(block, detail::is_forbidden_response_trailer_name, budget,
-               std::forward<visitor_type>(visitor)) == detail::http_trailer_block_status::ok;
+    return detail::visit_http1_trailer_block(block, http1_trailer_obs_fold::reject,
+               detail::is_forbidden_response_trailer_name, budget, std::forward<visitor_type>(visitor)) ==
+           detail::http_trailer_block_status::ok;
 }
 }  // namespace ruvia

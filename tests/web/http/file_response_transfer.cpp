@@ -82,17 +82,17 @@ class file_transfer_routes final {
 
     ruvia::task<ruvia::http_response> small(ruvia::context& c) {
         static const fs::path path = transfer_dir() / "small.bin";
-        co_return c.file({.path_ = path});
+        co_return co_await c.file({.path_ = path});
     }
 
     ruvia::task<ruvia::http_response> medium(ruvia::context& c) {
         static const fs::path path = transfer_dir() / "medium.bin";
-        co_return c.file({.path_ = path});
+        co_return co_await c.file({.path_ = path});
     }
 
     ruvia::task<ruvia::http_response> large(ruvia::context& c) {
         static const fs::path path = transfer_dir() / "large.bin";
-        co_return c.file({.path_ = path});
+        co_return co_await c.file({.path_ = path});
     }
 
     ruvia::task<ruvia::http_response> text(ruvia::context& c) {
@@ -100,16 +100,16 @@ class file_transfer_routes final {
     }
 
     ruvia::task<ruvia::http_response> indexed_small(ruvia::context& c) {
-        co_return c.static_file(*indexed_root, {.relative_path_ = "small.bin"});
+        co_return co_await c.static_file(*indexed_root, {.relative_path_ = "small.bin"});
     }
 
     ruvia::task<ruvia::http_response> indexed_large(ruvia::context& c) {
-        co_return c.static_file(*indexed_root, {.relative_path_ = "large.bin"});
+        co_return co_await c.static_file(*indexed_root, {.relative_path_ = "large.bin"});
     }
 
     ruvia::task<ruvia::http_response> held(ruvia::context& c) {
         const auto path = transfer_dir() / std::string(c.req().param("name").value_or(""));
-        auto response = c.file({.path_ = path});
+        auto response = co_await c.file({.path_ = path});
         held_response_framed.release();
         for (int wait = 0; wait < 1000 && !rewritten.load(); ++wait) {
             (void)co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(5));

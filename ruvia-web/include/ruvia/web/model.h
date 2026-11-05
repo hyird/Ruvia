@@ -1161,6 +1161,55 @@ template <typename left_type, typename right_type>
 
 namespace ruvia {
 
+// Outcome of looking up one name in a collection that permits repeated names
+// (JSON object members, SQL result columns). A repeated name never resolves
+// to one of its occurrences.
+enum class unique_lookup_status : unsigned char { absent,
+    found,
+    repeated };
+
+// Result of json_object::get<T>(name) / json_value::get<T>(name). value() is
+// engaged only when status() is found and the member converts to (and, for a
+// model type, validates as) t_type; found with an empty value means the member
+// exists but is not a t_type. The value may borrow the queried token's bytes and
+// must not outlive that token. An rvalue lookup yields its value by move, so no
+// reference into a temporary lookup is handed out.
+template <typename t_type>
+class json_field_lookup final {
+public:
+    [[nodiscard]] unique_lookup_status status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] std::optional<t_type>& value() & noexcept {
+        return value_;
+    }
+
+    [[nodiscard]] const std::optional<t_type>& value() const& noexcept {
+        return value_;
+    }
+
+    [[nodiscard]] std::optional<t_type> value() && noexcept(std::is_nothrow_move_constructible_v<t_type>) {
+        return std::move(value_);
+    }
+
+    std::optional<t_type> value() const&& = delete;
+
+private:
+    friend class json_object;
+    friend class json_value;
+
+    explicit json_field_lookup(unique_lookup_status status) noexcept
+        : status_(status) {}
+
+    explicit json_field_lookup(std::optional<t_type>&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>)
+        : status_(unique_lookup_status::found),
+          value_(std::move(value)) {}
+
+    unique_lookup_status status_;
+    std::optional<t_type> value_;
+};
+
 // json_value and json_object borrow their complete input body by default. An
 // owning string passed to parse() must therefore outlive the parsed view;
 // basic_string rvalues are rejected before a dangling view can be created.
@@ -1285,12 +1334,14 @@ public:
         requires detail::is_model_field<t_type>
     std::optional<t_type> get() const&& = delete;
 
+    // Same contract as json_object::get(field); a non-object token has no
+    // members, so every name is absent.
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    [[nodiscard]] std::optional<t_type> get(std::string_view field) const&;
+    [[nodiscard]] json_field_lookup<t_type> get(std::string_view field) const&;
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    std::optional<t_type> get(std::string_view field) const&& = delete;
+    json_field_lookup<t_type> get(std::string_view field) const&& = delete;
 
     // The callback receives a json_value borrowing this object's token; it is
     // valid only for the duration of the callback.
@@ -1406,14 +1457,17 @@ public:
         return view() == other.view();
     }
 
-    // The result may borrow this token's bytes, so rvalue tokens are rejected
-    // rather than left to dangle.
+    // Looks up the one member whose decoded name equals `field`: absent when
+    // no member has it, repeated when two or more do (no occurrence is chosen,
+    // and the scan stops at the second), otherwise found with the converted
+    // value. The value may borrow this token's bytes, so rvalue tokens are
+    // rejected rather than left to dangle.
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    [[nodiscard]] std::optional<t_type> get(std::string_view field) const&;
+    [[nodiscard]] json_field_lookup<t_type> get(std::string_view field) const&;
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    std::optional<t_type> get(std::string_view field) const&& = delete;
+    json_field_lookup<t_type> get(std::string_view field) const&& = delete;
 
 private:
     friend class json_value;

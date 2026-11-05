@@ -86,12 +86,6 @@ public:
     }
 
     template <fixed_string field>
-    [[nodiscard]] bool is_set() const noexcept {
-        constexpr auto index = model_field_index<field, descriptor_types...>();
-        return std::get<index>(fields_).is_set();
-    }
-
-    template <fixed_string field>
     [[nodiscard]] bool has_value() const noexcept {
         constexpr auto index = model_field_index<field, descriptor_types...>();
         return std::get<index>(fields_).has_value();

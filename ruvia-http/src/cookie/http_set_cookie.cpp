@@ -216,13 +216,7 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
                     if (http_ascii_equals_ignore_case(attribute, "Path")) {
                         // RFC 6265 section 5.2.4: a value that is empty or does not start
                         // with '/' selects the default-path; the last Path attribute wins.
-                        if (argument.empty() || argument.front() != '/') {
-                            result.path_ = {};
-                            result.clear(http_set_cookie_attribute::path);
-                        } else {
-                            result.path_ = argument;
-                            result.set(http_set_cookie_attribute::path);
-                        }
+                        result.path_ = argument.empty() || argument.front() != '/' ? std::string_view{} : argument;
                     }
                     break;
                 case 6U:
@@ -252,16 +246,12 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
                     if (http_ascii_equals_ignore_case(attribute, "SameSite")) {
                         if (http_ascii_equals_ignore_case(argument, "Strict")) {
                             result.same_site_ = cookie_same_site::strict;
-                            result.clear(http_set_cookie_attribute::same_site_none);
                         } else if (http_ascii_equals_ignore_case(argument, "Lax")) {
                             result.same_site_ = cookie_same_site::lax;
-                            result.clear(http_set_cookie_attribute::same_site_none);
                         } else if (http_ascii_equals_ignore_case(argument, "None")) {
                             result.same_site_ = cookie_same_site::none;
-                            result.set(http_set_cookie_attribute::same_site_none);
                         } else {
                             result.same_site_.reset();
-                            result.clear(http_set_cookie_attribute::same_site_none);
                         }
                     } else if (http_ascii_equals_ignore_case(attribute, "HttpOnly")) {
                         result.set(http_set_cookie_attribute::http_only);

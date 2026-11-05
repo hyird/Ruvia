@@ -57,5 +57,7 @@ void parse_redis_pong(redis_value&& value, std::pmr::memory_resource* resource);
 [[nodiscard]] redis_ttl parse_redis_ttl(redis_value&& value, bool seconds_precision);
 // A pushed reply of a subscribed connection. Views borrow `value`.
 [[nodiscard]] redis_pubsub_event parse_redis_pubsub_event(const redis_value& value);
+// The reply to an argument-less PING on a subscription connection.
+[[nodiscard]] bool is_redis_subscription_pong(const redis_value& value);
 
 }  // namespace ruvia::detail
