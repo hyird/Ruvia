@@ -4,11 +4,22 @@
 #include <memory_resource>
 #include <new>
 
+#include "stl_allocation_fixture.h"
+
 class failing_memory_resource final : public std::pmr::memory_resource {
 public:
+    // 裸分配或已确认可抛出的存储增长可直接注入；包含 STL 构造/移动的
+    // 整段操作使用 fail_after_stl_operation，不能猜测首个分配是安全的。
     void fail_after(std::size_t successful_allocations) noexcept {
         armed_ = true;
         successful_allocations_ = successful_allocations;
+    }
+
+    void fail_after_stl_operation(std::size_t successful_allocations,
+        ruvia::testing::test_context& context) noexcept {
+        if (ruvia::test::stl_allocation_failure_injection_enabled(context)) {
+            fail_after(successful_allocations);
+        }
     }
 
     void allow_allocations() noexcept {

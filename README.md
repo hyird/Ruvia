@@ -52,6 +52,27 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\examples\Release\ruvia_example_basic_http.exe
 ```
 
+Windows 测试需配对运行 Debug 与 Release：Debug 保留默认 STL 迭代器诊断，
+Release 执行完整分配失败扫描。MSVC 调试 STL 会在空容器构造及移动的
+`noexcept` 路径分配迭代器代理；测试不能按分配大小或序号猜测并跳过代理，
+也不能向这些路径注入 `bad_alloc`。此类扫描在 Debug 仍执行成功路径、值语义、
+所有权及回收检查，但不注入失败，并单独报告 `[PARTIAL]`（汇总不计为 passed）；
+真实可捕获的裸分配及已构造容器增长失败仍执行。Release 从首个失败位置逐点
+扫描至成功，并检查回滚、重试与回收；只有 Debug 与 Release 配对结果才能声称
+覆盖这两类契约。`[PARTIAL]` 本身不使进程返回失败，失败检查仍优先报告 `[FAIL]`。
+
+```powershell
+cmake --build build --config Debug "-j$([Environment]::ProcessorCount)"
+ctest --test-dir build -C Debug -V
+cmake --build build --config Release "-j$([Environment]::ProcessorCount)"
+ctest --test-dir build -C Release --output-on-failure
+```
+
+上述命令适用于默认多配置生成器。单配置生成器需使用各自独立的 Debug/Release
+构建目录。无需额外建立关闭迭代器诊断的 Debug 测试目标；若另行选择
+`_ITERATOR_DEBUG_LEVEL=0`，必须让应用、Ruvia 库、测试及所有跨 STL ABI 边界的
+依赖保持一致，不能只给测试翻译单元添加定义。不得为测试全局关闭 Debug STL。
+
 示例服务监听 `http://127.0.0.1:8080/api/hello`，按 Ctrl+C 停止。
 
 最小 HTTP 服务片段（完整可运行示例见 [examples/web/basic_http.cpp](examples/web/basic_http.cpp)）：

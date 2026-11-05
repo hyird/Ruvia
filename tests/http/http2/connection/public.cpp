@@ -50,8 +50,7 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        // Tiny STL debug proxies may allocate in noexcept constructors.
-        if (bytes_value >= 32 && failure_points_++ == fail_at_) {
+        if (failure_points_++ == fail_at_) {
             throw std::bad_alloc();
         }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
@@ -75,9 +74,6 @@ public:
     void reject(bool value = true) noexcept {
         reject_ = value;
     }
-    void reject_at_least(std::size_t bytes) noexcept {
-        reject_at_least_ = bytes;
-    }
     void reject_after_output(const ruvia::http2_connection* connection) noexcept {
         reject_after_output_ = connection;
     }
@@ -91,8 +87,7 @@ public:
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         ++allocation_attempts_;
-        if (reject_ || (reject_at_least_ != 0 && bytes_value >= reject_at_least_) ||
-            (bytes_value >= 32 && reject_after_output_ != nullptr && reject_after_output_->wants_write())) {
+        if (reject_ || (reject_after_output_ != nullptr && reject_after_output_->wants_write())) {
             throw std::bad_alloc();
         }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
@@ -107,7 +102,6 @@ private:
         return this == &other;
     }
     bool reject_{false};
-    std::size_t reject_at_least_{};
     const ruvia::http2_connection* reject_after_output_{};
     std::size_t allocation_attempts_{};
     std::size_t live_allocations_{};
@@ -359,6 +353,10 @@ RUVIA_TEST(http2_public_construction_propagates_allocation_failure) {
                                   : ruvia::http2_connection::server({.resource_ = &baseline});
             RUVIA_CHECK(connection.wants_write());
         }
+        RUVIA_CHECK_EQ(baseline.live_allocations(), std::size_t{0});
+        if (!ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+            continue;
+        }
         for (std::size_t fail_at = 0; fail_at < baseline.failure_points(); ++fail_at) {
             accounting_allocation_resource resource(fail_at);
             bool threw = false;
@@ -370,6 +368,7 @@ RUVIA_TEST(http2_public_construction_propagates_allocation_failure) {
                 threw = true;
             }
             RUVIA_CHECK(threw);
+            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
         }
     }
 }
@@ -822,27 +821,28 @@ RUVIA_TEST(http2_public_buffered_response_allocation_failure_preserves_submissio
             RUVIA_CHECK(std::holds_alternative<ruvia::http_buffered_response_write_plan>(plan));
             auto head_output = ruvia::testing::drain_output(server);
             RUVIA_CHECK(!head_output.empty());
-            resource.reject_at_least(32);
-            bool threw = false;
-            try {
-                const auto blocked = server.submit_data(1, response.body_bytes(), ruvia::http2_end_stream::end_stream, payload.size());
-                RUVIA_CHECK(blocked.status_ == ruvia::http2_data_submit_status::backpressured);
-                RUVIA_CHECK_EQ(blocked.consumed_bytes_, std::size_t{0});
-            } catch (const std::bad_alloc&) {
-                threw = true;
+            if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+                resource.reject();
+                bool threw = false;
+                try {
+                    const auto blocked = server.submit_data(1, response.body_bytes(), ruvia::http2_end_stream::end_stream, payload.size());
+                    RUVIA_CHECK(blocked.status_ == ruvia::http2_data_submit_status::backpressured);
+                    RUVIA_CHECK_EQ(blocked.consumed_bytes_, std::size_t{0});
+                } catch (const std::bad_alloc&) {
+                    threw = true;
+                }
+                resource.reject(false);
+                RUVIA_CHECK(threw == (initial_window != 0));
+                RUVIA_CHECK(!server.wants_write());
+                RUVIA_CHECK_EQ(server.pending_data_output_bytes(1), std::size_t{0});
+                const auto after = server.send_window_state(1);
+                RUVIA_CHECK(after.has_value());
+                if (before && after) {
+                    RUVIA_CHECK_EQ(after->connection_window_, before->connection_window_);
+                    RUVIA_CHECK_EQ(after->stream_window_, before->stream_window_);
+                    RUVIA_CHECK_EQ(after->available_, before->available_);
+                }
             }
-            RUVIA_CHECK(threw == (initial_window != 0));
-            RUVIA_CHECK(!server.wants_write());
-            RUVIA_CHECK_EQ(server.pending_data_output_bytes(1), std::size_t{0});
-            const auto after = server.send_window_state(1);
-            RUVIA_CHECK(after.has_value());
-            if (before && after) {
-                RUVIA_CHECK_EQ(after->connection_window_, before->connection_window_);
-                RUVIA_CHECK_EQ(after->stream_window_, before->stream_window_);
-                RUVIA_CHECK_EQ(after->available_, before->available_);
-            }
-
-            resource.reject_at_least(0);
             const auto retried = server.submit_data(1, response.body_bytes(), ruvia::http2_end_stream::end_stream, payload.size());
             RUVIA_CHECK(retried.status_ == ruvia::http2_data_submit_status::backpressured);
             RUVIA_CHECK_EQ(retried.consumed_bytes_, static_cast<std::size_t>(initial_window));
@@ -1119,8 +1119,10 @@ RUVIA_TEST(http2_public_response_submission_retries_each_allocation) {
         };
         const auto allocation_count = exercise(std::nullopt);
         RUVIA_CHECK(allocation_count != 0);
-        for (std::size_t failure_point = 0; failure_point < allocation_count; ++failure_point) {
-            (void)exercise(failure_point);
+        if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+            for (std::size_t failure_point = 0; failure_point < allocation_count; ++failure_point) {
+                (void)exercise(failure_point);
+            }
         }
     }
 }
@@ -1274,7 +1276,9 @@ RUVIA_TEST(http2_public_retried_data_and_trailers_keep_hpack_state_across_window
             RUVIA_CHECK(server.feed(window_update) == ruvia::http2_feed_result::accepted);
             RUVIA_CHECK(!server.next_event());
             RUVIA_CHECK(!server.wants_write());
-            resource.reject_after_output(&server);
+            if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+                resource.reject_after_output(&server);
+            }
             const auto submitted = server.submit_data(1, "z", ruvia::http2_end_stream::keep_open, 1);
             resource.reject_after_output(nullptr);
             RUVIA_CHECK(submitted.status_ == ruvia::http2_data_submit_status::complete);
@@ -4693,9 +4697,7 @@ RUVIA_TEST(http2_public_retried_data_preserves_stream_order_and_windows_on_alloc
         collect();
         RUVIA_CHECK(frame_order.empty());
         std::array<std::size_t, 3> consumed{};
-        if (ruvia::test::should_inject_stl_allocation_failure(failure_index)) {
-            resource.fail_after(failure_index);
-        }
+        resource.fail_after_stl_operation(failure_index, ruvia_ctx);
         bool failed = false;
         try {
             const auto result = client.submit_data(1, bodies[0], ruvia::http2_end_stream::end_stream, 4096);
@@ -4755,7 +4757,9 @@ RUVIA_TEST(http2_public_retried_data_preserves_stream_order_and_windows_on_alloc
         }
     }
     RUVIA_CHECK(completed);
-    RUVIA_CHECK(saw_allocation_failure);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK(saw_allocation_failure);
+    }
 }
 
 RUVIA_TEST(http2_output_observer_can_submit_new_data_without_losing_it) {
@@ -4887,14 +4891,15 @@ RUVIA_TEST(http2_public_full_output_batch_transfers_storage_and_accounts_data) {
         data_output_observations observed;
         ruvia::http2_output_batch_result batch;
         bool threw = false;
-        // Permit tiny STL debug proxies, but not another payload-sized buffer.
-        resource.reject_at_least(32);
+        if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+            resource.reject();
+        }
         try {
             batch = client.take_output_batch(16384, output, &data_output_observations::observe, &observed);
         } catch (const std::bad_alloc&) {
             threw = true;
         }
-        resource.reject_at_least(0);
+        resource.reject(false);
         RUVIA_CHECK(!threw);
         if (threw) {
             return;

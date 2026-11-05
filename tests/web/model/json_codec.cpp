@@ -104,23 +104,12 @@ public:
         return allocations_.deallocation_count();
     }
 
-    [[nodiscard]] std::size_t payload_allocations() const noexcept {
-        return payload_allocations_;
-    }
-
 private:
-    // See binary_failing_resource: MSVC debug proxy nodes must not be the
-    // failure point. Payload buffers used below are larger than this cutoff.
-    static constexpr std::size_t min_payload_bytes = 64;
-
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (bytes_value >= min_payload_bytes) {
-            if (remaining_ == 0) {
-                throw std::bad_alloc();
-            }
-            --remaining_;
-            ++payload_allocations_;
+        if (remaining_ == 0) {
+            throw std::bad_alloc();
         }
+        --remaining_;
         return allocations_.allocate(bytes_value, alignment);
     }
 
@@ -133,7 +122,6 @@ private:
     }
 
     std::size_t remaining_;
-    std::size_t payload_allocations_{0};
     ruvia::test::counting_memory_resource allocations_;
 };
 
@@ -219,20 +207,22 @@ RUVIA_TEST(model_json_codec_root_array_failure_cleans_partial_elements) {
     auto successful = ruvia::from_json<ruvia::array<ruvia::string>>(input,
         {.resource_ = &successful_resource});
     RUVIA_CHECK_EQ(successful.size(), std::size_t{3});
-    const auto allocations = successful_resource.payload_allocations();
+    const auto allocations = successful_resource.allocation_count();
     RUVIA_CHECK(allocations > 1);
-    for (std::size_t failure = 1; failure <= allocations; ++failure) {
-        failing_resource resource(failure - 1);
-        bool threw = false;
-        try {
-            (void)ruvia::from_json<ruvia::array<ruvia::string>>(input, {.resource_ = &resource});
-        } catch (const std::bad_alloc&) {
-            threw = true;
+    if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+        for (std::size_t failure = 1; failure <= allocations; ++failure) {
+            failing_resource resource(failure - 1);
+            bool threw = false;
+            try {
+                (void)ruvia::from_json<ruvia::array<ruvia::string>>(input, {.resource_ = &resource});
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            RUVIA_CHECK(threw);
+            RUVIA_CHECK_EQ(resource.allocation_count(), failure - 1);
+            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
         }
-        RUVIA_CHECK(threw);
-        RUVIA_CHECK_EQ(resource.payload_allocations(), failure - 1);
-        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
     }
 }
 
@@ -471,39 +461,56 @@ RUVIA_TEST(model_json_codec_releases_allocations_when_parse_or_serialize_fails) 
     failing_resource successful_resource((std::numeric_limits<std::size_t>::max)());
     auto successful = ruvia::from_json<codec_envelope>(input, {.resource_ = &successful_resource});
     RUVIA_CHECK_EQ(successful.get<"array">().size(), std::size_t{1});
-    const auto successful_allocations = successful_resource.payload_allocations();
+    const auto successful_allocations = successful_resource.allocation_count();
     RUVIA_CHECK(successful_allocations > 1);
-    bool saw_partial_construction_failure = false;
-    for (std::size_t failure = 1; failure <= successful_allocations; ++failure) {
-        failing_resource resource(failure - 1);
-        bool failed = false;
-        try {
-            (void)ruvia::from_json<codec_envelope>(input, {.resource_ = &resource});
-        } catch (const std::bad_alloc&) {
-            failed = true;
+    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
+    if (inject) {
+        bool saw_partial_construction_failure = false;
+        for (std::size_t failure = 1; failure <= successful_allocations; ++failure) {
+            failing_resource resource(failure - 1);
+            bool failed = false;
+            try {
+                (void)ruvia::from_json<codec_envelope>(input, {.resource_ = &resource});
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            RUVIA_CHECK(failed);
+            RUVIA_CHECK_EQ(resource.allocation_count(), failure - 1);
+            saw_partial_construction_failure =
+                saw_partial_construction_failure || resource.allocation_count() > 0;
+            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
         }
-        RUVIA_CHECK(failed);
-        RUVIA_CHECK_EQ(resource.payload_allocations(), failure - 1);
-        saw_partial_construction_failure =
-            saw_partial_construction_failure || resource.payload_allocations() > 0;
-        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
+        RUVIA_CHECK(saw_partial_construction_failure);
     }
-    RUVIA_CHECK(saw_partial_construction_failure);
 
     const std::string kept(80, 'k');
     auto model = ruvia::from_json<codec_dynamic>(
         "{\"value\":{\"kept\":\"" + kept + "\"},\"object\":{}}");
     const auto before = std::string(ruvia::to_json(model));
-    failing_resource output_resource(0);
-    bool serialize_failed = false;
-    try {
-        (void)ruvia::to_json(model, {.resource_ = &output_resource});
-    } catch (const std::bad_alloc&) {
-        serialize_failed = true;
+    failing_resource successful_output((std::numeric_limits<std::size_t>::max)());
+    {
+        const auto output = ruvia::to_json(model, {.resource_ = &successful_output});
+        RUVIA_CHECK_EQ(std::string_view(output), before);
     }
-    RUVIA_CHECK(serialize_failed);
-    RUVIA_CHECK_EQ(output_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(successful_output.live_allocations(), std::size_t{0});
+    const auto output_allocations = successful_output.allocation_count();
+    RUVIA_CHECK(output_allocations > 0);
+    if (inject) {
+        for (std::size_t failure = 0; failure < output_allocations; ++failure) {
+            failing_resource output_resource(failure);
+            bool serialize_failed = false;
+            try {
+                (void)ruvia::to_json(model, {.resource_ = &output_resource});
+            } catch (const std::bad_alloc&) {
+                serialize_failed = true;
+            }
+            RUVIA_CHECK(serialize_failed);
+            RUVIA_CHECK_EQ(output_resource.allocation_count(), failure);
+            RUVIA_CHECK_EQ(output_resource.live_allocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(output_resource.allocation_count(), output_resource.deallocation_count());
+        }
+    }
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(model)), before);
 }
 

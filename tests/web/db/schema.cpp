@@ -734,6 +734,8 @@ RUVIA_TEST(db_schema_timescale_options_cover_direct_settings_and_rejections) {
     RUVIA_CHECK(throws_on([&] { maria.remove_retention_policy("t"); }));
 }
 
+// 这两个操作只追加已存在的正文/控制栈，不构造或移动 PMR 容器；
+// Debug 也逐点注入可捕获的存储增长失败。
 RUVIA_TEST(db_procedure_begin_block_failure_preserves_control_state_and_allows_retry) {
     db_procedure expected;
     expected.begin_block();

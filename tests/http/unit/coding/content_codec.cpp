@@ -11,6 +11,7 @@
 #include "ruvia/http/http_content_encoder.h"
 
 #include "content_decoding_fixture.h"
+#include "failing_memory_resource.h"
 #include "stl_allocation_fixture.h"
 
 using ruvia::http_content_encoder;
@@ -41,9 +42,7 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        // Debug iterator proxies may be allocated inside noexcept STL code;
-        // exercise codec state and payload allocation failures instead.
-        if (bytes_value >= 32 && ++allocation_attempts_ == fail_at_) {
+        if (++allocation_attempts_ == fail_at_) {
             throw codec_test_allocation_error();
         }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
@@ -639,23 +638,25 @@ RUVIA_TEST(http_content_whole_buffer_results_keep_their_memory_resource_and_rele
         RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
     }
 
-    bool encode_allocation_threw = false;
-    try {
-        (void)encode_http_content(http_content_coding::identity, plain,
-            {.max_encoded_bytes_ = plain.size(), .resource_ = std::pmr::null_memory_resource()});
-    } catch (const std::bad_alloc&) {
-        encode_allocation_threw = true;
-    }
-    RUVIA_CHECK(encode_allocation_threw);
+    if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+        bool encode_allocation_threw = false;
+        try {
+            (void)encode_http_content(http_content_coding::identity, plain,
+                {.max_encoded_bytes_ = plain.size(), .resource_ = std::pmr::null_memory_resource()});
+        } catch (const std::bad_alloc&) {
+            encode_allocation_threw = true;
+        }
+        RUVIA_CHECK(encode_allocation_threw);
 
-    bool decode_allocation_threw = false;
-    try {
-        (void)decode_http_content(std::array{http_content_coding::identity}, plain,
-            {.max_decoded_bytes_ = plain.size(), .resource_ = std::pmr::null_memory_resource()});
-    } catch (const std::bad_alloc&) {
-        decode_allocation_threw = true;
+        bool decode_allocation_threw = false;
+        try {
+            (void)decode_http_content(std::array{http_content_coding::identity}, plain,
+                {.max_decoded_bytes_ = plain.size(), .resource_ = std::pmr::null_memory_resource()});
+        } catch (const std::bad_alloc&) {
+            decode_allocation_threw = true;
+        }
+        RUVIA_CHECK(decode_allocation_threw);
     }
-    RUVIA_CHECK(decode_allocation_threw);
 }
 
 RUVIA_TEST(http_content_codecs_rethrow_allocator_exceptions_and_release_partial_state) {
@@ -667,29 +668,42 @@ RUVIA_TEST(http_content_codecs_rethrow_allocator_exceptions_and_release_partial_
         {http_content_coding::brotli, brotli_compress({})},
         {http_content_coding::zstd, zstd_compress({})},
     };
+    const bool inject_failures = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
 
     for (const auto& test : cases) {
         for (const bool decode : {false, true}) {
-            bool observed_allocation_exception = false;
-            for (std::size_t fail_at = 1; fail_at <= 16; ++fail_at) {
-                throwing_memory_resource resource(fail_at);
-                try {
-                    if (decode) {
-                        auto result_value = decode_http_content(std::array{test.coding_}, test.encoded_,
-                            {.max_decoded_bytes_ = 0, .resource_ = &resource});
-                        RUVIA_CHECK(std::holds_alternative<std::pmr::string>(result_value));
-                    } else {
-                        auto result_value = encode_http_content(test.coding_, {},
-                            {.max_encoded_bytes_ = 1024, .resource_ = &resource});
-                        RUVIA_CHECK(result_value.has_value());
-                    }
-                } catch (const codec_test_allocation_error&) {
-                    observed_allocation_exception = true;
+            const auto run = [&](throwing_memory_resource& resource) {
+                if (decode) {
+                    auto result_value = decode_http_content(std::array{test.coding_}, test.encoded_,
+                        {.max_decoded_bytes_ = 0, .resource_ = &resource});
+                    RUVIA_CHECK(std::holds_alternative<std::pmr::string>(result_value));
+                } else {
+                    auto result_value = encode_http_content(test.coding_, {},
+                        {.max_encoded_bytes_ = 1024, .resource_ = &resource});
+                    RUVIA_CHECK(result_value.has_value());
                 }
-                RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
-                RUVIA_CHECK_EQ(resource.releases(), resource.allocations());
+            };
+            throwing_memory_resource baseline(0);
+            run(baseline);
+            RUVIA_CHECK_EQ(baseline.live_bytes(), std::size_t{0});
+            RUVIA_CHECK_EQ(baseline.releases(), baseline.allocations());
+            if (inject_failures) {
+                bool observed_allocation_exception = false;
+                for (std::size_t fail_at = 1; fail_at <= baseline.allocations(); ++fail_at) {
+                    throwing_memory_resource resource(fail_at);
+                    bool failed = false;
+                    try {
+                        run(resource);
+                    } catch (const codec_test_allocation_error&) {
+                        failed = true;
+                        observed_allocation_exception = true;
+                    }
+                    RUVIA_CHECK(failed);
+                    RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+                    RUVIA_CHECK_EQ(resource.releases(), resource.allocations());
+                }
+                RUVIA_CHECK(observed_allocation_exception);
             }
-            RUVIA_CHECK(observed_allocation_exception);
         }
     }
 }
@@ -762,22 +776,20 @@ RUVIA_TEST(http_content_encoder_rejects_writes_after_finish) {
     }
 }
 
-#if !defined(_MSC_VER)
-// MSVC's debug pmr::string does not complete a growth operation when
-// null_memory_resource throws. The same standard-library limitation is
-// already accounted for by the response-head spill probe; keep this exact
-// output-allocation failure contract on the other standard libraries.
 RUVIA_TEST(http_content_encoder_failure_is_terminal) {
     http_content_encoder encoder(http_content_coding::identity, std::pmr::get_default_resource());
-    std::pmr::string output(std::pmr::null_memory_resource());
+    failing_memory_resource resource;
+    std::pmr::string output(&resource);
     const std::string input(128, 'f');
     bool allocation_failed = false;
+    resource.fail_after(0);
     try {
         encoder.write(input, output);
     } catch (const std::bad_alloc&) {
         allocation_failed = true;
     }
     RUVIA_CHECK(allocation_failed);
+    resource.allow_allocations();
     RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.finish(output); }));
     RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.write("retry", output); }));
 }
@@ -786,10 +798,12 @@ RUVIA_TEST(http_content_encoder_brotli_reset_recovers_after_output_allocation_fa
     const std::string input(4096, 'b');
     for (const bool fail_on_finish : {false, true}) {
         http_content_encoder encoder(http_content_coding::brotli, std::pmr::get_default_resource());
-        std::pmr::string output(std::pmr::null_memory_resource());
+        failing_memory_resource resource;
+        std::pmr::string output(&resource);
         // Fill inline storage so even a one-byte final block must allocate.
         output.resize(output.capacity(), 'p');
         bool allocation_failed = false;
+        resource.fail_after(0);
         try {
             if (fail_on_finish) {
                 std::pmr::string pending;
@@ -802,6 +816,7 @@ RUVIA_TEST(http_content_encoder_brotli_reset_recovers_after_output_allocation_fa
             allocation_failed = true;
         }
         RUVIA_CHECK(allocation_failed);
+        resource.allow_allocations();
         std::pmr::string recovered;
         RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.write("retry", recovered); }));
         RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.finish(recovered); }));
@@ -812,7 +827,6 @@ RUVIA_TEST(http_content_encoder_brotli_reset_recovers_after_output_allocation_fa
         RUVIA_CHECK_EQ(decoded(http_content_coding::brotli, recovered, input.size()), input);
     }
 }
-#endif  // !_MSC_VER
 
 RUVIA_TEST(http_content_encoder_flushes_each_incremental_chunk) {
     const std::string input(4096, 's');
@@ -885,6 +899,8 @@ RUVIA_TEST(http_content_encoder_rethrows_codec_allocations_and_reclaims_partial_
     const std::string input(4096, 'x');
     // Brotli's default encoder build exits on internal OOM instead of returning
     // through its C API. Exercise its recoverable constructor path separately.
+    // This resource owns only raw codec state. Output and its STL metadata use
+    // the default resource, and the independent input needs no aliasing copy.
     for (const auto coding : {http_content_coding::gzip, http_content_coding::deflate,
              http_content_coding::zstd}) {
         bool completed = false;
@@ -916,6 +932,8 @@ RUVIA_TEST(http_content_encoder_rethrows_codec_allocations_and_reclaims_partial_
 }
 
 RUVIA_TEST(http_content_encoder_brotli_constructor_rethrows_allocator_exception) {
+    // Both failure points are raw owner/native-state allocations, not STL
+    // container construction, so they remain injectable with debug iterators.
     for (const auto fail_at : {std::size_t{1}, std::size_t{2}}) {
         throwing_memory_resource resource(fail_at);
         bool failed = false;

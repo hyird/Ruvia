@@ -59,7 +59,7 @@ RUVIA_TEST(db_query_values_kind_changes_only_after_the_row_is_committed) {
             db_query query(&resource);
             query.select(query.value(3));
             const std::array row{query.value(4)};
-            resource.fail_after(fail_after);
+            resource.fail_after_stl_operation(fail_after, ruvia_ctx);
             try {
                 query.values(row);
                 succeeded = true;
@@ -110,7 +110,7 @@ RUVIA_TEST(db_query_batch_set_allocation_failure_preserves_executable_assignment
             const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); });
             const std::array assignments{
                 db_assignment{"balance", db_expr::value(0)}, db_assignment{name, db_expr::value(5)}};
-            resource.fail_after(fail_after);
+            resource.fail_after_stl_operation(fail_after, ruvia_ctx);
             try {
                 query.set(assignments);
                 succeeded = true;
@@ -137,7 +137,7 @@ RUVIA_TEST(db_query_named_insert_batch_is_atomic_across_column_growth) {
             const std::array<std::string_view, 1> columns{"b"};
             const std::array values{query.value(22)};
             const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); });
-            resource.fail_after(fail_after);
+            resource.fail_after_stl_operation(fail_after, ruvia_ctx);
             try {
                 query.insert_rows(columns, values, 1);
                 succeeded = true;
@@ -171,6 +171,8 @@ RUVIA_TEST(db_query_insert_target_cannot_reinterpret_rows_and_rejected_batches_p
     RUVIA_CHECK_EQ(committed.sql(), "INSERT INTO \"pairs\" (\"a\", \"b\") VALUES (11, DEFAULT), (DEFAULT, 22)");
 }
 
+// 这里只增长已构造的 size_t 容器，不经过 noexcept 空容器构造/移动；
+// 因此 MSVC Debug 也保留真实 reserve 失败及原查询不变的验证。
 RUVIA_TEST(db_query_list_replacement_keeps_previous_clauses_when_growth_fails) {
     using setter_type = db_query& (db_query::*)(std::span<const db_expression>);
     for (const auto setter : {static_cast<setter_type>(&db_query::select),
@@ -880,7 +882,7 @@ RUVIA_TEST(db_query_failed_cte_append_does_not_publish_a_write_classification) {
         {
             db_query query(&resource);
             query.select(query.value(7));
-            resource.fail_after(fail_after);
+            resource.fail_after_stl_operation(fail_after, ruvia_ctx);
             try {
                 query.with("removed", removed);
                 succeeded = true;
@@ -899,7 +901,10 @@ RUVIA_TEST(db_query_failed_cte_append_does_not_publish_a_write_classification) {
         }
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     }
-    RUVIA_CHECK(failed && succeeded);
+    RUVIA_CHECK(succeeded);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK(failed);
+    }
 }
 
 RUVIA_TEST(db_predicate_composes_typed_fields_and_literal_parameters) {

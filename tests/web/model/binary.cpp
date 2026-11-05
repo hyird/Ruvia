@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <new>
 #include <span>
@@ -22,29 +23,16 @@ RUVIA_MODEL(binary_array_model,
     RUVIA_REQUIRED_FIELD(boxed, ruvia::boxed_array<ruvia::bytes>));
 class binary_failing_resource final : public std::pmr::memory_resource {
 public:
-    // MSVC debug STL allocates small iterator-proxy nodes from the container
-    // allocator, sometimes inside a noexcept move or while a debug lock is held.
-    // Failing those allocations terminates or deadlocks instead of testing
-    // unwinding. Payload buffers in this file are larger than this cutoff.
-    static constexpr std::size_t min_payload_bytes = 64;
-
-    explicit binary_failing_resource(std::size_t allowed_payload)
-        : allowed_payload_(allowed_payload) {}
+    explicit binary_failing_resource(std::size_t remaining)
+        : remaining_(remaining) {}
     ruvia::test::counting_memory_resource allocations_;
-
-    [[nodiscard]] std::size_t payload_allocations() const noexcept {
-        return payload_allocations_;
-    }
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (bytes_value >= min_payload_bytes) {
-            if (allowed_payload_ == 0) {
-                throw std::bad_alloc();
-            }
-            --allowed_payload_;
-            ++payload_allocations_;
+        if (remaining_ == 0) {
+            throw std::bad_alloc();
         }
+        --remaining_;
         return allocations_.allocate(bytes_value, alignment);
     }
     void do_deallocate(void* value, std::size_t bytes_value, std::size_t alignment) override {
@@ -53,8 +41,7 @@ private:
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
-    std::size_t allowed_payload_;
-    std::size_t payload_allocations_{0};
+    std::size_t remaining_;
 };
 
 void check_bytes(auto& ruvia_ctx, const ruvia::bytes& actual, std::span<const std::uint8_t> expected) {
@@ -164,39 +151,56 @@ RUVIA_TEST(model_bytes_partial_parse_and_output_failures_release_storage) {
     const std::vector<std::uint8_t> second(256, 2);
     const std::string input = "[" + std::string(ruvia::to_json(ruvia::bytes(first))) + "," +
                               std::string(ruvia::to_json(ruvia::bytes(second))) + "] ";
-    binary_failing_resource reference(1024);
+    binary_failing_resource reference((std::numeric_limits<std::size_t>::max)());
     {
         auto parsed_value = ruvia::from_json<ruvia::array<ruvia::bytes>>(input, {.resource_ = &reference});
         RUVIA_CHECK_EQ(parsed_value.size(), std::size_t{2});
     }
     RUVIA_CHECK_EQ(reference.allocations_.live_allocations(), std::size_t{0});
-    const auto count = reference.payload_allocations();
+    const auto count = reference.allocations_.allocation_count();
     RUVIA_CHECK(count > 1);
     RUVIA_CHECK(count < 1024);
-    for (std::size_t failure = 0; failure < count; ++failure) {
-        binary_failing_resource memory(failure);
-        bool threw = false;
-        try {
-            (void)ruvia::from_json<ruvia::array<ruvia::bytes>>(input, {.resource_ = &memory});
-        } catch (const std::bad_alloc&) {
-            threw = true;
+    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
+    if (inject) {
+        for (std::size_t failure = 0; failure < count; ++failure) {
+            binary_failing_resource memory(failure);
+            bool threw = false;
+            try {
+                (void)ruvia::from_json<ruvia::array<ruvia::bytes>>(input, {.resource_ = &memory});
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            RUVIA_CHECK(threw);
+            RUVIA_CHECK_EQ(memory.allocations_.allocation_count(), failure);
+            RUVIA_CHECK_EQ(memory.allocations_.live_allocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(memory.allocations_.allocation_count(), memory.allocations_.deallocation_count());
         }
-        RUVIA_CHECK(threw);
-        RUVIA_CHECK_EQ(memory.payload_allocations(), failure);
-        RUVIA_CHECK_EQ(memory.allocations_.live_allocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(memory.allocations_.allocation_count(), memory.allocations_.deallocation_count());
     }
     const std::vector<std::uint8_t> octets(256, 1);
     const ruvia::bytes retained(octets);
-    binary_failing_resource output(0);
-    bool threw = false;
-    try {
-        (void)ruvia::to_json(retained, {.resource_ = &output});
-    } catch (const std::bad_alloc&) {
-        threw = true;
+    binary_failing_resource successful_output((std::numeric_limits<std::size_t>::max)());
+    {
+        const auto encoded = ruvia::to_json(retained, {.resource_ = &successful_output});
+        RUVIA_CHECK(encoded.size() > 256);
     }
-    RUVIA_CHECK(threw);
-    RUVIA_CHECK_EQ(output.allocations_.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(successful_output.allocations_.live_allocations(), std::size_t{0});
+    const auto output_count = successful_output.allocations_.allocation_count();
+    RUVIA_CHECK(output_count > 0);
+    if (inject) {
+        for (std::size_t failure = 0; failure < output_count; ++failure) {
+            binary_failing_resource output(failure);
+            bool threw = false;
+            try {
+                (void)ruvia::to_json(retained, {.resource_ = &output});
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            RUVIA_CHECK(threw);
+            RUVIA_CHECK_EQ(output.allocations_.allocation_count(), failure);
+            RUVIA_CHECK_EQ(output.allocations_.live_allocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(output.allocations_.allocation_count(), output.allocations_.deallocation_count());
+        }
+    }
     RUVIA_CHECK_EQ(retained.size(), octets.size());
     RUVIA_CHECK(ruvia::to_json(retained).size() > 256);
 }

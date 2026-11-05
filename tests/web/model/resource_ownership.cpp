@@ -37,8 +37,7 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        // Skip MSVC debug iterator-proxy nodes. See binary_failing_resource.
-        if (remaining_ && bytes_value >= 64) {
+        if (remaining_) {
             if (*remaining_ == 0) {
                 throw std::bad_alloc();
             }
@@ -175,20 +174,22 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
         resource_pair source_value({.resource_ = &source_resource});
         source_value.set<"first">(new_text);
         source_value.set<"second">(new_text);
-        target_resource.remaining_ = 1;
-        bool failed = false;
-        try {
-            target = std::move(source_value);
-        } catch (const std::bad_alloc&) {
-            failed = true;
+        if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+            target_resource.remaining_ = 1;
+            bool failed = false;
+            try {
+                target = std::move(source_value);
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            target_resource.remaining_.reset();
+            RUVIA_CHECK(failed);
+            RUVIA_CHECK_EQ(target.get<"first">().view(), std::string_view(old_text));
+            RUVIA_CHECK_EQ(target.get<"second">().view(), std::string_view(old_text));
+            RUVIA_CHECK_EQ(source_value.get<"first">().view(), std::string_view(new_text));
+            RUVIA_CHECK_EQ(source_value.get<"second">().view(), std::string_view(new_text));
+            RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), retained);
         }
-        target_resource.remaining_.reset();
-        RUVIA_CHECK(failed);
-        RUVIA_CHECK_EQ(target.get<"first">().view(), std::string_view(old_text));
-        RUVIA_CHECK_EQ(target.get<"second">().view(), std::string_view(old_text));
-        RUVIA_CHECK_EQ(source_value.get<"first">().view(), std::string_view(new_text));
-        RUVIA_CHECK_EQ(source_value.get<"second">().view(), std::string_view(new_text));
-        RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), retained);
         for (int iteration = 0; iteration != 32; ++iteration) {
             source_value.set<"first">(new_text);
             source_value.set<"second">(new_text);
@@ -203,6 +204,7 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
 
 RUVIA_TEST(model_dynamic_token_failed_move_keeps_source_destination_and_resources) {
     const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
+    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
     const auto check = [&]<typename token_type>(std::string_view empty) {
         reject_after_resource target_resource;
         ruvia::test::counting_memory_resource source_resource;
@@ -210,17 +212,19 @@ RUVIA_TEST(model_dynamic_token_failed_move_keeps_source_destination_and_resource
             token_type source({.resource_ = &source_resource});
             source = token_type::parse(input);
             token_type target({.resource_ = &target_resource});
-            target_resource.remaining_ = 0;
-            bool failed = false;
-            try {
-                target = std::move(source);
-            } catch (const std::bad_alloc&) {
-                failed = true;
+            if (inject) {
+                target_resource.remaining_ = 0;
+                bool failed = false;
+                try {
+                    target = std::move(source);
+                } catch (const std::bad_alloc&) {
+                    failed = true;
+                }
+                RUVIA_CHECK(failed);
+                RUVIA_CHECK_EQ(source.view(), std::string_view(input));
+                RUVIA_CHECK_EQ(target.view(), empty);
+                target_resource.remaining_.reset();
             }
-            RUVIA_CHECK(failed);
-            RUVIA_CHECK_EQ(source.view(), std::string_view(input));
-            RUVIA_CHECK_EQ(target.view(), empty);
-            target_resource.remaining_.reset();
             target = std::move(source);
             RUVIA_CHECK_EQ(source.view(), empty);
             RUVIA_CHECK_EQ(target.view(), std::string_view(input));
@@ -289,7 +293,8 @@ RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
 }
 
 RUVIA_TEST(model_resource_scalar_array_moves_transfer_same_resource_storage) {
-    const auto check = [&ruvia_ctx]<typename sequence_type>() {
+    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
+    const auto check = [&ruvia_ctx, inject]<typename sequence_type>() {
         reject_after_resource resource;
         {
             sequence_type source({.resource_ = &resource});
@@ -298,7 +303,9 @@ RUVIA_TEST(model_resource_scalar_array_moves_transfer_same_resource_storage) {
                 source.push_back(ruvia::int32(index));
             }
             target.push_back(ruvia::int32(-1));
-            resource.remaining_ = 0;
+            if (inject) {
+                resource.remaining_ = 0;
+            }
             target = std::move(source);
             resource.remaining_.reset();
             RUVIA_CHECK(source.empty());

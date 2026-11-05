@@ -298,9 +298,7 @@ RUVIA_TEST(http2_pseudo_header_order_rolls_back_on_initial_and_final_continuatio
                 std::string wire;
                 append_frame(wire, continuation ? ruvia::http2_frame_type::continuation : ruvia::http2_frame_type::headers,
                     continuation ? 0x4 : 0x5, 1, std::string_view(block).substr(continuation ? 1 : 0));
-                if (ruvia::test::should_inject_stl_allocation_failure(failure_index)) {
-                    resource.fail_after(failure_index);
-                }
+                resource.fail_after_stl_operation(failure_index, ruvia_ctx);
                 bool failed = false;
                 try {
                     RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
@@ -329,6 +327,8 @@ RUVIA_TEST(http2_pseudo_header_order_rolls_back_on_initial_and_final_continuatio
             RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
         }
         RUVIA_CHECK(completed);
-        RUVIA_CHECK(saw_failure);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            RUVIA_CHECK(saw_failure);
+        }
     }
 }

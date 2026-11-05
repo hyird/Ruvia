@@ -200,6 +200,8 @@ RUVIA_TEST(ws_public_compression_recovers_after_unsent_message_failure) {
             }
             const std::string pending(sender.output_plan().bytes());
 
+            // The first compressed submission allocates its lazy raw codec
+            // owner before growing the already-constructed output strings.
             memory.reject_ = failure == failure_kind::allocation;
             mask.fail_ = failure != failure_kind::allocation;
             RUVIA_CHECK(ruvia::testing::throws_on([&] {
@@ -280,9 +282,10 @@ RUVIA_TEST(ws_public_decompression_preserves_resource_failure_and_retires_connec
             websocket_connection connection(input, {.compression_ = websocket_compression{.enabled_ = true}});
             input.append(wire);
             // zlib defers its raw-inflate window until the first message.
-            // Small protocol buffers remain available, so a queued Close cannot
-            // hide a window-allocation failure behind another allocation.
-            memory.reject_min_bytes_ = 32768;
+            // Target that codec window, not STL iterator metadata: allowing
+            // smaller protocol buffers prevents a queued Close from hiding the
+            // original window-allocation failure behind another allocation.
+            memory.reject_min_bytes_ = std::size_t{1} << MAX_WBITS;
             memory.reject_ = reject_window;
             bool allocation_failed = false;
             try {
@@ -864,6 +867,8 @@ RUVIA_TEST(ws_public_driver_releases_owned_memory_after_construction_failures) {
         RUVIA_CHECK_EQ(memory.live_bytes_, input_bytes);
     }
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
+    // http_io_buffer itself does not allocate. The rejected request is the raw
+    // connection implementation storage, before its STL members are constructed.
     memory.reject_ = true;
     RUVIA_CHECK(ruvia::testing::throws_on([&] {
         http_io_buffer input(&memory);
@@ -1069,6 +1074,8 @@ RUVIA_TEST(ws_owned_input_retries_after_borrowed_payload_copy_failure) {
             return;
         }
         const auto borrowed = wrapper->message()->payload();
+        // Borrowed input grows through http_io_buffer's raw allocation path;
+        // no STL container is constructed or moved while rejection is armed.
         resource.reject_ = true;
         bool threw = false;
         try {
@@ -1204,6 +1211,7 @@ RUVIA_TEST(ws_input_retries_after_borrowed_payload_copy_failure) {
             return;
         }
         const auto borrowed = wrapper->message()->payload();
+        // This append grows raw http_io_buffer storage, not STL metadata.
         resource.reject_ = true;
         bool threw = false;
         try {

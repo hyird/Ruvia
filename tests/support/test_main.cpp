@@ -23,6 +23,7 @@ int main() {
     int total_failures = 0;
     int failed_cases = 0;
     std::size_t executed_cases = 0;
+    std::size_t partial_cases = 0;
     auto& cases = registry();
     const char* filter = std::getenv("RUVIA_TEST_FILTER");
     const char* first_text = std::getenv("RUVIA_TEST_FIRST");
@@ -73,11 +74,14 @@ int main() {
         } catch (...) {
             report_failure(ctx, __FILE__, __LINE__, "unknown exception");
         }
-        if (ctx.failures_ == 0) {
-            std::printf("[ ok ] %s\n", c.name_);
-        } else {
+        if (ctx.failures_ != 0) {
             std::printf("[FAIL] %s (%d checks failed)\n", c.name_, ctx.failures_);
             ++failed_cases;
+        } else if (ctx.partial_reason_ != nullptr) {
+            std::printf("[PARTIAL] %s\n  %s\n", c.name_, ctx.partial_reason_);
+            ++partial_cases;
+        } else {
+            std::printf("[ ok ] %s\n", c.name_);
         }
         std::fflush(stdout);
         total_failures += ctx.failures_;
@@ -87,7 +91,8 @@ int main() {
         std::fputs("No test cases were selected. Check RUVIA_TEST_FILTER, RUVIA_TEST_FIRST, and RUVIA_TEST_LAST.\n", stderr);
         return 1;
     }
-    std::printf("\n%zu tests, %d failed cases, %d failed checks\n", executed_cases, failed_cases,
-        total_failures);
+    std::printf("\n%zu tests: %zu passed, %zu partial, %d failed cases, %d failed checks\n",
+        executed_cases, executed_cases - partial_cases - static_cast<std::size_t>(failed_cases),
+        partial_cases, failed_cases, total_failures);
     return total_failures == 0 ? 0 : 1;
 }

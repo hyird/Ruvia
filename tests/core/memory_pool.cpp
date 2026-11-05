@@ -21,6 +21,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_runtime.h"
 
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -604,6 +605,11 @@ RUVIA_TEST(worker_memory_construction_failure_reclaims_storage_and_allows_retry)
     }
     const auto construction_attempts = baseline.attempts_;
     RUVIA_CHECK(construction_attempts != 0);
+    // worker_memory construction builds pmr containers whose noexcept
+    // constructors allocate debug iterator metadata under MSVC Debug STL.
+    if (!ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+        return;
+    }
 
     for (std::size_t failure_point = 1; failure_point <= construction_attempts; ++failure_point) {
         counting_resource upstream;

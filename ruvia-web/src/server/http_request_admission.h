@@ -92,9 +92,10 @@ private:
 };
 
 // Answers a rejection through the application's error handler, adding the
-// rate-limit headers when that is why the request was refused.
+// rate-limit headers when that is why the request was refused. The lazy task
+// owns this snapshot; its diagnostic text still borrows static/request storage.
 [[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
-    request_memory& memory, const http_request_rejection& rejection, const context_services& services);
+    request_memory& memory, http_request_rejection rejection, const context_services& services);
 
 // Result of the synchronous first preparation pass. ready() is null only when
 // a blocking-pool encode or the application error handler must be awaited

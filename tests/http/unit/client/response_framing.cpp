@@ -253,9 +253,7 @@ RUVIA_TEST(http_client_folded_continue_allocation_failure_allows_retry) {
                 http1_client_request_wire_policy{
                     .expectation_ = ruvia::http_client_request_expectation::continue_value},
                 &resource);
-            if (ruvia::test::should_inject_stl_allocation_failure(fail_after)) {
-                resource.fail_after(fail_after);
-            }
+            resource.fail_after_stl_operation(fail_after, ruvia_ctx);
             for (const auto size : {wire.find("\r\n continuation") + 1, wire.size() - 1}) {
                 const auto partial = parser.parse(wire.substr(0, size));
                 RUVIA_CHECK(partial.need_more() != nullptr);
@@ -301,7 +299,9 @@ RUVIA_TEST(http_client_folded_continue_allocation_failure_allows_retry) {
             break;
         }
     }
-    RUVIA_CHECK(saw_failure);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK(saw_failure);
+    }
     RUVIA_CHECK(saw_success);
 }
 
@@ -319,9 +319,7 @@ RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failu
     bool saw_success = false;
     for (std::size_t fail_after = 0; fail_after < 32; ++fail_after) {
         failing_memory_resource resource;
-        if (ruvia::test::should_inject_stl_allocation_failure(fail_after)) {
-            resource.fail_after(fail_after);
-        }
+        resource.fail_after_stl_operation(fail_after, ruvia_ctx);
         bool allocation_failed = false;
         {
             try {
@@ -346,7 +344,9 @@ RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failu
         }
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     }
-    RUVIA_CHECK(saw_failure);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK(saw_failure);
+    }
     RUVIA_CHECK(saw_success);
 }
 

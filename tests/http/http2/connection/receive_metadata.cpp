@@ -15,25 +15,24 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
 
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
-// 设置 large_allocation_budget_ 后，至少 32 字节的分配在预算耗尽时抛 std::bad_alloc；
-// STL 调试代理可能在 noexcept 构造中分配小块，不向这些代理注入失败。
 class receive_memory_resource final : public std::pmr::memory_resource {
 public:
-    std::optional<std::size_t> large_allocation_budget_{};
+    std::optional<std::size_t> allocation_budget_{};
     std::size_t allocations_{0};
     std::size_t live_{0};
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (large_allocation_budget_ && bytes >= 32) {
-            if (*large_allocation_budget_ == 0) {
+        if (allocation_budget_) {
+            if (*allocation_budget_ == 0) {
                 throw std::bad_alloc();
             }
-            --*large_allocation_budget_;
+            --*allocation_budget_;
         }
         auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
         ++allocations_;
@@ -449,14 +448,16 @@ RUVIA_TEST(http2_receive_pmr_retry_does_not_replay_committed_prefix) {
             RUVIA_CHECK(server.feed(preface) == ruvia::http2_feed_result::accepted);
             log.drain(server);
             log.count_ = 0;
-            resource.large_allocation_budget_ = budget;
+            if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+                resource.allocation_budget_ = budget;
+            }
             bool threw = false;
             try {
                 RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
             } catch (const std::bad_alloc&) {
                 threw = true;
             }
-            resource.large_allocation_budget_.reset();
+            resource.allocation_budget_.reset();
             log.drain(server);
             if (threw) {
                 // 抛出前已提交的帧照常发布；同一输入重试只继续未提交的后缀。
@@ -481,7 +482,9 @@ RUVIA_TEST(http2_receive_pmr_retry_does_not_replay_committed_prefix) {
         RUVIA_CHECK_EQ(resource.live_, 0u);
     }
     RUVIA_CHECK(completed);
-    RUVIA_CHECK(retried_after_committed_prefix);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK(retried_after_committed_prefix);
+    }
 }
 
 RUVIA_TEST(http2_receive_control_metadata_needs_no_dynamic_allocation) {
@@ -498,12 +501,12 @@ RUVIA_TEST(http2_receive_control_metadata_needs_no_dynamic_allocation) {
         std::string window;
         append_frame(window, ruvia::http2_frame_type::window_update, 0, 0, window_payload(7));
         const auto allocations = resource.allocations_;
-        resource.large_allocation_budget_ = 0;
+        resource.allocation_budget_ = 0;
         RUVIA_CHECK(server.feed(priority) == ruvia::http2_feed_result::accepted);
         log.drain(server);
         RUVIA_CHECK(server.feed(window) == ruvia::http2_feed_result::accepted);
         log.drain(server);
-        resource.large_allocation_budget_.reset();
+        resource.allocation_budget_.reset();
         RUVIA_CHECK_EQ(resource.allocations_, allocations);
         RUVIA_CHECK_EQ(log.count_, publish ? 2u : 0u);
         RUVIA_CHECK(!server.connection_error());

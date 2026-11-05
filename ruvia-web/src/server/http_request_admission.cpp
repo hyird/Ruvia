@@ -73,7 +73,7 @@ http_request_rejection http_request_rejection::rate_limited(rate_limit_rejection
 }
 
 task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
-    request_memory& memory, const http_request_rejection& rejection, const context_services& services) {
+    request_memory& memory, http_request_rejection rejection, const context_services& services) {
     auto response = co_await routes.handle_error(request, memory, rejection.error(), services);
     if (const auto* rate_limit = rejection.rate_limit()) {
         apply_rate_limit_rejection_headers(response, *rate_limit);

@@ -8,6 +8,7 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_connection_advertisement.h"
 
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -15,8 +16,7 @@ struct advertisement_resource final : std::pmr::memory_resource {
     std::size_t live_{0};
     bool fail_{false};
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        // Fail frame storage, not noexcept debug iterator bookkeeping.
-        if (fail_ && bytes_value >= 32) {
+        if (fail_) {
             throw std::bad_alloc();
         }
         auto* result_value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
@@ -51,15 +51,17 @@ RUVIA_TEST(http_connection_advertisement_origin_frames_preserve_results_and_rele
             RUVIA_CHECK_EQ(resource.live_, baseline);
             RUVIA_CHECK(std::get<0>(parsed_value).origins_.back() == origins.back());
         }
-        resource.fail_ = true;
-        bool threw = false;
-        try {
-            (void)ruvia::encode_http2_origin_frame(origins, 16384, &resource);
-        } catch (const std::bad_alloc&) {
-            threw = true;
+        if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+            resource.fail_ = true;
+            bool threw = false;
+            try {
+                (void)ruvia::encode_http2_origin_frame(origins, 16384, &resource);
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            RUVIA_CHECK(threw);
+            resource.fail_ = false;
         }
-        RUVIA_CHECK(threw);
-        resource.fail_ = false;
         RUVIA_CHECK_EQ(resource.live_, baseline);
     }
     RUVIA_CHECK_EQ(resource.live_, 0u);
@@ -140,17 +142,20 @@ RUVIA_TEST(http_connection_advertisement_encoders_honor_exact_payload_budgets) {
 RUVIA_TEST(http_connection_advertisement_valid_frame_allocation_failure_releases_storage_and_allows_retry) {
     const std::array<std::string_view, 2> origins{"https://example.test", "https://other.test"};
     advertisement_resource resource;
+    const bool inject_failures = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
     const auto check = [&](auto make_frame) {
-        resource.fail_ = true;
-        bool threw = false;
-        try {
-            static_cast<void>(make_frame());
-        } catch (const std::bad_alloc&) {
-            threw = true;
+        if (inject_failures) {
+            resource.fail_ = true;
+            bool threw = false;
+            try {
+                static_cast<void>(make_frame());
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            RUVIA_CHECK(threw);
+            RUVIA_CHECK_EQ(resource.live_, std::size_t{0});
+            resource.fail_ = false;
         }
-        RUVIA_CHECK(threw);
-        RUVIA_CHECK_EQ(resource.live_, std::size_t{0});
-        resource.fail_ = false;
         {
             const auto frame = make_frame();
             RUVIA_CHECK(frame.index() == 0);

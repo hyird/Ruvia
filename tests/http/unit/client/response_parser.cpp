@@ -317,12 +317,10 @@ RUVIA_TEST(http_client_many_response_fields_retry_every_allocation_failure_witho
     }
 
     for (std::size_t phase = 0; phase < wires.size(); ++phase) {
-        for (std::size_t fail_after = 0; fail_after <= allocation_counts[phase]; ++fail_after) {
-            if constexpr (ruvia::test::stl_moves_allocate_debug_metadata) {
-                if (fail_after != 0 && fail_after != allocation_counts[phase]) {
-                    continue;
-                }
-            }
+        const auto first_failure = ruvia::test::stl_moves_allocate_debug_metadata
+                                       ? allocation_counts[phase]
+                                       : std::size_t{0};
+        for (std::size_t fail_after = first_failure; fail_after <= allocation_counts[phase]; ++fail_after) {
             failing_memory_resource memory;
             {
                 http1_client_response_parser parser = exchange_parser(origin, request, continue_policy, &memory);
@@ -331,7 +329,7 @@ RUVIA_TEST(http_client_many_response_fields_retry_every_allocation_failure_witho
                     check_many_field_response(ruvia_ctx, interim, wires[0].size(), true);
                 }
                 RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
-                memory.fail_after(fail_after);
+                memory.fail_after_stl_operation(fail_after, ruvia_ctx);
                 bool allocation_failed = false;
                 try {
                     const auto parsed = parser.parse(wires[phase]);

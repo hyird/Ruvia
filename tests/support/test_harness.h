@@ -20,6 +20,7 @@ struct test_case {
 struct test_context {
     int failures_ = 0;
     const char* current_ = "";
+    const char* partial_reason_ = nullptr;
 };
 
 inline std::vector<test_case>& registry() {

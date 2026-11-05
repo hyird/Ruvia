@@ -421,11 +421,7 @@ RUVIA_TEST(http2_push_allocation_failure_preserves_the_parent_and_is_retryable) 
             }
             const auto id = std::get<0>(push).stream_id();
             const auto wire = ruvia::testing::drain_output(server);
-            // 调试 STL 的 noexcept 事件移动也分配代理。此时验证首次分配失败
-            // 和无故障重试；其他构建继续遍历所有分配失败位置。
-            if (ruvia::test::should_inject_stl_allocation_failure(failure_index)) {
-                resource.fail_after(failure_index);
-            }
+            resource.fail_after_stl_operation(failure_index, ruvia_ctx);
             bool failed = false;
             try {
                 RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
@@ -464,7 +460,9 @@ RUVIA_TEST(http2_push_allocation_failure_preserves_the_parent_and_is_retryable) 
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     }
     RUVIA_CHECK(completed);
-    RUVIA_CHECK(saw_allocation_failure);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK(saw_allocation_failure);
+    }
 }
 
 RUVIA_TEST(http2_push_finish_releases_peer_concurrency_while_its_request_lease_is_retained) {
@@ -1087,9 +1085,7 @@ RUVIA_TEST(http2_push_tunnel_continuation_allocation_failure_preserves_rejection
             RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(continuation),
                 static_cast<std::uint32_t>(block.size()), ruvia::http2_frame_type::continuation, 4, 1));
             continuation.append(block);
-            if (ruvia::test::should_inject_stl_allocation_failure(failure_index)) {
-                resource.fail_after(failure_index);
-            }
+            resource.fail_after_stl_operation(failure_index, ruvia_ctx);
             bool failed = false;
             try {
                 RUVIA_CHECK(client.feed(continuation) == ruvia::http2_feed_result::accepted);
@@ -1129,7 +1125,9 @@ RUVIA_TEST(http2_push_tunnel_continuation_allocation_failure_preserves_rejection
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     }
     RUVIA_CHECK(completed);
-    RUVIA_CHECK(saw_allocation_failure);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK(saw_allocation_failure);
+    }
 }
 
 // A5H2-01: Releasing >128 push stream leases while GOAWAY stream_closed events

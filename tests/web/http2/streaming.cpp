@@ -21,6 +21,7 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/model.h"
 
 #include "http_server_fixture.h"
 #include "test_harness.h"
@@ -826,6 +827,55 @@ RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const std::string oversized(64, 'x');
+    // Read through END_STREAM: a valid head alone cannot prove that the
+    // rejection's borrowed diagnostic survived until its response was sent.
+    const auto check_body_limit_response = [&](asio::ip::tcp::socket& client, ruvia::hpack_decoder& decoder) {
+        client.non_blocking(true);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        std::string body;
+        unsigned response_heads = 0;
+        bool ended = false;
+        while (!ended) {
+            const auto frame = http2_streaming_test::read_frame(client, deadline);
+            if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+                (frame.header_.flags_ & 0x1) == 0) {
+                std::string ack;
+                append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                asio::write(client, asio::buffer(ack));
+                continue;
+            }
+            if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) ||
+                (frame.header_.stream_id_ == 1 &&
+                    frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream))) {
+                throw std::runtime_error("oversized HTTP/2 request reset before its complete 413 response");
+            }
+            if (frame.header_.stream_id_ != 1) {
+                continue;
+            }
+            if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+                ++response_heads;
+                std::string status;
+                const auto decoded = decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
+                    if (name == ":status") {
+                        status = value;
+                    }
+                    return true;
+                });
+                RUVIA_CHECK(!decoded.has_value());
+                RUVIA_CHECK_EQ(status, std::string("413"));
+                ended = (frame.header_.flags_ & 0x1) != 0;
+            } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                body.append(frame.payload_);
+                ended = (frame.header_.flags_ & 0x1) != 0;
+            }
+        }
+        RUVIA_CHECK_EQ(response_heads, 1U);
+        const auto error = ruvia::json_object::parse(body);
+        const auto status = error.get<ruvia::uint32>("status");
+        const auto code = error.get<ruvia::string>("code");
+        RUVIA_CHECK(status && static_cast<std::uint32_t>(*status) == 413);
+        RUVIA_CHECK(code && code->view() == "request_body_too_large");
+    };
 
     // 1. Declared Content-Length exceeding route body_limit<16> with Expect: 100-continue
     //    must answer 413 immediately without sending 100 Continue first.
@@ -835,7 +885,7 @@ RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
         asio::write(client, asio::buffer(request_wire(&resource, "POST", path, oversized, true)));
-        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("413"));
+        check_body_limit_response(client, decoder);
         client.close();
     }
 
@@ -856,7 +906,7 @@ RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
         append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
         append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, oversized);
         asio::write(client, asio::buffer(wire));
-        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("413"));
+        check_body_limit_response(client, decoder);
         client.close();
     }
 
@@ -886,7 +936,7 @@ RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
         append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
         append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, oversized);
         asio::write(client, asio::buffer(wire));
-        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("413"));
+        check_body_limit_response(client, decoder);
         client.close();
     }
     server.finish();
