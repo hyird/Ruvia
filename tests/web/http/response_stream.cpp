@@ -27,7 +27,6 @@
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
@@ -248,35 +247,29 @@ RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
 
 RUVIA_TEST(response_stream_cold_outputs_share_a_lane_only_when_started) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io);
     stream_lane_observed->write_overlap_rejected_ = false;
     stream_lane_observed->end_overlap_rejected_ = false;
     stream_lane_observed->completed_ = false;
-    std::exception_ptr failure;
-    auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
-                                                         .host_ = "127.0.0.1",
-                                                         .port_ = server.endpoint().port(),
-                                                         .request_timeout_ = std::chrono::seconds(5)});
-        try {
-            auto response = co_await client.handle().send({.target_ = "/server-lazy-stream-output"});
-            RUVIA_CHECK(response.status() == ruvia::http_status::ok);
-            auto body = co_await response.body().read_all();
-            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.bytes().data()), body.size()), "firstsecond\n");
-        } catch (...) {
-            failure = std::current_exception();
+    std::string response;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const std::string_view request =
+            "GET /server-lazy-stream-output HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        asio::write(client, asio::buffer(request));
+        std::array<char, 1024> input{};
+        std::error_code ec;
+        while (!ec) {
+            const auto read = client.read_some(asio::buffer(input), ec);
+            response.append(input.data(), read);
         }
-        co_await client.shutdown();
-        attachment.stop();
-    };
-    auto done = attachment.loop().start(run());
-    attachment.run();
-    done.get();
-    server.finish();
-    if (failure) {
-        std::rethrow_exception(failure);
     }
+    server.finish();
+    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    const auto first = response.find("first");
+    RUVIA_CHECK(first != std::string::npos);
+    RUVIA_CHECK(response.find("second\n", first) != std::string::npos);
     RUVIA_CHECK(stream_lane_observed->write_overlap_rejected_);
     RUVIA_CHECK(stream_lane_observed->end_overlap_rejected_);
     RUVIA_CHECK(stream_lane_observed->completed_);

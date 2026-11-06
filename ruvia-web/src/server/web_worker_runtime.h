@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <chrono>
 #include <memory>
 #include <span>
 
@@ -39,7 +38,12 @@ public:
     // every offload and client host lookup; null when the application
     // disabled it. It must outlive the worker.
     web_worker_runtime(const validated_http_server_configuration& configuration, const route_table& routes_value,
-        worker_capability_definitions capabilities, blocking_pool* pool);
+        worker_capability_definitions capabilities, blocking_pool* pool
+#if defined(RUVIA_ENABLE_HTTP3)
+        ,
+        http3_worker_placement http3_placement
+#endif
+    );
     ~web_worker_runtime();
 
     web_worker_runtime(const web_worker_runtime&) = delete;
@@ -49,34 +53,30 @@ public:
         return runtime_;
     }
     ruvia::worker_runtime& runtime() && = delete;
-    // Any thread, while serving: stops admitting connections and requests,
-    // closes connections outside a request exchange, and lets in-flight
-    // requests finish before their connections close. Stopping the runtime
-    // later closes whatever is left.
-    void request_drain() noexcept;
-    // Lifecycle thread: false when `deadline` passed before the drain completed.
-    // A worker that never served, or that stopped, has nothing to drain.
-    [[nodiscard]] bool wait_until_drained(std::chrono::steady_clock::time_point deadline);
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] http_server_stats stats() const noexcept;
     [[nodiscard]] web_worker_handle web_worker() const;
 #if defined(_WIN32)
-    void attach_windows_accept(windows_accept_domain& domain, std::size_t origin);
+    // This worker as the Windows acceptor's hand-over target.
+    [[nodiscard]] windows_acceptor::business_worker acceptor_target() noexcept {
+        return connections_.acceptor_target();
+    }
 #endif
 
 private:
     web_worker_runtime(std::span<const http_server_listener_definition> listeners,
         const route_table& routes_value, worker_capability_definitions capabilities,
-        http_server_options validated_options, blocking_pool* pool);
+        http_server_options validated_options, blocking_pool* pool
+#if defined(RUVIA_ENABLE_HTTP3)
+        ,
+        http3_worker_placement http3_placement
+#endif
+    );
 
     void serve_on_context();
-    void drain_on_context() noexcept;
     void stop_admission_on_context() noexcept;
     void finalize_on_context() noexcept;
     task<void> run_worker();
-#if defined(_WIN32)
-    task<void> run_windows_accepts();
-#endif
     ruvia::worker_runtime runtime_;
     asio::io_context& io_context_;
     worker_signal finalize_signal_;
@@ -95,11 +95,6 @@ private:
     static_root_runtime static_roots_;
     worker_capabilities capabilities_;
     worker_connections connections_;
-#if defined(_WIN32)
-    windows_accept_domain* windows_accept_{};
-    std::size_t windows_origin_{};
-    bool windows_accept_joined_{true};
-#endif
     // Shared only with escaped public handles: their terminal queries outlive
     // this worker. Jobs run in background_tasks_ and are joined by run_worker.
     std::shared_ptr<web_worker_dispatch> web_worker_dispatch_;

@@ -21,18 +21,16 @@ struct tls_identity_config final {
 
 enum class client_tls_mode : std::uint8_t {
     verify_identity,
-    // Plaintext. HTTP and WebSocket clients select plaintext through their
-    // scheme instead and reject this mode for https/wss.
+    // Plaintext.
     disabled,
 };
 
-// The one client TLS shape shared by HTTP, WebSocket, database and Redis
-// clients. TLS always authenticates the peer. HTTP, WebSocket and Redis
-// clients read the CA bundle and identity once, when the client or its
-// registration is created, and share them across workers; database drivers
-// read the files when connecting and do not accept an encrypted private key.
-// HTTP, WebSocket and Redis clients negotiate TLS 1.2 or 1.3, offer only ECDHE
-// with AEAD suites for TLS 1.2, and refuse renegotiation. Every client verifies
+// The one client TLS shape shared by database and Redis clients. TLS always
+// authenticates the peer. Redis clients read the CA bundle and identity once,
+// when the registration is created, and share them across workers; database
+// drivers read the files when connecting and do not accept an encrypted
+// private key. Redis clients negotiate TLS 1.2 or 1.3, offer only ECDHE with
+// AEAD suites for TLS 1.2, and refuse renegotiation. Every client verifies
 // identities by subjectAltName type (RFC 9525): DNS names match DNS-ID entries,
 // IP literals match IP entries, the subject Common Name is never used, and DNS
 // wildcards cover only a complete left-most label.
@@ -73,7 +71,9 @@ struct tls_sni_config final {
 
 // One HTTPS listener's identities. The listener negotiates TLS 1.2 or 1.3; its
 // TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
-// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. A client
+// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. The paired
+// HTTP/3 service (listen_config::http3_) uses the same identities over QUIC
+// with TLS 1.3 only and ALPN h3 only, without early data. A client
 // offering no server_name, or one matching no sni_ entry, is served the
 // primary identity: a product choice for single-certificate and wildcard
 // deployments, deliberately not RFC 9325 §3.7's unrecognized_name alert, so

@@ -41,7 +41,9 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
                 // RFC 8441 tunnel); this clock lets write_timeout close a peer
                 // that stopped reading regardless. Every transfer renews it.
                 const connection_scanner::entry::write_scope write_stall_clock(engine.scanner_entry());
-                write_error = (co_await connection_gather_write(stream, write_scratch, {}, engine.scanner_entry())).error_;
+                const auto write_result = co_await connection_gather_write(
+                    stream, write_scratch, {}, engine.scanner_entry());
+                write_error = write_result.error_;
             }
             if (write_error) {
                 engine.writer_write_failed(write_error);
@@ -144,7 +146,7 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
     }
     // A failed write leaves nothing to end gracefully. A clean peer end (FIN,
     // or TLS close_notify) earns this side's final GOAWAY and close alert. A
-    // completed drain (worker drain, request limit, or a timeout's drain at its
+    // completed drain (request limit, or a timeout's drain at its
     // bound) or a connection error ended the session with GOAWAY while peer
     // frames may still arrive: close lingering (RFC 9113 §9.1, RFC 9112 §9.6).
     // Transport errors close at once, and so does a stopping worker, whatever

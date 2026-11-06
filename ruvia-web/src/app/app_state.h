@@ -18,7 +18,6 @@
 #ifdef RUVIA_ENABLE_REDIS
 #include "redis/redis_config_storage.h"
 #endif
-#include "client/http_client_config_storage.h"
 #include "http/static_root_config_storage.h"
 #include "http/static_root_index.h"
 #include "server/http_server_listener.h"
@@ -60,7 +59,6 @@ struct app_state final {
 #ifdef RUVIA_ENABLE_REDIS
     std::pmr::vector<redis_definition_type> redis_{process_resource()};
 #endif
-    std::pmr::vector<http_client_definition_type> http_clients_{process_resource()};
     env env_;
     std::unique_ptr<app_runtime_graph, pmr_object_deleter<app_runtime_graph>> runtime_;
 

@@ -360,6 +360,9 @@ ruvia::app()
 - 每条连接复用回复解析根槽；嵌套值和字符串仍由当前操作指定的资源持有，失败或取消时随未完成的回复一起回收。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
 - `subscription_ping_interval_`（默认 30 秒，`std::nullopt` 关闭）是 Pub/Sub 订阅连接在 `read()` 等待期间的空闲探活间隔，语义见 4.3。
+- **连接竞速（[RFC 8305 §4–5](https://www.rfc-editor.org/rfc/rfc8305.html#section-4)）**：保留系统解析结果的 RFC 6724 优先级，从首选地址族开始交错 IPv6 / IPv4，每隔 `250ms` 追加一次并行尝试，首个成功者获胜，其余取消并等待结束。
+- **竞速边界**：数字地址与单候选地址直接单次连接；`connect_timeout_` 统一覆盖解析、全部尝试与 TLS 握手；解析为一次合并的 `getaddrinfo`，不实现 RFC 8305 §3 的独立 A / AAAA 查询与 Resolution Delay。
+- **TLS 关闭**：关闭连接时以一次非阻塞写发送 `close_notify`，不等待对端告警；仍有未完整写出的记录、写入失败或已发生 TLS 错误时不发送告警。
 
 ### 4.2 `ruvia::redis_handle` 命令分类总览
 

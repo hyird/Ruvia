@@ -16,7 +16,6 @@
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/dotenv.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/web_worker.h"
@@ -52,11 +51,6 @@ struct redis_registration_config final {
     redis_config config_{};
 };
 #endif
-
-struct http_client_registration_config final {
-    borrowed_text alias_{"default"};
-    http_client_config config_{};
-};
 
 class application final {
 public:
@@ -184,16 +178,18 @@ public:
     // the failures on_error cannot answer because the response is already
     // committed or the error handler itself failed. Without a listener these
     // are reported to stderr; they are never silently dropped. A peer reset
-    // or close, or I/O this server cancelled (stop, drain, timeouts), is a
+    // or close, or I/O this server cancelled (stop, timeouts), is a
     // normal end of connection: it is neither delivered here nor counted.
     application& on_connection_failure(connection_failure_callback callback);
     // Runs on the run() caller after worker capabilities are ready, before
     // TCP admission. All hooks must succeed before serving; failure or a
     // stop request rolls back startup. Ready workers can execute posted jobs.
     application& on_start(app_hook hook);
-    // Runs on the run() caller after admission closes and in-flight requests
-    // have drained (or server_config::drain_timeout_ passed), before runtime
-    // join. Also runs when published startup is cancelled or a start hook fails.
+    // Runs on the run() caller once every worker was told to stop -- admission
+    // closed and its connections closing, with handlers possibly still
+    // unwinding -- before runtime join. Also runs when published startup is
+    // cancelled or a start hook fails. A hook must not throw: a failure is
+    // reported, not rethrown.
     application& on_stop(app_hook hook);
     // Clearing retires the old hooks after releasing the application
     // configuration lock, as on_access() does.
@@ -207,8 +203,6 @@ public:
     application& redis(redis_registration_config config);
     application& redis(std::nullptr_t);
 #endif
-    application& http_client(http_client_registration_config config);
-    application& http_client(std::nullptr_t);
     // Serves until stop(); returns after every worker retired. May run again
     // after it returns. The first preparation, startup, or worker failure is
     // rethrown to the caller, who is responsible for printing it; run() does
@@ -217,17 +211,14 @@ public:
     void run();
     // Safe from any thread. A stop() issued while the app is not running is
     // kept for the next run(), which then returns without serving. A stop
-    // during startup rolls it back at once. A serving app stops gracefully:
-    // listeners close; connections without an admitted request (idle, or still
-    // receiving a request head) close, though a request head already received
-    // in full is still served; each WebSocket session starts its close
-    // handshake with 1001 Going Away, bounded by its close_handshake_timeout_;
-    // admitted requests and tunnels may finish, each request closing its
-    // connection after the response, and handlers observe their drain token
-    // (context::drain_token()) so long-lived responses can end early. Once
-    // server_config::drain_timeout_ passes, every remaining connection is
-    // closed and handlers observe their stop token. A worker failure skips
-    // the drain.
+    // during startup rolls it back at once. A serving app stops by direct
+    // disconnect, with no drain phase: admission stops (pending accepts and
+    // QUIC receives are cancelled), then every connection is closed at once
+    // -- HTTP/1, HTTP/2, WebSocket and tunnel sockets close without a final
+    // response, GOAWAY or close handshake, and each HTTP/3 connection sends
+    // CONNECTION_CLOSE(H3_NO_ERROR) -- and handlers observe their stop token
+    // (context::stop_token()); then worker I/O stops before background
+    // operations are joined.
     void stop();
     // HTTP serving counters summed across every worker. All zero before run()
     // starts them and after it returns. Safe from any thread, including from a

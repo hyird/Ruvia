@@ -83,8 +83,7 @@ public:
     // single missed field would leak one request's decoded headers / routing / body
     // into the next reused slot -- a cross-request data-disclosure risk not worth taking
     // for a micro-optimisation off the measured hot path.
-    [[nodiscard]] http2_stream_state* create(
-        std::uint32_t stream_id, std::int32_t peer_initial_window_size) & {
+    [[nodiscard]] http2_stream_state* create(std::uint32_t stream_id) & {
         if (auto* existing = find(stream_id); existing != nullptr) {
             return existing;
         }
@@ -95,7 +94,6 @@ public:
         for (auto& slot : inline_) {
             if (!slot) {
                 slot.emplace(stream_id, resource_);
-                slot->set_send_window(peer_initial_window_size);
                 ++size_;
                 if (is_push) {
                     ++push_size_;
@@ -104,7 +102,6 @@ public:
             }
         }
         auto stream = make_http_pmr_object<http2_stream_state>(resource_, stream_id, resource_);
-        stream->set_send_window(peer_initial_window_size);
         reserve_geometric(overflow_ids_, overflow_ids_.size() + 1);
         reserve_geometric(overflow_, overflow_.size() + 1);
         auto* result_value = stream.get();
@@ -116,7 +113,7 @@ public:
         }
         return result_value;
     }
-    [[nodiscard]] http2_stream_state* create(std::uint32_t, std::int32_t) && = delete;
+    [[nodiscard]] http2_stream_state* create(std::uint32_t) && = delete;
 
     bool remove(std::uint32_t stream_id) noexcept {
         if (stream_id == 0) {
@@ -162,41 +159,6 @@ public:
                 callback_value(*stream);
             }
         }
-    }
-
-    [[nodiscard]] bool apply_send_window_delta(
-        std::int64_t delta, std::int64_t minimum_delta, std::int64_t maximum_delta) noexcept {
-        // A zero final delta alone cannot skip intermediate overflow checks.
-        if (delta == 0 && minimum_delta == 0 && maximum_delta == 0) {
-            return true;
-        }
-        // Preflight the extrema of the ordered SETTINGS transaction before
-        // committing its final delta. Closed streams may remain as lease
-        // storage, but no longer participate in protocol flow control.
-        bool fits = true;
-        for_each([&fits, minimum_delta, maximum_delta](http2_stream_state& stream) noexcept {
-            if (!fits || http2_stream_is_closed(stream)) {
-                return;
-            }
-            const auto current = static_cast<std::int64_t>(stream.send_window());
-            if (maximum_delta > static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) -
-                                    current ||
-                minimum_delta < static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()) -
-                                    current) {
-                fits = false;
-            }
-        });
-        if (!fits) {
-            return false;
-        }
-        if (delta != 0) {
-            for_each([delta](http2_stream_state& stream) noexcept {
-                if (!http2_stream_is_closed(stream)) {
-                    (void)stream.add_send_window(delta);
-                }
-            });
-        }
-        return true;
     }
 
 private:

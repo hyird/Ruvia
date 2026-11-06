@@ -8,13 +8,11 @@
 #include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "http2/http2_field_list.h"
 #include "http2/http2_header_rules.h"
-#include "http2/http2_hpack.h"
-#include "http2/http2_hpack_static_table.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_stream_state.h"
@@ -67,42 +65,29 @@ namespace ruvia::detail {
     return validator.finish(options);
 }
 
-inline void http2_encode_websocket_handshake_headers(
-    std::pmr::string& header_block, const websocket_server_negotiation& negotiation) {
-    try {
-        header_block.clear();
-        const auto fields_value = negotiation.response_headers();
-        const bool has_date = std::ranges::any_of(fields_value, [](const http_header& field) {
-            return field.name() == "date";
-        });
-        const auto date = has_date ? std::string_view{} : cached_date_value();
-        constexpr std::string_view subprotocol_name = "sec-websocket-protocol";
-        constexpr std::string_view extensions_name = "sec-websocket-extensions";
-        const auto subprotocol = negotiation.subprotocol();
-        const auto extensions = negotiation.extensions();
-        // :status 200 is one indexed octet.
-        http2_reserve_field_block(header_block,
-            1U + (date.empty() ? 0U : date.size() + hpack_literal_overhead_bytes) +
-                (subprotocol.empty() ? 0U : subprotocol_name.size() + subprotocol.size() + hpack_literal_overhead_bytes) +
-                (extensions.empty() ? 0U : extensions_name.size() + extensions.size() + hpack_literal_overhead_bytes),
-            fields_value);
-        hpack_encoder::encode_status(header_block, http_status::ok);
-        if (!date.empty()) {
-            hpack_encoder::encode_header_with_name_index(
-                header_block, hpack_static_name_index("date"), date);
-        }
-        if (!subprotocol.empty()) {
-            hpack_encoder::encode_header(header_block, subprotocol_name, subprotocol);
-        }
-        if (!extensions.empty()) {
-            hpack_encoder::encode_header(header_block, extensions_name, extensions);
-        }
-        for (const auto& field : fields_value) {
-            hpack_encoder::encode_header(header_block, field.name(), field.value());
-        }
-    } catch (...) {
-        header_block.clear();
-        throw;
+inline void http2_append_websocket_handshake_headers(
+    http2_field_list& fields, const websocket_server_negotiation& negotiation) {
+    fields.clear();
+    const auto fields_value = negotiation.response_headers();
+    const bool has_date = std::ranges::any_of(fields_value, [](const http_header& field) {
+        return field.name() == "date";
+    });
+    const auto date = has_date ? std::string_view{} : cached_date_value();
+    const auto subprotocol = negotiation.subprotocol();
+    const auto extensions = negotiation.extensions();
+    fields.reserve(fields_value.size() + 4);
+    fields.add(":status", "200");
+    if (!date.empty()) {
+        fields.add_owned_value("date", date);
+    }
+    if (!subprotocol.empty()) {
+        fields.add("sec-websocket-protocol", subprotocol);
+    }
+    if (!extensions.empty()) {
+        fields.add("sec-websocket-extensions", extensions);
+    }
+    for (const auto& field : fields_value) {
+        fields.add(field.name(), field.value());
     }
 }
 

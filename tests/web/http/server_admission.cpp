@@ -18,11 +18,9 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/streaming.h"
 
@@ -99,10 +97,30 @@ class admission_routes final {
     }
 };
 
-ruvia::task<std::string> collect_text(ruvia::http_client_response& response) {
-    const auto bytes_value = co_await response.body().read_all();
-    const auto view = bytes_value.bytes();
-    co_return std::string(reinterpret_cast<const char*>(view.data()), view.size());
+// Sends one GET on a fresh connection that the server closes after its
+// response; returns everything the server wrote.
+std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint, std::string_view target,
+    std::string_view headers) {
+    asio::ip::tcp::socket socket(io);
+    socket.connect(server_endpoint);
+    std::string request = "GET ";
+    request.append(target).append(" HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
+    request.append(headers).append("\r\n");
+    asio::write(socket, asio::buffer(request));
+    std::string output;
+    std::error_code error;
+    asio::read(socket, asio::dynamic_buffer(output), error);
+    return output;
+}
+
+std::string lowercase(std::string_view text) {
+    std::string lowered(text);
+    for (auto& character : lowered) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    return lowered;
 }
 
 // Sends `prefix` on a fresh HTTP/1.1 connection, then stalls. Returns the
@@ -147,66 +165,41 @@ std::string status_codes(std::string_view output) {
 
 RUVIA_TEST(http1_clients_share_406_admission_and_rate_limit_budget) {
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io, admission_server_config());
-    auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client first(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
-                                                        .host_ = "127.0.0.1",
-                                                        .port_ = server.endpoint().port()});
-        ruvia::http_client second(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
-                                                         .host_ = "127.0.0.1",
-                                                         .port_ = server.endpoint().port()});
-        const std::array<ruvia::http_client*, 2> clients{&first, &second};
-        const std::array<ruvia::http_header_view, 1> refuse_every_coding{{{"Accept-Encoding", "identity;q=0, *;q=0"}}};
-        std::exception_ptr failure;
-        try {
-            // A response stream commits its representation before a status can
-            // be inspected, so a client that accepts no coding gets 406 first.
-            // The rejection is a terminal error: the error handler runs once
-            // and its answer is not negotiated again.
-            for (auto* client : clients) {
-                error_handler_calls = 0;
-                auto response = co_await client->handle().send({.target_ = "/events", .headers_ = refuse_every_coding});
-                RUVIA_CHECK(response.status() == ruvia::http_status::not_acceptable);
-                RUVIA_CHECK((co_await collect_text(response)) == "rejected");
-                RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
-            }
-            for (auto* client : clients) {
-                auto response = co_await client->handle().send({.target_ = "/plain"});
-                RUVIA_CHECK(response.status() == ruvia::http_status::ok);
-                RUVIA_CHECK((co_await collect_text(response)) == "plain");
-            }
-            // Both connections drew on the same client-address budget; it is
-            // spent. A client that accepts no coding still learns why.
-            const std::array<std::span<const ruvia::http_header_view>, 2> header_sets{
-                std::span<const ruvia::http_header_view>{}, refuse_every_coding};
-            const auto admitted_limit_text = std::to_string(admitted_requests);
-            for (auto* client : clients) {
-                for (const auto headers : header_sets) {
-                    error_handler_calls = 0;
-                    auto response = co_await client->handle().send({.target_ = "/plain", .headers_ = headers});
-                    RUVIA_CHECK(response.status() == ruvia::http_status::too_many_requests);
-                    RUVIA_CHECK(response.header("Retry-After").has_value());
-                    RUVIA_CHECK_EQ(response.header("X-RateLimit-Limit").value_or(std::string_view{}),
-                        std::string_view(admitted_limit_text));
-                    RUVIA_CHECK((co_await collect_text(response)) == "rejected");
-                    RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
-                }
-            }
-        } catch (...) {
-            failure = std::current_exception();
+    constexpr std::string_view refuse_every_coding = "Accept-Encoding: identity;q=0, *;q=0\r\n";
+    // Each exchange runs on its own connection from the same client address.
+    // A response stream commits its representation before a status can be
+    // inspected, so a client that accepts no coding gets 406 first. The
+    // rejection is a terminal error: the error handler runs once and its
+    // answer is not negotiated again.
+    for (int connection = 0; connection != 2; ++connection) {
+        error_handler_calls = 0;
+        const auto response = exchange(io, server.endpoint(), "/events", refuse_every_coding);
+        RUVIA_CHECK(response.starts_with("HTTP/1.1 406 "));
+        RUVIA_CHECK(response.ends_with("rejected"));
+        RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
+    }
+    for (int connection = 0; connection != 2; ++connection) {
+        const auto response = exchange(io, server.endpoint(), "/plain", {});
+        RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+        RUVIA_CHECK(response.ends_with("plain"));
+    }
+    // Every connection drew on the same client-address budget; it is spent. A
+    // client that accepts no coding still learns why.
+    const auto admitted_limit = "x-ratelimit-limit: " + std::to_string(admitted_requests) + "\r\n";
+    for (int connection = 0; connection != 2; ++connection) {
+        for (const auto headers : {std::string_view{}, refuse_every_coding}) {
+            error_handler_calls = 0;
+            const auto response = exchange(io, server.endpoint(), "/plain", headers);
+            const auto head = lowercase(response);
+            RUVIA_CHECK(response.starts_with("HTTP/1.1 429 "));
+            RUVIA_CHECK(head.find("\r\nretry-after: ") != std::string::npos);
+            RUVIA_CHECK(head.find("\r\n" + admitted_limit) != std::string::npos);
+            RUVIA_CHECK(response.ends_with("rejected"));
+            RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
         }
-        co_await first.shutdown();
-        co_await second.shutdown();
-        server.finish();
-        attachment.stop();
-        if (failure) {
-            std::rethrow_exception(failure);
-        }
-    };
-    auto root = attachment.loop().start(run());
-    attachment.run();
-    root.get();
+    }
+    server.finish();
 }
 
 RUVIA_TEST(http1_server_closes_connections_stalled_past_request_phase_timeouts) {

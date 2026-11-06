@@ -38,7 +38,8 @@ enum class http2_stream_data_write_status : std::uint8_t {
 
 // Submits caller-owned input with a credit-sized payload allowance, retaining
 // each unconsumed suffix until window and output credit are available.
-// Empty END_STREAM bypasses payload credit. The caller keeps bytes alive.
+// An empty END_STREAM takes no output credit but, like any DATA frame, waits
+// for both send windows to be positive. The caller keeps bytes alive.
 [[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, worker_signal& write_signal,

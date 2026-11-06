@@ -11,6 +11,15 @@
 #include "util/steady_clock.h"
 
 namespace ruvia::detail {
+
+connection_transport connection_transport::tcp(asio::ip::tcp::socket& socket) noexcept {
+    return connection_transport(
+        &socket, [](void* target) noexcept { close_socket(*static_cast<asio::ip::tcp::socket*>(target)); },
+        [](void* target) noexcept {
+            std::error_code ignored;
+            static_cast<asio::ip::tcp::socket*>(target)->cancel(ignored);
+        });
+}
 namespace {
 
 [[nodiscard]] worker_handle require_scanner_worker(worker_handle worker_value) {
@@ -110,24 +119,11 @@ connection_scanner::entry::write_scope::~write_scope() {
     --entry_.write_scopes_;
     entry_.touch();
 }
-bool connection_scanner::entry::enter_long_lived() noexcept {
-    const bool draining = scanner_ != nullptr && scanner_->impl_->draining_;
-    if (draining && !has_drain_check()) {
-        close_socket(*socket_);
-        return false;
-    }
+void connection_scanner::entry::enter_long_lived() noexcept {
     set_phase(phase::long_lived);
-    if (draining) {
-        notify_drain();
-        return false;
-    }
-    return true;
 }
 std::int64_t connection_scanner::entry::last_active_ms() const noexcept {
     return last_active_ms_;
-}
-bool connection_scanner::entry::draining() const noexcept {
-    return scanner_ != nullptr && scanner_->impl_->draining_;
 }
 void connection_scanner::entry::register_periodic_check(periodic_check_registration& registration,
     void* target, periodic_check_type tick, drain_check_type drain) noexcept {
@@ -215,9 +211,9 @@ void connection_scanner::entry::notify_drain() noexcept {
     }
 }
 connection_scanner::guard::guard(
-    connection_scanner& scanner, entry& entry_value, asio::ip::tcp::socket& socket)
+    connection_scanner& scanner, entry& entry_value, connection_transport transport_value)
     : entry_(entry_value) {
-    scanner.impl_->register_entry(entry_, socket);
+    scanner.impl_->register_entry(entry_, transport_value);
 }
 connection_scanner::guard::~guard() {
     connection_scanner::detach_entry(entry_);
@@ -275,9 +271,6 @@ void connection_scanner::stop() noexcept {
 void connection_scanner::close_all() noexcept {
     impl_->close_all();
 }
-void connection_scanner::drain() noexcept {
-    impl_->drain();
-}
 bool connection_scanner::evict_oldest_reusable() noexcept {
     auto& sentinel = impl_->reusable_sentinel_;
     for (auto* current = sentinel.reusable_next_; current != &sentinel; current = current->reusable_next_) {
@@ -290,7 +283,7 @@ bool connection_scanner::evict_oldest_reusable() noexcept {
         // the slot now. The close request keeps the entry out of the list
         // while its owner unwinds.
         impl_type::record_close_request(*current, impl_->cached_now_ms_);
-        close_socket(*current->socket_);
+        current->transport_.close();
         return true;
     }
     return false;
@@ -318,7 +311,7 @@ void connection_scanner::impl_type::stop() noexcept {
     running_ = false;
     timer_.cancel();
 }
-void connection_scanner::impl_type::register_entry(entry& entry_value, asio::ip::tcp::socket& socket) {
+void connection_scanner::impl_type::register_entry(entry& entry_value, connection_transport transport_value) {
     if (entry_value.scanner_ != nullptr) {
         throw std::logic_error("connection scanner entry is already registered");
     }
@@ -327,7 +320,7 @@ void connection_scanner::impl_type::register_entry(entry& entry_value, asio::ip:
     if (running_ && !timer_.registered()) {
         schedule();
     }
-    entry_value.socket_ = &socket;
+    entry_value.transport_ = transport_value;
     entry_value.scanner_ = owner_;
     entry_value.touch();
     entry_value.phase_started_ms_ = entry_value.last_active_ms_;
@@ -355,28 +348,13 @@ void connection_scanner::impl_type::unregister_entry(entry& entry_value) noexcep
     entry_value.next_->prev_ = entry_value.prev_;
     entry_value.prev_ = entry_value.next_ = nullptr;
     entry_value.unlink_reusable();
-    entry_value.socket_ = nullptr;
+    entry_value.transport_ = {};
     entry_value.detach_periodic_checks();
     entry_value.scanner_ = nullptr;
 }
 void connection_scanner::impl_type::close_all() noexcept {
     for (auto* current = sentinel_.next_; current != &sentinel_; current = current->next_) {
-        close_socket(*current->socket_);
-    }
-}
-void connection_scanner::impl_type::drain() noexcept {
-    draining_ = true;
-    // The coarse clock may lag by an interval; a lost cancel is closed by the
-    // first scan at least one whole interval after this drain.
-    const auto close_deadline = close_deadline_after(steady_now_ms(), options_.scan_interval_);
-    for (auto* current = sentinel_.next_; current != &sentinel_;) {
-        auto* const next = current->next_;
-        if (current->reading_request_head_) {
-            request_close(*current, close_deadline);
-        } else {
-            current->notify_drain();
-        }
-        current = next;
+        current->transport_.close();
     }
 }
 void connection_scanner::impl_type::schedule() {
@@ -479,7 +457,7 @@ void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
             return;
         }
     }
-    close_socket(*entry_value.socket_);
+    entry_value.transport_.close();
 }
 void connection_scanner::impl_type::request_close(entry& entry_value, std::int64_t deadline_ms) noexcept {
     // The pending read completes with operation_aborted; its owner then ends
@@ -487,8 +465,7 @@ void connection_scanner::impl_type::request_close(entry& entry_value, std::int64
     // read can lose the cancel (the ssl operation resumes reading a partial
     // record), so the deadline closes the socket of one that never returns.
     record_close_request(entry_value, deadline_ms);
-    std::error_code ignored;
-    entry_value.socket_->cancel(ignored);
+    entry_value.transport_.cancel();
 }
 void connection_scanner::impl_type::record_close_request(entry& entry_value, std::int64_t deadline_ms) noexcept {
     // Repeated requests (a timeout, then a drain) keep the earliest deadline.

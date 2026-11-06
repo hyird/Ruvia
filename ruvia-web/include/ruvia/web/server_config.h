@@ -22,7 +22,6 @@
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/detail/callback.h"
 #include "ruvia/web/detail/callback_ref.h"
-#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/static_files.h"
 #include "ruvia/web/tls_config.h"
 
@@ -43,30 +42,30 @@ enum class process_signal_handler_policy : std::uint8_t {
 // it, for at most 2 s and 4 MiB (fixed product limits), before TCP closes.
 // Unread peer input therefore cannot reset the connection ahead of the final
 // response; a lingering connection still counts as active and is closed by
-// a worker stop. Idle, request-head timeout and drain closes of a connection
+// a worker stop. Idle and request-head timeout closes of a connection
 // awaiting a request send TLS close_notify (RFC 9112 §9.8); write timeouts,
-// transport errors and forced stops close immediately.
+// transport errors and application::stop() close immediately.
+// An HTTP/2 connection ends gracefully on its own (RFC 9113 §6.8) when it
+// reaches max_requests_per_connection_ or a connection timeout fires: a
+// first GOAWAY with a PING, then the final GOAWAY after the PING round trip
+// or 1 s, whichever comes first (product limit). A timeout's drain ends the
+// session at its final GOAWAY, cancelling streams still open; a write still
+// blocked then is closed 2 s after the timeout. HTTP/3 does the same with its
+// shutdown-notice and final GOAWAY (RFC 9114 §5.2).
 // On Linux, a final buffered plain response may share its last TCP segment with
 // FIN. Reusable, streamed and TLS output do not use this send hint.
 // TCP may close before the session task is reclaimed. Worker shutdown still
 // joins session tasks before retiring their worker-local resources.
 struct server_config final {
-    // Business workers; each owns its listeners and accepts on its event loop.
-    // No additional server network thread is created.
+    // Business workers, each with its own event loop; a connection stays on
+    // the worker that adopted it. On POSIX every worker binds each TCP
+    // listener with SO_REUSEPORT and accepts on its own event loop. On
+    // Windows one acceptor thread per application owns every listener
+    // exclusively (SO_EXCLUSIVEADDRUSE) and hands each accepted socket to the
+    // business worker holding the fewest connections; a socket that worker's
+    // queue cannot admit is closed and counted in connections_refused_.
     std::size_t worker_count_{(std::max)(1U, std::thread::hardware_concurrency())};
     process_signal_handler_policy process_signal_handlers_{process_signal_handler_policy::external_owner};
-    // Graceful stop of a serving app: once stop() closes admission, admitted
-    // requests, tunnels and WebSocket close handshakes may finish for up to
-    // this long before every remaining connection is closed. Zero closes them
-    // at once. An HTTP/1 request whose head was already received in full when
-    // the drain began is still served, with Connection: close; handlers learn
-    // that the drain began from context::drain_token(). An HTTP/2 drain
-    // (stop, request cap or connection timeout) sends its final GOAWAY after
-    // the PING round trip or min(1 s, half of this value), whichever comes
-    // first (product limit). A drain started by a
-    // connection timeout ends the session at that point, cancelling streams
-    // still open; a write still blocked then is closed 2 s after the timeout.
-    std::chrono::milliseconds drain_timeout_{std::chrono::seconds(10)};
     std::size_t worker_queue_capacity_{1024};
     // HTTP connection inactivity: the keep-alive wait for the next request,
     // and a handler -- buffered or response-stream -- that neither reads nor
@@ -122,7 +121,8 @@ struct server_config final {
     std::optional<std::size_t> max_connections_per_worker_{1024};
     // Cumulative request cap for each connection. HTTP/2 then drains gracefully
     // (RFC 9113 section 6.8): streams the client had in flight before the final
-    // GOAWAY are still served, at most 128 beyond the cap.
+    // GOAWAY are still served, at most 128 beyond the cap. HTTP/3 sends its
+    // shutdown-notice GOAWAY and the final one alike (RFC 9114 §5.2).
     std::optional<std::size_t> max_requests_per_connection_{1000};
     std::size_t max_buffered_body_bytes_{default_max_buffered_body_bytes};
     // Live inbound buffer allocations across buffered and streamed HTTP request
@@ -140,8 +140,6 @@ struct server_config final {
     // connection_scan_interval_ with no request exchange in progress and no
     // connection activity.
     memory_pool_config memory_pool_{};
-    // Shared by all registered outbound HTTP client aliases on each worker.
-    http_client_result_budget_config http_client_result_budget_{};
 };
 
 struct trusted_proxy_config final {
@@ -158,14 +156,15 @@ struct access_log_record_access;
 struct connection_failure_record_access;
 }  // namespace detail
 
-// One bind address with optional HTTP and HTTPS service ports, independent of
-// the wire protocol. application validates and expands this value atomically. An
-// omitted port disables that service. auto_https_redirect_ targets the HTTPS
-// service port. Each worker independently binds every enabled service. POSIX
-// requires SO_REUSEPORT in addition to SO_REUSEADDR; unsupported platforms fail
-// startup. Windows uses SO_REUSEADDR only: it does not provide SO_REUSEPORT's
-// isolation or distribution semantics, other processes can reuse the port, and
-// connection distribution across workers is not guaranteed to be balanced.
+// One bind address with optional HTTP, HTTPS and HTTP/3 service ports,
+// independent of the wire protocol. application validates and expands this
+// value atomically. An omitted port disables that service. auto_https_redirect_
+// targets the HTTPS service port. Each worker independently binds every enabled
+// service. POSIX requires SO_REUSEPORT in addition to SO_REUSEADDR; unsupported
+// platforms fail startup. Windows uses SO_REUSEADDR only: it does not provide
+// SO_REUSEPORT's isolation or distribution semantics, other processes can reuse
+// the port, and connection distribution across workers is not guaranteed to be
+// balanced.
 struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
     // this configuration.
@@ -173,6 +172,37 @@ struct listen_config final {
     // Values are checked before narrowing; an enabled service must be non-zero.
     std::optional<port_number> http_{};
     std::optional<port_number> https_{};
+    // HTTP/3 (RFC 9114) over QUIC on this UDP port, serving the HTTPS
+    // listener's tls_ identities with TLS 1.3 and ALPN "h3" only. Requires
+    // https_ and a build with RUVIA_ENABLE_HTTP3; it may equal the https_
+    // number, since UDP and TCP ports are distinct. Every response of the
+    // HTTPS listener (HTTP/1.1 and HTTP/2) then advertises it with
+    // `Alt-Svc: h3=":<port>"; ma=<http3_alt_svc_max_age_>` (RFC 7838 §3)
+    // unless the application set its own Alt-Svc field. POSIX workers each
+    // bind the UDP port with SO_REUSEPORT and steer packets of a connection
+    // to the worker that owns it by its connection ID. On Windows the
+    // acceptor thread owns the UDP socket exclusively: it steers each packet
+    // to the worker its connection ID names, a new connection's Initial to
+    // the worker a keyed hash of the client's chosen ID selects (so its
+    // retransmissions reach the same worker), and sends the datagrams workers
+    // hand back through a bounded queue -- one past the bound is lost, as UDP
+    // may lose any. QUIC connection migration is
+    // disabled (disable_active_migration), Retry and 0-RTT are not offered,
+    // and no Stateless Reset is sent. CONNECT, and a route that would upgrade
+    // to WebSocket, is answered with 501; extended CONNECT (RFC 9220) is not
+    // advertised, so a request carrying :protocol is malformed. The server
+    // limits apply per request stream as for HTTP/2: idle_timeout_ is also
+    // the QUIC max_idle_timeout, request_header_timeout_ and
+    // header_completion_timeout_ bound the handshake, and a request body or an
+    // output wait (the peer not acknowledging) that outlasts its timeout
+    // resets only that stream with H3_REQUEST_CANCELLED. A request cap or
+    // connection timeout sends the shutdown-notice GOAWAY, the final GOAWAY
+    // after min(1 s, three probe timeouts), then CONNECTION_CLOSE with
+    // H3_NO_ERROR once every admitted stream closed (RFC 9114 §5.2);
+    // application::stop() sends CONNECTION_CLOSE(H3_NO_ERROR) at once.
+    std::optional<port_number> http3_{};
+    // Alt-Svc freshness lifetime (RFC 7838 §3 "ma"); must be positive.
+    std::chrono::seconds http3_alt_svc_max_age_{std::chrono::hours(24)};
     tls_config tls_{};
     bool auto_https_redirect_{false};
 };

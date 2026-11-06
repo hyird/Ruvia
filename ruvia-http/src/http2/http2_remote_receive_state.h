@@ -122,14 +122,6 @@ private:
         return true;
     }
 
-    [[nodiscard]] bool rollback_head_end_stream() noexcept {
-        if (head_end_stream_pending() == nullptr) {
-            return false;
-        }
-        state_ = state_type(http2_remote_head_pending());
-        return true;
-    }
-
     [[nodiscard]] bool finalize_content_head() noexcept {
         if (head_pending() != nullptr) {
             state_ = state_type(http2_remote_content_open());

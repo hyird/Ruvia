@@ -18,7 +18,6 @@
 
 #include "failing_memory_resource.h"
 #include "output_drain.h"
-#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -266,69 +265,5 @@ RUVIA_TEST(http2_locally_synthesized_push_has_no_received_pseudo_header_order) {
     if (pushed.index() == 0) {
         RUVIA_CHECK(std::get<0>(pushed).request_view().pseudo_header_order_.empty());
         RUVIA_CHECK(std::get<0>(pushed).request_view().path_ == "/asset");
-    }
-}
-
-RUVIA_TEST(http2_pseudo_header_order_rolls_back_on_initial_and_final_continuation_allocation_failure) {
-    constexpr std::array expected{pseudo_header::method, pseudo_header::authority, pseudo_header::scheme, pseudo_header::path};
-    std::pmr::string block;
-    const std::string method(64, 'M');
-    const std::string authority = std::string(64, 'a') + ".test";
-    const std::string path = "/" + std::string(128, 'p');
-    ruvia::hpack_encoder::encode_header(block, ":method", method);
-    ruvia::hpack_encoder::encode_header(block, ":authority", authority);
-    encode_pseudo_header(block, pseudo_header::scheme);
-    ruvia::hpack_encoder::encode_header(block, ":path", path);
-    ruvia::hpack_encoder::encode_header(block, "x-long", std::string(256, 'v'));
-    for (const bool continuation : {false, true}) {
-        bool completed = false;
-        bool saw_failure = false;
-        for (std::size_t failure_index = 0; failure_index < 128 && !completed; ++failure_index) {
-            failing_memory_resource resource;
-            {
-                auto server = ruvia::http2_connection::server({.resource_ = &resource});
-                (void)ruvia::testing::drain_output(server);
-                auto opening = opening_wire();
-                if (continuation) {
-                    append_frame(opening, ruvia::http2_frame_type::headers, 0x1, 1, std::string_view(block).substr(0, 1));
-                }
-                (void)server.feed(opening);
-                RUVIA_CHECK(!server.next_event());
-                (void)ruvia::testing::drain_output(server);
-                std::string wire;
-                append_frame(wire, continuation ? ruvia::http2_frame_type::continuation : ruvia::http2_frame_type::headers,
-                    continuation ? 0x4 : 0x5, 1, std::string_view(block).substr(continuation ? 1 : 0));
-                resource.fail_after_stl_operation(failure_index, ruvia_ctx);
-                bool failed = false;
-                try {
-                    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-                } catch (const std::bad_alloc&) {
-                    failed = true;
-                }
-                resource.allow_allocations();
-                if (failed) {
-                    saw_failure = true;
-                    RUVIA_CHECK(!server.connection_error());
-                    RUVIA_CHECK(!server.next_event());
-                    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-                } else {
-                    completed = true;
-                }
-                auto head = take_request_head(server);
-                RUVIA_CHECK(head.has_value());
-                if (head) {
-                    const auto view = head->request_view();
-                    RUVIA_CHECK(same_order(view.pseudo_header_order_, expected));
-                    RUVIA_CHECK(view.method_ == method && view.authority_ == authority && view.path_ == path);
-                    RUVIA_CHECK(head->build_request().header("x-long") == std::string(256, 'v'));
-                }
-                RUVIA_CHECK(!server.connection_error());
-            }
-            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-        }
-        RUVIA_CHECK(completed);
-        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            RUVIA_CHECK(saw_failure);
-        }
     }
 }

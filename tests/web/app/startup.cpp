@@ -757,32 +757,3 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     }
     app.trusted_proxies(nullptr);
 }
-
-// Registered clients look their hosts up on the application blocking pool, so
-// a disabled pool fails run() for a DNS host instead of blocking a worker.
-RUVIA_TEST(app_run_rejects_a_dns_client_without_the_blocking_pool) {
-    using namespace startup_test;
-    auto& app = ruvia::app();
-    asio::io_context io;
-    ruvia::test::tcp_port_reservation reservation(io);
-    const auto endpoint = reservation.endpoint();
-    app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
-    app.blocking_pool(nullptr);
-    app.http_client({.alias_ = "dns-host", .config_ = {.scheme_ = ruvia::http_scheme::http, .host_ = "localhost"}});
-    auto failed_run = std::async(std::launch::async, [&app] {
-        try {
-            app.run();
-            return false;
-        } catch (const std::invalid_argument&) {
-            return true;
-        }
-    });
-    const bool returned = failed_run.wait_for(3s) == std::future_status::ready;
-    RUVIA_CHECK(returned);
-    if (!returned) {
-        app.stop();
-    }
-    RUVIA_CHECK(failed_run.get());
-    app.http_client(nullptr);
-    app.blocking_pool(ruvia::blocking_pool_options{});
-}

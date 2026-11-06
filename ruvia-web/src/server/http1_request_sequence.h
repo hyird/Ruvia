@@ -15,7 +15,7 @@ namespace ruvia::detail {
 // HTTP still owns persistence and response framing; this connection state keeps
 // an optional saturating remaining-response budget, contributes one typed close policy
 // before a streamed head is committed, and records each completed route once.
-// A draining worker also closes the connection after its current response.
+// A stopping worker (which closes every connection) never allows reuse.
 // Once the peer has ended its request direction behind pipelined requests,
 // the sequence is those already received: they are served, then the
 // connection closes without reading the transport again.
@@ -58,7 +58,6 @@ public:
     // A streamed head already carries the pre-commit close policy. Once bytes
     // are committed the plan cannot be tightened; fail fast if a caller tries
     // to complete a limit-ending response whose wire plan still permits reuse.
-    // A drain that began after the commit closes the connection instead.
     void complete_committed_response(http1_request_connection_plan connection_plan) noexcept {
         if (budget_ends_with_next_response() &&
             connection_plan.disposition() != http1_close_policy::close_after_response) {

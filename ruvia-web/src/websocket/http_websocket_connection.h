@@ -61,8 +61,7 @@ public:
           reader_done_signal_(worker_value),
           background_tasks_(worker_value, {.resource_ = &resource}) {
         buffer_.append(initial_bytes);
-        scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk,
-            &server_websocket_connection::drain_thunk);
+        scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk);
     }
 
     server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
@@ -75,10 +74,6 @@ public:
 
     static void heartbeat_tick_thunk(void* target, std::int64_t now) noexcept {
         static_cast<server_websocket_connection*>(target)->heartbeat_tick(now);
-    }
-
-    static void drain_thunk(void* target) noexcept {
-        static_cast<server_websocket_connection*>(target)->start_going_away();
     }
 
     [[nodiscard]] task<std::optional<websocket_message>> read();
@@ -113,7 +108,7 @@ public:
         }
     }
     task<void> detach_and_drain_writes();
-    // The failure of a heartbeat or Going Away write. Those writes run detached
+    // The failure of a heartbeat write. Those writes run detached
     // from any caller, so the session reports it once detach_and_drain_writes()
     // has aborted the transport and joined them.
     [[nodiscard]] std::exception_ptr take_background_failure() noexcept {
@@ -288,10 +283,6 @@ private:
     [[nodiscard]] bool pong_observable() const noexcept;
     void restart_pong_window(std::int64_t now) noexcept;
     void heartbeat_tick(std::int64_t now) noexcept;
-    // A draining server starts the close handshake with 1001 Going Away as
-    // soon as the write lane is free; the close-handshake timeout bounds it.
-    void start_going_away() noexcept;
-    task<void> write_going_away_close();
     task<std::optional<websocket_message>> read_owned(read_guard_type read_guard);
     task<void> write_owned(
         websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease, bool compress);
@@ -334,7 +325,6 @@ private:
     bool write_active_{false};
     read_phase_type read_phase_{read_phase_type::idle};
     websocket_liveness_state_type liveness_state_{websocket_liveness_idle{}};
-    bool going_away_pending_{false};
     std::exception_ptr background_failure_;
     std::uint64_t heartbeat_sequence_{0};
     // Whether the last read between frames received less than

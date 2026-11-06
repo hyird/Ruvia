@@ -171,6 +171,11 @@ public:
         remote_address_ = remote_address;
         client_address_ = client_address;
     }
+    // The listener's Alt-Svc value (RFC 7838 §3), added to every prepared
+    // response that does not carry its own; it borrows listener storage.
+    void bind_alternative_service(std::string_view value) noexcept {
+        alternative_service_ = value;
+    }
 
     // All arguments borrow the current request owner through completion. Only
     // an uncommitted response may enter. The common response (no blocking-pool
@@ -200,6 +205,7 @@ private:
     std::string_view remote_address_;
     std::string_view client_address_;
     std::chrono::steady_clock::time_point start_;
+    std::string_view alternative_service_;
     mutable request_io_metrics io_metrics_{};
 };
 

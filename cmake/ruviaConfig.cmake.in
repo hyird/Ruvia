@@ -1,6 +1,8 @@
 @PACKAGE_INIT@
 
 set(ruvia_VERSION "@PROJECT_VERSION@")
+set(RUVIA_ENABLE_HTTP2 @RUVIA_ENABLE_HTTP2@)
+set(RUVIA_ENABLE_HTTP3 @RUVIA_ENABLE_HTTP3@)
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
 set(RUVIA_ENABLE_POSTGRESQL @RUVIA_ENABLE_POSTGRESQL@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)
@@ -17,6 +19,8 @@ if(NOT ruvia_FIND_COMPONENTS)
     set(ruvia_NOT_FOUND_MESSAGE "find_package(ruvia) requires explicit components: core, http, or web")
     return()
 endif()
+set(_ruvia_saved_module_path "${CMAKE_MODULE_PATH}")
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 
 include(CMakeFindDependencyMacro)
 set(requested ${ruvia_FIND_COMPONENTS})
@@ -50,6 +54,8 @@ foreach(component IN ITEMS core http web)
     endif()
     set(ruvia_${component}_FOUND TRUE)
 endforeach()
+set(CMAKE_MODULE_PATH "${_ruvia_saved_module_path}")
+unset(_ruvia_saved_module_path)
 
 # Controller archives register through static initialization.
 if(ruvia_web_FOUND)

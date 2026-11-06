@@ -25,9 +25,10 @@ enum class http_request_target_form : std::uint8_t {
     absolute,
     authority,
     asterisk,
-    // HTTP/2 carries target components as pseudo-fields rather than
-    // one HTTP/1 request-target token.
+    // HTTP/2 and HTTP/3 carry target components as pseudo-fields rather
+    // than one HTTP/1 request-target token.
     http2,
+    http3,
 };
 
 class http_request;

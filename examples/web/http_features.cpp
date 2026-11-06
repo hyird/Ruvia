@@ -1,8 +1,8 @@
 // HTTP/1 and HTTP/2 server features through the Web API.
-// Run ruvia_example_http_features, then ruvia_example_http_client_advanced [1|2].
+// Run ruvia_example_http_features, then query it with any HTTP/1.1 or HTTP/2 client.
 // Plain HTTP listens on 127.0.0.1:8093 and accepts HTTP/2 prior knowledge.
 // Set RUVIA_TLS_CERT and RUVIA_TLS_KEY to enable HTTPS on port 8444;
-// the certificate must cover localhost and clients trust it through RUVIA_TLS_CA.
+// the certificate must cover localhost.
 
 #include <array>
 #include <chrono>

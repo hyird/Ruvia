@@ -1,6 +1,5 @@
 #include <stdexcept>
 
-#include "ruvia/web/http_client.h"
 #include "ruvia/web/session.h"
 
 #include "context_request_fixture.h"
@@ -13,18 +12,11 @@
 #include "ruvia/web/redis/redis.h"
 #endif
 
+#if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
 RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
     const auto response = context_request_test::with_context(
         ruvia::test_request::get("/capabilities"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
-            bool http_client_rejected = false;
-            try {
-                static_cast<void>(context_value.http_client());
-            } catch (const ruvia::http_client_error& error) {
-                http_client_rejected = error.code() == ruvia::http_client_error::code_type::not_configured;
-            }
-            RUVIA_CHECK(http_client_rejected);
-
 #ifdef RUVIA_ENABLE_DATABASE
             bool database_rejected = false;
             try {
@@ -48,6 +40,7 @@ RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
         });
     (void)response;
 }
+#endif
 
 RUVIA_TEST(context_session_capability_requires_explicit_middleware_binding) {
     const auto response = context_request_test::with_context(

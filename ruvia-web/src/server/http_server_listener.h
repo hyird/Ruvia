@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
@@ -21,6 +24,10 @@
 #include "tls/tls_session_ticket_keys.h"
 
 namespace ruvia::detail {
+
+// A server-chosen QUIC connection ID carries its owning worker's index in two
+// bytes, so packets can be steered to that worker.
+inline constexpr std::size_t http3_max_worker_count = 65536;
 
 struct http_server_listener_definition final {
     // Every TLS member is loaded when the listener is configured: no file name
@@ -60,17 +67,32 @@ struct http_server_listener_definition final {
         std::uint16_t https_port_;
     };
 
+    // The HTTP/3 service of a TLS listener: a QUIC endpoint on the same
+    // address and UDP port_, serving the listener's TLS identities.
+    struct http3_service final {
+        std::uint16_t port_;
+        std::chrono::seconds alt_svc_max_age_;
+        // Created once by server configuration validation and shared by every
+        // worker: keys the connection IDs that steer packets between workers
+        // and derives stateless reset tokens (RFC 9000 §10.3.2).
+        std::shared_ptr<const std::array<std::uint8_t, 32>> secret_;
+    };
+
     using transport_type = std::variant<plain_http, tls, redirect_http_to_https>;
 
     http_server_listener_definition(asio::ip::tcp::endpoint configured_endpoint,
-        transport_type configured_transport = plain_http{})
+        transport_type configured_transport = plain_http{},
+        std::optional<http3_service> configured_http3 = std::nullopt)
         : endpoint_(std::move(configured_endpoint)),
-          transport_(std::move(configured_transport)) {}
+          transport_(std::move(configured_transport)),
+          http3_(std::move(configured_http3)) {}
 
     [[nodiscard]] http_server_listener_definition clone(std::pmr::memory_resource* resource) const;
 
     asio::ip::tcp::endpoint endpoint_;
     transport_type transport_;
+    // Only a TLS listener carries one.
+    std::optional<http3_service> http3_;
 };
 
 // Only validated configurations carry a key ring; an unvalidated definition
@@ -84,6 +106,16 @@ struct http_server_listener_definition final {
 }
 
 using sni_context_store_type = std::pmr::vector<asio::ssl::context>;
+
+class http_server_session_config;
+
+// The SNI callback argument of one TLS context family: the listener's
+// identities and the per-host contexts built for that family (TLS over TCP,
+// or TLS for QUIC).
+struct http_server_sni_selection final {
+    const http_server_session_config* session_;
+    sni_context_store_type* contexts_;
+};
 
 class http_server_session_config final {
 public:
@@ -107,12 +139,21 @@ public:
     const http_server_listener_definition::redirect_http_to_https* redirect() const&& = delete;
 
     http_server_listener_definition::transport_type transport_;
+    std::optional<http_server_listener_definition::http3_service> http3_;
+    // The Alt-Svc field value advertising http3_ (RFC 7838 §3), sent on every
+    // response of this TLS listener; empty without an HTTP/3 service.
+    std::pmr::string alternative_service_;
     // This worker's copy of the listener's ticket keys, refreshed on the
     // worker thread once per key epoch. The TLS contexts below point at it, so
     // it is declared before them and outlives them.
     std::optional<tls_session_ticket_key_set> ticket_keys_;
     std::optional<asio::ssl::context> tls_context_;
     sni_context_store_type sni_contexts_;
+    // TLS 1.3 contexts with ALPN h3 for the HTTP/3 service, same identities.
+    std::optional<asio::ssl::context> quic_tls_context_;
+    sni_context_store_type quic_sni_contexts_;
+    http_server_sni_selection tls_sni_{this, &sni_contexts_};
+    http_server_sni_selection quic_sni_{this, &quic_sni_contexts_};
 };
 
 }  // namespace ruvia::detail

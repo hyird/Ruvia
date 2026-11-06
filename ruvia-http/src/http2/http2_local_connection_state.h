@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <variant>
 
-#include "http2/http2_frame_types.h"
+#include "ruvia/http/http2_framing.h"
 
 namespace ruvia::detail {
 

@@ -1,4 +1,10 @@
 ruvia_collect_cpp_sources(ruvia_web_sources src)
+if(NOT RUVIA_ENABLE_HTTP2)
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/http2/")
+endif()
+if(NOT RUVIA_ENABLE_HTTP3)
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/http3/")
+endif()
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
@@ -37,6 +43,12 @@ target_link_libraries(ruvia-web
         ${RUVIA_WEB_DEPENDENCIES}
 )
 target_compile_definitions(ruvia-web PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
+if(RUVIA_ENABLE_HTTP2)
+    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_HTTP2)
+endif()
+if(RUVIA_ENABLE_HTTP3)
+    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_HTTP3)
+endif()
 
 foreach(_ruvia_feature IN ITEMS MARIADB POSTGRESQL REDIS JWT)
     if(RUVIA_ENABLE_${_ruvia_feature})

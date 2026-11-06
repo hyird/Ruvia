@@ -23,47 +23,6 @@ namespace detail {
 class hpack_decoder;
 }  // namespace detail
 
-// Non-zero 32-bit HPACK table index (RFC 7541 section 2.3.3). Checked before
-// narrowing so zero, negative, or wider integers cannot wrap into valid indices.
-class hpack_index final {
-public:
-    template <std::integral integer_type>
-    constexpr hpack_index(integer_type value)
-        : value_(is_valid_value(value)
-                     ? static_cast<std::uint32_t>(value)
-                     : throw std::invalid_argument("HPACK index must be in 1..4294967295")) {}
-
-    template <std::integral integer_type>
-    [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
-        return std::cmp_greater(+value, 0) && std::in_range<std::uint32_t>(+value);
-    }
-
-    template <std::integral integer_type>
-    [[nodiscard]] static constexpr std::optional<hpack_index> try_from_value(integer_type value) noexcept {
-        if (!is_valid_value(value)) {
-            return std::nullopt;
-        }
-        return hpack_index(static_cast<std::uint32_t>(value), validated_tag_type{});
-    }
-
-    [[nodiscard]] constexpr std::uint32_t value() const noexcept {
-        return value_;
-    }
-
-    friend constexpr auto operator<=>(hpack_index, hpack_index) = default;
-
-private:
-    struct validated_tag_type {};
-
-    constexpr hpack_index(std::uint32_t value, validated_tag_type) noexcept
-        : value_(value) {}
-
-    std::uint32_t value_{1};
-};
-
-static_assert(std::is_trivially_copyable_v<hpack_index>);
-static_assert(sizeof(hpack_index) == sizeof(std::uint32_t));
-
 // 32-bit HPACK dynamic-table byte capacity (RFC 7541 section 6.3). Checked
 // before narrowing so negative or wider integers cannot wrap into valid sizes.
 class hpack_table_size final {
@@ -107,13 +66,11 @@ private:
 static_assert(std::is_trivially_copyable_v<hpack_table_size>);
 static_assert(sizeof(hpack_table_size) == sizeof(std::uint32_t));
 
+// nghttp2's inflater reports every malformed or truncated block as one
+// decompression failure (RFC 7541 section 3.2 makes any of them a connection
+// error), so the cause is not subdivided.
 enum class hpack_decode_error : std::uint8_t {
-    need_more,
-    integer_overflow,
-    invalid_index,
-    invalid_string,
-    invalid_huffman,
-    dynamic_table_size,
+    compression_error,
     callback_rejected,
 };
 
@@ -123,13 +80,20 @@ struct hpack_decoder_options final {
     std::pmr::memory_resource* resource_{nullptr};
 };
 
-// Stateful RFC 7541 decoder. One decode() call is one dynamic-table
-// transaction; protocol failures roll back table changes while callback
-// rejection still consumes the complete block to keep peer state synchronized.
-// A block retains its starting table snapshot for rollback, but entries inserted
-// and evicted within that same block are retired incrementally.
-// Leading dynamic-table capacity updates are applied in wire order. Updates
-// after a field or above the configured maximum are decoding errors.
+// Stateful RFC 7541 decoder backed by nghttp2's HPACK inflater; every
+// allocation, the dynamic table included, uses the configured resource.
+// decode() consumes one complete field block. Callback rejection stops further
+// callbacks but still decodes the rest of the block, so the dynamic table stays
+// synchronized and the decoder remains usable. A compression error or an
+// allocation failure leaves the table out of step with the peer (RFC 7541 section
+// 2.2 offers no recovery): the decoder is poisoned, every later decode() reports
+// compression_error, and it must be discarded. Leading dynamic-table capacity
+// updates are applied in wire order; updates after a field or above the
+// configured maximum are compression errors.
+// Lowering the maximum below the table's current capacity evicts at once, and
+// the next block must then begin with a capacity update no larger than the
+// lowest maximum set since (RFC 7541 section 4.2); a block without one is a
+// compression error. Raising the maximum requires no update.
 class hpack_decoder final {
 public:
     explicit hpack_decoder(hpack_decoder_options options = {});
@@ -148,7 +112,7 @@ public:
     // A callback must keep this decoder's implementation alive until decode()
     // returns. Nested decode() on the same implementation throws std::logic_error;
     // a different decoder may be used. Callback exceptions are rethrown after
-    // consuming a valid block and synchronizing its dynamic table.
+    // consuming the block, so a valid block still synchronizes the dynamic table.
     template <typename callback>
         requires std::predicate<callback&, std::string_view, std::string_view>
     [[nodiscard]] std::optional<hpack_decode_error> decode(std::string_view block, callback&& callback_value) {
@@ -181,10 +145,8 @@ public:
             }
             return result_value;
         } catch (...) {
-            // A callback exception is the initiating failure. Continuing the
-            // block is only a best-effort attempt to preserve HPACK table sync;
-            // if that continuation also fails, the decoder rolls its transaction
-            // back and the original callback exception still reaches its owner.
+            // A callback exception is the initiating failure; it still reaches
+            // its owner when continuing the block failed as well.
             if (callback_failure) {
                 std::rethrow_exception(callback_failure);
             }
@@ -203,25 +165,18 @@ private:
     std::unique_ptr<detail::hpack_decoder, impl_deleter_type> impl_;
 };
 
-struct hpack_header_with_name_index_options final {
-    bool never_indexed_{false};
-};
-
+// Field-level HPACK encoding through nghttp2's deflater with a zero-capacity
+// dynamic table, so no call depends on or changes encoder state: an exact
+// static-table match is indexed, any other field is a literal without indexing
+// (never indexed for authorization, proxy-authorization, cookie and
+// set-cookie, RFC 7541 section 7.1.3), Huffman-coded when that is shorter.
 class hpack_encoder final {
 public:
-    // Indexed representations require a nonzero index; zero throws
-    // std::invalid_argument before changing output.
-    static void encode_indexed(std::pmr::string& output, hpack_index index);
-    static void encode_dynamic_table_size_update(std::pmr::string& output, hpack_table_size maximum);
     // Names and values may borrow output. Aliasing inputs are owned in output's
-    // resource before appending can invalidate them.
-    // Literal fields reserve their complete encoding before writing; allocation
-    // failure leaves the existing output bytes unchanged.
+    // resource before appending can invalidate them. Allocation failure leaves
+    // the existing output bytes unchanged.
     static void encode_header(
         std::pmr::string& output, std::string_view name, std::string_view value);
-    // The same borrowing and reservation contracts apply; name_index must be nonzero.
-    static void encode_header_with_name_index(std::pmr::string& output, hpack_index name_index,
-        std::string_view value, hpack_header_with_name_index_options options = {});
     static void encode_status(std::pmr::string& output, http_status_code status);
 };
 

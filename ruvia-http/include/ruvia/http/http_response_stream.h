@@ -17,7 +17,10 @@ enum class http_response_stream_framing : std::uint8_t {
     // the body is delimited by the connection close (RFC 9112 6.3), so it also
     // announces Connection: close and the session shuts the socket afterwards.
     http1_close_delimited,
-    http2_frames
+    http2_frames,
+    // RFC 9114 §4.1: HTTP/3 delimits content with DATA frames and carries a
+    // trailer section in a trailing HEADERS frame, exactly like HTTP/2.
+    http3_frames
 };
 // A trailer section is terminal message metadata, not an independently queued
 // side channel. The caller declares whether this head commit is reserving a
@@ -57,12 +60,13 @@ public:
     }
 
     // HTTP/1.1 requires chunked framing for trailers (RFC 9112 7.1.2).
-    // HTTP/2 carries them in a trailing field section. A body-suppressed
+    // HTTP/2 and HTTP/3 carry them in a trailing field section. A body-suppressed
     // response (HEAD / 304) ends at its initial head and discards trailers.
     [[nodiscard]] bool trailers_available() const noexcept {
         return !body_plan_.body_suppressed() &&
                (framing_ == http_response_stream_framing::http1_chunked ||
-                   framing_ == http_response_stream_framing::http2_frames);
+                   framing_ == http_response_stream_framing::http2_frames ||
+                   framing_ == http_response_stream_framing::http3_frames);
     }
 
     [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
@@ -143,7 +147,8 @@ private:
 // An application Transfer-Encoding must be exactly the `chunked` coding (OWS
 // and ASCII case aside): it is a hint the framework's writer replaces with its
 // own framing. Any other value throws http1_response_head_error for an HTTP/1
-// framing and std::invalid_argument for HTTP/2 before the response changes.
+// framing and std::invalid_argument for HTTP/2 or HTTP/3 before the response
+// changes.
 [[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
     http_response response, http_response_stream_commit_plan commit_plan);
 }  // namespace ruvia

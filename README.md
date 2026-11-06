@@ -1,12 +1,12 @@
 # Ruvia
 
-Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声明式类型化模型、中间件、流式传输、WebSocket、HTTP 隧道、出站客户端，以及可选的 SQL（MariaDB / PostgreSQL）、ORM、Redis 和 JWT 支持。
+Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声明式类型化模型、中间件、流式传输、WebSocket、HTTP 隧道，以及可选的 SQL（MariaDB / PostgreSQL）、ORM、Redis 和 JWT 支持。
 
 | 库目录 | CMake Target | 职责与公开依赖 |
 | --- | --- | --- |
 | `ruvia-core` | `ruvia::core` | 协程任务、事件循环、有界通道与阻塞卸载池；依赖 standalone Asio、`Threads::Threads` 与 mimalloc。 |
-| `ruvia-http` | `ruvia::http` | 独立 sans-I/O 的 HTTP/1.0、HTTP/1.1、HTTP/2、内容压缩与 WebSocket 协议层；依赖 zlib、Brotli 与 Zstandard。 |
-| `ruvia-web` | `ruvia::web` | 服务端、路由、中间件、Model/ORM、TLS、出站客户端与数据接入；依赖 `ruvia::core`、`ruvia::http` 与 OpenSSL 3.0+。 |
+| `ruvia-http` | `ruvia::http` | 独立 sans-I/O 的 HTTP/1.0、HTTP/1.1、可选 HTTP/2 与 HTTP/3、内容压缩及 WebSocket 协议层；HTTP/2 出站 HPACK 使用 nghttp2，HTTP/3 的 QPACK/QUIC 使用 nghttp3 与 ngtcp2。 |
+| `ruvia-web` | `ruvia::web` | 服务端、路由、中间件、Model/ORM、TLS 与数据接入；依赖 `ruvia::core`、`ruvia::http` 与 OpenSSL 3.0+，HTTP/3 通过 ngtcp2 的 OpenSSL 适配层接入 QUIC TLS。 |
 
 ## 构建与接入
 
@@ -21,12 +21,14 @@ Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声
 | `RUVIA_BUILD_WEB` | `ON` | 构建 `ruvia::web`（要求 `RUVIA_BUILD_CORE=ON` 且 `RUVIA_BUILD_HTTP=ON`）。 |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | 构建 `examples/` 示例程序（要求 `RUVIA_BUILD_WEB=ON`）。 |
 | `RUVIA_BUILD_TESTS` | `OFF` | 构建 `tests/` 测试套件。 |
+| `RUVIA_ENABLE_HTTP2` | `ON` | 启用 HTTP/2 公开 API、实现与测试（依赖 `nghttp2`）。 |
+| `RUVIA_ENABLE_HTTP3` | `ON` | 启用 HTTP/3/QUIC 公开 API、服务端 `listen_config::http3_`、实现与测试（依赖 `nghttp3`、`ngtcp2`；Web 同时使用 `ngtcp2[openssl]`）；关闭时配置 `http3_` 启动失败。 |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | 启用 MariaDB 驱动与公开数据库 API（依赖 `libmariadb`）。 |
 | `RUVIA_ENABLE_POSTGRESQL` | `OFF` | 启用 PostgreSQL 驱动、ORM 与公开数据库 API（依赖 `libpq`）。 |
 | `RUVIA_ENABLE_REDIS` | `OFF` | 启用 Redis 客户端、Pub/Sub、Streams、Redis ORM、服务端会话与数据库查询缓存（依赖 `hiredis`）。 |
 | `RUVIA_ENABLE_JWT` | `OFF` | 启用 JWT 签发与校验 API。 |
 
-未启用的可选功能不编译对应源码，也不安装对应的公开头文件目录（`db/`、`redis/`、`auth/`）。
+未启用的可选功能不编译对应源码，也不安装对应的公开头文件或目录；HTTP/2 与 HTTP/3 可独立关闭，数据库、Redis、JWT 分别对应 `db/`、`redis/`、`auth/`。
 
 安装后的包通过 `find_package(ruvia REQUIRED COMPONENTS core http web)` 与对应的 `ruvia::` target 接入（请求 `web` 组件会自动引入 `core` 与 `http`），消费方工具链须提供相同的第三方依赖：非 Windows 使用启用 `override` 的静态 mimalloc，不得同时使用另一套全局 allocator replacement；Windows 使用不带该特性的普通 mimalloc 依赖，不做全局分配接口覆盖。MSVC 消费方需在 `project()` 之前设置匹配的静态 `CMAKE_MSVC_RUNTIME_LIBRARY`。独立 `ruvia::http` 不依赖 mimalloc。
 
@@ -52,14 +54,13 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\examples\Release\ruvia_example_basic_http.exe
 ```
 
-真实网络测试通过 `tests/web/support/tcp_port_reservation.h` 选择并持续保留
-loopback 临时端口，直到服务器停止并 join；预留 socket 仅 bind、不 listen，
-避免抢走测试连接。POSIX 在绑定后启用共享；Windows 的共享策略在 bind 时固定，
-因此先以无 reuse 的 socket 选端口，再持有全局具名端口租约完成可共享 socket
-的重绑；其他夹具遇到该租约会重新选端口，租约也持续至服务器退出。
-禁止不持有租约的“bind 0 → close → 启动服务器”端口预选：
-并行进程可能选中同一端口，而 worker 的地址复用会使两个服务器均成功启动、
-互相接收对方的请求。此测试夹具约束不改变生产监听器的复用语义。
+真实网络测试通过 `tests/web/support/tcp_port_reservation.h` 选择 loopback
+临时端口并持有全局可见的保留，直到服务器停止并 join；预留 socket 仅 bind、
+不 listen，避免抢走测试连接。POSIX 选端口后以 `SO_REUSEPORT` 共享并保持绑定；
+Windows 的 Acceptor 以 `SO_EXCLUSIVEADDRUSE` 独占监听，因此选端口后释放 socket，
+仅持有全局具名端口租约，其他夹具遇到该租约会重新选端口，租约持续至服务器退出。
+禁止不持有租约的“bind 0 → close → 启动服务器”端口预选：并行进程可能选中同一端口。
+此测试夹具约束不改变生产监听器的绑定语义。
 
 Windows 测试需配对运行 Debug 与 Release：Debug 保留默认 STL 迭代器诊断，
 Release 执行完整分配失败扫描。MSVC 调试 STL 会在空容器构造及移动的
@@ -116,13 +117,14 @@ int main() {
 - 通过进程级单例 `ruvia::app()` 配置应用，在调用 `run()` 前完成监听、中间件、错误处理与后端注册。
 - 路由处理器与异步接口统一返回 `ruvia::task<t_type>`。任务默认惰性执行；一旦启动必须 `co_await` 或 `join` 直至完成，取消后同样如此。
 - 请求与消息上的视图仅借用所属 owner，不延长其生命周期。跨请求生命周期保存或投递到阻塞卸载池前必须复制为自有数据；阻塞卸载任务不得访问 `ruvia::context` 或 worker 局部状态。
-- 服务端与出站客户端支持基于 TCP 和 TLS 的 HTTP/1.0、HTTP/1.1 与 HTTP/2：TLS 通过 ALPN 协商 HTTP/2，明文 HTTP/2 使用 prior knowledge（不支持 HTTP/1 `Upgrade: h2c`）；WebSocket 使用 HTTP/1.1 `Upgrade` 或 HTTP/2 Extended `CONNECT`。
-- 服务端每个业务 worker 独立绑定监听器，连接始终留在接受它的 worker 上。Linux 等 POSIX 平台要求 `SO_REUSEADDR` + `SO_REUSEPORT`，不可用则启动失败；Windows 使用 `SO_REUSEADDR` 绑定并通过共享监听句柄矩阵发起原生 `AcceptEx`，不保证严格均衡或端口独占。
+- 服务端支持基于 TCP 和 TLS 的 HTTP/1.0、HTTP/1.1 与 HTTP/2：TLS 通过 ALPN 协商 HTTP/2，明文 HTTP/2 使用 prior knowledge（不支持 HTTP/1 `Upgrade: h2c`）；WebSocket 使用 HTTP/1.1 `Upgrade` 或 HTTP/2 Extended `CONNECT`。
+- HTTPS 监听器可用 `listen_config::http3_` 在 UDP 端口（可与 `https_` 同号）上同时提供 HTTP/3（RFC 9114，QUIC v1，TLS 1.3，ALPN 仅 `h3`），该监听器的 HTTP/1.1 与 HTTP/2 响应自动携带 `Alt-Svc: h3=":<端口>"; ma=<http3_alt_svc_max_age_>`（默认 24 小时，应用自设的 `Alt-Svc` 优先）。HTTP/3 不支持 0-RTT、连接迁移、CONNECT 隧道与 WebSocket（CONNECT 回 `501`），详见 [doc/web-guide.md](doc/web-guide.md#ruvialisten_config-与-ruviatls_config)。
+- 服务端连接始终留在接收它的业务 worker 上，业务 worker 彼此同构。Linux 等 POSIX 平台由每个业务 worker 以 `SO_REUSEADDR` + `SO_REUSEPORT` 绑定监听器并直接 accept，不可用则启动失败；Windows 由每个应用一个独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占全部监听器（含 HTTP/3 UDP socket），以 `AcceptEx` 接收尚未关联 IOCP 的裸 `SOCKET` 并派发给连接数最少的业务 worker，由其首次绑定自身 IOCP。`stop()` 直接断开全部连接，不设排空阶段。
 
 ## 示例导航与文档
 
 - 基础与 Web 服务：从 [basic_http.cpp](examples/web/basic_http.cpp) 开始，进阶用法见 [api_surface.cpp](examples/web/api_surface.cpp)、[models_validation.cpp](examples/web/models_validation.cpp)、[middleware_next.cpp](examples/web/middleware_next.cpp)、[files_static.cpp](examples/web/files_static.cpp)、[runtime_config.cpp](examples/web/runtime_config.cpp)、[ops.cpp](examples/web/ops.cpp)、[workers_blocking.cpp](examples/web/workers_blocking.cpp)、[request_policies.cpp](examples/web/request_policies.cpp) 与 [testing.cpp](examples/web/testing.cpp)。
-- 流式、HTTP/2、WebSocket、隧道与客户端：见 [streaming.cpp](examples/web/streaming.cpp)、[http_features.cpp](examples/web/http_features.cpp)、[websocket.cpp](examples/web/websocket.cpp)、[websocket_client.cpp](examples/web/websocket_client.cpp)、[http_client.cpp](examples/web/http_client.cpp)、[http_client_advanced.cpp](examples/web/http_client_advanced.cpp) 与 [tunnels.cpp](examples/web/tunnels.cpp)（HTTP/2 客户端示例可传入参数 `2` 运行）。
+- 流式、HTTP/2、WebSocket 与隧道：见 [streaming.cpp](examples/web/streaming.cpp)、[http_features.cpp](examples/web/http_features.cpp)、[websocket.cpp](examples/web/websocket.cpp) 与 [tunnels.cpp](examples/web/tunnels.cpp)。
 - 数据库、ORM、Redis 与 JWT（需启用对应 CMake 选项）：见 [database.cpp](examples/web/database.cpp)、[sql_queries.cpp](examples/web/sql_queries.cpp)、[orm.cpp](examples/web/orm.cpp)、[orm_columns.cpp](examples/web/orm_columns.cpp)、[orm_relations.cpp](examples/web/orm_relations.cpp)、[redis.cpp](examples/web/redis.cpp)、[redis_orm.cpp](examples/web/redis_orm.cpp)、[redis_streams.cpp](examples/web/redis_streams.cpp)、[redis_pubsub.cpp](examples/web/redis_pubsub.cpp)、[sessions.cpp](examples/web/sessions.cpp)、[event_loop_data.cpp](examples/web/event_loop_data.cpp) 与 [auth_jwt.cpp](examples/web/auth_jwt.cpp)。
 - 浏览 [examples/web](examples/web) 查看全部示例源码，构建 target 列表见 [examples/CMakeLists.txt](examples/CMakeLists.txt)。
 - 用户使用指南与公开 API 文档见 [doc/README.md](doc/README.md)。

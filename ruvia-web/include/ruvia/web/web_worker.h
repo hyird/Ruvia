@@ -16,7 +16,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
-#include "ruvia/web/http_client.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_handle.h"
@@ -80,8 +79,6 @@ public:
     [[nodiscard]] redis_handle redis() const;
     [[nodiscard]] redis_handle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] http_client_handle http_client() const;
-    [[nodiscard]] http_client_handle http_client(std::string_view alias) const;
 
 private:
     friend class detail::web_worker_dispatch;
@@ -101,7 +98,8 @@ private:
     // endpoint or cancellation-state ownership on the worker thread.
     detail::worker_context_capabilities capabilities_;
     std::pmr::memory_resource* resource_;
-    const detail::worker_client_registry_view& client_registries_;
+    // Read only by the database and Redis accessors.
+    [[maybe_unused]] const detail::worker_client_registry_view& client_registries_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.
     mutable ::ruvia::operation_scope operation_scope_;

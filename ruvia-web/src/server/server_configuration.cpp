@@ -1,10 +1,15 @@
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <span>
+#include <stdexcept>
 
 #include "ruvia/core/memory/pmr_object.h"
 
 #include "server/http_server_options_validation.h"
+#include "tls/tls_random.h"
 #include "util/config_validation.h"
 
 namespace ruvia::detail {
@@ -27,6 +32,16 @@ validated_http_server_configuration::validated_http_server_configuration(
                 std::pmr::polymorphic_allocator<tls_session_ticket_key_ring>(listeners_.get_allocator().resource()),
                 key_origin);
         }
+        // One QUIC secret per HTTP/3 service, shared by every worker so any
+        // worker can tell which one owns a connection ID.
+        if (validated.http3_.has_value()) {
+            auto secret = std::allocate_shared<std::array<std::uint8_t, 32>>(
+                std::pmr::polymorphic_allocator<std::array<std::uint8_t, 32>>(listeners_.get_allocator().resource()));
+            if (!fill_random_bytes(std::span<unsigned char>(secret->data(), secret->size()))) {
+                throw std::runtime_error("failed to generate the HTTP/3 connection ID secret");
+            }
+            validated.http3_->secret_ = std::move(secret);
+        }
     }
 }
 
@@ -46,9 +61,6 @@ void validate_server_limits(const server_config& config) {
     if (config.process_signal_handlers_ != process_signal_handler_policy::external_owner &&
         config.process_signal_handlers_ != process_signal_handler_policy::install) {
         throw std::invalid_argument("process signal handler policy is invalid");
-    }
-    if (config.drain_timeout_.count() < 0) {
-        throw std::invalid_argument("drain timeout must not be negative");
     }
     detail::ensure_positive_optional_durations("configured server timeouts must be greater than zero",
         config.idle_timeout_, config.request_header_timeout_, config.request_body_timeout_,
@@ -72,10 +84,6 @@ void validate_server_limits(const server_config& config) {
         "connection inbound buffer budget must be greater than zero");
     detail::ensure_positive_optional_durations("completion deadlines must be greater than zero",
         config.header_completion_timeout_, config.body_completion_timeout_);
-    detail::ensure_positive_size(config.http_client_result_budget_.max_retained_bytes_,
-        "HTTP client retained result byte budget must be greater than zero");
-    detail::ensure_positive_size(config.http_client_result_budget_.max_in_flight_bytes_,
-        "HTTP client in-flight response budget must be greater than zero");
 }
 
 namespace {
@@ -94,6 +102,10 @@ void validate_http_server_listener(const http_server_listener_definition& listen
     std::span<const http_server_listener_definition> listeners, http_server_options&& options) {
     for (const auto& listener : listeners) {
         validate_http_server_listener(listener);
+        // A QUIC connection ID names its owning worker in 16 bits.
+        if (listener.http3_.has_value() && options.server_.worker_count_ > http3_max_worker_count) {
+            throw std::invalid_argument("HTTP/3 supports at most 65536 workers");
+        }
     }
     return validated_http_server_configuration(listeners, std::move(options));
 }

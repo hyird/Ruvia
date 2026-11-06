@@ -74,7 +74,9 @@ task<http2_stream_data_write_status> write_http2_stream_data(
         if (signal == nullptr) {
             co_return http2_stream_data_write_status::peer_closed;
         }
-        if (!bytes.empty()) {
+        // Every DATA frame, an empty END_STREAM included, waits for positive
+        // connection and stream windows (RFC 9113 §6.9).
+        if (!bytes.empty() || http2_ends_stream(end_stream)) {
             const auto window = connection.send_window_state(stream_id);
             if (!window || connection.stream_aborted(stream_id)) {
                 co_return classify_aborted_write(signal, aborted);
@@ -85,6 +87,8 @@ task<http2_stream_data_write_status> write_http2_stream_data(
                     co_return classify_aborted_write(signal, aborted);
                 }
             }
+        }
+        if (!bytes.empty()) {
             if (!output_budget.try_acquire(stream_id)) {
                 if (!(co_await output_budget.acquire(stream_id, *signal, connection, aborted))) {
                     co_return classify_aborted_write(signal, aborted);

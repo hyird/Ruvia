@@ -52,8 +52,8 @@ namespace ruvia::detail {
 namespace {
 
 constexpr std::size_t http2_request_arena_stack_bytes = request_arena_initial_bytes;
-// Product limit on a server drain's wait for the PING round trip before the
-// final GOAWAY (also capped at half of server_config::drain_timeout_).
+// Product limit on a drain's wait for the PING round trip before the final
+// GOAWAY (a request cap or a connection timeout; a stop closes at once).
 constexpr std::chrono::milliseconds http2_drain_round_trip_bound{std::chrono::seconds(1)};
 
 struct response_output_target final {
@@ -136,11 +136,6 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
             static_cast<http2_sans_io_session_engine*>(target)->expire_stream_deadlines(now_ms);
         },
         [](void* target) noexcept { static_cast<http2_sans_io_session_engine*>(target)->request_drain(); });
-    // A session that starts after the worker began draining (a handshake or
-    // handoff that completed meanwhile) missed the scanner's drain pass.
-    if (session_.scanner_entry().draining()) {
-        request_drain();
-    }
 }
 
 bool http2_sans_io_session_engine::wants_write() const noexcept {
@@ -214,11 +209,9 @@ bool http2_sans_io_session_engine::drain_finished() const noexcept {
 }
 
 void http2_sans_io_session_engine::request_drain() noexcept {
-    // The scanner records a timeout's close request before invoking this
-    // callback; a worker drain does not.
-    if (session_.scanner_entry().close_requested()) {
-        timeout_drain_ = true;
-    }
+    // The scanner asks for a drain only when a connection timeout fired; it
+    // recorded the close request before invoking this callback.
+    timeout_drain_ = true;
     begin_drain();
     finish_drain_if_ready();
 }
@@ -242,13 +235,10 @@ void http2_sans_io_session_engine::arm_drain_timer() noexcept {
         return;
     }
     // RFC 9113 §6.8 asks only for "at least one round-trip time" before the
-    // final GOAWAY; nothing requires waiting for the PING ACK. Product limit:
-    // the round trip is bounded by min(1 s, drain_timeout_ / 2), so a final
-    // GOAWAY precedes a stop's forced close.
-    const auto bound = (std::min)(http2_drain_round_trip_bound, session_.options().server_.drain_timeout_ / 2);
+    // final GOAWAY; nothing requires waiting for the PING ACK.
     try {
         const auto status = session_.services().worker().schedule_timer(drain_timer_,
-            worker_timer_deadline_after(bound), [this](worker_timer_outcome outcome) {
+            worker_timer_deadline_after(http2_drain_round_trip_bound), [this](worker_timer_outcome outcome) {
                 // Cancellation is a stopping worker, which closes the connection.
                 if (outcome == worker_timer_outcome::expired) {
                     drain_timer_expired();

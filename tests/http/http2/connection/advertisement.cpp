@@ -58,7 +58,7 @@ RUVIA_TEST(http2_connection_server_rejects_client_only_options) {
     RUVIA_CHECK(!rejected({}));
 }
 
-RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tunnel_and_reserved_frames) {
+RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_ignores_tunnel_and_reserved_frames) {
     std::pmr::unsynchronized_pool_resource resource;
     ruvia::testing::output_relay relay;
     auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true, .receive_origin_advertisements_ = true});
@@ -170,7 +170,8 @@ RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tun
     // No RST_STREAM (or any other frame) answers the ignored frame.
     RUVIA_CHECK(ruvia::testing::drain_output(client).empty());
 
-    // 3. Reserved push stream receiving ALTSVC triggers connection GOAWAY(PROTOCOL_ERROR).
+    // 3. ALTSVC on a reserved push stream is an extension frame the stream cannot
+    //    use (RFC 7838 section 4, RFC 9113 section 5.5): ignored without a reply.
     auto pushed2 = server.submit_push_request(3, {.authority_ = "example.test", .path_ = "/reserved"});
     RUVIA_CHECK(pushed2.index() == 0);
     if (pushed2.index() == 0) {
@@ -181,8 +182,10 @@ RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tun
         std::string altsvc_on_reserved(ruvia::http2_frame_header_bytes + 8, '\0');
         RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(altsvc_on_reserved).first(9),
             8, ruvia::http2_frame_type::alternative_service, 0, pushed2_id));
-        RUVIA_CHECK(client.feed(altsvc_on_reserved) == ruvia::http2_feed_result::protocol_failure);
-        RUVIA_CHECK(client.connection_error() == ruvia::http2_error_code::protocol_error);
+        RUVIA_CHECK(client.feed(altsvc_on_reserved) == ruvia::http2_feed_result::accepted);
+        RUVIA_CHECK(!client.connection_error());
+        RUVIA_CHECK(!client.next_event().has_value());
+        RUVIA_CHECK(ruvia::testing::drain_output(client).empty());
         (void)server.release(std::move(std::get<0>(pushed2)));
     }
     if (connect_lease) {

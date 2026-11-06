@@ -60,6 +60,11 @@ http_server_stats application::http_stats() const {
         total.accept_failures_ += stats.accept_failures_;
         total.worker_failures_ += stats.worker_failures_;
     }
+#if defined(_WIN32)
+    // The acceptor refuses and fails accepts before any worker sees them.
+    total.connections_refused_ += state_value.runtime_->acceptor_->refused();
+    total.accept_failures_ += state_value.runtime_->acceptor_->accept_failures();
+#endif
     // One application-wide refresher owns the count; workers only adopt.
     if (state_value.runtime_->document_root_) {
         total.document_root_refresh_failures_ = state_value.runtime_->document_root_->failures();
@@ -116,8 +121,8 @@ void application::stop() {
         if (request == detail::app_stop_request::ignored) {
             return;
         }
-        // A serving app drains first: its run() owner wakes below and stops
-        // the runtime once in-flight requests have finished.
+        // A serving app's run() owner wakes below and stops admission, then
+        // the runtime, which closes every connection at once.
         if (request == detail::app_stop_request::startup) {
             detail::request_runtime_stop(state_value);
         }

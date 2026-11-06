@@ -3,11 +3,11 @@
 #include <algorithm>
 #include <array>
 
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 
 #include "field/http_structured_fields.h"
-#include "http2/http2_frame_codec.h"
 
 namespace ruvia {
 namespace {
@@ -150,7 +150,10 @@ std::variant<http_priority_update, http_priority_error> decode_http2_priority_up
     if (payload_value.size() < 4) {
         return http_priority_error::invalid_frame;
     }
-    const auto id = detail::http2_read31(reinterpret_cast<const unsigned char*>(payload_value.data()));
+    const auto* id_bytes = reinterpret_cast<const unsigned char*>(payload_value.data());
+    const auto id = ((static_cast<std::uint32_t>(id_bytes[0]) & 0x7fU) << 24) |
+                    (static_cast<std::uint32_t>(id_bytes[1]) << 16) |
+                    (static_cast<std::uint32_t>(id_bytes[2]) << 8) | static_cast<std::uint32_t>(id_bytes[3]);
     if (!id) {
         return http_priority_error::invalid_value;
     }
@@ -172,7 +175,11 @@ std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std:
     if (output.size() < 13 + std::get<0>(length)) {
         return http_priority_error::output_too_small;
     }
-    detail::http2_write32(detail::http2_write_frame_header(output.data(), static_cast<std::uint32_t>(4 + std::get<0>(length)), http2_frame_type::priority_update, 0, 0), id);
+    (void)encode_http2_frame_header(output.first(http2_frame_header_bytes),
+        static_cast<std::uint32_t>(4 + std::get<0>(length)), http2_frame_type::priority_update, 0, 0);
+    for (std::size_t index = 0; index < 4; ++index) {
+        output[http2_frame_header_bytes + index] = static_cast<char>((id >> (24 - 8 * index)) & 0xffU);
+    }
     std::copy_n(value.begin(), std::get<0>(length), output.begin() + 13);
     return 13 + std::get<0>(length);
 }

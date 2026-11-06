@@ -1,5 +1,6 @@
 #include "app/app_run_coordinator.h"
 
+#include <algorithm>
 #include <csignal>
 #include <exception>
 #include <memory>
@@ -14,7 +15,6 @@
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_runtime.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/detail/controller/controller_runtime.h"
 
@@ -125,21 +125,25 @@ public:
 
         auto& group = state_.runtime_->group_;
         std::exception_ptr primary_failure;
-        bool served = false;
         try {
             if (!stop_requested()) {
                 start_signal_handling();
-                // Every independently listening worker is ready before hooks;
-                // no listener accepts until every hook has succeeded.
-                if (group.start()) {
+                // Two-phase start: every worker is ready (and on Windows the
+                // acceptor holds every listener) before hooks; nothing
+                // accepts until every hook has succeeded.
+                bool started = group.start();
 #if defined(_WIN32)
-                    state_.runtime_->windows_accept_->publish();
+                started = started && state_.runtime_->acceptor_->start();
 #endif
+                if (started) {
                     publish_ready_workers();
                     run_start_hooks();
-                    if (!stop_requested() && group.serve()) {
+                    bool serving = !stop_requested() && group.serve();
+#if defined(_WIN32)
+                    serving = serving && state_.runtime_->acceptor_->serve();
+#endif
+                    if (serving) {
                         wait_for_stop();
-                        served = true;
                     }
                 }
             }
@@ -149,22 +153,39 @@ public:
         }
 
         stop_signal_handling();
-        if (served) {
-            drain();
-        }
-        // Stop admission is distinct from final retirement: stop hooks run
+        // Direct disconnect, with no drain phase: admission stops, then every
+        // worker's stop closes all of its connections at once. Stop hooks run
         // after admission closes and before any worker is finalized.
+#if defined(_WIN32)
+        auto& acceptor = *state_.runtime_->acceptor_;
+        acceptor.stop_admission();
+#endif
         group.request_stop();
         invoke_stop_hooks(state_);
         // The rethrown failure is chosen before the group reports the member
         // failures it supersedes, so the library reports no failure twice and
         // never the rethrown one, whose reporting belongs to the run() caller.
         const auto signal_failure = signals_.has_value() ? signals_->failure() : nullptr;
-        const auto rethrown = group.join(primary_failure != nullptr ? primary_failure : signal_failure);
+        auto rethrown = group.join(primary_failure != nullptr ? primary_failure : signal_failure);
+#if defined(_WIN32)
+        // The workers sent their last datagrams (QUIC CONNECTION_CLOSE)
+        // through the acceptor until they joined; only now do its sockets close.
+        acceptor.request_stop();
+        acceptor.join();
+        const auto acceptor_failure = acceptor.failure();
+        if (rethrown == nullptr) {
+            rethrown = acceptor_failure;
+        }
+#endif
         retire_runtime();
         if (signal_failure != nullptr && !ruvia::equivalent_failures(signal_failure, rethrown)) {
             ruvia::report_unhandled_failure("app signal handling", signal_failure);
         }
+#if defined(_WIN32)
+        if (acceptor_failure != nullptr && !ruvia::equivalent_failures(acceptor_failure, rethrown)) {
+            ruvia::report_unhandled_failure("app acceptor", acceptor_failure);
+        }
+#endif
         if (rethrown != nullptr) {
             std::rethrow_exception(rethrown);
         }
@@ -227,9 +248,20 @@ private:
         detail::controller_store first_controllers(controller_registrars);
         runtime->route_plan_ = detail::compile_route_plan(
             runtime_resource_, controller_registrars, first_controllers, state_.configuration_);
+#if defined(RUVIA_ENABLE_HTTP3)
+        if (std::ranges::any_of(validated_configuration.listeners(),
+                [](const auto& listener) { return listener.http3_.has_value(); })) {
+            runtime->http3_directory_ = make_pmr_object<detail::http3_worker_directory>(
+                runtime_resource_, state_.options_.server_.worker_count_, runtime_resource_);
+        }
+#endif
 #if defined(_WIN32)
-        runtime->windows_accept_ = make_pmr_object<detail::windows_accept_domain>(runtime_resource_,
-            state_.options_.server_.worker_count_, validated_configuration.listeners().size(), runtime_resource_);
+        runtime->acceptor_ = make_pmr_object<detail::windows_acceptor>(runtime_resource_,
+            validated_configuration.listeners(), state_.options_.server_.worker_count_,
+#if defined(RUVIA_ENABLE_HTTP3)
+            runtime->http3_directory_.get(),
+#endif
+            validated_configuration.options().failure_, runtime_resource_);
 #endif
         runtime->workers_.reserve(state_.options_.server_.worker_count_);
         for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
@@ -245,12 +277,26 @@ private:
                 .redis_ = std::span<const detail::redis_definition_type>(state_.redis_),
 #endif
                 .worker_states_ = state_.configuration_.worker_states(),
-                .http_clients_ = std::span<const detail::http_client_definition_type>(state_.http_clients_),
             };
+#if defined(RUVIA_ENABLE_HTTP3)
+            auto worker_value = make_pmr_object<detail::web_worker_runtime>(runtime_resource_,
+                validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(),
+                detail::http3_worker_placement{
+                    .directory_ = runtime->http3_directory_.get(),
+                    .worker_index_ = i,
+#if defined(_WIN32)
+                    .acceptor_ = runtime->acceptor_.get(),
+#endif
+                });
+            if (runtime->http3_directory_ != nullptr) {
+                runtime->http3_directory_->bind_worker(i, worker_value->runtime().handle());
+            }
+#else
             auto worker_value = make_pmr_object<detail::web_worker_runtime>(
                 runtime_resource_, validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get());
+#endif
 #if defined(_WIN32)
-            worker_value->attach_windows_accept(*runtime->windows_accept_, i);
+            runtime->acceptor_->bind_worker(i, worker_value->acceptor_target());
 #endif
             runtime->workers_.emplace_back(
                 std::move(controllers), std::move(routes_value), std::move(worker_value));
@@ -314,25 +360,6 @@ private:
         }
     }
 
-    // Every worker closes its own listeners and request admission, then lets
-    // in-flight requests finish until the shared drain deadline. A member
-    // failure has already stopped the group and closed every connection.
-    void drain() noexcept {
-        auto& runtime = *state_.runtime_;
-        if (state_.options_.server_.drain_timeout_.count() == 0 || runtime.group_.stop_requested()) {
-            return;
-        }
-        const auto deadline = worker_timer_deadline_after(state_.options_.server_.drain_timeout_);
-        for (auto& slot : runtime.workers_) {
-            slot.runtime_->request_drain();
-        }
-        for (auto& slot : runtime.workers_) {
-            if (!slot.runtime_->wait_until_drained(deadline)) {
-                return;
-            }
-        }
-    }
-
     void retire_runtime() noexcept {
         std::unique_ptr<detail::app_runtime_graph, pmr_object_deleter<detail::app_runtime_graph>>
             retired(nullptr, pmr_object_deleter<detail::app_runtime_graph>{runtime_resource_});
@@ -363,6 +390,9 @@ void detail::run_app(application& app, app_state& state_value) {
 void detail::request_runtime_stop(app_state& state_value) noexcept {
     if (state_value.runtime_ != nullptr) {
         state_value.runtime_->group_.request_stop();
+#if defined(_WIN32)
+        state_value.runtime_->acceptor_->request_stop();
+#endif
     }
 }
 

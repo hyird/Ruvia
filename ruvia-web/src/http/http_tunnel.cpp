@@ -10,10 +10,7 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/web/http_client.h"
 
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
 #include "http/http_capsule_stream_state.h"
 #include "util/operation_lane_lease.h"
 #include "util/pmr_owned_storage.h"
@@ -180,15 +177,6 @@ http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_confi
     state_ = make_pmr_object<detail::http_capsule_stream_state>(&tunnel.resource_, tunnel, config).release();
     tunnel.adapted_ = true;
 }
-http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config) {
-    if (!tunnel.response_.state_ || !tunnel.response_.state_->memory_domain().worker().is_current()) {
-        throw std::logic_error("capsule stream requires a live tunnel on its worker");
-    }
-    // Validate before consuming the caller's owner.
-    http_capsule_decoder validation(config);
-    auto* resource = tunnel.response_.state_->resource_;
-    state_ = make_pmr_object<detail::http_capsule_stream_state>(resource, std::move(tunnel), config).release();
-}
 http_capsule_stream::http_capsule_stream(http_capsule_stream&& other) noexcept
     : state_(std::exchange(other.state_, nullptr)) {}
 http_capsule_stream& http_capsule_stream::operator=(http_capsule_stream&& other) noexcept {
@@ -221,9 +209,6 @@ http_capsule_stream http_tunnel::capsules(http_capsule_config config) & {
     }
     require_unadapted();
     return http_capsule_stream(*this, config);
-}
-http_capsule_stream http_client_tunnel::capsules(http_capsule_config config) && {
-    return http_capsule_stream(std::move(*this), config);
 }
 task<std::optional<http_capsule>> http_capsule_stream::read() & {
     if (!state_) {
@@ -301,11 +286,7 @@ task<void> http_capsule_stream::finish() & {
         auto& state_value = pin.state();
         detail::running_capsule_operation running(state_value, true);
         if (!state_value.send_ended_) {
-            if (state_value.server_) {
-                co_await state_value.server_->finish();
-            } else {
-                co_await state_value.client_->finish();
-            }
+            co_await state_value.server_->finish();
             state_value.send_ended_ = true;
         }
     };
@@ -323,12 +304,6 @@ http_datagram_stream http_tunnel::datagrams(http_capsule_config config) & {
 }
 http_udp_tunnel http_tunnel::udp(http_capsule_config config) & {
     return http_udp_tunnel(datagrams(config));
-}
-http_datagram_stream http_client_tunnel::datagrams(http_capsule_config config) && {
-    if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->udp_ || !response_.state_->tunnel_->accepted_) {
-        throw std::logic_error("HTTP Datagrams require an accepted datagram tunnel");
-    }
-    return http_datagram_stream(std::move(*this).capsules(config));
 }
 task<std::optional<http_datagram>> http_datagram_stream::read() & {
     if (!stream_.state_) {

@@ -42,10 +42,6 @@ bool context::is_subrequest() const noexcept {
     return services().dispatch_depth() != 0;
 }
 
-::ruvia::stop_token context::drain_token() const noexcept {
-    return services().drain_token();
-}
-
 detail::context_services& context::services() noexcept {
     return request_storage().services_;
 }

@@ -65,11 +65,7 @@ task<void> invoke_websocket_handler(server_websocket_connection<stream_type>& co
     auto websocket_value = make_websocket_facade(connection, *context_value.pool());
     context_websocket_binding websocket_binding(context_value, websocket_value);
 
-    // A draining worker does not admit the session: it has already started
-    // the 1001 Going Away close, which finish_websocket_session completes.
-    if (!scanner_entry.enter_long_lived()) {
-        co_return;
-    }
+    scanner_entry.enter_long_lived();
     co_await handler(context_value);
 }
 
@@ -80,7 +76,7 @@ task<void> invoke_websocket_handler(server_websocket_connection<stream_type>& co
 // A handler that failed is already past the upgrade, so its exception can only
 // become a 1011 close code -- which tells the peer that something went wrong
 // but not what, and is the last thing that references the failure. It, a
-// failure to close, and a failed heartbeat or Going Away write are reported
+// failure to close, and a failed heartbeat write are reported
 // here, since nothing after this frame holds any of them. The sink classifies
 // each: a peer that resets instead of answering the Close, or a close-handshake
 // timeout that aborted the transport, ends the connection normally.

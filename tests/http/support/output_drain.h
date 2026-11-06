@@ -36,12 +36,9 @@ public:
         return to.feed(retained_.emplace_back(drain_output(from)));
     }
 
-    // need_input is the normal outcome when the drained bytes contain no
-    // complete event.
     void transfer(ruvia::http2_connection& from, ruvia::http2_connection& to) {
         const auto status = feed(from, to);
-        if (status != ruvia::http2_feed_result::accepted &&
-            status != ruvia::http2_feed_result::need_input) {
+        if (status != ruvia::http2_feed_result::accepted) {
             throw std::runtime_error(
                 "HTTP/2 transfer failed, status " + std::to_string(static_cast<int>(status)));
         }

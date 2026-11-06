@@ -32,12 +32,6 @@ worker_capabilities::worker_capabilities(asio::io_context& io_context, const wor
     : worker_(require_worker_capabilities_worker(worker_value)),
       redis_(io_context, resource, definitions.redis_, worker_),
       databases_(io_context, worker_, resource, definitions.databases_, &redis_),
-      http_client_result_budget_domain_(
-          std::make_shared<http_client_result_budget_domain>(options.http_client_result_budget_)),
-      // The worker resource outlives every request and worker state, so it
-      // backs client responses directly.
-      http_clients_(io_context, worker_, resource, http_client_response_storage::worker_resource,
-          definitions.http_clients_, http_client_result_budget_domain_),
       worker_states_(resource, definitions.worker_states_),
       rate_limiter_(
           options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_, resource),
@@ -60,23 +54,14 @@ task<void> worker_capabilities::start() {
 }
 
 void worker_capabilities::close_now() noexcept {
-    http_clients_.close_now();
     databases_.close_now();
     redis_.close_now();
 }
 
 task<void> worker_capabilities::stop() {
     close_now();
-    std::exception_ptr failure;
-    try {
-        co_await http_clients_.join();
-    } catch (...) {
-        failure = std::current_exception();
-    }
     worker_states_.shutdown();
-    if (failure != nullptr) {
-        std::rethrow_exception(failure);
-    }
+    co_return;
 }
 
 context_services worker_capabilities::make_context_services(const stop_token& stop_token_value) {
@@ -96,7 +81,7 @@ context_services worker_capabilities::make_context_services(const stop_token& st
 }
 
 worker_client_registry_view worker_capabilities::client_registries() noexcept {
-    return worker_client_registry_view(databases_, redis_, http_clients_);
+    return worker_client_registry_view(databases_, redis_);
 }
 
 const worker_state_registry& worker_capabilities::worker_states() const noexcept {

@@ -129,9 +129,12 @@ std::pmr::string get_block(std::pmr::memory_resource* resource) {
     return block;
 }
 
+// The peer's preface and SETTINGS, plus its ACK of ours so that the advertised
+// 1 MiB stream window is in force (RFC 9113 §6.5.3).
 std::pmr::string opening_wire(std::pmr::memory_resource* resource) {
     std::pmr::string wire(ruvia::http2_client_preface, resource);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+    append_frame(wire, ruvia::http2_frame_type::settings, 0x1, 0, {});
     return wire;
 }
 
@@ -384,9 +387,13 @@ RUVIA_TEST(http2_server_graceful_drain_admits_in_flight_streams_until_ping_ack) 
     RUVIA_CHECK(!server.drain_final());
     const auto initial = take_frames(server);
     RUVIA_CHECK(goaway_last_stream_ids(initial) == std::vector<std::uint32_t>{0x7fffffffU});
+    // The PING's ACK proves the client read the GOAWAY only if it follows it.
     std::optional<std::string> ping_payload;
+    bool goaway_seen = false;
     for (const auto& frame : initial) {
+        goaway_seen = goaway_seen || frame.is(ruvia::http2_frame_type::goaway);
         if (frame.is(ruvia::http2_frame_type::ping)) {
+            RUVIA_CHECK(goaway_seen);
             RUVIA_CHECK_EQ(frame.header_.flags_ & 0x1, 0);
             ping_payload = frame.payload_;
         }
@@ -409,13 +416,13 @@ RUVIA_TEST(http2_server_graceful_drain_admits_in_flight_streams_until_ping_ack) 
     RUVIA_CHECK(server.drain_final());
     RUVIA_CHECK(goaway_last_stream_ids(take_frames(server)) == std::vector<std::uint32_t>{3});
 
-    std::pmr::string refused(&resource);
-    append_frame(refused, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 5, get_block(&resource));
-    RUVIA_CHECK(server.feed(refused) == ruvia::http2_feed_result::accepted);
+    // RFC 9113 §6.8: a stream above the final boundary is discarded unanswered;
+    // the GOAWAY already tells the client it was not processed.
+    std::pmr::string discarded(&resource);
+    append_frame(discarded, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 5, get_block(&resource));
+    RUVIA_CHECK(server.feed(discarded) == ruvia::http2_feed_result::accepted);
     RUVIA_CHECK(!server.next_event().has_value());
-    const auto refusal = take_frames(server);
-    RUVIA_CHECK(refusal.size() == 1 && refusal.front().is(ruvia::http2_frame_type::rst_stream) &&
-                refusal.front().header_.stream_id_ == 5 && read_u32(refusal.front().payload_) == 7U);
+    RUVIA_CHECK(take_frames(server).empty());
     RUVIA_CHECK(!server.connection_error().has_value());
 }
 
@@ -500,11 +507,11 @@ RUVIA_TEST(http2_server_finish_drain_ends_round_trip_without_ping_ack) {
     server.finish_drain();
     RUVIA_CHECK(take_frames(server).empty());
 
-    std::pmr::string refused(&resource);
-    append_frame(refused, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 5, get_block(&resource));
-    RUVIA_CHECK(server.feed(refused) == ruvia::http2_feed_result::accepted);
+    std::pmr::string discarded(&resource);
+    append_frame(discarded, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 5, get_block(&resource));
+    RUVIA_CHECK(server.feed(discarded) == ruvia::http2_feed_result::accepted);
     RUVIA_CHECK(!server.next_event().has_value());
-    RUVIA_CHECK(has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 5));
+    RUVIA_CHECK(take_frames(server).empty());
     RUVIA_CHECK(!server.connection_error().has_value());
 }
 
@@ -562,27 +569,38 @@ RUVIA_TEST(http2_server_drain_after_peer_goaway_is_final_at_once) {
 }
 
 // RFC 8441 section 3: "Receipt of this parameter by a server does not have any
-// impact." The value range and 1->0 ban remain sender rules enforced by clients.
-RUVIA_TEST(http2_server_ignores_enable_connect_protocol_from_client) {
+// impact", so a client may withdraw it. A value outside 0..1 is a connection
+// error for either role, and a server may not withdraw it.
+RUVIA_TEST(http2_enable_connect_protocol_values_are_validated_for_both_roles) {
     std::pmr::unsynchronized_pool_resource resource;
     auto server = started_server(&resource);
     auto wire = opening_wire(&resource);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x08\x00\x00\x00\x01", 6));
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x08\x00\x00\x00\x00", 6));
-    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x08\x00\x00\x00\x02", 6));
     append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 1, get_block(&resource));
     RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
     RUVIA_CHECK(!server.connection_error().has_value());
     auto head = server.next_event();
     RUVIA_CHECK(head && head->request_head() != nullptr);
     RUVIA_CHECK(goaway_last_stream_ids(take_frames(server)).empty());
+    while (server.next_event()) {
+    }
+    std::pmr::string invalid(&resource);
+    append_frame(invalid, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x08\x00\x00\x00\x02", 6));
+    RUVIA_CHECK(server.feed(invalid) == ruvia::http2_feed_result::protocol_failure);
+    RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::protocol_error);
 
-    auto client = ruvia::http2_connection::client({.resource_ = &resource});
-    (void)ruvia::testing::drain_output(client);
-    std::pmr::string from_server(&resource);
-    append_frame(from_server, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x08\x00\x00\x00\x02", 6));
-    RUVIA_CHECK(client.feed(from_server) == ruvia::http2_feed_result::protocol_failure);
-    RUVIA_CHECK(client.connection_error() == ruvia::http2_error_code::protocol_error);
+    for (const std::string_view value : {std::string_view("\x00\x00\x00\x02", 4), std::string_view("\x00\x00\x00\x00", 4)}) {
+        auto client = ruvia::http2_connection::client({.resource_ = &resource});
+        (void)ruvia::testing::drain_output(client);
+        std::pmr::string from_server(&resource);
+        append_frame(from_server, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x08\x00\x00\x00\x01", 6));
+        std::pmr::string entry("\x00\x08", 2, &resource);
+        entry.append(value);
+        append_frame(from_server, ruvia::http2_frame_type::settings, 0, 0, entry);
+        RUVIA_CHECK(client.feed(from_server) == ruvia::http2_feed_result::protocol_failure);
+        RUVIA_CHECK(client.connection_error() == ruvia::http2_error_code::protocol_error);
+    }
 }
 
 // RFC 9113 section 5.5: unknown frame types are discarded, including on a
@@ -730,30 +748,5 @@ RUVIA_TEST(http2_websocket_connect_accepts_zero_content_length_and_early_data_wi
             RUVIA_CHECK(end_ev && end_ev->tunnel_end() != nullptr);
             (void)server.release(std::move(*head));
         }
-    }
-}
-
-// Refused streams must still validate mandatory pseudo-headers and framing,
-// resetting malformed requests with PROTOCOL_ERROR instead of REFUSED_STREAM.
-RUVIA_TEST(http2_refused_stream_with_malformed_headers_emits_protocol_error) {
-    std::pmr::unsynchronized_pool_resource resource;
-    auto server = started_server(&resource);
-    auto wire = opening_wire(&resource);
-    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-    server.finish_drain();
-    (void)take_frames(server);
-
-    std::pmr::string bad_block(&resource);
-    ruvia::hpack_encoder::encode_header(bad_block, "x-foo", "bar");
-    std::pmr::string bad_wire(&resource);
-    append_frame(bad_wire, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 1, bad_block);
-    RUVIA_CHECK(server.feed(bad_wire) == ruvia::http2_feed_result::accepted);
-    const auto frames = take_frames(server);
-    RUVIA_CHECK_EQ(frames.size(), std::size_t{1});
-    if (!frames.empty()) {
-        RUVIA_CHECK(frames.front().is(ruvia::http2_frame_type::rst_stream));
-        RUVIA_CHECK_EQ(frames.front().header_.stream_id_, 1U);
-        RUVIA_CHECK_EQ(read_u32(frames.front().payload_),
-            static_cast<std::uint32_t>(ruvia::http2_error_code::protocol_error));
     }
 }

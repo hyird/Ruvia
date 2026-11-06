@@ -1,5 +1,6 @@
 #include <array>
 #include <cstddef>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -198,7 +199,8 @@ RUVIA_TEST(ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     const auto validate = [&](std::string_view raw_request, bool required) {
         const auto parsed_value = parse_http1_request_message(raw_request);
         return validate_websocket_handshake(parsed_value.state_.request_, parsed_value.state_.body_plan_,
-            {.supported_subprotocols_ = supported, .require_subprotocol_ = required});
+            {.supported_subprotocols_ = std::span<const std::string_view>(supported),
+                .require_subprotocol_ = required});
     };
     const auto accepts = [&](std::string_view raw_request, bool required) {
         const auto result_value = validate(raw_request, required);

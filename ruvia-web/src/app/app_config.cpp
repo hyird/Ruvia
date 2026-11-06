@@ -1,6 +1,8 @@
 #include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -48,11 +50,37 @@ void append_listen_config(
     if (!config.https_.has_value() && detail::has_tls_configuration(config.tls_)) {
         throw std::invalid_argument("TLS config requires an HTTPS listen port");
     }
+    std::optional<detail::http_server_listener_definition::http3_service> http3;
+    if (config.http3_.has_value()) {
+#if defined(RUVIA_ENABLE_HTTP3)
+        detail::ensure_non_zero_optional_port(config.http3_, "HTTP/3 listen port must not be zero");
+        if (!config.https_.has_value()) {
+            throw std::invalid_argument("HTTP/3 requires an HTTPS listen port and its TLS config");
+        }
+        if (config.http3_alt_svc_max_age_.count() <= 0) {
+            throw std::invalid_argument("HTTP/3 Alt-Svc max age must be greater than zero");
+        }
+        // The secret is generated per validated configuration.
+        http3.emplace(detail::http_server_listener_definition::http3_service{
+            .port_ = config.http3_->value(), .alt_svc_max_age_ = config.http3_alt_svc_max_age_, .secret_ = {}});
+#else
+        throw std::invalid_argument("HTTP/3 listen port requires a build with RUVIA_ENABLE_HTTP3");
+#endif
+    }
 
     const auto ensure_unique_endpoint = [&](const asio::ip::tcp::endpoint& endpoint) {
         for (const auto& existing : replacement) {
             if (existing.endpoint_ == endpoint) {
                 throw std::invalid_argument("duplicate listen endpoint");
+            }
+        }
+    };
+    // UDP endpoints are a separate namespace from the TCP ones above.
+    const auto ensure_unique_http3_endpoint = [&](std::uint16_t port) {
+        for (const auto& existing : replacement) {
+            if (existing.http3_.has_value() && existing.http3_->port_ == port &&
+                existing.endpoint_.address() == address) {
+                throw std::invalid_argument("duplicate HTTP/3 listen endpoint");
             }
         }
     };
@@ -70,9 +98,12 @@ void append_listen_config(
     if (config.https_.has_value()) {
         const auto endpoint = asio::ip::tcp::endpoint(address, config.https_->value());
         ensure_unique_endpoint(endpoint);
+        if (http3.has_value()) {
+            ensure_unique_http3_endpoint(http3->port_);
+        }
         // Credentials load once, here; the definition keeps no file name or password.
         auto tls = detail::load_http_server_tls(config.tls_, replacement.get_allocator().resource());
-        replacement.emplace_back(endpoint, std::move(tls));
+        replacement.emplace_back(endpoint, std::move(tls), std::move(http3));
     }
 }
 

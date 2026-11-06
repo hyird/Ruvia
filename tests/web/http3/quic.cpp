@@ -1,0 +1,987 @@
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <limits>
+#include <map>
+#include <memory>
+#include <memory_resource>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <thread>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
+#include <nghttp3/nghttp3.h>
+#include <ngtcp2/ngtcp2_crypto.h>
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/udp.hpp>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
+
+#include "ruvia/http/http3_quic_connection.h"
+#include "ruvia/http/http3_request_head.h"
+#include "ruvia/http/http_response.h"
+
+#include "http3_test_client.h"
+#include "test_harness.h"
+#include "test_tls_identity.h"
+#include "udp_port_reservation.h"
+
+namespace {
+
+using namespace std::chrono_literals;
+
+ngtcp2_conn* get_connection(ngtcp2_crypto_conn_ref* reference) {
+    return static_cast<ruvia::http3_quic_connection*>(reference->user_data)
+        ->native_handle();
+}
+
+// RFC 9114 §3.1: the server offers HTTP/3 only, over TLS 1.3 only (RFC 9001
+// §4.2).
+int select_h3(SSL*, const unsigned char** out, unsigned char* out_length,
+    const unsigned char* in, unsigned int in_length, void*) {
+    for (unsigned int offset = 0; offset < in_length;) {
+        const unsigned int size = in[offset];
+        if (size > in_length - offset - 1) {
+            break;
+        }
+        if (size == 2 && in[offset + 1] == 'h' && in[offset + 2] == '3') {
+            *out = in + offset + 1;
+            *out_length = 2;
+            return SSL_TLSEXT_ERR_OK;
+        }
+        offset += 1 + size;
+    }
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
+}
+
+void configure_h3_server(SSL_CTX* context) {
+    if (SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION) != 1) {
+        throw std::runtime_error("cannot restrict the test server to TLS 1.3");
+    }
+    SSL_CTX_set_alpn_select_cb(context, select_h3, nullptr);
+}
+
+ngtcp2_callbacks server_callbacks() noexcept {
+    ngtcp2_callbacks callbacks{};
+    callbacks.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
+    callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
+    callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
+    callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
+    callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
+    callbacks.update_key = ngtcp2_crypto_update_key_cb;
+    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+    callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+    callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
+    callbacks.rand = ruvia::test::http3_test_fill_random;
+    callbacks.get_new_connection_id2 = ruvia::test::http3_test_new_connection_id;
+    return callbacks;
+}
+
+constexpr std::array<std::uint8_t, 32> stateless_reset_secret{
+    0x52, 0x75, 0x76, 0x69, 0x61, 0x2d, 0x68, 0x33, 0x2d, 0x74, 0x65, 0x73,
+    0x74, 0x2d, 0x72, 0x65, 0x73, 0x65, 0x74, 0x2d, 0x73, 0x65, 0x63, 0x72,
+    0x65, 0x74, 0x2d, 0x30, 0x31, 0x32, 0x33, 0x34};
+
+// One server connection accepted from a client's first Initial packet the
+// way a listener does it (RFC 9000 §7.2, §7.3): a fresh random Source
+// Connection ID, the client's chosen Destination Connection ID as
+// original_destination_connection_id, its stateless reset token, and no
+// active migration.
+class quic_server_session final {
+public:
+    quic_server_session(SSL_CTX* context, const ngtcp2_path& path,
+        std::span<const std::byte> initial, ngtcp2_tstamp now) {
+        ngtcp2_pkt_hd header{};
+        if (ngtcp2_accept(&header, reinterpret_cast<const std::uint8_t*>(initial.data()), initial.size()) != 0) {
+            throw std::invalid_argument("datagram is not an acceptable QUIC Initial");
+        }
+        const auto source = ruvia::test::http3_test_random_connection_id(16);
+        if (ngtcp2_crypto_generate_stateless_reset_token(stateless_reset_token_.data(),
+                stateless_reset_secret.data(), stateless_reset_secret.size(), &source) != 0) {
+            throw std::runtime_error("cannot derive a stateless reset token");
+        }
+        tls_.reset(SSL_new(context));
+        if (!tls_ || ngtcp2_crypto_ossl_configure_server_session(tls_.get()) != 0) {
+            throw std::runtime_error("cannot create the server TLS session");
+        }
+        SSL_set_app_data(tls_.get(), &reference_);
+        SSL_set_accept_state(tls_.get());
+        ngtcp2_crypto_ossl_ctx* crypto = nullptr;
+        if (ngtcp2_crypto_ossl_ctx_new(&crypto, tls_.get()) != 0) {
+            throw std::runtime_error("cannot create the server QUIC crypto context");
+        }
+        crypto_.reset(crypto);
+        connection_.emplace(ruvia::http3_quic_connection::server({
+            .callbacks_ = server_callbacks(),
+            .source_connection_id_ = source,
+            .destination_connection_id_ = header.scid,
+            .original_destination_connection_id_ = header.dcid,
+            .stateless_reset_token_ = stateless_reset_token_,
+            .disable_active_migration_ = true,
+            .initial_path_ = path,
+            .version_ = header.version,
+            .initial_timestamp_ = now,
+        }));
+        reference_.get_conn = get_connection;
+        reference_.user_data = &*connection_;
+        connection_->set_tls_native_handle(crypto_.get());
+    }
+
+    ~quic_server_session() {
+        connection_.reset();
+        SSL_set_app_data(tls_.get(), nullptr);
+    }
+
+    quic_server_session(const quic_server_session&) = delete;
+    quic_server_session& operator=(const quic_server_session&) = delete;
+    quic_server_session(quic_server_session&&) = delete;
+    quic_server_session& operator=(quic_server_session&&) = delete;
+
+    [[nodiscard]] ruvia::http3_quic_connection& connection() noexcept {
+        return *connection_;
+    }
+    [[nodiscard]] const ruvia::http3_quic_stateless_reset_token& stateless_reset_token() const noexcept {
+        return stateless_reset_token_;
+    }
+    [[nodiscard]] bool h3_selected() const noexcept {
+        const unsigned char* protocol = nullptr;
+        unsigned int protocol_size = 0;
+        SSL_get0_alpn_selected(tls_.get(), &protocol, &protocol_size);
+        return std::string_view(reinterpret_cast<const char*>(protocol), protocol_size) == "h3";
+    }
+
+private:
+    struct free_tls final {
+        void operator()(SSL* tls) const noexcept {
+            SSL_free(tls);
+        }
+    };
+    struct free_crypto final {
+        void operator()(ngtcp2_crypto_ossl_ctx* crypto) const noexcept {
+            ngtcp2_crypto_ossl_ctx_del(crypto);
+        }
+    };
+
+    ruvia::http3_quic_stateless_reset_token stateless_reset_token_{};
+    std::unique_ptr<SSL, free_tls> tls_;
+    std::unique_ptr<ngtcp2_crypto_ossl_ctx, free_crypto> crypto_;
+    ngtcp2_crypto_conn_ref reference_{};
+    std::optional<ruvia::http3_quic_connection> connection_;
+};
+
+void drain_events(ruvia::http3_quic_connection& connection, std::vector<ruvia::http3_event>& events) {
+    while (auto event = connection.next_event()) {
+        events.push_back(std::move(*event));
+    }
+}
+
+sockaddr_in loopback_address(std::uint16_t port) {
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    return address;
+}
+
+// A client and a server connection joined by an in-memory datagram relay on
+// a manually advanced clock: no sockets, no wall time, no loss.
+class in_memory_h3_pair final {
+public:
+    explicit in_memory_h3_pair(ruvia::test::tls_identity& identity)
+        : client_address_(loopback_address(50000)),
+          server_address_(loopback_address(443)),
+          client_path_{
+              .local = {reinterpret_cast<ngtcp2_sockaddr*>(&client_address_), sizeof(client_address_)},
+              .remote = {reinterpret_cast<ngtcp2_sockaddr*>(&server_address_), sizeof(server_address_)},
+              .user_data = nullptr,
+          },
+          server_path_{
+              .local = {reinterpret_cast<ngtcp2_sockaddr*>(&server_address_), sizeof(server_address_)},
+              .remote = {reinterpret_cast<ngtcp2_sockaddr*>(&client_address_), sizeof(client_address_)},
+              .user_data = nullptr,
+          },
+          client_initial_destination_(ruvia::test::http3_test_random_connection_id(18)),
+          client_tls_(identity.ca_file_, "localhost") {
+        client_.emplace(ruvia::http3_quic_connection::client({
+            .callbacks_ = ruvia::test::http3_test_client_callbacks(),
+            .source_connection_id_ = ruvia::test::http3_test_random_connection_id(16),
+            .destination_connection_id_ = client_initial_destination_,
+            .initial_path_ = client_path_,
+            .initial_timestamp_ = now_,
+        }));
+        client_tls_.bind(*client_);
+
+        ruvia::http3_quic_datagram initial;
+        if (client_->next_datagram(1350, now_, initial).status_ != ruvia::http3_quic_status::accepted) {
+            throw std::runtime_error("client wrote no Initial");
+        }
+        drain_events(*client_, client_events_);
+        server_.emplace(identity.context_.native_handle(), server_path_, initial.bytes_, now_);
+        last_server_receive_ = server().receive_datagram(server_path_, initial.ecn_, initial.bytes_, now_).status_;
+        drain_events(server(), server_events_);
+    }
+
+    in_memory_h3_pair(const in_memory_h3_pair&) = delete;
+    in_memory_h3_pair& operator=(const in_memory_h3_pair&) = delete;
+
+    // Relays datagrams both ways until neither side writes one, advancing
+    // the clock by one millisecond per round.
+    void exchange() {
+        for (int round = 0; round < 256; ++round) {
+            now_ += NGTCP2_MILLISECONDS;
+            const auto moved = relay(*client_, client_events_, server(), server_path_, server_events_, last_server_receive_) +
+                               relay(server(), server_events_, *client_, client_path_, client_events_, last_client_receive_);
+            if (moved == 0) {
+                return;
+            }
+        }
+        throw std::runtime_error("in-memory QUIC exchange did not settle");
+    }
+
+    [[nodiscard]] ruvia::http3_quic_connection& client() noexcept {
+        return *client_;
+    }
+    [[nodiscard]] ruvia::http3_quic_connection& server() noexcept {
+        return server_->connection();
+    }
+    [[nodiscard]] quic_server_session& server_session() noexcept {
+        return *server_;
+    }
+
+    sockaddr_in client_address_;
+    sockaddr_in server_address_;
+    ngtcp2_path client_path_;
+    ngtcp2_path server_path_;
+    ngtcp2_tstamp now_{NGTCP2_SECONDS};
+    ngtcp2_cid client_initial_destination_;
+    ruvia::test::http3_test_client_tls client_tls_;
+    std::optional<ruvia::http3_quic_connection> client_;
+    std::optional<quic_server_session> server_;
+    std::vector<ruvia::http3_event> client_events_;
+    std::vector<ruvia::http3_event> server_events_;
+    ruvia::http3_quic_status last_client_receive_{ruvia::http3_quic_status::accepted};
+    ruvia::http3_quic_status last_server_receive_{ruvia::http3_quic_status::accepted};
+
+private:
+    std::size_t relay(ruvia::http3_quic_connection& from, std::vector<ruvia::http3_event>& from_events,
+        ruvia::http3_quic_connection& to, const ngtcp2_path& to_path, std::vector<ruvia::http3_event>& to_events,
+        ruvia::http3_quic_status& last_receive) {
+        std::size_t moved = 0;
+        ruvia::http3_quic_datagram datagram;
+        for (;;) {
+            const auto written = from.next_datagram(1350, now_, datagram);
+            drain_events(from, from_events);
+            if (written.status_ != ruvia::http3_quic_status::accepted || datagram.bytes_.empty()) {
+                return moved;
+            }
+            ++moved;
+            last_receive = to.receive_datagram(to_path, datagram.ecn_, datagram.bytes_, now_).status_;
+            drain_events(to, to_events);
+        }
+    }
+};
+
+std::optional<ruvia::http3_headers_event> take_headers(std::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
+    for (auto& event : events) {
+        if (auto* headers = std::get_if<ruvia::http3_headers_event>(&event); headers != nullptr && headers->stream_id_ == stream_id) {
+            auto taken = std::move(*headers);
+            event = ruvia::http3_stream_end_event{-1};
+            return taken;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string_view> field(const ruvia::http3_headers_event& headers, std::string_view name) {
+    for (const auto& entry : headers.fields_) {
+        if (entry.name() == name) {
+            return entry.value();
+        }
+    }
+    return std::nullopt;
+}
+
+std::string take_body(std::vector<ruvia::http3_event>& events, ruvia::http3_quic_connection& connection, std::int64_t stream_id) {
+    std::string body;
+    for (const auto& event : events) {
+        if (const auto* data = std::get_if<ruvia::http3_data_event>(&event); data != nullptr && data->stream_id_ == stream_id) {
+            body.append(data->bytes_);
+            connection.consume_stream_data(stream_id, data->bytes_.size());
+        }
+    }
+    return body;
+}
+
+bool stream_ended(const std::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
+    return std::any_of(events.begin(), events.end(), [stream_id](const ruvia::http3_event& event) {
+        const auto* end = std::get_if<ruvia::http3_stream_end_event>(&event);
+        return end != nullptr && end->stream_id_ == stream_id;
+    });
+}
+
+std::vector<std::int64_t> goaway_ids(const std::vector<ruvia::http3_event>& events) {
+    std::vector<std::int64_t> ids;
+    for (const auto& event : events) {
+        if (const auto* goaway = std::get_if<ruvia::http3_goaway_event>(&event)) {
+            ids.push_back(goaway->id_);
+        }
+    }
+    return ids;
+}
+
+std::span<const std::byte> as_bytes(std::string_view text) noexcept {
+    return std::as_bytes(std::span(text.data(), text.size()));
+}
+
+// Submits a buffered response through the server mapping: head, the whole
+// body as DATA within the output budget, then the end of the stream.
+bool submit_buffered_response(ruvia::http3_connection& codec, std::int64_t stream_id,
+    ruvia::http_known_method method, const ruvia::http_response& response) {
+    const auto plan = ruvia::plan_buffered_http_response_write(method, response);
+    const auto head = codec.submit_response_head(stream_id, response, plan);
+    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head)) {
+        return false;
+    }
+    if (plan.send_body()) {
+        const auto submitted = codec.submit_data(stream_id, as_bytes(response.body()));
+        if (submitted.status_ != ruvia::http3_status::accepted || submitted.accepted_bytes_ != response.body().size()) {
+            return false;
+        }
+        return codec.finish_stream(stream_id) == ruvia::http3_status::accepted;
+    }
+    return true;
+}
+
+struct served_get final {
+    bool request_parsed_{false};
+    bool response_submitted_{false};
+    std::optional<ruvia::http3_headers_event> response_head_;
+    std::string response_body_;
+    bool response_ended_{false};
+};
+
+// Client GET on a fresh request stream, answered by the server through
+// http3_request_head and the buffered response mapping.
+served_get serve_get(in_memory_h3_pair& pair, std::int64_t stream_id, std::string_view path, std::string_view body) {
+    served_get result;
+    const std::array request_fields{
+        ruvia::http3_field_view{":method", "GET"},
+        ruvia::http3_field_view{":scheme", "https"},
+        ruvia::http3_field_view{":authority", "localhost"},
+        ruvia::http3_field_view{":path", path},
+    };
+    if (pair.client().http3().submit_request(stream_id, request_fields, true) != ruvia::http3_status::accepted) {
+        return result;
+    }
+    pair.exchange();
+
+    auto request_headers = take_headers(pair.server_events_, stream_id);
+    if (!request_headers) {
+        return result;
+    }
+    auto* resource = std::pmr::get_default_resource();
+    const auto head = ruvia::http3_request_head::parse(std::move(*request_headers), resource);
+    if (!head) {
+        return result;
+    }
+    const auto request = head->build_request(resource);
+    result.request_parsed_ = head->method() == "GET" && head->path() == path && head->authority() == "localhost" &&
+                             head->stream_ended() && request.protocol_version() == ruvia::http_protocol_version::http3 &&
+                             request.path() == path;
+
+    ruvia::http_response response;
+    response.header("x-served-by", "ruvia-http3");
+    response.body(body);
+    result.response_submitted_ = submit_buffered_response(pair.server().http3(), stream_id, ruvia::http_known_method::get, response);
+    pair.exchange();
+
+    result.response_head_ = take_headers(pair.client_events_, stream_id);
+    result.response_body_ = take_body(pair.client_events_, pair.client(), stream_id);
+    result.response_ended_ = stream_ended(pair.client_events_, stream_id);
+    return result;
+}
+
+}  // namespace
+
+RUVIA_TEST(http3_ngtcp2_openssl_client_emits_a_real_quic_initial_packet) {
+    using ssl_context_ptr = std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)>;
+    using ssl_ptr = std::unique_ptr<SSL, decltype(&SSL_free)>;
+
+    ssl_context_ptr context(SSL_CTX_new(TLS_client_method()), SSL_CTX_free);
+    RUVIA_CHECK(context != nullptr);
+    if (!context) {
+        return;
+    }
+    ssl_ptr tls(SSL_new(context.get()), SSL_free);
+    RUVIA_CHECK(tls != nullptr);
+    if (!tls) {
+        return;
+    }
+    SSL_set_connect_state(tls.get());
+    constexpr std::array<unsigned char, 3> h3_alpn{2, 'h', '3'};
+    RUVIA_CHECK(SSL_set_alpn_protos(tls.get(), h3_alpn.data(),
+                    static_cast<unsigned int>(h3_alpn.size())) == 0);
+
+    ngtcp2_crypto_conn_ref connection_reference{
+        .get_conn = get_connection,
+        .user_data = nullptr,
+    };
+    SSL_set_app_data(tls.get(), &connection_reference);
+    RUVIA_CHECK(ngtcp2_crypto_ossl_configure_client_session(tls.get()) == 0);
+    ngtcp2_crypto_ossl_ctx* crypto_raw = nullptr;
+    RUVIA_CHECK(ngtcp2_crypto_ossl_ctx_new(&crypto_raw, tls.get()) == 0);
+    std::unique_ptr<ngtcp2_crypto_ossl_ctx,
+        decltype(&ngtcp2_crypto_ossl_ctx_del)>
+        crypto(crypto_raw, ngtcp2_crypto_ossl_ctx_del);
+    if (!crypto) {
+        return;
+    }
+
+    auto local = loopback_address(44300);
+    auto remote = loopback_address(443);
+    const ngtcp2_path path{
+        .local = {reinterpret_cast<ngtcp2_sockaddr*>(&local), sizeof(local)},
+        .remote = {reinterpret_cast<ngtcp2_sockaddr*>(&remote), sizeof(remote)},
+        .user_data = nullptr,
+    };
+
+    constexpr std::array<std::uint8_t, 8> source_id{
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
+    constexpr std::array<std::uint8_t, 8> destination_id{
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27};
+    ngtcp2_cid source_connection_id;
+    ngtcp2_cid destination_connection_id;
+    ngtcp2_cid_init(&source_connection_id, source_id.data(), source_id.size());
+    ngtcp2_cid_init(&destination_connection_id, destination_id.data(),
+        destination_id.size());
+
+    constexpr ngtcp2_tstamp timestamp = NGTCP2_SECONDS;
+    auto connection = ruvia::http3_quic_connection::client({
+        .callbacks_ = ruvia::test::http3_test_client_callbacks(),
+        .source_connection_id_ = source_connection_id,
+        .destination_connection_id_ = destination_connection_id,
+        .initial_path_ = path,
+        .initial_timestamp_ = timestamp,
+    });
+    connection_reference.user_data = &connection;
+    connection.set_tls_native_handle(crypto.get());
+
+    ruvia::http3_quic_datagram datagram;
+    const auto result = connection.next_datagram(1350, timestamp, datagram);
+    RUVIA_CHECK(result.status_ == ruvia::http3_quic_status::accepted);
+    RUVIA_CHECK(datagram.bytes_.size() >= 1200);
+    RUVIA_CHECK(datagram.path_.path.remote.addrlen == sizeof(remote));
+    RUVIA_CHECK(datagram.path_.path.remote.addr ==
+                reinterpret_cast<ngtcp2_sockaddr*>(
+                    &datagram.path_.remote_addrbuf));
+    RUVIA_CHECK(connection.expiry() > timestamp);
+
+    SSL_set_app_data(tls.get(), nullptr);
+}
+
+RUVIA_TEST(http3_quic_server_accepts_a_client_initial_and_serves_a_request_in_memory) {
+    ruvia::test::tls_identity identity("localhost");
+    configure_h3_server(identity.context_.native_handle());
+    in_memory_h3_pair pair(identity);
+    pair.exchange();
+
+    RUVIA_CHECK(pair.last_server_receive_ == ruvia::http3_quic_status::accepted);
+    RUVIA_CHECK(pair.last_client_receive_ == ruvia::http3_quic_status::accepted);
+    RUVIA_CHECK(pair.client().handshake_completed());
+    RUVIA_CHECK(pair.server().handshake_completed());
+    RUVIA_CHECK(pair.client_tls_.verify_result() == X509_V_OK);
+    RUVIA_CHECK(pair.client_tls_.h3_selected());
+    RUVIA_CHECK(pair.server_session().h3_selected());
+
+    // The server's transport parameters, as the client received them.
+    const auto* parameters = ngtcp2_conn_get_remote_transport_params2(pair.client().native_handle());
+    RUVIA_CHECK(parameters != nullptr);
+    if (parameters != nullptr) {
+        RUVIA_CHECK(parameters->disable_active_migration == 1);
+        RUVIA_CHECK(parameters->original_dcid_present == 1);
+        RUVIA_CHECK(ngtcp2_cid_eq(&parameters->original_dcid, &pair.client_initial_destination_) != 0);
+        RUVIA_CHECK(parameters->stateless_reset_token_present == 1);
+        const auto& token = pair.server_session().stateless_reset_token();
+        RUVIA_CHECK(std::equal(token.begin(), token.end(), std::begin(parameters->stateless_reset_token)));
+    }
+
+    RUVIA_CHECK(pair.client().start_http3() == ruvia::http3_quic_status::accepted);
+    RUVIA_CHECK(pair.server().start_http3() == ruvia::http3_quic_status::accepted);
+    pair.exchange();
+    const auto stream_id = pair.client().open_request_stream();
+    RUVIA_CHECK(stream_id == std::int64_t{0});
+    if (!stream_id) {
+        return;
+    }
+
+    constexpr std::string_view body = "hello over http/3";
+    auto served = serve_get(pair, *stream_id, "/hello", body);
+    RUVIA_CHECK(served.request_parsed_);
+    RUVIA_CHECK(served.response_submitted_);
+    RUVIA_CHECK(served.response_head_.has_value());
+    if (served.response_head_) {
+        RUVIA_CHECK(field(*served.response_head_, ":status") == std::string_view("200"));
+        RUVIA_CHECK(field(*served.response_head_, "content-length") == std::to_string(body.size()));
+        RUVIA_CHECK(field(*served.response_head_, "x-served-by") == std::string_view("ruvia-http3"));
+        RUVIA_CHECK(field(*served.response_head_, "date").has_value());
+    }
+    RUVIA_CHECK(served.response_body_ == body);
+    RUVIA_CHECK(served.response_ended_);
+    RUVIA_CHECK(!pair.client().closed());
+    RUVIA_CHECK(!pair.server().closed());
+}
+
+RUVIA_TEST(http3_quic_server_drains_with_goaway_then_closes_the_connection_gracefully) {
+    ruvia::test::tls_identity identity("localhost");
+    configure_h3_server(identity.context_.native_handle());
+    in_memory_h3_pair pair(identity);
+    pair.exchange();
+    RUVIA_CHECK(pair.client().start_http3() == ruvia::http3_quic_status::accepted);
+    RUVIA_CHECK(pair.server().start_http3() == ruvia::http3_quic_status::accepted);
+    pair.exchange();
+    const auto stream_id = pair.client().open_request_stream();
+    RUVIA_CHECK(stream_id.has_value());
+    if (!stream_id) {
+        return;
+    }
+    const auto served = serve_get(pair, *stream_id, "/before-drain", "admitted");
+    RUVIA_CHECK(served.response_ended_);
+    RUVIA_CHECK(served.response_body_ == "admitted");
+
+    // RFC 9114 §5.2: a shutdown notice first, the final GOAWAY a round trip
+    // later naming the first request stream that was not processed.
+    RUVIA_CHECK(pair.server().http3().begin_drain() == ruvia::http3_status::accepted);
+    pair.exchange();
+    RUVIA_CHECK(goaway_ids(pair.client_events_) == std::vector<std::int64_t>{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID});
+    RUVIA_CHECK(pair.server().http3().finish_drain() == ruvia::http3_status::accepted);
+    pair.exchange();
+    RUVIA_CHECK(pair.server().http3().drain_final());
+    RUVIA_CHECK(goaway_ids(pair.client_events_) ==
+                (std::vector<std::int64_t>{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID, *stream_id + 4}));
+
+    pair.server().close(NGHTTP3_H3_NO_ERROR);
+    ruvia::http3_quic_datagram close_datagram;
+    const auto written = pair.server().next_datagram(1350, pair.now_, close_datagram);
+    RUVIA_CHECK(written.status_ == ruvia::http3_quic_status::accepted);
+    RUVIA_CHECK(!close_datagram.bytes_.empty());
+    RUVIA_CHECK(pair.server().closed());
+    drain_events(pair.server(), pair.server_events_);
+
+    const auto received = pair.client().receive_datagram(pair.client_path_, close_datagram.ecn_, close_datagram.bytes_, pair.now_);
+    drain_events(pair.client(), pair.client_events_);
+    RUVIA_CHECK(received.status_ == ruvia::http3_quic_status::closed);
+    RUVIA_CHECK(pair.client().closed());
+    const auto* close_error = ngtcp2_conn_get_ccerr2(pair.client().native_handle());
+    RUVIA_CHECK(close_error->type == NGTCP2_CCERR_TYPE_APPLICATION);
+    RUVIA_CHECK(close_error->error_code == NGHTTP3_H3_NO_ERROR);
+
+    // The CONNECTION_CLOSE is written once; the closing period sends nothing.
+    ruvia::http3_quic_datagram after_close;
+    RUVIA_CHECK(pair.server().next_datagram(1350, pair.now_, after_close).status_ == ruvia::http3_quic_status::closed);
+    RUVIA_CHECK(after_close.bytes_.empty());
+}
+
+namespace {
+
+// A one-connection HTTP/3 server on a real loopback UDP socket, built from the
+// same server path as the in-memory tests and run on its own thread. Routes:
+// GET /hello, POST /echo (the request content back) and GET /shutdown, which
+// answers and then drains (GOAWAY notice, final GOAWAY a round trip later)
+// and closes with H3_NO_ERROR once every admitted stream has closed. The
+// thread ends when its connection closes, on stop, or after a bounded
+// lifetime.
+class udp_h3_test_server final {
+public:
+    udp_h3_test_server(SSL_CTX* context, asio::ip::udp::endpoint endpoint)
+        : context_(context),
+          endpoint_(endpoint),
+          socket_(io_) {
+        // Bound before the client can send, so its Initial is never refused.
+        socket_.open(endpoint_.protocol());
+#if !defined(_WIN32)
+        socket_.set_option(asio::socket_base::reuse_address(true));
+        const int enabled = 1;
+        if (::setsockopt(socket_.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
+            throw std::system_error(errno, asio::system_category(), "cannot share the reserved UDP port");
+        }
+#endif
+        socket_.bind(endpoint_);
+        socket_.non_blocking(true);
+        thread_ = std::thread([this] {
+            try {
+                serve();
+            } catch (const std::exception& error) {
+                failure_ = error.what();
+            }
+        });
+    }
+
+    ~udp_h3_test_server() {
+        stop_ = true;
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    udp_h3_test_server(const udp_h3_test_server&) = delete;
+    udp_h3_test_server& operator=(const udp_h3_test_server&) = delete;
+
+    // Waits for the server thread; returns its failure, empty when none.
+    [[nodiscard]] std::string join() {
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+        return failure_;
+    }
+
+private:
+    struct served_stream final {
+        std::optional<ruvia::http3_request_head> head_;
+        std::string request_body_;
+        std::string response_body_;
+        std::size_t response_offset_{0};
+        bool responding_{false};
+        bool finished_{false};
+    };
+
+    [[nodiscard]] static ngtcp2_tstamp timestamp() noexcept {
+        return static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+    }
+
+    [[nodiscard]] ngtcp2_path path() noexcept {
+        return {
+            .local = {reinterpret_cast<ngtcp2_sockaddr*>(endpoint_.data()), static_cast<ngtcp2_socklen>(endpoint_.size())},
+            .remote = {reinterpret_cast<ngtcp2_sockaddr*>(peer_.data()), static_cast<ngtcp2_socklen>(peer_.size())},
+            .user_data = nullptr,
+        };
+    }
+
+    void serve() {
+        const auto deadline = std::chrono::steady_clock::now() + 30s;
+        while (!stop_ && std::chrono::steady_clock::now() < deadline) {
+            auto wake = std::chrono::steady_clock::now() + 20ms;
+            if (session_) {
+                const auto expiry = session_->connection().expiry();
+                if (expiry < static_cast<ngtcp2_tstamp>((std::numeric_limits<std::int64_t>::max)())) {
+                    wake = (std::min)(wake, std::chrono::steady_clock::time_point(
+                                                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                    std::chrono::nanoseconds(static_cast<std::int64_t>(expiry)))));
+                }
+            }
+            socket_.async_wait(asio::socket_base::wait_read, [](const std::error_code&) {});
+            io_.restart();
+            io_.run_until(wake);
+            socket_.cancel();
+            io_.restart();
+            io_.run();
+
+            const bool received = receive_available();
+            if (!session_) {
+                continue;
+            }
+            auto& connection = session_->connection();
+            if (!connection.closed() && timestamp() >= connection.expiry()) {
+                static_cast<void>(connection.handle_expiry(timestamp()));
+                handle_events();
+            }
+            if (!connection.closed()) {
+                if (!connection.http3_started() && connection.handshake_completed()) {
+                    const auto started = connection.start_http3();
+                    if (started == ruvia::http3_quic_status::application_error ||
+                        started == ruvia::http3_quic_status::transport_error) {
+                        throw std::runtime_error("server cannot start HTTP/3");
+                    }
+                }
+                continue_responses();
+                advance_drain(received);
+            }
+            flush();
+            if (connection.closed()) {
+                return;
+            }
+        }
+    }
+
+    bool receive_available() {
+        bool received = false;
+        for (;;) {
+            asio::ip::udp::endpoint sender;
+            std::error_code error;
+            const auto size = socket_.receive_from(asio::buffer(input_), sender, 0, error);
+            if (error == asio::error::would_block || error == asio::error::try_again) {
+                return received;
+            }
+            if (error) {
+                // ICMP errors for a previous send surface here on some
+                // platforms; they carry no datagram.
+                continue;
+            }
+            const std::span<const std::byte> bytes(input_.data(), size);
+            if (!session_) {
+                peer_ = sender;
+                try {
+                    session_.emplace(context_, path(), bytes, timestamp());
+                } catch (const std::invalid_argument&) {
+                    continue;
+                }
+            } else if (sender != peer_) {
+                continue;
+            }
+            if (session_->connection().closed()) {
+                continue;
+            }
+            received = true;
+            static_cast<void>(session_->connection().receive_datagram(path(), NGTCP2_ECN_NOT_ECT, bytes, timestamp()));
+            handle_events();
+        }
+    }
+
+    void flush() {
+        auto& connection = session_->connection();
+        for (;;) {
+            const auto result = connection.next_datagram(1350, timestamp(), output_);
+            handle_events();
+            if (result.status_ != ruvia::http3_quic_status::accepted || output_.bytes_.empty()) {
+                if (drain_notice_pending_flush_) {
+                    drain_notice_pending_flush_ = false;
+                    drain_notice_sent_ = true;
+                }
+                return;
+            }
+            std::error_code error;
+            socket_.send_to(asio::buffer(output_.bytes_.data(), output_.bytes_.size()), peer_, 0, error);
+        }
+    }
+
+    void handle_events() {
+        auto& connection = session_->connection();
+        while (auto event = connection.next_event()) {
+            if (auto* headers = std::get_if<ruvia::http3_headers_event>(&*event)) {
+                auto& stream = streams_[headers->stream_id_];
+                if (stream.head_) {
+                    continue;
+                }
+                const auto stream_id = headers->stream_id_;
+                stream.head_ = ruvia::http3_request_head::parse(std::move(*headers), std::pmr::get_default_resource());
+                if (!stream.head_) {
+                    connection.reset_stream(stream_id, NGHTTP3_H3_MESSAGE_ERROR);
+                    streams_.erase(stream_id);
+                } else if (stream.head_->stream_ended()) {
+                    respond(stream_id, stream);
+                }
+            } else if (const auto* data = std::get_if<ruvia::http3_data_event>(&*event)) {
+                connection.consume_stream_data(data->stream_id_, data->bytes_.size());
+                if (const auto found = streams_.find(data->stream_id_); found != streams_.end()) {
+                    found->second.request_body_.append(data->bytes_);
+                }
+            } else if (const auto* end = std::get_if<ruvia::http3_stream_end_event>(&*event)) {
+                if (const auto found = streams_.find(end->stream_id_); found != streams_.end() && !found->second.responding_) {
+                    respond(end->stream_id_, found->second);
+                }
+            } else if (const auto* closed = std::get_if<ruvia::http3_stream_close_event>(&*event)) {
+                streams_.erase(closed->stream_id_);
+            }
+        }
+    }
+
+    void respond(std::int64_t stream_id, served_stream& stream) {
+        const auto method = stream.head_->method();
+        const auto target = stream.head_->path();
+        ruvia::http_response response;
+        response.header("x-request-method", method);
+        if (method == "GET" && target == "/hello") {
+            stream.response_body_ = "hello over http/3";
+        } else if (method == "POST" && target == "/echo") {
+            stream.response_body_ = std::move(stream.request_body_);
+        } else if (method == "GET" && target == "/shutdown") {
+            stream.response_body_ = "draining";
+            drain_requested_ = true;
+        } else {
+            response.status(ruvia::http_status::not_found);
+        }
+        response.body(stream.response_body_);
+        const auto known_method = method == "POST" ? ruvia::http_known_method::post : ruvia::http_known_method::get;
+        const auto plan = ruvia::plan_buffered_http_response_write(known_method, response);
+        const auto head = session_->connection().http3().submit_response_head(stream_id, response, plan);
+        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head)) {
+            throw std::runtime_error("server cannot submit a response head");
+        }
+        stream.responding_ = true;
+        stream.finished_ = !plan.send_body();
+    }
+
+    // Submits response content as the per-stream output budget frees up.
+    void continue_responses() {
+        auto& codec = session_->connection().http3();
+        for (auto& [stream_id, stream] : streams_) {
+            if (!stream.responding_ || stream.finished_) {
+                continue;
+            }
+            while (stream.response_offset_ < stream.response_body_.size()) {
+                const auto submitted = codec.submit_data(
+                    stream_id, as_bytes(std::string_view(stream.response_body_).substr(stream.response_offset_)));
+                if (submitted.status_ != ruvia::http3_status::accepted) {
+                    break;
+                }
+                stream.response_offset_ += submitted.accepted_bytes_;
+            }
+            if (stream.response_offset_ == stream.response_body_.size()) {
+                if (codec.finish_stream(stream_id) != ruvia::http3_status::accepted) {
+                    throw std::runtime_error("server cannot finish a response");
+                }
+                stream.finished_ = true;
+            }
+        }
+    }
+
+    void advance_drain(bool received) {
+        auto& connection = session_->connection();
+        auto& codec = connection.http3();
+        if (drain_requested_ && !drain_begun_) {
+            if (codec.begin_drain() != ruvia::http3_status::accepted) {
+                throw std::runtime_error("server cannot begin draining");
+            }
+            drain_begun_ = true;
+            drain_notice_pending_flush_ = true;
+        } else if (drain_notice_sent_ && received && !codec.drain_final()) {
+            // The peer has answered since the notice left: a round trip.
+            if (codec.finish_drain() != ruvia::http3_status::accepted) {
+                throw std::runtime_error("server cannot finish draining");
+            }
+        } else if (codec.drain_final() && codec.drained()) {
+            connection.close(NGHTTP3_H3_NO_ERROR);
+        }
+    }
+
+    SSL_CTX* context_;
+    asio::ip::udp::endpoint endpoint_;
+    asio::ip::udp::endpoint peer_;
+    asio::io_context io_;
+    asio::ip::udp::socket socket_;
+    std::vector<std::byte> input_ = std::vector<std::byte>(64 * 1024);
+    ruvia::http3_quic_datagram output_;
+    std::optional<quic_server_session> session_;
+    std::map<std::int64_t, served_stream> streams_;
+    bool drain_requested_{false};
+    bool drain_begun_{false};
+    bool drain_notice_pending_flush_{false};
+    bool drain_notice_sent_{false};
+    std::atomic<bool> stop_{false};
+    std::string failure_;
+    // Started last: every member above is ready before the thread runs.
+    std::thread thread_;
+};
+
+}  // namespace
+
+RUVIA_TEST(http3_test_client_exchanges_requests_with_a_udp_loopback_server) {
+    asio::io_context io;
+    ruvia::test::udp_port_reservation reservation(io);
+    ruvia::test::tls_identity identity("localhost");
+    configure_h3_server(identity.context_.native_handle());
+    udp_h3_test_server server(identity.context_.native_handle(), reservation.endpoint());
+
+    {
+        ruvia::test::http3_test_client client(reservation.endpoint(), identity.ca_file_, "localhost", 5s);
+        const auto* parameters = ngtcp2_conn_get_remote_transport_params2(client.native_handle());
+        RUVIA_CHECK(parameters != nullptr && parameters->disable_active_migration == 1);
+
+        const auto hello = client.request("GET", "/hello");
+        RUVIA_CHECK(hello.status_ == 200);
+        RUVIA_CHECK(hello.body_ == "hello over http/3");
+        RUVIA_CHECK(hello.header("Content-Length") == std::string("17"));
+        RUVIA_CHECK(hello.header("x-request-method") == std::string("GET"));
+        RUVIA_CHECK(!hello.reset_error_.has_value());
+
+        // Larger than both the client's and the server's per-stream output
+        // budget (256 KiB) and the initial stream window (1 MiB): the upload
+        // and the echo only complete if DATA credit is returned as consumed.
+        std::string upload(1536 * 1024, '\0');
+        for (std::size_t index = 0; index < upload.size(); ++index) {
+            upload[index] = static_cast<char>('a' + index % 23);
+        }
+        const auto echo = client.request("POST", "/echo", {{"content-length", std::to_string(upload.size())}}, upload);
+        RUVIA_CHECK(echo.status_ == 200);
+        RUVIA_CHECK(echo.header("content-length") == std::to_string(upload.size()));
+        RUVIA_CHECK(echo.body_ == upload);
+
+        // Incremental reading: chunks taken one at a time reassemble the body.
+        const std::string streamed_upload(96 * 1024, 's');
+        const auto stream_id = client.start_request(
+            "POST", "/echo", {{"content-length", std::to_string(streamed_upload.size())}}, streamed_upload);
+        RUVIA_CHECK(client.wait_for_response_head(stream_id).status_ == 200);
+        std::string streamed;
+        while (auto chunk = client.read_body_chunk(stream_id, 5s)) {
+            RUVIA_CHECK(!chunk->empty());
+            streamed += *chunk;
+        }
+        RUVIA_CHECK(streamed == streamed_upload);
+        const auto streamed_response = client.finish_response(stream_id);
+        RUVIA_CHECK(streamed_response.status_ == 200);
+        RUVIA_CHECK(streamed_response.body_.empty());
+
+        const auto missing = client.request("GET", "/missing");
+        RUVIA_CHECK(missing.status_ == 404);
+
+        const auto shutdown = client.request("GET", "/shutdown");
+        RUVIA_CHECK(shutdown.status_ == 200);
+        RUVIA_CHECK(shutdown.body_ == "draining");
+        RUVIA_CHECK(client.wait_until([&] { return client.closed(); }, 5s));
+        // Streams 0, 4, 8, 12 and 16 were processed; 20 is the first that was not.
+        RUVIA_CHECK(client.goaway_ids() == (std::vector<std::int64_t>{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID, 20}));
+        const auto* close_error = ngtcp2_conn_get_ccerr2(client.native_handle());
+        RUVIA_CHECK(close_error->type == NGTCP2_CCERR_TYPE_APPLICATION);
+        RUVIA_CHECK(close_error->error_code == NGHTTP3_H3_NO_ERROR);
+    }
+    RUVIA_CHECK(server.join().empty());
+}
+
+RUVIA_TEST(http3_test_client_rejects_a_certificate_for_another_server_name) {
+    asio::io_context io;
+    ruvia::test::udp_port_reservation reservation(io);
+    ruvia::test::tls_identity identity("localhost");
+    configure_h3_server(identity.context_.native_handle());
+    udp_h3_test_server server(identity.context_.native_handle(), reservation.endpoint());
+
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        ruvia::test::http3_test_client client(reservation.endpoint(), identity.ca_file_, "other.example", 5s);
+    }));
+    // The client's CONNECTION_CLOSE ends the server's only connection.
+    RUVIA_CHECK(server.join().empty());
+}
+
+RUVIA_TEST(http3_test_client_fails_within_its_timeout_without_a_server) {
+    asio::io_context io;
+    ruvia::test::udp_port_reservation reservation(io);
+    ruvia::test::tls_identity identity("localhost");
+    const auto started = std::chrono::steady_clock::now();
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        ruvia::test::http3_test_client client(reservation.endpoint(), identity.ca_file_, "localhost", 1s);
+    }));
+    RUVIA_CHECK(std::chrono::steady_clock::now() - started < 5s);
+}

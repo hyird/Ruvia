@@ -16,7 +16,7 @@ enum class app_stop_request : std::uint8_t {
     ignored,
     // Startup was in progress: the runtime stops at once, rolling it back.
     startup,
-    // The app was serving: the run() owner drains before stopping the runtime.
+    // The app was serving: the run() owner stops admission, then the runtime.
     serving,
 };
 

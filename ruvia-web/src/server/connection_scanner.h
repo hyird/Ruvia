@@ -50,6 +50,35 @@ struct connection_scanner_options final {
 // activity in the meantime.
 inline constexpr std::chrono::milliseconds connection_close_grace{std::chrono::seconds(2)};
 
+// What the scanner acts on when it ends a connection. close() ends it at once
+// (timeout past its grace, eviction, worker stop); cancel() aborts its pending
+// read so the owner can end it gracefully. A TCP session binds its socket; a
+// QUIC connection, which shares its worker's UDP socket, binds itself.
+class connection_transport final {
+public:
+    using action_type = void (*)(void*) noexcept;
+
+    constexpr connection_transport() noexcept = default;
+    constexpr connection_transport(void* target, action_type close_action, action_type cancel_action) noexcept
+        : target_(target),
+          close_(close_action),
+          cancel_(cancel_action) {}
+
+    [[nodiscard]] static connection_transport tcp(asio::ip::tcp::socket& socket) noexcept;
+
+    void close() const noexcept {
+        close_(target_);
+    }
+    void cancel() const noexcept {
+        cancel_(target_);
+    }
+
+private:
+    void* target_{nullptr};
+    action_type close_{nullptr};
+    action_type cancel_{nullptr};
+};
+
 // Worker-affine connection timeout owner. Its implementation is allocated once
 // per scanner; entries and checks remain caller-owned intrusive nodes, with no
 // per-connection allocation by the scanner.
@@ -59,7 +88,8 @@ private:
 
 public:
     // Product-owned callbacks. A tick runs on the worker during each scan; a
-    // drain callback runs on the worker when draining reaches the connection.
+    // drain callback runs on the worker when a connection timeout asks the
+    // connection to end gracefully (HTTP/2 or HTTP/3 GOAWAY).
     using periodic_check_type = void (*)(void*, std::int64_t) noexcept;
     using drain_check_type = void (*)(void*) noexcept;
 
@@ -129,9 +159,9 @@ public:
         // Ends a request-head read started by read_request_head().
         void set_phase(phase next_phase) noexcept;
         // Reads the head of the connection's next request, timed by
-        // `timeout_phase`. No request is admitted until a later set_phase(), so
-        // draining ends the connection meanwhile; touch() keeps the read open.
-        // A timeout or drain cancels the read and sets close_requested().
+        // `timeout_phase`. No request is admitted until a later set_phase();
+        // touch() keeps the read open. A timeout cancels the read and sets
+        // close_requested().
         void read_request_head(phase timeout_phase) noexcept;
         // The scanner asked the connection to end gracefully: it cancelled a
         // request-head read, or invoked a drain callback for a timeout -- or
@@ -186,18 +216,12 @@ public:
             entry& entry_;
         };
 
-        // Moves an established upgrade into the untimed long_lived phase. Once
-        // the scanner drains, the upgrade is not admitted and false tells the
-        // caller not to start the session's handler: an upgrade with a drain
-        // callback is notified to end gracefully, any other has its socket closed.
-        [[nodiscard]] bool enter_long_lived() noexcept;
+        // Moves an established upgrade into the untimed long_lived phase.
+        void enter_long_lived() noexcept;
         [[nodiscard]] std::int64_t last_active_ms() const noexcept;
-        // The scanner has started draining. A drain callback registered after
-        // drain() ran was never notified; its owner asks for the drain itself.
-        [[nodiscard]] bool draining() const noexcept;
-        // `drain` is optional: a long-lived connection uses it to end itself
-        // gracefully once draining starts. A connection whose read or idle
-        // phase times out is asked the same way once, instead of being closed.
+        // `drain` is optional: a connection whose read or idle phase times
+        // out is asked once through it to end gracefully, instead of being
+        // closed.
         void register_periodic_check(periodic_check_registration& registration, void* target,
             periodic_check_type tick, drain_check_type drain = nullptr) noexcept;
 
@@ -226,7 +250,7 @@ public:
         // when it became reusable, unlinks it when it stopped being so.
         void sync_reusable() noexcept;
         void unlink_reusable() noexcept;
-        asio::ip::tcp::socket* socket_{nullptr};
+        connection_transport transport_{};
         connection_scanner* scanner_{nullptr};
         entry* prev_{nullptr};
         entry* next_{nullptr};
@@ -248,13 +272,13 @@ public:
         entry* reusable_next_{nullptr};
     };
 
-    // Binds a TCP socket to an entry for the guard lifetime; its destructor
-    // safely detaches even if the scanner was destroyed first. An entry has one
-    // registration owner: binding an already-bound entry throws
+    // Binds a connection's transport to an entry for the guard lifetime; its
+    // destructor safely detaches even if the scanner was destroyed first. An
+    // entry has one registration owner: binding an already-bound entry throws
     // std::logic_error without changing its existing binding or checks.
     class guard final {
     public:
-        guard(connection_scanner& scanner, entry& entry_value, asio::ip::tcp::socket& socket);
+        guard(connection_scanner& scanner, entry& entry_value, connection_transport transport_value);
         ~guard();
         guard(const guard&) = delete;
         guard& operator=(const guard&) = delete;
@@ -273,15 +297,8 @@ public:
 
     void start();
     void stop() noexcept;
+    // Closes every connection at once (a worker stop): there is no drain.
     void close_all() noexcept;
-    // Starts draining: cancels the read of connections waiting for or still
-    // reading an unadmitted HTTP/1 request head (see close_requested(); a
-    // later scan closes the socket of one whose cancel was lost), then
-    // notifies registered protocol drain callbacks on all admitted sessions
-    // (including multiplexed HTTP/2).
-    // From then on enter_long_lived() refuses new upgrades. Admitted requests
-    // and connections without a callback may finish until the worker stops.
-    void drain() noexcept;
     // Admission at the connection cap, as nginx reuses idle keep-alive
     // connections when worker_connections run out: closes the connection
     // that has been reusable longest (see entry::reusable(); one with a write
@@ -326,10 +343,9 @@ struct connection_scanner::impl_type final {
 
     void start();
     void stop() noexcept;
-    void register_entry(entry& entry, asio::ip::tcp::socket& socket);
+    void register_entry(entry& entry, connection_transport transport_value);
     void unregister_entry(entry& entry) noexcept;
     void close_all() noexcept;
-    void drain() noexcept;
     // Arms the next scan. Scanning parks (no timer armed) once no entry is
     // tracked and the quiet period's trim has run; the next registration
     // re-arms it, so an idle worker holds no scanner timer work.
@@ -376,8 +392,6 @@ struct connection_scanner::impl_type final {
     bool release_after_scan_{false};
     // Worker-local: the current quiet period has been trimmed.
     bool quiet_trimmed_{false};
-    // Worker-local; set once by drain() and never cleared.
-    bool draining_{false};
 };
 
 }  // namespace ruvia::detail

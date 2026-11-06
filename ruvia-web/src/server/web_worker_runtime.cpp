@@ -17,12 +17,28 @@
 namespace ruvia::detail {
 
 web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration,
-    const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool)
-    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool) {}
+    const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool
+#if defined(RUVIA_ENABLE_HTTP3)
+    ,
+    http3_worker_placement http3_placement
+#endif
+    )
+    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool
+#if defined(RUVIA_ENABLE_HTTP3)
+          ,
+          http3_placement
+#endif
+      ) {
+}
 
 web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_definition> listeners,
     const route_table& routes_value, worker_capability_definitions capabilities,
-    http_server_options validated_options, blocking_pool* pool)
+    http_server_options validated_options, blocking_pool* pool
+#if defined(RUVIA_ENABLE_HTTP3)
+    ,
+    http3_worker_placement http3_placement
+#endif
+    )
     : runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_,
           .io_policy_ = ruvia::worker_io_policy::single_owner,
           .blocking_pool_ = pool}),
@@ -42,7 +58,6 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
                                                                    : route_rate_limit_presence::absent,
               .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
               .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
-              .http_client_result_budget_ = options_.server_.http_client_result_budget_,
               .env_ = options_.env_,
               .trusted_proxies_ =
                   options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
@@ -50,7 +65,12 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .file_io_timeout_ = options_.server_.write_timeout_,
               .connection_failure_ = &options_.connection_failure_,
           }),
-      connections_(io_context_, runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_),
+      connections_(io_context_, runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_
+#if defined(RUVIA_ENABLE_HTTP3)
+          ,
+          http3_placement
+#endif
+          ),
       web_worker_dispatch_(std::allocate_shared<web_worker_dispatch>(
           std::pmr::polymorphic_allocator<web_worker_dispatch>(process_resource()), runtime_,
           memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
@@ -80,29 +100,8 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
 
 web_worker_runtime::~web_worker_runtime() {
     runtime_.request_stop();
-#if defined(_WIN32)
-    if (windows_accept_ == nullptr) {
-        runtime_.finalize();
-    }
-#else
     runtime_.finalize();
-#endif
     runtime_.join();
-#if defined(_WIN32)
-    if (windows_accept_ != nullptr) {
-        windows_accept_->detach(windows_origin_);
-    }
-#endif
-}
-
-void web_worker_runtime::request_drain() noexcept {
-    // A refused control means the worker is already stopping, which completes
-    // its drain barrier itself.
-    (void)runtime_.post_control([this] { drain_on_context(); });
-}
-
-bool web_worker_runtime::wait_until_drained(std::chrono::steady_clock::time_point deadline) {
-    return connections_.wait_until_drained(deadline);
 }
 
 http_server_stats web_worker_runtime::stats() const noexcept {
@@ -114,32 +113,6 @@ http_server_stats web_worker_runtime::stats() const noexcept {
 web_worker_handle web_worker_runtime::web_worker() const {
     return web_worker_dispatch::handle(web_worker_dispatch_);
 }
-#if defined(_WIN32)
-void web_worker_runtime::attach_windows_accept(windows_accept_domain& domain, std::size_t origin) {
-    connections_.attach_windows_accept(domain, origin);
-    windows_accept_ = &domain;
-    windows_origin_ = origin;
-}
-
-task<void> web_worker_runtime::run_windows_accepts() {
-    std::exception_ptr failure;
-    try {
-        co_await connections_.run_windows_accepts();
-    } catch (...) {
-        failure = std::current_exception();
-        windows_accept_->request_stop();
-    }
-    windows_accept_joined_ = true;
-    if (failure != nullptr) {
-        // Nested task allocation can fail before the receiver ever starts.
-        // Publish that failure now, not from the scope join after finalization.
-        (void)runtime_.fail(std::move(failure));
-    }
-    if (stop_token_.stop_requested()) {
-        runtime_.finalize();
-    }
-}
-#endif
 
 void web_worker_runtime::serve_on_context() {
     if (static_roots_.enabled()) {
@@ -148,27 +121,11 @@ void web_worker_runtime::serve_on_context() {
     connections_.open_admission();
 }
 
-void web_worker_runtime::drain_on_context() noexcept {
-    if (!http_server_worker_running(worker_state_)) {
-        return;
-    }
-    worker_state_ = http_server_worker_state::draining;
-    connections_.drain();
-}
-
 void web_worker_runtime::stop_admission_on_context() noexcept {
     worker_state_ = http_server_worker_state::stopped;
     stop_source_.request_stop();
     connections_.stop();
-#if defined(_WIN32)
-    // A stopped listener IOCP still produces completions for peer origins.
-    // The receiver closes/joins only after the entire accept matrix is quiet.
-    if (windows_accept_joined_) {
-        runtime_.finalize();
-    }
-#else
     runtime_.finalize();
-#endif
 }
 
 void web_worker_runtime::finalize_on_context() noexcept {
@@ -181,15 +138,6 @@ task<void> web_worker_runtime::run_worker() {
         // A stop applied before this task first runs has already stopped the
         // worker timers; starting the scanner or capability I/O would fail.
         if (!stop_token_.stop_requested()) {
-#if defined(_WIN32)
-            windows_accept_joined_ = false;
-            try {
-                background_tasks_.spawn(run_windows_accepts());
-            } catch (...) {
-                windows_accept_joined_ = true;
-                throw;
-            }
-#endif
             connections_.prepare();
             co_await capabilities_.start();
             // Ignored once stopping: core has already aborted the barrier.

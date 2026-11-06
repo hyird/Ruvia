@@ -14,17 +14,6 @@
 
 namespace {
 
-// Returns the invalid_argument message a call throws, or empty if it does not.
-template <typename fn_type>
-std::string caught_message(fn_type&& fn) {
-    try {
-        fn();
-        return {};
-    } catch (const std::invalid_argument& error) {
-        return error.what();
-    }
-}
-
 template <typename fn_type>
 bool throws_invalid(fn_type&& fn) {
     try {
@@ -37,59 +26,14 @@ bool throws_invalid(fn_type&& fn) {
 
 }  // namespace
 
-RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
-    const auto register_client = [](ruvia::http_client_config config) {
-        return caught_message([&config] {
-            ruvia::app().http_client({.alias_ = "config-validation", .config_ = std::move(config)});
-        });
-    };
-    const auto with_host = [](std::string_view host) {
-        ruvia::http_client_config config;
-        config.host_ = host;
-        return config;
-    };
-
-    RUVIA_CHECK_EQ(register_client(with_host("")), std::string("http client host must not be empty"));
-    for (const std::string_view host : {std::string_view("has space"), std::string_view("a/b"),
-             std::string_view("a\\b"), std::string_view("a\rb", 3), std::string_view("a\x7f"
-                                                                                     "b",
-                                                                        3),
-             std::string_view("[::1]"), std::string_view("host:80")}) {
-        RUVIA_CHECK_EQ(register_client(with_host(host)), std::string("http client host is invalid"));
-    }
-
-    auto tls_config = with_host("example.com");
-    tls_config.tls_.server_name_ = "";
-    RUVIA_CHECK_EQ(register_client(std::move(tls_config)), std::string("TLS server name must not be empty"));
-    tls_config = with_host("example.com");
-    tls_config.tls_.server_name_ = "host:80";
-    RUVIA_CHECK_EQ(register_client(std::move(tls_config)), std::string("TLS server name is invalid"));
-    // The override replaces the origin host for SNI and peer verification, so
-    // it must be an IP literal or an ASCII DNS name.
-    for (const std::string_view server_name : {std::string_view("a::b::c"), std::string_view("b\xc3\xbc"
-                                                                                             "cher.example"),
-             std::string_view("-leading.example")}) {
-        tls_config = with_host("example.com");
-        tls_config.tls_.server_name_ = std::string(server_name);
-        RUVIA_CHECK_EQ(register_client(std::move(tls_config)), std::string("TLS server name is invalid"));
-    }
-    std::string long_name;
-    for (unsigned label = 0; label != 5; ++label) {
-        long_name.append(std::string(60, 'a')).push_back('.');
-    }
-    long_name.append("example");
-    tls_config = with_host("example.com");
-    tls_config.tls_.server_name_ = long_name;
-    RUVIA_CHECK_EQ(register_client(std::move(tls_config)), std::string("TLS server name is invalid"));
-}
-
+#ifdef RUVIA_ENABLE_REDIS
 RUVIA_TEST(client_tls_rejects_unsafe_outgoing_record_limits) {
     const auto rejects = [](std::uint64_t limit) {
-        ruvia::http_client_config config;
+        ruvia::redis_config config;
         config.host_ = "example.com";
         config.tls_.max_outgoing_records_ = limit;
         return throws_invalid([&config] {
-            ruvia::app().http_client({.alias_ = "tls-record-limit", .config_ = std::move(config)});
+            ruvia::app().redis({.alias_ = "tls-record-limit", .config_ = std::move(config)});
         });
     };
     RUVIA_CHECK(rejects(0));
@@ -100,17 +44,18 @@ RUVIA_TEST(client_tls_rejects_unsafe_outgoing_record_limits) {
 // never a fallback to the system trust store or to no client certificate.
 RUVIA_TEST(client_tls_rejects_empty_file_paths) {
     const auto rejects = [](ruvia::client_tls_config tls) {
-        ruvia::http_client_config config;
+        ruvia::redis_config config;
         config.host_ = "example.com";
         config.tls_ = std::move(tls);
         return throws_invalid([&config] {
-            ruvia::app().http_client({.alias_ = "tls-empty-path", .config_ = std::move(config)});
+            ruvia::app().redis({.alias_ = "tls-empty-path", .config_ = std::move(config)});
         });
     };
     RUVIA_CHECK(rejects({.ca_file_ = std::filesystem::path{}}));
     RUVIA_CHECK(rejects({.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = "client.pem"}}));
     RUVIA_CHECK(rejects({.identity_ = ruvia::tls_identity_config{.private_key_file_ = "client.key"}}));
 }
+#endif
 
 RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {
     ruvia::document_root_config config;

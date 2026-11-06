@@ -21,8 +21,9 @@ namespace ruvia {
     }
     const auto framing = commit_plan.framing();
     if (!detail::response_transfer_encoding_replaceable(response)) {
-        if (framing == http_response_stream_framing::http2_frames) {
-            throw std::invalid_argument("HTTP/2 response cannot carry a Transfer-Encoding other than chunked");
+        if (framing == http_response_stream_framing::http2_frames ||
+            framing == http_response_stream_framing::http3_frames) {
+            throw std::invalid_argument("HTTP/2 or HTTP/3 response cannot carry a Transfer-Encoding other than chunked");
         }
         throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
     }
@@ -34,7 +35,7 @@ namespace ruvia {
     // Keep the prepared response metadata consistent with the wire plan. The
     // framework's chunk writer is the only Transfer-Encoding producer, so the
     // handler's chunked hint survives only as that writer's own field; HTTP/2
-    // frames and an HTTP/1.0 close-delimited body carry none. An HTTP/1.0
+    // and HTTP/3 frames and an HTTP/1.0 close-delimited body carry none. An HTTP/1.0
     // close-delimited body cannot retain Content-Length either. HEAD/304 may
     // retain Content-Length metadata because their body is suppressed.
     if (writer_owns_http1_chunked) {

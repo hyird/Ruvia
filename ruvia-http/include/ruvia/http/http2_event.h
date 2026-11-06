@@ -412,14 +412,14 @@ public:
     // Peer frame metadata, produced only with
     // http2_connection_options::receive_frame_metadata_. Each committed frame
     // yields at most one such event, queued in wire order with the others; a
-    // frame rejected with a connection error yields none, and a retried feed()
-    // never repeats one.
+    // frame rejected with a connection error yields none.
     // - received_settings: each applied non-ACK SETTINGS (an ACK yields none).
-    // - received_window_update: each applied WINDOW_UPDATE; a zero or
-    //   overflowing increment, or one on a closed or unknown stream, yields none.
-    // - received_priority: each PRIORITY frame with a valid payload, and the
-    //   priority fields of an accepted HEADERS frame, ahead of every event that
-    //   frame produces (such as its request head).
+    // - received_window_update: each applied WINDOW_UPDATE; an overflowing
+    //   increment, or one on a closed or unknown stream, yields none. A zero
+    //   increment, on any stream, is a PROTOCOL_ERROR connection error.
+    // - received_priority: the priority fields of an accepted HEADERS frame,
+    //   ahead of every event that frame produces (such as its request head).
+    //   A PRIORITY frame yields none.
     [[nodiscard]] const http2_received_settings* received_settings() const& noexcept {
         return std::get_if<http2_received_settings>(&value_);
     }

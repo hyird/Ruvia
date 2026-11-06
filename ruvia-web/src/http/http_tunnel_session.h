@@ -116,10 +116,7 @@ template <typename transport_type>
 [[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value,
     connection_scanner::entry& entry_value, const route_stream_handler& handler, context& context_value) {
     context_tunnel_binding binding(context_value, session_value.tunnel());
-    // A draining worker closed the socket instead of admitting the tunnel.
-    if (!entry_value.enter_long_lived()) {
-        co_return;
-    }
+    entry_value.enter_long_lived();
     co_await handler(context_value);
 }
 

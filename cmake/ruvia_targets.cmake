@@ -96,8 +96,8 @@ endfunction()
 # headers that surface includes transitively. Source-only implementation headers
 # stay build-private without requiring a second hand-maintained header list.
 function(ruvia_install_public_header_closure component relative_dir)
-    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" "" "EXCLUDE_DIRECTORIES")
-    ruvia_assert_component_header_path(${component} "${relative_dir}")
+    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" ""
+        "EXCLUDE_DIRECTORIES;EXCLUDE_FILES")
 
     file(GLOB_RECURSE _ruvia_closure_candidates CONFIGURE_DEPENDS
         RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -110,6 +110,9 @@ function(ruvia_install_public_header_closure component relative_dir)
     set(_ruvia_closure_headers)
     while(_ruvia_closure_queue)
         list(POP_FRONT _ruvia_closure_queue _ruvia_header)
+        if(_ruvia_header IN_LIST _ruvia_closure_EXCLUDE_FILES)
+            continue()
+        endif()
         string(REPLACE "/" ";" _ruvia_header_components "${_ruvia_header}")
         set(_ruvia_header_excluded FALSE)
         foreach(_ruvia_excluded_dir IN LISTS _ruvia_closure_EXCLUDE_DIRECTORIES)

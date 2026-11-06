@@ -20,11 +20,6 @@ namespace ruvia::detail {
 
 class http2_stream_request_data final {
 public:
-    struct header_checkpoint_type final {
-        http2_header_list::checkpoint_type headers_;
-        std::size_t trailer_count_{0};
-    };
-
     explicit http2_stream_request_data(std::pmr::memory_resource* resource = nullptr)
         : http2_stream_request_data(http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {
     }
@@ -47,22 +42,6 @@ public:
         return method_.get_allocator().resource();
     }
 
-    void swap(http2_stream_request_data& other) noexcept {
-        if (resource() != other.resource()) {
-            std::terminate();
-        }
-        method_.swap(other.method_);
-        using std::swap;
-        swap(known_method_, other.known_method_);
-        scheme_.swap(other.scheme_);
-        authority_.swap(other.authority_);
-        path_.swap(other.path_);
-        protocol_.swap(other.protocol_);
-        cookie_.swap(other.cookie_);
-        headers_.swap(other.headers_);
-        trailers_.swap(other.trailers_);
-    }
-
     void take_request_target_from(http2_stream_request_data& other) noexcept {
         if (resource() != other.resource()) {
             std::terminate();
@@ -73,21 +52,6 @@ public:
         scheme_.swap(other.scheme_);
         authority_.swap(other.authority_);
         path_.swap(other.path_);
-    }
-
-    [[nodiscard]] header_checkpoint_type header_checkpoint() const noexcept {
-        return header_checkpoint_type{.headers_ = headers_.checkpoint(),
-            .trailer_count_ = trailers_.size()};
-    }
-
-    void rollback_headers(header_checkpoint_type checkpoint) noexcept {
-        headers_.rollback(checkpoint.headers_);
-        if (checkpoint.trailer_count_ > trailers_.size()) {
-            std::terminate();
-        }
-        while (trailers_.size() > checkpoint.trailer_count_) {
-            trailers_.pop_back();
-        }
     }
 
     void assign_method(std::string_view method) {

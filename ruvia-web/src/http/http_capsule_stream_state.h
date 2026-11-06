@@ -17,11 +17,8 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_datagram.h"
-#include "ruvia/web/http_client.h"
 #include "ruvia/web/http_tunnel.h"
 
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
 #include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
@@ -34,16 +31,8 @@ public:
           decoder_(config),
           config_(config),
           payload_(resource_) {}
-    http_capsule_stream_state(http_client_tunnel&& tunnel, http_capsule_config config)
-        : worker_(tunnel.response_.state_->memory_domain().worker()),
-          resource_(tunnel.response_.state_->resource_),
-          memory_pin_(http_client_response(tunnel.response_.state_)),
-          client_(std::move(tunnel)),
-          decoder_(config),
-          config_(config),
-          payload_(resource_) {}
     void require() const {
-        if (closed_ || (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr))) {
+        if (closed_) {
             throw std::logic_error("capsule stream is closed");
         }
         if (!worker_.is_current()) {
@@ -64,9 +53,6 @@ public:
         if (--references_ != 0) {
             return;
         }
-        // Keep the client domain alive until after this object is deallocated
-        // from its pool. Capsule results and cold/running operations pin it.
-        auto pin = std::move(memory_pin_);
         auto* allocator = resource_;
         std::destroy_at(this);
         allocator->deallocate(this, sizeof(http_capsule_stream_state), alignof(http_capsule_stream_state));
@@ -85,22 +71,12 @@ public:
         if (closed_) {
             return;
         }
-        if (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr)) {
-            closed_ = true;
-            return;
-        }
         if (!worker_.is_current()) {
             std::terminate();
         }
         closed_ = true;
         if (server_) {
             server_->abort_input(malformed);
-        } else if (client_) {
-            if (malformed) {
-                client_->abort_malformed();
-            } else {
-                client_->abort();
-            }
         }
     }
     void close() noexcept {
@@ -112,11 +88,7 @@ public:
         if (running_ != 0) {
             std::terminate();
         }
-        if (client_) {
-            abort();
-        } else {
-            closed_ = true;
-        }
+        closed_ = true;
         read_scope_.close();
         output_scope_.close();
         // Results pin the worker/client payload domain, not transport input.
@@ -154,46 +126,20 @@ public:
         input_ = {};
         owned_input_.reset();
         offset_ = 0;
-        if (server_) {
-            auto chunk = co_await server_->read_raw();
-            if (!chunk) {
-                co_return false;
-            }
-            owned_input_.emplace(std::move(*chunk));
-            input_ = *owned_input_;
-        } else {
-            auto chunk = co_await client_->read();
-            if (!chunk) {
-                co_return false;
-            }
-            // The owned tunnel keeps this view valid until the next read.
-            // Consume it completely before read_input() advances the source.
-            input_ = as_chars(*chunk);
+        auto chunk = co_await server_->read_raw();
+        if (!chunk) {
+            co_return false;
         }
+        owned_input_.emplace(std::move(*chunk));
+        input_ = *owned_input_;
         co_return true;
     }
     [[nodiscard]] task<void> send_bytes(std::pmr::string&& bytes_value) {
-        if (server_ != nullptr) {
-            co_await server_->write_raw(std::move(bytes_value));
-            co_return;
-        }
-        const auto limit = client_->response_.state_->tunnel_->config_.max_chunk_bytes_;
-        if (bytes_value.size() <= limit) {
-            co_await client_->write_owned(std::move(bytes_value));
-            co_return;
-        }
-        std::string_view remaining = bytes_value;
-        while (!remaining.empty()) {
-            const auto chunk = remaining.substr(0, limit);
-            co_await client_->write(chunk);
-            remaining.remove_prefix(chunk.size());
-        }
+        co_await server_->write_raw(std::move(bytes_value));
     }
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
-    std::optional<http_client_response> memory_pin_;
     http_tunnel* server_{};
-    std::optional<http_client_tunnel> client_;
     http_capsule_decoder decoder_;
     http_capsule_config config_;
     // Server chunks belong to the connection's inbound budget, unlike payload_.

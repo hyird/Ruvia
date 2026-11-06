@@ -228,6 +228,7 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
                 throw std::system_error(written.error_code());
             }
             ruvia::hpack_decoder decoder({.resource_ = &resource});
+            bool credited = false;
             while (!ended) {
                 const auto frame = co_await read_frame(socket);
                 if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
@@ -267,10 +268,25 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
                     ended = (frame.header_.flags_ & 0x1) != 0;
                     if (ended) {
                         RUVIA_CHECK(frame.payload_.empty());
+                        RUVIA_CHECK(credited);
                     }
                 }
-                // Deliberately never send WINDOW_UPDATE: a zero-length final
-                // DATA frame needs no credit (RFC 9113 section 6.9.1).
+                // The file exhausted one send window. The empty END_STREAM DATA
+                // frame waits for that window to open (RFC 9113 section 6.9.1
+                // permits sending it at zero window; nghttp2 does not), so one
+                // byte of credit releases it.
+                if (!ended && !credited && body.size() == file_size) {
+                    credited = true;
+                    std::string increment;
+                    append_frame(increment, ruvia::http2_frame_type::window_update, 0, exhaust_connection ? 0 : 1,
+                        std::string_view("\0\0\0\1", 4));
+                    const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                        asio::async_write(socket, asio::buffer(increment), std::move(handler));
+                    });
+                    if (sent.error_code()) {
+                        throw std::system_error(sent.error_code());
+                    }
+                }
             }
         } catch (...) {
             failure = std::current_exception();
@@ -295,11 +311,11 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
 
 }  // namespace http2_file_flow_control_test
 
-RUVIA_TEST(http2_file_response_ends_with_exhausted_connection_window) {
+RUVIA_TEST(http2_file_response_end_waits_for_exhausted_connection_window) {
     http2_file_flow_control_test::check_file_end(ruvia_ctx, true);
 }
 
-RUVIA_TEST(http2_file_response_ends_with_exhausted_stream_window) {
+RUVIA_TEST(http2_file_response_end_waits_for_exhausted_stream_window) {
     http2_file_flow_control_test::check_file_end(ruvia_ctx, false);
 }
 

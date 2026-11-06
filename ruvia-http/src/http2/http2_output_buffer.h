@@ -1,27 +1,24 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <memory_resource>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_types.h"
 
-#include "http2/http2_frame_codec.h"
 #include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
-// Sole owner of HTTP/2 outbound bytes and their consumed prefix. Connection logic
-// selects protocol actions; this component owns contiguous frame serialization and
-// buffer lifetime so frame handlers cannot manipulate storage cursors directly.
+// Sole owner of HTTP/2 outbound bytes and their consumed prefix. nghttp2
+// serializes frames; the connection appends each frame it emits as one segment
+// so batches stay frame-aligned and DATA payload bytes stay attributable.
 class http2_output_buffer final {
 public:
     struct segment_type final {
@@ -40,103 +37,22 @@ public:
         return consumed_ < bytes_.size();
     }
 
-    // Internal transaction checkpoint. The checkpoint includes already-consumed
-    // bytes, so a caller can remove only the frames appended after it without
-    // disturbing a transport's pending cursor.
-    [[nodiscard]] std::size_t checkpoint() const noexcept {
-        return base_offset_ + bytes_.size();
-    }
-
-    void rollback_to(std::size_t checkpoint) noexcept {
-        if (checkpoint < base_offset_ + consumed_ || checkpoint > base_offset_ + bytes_.size()) {
-            std::terminate();
+    // Appends one complete frame (or the client connection preface) as a
+    // segment; both reservations precede the copy, so a throwing resource
+    // leaves the pending output unchanged.
+    void append_segment(std::string_view bytes_value, std::uint32_t stream_id, bool is_data) {
+        if (bytes_value.empty()) {
+            return;
         }
-        const auto physical_checkpoint = checkpoint - base_offset_;
-        bytes_.resize(physical_checkpoint);
-        while (segments_.size() > segment_offset_ && segments_.back().begin_ >= physical_checkpoint) {
-            segments_.pop_back();
-        }
-        if (segments_.size() > segment_offset_ && segments_.back().end_ > physical_checkpoint) {
-            std::terminate();
-        }
-    }
-
-    void append_bytes(std::string_view bytes_value) {
-        if (!bytes_value.empty()) {
-            reserve_segment();
-            const auto begin = bytes_.size();
-            bytes_.append(bytes_value.data(), bytes_value.size());
-            segments_.push_back(segment_type{begin, bytes_.size(), 0, false});
-        }
-    }
-
-    // Reserve storage for a whole sequence before its first frame is emitted.
-    // Callers that need multi-frame wire atomicity use this once, while
-    // append_frame() applies the same guarantee to an individual frame.
-    void reserve_segments_additional(std::size_t additional) {
-        if (additional > segments_.max_size() - segments_.size()) {
-            throw std::length_error("HTTP/2 output segment count overflow");
-        }
-        if (observer_depth_ == 0 && segment_offset_ >= 32 &&
-            segment_offset_ >= segments_.size() - segment_offset_) {
-            const auto remaining = segments_.size() - segment_offset_;
-            std::move(segments_.begin() + static_cast<std::ptrdiff_t>(segment_offset_),
-                segments_.end(), segments_.begin());
-            segments_.resize(remaining);
-            segment_offset_ = 0;
-        }
-        // Individual frame submissions share the same growth policy as a
-        // preflighted batch, so a burst does not reallocate for every frame.
-        reserve_geometric(segments_, segments_.size() + additional);
-    }
-
-    void reserve_additional(std::size_t additional) {
-        if (additional > bytes_.max_size() - bytes_.size()) {
+        reserve_segment();
+        if (bytes_value.size() > bytes_.max_size() - bytes_.size()) {
             throw std::length_error("HTTP/2 output buffer size overflow");
         }
-        reserve_geometric(bytes_, bytes_.size() + additional);
-    }
-
-    void append_frame(http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id,
-        std::string_view first, std::string_view second = {}) {
-        if (first.size() > http2_max_frame_size ||
-            second.size() > http2_max_frame_size - first.size()) {
-            std::terminate();
-        }
-
-        std::array<char, http2_frame_header_bytes> header;
-        http2_write_frame_header(header.data(),
-            static_cast<std::uint32_t>(first.size() + second.size()), type, flags, stream_id);
-        reserve_segment();
+        reserve_geometric(bytes_, bytes_.size() + bytes_value.size());
         const auto begin = bytes_.size();
-        // A frame is the smallest wire-level transaction. Reserve the complete
-        // frame before appending any part so a throwing PMR resource cannot leave
-        // a header or prefix without its payload in the pending output.
-        reserve_additional(http2_frame_header_bytes + first.size() + second.size());
-        append_raw(std::string_view(header.data(), header.size()));
-        append_raw(first);
-        append_raw(second);
-        segments_.push_back(segment_type{begin, bytes_.size(), stream_id, type == http2_frame_type::data});
+        bytes_.append(bytes_value.data(), bytes_value.size());
+        segments_.push_back(segment_type{begin, bytes_.size(), stream_id, is_data});
     }
-    // Appends one complete frame whose `payload_size` payload bytes the caller
-    // serializes in place into the returned span before the next append.
-    [[nodiscard]] std::span<char> append_frame_payload(http2_frame_type type, std::uint8_t flags,
-        std::uint32_t stream_id, std::size_t payload_size) {
-        if (payload_size > http2_max_frame_size) {
-            std::terminate();
-        }
-        reserve_segment();
-        const auto begin = bytes_.size();
-        reserve_additional(http2_frame_header_bytes + payload_size);
-        bytes_.resize(begin + http2_frame_header_bytes + payload_size);
-        auto* payload = http2_write_frame_header(
-            bytes_.data() + begin, static_cast<std::uint32_t>(payload_size), type, flags, stream_id);
-        segments_.push_back(segment_type{begin, bytes_.size(), stream_id, type == http2_frame_type::data});
-        return {payload, payload_size};
-    }
-    void append_goaway_frame(
-        std::uint32_t last_stream_id, http2_error_code error, std::string_view debug = {});
-    void append_rst_stream(std::uint32_t stream_id, http2_error_code error);
 
     [[nodiscard]] http2_output_batch_result take_batch(std::size_t max_bytes, std::pmr::string& into,
         http2_data_output_observer_type observer, void* observer_context) {
@@ -162,9 +78,7 @@ public:
         const auto batch_bytes = end - consumed_;
         const bool transfer_storage = consumed_ == 0 && end == bytes_.size() &&
                                       into.empty() && into.get_allocator() == bytes_.get_allocator();
-        std::size_t logical_end{};
         if (transfer_storage) {
-            logical_end = base_offset_ + end;
             into.swap(bytes_);
         } else {
             into.append(bytes_.data() + consumed_, batch_bytes);
@@ -173,7 +87,7 @@ public:
             ++observer_depth_;
         }
         if (transfer_storage) {
-            reset_after_drain(logical_end);
+            reset_after_drain();
         } else {
             consume_batch(batch_bytes, segment_count);
         }
@@ -216,7 +130,7 @@ private:
     // segment boundary, so no partial-segment bookkeeping exists.
     void consume_batch(std::size_t bytes_value, std::size_t segment_count) noexcept {
         if (bytes_value == bytes_.size() - consumed_) {
-            reset_after_drain(base_offset_ + bytes_.size());
+            reset_after_drain();
             return;
         }
         consumed_ += bytes_value;
@@ -224,7 +138,7 @@ private:
         compact_consumed_prefix();
     }
 
-    void reset_after_drain(std::size_t logical_end) noexcept {
+    void reset_after_drain() noexcept {
         bytes_.clear();
         if (observer_depth_ == 0) {
             segments_.clear();
@@ -233,13 +147,6 @@ private:
             segment_offset_ = segments_.size();
         }
         consumed_ = 0;
-        base_offset_ = logical_end;
-    }
-
-    void append_raw(std::string_view bytes_value) {
-        if (!bytes_value.empty()) {
-            bytes_.append(bytes_value.data(), bytes_value.size());
-        }
     }
 
     void compact_consumed_prefix() noexcept {
@@ -255,20 +162,27 @@ private:
         }
         segments_.erase(segments_.begin(),
             segments_.begin() + static_cast<std::ptrdiff_t>(segment_offset_));
-        base_offset_ += prefix;
         segment_offset_ = 0;
         consumed_ = 0;
     }
 
     void reserve_segment() {
-        reserve_segments_additional(1);
+        if (observer_depth_ == 0 && segment_offset_ >= 32 &&
+            segment_offset_ >= segments_.size() - segment_offset_) {
+            const auto remaining = segments_.size() - segment_offset_;
+            std::move(segments_.begin() + static_cast<std::ptrdiff_t>(segment_offset_),
+                segments_.end(), segments_.begin());
+            segments_.resize(remaining);
+            segment_offset_ = 0;
+        }
+        // A burst of frames shares one geometric growth policy.
+        reserve_geometric(segments_, segments_.size() + 1);
     }
 
     std::pmr::string bytes_;
     std::pmr::vector<segment_type> segments_;
     std::size_t segment_offset_{0};
     std::size_t consumed_{0};
-    std::size_t base_offset_{0};
     std::size_t observer_depth_{0};
 };
 

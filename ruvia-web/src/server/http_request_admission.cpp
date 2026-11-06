@@ -132,6 +132,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     const auto remote_address = connection.remote().address();
     const auto client_address = connection.client().address();
     admission.tail_.bind_addresses(remote_address, client_address);
+    admission.tail_.bind_alternative_service(services.alternative_service());
     admission.services_.bind_response_coding(input.coding_);
     if (input.pinned_arrival_.has_value()) {
         admission.services_.pin_arrival(*input.pinned_arrival_);

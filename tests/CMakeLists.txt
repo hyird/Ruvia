@@ -106,11 +106,24 @@ if(RUVIA_BUILD_CORE)
 endif()
 
 if(RUVIA_BUILD_HTTP)
-    ruvia_collect_test_sources(_ruvia_http_unit_sources
+    set(_ruvia_http_test_patterns
         http/unit/*.cpp
         http/http1/*.cpp
-        http/http2/*.cpp
         http/websocket/*.cpp)
+    if(RUVIA_ENABLE_HTTP2)
+        list(APPEND _ruvia_http_test_patterns http/http2/*.cpp)
+    endif()
+    if(RUVIA_ENABLE_HTTP3)
+        list(APPEND _ruvia_http_test_patterns http/http3/*.cpp)
+    endif()
+    ruvia_collect_test_sources(_ruvia_http_unit_sources
+        ${_ruvia_http_test_patterns})
+    if(NOT RUVIA_ENABLE_HTTP2)
+        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX
+            "^http/unit/connection_advertisement\\.cpp$")
+        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX
+            "^http/websocket/client_negotiation\\.cpp$")
+    endif()
     list(APPEND _ruvia_http_unit_sources support/test_main.cpp)
     list(SORT _ruvia_http_unit_sources)
 
@@ -123,11 +136,15 @@ if(RUVIA_BUILD_WEB)
     # Process-singleton application fixtures run in separate test executables.
     ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
     ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
-    # Owns a Redis-backed session application and an isolated stateful peer.
-    ruvia_add_web_standalone_test(ruvia_session_tests 30 web/http/session.cpp)
+    if(RUVIA_ENABLE_REDIS)
+        # Owns a Redis-backed session application and an isolated stateful peer.
+        ruvia_add_web_standalone_test(ruvia_session_tests 30 web/http/session.cpp)
+    endif()
     ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/app/accept_ownership.cpp)
-    ruvia_add_web_standalone_test(ruvia_app_http2_drain 30 web/app/http2_drain.cpp)
-    ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/app/http2_request_limit.cpp)
+    if(RUVIA_ENABLE_HTTP2)
+        ruvia_add_web_standalone_test(ruvia_app_http2_goaway 30 web/app/http2_goaway.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/app/http2_request_limit.cpp)
+    endif()
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
     # Trusts the loopback peer in its second run.
     ruvia_add_web_standalone_test(ruvia_app_misdirected_request 30 web/app/misdirected_request.cpp)
@@ -138,16 +155,18 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_route_encoded_duplicate 30 web/app/route_encoded_duplicate.cpp)
     ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
-    ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
+    set(_ruvia_tcp_client_test_sources
         web/http1/connect.cpp
         web/http1/websocket.cpp
-        web/http2/client_tunnel.cpp
-        web/http2/client_upload.cpp
-        web/http2/connect.cpp
-        web/http2/file_flow_control.cpp
-        web/http2/push.cpp
-        web/http2/streaming.cpp
         web/http/udp_tunnel.cpp)
+    if(RUVIA_ENABLE_HTTP2)
+        list(APPEND _ruvia_tcp_client_test_sources
+            web/http2/connect.cpp
+            web/http2/file_flow_control.cpp
+            web/http2/streaming.cpp)
+    endif()
+    ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
+        ${_ruvia_tcp_client_test_sources})
     # Owns an application with an app-wide rate limit, so it cannot share the
     # process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_server_admission_tests 60
@@ -189,10 +208,34 @@ if(RUVIA_BUILD_WEB)
     # pool and a connection-failure hook, then runs it without a pool.
     ruvia_add_web_standalone_test(ruvia_file_response_failure_tests 30
         web/http/file_response_failure.cpp)
+    if(RUVIA_ENABLE_HTTP3)
+        # QUIC + TLS loopback suites over ruvia-http and the OpenSSL QUIC
+        # crypto adapter; they need no ruvia-web.
+        ruvia_add_test(ruvia_http3_quic_tests ruvia::http TIMEOUT 30 SOURCES
+            web/http3/quic.cpp support/test_main.cpp)
+        target_include_directories(ruvia_http3_quic_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
+        target_link_libraries(ruvia_http3_quic_tests PRIVATE
+            ${RUVIA_HTTP_DEPENDENCIES} ${RUVIA_WEB_DEPENDENCIES})
+        target_compile_definitions(ruvia_http3_quic_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
+        if(WIN32)
+            target_compile_definitions(ruvia_http3_quic_tests PRIVATE NOMINMAX)
+        endif()
+        list(APPEND _ruvia_web_standalone_sources web/http3/quic.cpp)
+        # Owns a four-worker application serving HTTP/3 beside its HTTPS
+        # listener, stopped gracefully at its end.
+        ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http3/serving.cpp)
+    endif()
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)
     list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/(auth|db|redis)/")
+    if(NOT RUVIA_ENABLE_HTTP2)
+        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http2/")
+    endif()
+    if(NOT RUVIA_ENABLE_HTTP3)
+        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http3/")
+    endif()
     list(REMOVE_ITEM _ruvia_web_unit_sources ${_ruvia_web_standalone_sources})
     if(RUVIA_ENABLE_JWT)
         ruvia_collect_test_sources(_ruvia_web_feature_sources web/auth/*.cpp)

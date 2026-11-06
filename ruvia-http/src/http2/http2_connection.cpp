@@ -2,22 +2,22 @@
 
 #include <algorithm>
 #include <array>
-#include <iterator>
+#include <cstring>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_connection_advertisement.h"
 
-#include "http2/http2_frame_codec.h"
-#include "http2/http2_frame_payload.h"
+#include "http2/http2_advertisement_frames.h"
 #include "http2/http2_remote_receive_semantics.h"
-#include "http2/http2_window_update.h"
 #include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
 namespace {
+
 constexpr std::string_view http2_drain_debug = "connection draining";
 // Opaque payloads of the locally originated PINGs (RFC 9113 §6.7 echoes them
 // unchanged); distinct values tell the graceful-drain round trip from liveness.
@@ -25,43 +25,319 @@ constexpr std::string_view http2_drain_ping_payload = "ruviadrn";
 constexpr std::string_view http2_liveness_ping_payload = "ruvialiv";
 static_assert(http2_drain_ping_payload.size() == 8 && http2_liveness_ping_payload.size() == 8);
 
-[[nodiscard]] std::size_t http2_goaway_encoded_bytes(std::string_view debug) {
-    constexpr std::size_t goaway_fixed_payload_bytes = 8;
-    constexpr std::size_t fixed_bytes = http2_frame_header_bytes + goaway_fixed_payload_bytes;
-    if (debug.size() > std::numeric_limits<std::size_t>::max() - fixed_bytes) {
-        throw std::length_error("HTTP/2 GOAWAY output size overflow");
-    }
-    return fixed_bytes + debug.size();
+[[nodiscard]] std::string_view bytes_view(const std::uint8_t* data, std::size_t size) noexcept {
+    return size == 0 ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(data), size);
 }
+
 }  // namespace
 
-bool http2_connection::admit_undrained_control_frame() {
-    if (undrained_control_frames_ < max_undrained_control_frames) {
-        return true;
+// Static entry points registered with nghttp2. Each one is noexcept: an
+// exception is recorded on the connection and reported to nghttp2 as a fatal
+// callback failure, then rethrown after nghttp2 returns.
+struct http2_session_callbacks final {
+    template <typename function_type>
+    static int guard(void* user_data, function_type&& function) noexcept {
+        auto& connection = *static_cast<http2_connection*>(user_data);
+        try {
+            return std::forward<function_type>(function)(connection);
+        } catch (...) {
+            connection.record_callback_failure();
+            return NGHTTP2_ERR_CALLBACK_FAILURE;
+        }
     }
-    append_goaway(http2_error_code::enhance_your_calm, "excessive control frames");
-    return false;
+
+    static int on_begin_frame(nghttp2_session*, const nghttp2_frame_hd* header, void* user_data) {
+        return guard(user_data, [header](http2_connection& connection) {
+            return connection.on_begin_frame(*header);
+        });
+    }
+    static int on_begin_headers(nghttp2_session*, const nghttp2_frame* frame, void* user_data) {
+        return guard(user_data, [frame](http2_connection& connection) {
+            return connection.on_begin_headers(*frame);
+        });
+    }
+    static int on_header(nghttp2_session*, const nghttp2_frame* frame, nghttp2_rcbuf* name,
+        nghttp2_rcbuf* value, std::uint8_t, void* user_data) {
+        return guard(user_data, [frame, name, value](http2_connection& connection) {
+            const auto name_buffer = nghttp2_rcbuf_get_buf(name);
+            const auto value_buffer = nghttp2_rcbuf_get_buf(value);
+            return connection.on_header(*frame, bytes_view(name_buffer.base, name_buffer.len),
+                bytes_view(value_buffer.base, value_buffer.len));
+        });
+    }
+    static int on_frame_recv(nghttp2_session*, const nghttp2_frame* frame, void* user_data) {
+        return guard(user_data, [frame](http2_connection& connection) {
+            return connection.on_frame_recv(*frame);
+        });
+    }
+    static int on_data_chunk_recv(nghttp2_session*, std::uint8_t flags, std::int32_t stream_id,
+        const std::uint8_t* data, std::size_t length, void* user_data) {
+        return guard(user_data, [=](http2_connection& connection) {
+            return connection.on_data_chunk_recv(flags, static_cast<std::uint32_t>(stream_id), bytes_view(data, length));
+        });
+    }
+    static int on_stream_close(nghttp2_session*, std::int32_t stream_id, std::uint32_t error_code, void* user_data) {
+        return guard(user_data, [=](http2_connection& connection) {
+            return connection.on_stream_close(static_cast<std::uint32_t>(stream_id), error_code);
+        });
+    }
+    static int before_frame_send(nghttp2_session*, const nghttp2_frame* frame, void* user_data) {
+        return guard(user_data, [frame](http2_connection& connection) {
+            return connection.before_frame_send(*frame);
+        });
+    }
+    static int on_frame_send(nghttp2_session*, const nghttp2_frame* frame, void* user_data) {
+        return guard(user_data, [frame](http2_connection& connection) {
+            return connection.on_frame_send(*frame);
+        });
+    }
+    static int on_extension_chunk(nghttp2_session*, const nghttp2_frame_hd* header, const std::uint8_t* data,
+        std::size_t length, void* user_data) {
+        return guard(user_data, [=](http2_connection& connection) {
+            return connection.on_extension_chunk(*header, bytes_view(data, length));
+        });
+    }
+    // ORIGIN and ALTSVC payloads are decoded from the accumulated chunks in
+    // on_frame_recv, so no unpacked object is handed back to nghttp2.
+    static int unpack_extension(nghttp2_session*, void** payload, const nghttp2_frame_hd*, void*) noexcept {
+        *payload = nullptr;
+        return 0;
+    }
+    static nghttp2_ssize pack_extension(nghttp2_session*, std::uint8_t* buffer, std::size_t length,
+        const nghttp2_frame* frame, void*) noexcept {
+        const auto& payload = *static_cast<const http2_extension_payload*>(frame->ext.payload);
+        if (payload.size_ > length) {
+            return NGHTTP2_ERR_CANCEL;
+        }
+        payload.write_(payload, std::span<char>(reinterpret_cast<char*>(buffer), payload.size_));
+        return static_cast<nghttp2_ssize>(payload.size_);
+    }
+    // DATA frames may use the peer's whole SETTINGS_MAX_FRAME_SIZE (RFC 9113
+    // §4.2) instead of nghttp2's 16 KiB default.
+    static nghttp2_ssize read_length(nghttp2_session*, std::uint8_t, std::int32_t, std::int32_t session_window,
+        std::int32_t stream_window, std::uint32_t remote_max_frame_size, void*) noexcept {
+        const auto window = (std::min)(session_window, stream_window);
+        return static_cast<nghttp2_ssize>(
+            (std::max)(std::int64_t{1}, (std::min)(static_cast<std::int64_t>(remote_max_frame_size),
+                                            static_cast<std::int64_t>(window))));
+    }
+};
+
+nghttp2_ssize http2_connection::read_outbound_data(nghttp2_session*, std::int32_t, std::uint8_t* buffer,
+    std::size_t length, std::uint32_t* data_flags, nghttp2_data_source* source, void*) noexcept {
+    auto* data = static_cast<outbound_data_type*>(source->ptr);
+    if (data == nullptr) {
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        return 0;
+    }
+    const auto copied = (std::min)(length, data->bytes_.size());
+    if (copied != 0) {
+        std::memcpy(buffer, data->bytes_.data(), copied);
+        data->bytes_.remove_prefix(copied);
+    }
+    if (data->bytes_.empty()) {
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        data->finished_ = true;
+    }
+    return static_cast<nghttp2_ssize>(copied);
 }
 
 http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push,
     bool receive_origin_advertisements, bool receive_frame_metadata)
     : resource_(resource),
-      input_(std::string_view{}, resource),
-      local_header_block_(std::string_view{}, resource),
+      memory_(resource),
       output_(resource),
+      fields_(resource),
       streams_(resource),
       priorities_(resource),
-      decoder_(resource),
-      peer_settings_(role),
-      events_(std::make_move_iterator(static_cast<http2_event*>(nullptr)),
-          std::make_move_iterator(static_cast<http2_event*>(nullptr)), resource),
-      role_(role),
-      connection_send_window_(http2_default_initial_window_size),
-      connection_receive_window_(static_cast<std::int32_t>(http2_local_settings::initial_window_size)) {
+      events_(resource),
+      owner_resets_(resource),
+      extension_payload_(resource),
+      role_(role) {
     enable_push_ = role == http2_role::client && enable_push;
     receive_origin_advertisements_ = role == http2_role::client && receive_origin_advertisements;
     receive_frame_metadata_ = receive_frame_metadata;
-    decoder_.set_max_dynamic_table_size(http2_local_settings::header_table_size);
+    create_session();
+}
+
+http2_connection::~http2_connection() = default;
+
+void http2_connection::create_session() {
+    struct callbacks_deleter final {
+        void operator()(nghttp2_session_callbacks* value) const noexcept {
+            nghttp2_session_callbacks_del(value);
+        }
+    };
+    struct option_deleter final {
+        void operator()(nghttp2_option* value) const noexcept {
+            nghttp2_option_del(value);
+        }
+    };
+    nghttp2_session_callbacks* raw_callbacks = nullptr;
+    if (nghttp2_session_callbacks_new(&raw_callbacks) != 0) {
+        throw std::bad_alloc();
+    }
+    const std::unique_ptr<nghttp2_session_callbacks, callbacks_deleter> callbacks(raw_callbacks);
+    nghttp2_session_callbacks_set_on_begin_frame_callback(callbacks.get(), &http2_session_callbacks::on_begin_frame);
+    nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks.get(), &http2_session_callbacks::on_begin_headers);
+    nghttp2_session_callbacks_set_on_header_callback2(callbacks.get(), &http2_session_callbacks::on_header);
+    nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks.get(), &http2_session_callbacks::on_frame_recv);
+    nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
+        callbacks.get(), &http2_session_callbacks::on_data_chunk_recv);
+    nghttp2_session_callbacks_set_on_stream_close_callback(callbacks.get(), &http2_session_callbacks::on_stream_close);
+    nghttp2_session_callbacks_set_before_frame_send_callback(
+        callbacks.get(), &http2_session_callbacks::before_frame_send);
+    nghttp2_session_callbacks_set_on_frame_send_callback(callbacks.get(), &http2_session_callbacks::on_frame_send);
+    nghttp2_session_callbacks_set_on_extension_chunk_recv_callback(
+        callbacks.get(), &http2_session_callbacks::on_extension_chunk);
+    nghttp2_session_callbacks_set_unpack_extension_callback(
+        callbacks.get(), &http2_session_callbacks::unpack_extension);
+    nghttp2_session_callbacks_set_pack_extension_callback2(callbacks.get(), &http2_session_callbacks::pack_extension);
+    nghttp2_session_callbacks_set_data_source_read_length_callback2(
+        callbacks.get(), &http2_session_callbacks::read_length);
+
+    nghttp2_option* raw_option = nullptr;
+    if (nghttp2_option_new(&raw_option) != 0) {
+        throw std::bad_alloc();
+    }
+    const std::unique_ptr<nghttp2_option, option_deleter> option(raw_option);
+    // Received DATA is credited only when the owner consumes it.
+    nghttp2_option_set_no_auto_window_update(option.get(), 1);
+    // Ruvia's request/response validators own HTTP message semantics.
+    nghttp2_option_set_no_http_messaging(option.get(), 1);
+    // RFC 9113 §6.5.2: no concurrency limit applies until the peer sets one.
+    nghttp2_option_set_peer_max_concurrent_streams(option.get(), (std::numeric_limits<std::uint32_t>::max)());
+    nghttp2_option_set_max_reserved_remote_streams(
+        option.get(), static_cast<std::uint32_t>(http2_stream_table::max_push_streams));
+    nghttp2_option_set_max_send_header_block_length(option.get(), max_http2_encoded_header_block_bytes);
+    // The encoder never inserts dynamic-table entries.
+    nghttp2_option_set_max_deflate_dynamic_table_size(option.get(), 0);
+    nghttp2_option_set_max_settings(option.get(), http2_received_settings::max_frame_entries);
+    nghttp2_option_set_max_continuations(option.get(), max_continuation_frames);
+    nghttp2_option_set_max_outbound_ack(option.get(), max_undrained_control_frames);
+    // The core has no clock: nghttp2's time-based limiters stay out of reach and
+    // the deterministic budgets in this class bound abuse instead.
+    constexpr auto unlimited = (std::numeric_limits<std::uint64_t>::max)();
+    nghttp2_option_set_stream_reset_rate_limit(option.get(), unlimited, 0);
+    nghttp2_option_set_glitch_rate_limit(option.get(), unlimited, 0);
+    nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::alternative_service));
+    nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::origin));
+    nghttp2_option_set_builtin_recv_extension_type(option.get(), NGHTTP2_PRIORITY_UPDATE);
+
+    nghttp2_session* raw_session = nullptr;
+    const int result = role_ == http2_role::client
+                           ? nghttp2_session_client_new3(&raw_session, callbacks.get(), this, option.get(), memory_.table())
+                           : nghttp2_session_server_new3(&raw_session, callbacks.get(), this, option.get(), memory_.table());
+    if (result == NGHTTP2_ERR_NOMEM) {
+        memory_.rethrow_allocation_failure();
+    }
+    if (result != 0) {
+        throw std::runtime_error("nghttp2 failed to create an HTTP/2 session");
+    }
+    session_.reset(raw_session);
+}
+
+void http2_connection::record_callback_failure() noexcept {
+    if (!callback_failure_) {
+        callback_failure_ = std::current_exception();
+    }
+}
+
+void http2_connection::fail_connection(http2_error_code error) {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return;
+    }
+    local_connection_state_.fail(error);
+    // Queues GOAWAY(error) and makes nghttp2 ignore every later inbound frame.
+    // An allocation failure here only loses the GOAWAY; the state is already terminal.
+    (void)nghttp2_session_terminate_session(session_.get(), static_cast<std::uint32_t>(error));
+}
+
+void http2_connection::fail_on_nghttp2_error(int error) {
+    auto failure = std::exchange(callback_failure_, nullptr);
+    auto code = http2_error_code::internal_error;
+    switch (error) {
+        case NGHTTP2_ERR_FLOODED:
+        case NGHTTP2_ERR_TOO_MANY_CONTINUATIONS:
+        case NGHTTP2_ERR_SETTINGS_EXPECTED:
+            code = error == NGHTTP2_ERR_SETTINGS_EXPECTED ? http2_error_code::protocol_error
+                                                          : http2_error_code::enhance_your_calm;
+            break;
+        case NGHTTP2_ERR_BAD_CLIENT_MAGIC:
+            code = http2_error_code::protocol_error;
+            break;
+        default:
+            break;
+    }
+    fail_connection(code);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    if (error == NGHTTP2_ERR_NOMEM) {
+        memory_.rethrow_allocation_failure();
+    }
+}
+
+void http2_connection::check_nghttp2(int result) {
+    if (result >= 0) {
+        return;
+    }
+    if (result == NGHTTP2_ERR_NOMEM || nghttp2_is_fatal(result)) {
+        fail_on_nghttp2_error(result);
+        throw std::runtime_error(nghttp2_strerror(result));
+    }
+    throw std::logic_error(nghttp2_strerror(result));
+}
+
+void http2_connection::flush_session() {
+    for (;;) {
+        const std::uint8_t* data = nullptr;
+        const auto produced = nghttp2_session_mem_send2(session_.get(), &data);
+        if (produced < 0) {
+            // A failed mem_send2 leaves nghttp2's outbound state indeterminate,
+            // so nothing more is sent on this session.
+            const auto error = static_cast<int>(produced);
+            if (local_connection_state_.fatal_failure() == nullptr) {
+                local_connection_state_.fail(http2_error_code::internal_error);
+            }
+            if (auto failure = std::exchange(callback_failure_, nullptr)) {
+                std::rethrow_exception(failure);
+            }
+            if (error == NGHTTP2_ERR_NOMEM) {
+                memory_.rethrow_allocation_failure();
+            }
+            throw std::runtime_error(nghttp2_strerror(error));
+        }
+        if (produced == 0) {
+            break;
+        }
+        const auto bytes = bytes_view(data, static_cast<std::size_t>(produced));
+        const auto header = parse_http2_frame_header(std::span<const char>(bytes.data(), bytes.size()));
+        const bool preface = bytes.size() == http2_client_preface.size() && bytes == http2_client_preface;
+        const bool is_data = !preface && header && header->type_ == static_cast<std::uint8_t>(http2_frame_type::data);
+        try {
+            output_.append_segment(bytes, is_data ? header->stream_id_ : 0, is_data);
+        } catch (...) {
+            // nghttp2 already counts these bytes as sent; the wire can no longer
+            // be made consistent.
+            if (local_connection_state_.fatal_failure() == nullptr) {
+                local_connection_state_.fail(http2_error_code::internal_error);
+            }
+            throw;
+        }
+    }
+}
+
+void http2_connection::begin_connection() {
+    if (started_) {
+        return;
+    }
+    const auto entries = http2_local_settings_entries(enable_push_);
+    check_nghttp2(nghttp2_submit_settings(session_.get(), NGHTTP2_FLAG_NONE, entries.data(), entries.size()));
+    check_nghttp2(nghttp2_session_set_local_window_size(
+        session_.get(), NGHTTP2_FLAG_NONE, 0, static_cast<std::int32_t>(http2_local_settings::initial_window_size)));
+    started_ = true;
+    flush_session();
 }
 
 // --- outbound byte buffer (batched writes) ------------------------------------
@@ -86,12 +362,6 @@ http2_event* http2_connection::peek_event() & noexcept {
     return nullptr;
 }
 
-bool http2_connection::has_pending_events(std::uint32_t stream_id) const noexcept {
-    // A removed stream has no storage left for a queued event to read.
-    const auto* stream = streams_.find(stream_id);
-    return stream != nullptr && stream->has_pending_events();
-}
-
 void http2_connection::consume_event() noexcept {
     if (event_offset_ >= events_.size()) {
         std::terminate();
@@ -109,9 +379,11 @@ void http2_connection::consume_event() noexcept {
         }
         retry_deferred_stream_lease(stream_ids[index]);
     }
+    flush_output();
 }
 
 void http2_connection::publish_event(http2_event event) {
+    reserve_geometric(events_, events_.size() + 1);
     events_.push_back(std::move(event));
     events_.back().for_each_referenced_stream([this](std::uint32_t stream_id) noexcept {
         if (auto* stream = streams_.find(stream_id)) {
@@ -120,278 +392,161 @@ void http2_connection::publish_event(http2_event event) {
     });
 }
 
-void http2_connection::reserve_event_slots(std::size_t count) {
-    if (count > events_.max_size() - events_.size()) {
-        throw std::length_error("HTTP/2 event queue size overflow");
-    }
-    // Reserve before state changes, without forcing a reallocation for every frame.
-    reserve_geometric(events_, events_.size() + count);
-}
+// --- inbound -----------------------------------------------------------------
 
-void http2_connection::append_goaway(http2_error_code error, std::string_view debug) {
-    // RFC 9113 §6.8: "Endpoints MUST NOT increase the value they send in the last
-    // stream identifier". last_stream_id_ doubles as the idle-stream high-water mark
-    // (§5.1.1), so it keeps climbing for streams a graceful drain already refused --
-    // those are exactly the ids the peer was told it may retry elsewhere. Clamp to the
-    // advertised drain boundary; read it before fail() replaces the drain state.
-    auto advertised = last_stream_id_;
-    if (const auto* drain = local_connection_state_.graceful_drain()) {
-        advertised = std::min(advertised, drain->last_stream_id());
+http2_feed_result http2_connection::feed(std::string_view in) {
+    // The facade begins the connection before it offers any input.
+    if (!started_) {
+        std::terminate();
     }
-    // A fatal transition is only observable together with its GOAWAY. Preflight the
-    // complete frame so a throwing PMR resource cannot leave the connection marked
-    // failed while the required terminal bytes were never queued.
-    output_.reserve_segments_additional(1);
-    output_.reserve_additional(http2_goaway_encoded_bytes(debug));
-    local_connection_state_.fail(error);
-    output_.append_goaway_frame(advertised, error, debug);
-}
-
-void http2_connection::begin_drain() {
-    // Graceful drain (RFC 9113 §6.8) WITHOUT a connection error: established streams
-    // keep running, and HEADERS for a stream above the advertised id are refused in
-    // process_headers. A server first advertises 2^31-1 and keeps admitting the
-    // streams the client may already have in flight; the final boundary follows the
-    // ACK of a PING queued right behind that GOAWAY, i.e. one round trip later.
-    if (local_connection_state_.open() == nullptr) {
-        return;
+    // An unread event may carry a zero-copy view into the previous input, so
+    // accepting another span here would invalidate its bytes.
+    if (event_offset_ < events_.size()) {
+        return http2_feed_result::events_pending;
     }
-    if (role_ != http2_role::server) {
-        begin_final_drain();
-        return;
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return http2_feed_result::protocol_failure;
     }
-    // Keep the lifecycle transition and its frames as one externally visible
-    // operation. The reservation is made while the state is still open, so a
-    // failed allocation leaves begin_drain() retryable.
-    output_.reserve_segments_additional(2);
-    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug) + http2_frame_header_bytes +
-                               http2_drain_ping_payload.size());
-    // A client that ignores the first GOAWAY and withholds the ACK still cannot
-    // extend the round trip indefinitely: one concurrency window of further streams
-    // is admitted, then the boundary becomes final. finish_drain() bounds it in time.
-    const auto stream_budget = std::uint32_t{2} * http2_local_settings::max_concurrent_streams;
-    const auto round_trip_limit =
-        last_stream_id_ > http2_max_stream_id - stream_budget ? http2_max_stream_id : last_stream_id_ + stream_budget;
-    if (!local_connection_state_.begin_round_trip_drain(http2_max_stream_id, round_trip_limit)) {
-        return;
-    }
-    output_.append_goaway_frame(http2_max_stream_id, http2_error_code::no_error, http2_drain_debug);
-    output_.append_frame(http2_frame_type::ping, 0, 0, http2_drain_ping_payload);
-}
-
-void http2_connection::finish_drain() {
-    if (local_connection_state_.open() != nullptr) {
-        begin_final_drain();
-        return;
-    }
-    finish_drain_round_trip();
-}
-
-void http2_connection::begin_final_drain() {
-    // Reserve while still open so a failed allocation leaves the transition retryable.
-    output_.reserve_segments_additional(1);
-    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug));
-    if (local_connection_state_.begin_graceful_drain(last_stream_id_)) {
-        output_.append_goaway_frame(last_stream_id_, http2_error_code::no_error, http2_drain_debug);
-    }
-}
-
-void http2_connection::finish_drain_round_trip() {
-    const auto* drain = local_connection_state_.graceful_drain();
-    if (drain == nullptr || !drain->awaiting_round_trip()) {
-        return;
-    }
-    output_.reserve_segments_additional(1);
-    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug));
-    if (local_connection_state_.finish_round_trip_drain(last_stream_id_)) {
-        output_.append_goaway_frame(last_stream_id_, http2_error_code::no_error, http2_drain_debug);
-    }
-}
-
-bool http2_connection::apply_settings_payload(std::string_view payload_value) {
-    if (!http2_settings_payload_size_valid(payload_value)) {
-        append_goaway(http2_error_code::frame_size_error, "invalid SETTINGS size");
-        return false;
-    }
-
-    // SETTINGS is one protocol transaction. Validate and apply every entry to a
-    // detached candidate first; an invalid later entry must not leave an earlier
-    // valid entry visible in the live peer model before the fatal GOAWAY is queued.
-    http2_peer_settings candidate_value = peer_settings_;
-    bool encoder_table_size_reduction = false;
-    const auto initial_window_baseline =
-        static_cast<std::int64_t>(peer_settings_.initial_window_size());
-    std::int64_t minimum_window_delta = 0;
-    std::int64_t maximum_window_delta = 0;
-    const http2_received_settings settings(payload_value);
-    for (std::size_t index = 0; index < settings.size(); ++index) {
-        const auto entry_value = settings.at(index);
-        if (const auto error = candidate_value.apply(entry_value.id_, entry_value.value_)) {
-            append_goaway(http2_peer_setting_error_code(*error),
-                http2_peer_setting_error_message(*error));
-            return false;
-        }
-        if (entry_value.id_ == http2_setting_id::initial_window_size) {
-            const auto delta = static_cast<std::int64_t>(entry_value.value_) -
-                               initial_window_baseline;
-            minimum_window_delta = (std::min)(minimum_window_delta, delta);
-            maximum_window_delta = (std::max)(maximum_window_delta, delta);
-        }
-        if (entry_value.id_ == http2_setting_id::header_table_size &&
-            entry_value.value_ < encoder_dynamic_table_size_) {
-            encoder_table_size_reduction = true;
-        }
-    }
-
-    const auto initial_window_delta = static_cast<std::int64_t>(candidate_value.initial_window_size()) -
-                                      initial_window_baseline;
-    // Validate every intermediate window as well as the final setting before
-    // publishing the candidate or changing any active stream.
-    if (!streams_.apply_send_window_delta(
-            initial_window_delta, minimum_window_delta, maximum_window_delta)) {
-        append_goaway(http2_error_code::flow_control_error, "stream window overflow");
-        return false;
-    }
-    if (encoder_table_size_reduction) {
-        // RFC 9113 §4.3.1 requires the next field block after our SETTINGS ACK
-        // to begin with a conformant table-size update. This encoder never uses
-        // dynamic entries, so permanently selecting zero is both exact and avoids
-        // carrying a fictitious compression capacity through later SETTINGS.
-        encoder_dynamic_table_size_ = 0;
-        encoder_table_size_update_pending_ = true;
-    }
-    candidate_value.complete_frame();
-    peer_settings_ = candidate_value;
-    return true;
-}
-
-bool http2_connection::process_settings(const http2_frame_header& header_value, std::string_view payload_value) {
-    if (header_value.stream_id_ != 0) {
-        append_goaway(http2_error_code::protocol_error, "SETTINGS stream id must be zero");
-        return false;
-    }
-    if ((header_value.flags_ & http2_flag_ack) != 0) {
-        if (!payload_value.empty()) {
-            append_goaway(http2_error_code::frame_size_error, "SETTINGS ack payload");
-            return false;
-        }
-        if (preface_phase_ == preface_phase_type::awaiting_peer_settings) {
-            // Each peer preface must start with a (possibly empty) non-ACK SETTINGS
-            // frame (RFC 9113 §3.4); an ACK alone does not satisfy either role.
-            append_goaway(http2_error_code::protocol_error, "SETTINGS ACK before SETTINGS");
-            return false;
-        }
-        return true;
-    }
-    // Check the control-output budget before applying this frame, so the frame
-    // that would exceed it consumes no SETTINGS state before its fatal GOAWAY.
-    if (!admit_undrained_control_frame()) {
-        return false;
-    }
-    // The ACK is part of the SETTINGS transaction. Reserve it before changing
-    // peer settings or stream windows so a throwing PMR resource leaves the
-    // incoming frame wholly retryable.
-    const auto output_checkpoint = output_.checkpoint();
-    const auto previous_settings = peer_settings_;
-    const auto previous_encoder_dynamic_table_size = encoder_dynamic_table_size_;
-    const auto previous_encoder_table_size_update_pending = encoder_table_size_update_pending_;
-    const auto previous_preface_phase = preface_phase_;
-    const auto previous_initial_window_size = peer_settings_.initial_window_size();
-    bool settings_applied = false;
-    try {
-        output_.reserve_additional(http2_frame_header_bytes);
-        if (receive_frame_metadata_) {
-            // Nothing below queues another event before this frame's own.
-            reserve_event_slots(1);
-        }
-        if (!apply_settings_payload(payload_value)) {
-            return false;
-        }
-        settings_applied = true;
-        if (preface_phase_ == preface_phase_type::awaiting_peer_settings) {
-            preface_phase_ = preface_phase_type::ready;
-        }
-        output_.append_frame(http2_frame_type::settings, http2_flag_ack, 0, {});
-        if (receive_frame_metadata_) {
-            // Last, after every throwing step: the view borrows the accepted input.
-            publish_event(http2_event(http2_received_settings(payload_value)));
-        }
-        ++undrained_control_frames_;
-        return true;
-    } catch (...) {
-        if (settings_applied) {
-            const auto applied_initial_window_delta =
-                static_cast<std::int64_t>(peer_settings_.initial_window_size()) -
-                static_cast<std::int64_t>(previous_initial_window_size);
-            const auto rollback_delta = -applied_initial_window_delta;
-            if (!streams_.apply_send_window_delta(rollback_delta, rollback_delta, rollback_delta)) {
-                std::terminate();
+    events_.clear();
+    event_offset_ = 0;
+    const auto consumed = nghttp2_session_mem_recv2(
+        session_.get(), reinterpret_cast<const std::uint8_t*>(in.data()), in.size());
+    if (consumed < 0) {
+        try {
+            fail_on_nghttp2_error(static_cast<int>(consumed));
+        } catch (...) {
+            try {
+                flush_session();
+                // NOLINTNEXTLINE(bugprone-empty-catch): the original failure wins.
+            } catch (...) {
             }
-            peer_settings_ = previous_settings;
-            encoder_dynamic_table_size_ = previous_encoder_dynamic_table_size;
-            encoder_table_size_update_pending_ = previous_encoder_table_size_update_pending;
-            preface_phase_ = previous_preface_phase;
-            output_.rollback_to(output_checkpoint);
+            throw;
         }
-        throw;
+    }
+    flush_session();
+    return local_connection_state_.fatal_failure() != nullptr ? http2_feed_result::protocol_failure
+                                                              : http2_feed_result::accepted;
+}
+
+int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
+    switch (header.type) {
+        case NGHTTP2_HEADERS:
+        case NGHTTP2_PUSH_PROMISE:
+            header_block_bytes_ = header.length;
+            header_block_in_progress_ = (header.flags & NGHTTP2_FLAG_END_HEADERS) == 0;
+            break;
+        case NGHTTP2_CONTINUATION:
+            header_block_bytes_ += header.length;
+            header_block_in_progress_ = (header.flags & NGHTTP2_FLAG_END_HEADERS) == 0;
+            if (header_block_bytes_ > max_http2_encoded_header_block_bytes) {
+                // A partial block cannot be skipped without desynchronizing the
+                // connection-wide HPACK state (RFC 9113 §4.3).
+                header_block_.reset();
+                fail_connection(http2_error_code::compression_error);
+            }
+            break;
+        case static_cast<std::uint8_t>(http2_frame_type::alternative_service):
+        case static_cast<std::uint8_t>(http2_frame_type::origin):
+            extension_payload_.clear();
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
+int http2_connection::on_extension_chunk(const nghttp2_frame_hd&, std::string_view data) {
+    extension_payload_.append(data.data(), data.size());
+    return 0;
+}
+
+int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return 0;
+    }
+    switch (frame.hd.type) {
+        case NGHTTP2_DATA:
+            if ((frame.hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
+                if (auto* stream = streams_.find(frame.hd.stream_id); stream != nullptr && !stream->is_aborted()) {
+                    finish_data_frame(*stream);
+                }
+            }
+            break;
+        case NGHTTP2_HEADERS:
+        case NGHTTP2_PUSH_PROMISE:
+            header_block_in_progress_ = false;
+            finish_header_block(frame);
+            break;
+        case NGHTTP2_RST_STREAM:
+            process_rst_stream(frame);
+            break;
+        case NGHTTP2_SETTINGS:
+            if ((frame.hd.flags & NGHTTP2_FLAG_ACK) == 0) {
+                process_settings(frame);
+            }
+            break;
+        case NGHTTP2_PING:
+            process_ping(frame);
+            break;
+        case NGHTTP2_GOAWAY:
+            process_goaway(frame);
+            break;
+        case NGHTTP2_WINDOW_UPDATE:
+            if (receive_frame_metadata_) {
+                publish_event(http2_event(http2_received_window_update{
+                    .stream_id_ = static_cast<std::uint32_t>(frame.hd.stream_id),
+                    .increment_ = static_cast<std::uint32_t>(frame.window_update.window_size_increment)}));
+            }
+            break;
+        case NGHTTP2_PRIORITY_UPDATE:
+            process_priority_update(frame);
+            break;
+        case static_cast<std::uint8_t>(http2_frame_type::alternative_service):
+        case static_cast<std::uint8_t>(http2_frame_type::origin):
+            process_advertisement(frame.hd);
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
+void http2_connection::process_settings(const nghttp2_frame& frame) {
+    received_peer_settings_ = true;
+    if (!receive_frame_metadata_) {
+        return;
+    }
+    http2_received_settings settings;
+    const auto count = (std::min)(frame.settings.niv, http2_received_settings::max_entries);
+    for (std::size_t index = 0; index < count; ++index) {
+        settings.entries_[index] = http2_setting_entry{
+            .id_ = static_cast<http2_setting_id>(frame.settings.iv[index].settings_id),
+            .value_ = frame.settings.iv[index].value};
+    }
+    settings.size_ = count;
+    publish_event(http2_event(settings));
+}
+
+void http2_connection::process_ping(const nghttp2_frame& frame) {
+    if ((frame.hd.flags & NGHTTP2_FLAG_ACK) == 0) {
+        return;
+    }
+    const auto payload = bytes_view(frame.ping.opaque_data, sizeof(frame.ping.opaque_data));
+    // The drain PING's ACK completes the round trip that in-flight stream
+    // creation was given (RFC 9113 §6.8).
+    if (payload == http2_drain_ping_payload) {
+        finish_drain_round_trip();
+    } else if (payload == http2_liveness_ping_payload) {
+        liveness_ping_outstanding_ = false;
     }
 }
 
-bool http2_connection::process_priority(const http2_frame_header& header_value, std::string_view payload_value) {
-    if (header_value.stream_id_ == 0) {
-        append_goaway(http2_error_code::protocol_error, "PRIORITY stream id must be nonzero");
-        return false;
-    }
-    if (payload_value.size() != 5) {
-        auto* const stream = streams_.find(header_value.stream_id_);
-        if (stream == nullptr || http2_stream_is_closed(*stream)) {
-            // PRIORITY is allowed in every state, but RST_STREAM is not legal
-            // on an idle or closed stream. Promote its mandatory stream
-            // FRAME_SIZE_ERROR to the connection instead.
-            append_goaway(http2_error_code::frame_size_error, "invalid PRIORITY without active stream");
-            return false;
-        }
-        // RFC 9113 section 6.3 makes malformed PRIORITY length a stream error,
-        // unlike most fixed-size connection-control frames. Do not terminate
-        // unrelated multiplexed streams for one bad advisory frame.
-        return reset_stream_for_peer_error(header_value.stream_id_, http2_error_code::frame_size_error);
-    }
-    // RFC 9113 §6.3：已废弃的优先级树不参与协议状态或调度，元数据事件也不新增校验。
-    if (receive_frame_metadata_) {
-        reserve_event_slots(1);
-        publish_event(http2_event(http2_decode_priority_fields(
-            header_value.stream_id_, reinterpret_cast<const unsigned char*>(payload_value.data()))));
-    }
-    return true;
-}
-
-bool http2_connection::process_goaway(const http2_frame_header& header_value, std::string_view payload_value) {
-    // RFC 9113 §6.8 gives these two malformations distinct codes: a nonzero stream id is
-    // a PROTOCOL_ERROR, while a payload short of the 8-octet fixed fields is a
-    // FRAME_SIZE_ERROR. Both are connection errors, but conformance suites read the code.
-    if (header_value.stream_id_ != 0) {
-        append_goaway(http2_error_code::protocol_error, "GOAWAY stream id must be zero");
-        return false;
-    }
-    if (payload_value.size() < 8) {
-        append_goaway(http2_error_code::frame_size_error, "invalid GOAWAY size");
-        return false;
-    }
-
-    const http2_goaway_event goaway(
-        http2_read31(reinterpret_cast<const unsigned char*>(payload_value.data())),
-        static_cast<http2_error_code>(
-            http2_read32(reinterpret_cast<const unsigned char*>(payload_value.data() + 4))));
-    if (peer_goaway_ && goaway.last_stream_id() > peer_goaway_->last_stream_id()) {
-        // RFC 9113 §6.8: increasing this value can make an already retried request
-        // ambiguous, so the peer is not allowed to widen it on a later GOAWAY.
-        append_goaway(http2_error_code::protocol_error, "GOAWAY last stream id increased");
-        return false;
-    }
-
+void http2_connection::process_goaway(const nghttp2_frame& frame) {
+    const http2_goaway_event goaway(static_cast<std::uint32_t>(frame.goaway.last_stream_id),
+        static_cast<http2_error_code>(frame.goaway.error_code));
     // A GOAWAY boundary can cover more live streams than the concurrency budget:
-    // reserved push promises do not occupy a concurrency slot (RFC 9113 Sections
-    // 5.1.2 and 8.4.2) yet remain open and must be closed here.
+    // reserved push promises hold no concurrency slot (RFC 9113 §5.1.2, §8.4.2)
+    // yet remain open and must be closed here.
     std::array<std::uint32_t, http2_stream_table::max_streams> unprocessed_stream_ids;
     std::size_t unprocessed_count = 0;
     if (role_ == http2_role::client) {
@@ -400,8 +555,8 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
             if ((stream.id() & 1U) == 0 || stream.id() <= goaway.last_stream_id() || stream.is_aborted()) {
                 return;
             }
-            // A response head proves that the peer acted on this request. Claiming
-            // otherwise would make replay unsafe, so reject the contradictory GOAWAY.
+            // A response head proves that the peer acted on this request; calling
+            // it unprocessed would make replay unsafe (RFC 9113 §8.7).
             if (http2_remote_final_head_decoded(stream) || stream.has_informational_response()) {
                 response_started_above_last = true;
                 return;
@@ -409,8 +564,8 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
             unprocessed_stream_ids[unprocessed_count++] = stream.id();
         });
         if (response_started_above_last) {
-            append_goaway(http2_error_code::protocol_error, "GOAWAY excludes a started response");
-            return false;
+            fail_connection(http2_error_code::protocol_error);
+            return;
         }
         std::ranges::sort(std::span(unprocessed_stream_ids).first(unprocessed_count));
     } else {
@@ -421,74 +576,246 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
         });
     }
 
-    // Reserve every event that this frame can publish before changing peer or local
-    // lifecycle state. The client may add one request-unprocessed event per stream
-    // below; without this preflight an allocator failure after peer_goaway_ was set
-    // would leave a half-published GOAWAY transaction.
-    const auto event_count = std::size_t{1} + unprocessed_count;
-    reserve_event_slots(event_count);
-
-    // A valid peer GOAWAY is graceful shutdown state, not a local connection error.
-    // Send our directional GOAWAY through the same idempotent drain path before
-    // publishing the peer event. Its sender opens no further streams (RFC 9113 §6.8),
-    // so a server needs no round trip: the boundary is final at once, also ending
-    // a round trip already in progress. finish_drain() reserves its complete output
-    // first, so a throwing resource leaves both lifecycle sides retryable.
+    // A valid peer GOAWAY is graceful shutdown, not a local connection error. Its
+    // sender opens no further streams (RFC 9113 §6.8), so our directional GOAWAY
+    // follows at once without a round trip.
     finish_drain();
     peer_goaway_ = goaway;
     publish_event(http2_event(goaway));
-
-    if (role_ == http2_role::server) {
-        for (std::size_t i = 0; i < unprocessed_count; ++i) {
-            (void)close_stream_impl(unprocessed_stream_ids[i], http2_stream_close_source::peer_goaway,
-                goaway.error(), close_notification_type::emit_event);
-        }
-        return true;
-    }
-
-    // Higher locally initiated streams were never processed and can be replayed on a
-    // new connection. Close them inside the protocol core so flow-control debt,
-    // stream-table storage, and peer concurrency slots cannot leak.
     for (std::size_t i = 0; i < unprocessed_count; ++i) {
         const auto stream_id = unprocessed_stream_ids[i];
-        if (!close_stream_impl(stream_id, http2_stream_close_source::peer_goaway, goaway.error(),
-                close_notification_type::owner_already_knows)) {
+        if (role_ == http2_role::server) {
+            (void)close_stream(stream_id, http2_stream_close_source::peer_goaway, goaway.error());
             continue;
         }
-        publish_event(http2_event(http2_request_unprocessed_event(stream_id)));
+        // Higher locally initiated streams were never processed and can be
+        // replayed on a new connection (RFC 9113 §8.7).
+        if (close_stream_impl(stream_id, http2_stream_close_source::peer_goaway, goaway.error(),
+                close_notification_type::owner_already_knows)) {
+            publish_event(http2_event(http2_request_unprocessed_event(stream_id)));
+        }
     }
-    return true;
 }
 
-bool http2_connection::process_ping(const http2_frame_header& header_value, std::string_view payload_value) {
-    if (payload_value.size() != 8) {
-        append_goaway(http2_error_code::frame_size_error, "invalid PING");
-        return false;
+void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
+    if (role_ != http2_role::client) {
+        return;
     }
-    if (header_value.stream_id_ != 0) {
-        append_goaway(http2_error_code::protocol_error, "PING stream id must be zero");
-        return false;
-    }
-    if ((header_value.flags_ & http2_flag_ack) != 0) {
-        // The drain PING's ACK completes the round trip that in-flight stream
-        // creation was given (RFC 9113 §6.8). Any received frame, this ACK
-        // included, already proved liveness for submit_ping().
-        if (payload_value == http2_drain_ping_payload) {
-            finish_drain_round_trip();
-        } else if (payload_value == http2_liveness_ping_payload) {
-            liveness_ping_outstanding_ = false;
+    const auto payload = std::span<const char>(extension_payload_.data(), extension_payload_.size());
+    if (header.type == static_cast<std::uint8_t>(http2_frame_type::origin)) {
+        if (!receive_origin_advertisements_ || header.stream_id != 0 || (header.flags & 0xf) != 0) {
+            return;
         }
-        return true;
+        auto advertisement = decode_http_origin_advertisement(payload, resource_);
+        if (advertisement.index() == 0) {
+            publish_event(http2_event(std::move(std::get<0>(advertisement))));
+        }
+        return;
     }
-    if (!admit_undrained_control_frame()) {
-        return false;
+    const auto stream_id = static_cast<std::uint32_t>(header.stream_id);
+    if (stream_id != 0) {
+        // ALTSVC is ignored on a CONNECT tunnel (RFC 7838 §4).
+        const auto* stream = streams_.find(stream_id);
+        if (stream == nullptr || http2_stream_is_closed(*stream) || stream->tunnel().not_connect() == nullptr) {
+            return;
+        }
     }
-    // Reserve before either side effect so an allocation failure does not
-    // consume the peer's retryable PING or make the budget lie about the output.
-    output_.reserve_additional(http2_frame_header_bytes + payload_value.size());
-    output_.append_frame(http2_frame_type::ping, http2_flag_ack, 0, payload_value);  // echo back
+    auto advertisement = decode_http2_alternative_service(stream_id, payload, resource_);
+    if (advertisement.index() == 0) {
+        publish_event(http2_event(std::move(std::get<0>(advertisement))));
+    }
+}
+
+void http2_connection::process_priority_update(const nghttp2_frame& frame) {
+    // nghttp2 accepts PRIORITY_UPDATE only on a server and already enforced its
+    // push-stream and idle-stream rules; a Prioritized Stream ID of zero is left
+    // to this layer (RFC 9218 §7.1).
+    const auto& update = *static_cast<const nghttp2_ext_priority_update*>(frame.ext.payload);
+    const auto id = static_cast<std::uint32_t>(update.stream_id);
+    if (id == 0) {
+        fail_connection(http2_error_code::protocol_error);
+        return;
+    }
+    const auto parsed = parse_http_priority(bytes_view(update.field_value, update.field_value_len));
+    if (parsed.index() != 0) {
+        return;  // A malformed Priority field does not prioritize a stream.
+    }
+    const auto fields = std::get<0>(parsed);
+    auto* stream = streams_.find(id);
+    const bool idle = stream == nullptr && (id & 1U) != 0 && id > last_peer_stream_id_;
+    if (stream != nullptr) {
+        if (http2_stream_is_closed(*stream) || stream->local_send().end_stream_committed() != nullptr) {
+            return;
+        }
+        stream->set_priority_update(fields);
+    } else if (idle) {
+        if (!priorities_.contains(id)) {
+            // Signals for identifiers the peer skipped become unreachable once a
+            // higher stream opens; drop those only when the map would grow.
+            std::erase_if(priorities_, [this](const auto& entry_value) {
+                return entry_value.first <= last_peer_stream_id_;
+            });
+        }
+        priorities_.insert_or_assign(id, fields);
+    } else {
+        return;
+    }
+    publish_event(http2_event(http_priority_update{id, (id & 1U) == 0, fields}));
+}
+
+void http2_connection::process_rst_stream(const nghttp2_frame& frame) {
+    const auto stream_id = static_cast<std::uint32_t>(frame.hd.stream_id);
+    const auto error = static_cast<http2_error_code>(frame.rst_stream.error_code);
+    auto* stream = streams_.find(stream_id);
+    // RFC 9113 §8.7: REFUSED_STREAM on a stream this client opened means the
+    // server did no processing; the owner may replay the request. A refusal
+    // after a response head contradicts that and stays a reset.
+    const bool refused_request = role_ == http2_role::client && error == http2_error_code::refused_stream &&
+                                 (stream_id & 1U) != 0 && stream != nullptr &&
+                                 stream->response_status() == nullptr && !stream->has_informational_response();
+    if (stream != nullptr && !stream->is_aborted() && !http2_stream_is_closed(*stream)) {
+        if (refused_request) {
+            if (close_stream_impl(stream_id, http2_stream_close_source::peer, error,
+                    close_notification_type::owner_already_knows)) {
+                publish_event(http2_event(http2_request_unprocessed_event(stream_id)));
+            }
+        } else {
+            (void)close_stream(stream_id, http2_stream_close_source::peer, error);
+        }
+    }
+    // Rapid reset (CVE-2023-44487): a peer that keeps resetting streams far ahead
+    // of the responses it lets complete is cut off.
+    ++peer_reset_streams_;
+    if (static_cast<std::uint64_t>(peer_reset_streams_) >
+        static_cast<std::uint64_t>(completed_responses_) + max_unprocessed_resets) {
+        fail_connection(http2_error_code::enhance_your_calm);
+    }
+}
+
+int http2_connection::on_stream_close(std::uint32_t stream_id, std::uint32_t error_code) {
+    if (const auto owner_reset = std::ranges::find(owner_resets_, stream_id); owner_reset != owner_resets_.end()) {
+        owner_resets_.erase(owner_reset);
+    }
+    if (header_block_.has_value() && &header_block_->context_.stream_ == streams_.find(stream_id)) {
+        header_block_.reset();
+    }
+    auto* stream = streams_.find(stream_id);
+    // After a connection error the owner learns of every stream's end from
+    // connection_error(); nghttp2 closing streams while tearing down (for
+    // example on the GOAWAY that caused the error) is not a stream event.
+    if (stream == nullptr || stream->is_aborted() || http2_stream_is_closed(*stream) ||
+        local_connection_state_.fatal_failure() != nullptr) {
+        return 0;
+    }
+    // nghttp2 ended a stream Ruvia still considers open: a stream error it
+    // detected itself (flow control, frame on a closed half, refused stream).
+    (void)close_stream(stream_id, http2_stream_close_source::local, static_cast<http2_error_code>(error_code));
+    return 0;
+}
+
+int http2_connection::before_frame_send(const nghttp2_frame& frame) {
+    const bool ack = (frame.hd.flags & NGHTTP2_FLAG_ACK) != 0;
+    if ((frame.hd.type == NGHTTP2_PING || frame.hd.type == NGHTTP2_SETTINGS) && ack) {
+        if (undrained_control_frames_ >= max_undrained_control_frames) {
+            fail_connection(http2_error_code::enhance_your_calm);
+            return NGHTTP2_ERR_CANCEL;
+        }
+        ++undrained_control_frames_;
+        return 0;
+    }
+    if (frame.hd.type != NGHTTP2_RST_STREAM) {
+        return 0;
+    }
+    const auto stream_id = static_cast<std::uint32_t>(frame.hd.stream_id);
+    if (const auto owner_reset = std::ranges::find(owner_resets_, stream_id); owner_reset != owner_resets_.end()) {
+        owner_resets_.erase(owner_reset);
+        return 0;
+    }
+    // Every other RST_STREAM answers a peer frame.
+    if (peer_error_resets_ >= max_peer_error_resets || undrained_control_frames_ >= max_undrained_control_frames) {
+        fail_connection(http2_error_code::enhance_your_calm);
+        return NGHTTP2_ERR_CANCEL;
+    }
+    ++peer_error_resets_;
     ++undrained_control_frames_;
-    return true;
+    return 0;
+}
+
+int http2_connection::on_frame_send(const nghttp2_frame& frame) {
+    // A GOAWAY carrying an error is nghttp2's own connection error (or ours,
+    // already recorded); graceful drain GOAWAYs carry NO_ERROR.
+    if (frame.hd.type == NGHTTP2_GOAWAY && frame.goaway.error_code != NGHTTP2_NO_ERROR &&
+        local_connection_state_.fatal_failure() == nullptr) {
+        local_connection_state_.fail(static_cast<http2_error_code>(frame.goaway.error_code));
+    }
+    return 0;
+}
+
+// --- local control frames ---------------------------------------------------
+
+void http2_connection::submit_goaway(std::uint32_t last_stream_id) {
+    check_nghttp2(nghttp2_submit_goaway(session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(last_stream_id),
+        NGHTTP2_NO_ERROR, reinterpret_cast<const std::uint8_t*>(http2_drain_debug.data()), http2_drain_debug.size()));
+}
+
+void http2_connection::begin_drain() {
+    // Graceful drain (RFC 9113 §6.8) without a connection error: established
+    // streams keep running. A server first advertises 2^31-1 and keeps admitting
+    // the streams the client may already have in flight; the final boundary
+    // follows the ACK of a PING queued right behind that GOAWAY.
+    if (local_connection_state_.open() == nullptr) {
+        return;
+    }
+    if (role_ != http2_role::server) {
+        begin_final_drain();
+        flush_session();
+        return;
+    }
+    // A client that ignores the first GOAWAY and withholds the ACK still cannot
+    // extend the round trip indefinitely: one concurrency window of further
+    // streams is admitted, then the boundary becomes final.
+    const auto stream_budget = std::uint32_t{2} * http2_local_settings::max_concurrent_streams;
+    const auto round_trip_limit = last_peer_stream_id_ > http2_max_stream_id - stream_budget
+                                      ? http2_max_stream_id
+                                      : last_peer_stream_id_ + stream_budget;
+    // nghttp2's shutdown notice is the 2^31-1 GOAWAY that, unlike a final
+    // GOAWAY, leaves new peer streams admitted and input read while no stream
+    // is active.
+    check_nghttp2(nghttp2_submit_shutdown_notice(session_.get()));
+    // The PING's ACK proves the peer read the GOAWAY only if the PING follows
+    // it on the wire. nghttp2 sends a queued PING ahead of a queued GOAWAY, so
+    // the GOAWAY is drained first.
+    flush_session();
+    check_nghttp2(nghttp2_submit_ping(
+        session_.get(), NGHTTP2_FLAG_NONE, reinterpret_cast<const std::uint8_t*>(http2_drain_ping_payload.data())));
+    (void)local_connection_state_.begin_round_trip_drain(http2_max_stream_id, round_trip_limit);
+    flush_session();
+}
+
+void http2_connection::finish_drain() {
+    if (local_connection_state_.open() != nullptr) {
+        begin_final_drain();
+    } else {
+        finish_drain_round_trip();
+    }
+    flush_session();
+}
+
+void http2_connection::begin_final_drain() {
+    if (local_connection_state_.open() == nullptr) {
+        return;
+    }
+    submit_goaway(last_peer_stream_id_);
+    (void)local_connection_state_.begin_graceful_drain(last_peer_stream_id_);
+}
+
+void http2_connection::finish_drain_round_trip() {
+    const auto* drain = local_connection_state_.graceful_drain();
+    if (drain == nullptr || !drain->awaiting_round_trip()) {
+        return;
+    }
+    submit_goaway(last_peer_stream_id_);
+    (void)local_connection_state_.finish_round_trip_drain(last_peer_stream_id_);
 }
 
 http2_submit_status http2_connection::submit_ping() {
@@ -498,297 +825,41 @@ http2_submit_status http2_connection::submit_ping() {
     if (liveness_ping_outstanding_) {
         return http2_submit_status::accepted;
     }
-    output_.append_frame(http2_frame_type::ping, 0, 0, http2_liveness_ping_payload);
+    check_nghttp2(nghttp2_submit_ping(
+        session_.get(), NGHTTP2_FLAG_NONE, reinterpret_cast<const std::uint8_t*>(http2_liveness_ping_payload.data())));
     liveness_ping_outstanding_ = true;
+    flush_session();
     return http2_submit_status::accepted;
 }
 
 http2_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
-    if (role_ != http2_role::client || local_connection_state_.open() == nullptr || !stream_id ||
-        stream_id > http2_max_stream_id || ((stream_id & 1) == 0 && is_idle_stream_id(stream_id))) {
+    if (role_ != http2_role::client || local_connection_state_.open() == nullptr || stream_id == 0 ||
+        stream_id > http2_max_stream_id ||
+        ((stream_id & 1U) == 0 && stream_id > last_peer_stream_id_)) {
         return http2_submit_status::invalid_state;
     }
     std::array<char, 32> encoded{};
-    const auto size = encode_http2_priority_update(encoded, stream_id, fields_value);
-    if ((size.index() != 0)) {
+    const auto size = encode_http_priority(encoded, fields_value);
+    if (size.index() != 0) {
         return http2_submit_status::invalid_message;
     }
-    output_.append_frame(http2_frame_type::priority_update, 0, 0,
-        std::string_view(encoded.data() + http2_frame_header_bytes, std::get<0>(size) - http2_frame_header_bytes));
+    // nghttp2 sends PRIORITY_UPDATE only to a peer that advertised
+    // SETTINGS_NO_RFC7540_PRIORITIES=1 (RFC 9218 §2.1).
+    if (peer_setting(NGHTTP2_SETTINGS_NO_RFC7540_PRIORITIES) == 0) {
+        return http2_submit_status::peer_capability_unavailable;
+    }
+    check_nghttp2(nghttp2_submit_priority_update(session_.get(), NGHTTP2_FLAG_NONE,
+        static_cast<std::int32_t>(stream_id), reinterpret_cast<const std::uint8_t*>(encoded.data()), std::get<0>(size)));
+    flush_session();
     return http2_submit_status::accepted;
 }
 
-bool http2_connection::process_priority_update(const http2_frame_header& header_value, std::string_view payload_value) {
-    if (role_ != http2_role::server) {
-        append_goaway(http2_error_code::protocol_error, "server must not send PRIORITY_UPDATE");
-        return false;
-    }
-    if (header_value.stream_id_ != 0) {
-        append_goaway(http2_error_code::protocol_error, "PRIORITY_UPDATE frame stream id must be 0");
-        return false;
-    }
-    if (payload_value.size() < 4) {
-        append_goaway(http2_error_code::frame_size_error, "PRIORITY_UPDATE frame payload too short");
-        return false;
-    }
-    const auto id = http2_read31(reinterpret_cast<const unsigned char*>(payload_value.data()));
-    if (!id || ((id & 1) == 0 && is_idle_stream_id(id))) {
-        append_goaway(http2_error_code::protocol_error, "invalid prioritized stream");
-        return false;
-    }
-    const auto update = decode_http2_priority_update(std::span(payload_value.data(), payload_value.size()));
-    if ((update.index() != 0)) {
-        return true;  // A malformed Priority field does not prioritize a stream.
-    }
-    const bool new_entry = !priorities_.contains(id);
-    if (new_entry) {
-        // Entries are removed when their stream closes. An id the peer skipped
-        // never opens, so its entry becomes unreachable once a higher stream
-        // opens; drop those only when the map would otherwise grow.
-        std::erase_if(priorities_, [&](const auto& entry_value) {
-            return !is_idle_stream_id(entry_value.first) && streams_.find(entry_value.first) == nullptr;
-        });
-    }
-    const bool new_idle = new_entry && is_idle_stream_id(id);
-    if (new_idle) {
-        // RFC 9218 §7.1: retained idle priorities plus active peer streams stay
-        // within the advertised concurrency limit.
-        std::size_t idle = 0;
-        for (const auto& entry : priorities_) {
-            if (is_idle_stream_id(entry.first)) {
-                ++idle;
-            }
-        }
-        if (idle + 1 + open_streams_initiated_by(http2_role::client) > http2_local_settings::max_concurrent_streams) {
-            append_goaway(http2_error_code::protocol_error, "too many prioritized idle streams");
-            return false;
-        }
-    }
-    http2_stream_state* active_stream = nullptr;
-    if (!is_idle_stream_id(id)) {
-        active_stream = streams_.find(id);
-        if (!active_stream || http2_stream_is_closed(*active_stream) ||
-            active_stream->local_send().end_stream_committed() != nullptr) {
-            return true;
-        }
-    }
-    reserve_event_slots(1);
-    const auto fields = std::get<0>(update).fields_;
-    priorities_.insert_or_assign(id, fields);
-    if (active_stream != nullptr) {
-        active_stream->set_priority_update(fields);
-    }
-    publish_event(http2_event(std::get<0>(update)));
-    return true;
+std::uint32_t http2_connection::peer_setting(nghttp2_settings_id id) const noexcept {
+    return nghttp2_session_get_remote_settings(session_.get(), id);
 }
 
-bool http2_connection::process_frame(const http2_frame_header& header_value, std::string_view payload_value) {
-    if (preface_phase_ == preface_phase_type::awaiting_peer_settings &&
-        header_value.type_ != static_cast<std::uint8_t>(http2_frame_type::settings)) {
-        append_goaway(http2_error_code::protocol_error, "first frame must be SETTINGS");
-        return false;
-    }
-    if (!header_continuation_.expects_frame_type(header_value.type_)) {
-        append_goaway(http2_error_code::protocol_error, "expected CONTINUATION");
-        return false;
-    }
-    const auto type = static_cast<http2_frame_type>(header_value.type_);
-    const bool known_frame = header_value.type_ <= 9 ||
-                             (role_ == http2_role::client && type == http2_frame_type::alternative_service);
-    if (auto* stream = streams_.find(header_value.stream_id_); stream && !stream->is_aborted()) {
-        if (known_frame) {
-            const auto reservation = stream->push_reservation();
-            const bool permitted = type == http2_frame_type::rst_stream || type == http2_frame_type::priority ||
-                                   (reservation == http2_push_reservation::local && type == http2_frame_type::window_update) ||
-                                   (reservation == http2_push_reservation::remote &&
-                                       (type == http2_frame_type::headers || type == http2_frame_type::continuation));
-            if (reservation != http2_push_reservation::none && !permitted) {
-                append_goaway(http2_error_code::protocol_error, "frame on reserved push stream");
-                return false;
-            }
-        }
-    }
-    switch (static_cast<http2_frame_type>(header_value.type_)) {
-        case http2_frame_type::settings:
-            return process_settings(header_value, payload_value);
-        case http2_frame_type::ping:
-            return process_ping(header_value, payload_value);
-        case http2_frame_type::window_update:
-            return process_window_update(header_value, payload_value);
-        case http2_frame_type::rst_stream:
-            return process_rst_stream(header_value, payload_value);
-        case http2_frame_type::origin:
-        case http2_frame_type::alternative_service:
-            return process_advertisement(header_value, payload_value);
-        case http2_frame_type::priority_update:
-            return process_priority_update(header_value, payload_value);
-        case http2_frame_type::priority:
-            return process_priority(header_value, payload_value);
-        case http2_frame_type::headers:
-            return process_headers(header_value, payload_value);
-        case http2_frame_type::continuation:
-            return process_continuation(header_value, payload_value);
-        case http2_frame_type::data:
-            return process_data(header_value, payload_value);
-        case http2_frame_type::goaway:
-            return process_goaway(header_value, payload_value);
-        case http2_frame_type::push_promise:
-            return process_push_promise(header_value, payload_value);
-        default:
-            return true;
-    }
-}
-
-bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offset) {
-    for (;;) {
-        const std::size_t available = buffer.size() - offset;
-        if (available < http2_frame_header_bytes) {
-            break;
-        }
-        const auto header_value = http2_parse_frame_header(buffer.substr(offset, http2_frame_header_bytes));
-        if (header_value.length_ > http2_local_settings::max_frame_size) {
-            append_goaway(http2_error_code::frame_size_error, "frame too large");
-            return false;
-        }
-        if (available < http2_frame_header_bytes + header_value.length_) {
-            break;  // partial frame; wait for the next feed
-        }
-        const auto payload_value = buffer.substr(offset + http2_frame_header_bytes, header_value.length_);
-        if (!process_frame(header_value, payload_value)) {
-            return false;
-        }
-        offset += http2_frame_header_bytes + header_value.length_;
-        if (local_connection_state_.fatal_failure() != nullptr) {
-            break;
-        }
-    }
-    return true;
-}
-
-std::optional<http2_feed_result> http2_connection::consume_client_magic(
-    std::string_view buffer, std::size_t& offset) {
-    // Server mode: the 24-byte client connection preface precedes the first frame
-    // (RFC 9113 §3.4). Consume and validate it before any frame parsing.
-    if (preface_phase_ != preface_phase_type::awaiting_client_magic) {
-        return std::nullopt;
-    }
-    if (buffer.size() - offset < http2_client_preface.size()) {
-        return http2_feed_result::need_input;
-    }
-    if (buffer.substr(offset, http2_client_preface.size()) != http2_client_preface) {
-        append_goaway(http2_error_code::protocol_error, "invalid connection preface");
-        return http2_feed_result::protocol_failure;
-    }
-    offset += http2_client_preface.size();
-    preface_phase_ = preface_phase_type::awaiting_peer_settings;
-    return std::nullopt;
-}
-
-http2_feed_result http2_connection::dispatch_input(std::string_view buffer, std::size_t& offset) {
-    if (const auto magic_result = consume_client_magic(buffer, offset)) {
-        return *magic_result;
-    }
-    if (!consume_frames(buffer, offset) || local_connection_state_.fatal_failure() != nullptr) {
-        return http2_feed_result::protocol_failure;
-    }
-    return offset < buffer.size() ? http2_feed_result::need_input : http2_feed_result::accepted;
-}
-
-http2_feed_result http2_connection::feed(std::string_view in) {
-    // The facade begins the connection before it offers any input, so a core
-    // fed before begin_connection() is a driver bug, not a protocol outcome.
-    if (preface_phase_ == preface_phase_type::not_started) {
-        std::terminate();
-    }
-    // Event delivery is part of input ownership, not a best-effort side channel. An
-    // unread event may carry a zero-copy view into the previous input, so accepting
-    // another span here would both discard the event and invalidate its bytes.
-    if (event_offset_ < events_.size()) {
-        return http2_feed_result::events_pending;
-    }
-    if (local_connection_state_.fatal_failure() != nullptr) {
-        return http2_feed_result::protocol_failure;
-    }
-
-    // Reclaim the prefix consumed by the PREVIOUS feed now, at the start of this one --
-    // not at the end of that feed. A message_body_chunk event carries a view INTO input_
-    // (or into the caller's `in` on the fast path), and reclaiming shifts the buffer;
-    // deferring the reclaim keeps those views valid until this next feed, matching the
-    // documented contract. All prior events have been pulled (enforced above), so the
-    // exhausted queue and its now-stale views can be reset. A retry keeps the prefix
-    // and cursor intact until the retained uncommitted suffix has been dispatched.
-    const auto retry_offset = std::exchange(retry_offset_, std::nullopt);
-    if (!retry_offset && input_offset_ > 0) {
-        if (input_offset_ == input_.size()) {
-            http_clear_pmr_string_retaining_small(input_);
-            input_offset_ = 0;
-        } else if (input_offset_ >= 4096 && input_offset_ * 2 >= input_.size()) {
-            input_.erase(0, input_offset_);
-            input_offset_ = 0;
-        }
-    }
-    events_.clear();
-    event_offset_ = 0;
-
-    if (input_.empty()) {
-        // FAST PATH: parse over the caller's bytes; only an incomplete tail is owned.
-        std::size_t offset = retry_offset ? std::min(*retry_offset, in.size()) : std::size_t{0};
-        try {
-            const auto result_value = dispatch_input(in, offset);
-            if (result_value == http2_feed_result::need_input) {
-                input_.append(in.data() + offset, in.size() - offset);
-            }
-            return result_value;
-        } catch (...) {
-            retry_offset_ = offset;
-            throw;
-        }
-    }
-
-    // SLOW PATH: a buffered partial-frame tail is pending in input_. Own all new
-    // bytes before dispatch. If dispatch throws, retain the cursor and do not
-    // append the caller's retry span a second time. The consumed prefix is
-    // reclaimed at the start of the next feed, so event views stay valid until then.
-    if (!retry_offset) {
-        input_.append(in.data(), in.size());
-    }
-    try {
-        return dispatch_input(std::string_view(input_), input_offset_);
-    } catch (...) {
-        retry_offset_ = std::size_t{0};
-        throw;
-    }
-}
-
-void http2_connection::begin_connection() {
-    if (preface_phase_ != preface_phase_type::not_started) {
-        return;
-    }
-    std::array<char, http2_local_settings::frame_bytes + http2_window_update_frame_bytes> buffer;
-    auto* out = http2_write_local_settings_frame(buffer.data(), enable_push_);
-    if constexpr (http2_local_settings::initial_window_size >
-                  static_cast<std::uint32_t>(http2_default_initial_window_size)) {
-        out = http2_write_window_update(out, 0,
-            http2_local_settings::initial_window_size -
-                static_cast<std::uint32_t>(http2_default_initial_window_size));
-    }
-    const auto settings_bytes = static_cast<std::size_t>(out - buffer.data());
-    const auto preface_bytes =
-        role_ == http2_role::client ? http2_client_preface.size() : std::size_t{0};
-    if (settings_bytes > std::numeric_limits<std::size_t>::max() - preface_bytes) {
-        throw std::length_error("HTTP/2 connection preface output size overflow");
-    }
-    // Queue the complete local preface before publishing that this connection has
-    // started. A failed reserve therefore leaves the exact begin_connection() call
-    // retryable instead of exposing a half-started protocol state.
-    output_.reserve_segments_additional(role_ == http2_role::client ? 2 : 1);
-    output_.reserve_additional(preface_bytes + settings_bytes);
-    if (role_ == http2_role::client) {
-        output_.append_bytes(http2_client_preface);
-    }
-    output_.append_bytes(std::string_view(buffer.data(), settings_bytes));
-    preface_phase_ = role_ == http2_role::client ? preface_phase_type::awaiting_peer_settings
-                                                 : preface_phase_type::awaiting_client_magic;
+std::int32_t http2_connection::connection_send_window() const noexcept {
+    return nghttp2_session_get_remote_window_size(session_.get());
 }
 
 }  // namespace ruvia::detail

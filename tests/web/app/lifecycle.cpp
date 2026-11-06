@@ -38,22 +38,13 @@ struct shared_state final {
     std::atomic<unsigned> stop_hooks_{};
     std::atomic<bool> slow_entered_{};
     std::atomic<bool> release_slow_{};
-    std::atomic<bool> slow_returned_{};
     std::atomic<bool> slow_saw_stop_{};
-    std::atomic<bool> stop_hook_saw_slow_return_{};
     std::atomic<bool> stuck_entered_{};
     std::atomic<bool> stuck_cancelled_{};
     std::atomic<bool> upgrade_held_{};
-    std::atomic<bool> release_upgrade_{};
     std::atomic<bool> upgrade_handler_ran_{};
     std::atomic<bool> socket_open_{};
-    std::atomic<bool> socket_read_ended_{};
     std::atomic<bool> tunnel_open_{};
-    std::atomic<bool> block_entered_{};
-    std::atomic<bool> release_block_{};
-    std::atomic<bool> drain_aware_entered_{};
-    std::atomic<bool> drain_aware_woke_{};
-    std::atomic<bool> drain_aware_saw_stop_{};
 };
 
 shared_state& state() {
@@ -61,15 +52,15 @@ shared_state& state() {
     return value;
 }
 
-// Holds an upgrade inside its route chain until the test releases it, polling
-// on the worker so the worker keeps serving lifecycle controls meanwhile.
+// Holds an upgrade inside its route chain until stop, polling on the worker
+// so the worker keeps serving lifecycle controls meanwhile.
 class held_upgrade final {
 public:
     ruvia::task<void> handle(ruvia::context& context, ruvia::next& next_value) {
         auto& state_value = state();
         state_value.upgrade_held_ = true;
         const auto stop = context.stop_token();
-        while (!state_value.release_upgrade_.load() && !stop.stop_requested()) {
+        while (!stop.stop_requested()) {
             (void)co_await ruvia::sleep_for(context.worker(), 1ms, stop);
         }
         co_await next_value();
@@ -82,15 +73,8 @@ public:
     RUVIA_GET("/fast", fast);
     RUVIA_GET("/slow", slow);
     RUVIA_GET("/stuck", stuck);
-    RUVIA_GET("/block", block);
-    RUVIA_GET("/drain-aware", drain_aware);
     RUVIA_GET_WS("/held-socket", held_socket, held_upgrade);
-    const auto short_close = ruvia::websocket_route_config{.lifecycle_ = {.close_handshake_timeout_ = 200ms}};
-    const auto unbounded_close =
-        ruvia::websocket_route_config{.lifecycle_ = {.close_handshake_timeout_ = std::nullopt}};
     RUVIA_GET_WS("/socket", open_socket);
-    RUVIA_GET_WS("/short-close-socket", open_socket, short_close);
-    RUVIA_GET_WS("/unbounded-close-socket", open_socket, unbounded_close);
     RUVIA_CONNECT("lifecycle-target.test:443", echo_tunnel);
     RUVIA_ROUTES_END
 
@@ -98,8 +82,8 @@ public:
         co_return context.text(std::string_view("fast"));
     }
 
-    // Finishes only once the test releases it, polling on the worker so the
-    // worker keeps serving lifecycle controls meanwhile.
+    // Finishes once the test releases it or the worker stops, polling on the
+    // worker so the worker keeps serving lifecycle controls meanwhile.
     ruvia::task<ruvia::http_response> slow(ruvia::context& context) {
         auto& state_value = state();
         state_value.slow_entered_ = true;
@@ -108,7 +92,6 @@ public:
             (void)co_await ruvia::sleep_for(context.worker(), 1ms, stop);
         }
         state_value.slow_saw_stop_ = stop.stop_requested();
-        state_value.slow_returned_ = true;
         co_return context.text(std::string_view("slow-done"));
     }
 
@@ -119,27 +102,6 @@ public:
         const auto result = co_await ruvia::sleep_for(context.worker(), 1h, context.stop_token());
         state_value.stuck_cancelled_ = result == ruvia::timer_sleep_result::stop_requested;
         co_return context.text(std::string_view("stuck-done"));
-    }
-
-    // Holds the worker thread itself until the test releases it, so input
-    // and lifecycle controls queue up behind it in a known order.
-    ruvia::task<ruvia::http_response> block(ruvia::context& context) {
-        auto& state_value = state();
-        state_value.block_entered_ = true;
-        while (!state_value.release_block_.load()) {
-            std::this_thread::sleep_for(1ms);
-        }
-        co_return context.text(std::string_view("block-done"));
-    }
-
-    // A long poll that ends as soon as the drain begins.
-    ruvia::task<ruvia::http_response> drain_aware(ruvia::context& context) {
-        auto& state_value = state();
-        state_value.drain_aware_entered_ = true;
-        const auto result = co_await ruvia::sleep_for(context.worker(), 1h, context.drain_token());
-        state_value.drain_aware_woke_ = result == ruvia::timer_sleep_result::stop_requested;
-        state_value.drain_aware_saw_stop_ = context.stop_token().stop_requested();
-        co_return context.text(std::string_view("drained"));
     }
 
     // Lives until the peer ends the session.
@@ -153,15 +115,13 @@ public:
         }
     }
 
-    // Reads until the session ends, recording whether its reads ended cleanly.
+    // Reads until the session ends.
     ruvia::task<void> open_socket(ruvia::context& context) {
-        auto& state_value = state();
         auto& websocket_value = context.websocket();
-        state_value.socket_open_ = true;
+        state().socket_open_ = true;
         try {
             while (co_await websocket_value.read()) {
             }
-            state_value.socket_read_ended_ = true;
         } catch (...) {
         }
     }
@@ -183,11 +143,7 @@ void install_hooks() {
     std::call_once(once, [] {
         ruvia::app()
             .on_start([] { state().started_.release(); })
-            .on_stop([] {
-                auto& state_value = state();
-                state_value.stop_hook_saw_slow_return_ = state_value.slow_returned_.load();
-                state_value.stop_hooks_.fetch_add(1);
-            });
+            .on_stop([] { state().stop_hooks_.fetch_add(1); });
     });
 }
 
@@ -266,9 +222,10 @@ bool read_to_end(asio::ip::tcp::socket& socket, std::string& received, std::chro
     return read_until(socket, received, [](const std::string&) { return false; }, limit);
 }
 
-[[nodiscard]] bool has_header(std::string_view response, std::string_view line) {
-    const auto head_end = response.find("\r\n\r\n");
-    return head_end != std::string_view::npos && response.substr(0, head_end).find(line) != std::string_view::npos;
+// The bytes after the response head, or empty while the head is incomplete.
+[[nodiscard]] std::string_view after_head(std::string_view received) {
+    const auto head_end = received.find("\r\n\r\n");
+    return head_end == std::string_view::npos ? std::string_view{} : received.substr(head_end + 4);
 }
 
 void send(asio::ip::tcp::socket& socket, std::string_view bytes) {
@@ -283,30 +240,6 @@ void send_websocket_upgrade(asio::ip::tcp::socket& socket, std::string_view path
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
 }
 
-// The server's unmasked Close frame carrying 1001 Going Away.
-constexpr std::string_view going_away_close("\x88\x02\x03\xE9", 4);
-// The client's answering Close: masked, with an all-zero masking key.
-constexpr std::string_view client_close_reply("\x88\x82\x00\x00\x00\x00\x03\xE9", 8);
-
-// The bytes after the response head, or empty while the head is incomplete.
-[[nodiscard]] std::string_view after_head(std::string_view received) {
-    const auto head_end = received.find("\r\n\r\n");
-    return head_end == std::string_view::npos ? std::string_view{} : received.substr(head_end + 4);
-}
-
-// Reads the 101 response and then the drain's Close frame.
-[[nodiscard]] bool read_going_away(asio::ip::tcp::socket& socket, std::string& received) {
-    (void)read_until(socket, received,
-        [](const std::string& value) { return after_head(value).size() >= going_away_close.size(); });
-    return received.starts_with("HTTP/1.1 101 ") && after_head(received) == going_away_close;
-}
-
-void reset_socket_state() {
-    auto& state_value = state();
-    state_value.socket_open_ = false;
-    state_value.socket_read_ended_ = false;
-}
-
 }  // namespace lifecycle_test
 
 using namespace lifecycle_test;
@@ -318,7 +251,7 @@ RUVIA_TEST(app_multi_worker_restarts_after_idle_connections_and_pending_accepts)
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
     for (unsigned cycle = 0; cycle < 3; ++cycle) {
-        app.server({.worker_count_ = 2, .drain_timeout_ = 0ms, .connection_scan_interval_ = 5ms, .max_connections_per_worker_ = 64});
+        app.server({.worker_count_ = 2, .connection_scan_interval_ = 5ms, .max_connections_per_worker_ = 64});
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
         app_run run(app);
         RUVIA_CHECK(state().started_.try_acquire_for(3s));
@@ -368,23 +301,21 @@ RUVIA_TEST(app_multi_worker_restarts_after_idle_connections_and_pending_accepts)
     }
 }
 
-// A stop while a request is in flight closes admission and idle connections at
-// once, lets the request finish with Connection: close, and only then retires
-// the workers and runs the stop hooks.
-static void check_stop_drains_in_flight_request(
-    ruvia::testing::test_context& ruvia_ctx, std::chrono::milliseconds drain_timeout) {
+// A stop disconnects directly, with no drain phase: an idle keep-alive
+// connection, a connection still sending its request head and one with a
+// request in flight all close at once without a response, the in-flight
+// handler observes its stop token, and the stop hooks run once.
+RUVIA_TEST(app_stop_closes_every_connection_at_once) {
     install_hooks();
     auto& app = ruvia::app();
     auto& state_value = state();
     state_value.slow_entered_ = false;
     state_value.release_slow_ = false;
-    state_value.slow_returned_ = false;
     state_value.slow_saw_stop_ = false;
-    state_value.stop_hook_saw_slow_return_ = false;
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = drain_timeout, .connection_scan_interval_ = 5ms});
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
     const auto stop_hooks = state_value.stop_hooks_.load();
 
@@ -399,45 +330,34 @@ static void check_stop_drains_in_flight_request(
     RUVIA_CHECK(!read_until(idle, idle_response, [](const std::string& value) { return value.ends_with("fast"); }));
     RUVIA_CHECK(idle_response.starts_with("HTTP/1.1 200 "));
 
+    asio::ip::tcp::socket partial(io);
+    partial.connect(endpoint);
+    send(partial, "GET /fa");
+
     asio::ip::tcp::socket busy(io);
     busy.connect(endpoint);
     send(busy, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
     RUVIA_CHECK(wait_for([&] { return state_value.slow_entered_.load(); }));
+    RUVIA_CHECK(wait_for([&] { return app.http_stats().active_connections_ == 3; }));
 
+    const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
-    // The drain closes the idle connection without waiting for the busy one.
-    std::string idle_rest;
-    RUVIA_CHECK(read_to_end(idle, idle_rest, 3s));
-    RUVIA_CHECK(idle_rest.empty());
-    RUVIA_CHECK(!state_value.slow_returned_.load());
-    RUVIA_CHECK_EQ(state_value.stop_hooks_.load(), stop_hooks);
-
-    state_value.release_slow_ = true;
-    std::string busy_response;
-    RUVIA_CHECK(read_to_end(busy, busy_response));
-    RUVIA_CHECK(busy_response.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(has_header(busy_response, "Connection: close"));
-    RUVIA_CHECK(busy_response.ends_with("slow-done"));
-
+    for (auto* socket : {&idle, &partial, &busy}) {
+        std::string rest;
+        RUVIA_CHECK(read_to_end(*socket, rest, 3s));
+        RUVIA_CHECK(rest.empty());
+    }
     run.join();
     RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(!state_value.slow_saw_stop_.load());
+    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 3s);
+    RUVIA_CHECK(state_value.slow_saw_stop_.load());
     RUVIA_CHECK_EQ(state_value.stop_hooks_.load(), stop_hooks + 1);
-    RUVIA_CHECK(state_value.stop_hook_saw_slow_return_.load());
+    RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
 }
 
-RUVIA_TEST(app_stop_drains_in_flight_requests) {
-    check_stop_drains_in_flight_request(ruvia_ctx, 10s);
-    // A large nonsaturated deadline must also allow the worker to notify completion.
-    check_stop_drains_in_flight_request(ruvia_ctx, std::chrono::hours(24 * 365 * 250));
-    // The largest configurable drain window saturates instead of overflowing
-    // into a deadline that has already passed.
-    check_stop_drains_in_flight_request(ruvia_ctx, std::chrono::milliseconds::max());
-}
-
-// A request still running at the drain deadline is cut: its connection closes
-// without a response and its handler observes the stop token.
-RUVIA_TEST(app_stop_forces_close_at_drain_deadline) {
+// A request that never ends by itself does not hold the stop: its connection
+// closes without a response and its handler observes the stop token.
+RUVIA_TEST(app_stop_cancels_a_request_that_never_ends) {
     install_hooks();
     auto& app = ruvia::app();
     auto& state_value = state();
@@ -446,8 +366,7 @@ RUVIA_TEST(app_stop_forces_close_at_drain_deadline) {
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
-    constexpr auto drain_timeout = 200ms;
-    app.server({.worker_count_ = 1, .drain_timeout_ = drain_timeout, .connection_scan_interval_ = 5ms});
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
     app_run run(app);
@@ -460,42 +379,31 @@ RUVIA_TEST(app_stop_forces_close_at_drain_deadline) {
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
     std::string response;
-    RUVIA_CHECK(read_to_end(socket, response));
+    RUVIA_CHECK(read_to_end(socket, response, 3s));
     RUVIA_CHECK(response.empty());
     run.join();
-    const auto elapsed = std::chrono::steady_clock::now() - stop_started;
     RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(elapsed >= drain_timeout);
+    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 3s);
     RUVIA_CHECK(state_value.stuck_cancelled_.load());
 }
 
-// An upgrade still inside its route chain when the drain starts is not admitted
-// once it is established: the session handler never runs, and the connection
-// answers the handshake with a 1001 Going Away Close, so it cannot hold the
-// drain open.
-RUVIA_TEST(app_drain_refuses_an_upgrade_established_after_the_drain_began) {
+// An upgrade still inside its route chain when the stop begins is never
+// established: its connection closes without a 101 and the session handler
+// never runs.
+RUVIA_TEST(app_stop_closes_an_upgrade_still_in_its_route_chain) {
     install_hooks();
     auto& app = ruvia::app();
     auto& state_value = state();
     state_value.upgrade_held_ = false;
-    state_value.release_upgrade_ = false;
     state_value.upgrade_handler_ran_ = false;
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
     app_run run(app);
     RUVIA_CHECK(state_value.started_.try_acquire_for(3s));
-
-    // An idle keep-alive connection whose close shows that the drain began.
-    asio::ip::tcp::socket idle(io);
-    idle.connect(endpoint);
-    send(idle, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    std::string idle_response;
-    RUVIA_CHECK(!read_until(idle, idle_response, [](const std::string& value) { return value.ends_with("fast"); }));
-
     asio::ip::tcp::socket upgrading(io);
     upgrading.connect(endpoint);
     send_websocket_upgrade(upgrading, "/held-socket");
@@ -503,35 +411,26 @@ RUVIA_TEST(app_drain_refuses_an_upgrade_established_after_the_drain_began) {
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
-    std::string idle_rest;
-    RUVIA_CHECK(read_to_end(idle, idle_rest, 3s));
-
-    state_value.release_upgrade_ = true;
-    std::string upgrade_response;
-    RUVIA_CHECK(read_going_away(upgrading, upgrade_response));
-    send(upgrading, client_close_reply);
-    std::string upgrade_rest;
-    RUVIA_CHECK(read_to_end(upgrading, upgrade_rest));
-    RUVIA_CHECK(upgrade_rest.empty());
+    std::string received;
+    RUVIA_CHECK(read_to_end(upgrading, received, 3s));
+    RUVIA_CHECK(received.empty());
     run.join();
     RUVIA_CHECK(run.failure() == nullptr);
     RUVIA_CHECK(!state_value.upgrade_handler_ran_.load());
-    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 10s);
+    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 3s);
 }
 
-// A drain asks every established WebSocket session to go away: the server
-// starts the close handshake with 1001, the session's reads end cleanly once
-// the peer answers, and the server then closes the connection without waiting
-// for the drain deadline.
-RUVIA_TEST(app_drain_closes_websockets_with_going_away) {
+// An established WebSocket session is closed at once, without a Close
+// handshake: nothing follows the 101 response before the connection ends.
+RUVIA_TEST(app_stop_closes_websockets_without_close_handshake) {
     install_hooks();
     auto& app = ruvia::app();
     auto& state_value = state();
-    reset_socket_state();
+    state_value.socket_open_ = false;
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
     app_run run(app);
@@ -539,108 +438,23 @@ RUVIA_TEST(app_drain_closes_websockets_with_going_away) {
     asio::ip::tcp::socket client(io);
     client.connect(endpoint);
     send_websocket_upgrade(client, "/socket");
+    std::string received;
+    RUVIA_CHECK(!read_until(client, received, [](const std::string& value) { return value.find("\r\n\r\n") != std::string::npos; }));
+    RUVIA_CHECK(received.starts_with("HTTP/1.1 101 "));
     RUVIA_CHECK(wait_for([&] { return state_value.socket_open_.load(); }));
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
-    std::string received;
-    RUVIA_CHECK(read_going_away(client, received));
-    send(client, client_close_reply);
-    std::string rest;
-    RUVIA_CHECK(read_to_end(client, rest));
-    RUVIA_CHECK(rest.empty());
+    RUVIA_CHECK(read_to_end(client, received, 3s));
+    RUVIA_CHECK(after_head(received).empty());
     run.join();
     RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(state_value.socket_read_ended_.load());
-    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 10s);
+    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 3s);
 }
 
-// A peer that never answers the drain's Close is cut at the earlier of the
-// route's close-handshake timeout and the drain deadline.
-static void check_unanswered_going_away(ruvia::testing::test_context& ruvia_ctx, std::string_view path,
-    std::chrono::milliseconds drain_timeout, std::chrono::milliseconds expected_bound) {
-    install_hooks();
-    auto& app = ruvia::app();
-    auto& state_value = state();
-    reset_socket_state();
-    asio::io_context io;
-    ruvia::test::tcp_port_reservation reservation(io);
-    const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = drain_timeout, .connection_scan_interval_ = 5ms});
-    app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
-
-    app_run run(app);
-    RUVIA_CHECK(state_value.started_.try_acquire_for(3s));
-    asio::ip::tcp::socket client(io);
-    client.connect(endpoint);
-    send_websocket_upgrade(client, path);
-    RUVIA_CHECK(wait_for([&] { return state_value.socket_open_.load(); }));
-
-    const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
-    std::string received;
-    RUVIA_CHECK(read_going_away(client, received));
-    std::string rest;
-    RUVIA_CHECK(read_to_end(client, rest));
-    RUVIA_CHECK(rest.empty());
-    run.join();
-    const auto elapsed = std::chrono::steady_clock::now() - stop_started;
-    RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(elapsed >= expected_bound);
-    RUVIA_CHECK(elapsed < expected_bound + 5s);
-}
-
-RUVIA_TEST(app_drain_bounds_an_unanswered_going_away) {
-    // The route's close-handshake timeout ends it long before the drain deadline.
-    check_unanswered_going_away(ruvia_ctx, "/short-close-socket", 30s, 200ms);
-    // Without a close-handshake timeout, the drain deadline ends it.
-    check_unanswered_going_away(ruvia_ctx, "/unbounded-close-socket", 300ms, 300ms);
-}
-
-// A connection still receiving a request head has no admitted request, so the
-// drain closes it at once instead of holding the stop until the deadline.
-RUVIA_TEST(app_drain_closes_a_partial_request_head) {
-    install_hooks();
-    auto& app = ruvia::app();
-    auto& state_value = state();
-    asio::io_context io;
-    ruvia::test::tcp_port_reservation reservation(io);
-    const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
-    app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
-
-    app_run run(app);
-    RUVIA_CHECK(state_value.started_.try_acquire_for(3s));
-    // A connection's first request head, and a partial head pipelined behind a
-    // served request on a kept-alive connection.
-    asio::ip::tcp::socket first(io);
-    first.connect(endpoint);
-    send(first, "GET /fa");
-    asio::ip::tcp::socket pipelined(io);
-    pipelined.connect(endpoint);
-    send(pipelined, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\nGET /fa");
-    std::string pipelined_response;
-    RUVIA_CHECK(!read_until(
-        pipelined, pipelined_response, [](const std::string& value) { return value.ends_with("fast"); }));
-    RUVIA_CHECK(wait_for([&] { return app.http_stats().active_connections_ == 2; }));
-
-    const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
-    std::string first_rest;
-    RUVIA_CHECK(read_to_end(first, first_rest, 3s));
-    RUVIA_CHECK(first_rest.empty());
-    std::string pipelined_rest;
-    RUVIA_CHECK(read_to_end(pipelined, pipelined_rest, 3s));
-    RUVIA_CHECK(pipelined_rest.empty());
-    run.join();
-    RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 10s);
-}
-
-// A tunnel has no in-band close signal, so a drain lets it run like an admitted
-// request: it still carries data after the drain began and ends when its peer
-// finishes, without waiting for the drain deadline.
-RUVIA_TEST(app_drain_lets_tunnels_finish) {
+// A tunnel has no in-band close signal and is not waited for: the stop
+// closes it at once, while its peer still holds it open.
+RUVIA_TEST(app_stop_closes_tunnels_at_once) {
     install_hooks();
     auto& app = ruvia::app();
     auto& state_value = state();
@@ -648,18 +462,11 @@ RUVIA_TEST(app_drain_lets_tunnels_finish) {
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
     app_run run(app);
     RUVIA_CHECK(state_value.started_.try_acquire_for(3s));
-    // An idle keep-alive connection whose close shows that the drain began.
-    asio::ip::tcp::socket idle(io);
-    idle.connect(endpoint);
-    send(idle, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    std::string idle_response;
-    RUVIA_CHECK(!read_until(idle, idle_response, [](const std::string& value) { return value.ends_with("fast"); }));
-
     asio::ip::tcp::socket tunnel(io);
     tunnel.connect(endpoint);
     send(tunnel, "CONNECT lifecycle-target.test:443 HTTP/1.1\r\nHost: lifecycle-target.test:443\r\n\r\n");
@@ -667,123 +474,19 @@ RUVIA_TEST(app_drain_lets_tunnels_finish) {
     RUVIA_CHECK(!read_until(tunnel, head, [](const std::string& value) { return value.ends_with("\r\n\r\n"); }));
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
     RUVIA_CHECK(wait_for([&] { return state_value.tunnel_open_.load(); }));
-
-    const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
-    std::string idle_rest;
-    RUVIA_CHECK(read_to_end(idle, idle_rest, 3s));
-
     send(tunnel, "ping");
     std::string echoed;
     RUVIA_CHECK(!read_until(tunnel, echoed, [](const std::string& value) { return value.size() >= 4; }));
     RUVIA_CHECK_EQ(echoed, std::string("ping"));
-    tunnel.shutdown(asio::ip::tcp::socket::shutdown_send);
+
+    const auto stop_started = std::chrono::steady_clock::now();
+    app.stop();
     std::string rest;
-    RUVIA_CHECK(read_to_end(tunnel, rest));
+    RUVIA_CHECK(read_to_end(tunnel, rest, 3s));
     RUVIA_CHECK(rest.empty());
     run.join();
     RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 10s);
-}
-
-// Releases the /block handler however a test exits, before app_run's
-// destructor stops and joins the worker that handler holds.
-class release_block_on_exit final {
-public:
-    release_block_on_exit() = default;
-    ~release_block_on_exit() {
-        state().release_block_ = true;
-    }
-    release_block_on_exit(const release_block_on_exit&) = delete;
-    release_block_on_exit& operator=(const release_block_on_exit&) = delete;
-};
-
-// A request that had already arrived when the drain began is answered, not
-// dropped. The worker is held inside a handler while the request arrives on
-// an idle keep-alive connection and stop() posts the drain, so the drain
-// cancels the connection's read before the reactor performs it; the arrived
-// input is still read and the request served.
-RUVIA_TEST(app_drain_serves_a_request_already_received) {
-    install_hooks();
-    auto& app = ruvia::app();
-    auto& state_value = state();
-    state_value.block_entered_ = false;
-    state_value.release_block_ = false;
-    asio::io_context io;
-    ruvia::test::tcp_port_reservation reservation(io);
-    const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
-    app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
-
-    app_run run(app);
-    release_block_on_exit release_block;
-    RUVIA_CHECK(state_value.started_.try_acquire_for(3s));
-    asio::ip::tcp::socket waiting(io);
-    waiting.connect(endpoint);
-    send(waiting, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    std::string first;
-    RUVIA_CHECK(!read_until(waiting, first, [](const std::string& value) { return value.ends_with("fast"); }));
-
-    asio::ip::tcp::socket blocker(io);
-    blocker.connect(endpoint);
-    send(blocker, "GET /block HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    RUVIA_CHECK(wait_for([&] { return state_value.block_entered_.load(); }));
-
-    const auto stop_started = std::chrono::steady_clock::now();
-    send(waiting, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    app.stop();
-    // Lets the lifecycle thread post the drain behind the held handler.
-    std::this_thread::sleep_for(100ms);
-    state_value.release_block_ = true;
-
-    std::string second;
-    RUVIA_CHECK(read_to_end(waiting, second));
-    RUVIA_CHECK(second.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(second.ends_with("fast"));
-    std::string blocked;
-    RUVIA_CHECK(read_to_end(blocker, blocked));
-    RUVIA_CHECK(blocked.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(blocked.ends_with("block-done"));
-    run.join();
-    RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 10s);
-}
-
-// A long poll that waits on context::drain_token() ends as soon as the drain
-// begins: its response completes with Connection: close and stop returns
-// long before drain_timeout_, while the stop token stays unrequested.
-RUVIA_TEST(app_drain_token_ends_a_long_poll_before_the_deadline) {
-    install_hooks();
-    auto& app = ruvia::app();
-    auto& state_value = state();
-    state_value.drain_aware_entered_ = false;
-    state_value.drain_aware_woke_ = false;
-    state_value.drain_aware_saw_stop_ = false;
-    asio::io_context io;
-    ruvia::test::tcp_port_reservation reservation(io);
-    const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1, .drain_timeout_ = 30s, .connection_scan_interval_ = 5ms});
-    app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
-
-    app_run run(app);
-    RUVIA_CHECK(state_value.started_.try_acquire_for(3s));
-    asio::ip::tcp::socket socket(io);
-    socket.connect(endpoint);
-    send(socket, "GET /drain-aware HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    RUVIA_CHECK(wait_for([&] { return state_value.drain_aware_entered_.load(); }));
-
-    const auto stop_started = std::chrono::steady_clock::now();
-    app.stop();
-    std::string response;
-    RUVIA_CHECK(read_to_end(socket, response));
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(has_header(response, "Connection: close"));
-    RUVIA_CHECK(response.ends_with("drained"));
-    run.join();
-    RUVIA_CHECK(run.failure() == nullptr);
-    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 10s);
-    RUVIA_CHECK(state_value.drain_aware_woke_.load());
-    RUVIA_CHECK(!state_value.drain_aware_saw_stop_.load());
+    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 3s);
 }
 
 // At max_connections_per_worker_, a new connection takes the slot of the
@@ -794,14 +497,12 @@ RUVIA_TEST(app_connection_cap_evicts_the_oldest_idle_connection) {
     auto& app = ruvia::app();
     auto& state_value = state();
     state_value.stuck_entered_ = false;
-    state_value.drain_aware_entered_ = false;
+    state_value.slow_entered_ = false;
+    state_value.release_slow_ = false;
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
-    app.server({.worker_count_ = 1,
-        .drain_timeout_ = 200ms,
-        .connection_scan_interval_ = 5ms,
-        .max_connections_per_worker_ = 2});
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .max_connections_per_worker_ = 2});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
     app_run run(app);
@@ -833,8 +534,8 @@ RUVIA_TEST(app_connection_cap_evicts_the_oldest_idle_connection) {
     // With a request in flight on both, no connection is idle.
     send(newer, "GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n");
     RUVIA_CHECK(wait_for([&] { return state_value.stuck_entered_.load(); }));
-    send(admitted, "GET /drain-aware HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    RUVIA_CHECK(wait_for([&] { return state_value.drain_aware_entered_.load(); }));
+    send(admitted, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    RUVIA_CHECK(wait_for([&] { return state_value.slow_entered_.load(); }));
     asio::ip::tcp::socket refused(io);
     refused.connect(endpoint);
     std::string refused_bytes;
@@ -856,10 +557,7 @@ RUVIA_TEST(app_connection_timeouts_honor_coarse_scan_clock) {
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
     constexpr auto header_timeout = 200ms;
-    app.server({.worker_count_ = 1,
-        .drain_timeout_ = 0ms,
-        .connection_scan_interval_ = 300ms,
-        .request_header_timeout_ = header_timeout});
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 300ms, .request_header_timeout_ = header_timeout});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
 
     app_run run(app);

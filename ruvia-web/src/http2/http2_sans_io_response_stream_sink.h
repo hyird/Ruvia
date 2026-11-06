@@ -198,17 +198,28 @@ public:
             co_await write_encoded(compression_.output());
             compression_.release_output();
         }
-        http2_finish_status result_value{};
-        try {
-            result_value = connection_.finish_response(stream_id_, trailer_section);
-        } catch (...) {
-            state_.mark_aborted();
+        // An empty trailer section ends the stream with an empty DATA frame,
+        // which needs both send windows open (RFC 9113 §6.9).
+        for (;;) {
+            http2_finish_status result_value{};
+            try {
+                result_value = connection_.finish_response(stream_id_, trailer_section);
+            } catch (...) {
+                state_.mark_aborted();
+                wake_writer();
+                throw;
+            }
             wake_writer();
-            throw;
-        }
-        wake_writer();
-        if (result_value == http2_finish_status::closed) {
+            if (result_value == http2_finish_status::accepted) {
+                break;
+            }
+            if (result_value == http2_finish_status::backpressured &&
+                co_await await_http2_send_window(connection_, stream_id_, &stream_signal_) ==
+                    http2_send_window_wait_status::ready) {
+                continue;
+            }
             state_.mark_aborted();
+            throw_if_terminated();
             throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
         }
         state_.mark_ended();

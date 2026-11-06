@@ -29,7 +29,6 @@ class http_tunnel_session;
 }  // namespace detail
 
 class http_tunnel;
-class http_client_tunnel;
 class http_udp_tunnel;
 class http_datagram_stream;
 
@@ -71,8 +70,8 @@ private:
 };
 
 // RFC 9297 reliable Capsule Protocol over an established tunnel. The protocol
-// using the capsules owns negotiation. Server streams borrow their route
-// tunnel; client streams take tunnel ownership. Use this adapter exclusively:
+// using the capsules owns negotiation. Streams borrow their route
+// tunnel. Use this adapter exclusively:
 // do not interleave raw tunnel operations with capsule operations. Abort wakes
 // pending I/O; join started operations before destroying their scope owner.
 // Operations occupy their read or write/finish lane when started; unstarted
@@ -99,19 +98,17 @@ public:
 
 private:
     friend class http_tunnel;
-    friend class http_client_tunnel;
     friend class http_udp_tunnel;
     friend class http_datagram_stream;
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin);
     [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload);
     explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
-    explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
     void release() noexcept;
     detail::http_capsule_stream_state* state_{};
 };
 
 // Owned opaque HTTP Datagram payload, valid across later reads, stream and
-// connection retirement, and client shutdown even if input remains unread.
+// connection retirement even if input remains unread.
 // Destroy results on their worker before the worker retires.
 class http_datagram final {
 public:
@@ -145,7 +142,7 @@ private:
 };
 
 // RFC 9297 channel using reliable DATAGRAM capsules over a negotiated tunnel.
-// Create through http_tunnel::datagrams() or http_client_tunnel::datagrams();
+// Create through http_tunnel::datagrams();
 // arbitrary Capsule Protocol streams cannot be promoted to this channel.
 // Empty payloads are data; an empty optional is EOF. Use exclusively with the tunnel.
 // Operations occupy separate read and send/finish lanes when started; unstarted
@@ -179,7 +176,6 @@ public:
 
 private:
     friend class http_tunnel;
-    friend class http_client_tunnel;
     friend class http_udp_tunnel;
     explicit http_datagram_stream(http_capsule_stream&& stream);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp);
@@ -223,7 +219,6 @@ public:
 
 private:
     friend class http_tunnel;
-    friend class http_client_tunnel;
     explicit http_udp_tunnel(http_datagram_stream stream) noexcept
         : stream_(std::move(stream)) {}
     http_datagram_stream stream_;

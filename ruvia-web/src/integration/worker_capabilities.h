@@ -15,8 +15,6 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 
-#include "client/http_client_registry.h"
-#include "client/http_client_result_budget.h"
 #include "db/db_registry.h"
 #include "integration/worker_client_registry_view.h"
 #include "ratelimit/rate_limiter.h"
@@ -36,7 +34,6 @@ struct worker_capability_definitions final {
     std::span<const db_definition> databases_{};
     std::span<const redis_definition_type> redis_{};
     std::span<const worker_state_definition> worker_states_{};
-    std::span<const http_client_definition_type> http_clients_{};
 };
 
 struct worker_capability_options final {
@@ -44,7 +41,6 @@ struct worker_capability_options final {
     route_rate_limit_presence route_rate_limits_{route_rate_limit_presence::absent};
     std::size_t rate_limit_capacity_{default_rate_limit_capacity_per_worker};
     std::size_t max_decoded_body_bytes_{default_max_buffered_body_bytes};
-    http_client_result_budget_config http_client_result_budget_{};
     const env* env_{nullptr};
     const trusted_proxy_set* trusted_proxies_{nullptr};
     bool precompressed_static_files_{false};
@@ -75,7 +71,7 @@ public:
     [[nodiscard]] task<void> start();
     // Interrupts capability I/O; idempotent. Retirement completes in stop().
     void close_now() noexcept;
-    // Closes capability I/O, joins in-flight client work, then destroys the
+    // Closes capability I/O, then destroys the
     // per-worker state. Safe after a failed or skipped start().
     [[nodiscard]] task<void> stop();
 
@@ -88,8 +84,6 @@ private:
     const worker_handle& worker_;
     redis_registry redis_;
     db_registry databases_;
-    std::shared_ptr<http_client_result_budget_domain> http_client_result_budget_domain_;
-    http_client_registry http_clients_;
     worker_state_registry worker_states_;
     rate_limiter rate_limiter_;
     worker_capability_options options_;

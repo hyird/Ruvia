@@ -9,11 +9,14 @@
 #include <memory_resource>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
+#include <vector>
 
 #include <asio.hpp>
 
@@ -930,13 +933,36 @@ RUVIA_TEST(http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
 
 // WST-01 (server): When the server half-closes its capsule stream first and the
 // client subsequently sends a truncated capsule on DATA(END_STREAM), the server
-// emits RST_STREAM(PROTOCOL_ERROR).
-RUVIA_TEST(http2_capsule_route_half_closed_resets_truncated_capsule_on_end_stream) {
+// rejects the capsule. Both END_STREAM flags closed the stream, so no
+// RST_STREAM follows (RFC 9113 section 5.1 forbids frames on a closed stream)
+// and the connection keeps serving.
+RUVIA_TEST(http2_capsule_route_closed_stream_rejects_truncated_capsule_without_reset) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     observation->halfclose_capsules_ = true;
     ruvia::test::http_server_fixture server(io);
     std::string raw_from_server;
+    // The frames read from the server, as (type, flags, payload).
+    const auto server_frames = [&] {
+        std::vector<std::tuple<std::uint8_t, std::uint8_t, std::string>> frames;
+        for (std::size_t off = 0; off + ruvia::http2_frame_header_bytes <= raw_from_server.size();) {
+            const auto hdr = ruvia::parse_http2_frame_header(
+                std::span<const char>(raw_from_server.data() + off, ruvia::http2_frame_header_bytes));
+            if (!hdr || off + ruvia::http2_frame_header_bytes + hdr->length_ > raw_from_server.size()) {
+                break;
+            }
+            frames.emplace_back(hdr->type_, hdr->flags_,
+                raw_from_server.substr(off + ruvia::http2_frame_header_bytes, hdr->length_));
+            off += ruvia::http2_frame_header_bytes + hdr->length_;
+        }
+        return frames;
+    };
+    const auto ping_acknowledged = [&] {
+        return std::ranges::any_of(server_frames(), [](const auto& frame) {
+            return std::get<0>(frame) == static_cast<std::uint8_t>(ruvia::http2_frame_type::ping) &&
+                   (std::get<1>(frame) & 0x1) != 0 && std::get<2>(frame) == "12345678";
+        });
+    };
     auto run = [&]() -> ruvia::task<void> {
         asio::ip::tcp::socket socket(io);
         (void)co_await ruvia::async_asio([&](auto h) { socket.async_connect(server.endpoint(), std::move(h)); });
@@ -989,7 +1015,8 @@ RUVIA_TEST(http2_capsule_route_half_closed_resets_truncated_capsule_on_end_strea
         (void)co_await ruvia::async_asio<std::size_t>([&](auto h) {
             asio::async_write(socket, asio::buffer(ping_frame), std::move(h));
         });
-        co_await pump();
+        while (!ping_acknowledged() && co_await pump()) {
+        }
         ruvia::close_socket(socket);
         server.finish();
         attachment.stop();
@@ -999,24 +1026,10 @@ RUVIA_TEST(http2_capsule_route_half_closed_resets_truncated_capsule_on_end_strea
     root.get();
     observation->halfclose_capsules_ = false;
 
-    std::optional<std::uint32_t> rst_code;
-    for (std::size_t off = 0; off + ruvia::http2_frame_header_bytes <= raw_from_server.size();) {
-        const auto hdr = ruvia::parse_http2_frame_header(
-            std::span<const char>(raw_from_server.data() + off, ruvia::http2_frame_header_bytes));
-        if (!hdr || off + ruvia::http2_frame_header_bytes + hdr->length_ > raw_from_server.size()) {
-            break;
-        }
-        const auto* p = reinterpret_cast<const unsigned char*>(
-            raw_from_server.data() + off + ruvia::http2_frame_header_bytes);
-        if (hdr->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream) && hdr->length_ == 4) {
-            rst_code = (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16) |
-                       (std::uint32_t(p[2]) << 8) | std::uint32_t(p[3]);
-        }
-        off += ruvia::http2_frame_header_bytes + hdr->length_;
-    }
-    RUVIA_CHECK(rst_code.has_value());
-    if (rst_code) {
-        RUVIA_CHECK_EQ(*rst_code, static_cast<std::uint32_t>(ruvia::http2_error_code::protocol_error));
+    RUVIA_CHECK(ping_acknowledged());
+    for (const auto& [type, flags, payload] : server_frames()) {
+        RUVIA_CHECK(type != static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+        RUVIA_CHECK(type != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
     }
 }
 

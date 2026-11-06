@@ -1,18 +1,23 @@
 #pragma once
 
+#include <nghttp2/nghttp2.h>
+
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_limits.h"
-
-#include "http2/http2_frame_codec.h"
 
 namespace ruvia::detail {
 
+// RFC 9113 §5.1.1: stream identifiers are 31-bit values.
+inline constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
+
 // One compile-time source of truth for every local receive constraint. These values
-// drive both the advertised SETTINGS bytes and the matching in-memory accounting /
-// fixed capacities; they are intentionally not runtime knobs that can diverge.
+// drive both the advertised SETTINGS and the matching session options and fixed
+// capacities; they are intentionally not runtime knobs that can diverge.
 struct http2_local_settings final {
     static constexpr std::uint32_t header_table_size = 4096;
     static constexpr std::uint32_t max_concurrent_streams = 128;
@@ -21,35 +26,24 @@ struct http2_local_settings final {
     static constexpr std::uint32_t max_header_list_size =
         static_cast<std::uint32_t>(max_http_header_bytes);
     static constexpr std::uint32_t enable_connect_protocol = 1;
-    static constexpr std::uint32_t entry_count = 8;
-    static constexpr std::uint32_t payload_bytes = entry_count * 6;
-    static constexpr std::size_t frame_bytes = http2_frame_header_bytes + payload_bytes;
 };
 
-static_assert(http2_local_settings::enable_connect_protocol <= 1);
 static_assert(http2_local_settings::initial_window_size <=
               static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()));
-static_assert(http2_local_settings::max_frame_size >= http2_default_max_frame_size);
-static_assert(http2_local_settings::max_frame_size <= http2_max_frame_size);
 
-inline char* http2_write_local_settings_frame(char* out, bool enable_push = false) noexcept {
-    out = http2_write_frame_header(
-        out, http2_local_settings::payload_bytes, http2_frame_type::settings, 0, 0);
-    out = http2_write_settings_entry(
-        out, http2_setting_id::header_table_size, http2_local_settings::header_table_size);
-    out =
-        http2_write_settings_entry(out, http2_setting_id::enable_push, enable_push ? 1u : 0u);
-    out = http2_write_settings_entry(
-        out, http2_setting_id::max_concurrent_streams, http2_local_settings::max_concurrent_streams);
-    out = http2_write_settings_entry(
-        out, http2_setting_id::initial_window_size, http2_local_settings::initial_window_size);
-    out = http2_write_settings_entry(
-        out, http2_setting_id::max_frame_size, http2_local_settings::max_frame_size);
-    out = http2_write_settings_entry(
-        out, http2_setting_id::max_header_list_size, http2_local_settings::max_header_list_size);
-    out = http2_write_settings_entry(
-        out, http2_setting_id::enable_connect_protocol, http2_local_settings::enable_connect_protocol);
-    return http2_write_settings_entry(out, http2_setting_id::no_rfc7540_priorities, 1);
+// The local SETTINGS frame of the connection preface. Only a client may
+// advertise ENABLE_PUSH=1 (RFC 9113 §6.5.2).
+[[nodiscard]] inline std::array<nghttp2_settings_entry, 8> http2_local_settings_entries(bool enable_push) noexcept {
+    return {{
+        {NGHTTP2_SETTINGS_HEADER_TABLE_SIZE, http2_local_settings::header_table_size},
+        {NGHTTP2_SETTINGS_ENABLE_PUSH, enable_push ? 1U : 0U},
+        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, http2_local_settings::max_concurrent_streams},
+        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, http2_local_settings::initial_window_size},
+        {NGHTTP2_SETTINGS_MAX_FRAME_SIZE, http2_local_settings::max_frame_size},
+        {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, http2_local_settings::max_header_list_size},
+        {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, http2_local_settings::enable_connect_protocol},
+        {NGHTTP2_SETTINGS_NO_RFC7540_PRIORITIES, 1},
+    }};
 }
 
 }  // namespace ruvia::detail

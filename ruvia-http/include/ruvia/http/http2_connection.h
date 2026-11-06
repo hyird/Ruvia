@@ -43,10 +43,11 @@ struct http2_connection_options final {
     // RFC 8336 forbids using ORIGIN over h2c or through an explicit proxy.
     bool receive_origin_advertisements_{false};
     // Deliver the peer's frame metadata as received_settings,
-    // received_window_update and received_priority events, interleaved with
-    // the other events in wire order (see http2_event). Off, none is produced
-    // and no metadata work is done. Request pseudo-header order is always in
-    // the request-head event's request_view().
+    // received_window_update and received_priority (HEADERS priority fields
+    // only) events, interleaved with the other events in wire order (see
+    // http2_event). Off, none is produced and no metadata work is done.
+    // Request pseudo-header order is always in the request-head event's
+    // request_view().
     bool receive_frame_metadata_{false};
 };
 
@@ -76,18 +77,26 @@ struct http2_extended_connect_request_head_view final {
     http_request_field_source field_source_{http_request_field_source::generated};
 };
 
-// Stable HTTP/2 sans-I/O driver. Feed transport bytes, drain typed events, and
-// write out take_output_batch(); the class owns all HPACK, stream and flow-control state.
+// Stable HTTP/2 sans-I/O driver backed by one nghttp2 session per connection.
+// Feed transport bytes, drain typed events, and write out take_output_batch().
+// nghttp2 owns framing, HPACK, stream states, flow control and SETTINGS/PING/
+// GOAWAY handling; this class owns HTTP message semantics, leases, credits and
+// the abuse budgets. nghttp2 buffers an incomplete trailing frame itself.
 // The storage behind an accepted feed() input must remain alive and unchanged
 // until every event produced by that call has been taken and every event-derived
 // byte view has expired. Calling feed() again may invalidate those views; owning
 // string temporaries are rejected at compile time.
-// Event, deferred-DATA and drain-notification queue capacities grow geometrically
-// and are retained for reuse; their storage uses the connection's PMR resource.
+// The event queue capacity grows geometrically and is retained for reuse; all
+// storage, nghttp2's own allocations included, uses the connection's PMR resource.
 // Receive-field text growth reserves the whole name/value pair before copying.
 // Request field capacity includes synthesized Host and coalesced Cookie. A head
 // that cannot fit the public request view resets its stream before publication.
-// Outbound HPACK never inserts dynamic entries; required capacity reductions select zero.
+// Outbound HPACK never uses the dynamic table; credentials (authorization,
+// proxy-authorization, cookie, set-cookie) are sent never-indexed.
+// An allocation failure inside nghttp2 or while buffering its output, and an
+// exception thrown while nghttp2 runs a callback, fail the connection (with
+// GOAWAY(INTERNAL_ERROR) when it can still be queued) and propagate; nothing
+// is rolled back for a retry.
 // A fatal connection error rejects new stream output. Request leases and DATA
 // credits remain releasable without generating more frames. Graceful local or
 // peer GOAWAY still permits output on established streams that remain open.
@@ -110,6 +119,23 @@ struct http2_extended_connect_request_head_view final {
 // An incoming OPTIONS body does not require Content-Type at admission; RFC 9110
 // section 9.3.7 places that media-description requirement on senders.
 // TRACE accepts zero Content-Length and empty DATA endings but rejects content.
+// nghttp2 enforces the wire rules, so these error classes are its own:
+// - A zero WINDOW_UPDATE increment on any stream, a HEADERS frame too short for
+//   its padding or priority fields, a self-dependent HEADERS priority, a
+//   SETTINGS_ENABLE_CONNECT_PROTOCOL value other than 0 or 1 (either role), and
+//   a peer stream beyond our acknowledged SETTINGS_MAX_CONCURRENT_STREAMS are
+//   PROTOCOL_ERROR connection errors. Before the peer acknowledges our
+//   SETTINGS, a stream beyond the advertised limit is refused with
+//   RST_STREAM(REFUSED_STREAM), and the peer may only use the RFC default
+//   65535-byte stream window (RFC 9113 section 6.9.2).
+// - A bad client preface is a PROTOCOL_ERROR; a SETTINGS frame with more than
+//   32 entries or a header block with more than 1024 CONTINUATION frames ends
+//   in GOAWAY(ENHANCE_YOUR_CALM).
+// - Closed streams are not remembered: frames for a stream nghttp2 already
+//   retired are ignored. A PUSH_PROMISE whose associated stream is gone has its
+//   promised stream reset with CANCEL, and one arriving after our GOAWAY is
+//   discarded. PRIORITY frames are read and dropped (RFC 9113 section 5.3.2
+//   deprecates them).
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});
@@ -121,8 +147,8 @@ public:
     http2_connection& operator=(http2_connection&&) noexcept;
 
     [[nodiscard]] http2_role role() const noexcept;
-    // A server ignores a received SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 8441
-    // section 3: receipt by a server "does not have any impact").
+    // A server ignores a received SETTINGS_ENABLE_CONNECT_PROTOCOL of 0 or 1 (RFC
+    // 8441 section 3: receipt by a server "does not have any impact").
     [[nodiscard]] bool received_peer_settings() const noexcept;
     // Read-only observation for transport timeout decisions while a CONTINUATION
     // sequence is incomplete.
@@ -163,13 +189,17 @@ public:
     // and/or a WINDOW_UPDATE/SETTINGS change. complete means this input was consumed,
     // not that its frames reached the socket. Frame headers are additional overhead.
     // Validate the complete input's length/terminal intent before consuming anything.
-    // Allocation failure leaves output, windows and content accounting unchanged.
-    // END_STREAM is emitted only after consuming this entire input; an empty terminal
-    // input emits one DATA frame even with zero payload allowance or zero send window.
+    // END_STREAM is emitted only after consuming this entire input. An empty
+    // terminal input is still a DATA frame, sent only while both the connection
+    // and the stream send windows are positive (RFC 9113 section 6.9); otherwise
+    // it returns {0, backpressured} without changing anything, and the caller
+    // retries once send_window_state() reports available window.
     [[nodiscard]] http2_data_submit_result submit_data(std::uint32_t stream_id,
         std::string_view bytes, http2_end_stream end_stream, std::size_t max_payload_bytes);
     // Finish only after all source bytes were consumed. Trailer fields are encoded
-    // before returning and never wait in a deferred DATA queue.
+    // before returning. Without trailers the END_STREAM rides an empty DATA frame
+    // and returns backpressured, changing nothing, under the same window rule as
+    // submit_data().
     [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id,
         std::span<const http_header_view> trailers = {});
     [[nodiscard]] http2_request_content_release_status release_request_content(
@@ -219,19 +249,28 @@ public:
         http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // Call after all body bytes have been consumed. Encodes trailers before returning;
     // field storage may then be released. Incomplete Content-Length is rejected.
+    // Without trailers it returns backpressured under the same window rule as
+    // finish_request().
     [[nodiscard]] http2_finish_status finish_response(
         std::uint32_t stream_id, const http_response_trailer_section& trailers);
+    // ORIGIN and ALTSVC payloads are limited to the smaller of the peer's
+    // SETTINGS_MAX_FRAME_SIZE and 16384 bytes (nghttp2's extension frame buffer);
+    // larger ones return invalid_message.
     [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
     [[nodiscard]] http2_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id,
         std::string_view origin, std::string_view field_value);
+    // Client only. Returns peer_capability_unavailable unless the server sent
+    // SETTINGS_NO_RFC7540_PRIORITIES=1 (RFC 9218 section 2.1).
     [[nodiscard]] http2_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
 
     // Resetting a stream does not return connection send credit or reopen other
     // streams' send windows.
-    // Resetting an associated request leaves any in-progress PUSH_PROMISE block
-    // intact; its CONTINUATION can still publish a promised-stream event.
-    // A PROTOCOL_ERROR reset may also be submitted for a malformed message after
-    // both END_STREAM flags have closed the stream.
+    // Resetting an associated request cancels any PUSH_PROMISE block still in
+    // progress on it: the promised stream is reset with CANCEL and publishes no event.
+    // A stream nghttp2 no longer tracks (it keeps no closed-stream history,
+    // RFC 9113 section 5.1) returns closed. Once both END_STREAM flags closed a
+    // stream, only a PROTOCOL_ERROR reset for a malformed message is accepted;
+    // it retires the stream locally and sends no frame.
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
     // Queues one PING (non-ACK) carrying an opaque payload distinct from the
     // graceful-drain PING. Liveness is any received frame (the peer's ACK
@@ -256,11 +295,13 @@ public:
     [[nodiscard]] http2_server_request_release_status release(http2_request_head_event&& request);
     // Graceful drain (RFC 9113 section 6.8). A server first sends GOAWAY(2^31-1,
     // NO_ERROR) and a PING, and keeps admitting peer streams until the PING ACK or
-    // finish_drain(); then it sends GOAWAY(NO_ERROR) with the last peer stream id and
-    // refuses later streams. A peer that opens more than 128 further streams before
-    // its ACK gets the final GOAWAY at once (a product bound on the round trip). The
-    // ACK itself is not required: the owner bounds the wait in time with
-    // finish_drain(). A client sends its final GOAWAY immediately. Idempotent.
+    // finish_drain(); then it sends GOAWAY(NO_ERROR) with the last peer stream id.
+    // Streams above that boundary are discarded without a reply (the peer learns of
+    // them from the GOAWAY). A peer stream that exceeds the round-trip bound (128
+    // further streams before the ACK, a product bound) gets RST_STREAM(REFUSED_STREAM)
+    // and the final GOAWAY follows at once. The ACK itself is not required: the
+    // owner bounds the wait in time with finish_drain(). A client sends its final
+    // GOAWAY immediately. Idempotent.
     void begin_drain();
     // Makes the drain final now: sends GOAWAY(NO_ERROR) with the last peer stream id
     // and refuses later peer streams, entering the drain without the round trip when

@@ -4,6 +4,9 @@
   "default-features": [
     "runtime",
     "protocol",
+    "http2",
+    "http3",
+    "http3-openssl",
     "framework"
   ],
   "features": {
@@ -24,11 +27,35 @@
       ]
     },
     "protocol": {
-      "description": "Dependencies for the standalone ruvia-http protocol library.",
+      "description": "Dependencies for the standalone HTTP/1, content-coding and WebSocket protocol library.",
       "dependencies": [
         "brotli",
         "zlib",
         "zstd"
+      ]
+    },
+    "http2": {
+      "description": "Enable HTTP/2 through nghttp2.",
+      "dependencies": [
+        "nghttp2"
+      ]
+    },
+    "http3": {
+      "description": "Enable sans-I/O HTTP/3 and QUIC through nghttp3 and ngtcp2.",
+      "dependencies": [
+        "nghttp3",
+        "ngtcp2"
+      ]
+    },
+    "http3-openssl": {
+      "description": "Enable the ngtcp2 OpenSSL QUIC adapter used by ruvia-web.",
+      "dependencies": [
+        {
+          "name": "ngtcp2",
+          "features": [
+            "openssl"
+          ]
+        }
       ]
     },
     "framework": {

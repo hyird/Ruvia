@@ -17,17 +17,13 @@
 
 #include "http2/http2_local_content_state.h"
 #include "http2/http2_local_send_state.h"
-#include "http2/http2_receive_window_credit.h"
 #include "http2/http2_remote_content_state.h"
 #include "http2/http2_remote_receive_state.h"
-#include "http2/http2_stream_flow_control.h"
 #include "http2/http2_stream_request_data.h"
 #include "http2/http2_stream_request_state.h"
 #include "http2/http2_tunnel_state.h"
 
 namespace ruvia::detail {
-
-class http2_stream_header_decode_transaction;
 
 enum class http2_local_request_content_gate : std::uint8_t {
     open,
@@ -39,9 +35,11 @@ enum class http2_push_reservation : std::uint8_t { none,
     local,
     remote };
 
+// Ruvia's message-level view of one stream: decoded request/response storage,
+// content accounting and the semantic half-states. Framing, stream state and
+// flow control belong to the connection's nghttp2 session; this record outlives
+// the nghttp2 stream while an owner lease or delivered DATA credit still names it.
 class http2_stream_state final {
-    friend class http2_stream_header_decode_transaction;
-
     std::uint32_t id_{0};
     http2_push_reservation push_reservation_{http2_push_reservation::none};
     http2_remote_content_state remote_content_;
@@ -52,10 +50,8 @@ class http2_stream_state final {
     http_request_expectations expectations_;
     http2_stream_request_state request_state_;
     http2_tunnel_state tunnel_state_;
-    http2_stream_flow_control flow_control_;
+    // Received DATA bytes delivered to the owner and not yet acknowledged.
     std::uint32_t window_debt_{0};
-    http2_receive_window_credit receive_window_credit_;
-    std::pmr::string remote_header_block_;
     http2_stream_request_data message_data_;
     http2_local_request_content_gate local_request_content_gate_{http2_local_request_content_gate::open};
     bool pinned_{false};
@@ -64,7 +60,6 @@ class http2_stream_state final {
 public:
     explicit http2_stream_state(std::uint32_t stream_id, std::pmr::memory_resource* resource)
         : id_(stream_id),
-          remote_header_block_(http_pmr_resource_or_default(resource)),
           message_data_(resource) {}
 
     void reserve_push(http2_push_reservation reservation) noexcept {
@@ -103,34 +98,6 @@ public:
         --pending_events_;
     }
 
-    void set_send_window(std::int32_t window) noexcept {
-        flow_control_.set_send_window(window);
-    }
-
-    [[nodiscard]] bool add_send_window(std::int64_t delta) noexcept {
-        return flow_control_.add_send_window(delta);
-    }
-
-    [[nodiscard]] http2_window_update_result apply_window_update(std::uint32_t increment) noexcept {
-        return flow_control_.apply_window_update(increment);
-    }
-
-    [[nodiscard]] std::int32_t send_window() const noexcept {
-        return flow_control_.send_window();
-    }
-
-    void consume_send_window(std::size_t bytes_value) noexcept {
-        flow_control_.consume_send(bytes_value);
-    }
-
-    [[nodiscard]] bool consume_receive_window(std::int32_t bytes_value) noexcept {
-        return flow_control_.consume_receive(bytes_value);
-    }
-
-    [[nodiscard]] std::int32_t receive_window() const noexcept {
-        return flow_control_.receive_window();
-    }
-
     void add_window_debt(std::uint32_t bytes_value) noexcept {
         window_debt_ += bytes_value;
     }
@@ -150,25 +117,6 @@ public:
         window_debt_ -= bytes_value;
         return true;
     }
-
-    [[nodiscard]] http2_receive_window_credit& receive_window_credit() & noexcept {
-        return receive_window_credit_;
-    }
-    [[nodiscard]] http2_receive_window_credit& receive_window_credit() && = delete;
-
-    void restore_receive_window(std::int32_t bytes_value) noexcept {
-        flow_control_.restore_receive(bytes_value);
-    }
-
-    [[nodiscard]] std::pmr::string& remote_header_block() & noexcept {
-        return remote_header_block_;
-    }
-    [[nodiscard]] std::pmr::string& remote_header_block() && = delete;
-
-    [[nodiscard]] const std::pmr::string& remote_header_block() const& noexcept {
-        return remote_header_block_;
-    }
-    [[nodiscard]] const std::pmr::string& remote_header_block() const&& = delete;
 
     [[nodiscard]] bool declare_remote_content_length(std::uint64_t value) noexcept {
         if (value > (std::numeric_limits<std::size_t>::max)()) {
@@ -255,10 +203,6 @@ public:
 
     [[nodiscard]] bool record_remote_head_end_stream() noexcept {
         return remote_receive_.record_head_end_stream();
-    }
-
-    [[nodiscard]] bool rollback_remote_head_end_stream_for_retry() noexcept {
-        return remote_receive_.rollback_head_end_stream();
     }
 
     [[nodiscard]] bool finalize_remote_content_head() noexcept {
@@ -611,84 +555,6 @@ public:
     void set_priority_update(http_priority_fields fields) noexcept {
         request_state_.set_priority_update(fields);
     }
-};
-
-// Header callbacks write into stream-owned PMR storage and typed protocol state. A
-// callback is allowed to throw (most commonly from a request-header allocation), so
-// the complete field block needs the same strong exception guarantee as HPACK's
-// connection-global dynamic table. Isolated request decoding swaps out prior data;
-// response/trailer decoding keeps only a header checkpoint.
-// Both snapshot scalar protocol state and restore it unless explicitly committed.
-class http2_stream_header_decode_transaction final {
-public:
-    explicit http2_stream_header_decode_transaction(
-        http2_stream_state& stream, bool isolate_request_data = true)
-        : stream_(&stream),
-          remote_content_(stream.remote_content_),
-          local_content_(stream.local_content_),
-          local_send_(stream.local_send_),
-          remote_receive_(stream.remote_receive_),
-          peer_concurrency_slot_held_(stream.peer_concurrency_slot_held_),
-          expectations_(stream.expectations_),
-          request_state_(stream.request_state_),
-          tunnel_state_(stream.tunnel_state_),
-          local_request_content_gate_(stream.local_request_content_gate_),
-          remote_headers_checkpoint_(stream.message_data_.header_checkpoint()) {
-        if (isolate_request_data) {
-            message_data_.emplace(stream.message_data_.resource());
-            message_data_->swap(stream.message_data_);
-        }
-    }
-
-    http2_stream_header_decode_transaction(const http2_stream_header_decode_transaction&) = delete;
-    http2_stream_header_decode_transaction& operator=(
-        const http2_stream_header_decode_transaction&) = delete;
-    http2_stream_header_decode_transaction(http2_stream_header_decode_transaction&&) = delete;
-    http2_stream_header_decode_transaction& operator=(http2_stream_header_decode_transaction&&) = delete;
-
-    ~http2_stream_header_decode_transaction() {
-        rollback();
-    }
-
-    void commit() noexcept {
-        active_ = false;
-    }
-
-    void rollback() noexcept {
-        if (!active_) {
-            return;
-        }
-        if (message_data_) {
-            stream_->message_data_.swap(*message_data_);
-        } else {
-            stream_->message_data_.rollback_headers(remote_headers_checkpoint_);
-        }
-        stream_->remote_content_ = remote_content_;
-        stream_->local_content_ = local_content_;
-        stream_->local_send_ = local_send_;
-        stream_->remote_receive_ = remote_receive_;
-        stream_->peer_concurrency_slot_held_ = peer_concurrency_slot_held_;
-        stream_->expectations_ = expectations_;
-        stream_->request_state_ = request_state_;
-        stream_->tunnel_state_ = tunnel_state_;
-        stream_->local_request_content_gate_ = local_request_content_gate_;
-        active_ = false;
-    }
-
-private:
-    http2_stream_state* stream_;
-    std::optional<http2_stream_request_data> message_data_;
-    http2_remote_content_state remote_content_;
-    http2_local_content_state local_content_;
-    http2_local_send_state local_send_;
-    http2_remote_receive_state remote_receive_;
-    bool peer_concurrency_slot_held_;
-    http_request_expectations expectations_;
-    http2_stream_request_state request_state_;
-    http2_tunnel_state tunnel_state_;
-    http2_local_request_content_gate local_request_content_gate_;
-    http2_stream_request_data::header_checkpoint_type remote_headers_checkpoint_;
-    bool active_{true};
 };
 
 }  // namespace ruvia::detail

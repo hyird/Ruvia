@@ -291,7 +291,9 @@ private:
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);
-            ec = (co_await write_to_stream(asio::buffer(head_.view()))).error_code();
+            const auto write_result =
+                co_await write_to_stream(asio::buffer(head_.view()));
+            ec = write_result.error_code();
         }
         if (ec) {
             fail_write(ec, "failed to write HTTP response stream head");
@@ -344,7 +346,8 @@ private:
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);
-            ec = (co_await write_to_stream(buffers)).error_code();
+            const auto write_result = co_await write_to_stream(buffers);
+            ec = write_result.error_code();
         }
         if (ec) {
             fail_write(ec, "failed to write HTTP response stream body");
@@ -400,7 +403,8 @@ private:
         {
             const connection_scanner::entry::phase_scope write_phase(
                 scanner_entry_, connection_scanner::phase::writing);
-            ec = (co_await write_to_stream(buffers)).error_code();
+            const auto write_result = co_await write_to_stream(buffers);
+            ec = write_result.error_code();
         }
         if (ec) {
             fail_write(ec, "failed to write HTTP response stream end");

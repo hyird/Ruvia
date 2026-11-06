@@ -80,15 +80,13 @@ struct client_tcp_endpoint final {
     // nullptr selects plaintext TCP.
     const client_tls_config_storage* tls_;
     client_tcp_config tcp_;
-    // ALPN offered in the TLS handshake; ignored for plaintext TCP.
-    client_alpn alpn_;
 };
 
 // True for an OpenSSL failure or a TLS stream truncated without close_notify.
 [[nodiscard]] bool is_tls_error(const std::error_code& error) noexcept;
 
-// The one outbound TCP/TLS byte transport shared by the HTTP/1, WebSocket and
-// Redis clients. Protocol-neutral: callers map results onto their error
+// The one outbound TCP/TLS byte transport of the Redis client.
+// Protocol-neutral: callers map results onto their error
 // types. One worker owns the socket; the read lane (resolve, connect, TLS
 // handshake, reads) and the write lane have independent deadlines so a
 // full-duplex exchange can bound its upload separately. A connected socket
@@ -109,32 +107,13 @@ public:
     [[nodiscard]] bool secure() const noexcept {
         return endpoint_.tls_ != nullptr;
     }
-    // Resolves, connects, applies socket policies and, for TLS, prepares SNI,
-    // peer identity and the ALPN offer before the handshake. Every
+    // Resolves, connects, applies socket policies and, for TLS, prepares SNI
+    // and peer identity before the handshake. Every
     // operation borrowing a previous connection must have finished.
     [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
-    // Replaces the endpoint's ALPN offer for every later connect().
-    void offer_alpn(client_alpn alpn) noexcept {
-        endpoint_.alpn_ = alpn;
-    }
-    // Selected ALPN protocol of the current TLS connection; empty for TCP.
-    [[nodiscard]] std::string_view alpn() noexcept;
-    // HTTP/1 clients offer only http/1.1: a TLS peer either skips ALPN or
-    // must select it.
-    [[nodiscard]] bool alpn_allows_http11() noexcept {
-        if (!secure()) {
-            return true;
-        }
-        const auto selected = alpn();
-        return selected.empty() || selected == "http/1.1";
-    }
     [[nodiscard]] task<client_transport_result> read_some(std::span<char> bytes, const operation_timeout& timeout);
-    // Writes every byte under the write lane's own deadline. The buffer
-    // sequence form sends framed parts (chunk prefix, payload, suffix) as one
-    // transport write, which is one TLS record sequence and one deadline cycle.
+    // Writes every byte under the write lane's own deadline.
     [[nodiscard]] task<client_transport_result> write(std::string_view bytes, const operation_timeout& timeout);
-    [[nodiscard]] task<client_transport_result> write(
-        std::span<const asio::const_buffer> buffers, const operation_timeout& timeout);
 
     [[nodiscard]] client_abort_reason abort_reason() const noexcept {
         return abort_reason_;
@@ -156,24 +135,11 @@ public:
     // back; the close cancels it.
     void close() noexcept;
     // Bounded non-blocking check of a connected, idle transport that never
-    // runs the TLS engine. An HTTP/1 or Redis peer sends nothing between
+    // runs the TLS engine. A Redis peer sends nothing between
     // exchanges, so readable or TLS-buffered bytes are distinguished from an
     // end of stream before either condition retires the connection. Pending TLS
     // data can be close_notify, a post-handshake record or an unsolicited response.
     [[nodiscard]] client_idle_transport_status idle_status() noexcept;
-    // Completes once the socket of a connected, idle transport is readable,
-    // at its end or failed, without reading and without running the TLS
-    // engine; idle_status() then classifies it. Only while no other operation
-    // is pending: cancel_wait() ends it early.
-    [[nodiscard]] task<void> wait_readable();
-    void cancel_wait() noexcept;
-
-    // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown: the
-    // transport no longer sends close_notify for this connection.
-    [[nodiscard]] asio::ssl::stream<client_tls_socket>& stream() noexcept {
-        tls_close_ready_ = false;
-        return stream_;
-    }
 
 private:
     struct lane_deadline final {

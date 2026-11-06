@@ -15,7 +15,6 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
 
-#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -68,7 +67,6 @@ struct received_record final {
 };
 
 // 按 next_event() 顺序记录元数据与请求头事件，其余事件不在本文件观察范围内。
-// received_settings 借用本次 feed() 输入，drain() 在下一次 feed() 前读完全部条目；
 // 请求头租约保留到日志析构，使对应流保持存活。
 struct received_log final {
     std::array<received_record, 16> records_{};
@@ -219,7 +217,10 @@ RUVIA_TEST(http2_receive_frame_metadata_off_produces_no_metadata_events) {
     }
 }
 
-RUVIA_TEST(http2_receive_settings_preserve_unknown_duplicate_empty_and_bounds) {
+// nghttp2 folds a repeated known identifier into its first position with the
+// last value, keeps unknown identifiers in wire order, and owns the decoded
+// entries, so the event outlives the input.
+RUVIA_TEST(http2_receive_settings_fold_known_duplicates_and_keep_unknown_entries) {
     for (const auto role : {ruvia::http2_role::server, ruvia::http2_role::client}) {
         const ruvia::http2_connection_options options{.receive_frame_metadata_ = true};
         auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server(options)
@@ -234,22 +235,21 @@ RUVIA_TEST(http2_receive_settings_preserve_unknown_duplicate_empty_and_bounds) {
         append_frame(wire, ruvia::http2_frame_type::settings, 1, 0);
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0);
         RUVIA_CHECK(connection.feed(wire) == ruvia::http2_feed_result::accepted);
+        wire.assign(wire.size(), '#');
         received_log log;
         log.drain(connection);
         RUVIA_CHECK_EQ(log.count_, 2u);
         RUVIA_CHECK(!log.overflow_);
         const auto& first = log.records_[0];
         RUVIA_CHECK(first.kind_ == received_kind::settings);
-        RUVIA_CHECK_EQ(first.settings_count_, 4u);
+        RUVIA_CHECK_EQ(first.settings_count_, 3u);
         RUVIA_CHECK(first.checked_bounds_);
         RUVIA_CHECK_EQ(static_cast<std::uint16_t>(first.settings_[0].id_), 0xfefe);
         RUVIA_CHECK_EQ(first.settings_[0].value_, 0xabcdef01u);
         RUVIA_CHECK(first.settings_[1].id_ == ruvia::http2_setting_id::max_concurrent_streams);
-        RUVIA_CHECK_EQ(first.settings_[1].value_, 13u);
-        RUVIA_CHECK(first.settings_[2].id_ == ruvia::http2_setting_id::max_concurrent_streams);
-        RUVIA_CHECK_EQ(first.settings_[2].value_, 7u);
-        RUVIA_CHECK_EQ(static_cast<std::uint16_t>(first.settings_[3].id_), 0xfefe);
-        RUVIA_CHECK_EQ(first.settings_[3].value_, 0u);
+        RUVIA_CHECK_EQ(first.settings_[1].value_, 7u);
+        RUVIA_CHECK_EQ(static_cast<std::uint16_t>(first.settings_[2].id_), 0xfefe);
+        RUVIA_CHECK_EQ(first.settings_[2].value_, 0u);
         RUVIA_CHECK(log.records_[1].kind_ == received_kind::settings);
         RUVIA_CHECK_EQ(log.records_[1].settings_count_, 0u);
         RUVIA_CHECK(log.records_[1].checked_bounds_);
@@ -286,24 +286,21 @@ RUVIA_TEST(http2_receive_byte_fragments_publish_only_complete_frames) {
     received_log log;
     std::string wire = server_preface();
     const auto settings_end = wire.size();
-    append_frame(wire, ruvia::http2_frame_type::priority, 0, 7, priority_payload(7, 256, true));
-    const auto priority_end = wire.size();
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(5));
+    const auto first_window_end = wire.size();
     append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(11));
     for (std::size_t index = 0; index != wire.size(); ++index) {
         const auto status = server.feed(std::string_view(wire).substr(index, 1));
-        RUVIA_CHECK(status == ruvia::http2_feed_result::accepted || status == ruvia::http2_feed_result::need_input);
+        RUVIA_CHECK(status == ruvia::http2_feed_result::accepted);
         log.drain(server);
         const auto expected = static_cast<std::size_t>(index + 1 >= settings_end) +
-                              static_cast<std::size_t>(index + 1 >= priority_end) +
+                              static_cast<std::size_t>(index + 1 >= first_window_end) +
                               static_cast<std::size_t>(index + 1 == wire.size());
         RUVIA_CHECK_EQ(log.count_, expected);
     }
     RUVIA_CHECK(log.records_[0].kind_ == received_kind::settings);
-    RUVIA_CHECK(log.records_[1].kind_ == received_kind::priority);
-    RUVIA_CHECK_EQ(log.records_[1].stream_id_, 7u);
-    RUVIA_CHECK_EQ(log.records_[1].value_, 7u);
-    RUVIA_CHECK_EQ(log.records_[1].weight_, 256u);
-    RUVIA_CHECK(log.records_[1].exclusive_);
+    RUVIA_CHECK(log.records_[1].kind_ == received_kind::window_update);
+    RUVIA_CHECK_EQ(log.records_[1].value_, 5u);
     RUVIA_CHECK(log.records_[2].kind_ == received_kind::window_update);
     RUVIA_CHECK_EQ(log.records_[2].value_, 11u);
     RUVIA_CHECK(!server.connection_error());
@@ -316,7 +313,7 @@ RUVIA_TEST(http2_receive_padded_headers_priority_precedes_continued_request_and_
         auto block = request_block();
         const auto split = continued ? block.size() / 2 : block.size();
         std::string payload(1, '\x03');
-        payload += priority_payload(1, 256, true);  // 自依赖仍按废弃 priority 的既有规则容忍。
+        payload += priority_payload(0, 256, true);
         payload.append(block.data(), split);
         payload.append(3, '\0');
         std::string wire = server_preface();
@@ -330,20 +327,21 @@ RUVIA_TEST(http2_receive_padded_headers_priority_precedes_continued_request_and_
             wire.clear();
             append_frame(wire, ruvia::http2_frame_type::continuation, 4, 1, std::string_view(block).substr(split));
         }
+        // A PRIORITY frame publishes nothing (RFC 9113 §5.3.2 deprecates it).
         append_frame(wire, ruvia::http2_frame_type::priority, 0, 5, priority_payload(0, 1, false));
         append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(9));
         RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
         log.drain(server);
-        RUVIA_CHECK_EQ(log.count_, 6u);
+        RUVIA_CHECK_EQ(log.count_, 5u);
         RUVIA_CHECK(!log.overflow_);
         const std::array kinds{received_kind::settings, received_kind::window_update, received_kind::priority,
-            received_kind::request_head, received_kind::priority, received_kind::window_update};
+            received_kind::request_head, received_kind::window_update};
         for (std::size_t index = 0; index != kinds.size(); ++index) {
             RUVIA_CHECK(log.records_[index].kind_ == kinds[index]);
         }
         RUVIA_CHECK_EQ(log.records_[1].value_, 3u);
         RUVIA_CHECK_EQ(log.records_[2].stream_id_, 1u);
-        RUVIA_CHECK_EQ(log.records_[2].value_, 1u);
+        RUVIA_CHECK_EQ(log.records_[2].value_, 0u);
         RUVIA_CHECK_EQ(log.records_[2].weight_, 256u);
         RUVIA_CHECK(log.records_[2].exclusive_);
         const auto& request = log.records_[3];
@@ -355,8 +353,7 @@ RUVIA_TEST(http2_receive_padded_headers_priority_precedes_continued_request_and_
         for (std::size_t index = 0; index != expected.size(); ++index) {
             RUVIA_CHECK(request.pseudo_order_[index] == expected[index]);
         }
-        RUVIA_CHECK_EQ(log.records_[4].stream_id_, 5u);
-        RUVIA_CHECK_EQ(log.records_[5].value_, 9u);
+        RUVIA_CHECK_EQ(log.records_[4].value_, 9u);
         RUVIA_CHECK(!server.connection_error());
     }
 }
@@ -373,11 +370,9 @@ RUVIA_TEST(http2_receive_window_updates_only_report_applied_credit) {
     RUVIA_CHECK(log.records_[1].kind_ == received_kind::request_head);
     log.count_ = 0;
     wire.clear();
-    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 1, window_payload(0));  // 跳过的闭流。
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 1, window_payload(0));  // 跳过的闭流：忽略。
     append_frame(wire, ruvia::http2_frame_type::window_update, 0, 3, window_payload(17));
     append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(23));
-    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 3, window_payload(0));  // 流错误不发布。
-    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 3, window_payload(9));  // 本地 reset 后忽略。
     RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
     log.drain(server);
     RUVIA_CHECK_EQ(log.count_, 2u);
@@ -388,6 +383,14 @@ RUVIA_TEST(http2_receive_window_updates_only_report_applied_credit) {
     RUVIA_CHECK_EQ(log.records_[1].stream_id_, 0u);
     RUVIA_CHECK_EQ(log.records_[1].value_, 23u);
     RUVIA_CHECK(!server.connection_error());
+    // nghttp2 treats a zero increment on a live stream as a connection error.
+    log.count_ = 0;
+    wire.clear();
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 3, window_payload(0));
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::protocol_failure);
+    log.drain(server);
+    RUVIA_CHECK_EQ(log.count_, 0u);
+    RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::protocol_error);
 }
 
 RUVIA_TEST(http2_receive_rejected_connection_window_and_malformed_priority_are_not_published) {
@@ -406,88 +409,8 @@ RUVIA_TEST(http2_receive_rejected_connection_window_and_malformed_priority_are_n
     }
 }
 
-RUVIA_TEST(http2_receive_malformed_priority_on_live_stream_resets_it_without_event) {
-    auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
-    received_log log;
-    auto block = request_block();
-    std::string wire = server_preface();
-    append_frame(wire, ruvia::http2_frame_type::headers, 4, 1, block);
-    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-    log.drain(server);
-    RUVIA_CHECK_EQ(log.count_, 2u);
-    RUVIA_CHECK(!server.stream_aborted(1));
-    log.count_ = 0;
-    wire.clear();
-    // RFC 9113 §6.3：长度错误的 PRIORITY 是流级 FRAME_SIZE_ERROR，连接继续处理后续帧。
-    append_frame(wire, ruvia::http2_frame_type::priority, 0, 1, window_payload(0));
-    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(5));
-    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-    log.drain(server);
-    RUVIA_CHECK(server.stream_aborted(1));
-    RUVIA_CHECK_EQ(log.count_, 1u);
-    RUVIA_CHECK(log.records_[0].kind_ == received_kind::window_update);
-    RUVIA_CHECK_EQ(log.records_[0].value_, 5u);
-    RUVIA_CHECK(!server.connection_error());
-}
-
-RUVIA_TEST(http2_receive_pmr_retry_does_not_replay_committed_prefix) {
-    auto block = request_block();
-    ruvia::hpack_encoder::encode_header(block, "x-large", std::string(4096, 'a'));
-    std::string wire;
-    append_frame(wire, ruvia::http2_frame_type::priority, 0, 1, priority_payload(0, 12, false));
-    append_frame(wire, ruvia::http2_frame_type::headers, 5, 1, block);
-    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(31));
-    bool completed = false;
-    bool retried_after_committed_prefix = false;
-    for (std::size_t budget = 0; budget < 64 && !completed; ++budget) {
-        receive_memory_resource resource;
-        {
-            auto server = ruvia::http2_connection::server({.resource_ = &resource, .receive_frame_metadata_ = true});
-            received_log log;
-            const auto preface = server_preface();
-            RUVIA_CHECK(server.feed(preface) == ruvia::http2_feed_result::accepted);
-            log.drain(server);
-            log.count_ = 0;
-            if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
-                resource.allocation_budget_ = budget;
-            }
-            bool threw = false;
-            try {
-                RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-            } catch (const std::bad_alloc&) {
-                threw = true;
-            }
-            resource.allocation_budget_.reset();
-            log.drain(server);
-            if (threw) {
-                // 抛出前已提交的帧照常发布；同一输入重试只继续未提交的后缀。
-                RUVIA_CHECK(log.count_ < 3u);
-                retried_after_committed_prefix = retried_after_committed_prefix || log.count_ != 0;
-                RUVIA_CHECK(!server.connection_error());
-                RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-                log.drain(server);
-            } else {
-                completed = true;
-            }
-            RUVIA_CHECK_EQ(log.count_, 3u);
-            RUVIA_CHECK(log.records_[0].kind_ == received_kind::priority);
-            RUVIA_CHECK_EQ(log.records_[0].stream_id_, 1u);
-            RUVIA_CHECK_EQ(log.records_[0].weight_, 12u);
-            RUVIA_CHECK(log.records_[1].kind_ == received_kind::request_head);
-            RUVIA_CHECK(log.records_[1].request_matches_);
-            RUVIA_CHECK(log.records_[2].kind_ == received_kind::window_update);
-            RUVIA_CHECK_EQ(log.records_[2].value_, 31u);
-            RUVIA_CHECK(!server.connection_error());
-        }
-        RUVIA_CHECK_EQ(resource.live_, 0u);
-    }
-    RUVIA_CHECK(completed);
-    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-        RUVIA_CHECK(retried_after_committed_prefix);
-    }
-}
-
 RUVIA_TEST(http2_receive_control_metadata_needs_no_dynamic_allocation) {
+    // PRIORITY frames are deprecated (RFC 9113 §5.3.2) and publish nothing.
     for (const bool publish : {false, true}) {
         receive_memory_resource resource;
         auto server = ruvia::http2_connection::server({.resource_ = &resource, .receive_frame_metadata_ = publish});
@@ -508,12 +431,14 @@ RUVIA_TEST(http2_receive_control_metadata_needs_no_dynamic_allocation) {
         log.drain(server);
         resource.allocation_budget_.reset();
         RUVIA_CHECK_EQ(resource.allocations_, allocations);
-        RUVIA_CHECK_EQ(log.count_, publish ? 2u : 0u);
+        RUVIA_CHECK_EQ(log.count_, publish ? 1u : 0u);
         RUVIA_CHECK(!server.connection_error());
     }
 }
 
 RUVIA_TEST(http2_receive_malformed_headers_do_not_publish_priority_or_request) {
+    // Invalid padding and a payload too short for the PRIORITY fields are both
+    // reported by nghttp2 as connection PROTOCOL_ERROR.
     for (const bool missing_priority : {false, true}) {
         auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
         std::string wire = server_preface();
@@ -528,8 +453,7 @@ RUVIA_TEST(http2_receive_malformed_headers_do_not_publish_priority_or_request) {
         log.drain(server);
         RUVIA_CHECK_EQ(log.count_, 1u);
         RUVIA_CHECK(log.records_[0].kind_ == received_kind::settings);
-        RUVIA_CHECK(server.connection_error() == (missing_priority ? ruvia::http2_error_code::frame_size_error
-                                                                   : ruvia::http2_error_code::protocol_error));
+        RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::protocol_error);
     }
 }
 

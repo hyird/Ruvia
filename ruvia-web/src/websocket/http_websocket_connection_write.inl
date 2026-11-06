@@ -99,8 +99,7 @@ task<void> server_websocket_connection<stream_type>::close_owned(::ruvia::websoc
         // RFC 6455: sending Close starts, but does not complete, the handshake.
         // Keep parsing transport input until the peer Close arrives (or EOF/timeout
         // aborts this transport). The core suppresses application messages in this
-        // phase while still validating frames and handling control traffic. The
-        // Close may be this call's or the one a draining server already sent.
+        // phase while still validating frames and handling control traffic.
         if (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close) {
             if (read_phase_ == read_phase_type::active) {
                 while (read_phase_ == read_phase_type::active) {
@@ -208,7 +207,8 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
                 // peer that stopped reading, whatever the reader's phase. An
                 // HTTP/2-adapted stream is bounded by its session's writer.
                 const connection_scanner::entry::write_scope write_stall_clock(scanner_entry_);
-                ec = (co_await write_bytes(plan)).error_code();
+                const auto write_result = co_await write_bytes(plan);
+                ec = write_result.error_code();
             } else {
                 ec = co_await write_bytes(plan);
             }

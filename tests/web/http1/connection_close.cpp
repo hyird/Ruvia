@@ -1,5 +1,4 @@
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +10,6 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
-#include <vector>
 
 #include <asio/buffer.hpp>
 #include <asio/io_context.hpp>
@@ -22,14 +20,9 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/task_scope.h"
-#include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/http_client.h"
 #include "ruvia/web/websocket.h"
 
 #include "tcp_port_reservation.h"
@@ -278,191 +271,6 @@ void wss_truncated_peer_eof_omits_close_notify(
     RUVIA_CHECK(rest.empty());
     RUVIA_CHECK(error == asio::ssl::error::stream_truncated);
 }
-
-// RFC 9112 §9.8 / RFC 9846 §6.1: cancelling a multi-record HTTPS request write
-// after the first record is taken synchronously by the socket must close
-// without sending a clean TLS close_notify.
-void client_cancelled_multi_record_tls_write_omits_close_notify(
-    ruvia::testing::test_context& ruvia_ctx, ruvia::test::tls_identity& identity) {
-    asio::io_context server_io;
-    asio::ip::tcp::acceptor acceptor(server_io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = acceptor.local_endpoint();
-
-    std::string server_received;
-    std::error_code server_read_ec;
-    std::thread server_thread([&] {
-        tls_stream srv(server_io, identity.context_);
-        acceptor.accept(srv.lowest_layer());
-        std::error_code ec;
-        srv.handshake(asio::ssl::stream_base::server, ec);
-        std::array<char, 4096> buf{};
-        std::string req1;
-        while (req1.find("\r\n\r\n") == std::string::npos && !ec) {
-            req1.append(buf.data(), srv.read_some(asio::buffer(buf), ec));
-        }
-        constexpr std::string_view resp1 = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
-        asio::write(srv, asio::buffer(resp1), ec);
-
-        while (!server_read_ec) {
-            const auto n = srv.read_some(asio::buffer(buf), server_read_ec);
-            server_received.append(buf.data(), n);
-        }
-    });
-
-    asio::io_context client_io;
-    auto attachment = ruvia::attach_event_loop(client_io);
-    ruvia::http_client client(attachment.loop(), {
-                                                     .scheme_ = ruvia::http_scheme::https,
-                                                     .host_ = "127.0.0.1",
-                                                     .port_ = endpoint.port(),
-                                                     .protocol_ = ruvia::http_client_protocol::http1_only,
-                                                     .tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "localhost"},
-                                                 });
-
-    bool post_cancelled = false;
-    auto run_client = [&]() -> ruvia::task<void> {
-        auto h = client.handle();
-        {
-            auto r1 = co_await h.send({.method_ = "GET", .target_ = "/warmup"});
-            (void)co_await r1.body().read_all();
-        }
-        ruvia::stop_source cancel_src;
-        const std::string body(20480, 'B');
-        asio::post(client_io, [&] {
-            cancel_src.request_stop();
-        });
-        try {
-            auto r2 = co_await h.with_options({.stop_token_ = cancel_src.token()})
-                          .send({
-                              .method_ = "POST",
-                              .target_ = "/upload",
-                              .content_ = ruvia::http_client_request_content_view::bytes(body),
-                          });
-            (void)co_await r2.body().read_all();
-        } catch (const ruvia::http_client_error& ex) {
-            post_cancelled = ex.code() == ruvia::http_client_error::code_type::cancelled;
-        }
-        co_await client.shutdown();
-        attachment.stop();
-    };
-    auto root = attachment.loop().start(run_client());
-
-    attachment.run();
-    root.get();
-    server_thread.join();
-
-    RUVIA_CHECK(post_cancelled);
-    RUVIA_CHECK(server_received.size() > 0 && server_received.size() < 20480);
-    RUVIA_CHECK(server_read_ec == asio::ssl::error::stream_truncated);
-}
-
-// A write_timeout_ firing while a speculative TLS record write completion is
-// queued via asio::post must abort the write immediately instead of hanging on
-// the reactor on the next record.
-void client_tls_write_timeout_during_speculative_post_does_not_hang(
-    ruvia::testing::test_context& ruvia_ctx, ruvia::test::tls_identity& identity) {
-    asio::io_context server_io;
-    asio::ip::tcp::acceptor acceptor(server_io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = acceptor.local_endpoint();
-
-    std::binary_semaphore read_32k{0};
-    std::binary_semaphore read_32k_done{0};
-    std::atomic<bool> release_server{false};
-    std::thread server_thread([&] {
-        tls_stream srv(server_io, identity.context_);
-        acceptor.accept(srv.lowest_layer());
-        std::error_code ec;
-        srv.lowest_layer().set_option(asio::socket_base::receive_buffer_size(4096), ec);
-        srv.handshake(asio::ssl::stream_base::server, ec);
-        std::array<char, 4096> buf{};
-        std::string req1;
-        while (req1.find("\r\n\r\n") == std::string::npos && !ec) {
-            req1.append(buf.data(), srv.read_some(asio::buffer(buf), ec));
-        }
-        constexpr std::string_view resp1 = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
-        asio::write(srv, asio::buffer(resp1), ec);
-
-        read_32k.acquire();
-        std::vector<char> raw(32768);
-        (void)srv.next_layer().read_some(asio::buffer(raw), ec);
-        read_32k_done.release();
-
-        while (!release_server.load()) {
-            std::this_thread::sleep_for(10ms);
-        }
-    });
-
-    asio::io_context client_io;
-    auto attachment = ruvia::attach_event_loop(client_io);
-    ruvia::http_client client(attachment.loop(), {
-                                                     .scheme_ = ruvia::http_scheme::https,
-                                                     .host_ = "127.0.0.1",
-                                                     .port_ = endpoint.port(),
-                                                     .write_timeout_ = 40ms,
-                                                     .request_timeout_ = std::nullopt,
-                                                     .protocol_ = ruvia::http_client_protocol::http1_only,
-                                                     .tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "localhost"},
-                                                 });
-
-    std::atomic<bool> post_completed{false};
-    bool timed_out = false;
-    auto run_client = [&]() -> ruvia::task<void> {
-        auto h = client.handle();
-        {
-            auto r1 = co_await h.send({.method_ = "GET", .target_ = "/warmup"});
-            (void)co_await r1.body().read_all();
-        }
-        std::string big_body(8 * 1024 * 1024, 'C');
-        const auto worker = attachment.loop().handle();
-        auto trigger = [&]() -> ruvia::task<void> {
-            (void)co_await ruvia::sleep_for(worker, 5ms);
-            read_32k.release();
-            read_32k_done.acquire();
-            std::this_thread::sleep_for(50ms);
-        };
-        ruvia::task_scope tasks(worker);
-        tasks.spawn(trigger());
-        try {
-            auto r2 = co_await h.send({
-                .method_ = "POST",
-                .target_ = "/hang",
-                .content_ = ruvia::http_client_request_content_view::bytes(big_body),
-            });
-            (void)co_await r2.body().read_all();
-        } catch (const ruvia::http_client_error& ex) {
-            timed_out = ex.code() == ruvia::http_client_error::code_type::timeout;
-        }
-        post_completed.store(true);
-        co_await tasks.join();
-        co_await client.shutdown();
-        attachment.stop();
-    };
-    auto root = attachment.loop().start(run_client());
-
-    bool watchdog_fired = false;
-    std::thread watchdog([&] {
-        for (int i = 0; i < 40; ++i) {
-            if (post_completed.load()) {
-                return;
-            }
-            std::this_thread::sleep_for(25ms);
-        }
-        watchdog_fired = true;
-        release_server.store(true);
-        asio::post(client_io, [&] {
-            client.close();
-        });
-    });
-
-    attachment.run();
-    root.get();
-    release_server.store(true);
-    watchdog.join();
-    server_thread.join();
-
-    RUVIA_CHECK(!watchdog_fired);
-    RUVIA_CHECK(timed_out);
-}
 }  // namespace connection_close_test
 
 using namespace connection_close_test;
@@ -510,9 +318,9 @@ RUVIA_TEST(server_closes_connections_gracefully) {
         idle_http2_connection_sends_goaway_then_close_notify(ruvia_ctx, io, tls_endpoint);
         wss_clean_close_handshake_sends_close_notify(ruvia_ctx, io, tls_endpoint);
         wss_truncated_peer_eof_omits_close_notify(ruvia_ctx, io, tls_endpoint);
-        client_cancelled_multi_record_tls_write_omits_close_notify(ruvia_ctx, identity);
-        client_tls_write_timeout_during_speculative_post_does_not_hang(ruvia_ctx, identity);
 
+        // A stop disconnects directly: an unused TLS connection is closed
+        // without close_notify, so the peer sees a truncated stream.
         asio::ssl::context client(asio::ssl::context::tls_client);
         client.set_verify_mode(asio::ssl::verify_none);
         const auto unused = open_unused_tls_connection(io, client, tls_endpoint);
@@ -521,7 +329,7 @@ RUVIA_TEST(server_closes_connections_gracefully) {
         const auto end = read_to_end(*unused, received);
         stopper.join();
         RUVIA_CHECK(received.empty());
-        RUVIA_CHECK(end == asio::error::eof);
+        RUVIA_CHECK(end == asio::ssl::error::stream_truncated || end == asio::error::connection_reset);
     } else {
         app.stop();
     }

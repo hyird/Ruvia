@@ -14,7 +14,6 @@
 
 #include "client/http_client_access.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_frame_codec.h"
 #include "http2/http2_request_builder.h"
 #include "http2/http2_websocket_handshake.h"
 #include "request/http_request_access.h"
@@ -23,12 +22,10 @@
 namespace ruvia {
 
 http2_setting_entry http2_received_settings::at(std::size_t index) const {
-    if (index >= size()) {
+    if (index >= size_) {
         throw std::out_of_range("HTTP/2 received SETTINGS index out of range");
     }
-    const auto* data = reinterpret_cast<const unsigned char*>(payload_.data() + index * 6);
-    return {.id_ = static_cast<http2_setting_id>(detail::http2_read16(data)),
-        .value_ = detail::http2_read32(data + 2)};
+    return entries_[index];
 }
 
 namespace {

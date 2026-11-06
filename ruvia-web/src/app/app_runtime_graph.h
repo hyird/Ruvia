@@ -14,6 +14,12 @@
 #include "router/route_table.h"
 #include "server/static_root_runtime.h"
 #include "server/web_worker_runtime.h"
+#if defined(RUVIA_ENABLE_HTTP3)
+#include "http3/http3_worker_directory.h"
+#endif
+#if defined(_WIN32)
+#include "server/windows_acceptor.h"
+#endif
 
 namespace ruvia::detail {
 
@@ -41,8 +47,11 @@ struct app_runtime_graph final {
         : blocking_pool_(nullptr, pmr_object_deleter<blocking_pool>{resource}),
           document_root_(nullptr, pmr_object_deleter<document_root_publisher>{resource}),
           route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{resource}),
+#if defined(RUVIA_ENABLE_HTTP3)
+          http3_directory_(nullptr, pmr_object_deleter<http3_worker_directory>{resource}),
+#endif
 #if defined(_WIN32)
-          windows_accept_(nullptr, pmr_object_deleter<windows_accept_domain>{resource}),
+          acceptor_(nullptr, pmr_object_deleter<windows_acceptor>{resource}),
 #endif
           workers_(resource),
           group_(resource) {
@@ -55,9 +64,17 @@ struct app_runtime_graph final {
     std::unique_ptr<document_root_publisher, pmr_object_deleter<document_root_publisher>> document_root_;
     // Every worker's route_table binds its instances to this one immutable plan.
     compiled_route_plan_ptr_type route_plan_;
+#if defined(RUVIA_ENABLE_HTTP3)
+    // Hands QUIC datagrams to the worker that owns their connection; null
+    // without an HTTP/3 listener. Declared before the workers and the
+    // acceptor, whose queued hand-overs reference it.
+    std::unique_ptr<http3_worker_directory, pmr_object_deleter<http3_worker_directory>> http3_directory_;
+#endif
 #if defined(_WIN32)
-    // Native completion slots outlive all listener IOCP and origin workers.
-    std::unique_ptr<windows_accept_domain, pmr_object_deleter<windows_accept_domain>> windows_accept_;
+    // The one thread that owns every listener and hands sockets and datagrams
+    // to the workers. Declared before them: they send their datagrams
+    // through it until they joined, so it is destroyed after them.
+    std::unique_ptr<windows_acceptor, pmr_object_deleter<windows_acceptor>> acceptor_;
 #endif
     std::pmr::vector<app_worker_slot> workers_;
     // The one lifecycle over every independently listening worker. It borrows

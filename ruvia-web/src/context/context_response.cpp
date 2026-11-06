@@ -15,6 +15,7 @@
 #include "http/http_error_response.h"
 #include "http/session_access.h"
 #include "router/route_table.h"
+#include "server/http_alternative_service.h"
 
 namespace ruvia {
 
@@ -226,7 +227,9 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
     if (session_access::available(context_value)) {
         co_await session_access::commit(context_value);
     }
-    co_return context_value.streaming_head();
+    auto response = context_value.streaming_head();
+    detail::apply_alternative_service(response, context_value.services().alternative_service());
+    co_return response;
 }
 
 context& context::set_stable_response_header(std::string_view name, std::string_view value) {

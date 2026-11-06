@@ -94,7 +94,8 @@ http_target_origin decide_http_target_origin(
     const auto form = request.target_form();
     const auto scheme = request.scheme();
     if (form == http_request_target_form::authority ||
-        (form == http_request_target_form::http2 && scheme.empty())) {
+        ((form == http_request_target_form::http2 || form == http_request_target_form::http3) &&
+            scheme.empty())) {
         // A CONNECT tunnel target names a destination, not an "https" resource.
         return http_target_origin::accepted();
     }

@@ -224,7 +224,7 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
     const auto http = http_reservation.endpoint();
     const auto https = https_reservation.endpoint();
     const auto configure = [&] {
-        app.server({.worker_count_ = 3, .drain_timeout_ = 0ms, .connection_scan_interval_ = 5ms});
+        app.server({.worker_count_ = 3, .connection_scan_interval_ = 5ms});
         app.listen({.address_ = "127.0.0.1", .http_ = http.port(), .https_ = https.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = key}}});
     };
     // A pending stop must retire even a graph whose worker threads never ran.

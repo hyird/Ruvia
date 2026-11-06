@@ -67,7 +67,7 @@ struct http1_tunnel_upgrade_commit final {
                 dispatch_.base_route_services_.worker(), *dispatch_.memory_.resource());
             tls_output_->start();
         }
-        co_return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, &dispatch_.scanner_entry_);
+        co_return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, dispatch_.scanner_entry_);
     }
 };
 

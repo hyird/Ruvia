@@ -50,9 +50,8 @@ class context;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
-// where they are used: http_client.h, websocket.h, http_tunnel.h,
+// where they are used: websocket.h, http_tunnel.h,
 // session.h, streaming.h and multipart_reader.h.
-class http_client_handle;
 class websocket;
 class http_tunnel;
 class test_app;
@@ -607,9 +606,10 @@ public:
         return capabilities_.run_blocking(timeout, std::move(callable));
     }
 
-    // Observes worker shutdown and, for a subrequest, explicit cancellation.
-    // db(), redis(), http_client({...}).send(), and run_blocking() bind this
-    // token automatically. Explicit operation tokens are combined with it.
+    // Observes worker shutdown (application::stop() closes every connection
+    // at once, with no drain phase) and, for a subrequest, explicit
+    // cancellation. db(), redis(), and run_blocking() bind this token
+    // automatically. Explicit operation tokens are combined with it.
     //
     // Cancellation is cooperative: framework waits, including streaming sleep(),
     // observe this token; CPU work and raw Asio waits without it are not preempted.
@@ -622,16 +622,6 @@ public:
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept {
         return capabilities_.stop_token();
     }
-
-    // Requested when the server starts a graceful stop (application::stop()
-    // begins draining), and at the latest when the worker stops. A response
-    // that would otherwise hold the drain open -- SSE, long polling -- should
-    // observe it and finish, so stop completes before drain_timeout_ instead of
-    // cutting the response. stop_token() is unaffected: db(), redis(),
-    // http_client() and run_blocking() keep running through the drain. A
-    // context outside a serving connection (in-memory testing dispatch) gets a
-    // token that is never requested.
-    [[nodiscard]] ::ruvia::stop_token drain_token() const noexcept;
 
     // Present only while session_middleware is bound for this request.
     [[nodiscard]] ruvia::session session();
@@ -719,8 +709,6 @@ public:
     [[nodiscard]] redis_handle redis() const;
     [[nodiscard]] redis_handle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] http_client_handle http_client() const;
-    [[nodiscard]] http_client_handle http_client(std::string_view alias) const;
     [[nodiscard]] ::ruvia::websocket& websocket() const;
     [[nodiscard]] http_tunnel& tunnel() const;
 

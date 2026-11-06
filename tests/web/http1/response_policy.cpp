@@ -678,12 +678,15 @@ RUVIA_TEST(http_server_fixture_reservations_stay_bound_without_accepting_clients
     RUVIA_CHECK(first.endpoint() != server.endpoint());
     RUVIA_CHECK(second.endpoint() != server.endpoint());
 
-    // A reservation must remain bound, including before the real server starts.
+    std::error_code error;
+#if !defined(_WIN32)
+    // POSIX: a reservation stays bound, including before the real server starts.
+    // Windows keeps only a named lease so the server's exclusive bind can succeed.
     asio::ip::tcp::acceptor contender(io);
     contender.open(asio::ip::tcp::v4());
-    std::error_code error;
     contender.bind(first.endpoint(), error);
     RUVIA_CHECK(error == asio::error::address_in_use);
+#endif
 
     // It must not be a listener that can steal a client's connection.
     asio::ip::tcp::socket client(io);

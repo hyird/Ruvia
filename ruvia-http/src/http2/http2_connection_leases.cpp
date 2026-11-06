@@ -46,6 +46,7 @@ void http2_connection::abandon_received_data(std::uint32_t stream_id, std::uint3
     } catch (...) {
         leases_.defer_credit(stream_id, bytes);
     }
+    flush_output();
 }
 
 bool http2_connection::acknowledge_received_data(std::uint32_t stream_id, std::uint32_t bytes) {
@@ -53,6 +54,7 @@ bool http2_connection::acknowledge_received_data(std::uint32_t stream_id, std::u
         return false;
     }
     retry_deferred_stream_lease(stream_id);
+    flush_session();
     return true;
 }
 
@@ -61,6 +63,17 @@ void http2_connection::abandon_stream_lease(std::uint32_t stream_id) noexcept {
         abandon_stream_lease_checked(stream_id);
     } catch (...) {
         leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::abandon);
+    }
+    flush_output();
+}
+
+void http2_connection::flush_output() noexcept {
+    try {
+        flush_session();
+        // A failed flush has already failed the connection; the next feed() or
+        // output drain observes that terminal state.
+        // NOLINTNEXTLINE(bugprone-empty-catch)
+    } catch (...) {
     }
 }
 
@@ -120,6 +133,7 @@ void http2_connection::retry_deferred_stream_leases() noexcept {
             ++index;
         }
     }
+    flush_output();
 }
 
 }  // namespace ruvia::detail

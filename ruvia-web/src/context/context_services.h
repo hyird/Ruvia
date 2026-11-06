@@ -58,8 +58,6 @@ struct context_worker_services final {
     // are reported; the worker's connection failure outlet, never null.
     const connection_failure_sink* connection_failure_{};
     const trusted_proxy_set* trusted_proxies_{};
-    // The serving worker's drain token; null outside a serving connection.
-    const stop_token* drain_token_{};
 };
 
 struct context_connection_services final {
@@ -70,6 +68,9 @@ struct context_connection_services final {
     bool peer_trusted_{false};
     // The certificate a TLS connection presented; null for cleartext.
     tls_served_certificate* served_certificate_{};
+    // The Alt-Svc field value (RFC 7838 §3) this connection's listener
+    // advertises on every response; empty when it advertises none.
+    std::string_view alternative_service_{};
 };
 
 // Borrowed protocol channels outlive every context for this request.
@@ -176,21 +177,6 @@ public:
         request_services_.stop_token_ = token;
     }
     void bind_stop_token(stop_token&&) = delete;
-
-    // Requested when the serving worker starts draining, and at the latest
-    // when it stops. A context outside a serving connection (in-memory test
-    // dispatch) gets a token that is never requested.
-    [[nodiscard]] stop_token drain_token() const noexcept {
-        return worker_services_.drain_token_ != nullptr ? *worker_services_.drain_token_ : stop_token{};
-    }
-
-    // The worker-owned token outlives every connection it is bound to.
-    [[nodiscard]] context_services with_drain_token(const stop_token& token) const noexcept {
-        auto services = *this;
-        services.worker_services_.drain_token_ = &token;
-        return services;
-    }
-    context_services with_drain_token(stop_token&&) const = delete;
 
     [[nodiscard]] const route_table* routes() const noexcept {
         return worker_services_.routes_;
@@ -376,6 +362,20 @@ public:
     template <typename traits_type, typename allocator_type>
     context_services with_tls_transport(std::string_view, std::basic_string<char, traits_type, allocator_type>&&,
         std::uint16_t, tls_served_certificate&) const = delete;
+
+    [[nodiscard]] constexpr std::string_view alternative_service() const noexcept {
+        return connection_services_.alternative_service_;
+    }
+
+    // `value` borrows listener-owned storage that outlives the connection.
+    [[nodiscard]] context_services with_alternative_service(std::string_view value) const noexcept {
+        auto services = *this;
+        services.connection_services_.alternative_service_ = value;
+        return services;
+    }
+
+    template <typename traits_type, typename allocator_type>
+    context_services with_alternative_service(std::basic_string<char, traits_type, allocator_type>&&) const = delete;
 
 private:
     [[nodiscard]] bool trusts_peer(std::string_view remote_address) const noexcept {

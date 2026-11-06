@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <variant>
 
 #include "ruvia/http/http_connection_advertisement.h"
@@ -6,36 +7,20 @@
 #include "http2/http2_connection.h"
 #include "http2/http2_remote_receive_semantics.h"
 
+// ORIGIN (RFC 8336) and ALTSVC (RFC 7838) leave through nghttp2 as extension
+// frames whose payload the single in-tree advertisement encoder writes.
+
 namespace ruvia::detail {
-bool http2_connection::process_advertisement(const http2_frame_header& header_value, std::string_view payload_value) {
-    if (role_ != http2_role::client) {
-        return true;
-    }
-    if (header_value.type_ == static_cast<std::uint8_t>(http2_frame_type::origin)) {
-        if (!receive_origin_advertisements_ || header_value.stream_id_ != 0 || (header_value.flags_ & 0xf) != 0) {
-            return true;
-        }
-        auto advertisement = decode_http_origin_advertisement({payload_value.data(), payload_value.size()}, resource_);
-        if ((advertisement.index() == 0)) {
-            reserve_event_slots(1);
-            publish_event(http2_event(std::move(std::get<0>(advertisement))));
-        }
-    } else {
-        if (header_value.stream_id_ != 0) {
-            const auto* stream = streams_.find(header_value.stream_id_);
-            if (stream == nullptr || http2_stream_is_closed(*stream) ||
-                stream->tunnel().not_connect() == nullptr) {
-                return true;
-            }
-        }
-        auto advertisement = decode_http2_alternative_service(header_value.stream_id_, {payload_value.data(), payload_value.size()}, resource_);
-        if ((advertisement.index() == 0)) {
-            reserve_event_slots(1);
-            publish_event(http2_event(std::move(std::get<0>(advertisement))));
-        }
-    }
-    return true;
+namespace {
+
+// nghttp2 packs an extension payload into a buffer of at least 16 KiB
+// (nghttp2_pack_extension_callback2), so larger peer frame limits do not apply.
+[[nodiscard]] std::uint32_t extension_payload_limit(std::uint32_t peer_max_frame_size) noexcept {
+    return (std::min)(peer_max_frame_size, http2_default_max_frame_size);
 }
+
+}  // namespace
+
 http2_submit_status http2_connection::submit_origin_advertisement(std::span<const std::string_view> origins) {
     if (role_ != http2_role::server) {
         return http2_submit_status::invalid_state;
@@ -43,19 +28,29 @@ http2_submit_status http2_connection::submit_origin_advertisement(std::span<cons
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_) {
         return http2_submit_status::closed;
     }
-    if (preface_phase_ != preface_phase_type::ready) {
+    if (!received_peer_settings_) {
         return http2_submit_status::invalid_state;
     }
-    const auto payload_size = http2_origin_payload_size(origins, peer_settings_.max_frame_size());
+    const auto payload_size =
+        http2_origin_payload_size(origins, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
     if (payload_size.index() != 0) {
         return http2_submit_status::invalid_message;
     }
-    http2_write_origin_payload(
-        output_.append_frame_payload(http2_frame_type::origin, 0, 0, std::get<0>(payload_size)), origins);
+    http2_extension_payload payload{
+        .size_ = std::get<0>(payload_size),
+        .write_ = [](const http2_extension_payload& value, std::span<char> output) noexcept {
+            http2_write_origin_payload(output, value.origins_);
+        },
+        .origins_ = origins,
+    };
+    check_nghttp2(nghttp2_submit_extension(
+        session_.get(), static_cast<std::uint8_t>(http2_frame_type::origin), NGHTTP2_FLAG_NONE, 0, &payload));
+    flush_session();
     return http2_submit_status::accepted;
 }
+
 http2_submit_status http2_connection::submit_alternative_service_advertisement(std::uint32_t stream_id,
-    std::string_view origin, std::string_view value) {
+    std::string_view origin, std::string_view field_value) {
     if (role_ != http2_role::server) {
         return http2_submit_status::invalid_state;
     }
@@ -64,23 +59,32 @@ http2_submit_status http2_connection::submit_alternative_service_advertisement(s
     }
     const auto* stream = stream_id != 0 ? streams_.find(stream_id) : nullptr;
     // A promised stream leaves reserved (local) with its first response
-    // HEADERS, interim or final (RFC 9113 §8.4.2); only the still-reserved
-    // stream may not carry ALTSVC (RFC 7838 §4).
-    if (preface_phase_ != preface_phase_type::ready ||
+    // HEADERS (RFC 9113 §8.4.2); only the still-reserved stream may not carry
+    // ALTSVC (RFC 7838 §4), and a CONNECT tunnel never does.
+    if (!received_peer_settings_ ||
         (stream_id != 0 &&
             (stream == nullptr || http2_stream_is_closed(*stream) ||
                 stream->push_reservation() == http2_push_reservation::local ||
                 !http2_remote_final_head_decoded(*stream) || stream->tunnel().not_connect() == nullptr))) {
         return http2_submit_status::invalid_state;
     }
-    const auto payload_size =
-        http2_alternative_service_payload_size(stream_id, origin, value, peer_settings_.max_frame_size());
+    const auto payload_size = http2_alternative_service_payload_size(
+        stream_id, origin, field_value, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
     if (payload_size.index() != 0) {
         return http2_submit_status::invalid_message;
     }
-    http2_write_alternative_service_payload(
-        output_.append_frame_payload(http2_frame_type::alternative_service, 0, stream_id, std::get<0>(payload_size)),
-        origin, value);
+    http2_extension_payload payload{
+        .size_ = std::get<0>(payload_size),
+        .write_ = [](const http2_extension_payload& value, std::span<char> output) noexcept {
+            http2_write_alternative_service_payload(output, value.origin_, value.field_value_);
+        },
+        .origin_ = origin,
+        .field_value_ = field_value,
+    };
+    check_nghttp2(nghttp2_submit_extension(session_.get(), static_cast<std::uint8_t>(http2_frame_type::alternative_service),
+        NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(stream_id), &payload));
+    flush_session();
     return http2_submit_status::accepted;
 }
+
 }  // namespace ruvia::detail

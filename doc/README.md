@@ -8,7 +8,7 @@
 | --- | --- |
 | [doc/README.md](README.md) | 架构总览、CMake 构建与工程接入、生命周期与所有权准则、错误处理约定、示例程序全集索引 |
 | [doc/web-guide.md](web-guide.md) | `ruvia::web` 服务端核心：应用配置（`ruvia::app()`）、控制器与路由宏、中间件、`context` / `context_request`、声明式模型 `RUVIA_MODEL` 与校验、静态文件、运维能力与内存级测试 `test_app` |
-| [doc/streaming-websocket-client.md](streaming-websocket-client.md) | 流式请求/响应与 SSE、HTTP/1.1 & HTTP/2 高级服务端能力（`103 Early Hints`、优先级、Server Push、Trailer）、WebSocket 服务端、HTTP `CONNECT` / `CONNECT-UDP` 隧道、出站 `http_client` 与 `websocket_client` |
+| [doc/streaming-websocket.md](streaming-websocket.md) | 流式请求/响应与 SSE、HTTP/1.1 & HTTP/2 高级服务端能力（`103 Early Hints`、优先级、Server Push、Trailer）、WebSocket 服务端与 HTTP `CONNECT` / `CONNECT-UDP` 隧道 |
 | [doc/data-and-auth.md](data-and-auth.md) | SQL 数据库（MariaDB / PostgreSQL 连接池、直接查询、事务、迁移、SQL/DDL/过程构建器）、强类型关系型 ORM、Redis 客户端（命令、Pipeline、事务、Streams、Pub/Sub、RediSearch ORM）与 JWT 认证 |
 | [doc/core-and-http.md](core-and-http.md) | `ruvia::core` 运行时（`task<T>`、`event_loop_pool`、`blocking_pool`、有界通道、停止令牌、定时器、PMR 内存资源）与 `ruvia::http` 独立 Sans-I/O 协议层（HTTP/1、HTTP/2、HPACK、WebSocket、内容压缩、Multipart、SSE） |
 
@@ -22,7 +22,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | --- | --- | --- | --- |
 | `ruvia-core` | `ruvia::core` | `"ruvia/core/..."` | 协程任务（`task<T>` / `root_task<T>`）、事件循环（`event_loop` / `event_loop_pool` / `event_loop_attachment`）、有界通道（`channel` / `one_shot`）、阻塞卸载池（`blocking_pool`）与 PMR 内存池；仅公开依赖 standalone Asio 与 `Threads::Threads` |
 | `ruvia-http` | `ruvia::http` | `"ruvia/http/..."` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HPACK、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；不依赖 `ruvia::core`、Asio、socket 或 OpenSSL |
-| `ruvia-web` | `ruvia::web` | `"ruvia/web/..."` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、出站 HTTP/WebSocket 客户端、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
+| `ruvia-web` | `ruvia::web` | `"ruvia/web/..."` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
 
 > **头文件使用原则**：只包含 `include/ruvia/{core,http,web}/` 下的非 `detail` 公开头文件，不直接引用任何 `detail/` 子目录下的内部头文件。
 
@@ -99,15 +99,15 @@ ruvia_link_controllers(my_service user_controllers)
 
 ### 3.1 Shared-Nothing Worker 线程模型
 
-- **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `server_config::worker_count_` 启动业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、自己的监听器、控制器实例、中间件实例、PMR 内存池以及绑定的 `db_client` / `redis_client` / `http_client` 连接池。
-- **无跨线程连接交接**：待接受的 socket 从发起 accept 的 origin worker 创建起，其后的 TCP/TLS I/O、HTTP/1 或 HTTP/2 解析、路由执行、协议定时器和关闭排空全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。
+- **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `server_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例、PMR 内存池以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
+- **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`stop()` 直接断开全部连接，不设排空阶段。
 - **跨线程调度与卸载**：
   - 跨 worker 通信通过 `web_worker_handle::post`、`event_loop::post` 或有界通道 `make_channel` / `make_one_shot` 进行。
-  - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环借用的 `blocking_pool`；独立事件循环须在创建时通过 `blocking_pool_` 选项交给它一个比它存活更久的池，否则返回 `blocking_status::unavailable`，主机不是 IP 字面量的客户端也无法构造。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context`、请求 Arena 或任何 worker 局部状态**。
+  - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环借用的 `blocking_pool`；独立事件循环须在创建时通过 `blocking_pool_` 选项交给它一个比它存活更久的池，否则返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context`、请求 Arena 或任何 worker 局部状态**。
 
 ### 3.2 协程与作用域操作契约
 
-- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`http_client`、`db_handle`、`redis_handle` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的 `operation_scope`。
+- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`db_handle`、`redis_handle` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的 `operation_scope`。
   - **未启动（cold）**的 `task<T>` 可直接析构丢弃，或随所属 `operation_scope` 关闭自动回收。
   - **已启动（started）但尚未完成**的 `task<T>` 严禁直接析构（会直接触发 `std::terminate()`）。请求取消（`stop_source::request_stop()`）后，仍必须 `co_await` 或 `join` 等待其完成退出。
 
@@ -126,7 +126,7 @@ ruvia_link_controllers(my_service user_controllers)
 - **配置结构体字段命名**：所有配置/选项结构体（`*_config`、`*_options`、`*_rule` 等）的公开成员变量均以**下划线 `_` 结尾**（例如 `listen_config{.address_ = "0.0.0.0", .http_ = 8080}`），支持 C++20 指定初始化器（designated initializers）。
 - **错误处理形状**：
   - **正常协议/队列状态推进**：通过状态枚举或结果类型表示（如 `post_status::queue_full`、`channel_send_status::full`、`blocking_status::timed_out`、`worker_wait_status::closed`）。
-  - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error`（可携带校验 issues）由错误处理器转换为对应 HTTP 响应；协议原语抛出 `ruvia::http_protocol_error`，携带状态码与稳定机器码 `code()`；客户端抛出 `http_client_error`、`websocket_client_error`、`db_error`、`redis_error`）。
+  - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error`（可携带校验 issues）由错误处理器转换为对应 HTTP 响应；协议原语抛出 `ruvia::http_protocol_error`，携带状态码与稳定机器码 `code()`；客户端抛出 `db_error`、`redis_error`）。
   - **纯解析/值校验边界**：返回 `std::optional<T>`、`std::variant<T, Error>`，或直接返回值并在格式/规则非法时抛出 `std::invalid_argument` / 携带 issues 的 `ruvia::http_error`（如 `ruvia::parse_integer<T>`、`ruvia::from_json<T>`）。
 
 ---
@@ -147,10 +147,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [streaming.cpp](../examples/web/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `body_reader()`、流式 Multipart `multipart_reader()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
 | [http_features.cpp](../examples/web/http_features.cpp) | `ruvia_example_http_features` | 默认 | `103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告与请求/响应 Trailer |
 | [websocket.cpp](../examples/web/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
-| [tunnels.cpp](../examples/web/tunnels.cpp) | `ruvia_example_tunnels` | 默认 | HTTP/1.1 & HTTP/2 `CONNECT` 字节流隧道与 RFC 9298 `CONNECT-UDP` 数据报隧道（含服务端与 `--client` 客户端模式） |
-| [http_client.cpp](../examples/web/http_client.cpp) | `ruvia_example_http_client` | 默认 | Worker 绑定的出站 `http_client`：超时控制、POST 转发、`read_all()` 与 `pipe_to(c.stream())` 流式反向代理 |
-| [http_client_advanced.cpp](../examples/web/http_client_advanced.cpp) | `ruvia_example_http_client_advanced` | 默认 | 独立 `event_loop_pool` 上的 HTTP/1.1 & HTTP/2 高级客户端：流式上传、`100-continue`、Trailer、1xx 响应、重设优先级、接收 Push 与通告、同源重定向 |
-| [websocket_client.cpp](../examples/web/websocket_client.cpp) | `ruvia_example_websocket_client` | 默认 | 独立 `event_loop_pool` 上的 WebSocket 客户端（支持 HTTP/1.1 Upgrade 与 HTTP/2 Extended CONNECT） |
+| [tunnels.cpp](../examples/web/tunnels.cpp) | `ruvia_example_tunnels` | 默认 | HTTP/1.1 & HTTP/2 `CONNECT` 字节流隧道与 RFC 9298 `CONNECT-UDP` 数据报隧道 |
 | [runtime_config.cpp](../examples/web/runtime_config.cpp) | `ruvia_example_runtime_config` | 默认 | `.env` 加载、全局与前缀中间件、内存池与连接限制、协商压缩、CORS、TLS / mTLS / SNI 与 HTTP 自动跳转 HTTPS |
 | [ops.cpp](../examples/web/ops.cpp) | `ruvia_example_ops` | 默认 | `security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`http_stats()`、生命周期与日志钩子 |
 | [workers_blocking.cpp](../examples/web/workers_blocking.cpp) | `ruvia_example_workers_blocking` | 默认 | Worker 局部状态 `use_worker_state<T>()`、跨 Worker 任务投递 `worker.post(...)` 与 `c.run_blocking(...)` 阻塞池卸载 |

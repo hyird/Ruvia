@@ -68,8 +68,7 @@ public:
     [[nodiscard]] const lowest_layer_type& lowest_layer() const noexcept {
         return *this;
     }
-    // The raw socket, for plaintext connections, socket options and the
-    // CONNECT tunnel, which writes its own TLS records.
+    // The raw socket, for plaintext connections and socket options.
     [[nodiscard]] asio::ip::tcp::socket& socket() noexcept {
         return socket_;
     }

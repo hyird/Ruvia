@@ -1,6 +1,7 @@
 #include "server/http_server_listener.h"
 
 #include <memory_resource>
+#include <string>
 #include <type_traits>
 
 namespace ruvia::detail {
@@ -36,12 +37,25 @@ http_server_listener_definition::transport_type clone_transport(
 }  // namespace
 
 http_server_listener_definition http_server_listener_definition::clone(std::pmr::memory_resource* resource) const {
-    return http_server_listener_definition(endpoint_, clone_transport(transport_, pmr_resource_or_default(resource)));
+    return http_server_listener_definition(
+        endpoint_, clone_transport(transport_, pmr_resource_or_default(resource)), http3_);
 }
 
 http_server_session_config::http_server_session_config(
     const http_server_listener_definition& definition, std::pmr::memory_resource* resource)
     : transport_(clone_transport(definition.transport_, pmr_resource_or_default(resource))),
-      sni_contexts_(pmr_resource_or_default(resource)) {}
+      http3_(definition.http3_),
+      alternative_service_(pmr_resource_or_default(resource)),
+      sni_contexts_(pmr_resource_or_default(resource)),
+      quic_sni_contexts_(pmr_resource_or_default(resource)) {
+    if (http3_.has_value()) {
+        // RFC 7838 §3: alt-authority with an empty host names this origin's
+        // host on the UDP port; "ma" bounds how long clients cache it.
+        alternative_service_.append("h3=\":");
+        alternative_service_.append(std::to_string(http3_->port_));
+        alternative_service_.append("\"; ma=");
+        alternative_service_.append(std::to_string(http3_->alt_svc_max_age_.count()));
+    }
+}
 
 }  // namespace ruvia::detail

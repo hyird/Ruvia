@@ -37,48 +37,7 @@ void server_websocket_connection<stream_type>::finish_write() noexcept {
     if (std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
         restart_pong_window(steady_now_ms());
     }
-    if (going_away_pending_) {
-        start_going_away();
-    }
     write_lane_.notify();
-}
-
-template <typename stream_type>
-void server_websocket_connection<stream_type>::start_going_away() noexcept {
-    if (protocol_.liveness_mode() != websocket_liveness_mode::open) {
-        // A close handshake (or a terminal failure) is already under way.
-        going_away_pending_ = false;
-        return;
-    }
-    if (write_lane_.blocked_for_writer()) {
-        // The lane owner or reserved reader's finish_write() starts the close.
-        going_away_pending_ = true;
-        return;
-    }
-    going_away_pending_ = false;
-    write_lane_.begin();
-    try {
-        background_tasks_.spawn(write_going_away_close());
-    } catch (...) {
-        finish_write();
-        fail_background(std::current_exception());
-    }
-}
-
-template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::write_going_away_close() {
-    write_guard_type write_guard(*this, write_claim_type::adopt);
-    try {
-        // The session may have closed or failed before this coroutine ran.
-        if (protocol_.submit_close(websocket_close_status::going_away, {}) != websocket_close_submit_status::accepted) {
-            co_return;
-        }
-        // Same deadline as a locally initiated close(); it covers this write.
-        liveness_state_ = websocket_awaiting_peer_close(steady_now_ms());
-        co_await flush_protocol_output_now();
-    } catch (...) {
-        fail_background(std::current_exception());
-    }
 }
 
 template <typename stream_type>

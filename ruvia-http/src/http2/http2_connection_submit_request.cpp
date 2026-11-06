@@ -3,7 +3,6 @@
 #include <memory_resource>
 #include <utility>
 
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
@@ -15,7 +14,6 @@
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_response_headers.h"
-#include "http2/http2_websocket_handshake.h"
 #include "parser/http_request_target.h"
 #include "websocket/http_websocket_handshake_fields.h"
 
@@ -134,6 +132,43 @@ namespace {
 
 }  // namespace
 
+template <typename prepare_type>
+std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_local_request_head(
+    http2_end_stream end_stream, const prepare_type& prepare) {
+    if (active_local_request_streams_ >= http2_local_settings::max_concurrent_streams) {
+        return http2_request_head_submit_error::local_stream_capacity_reached;
+    }
+    // nghttp2 assigns this identifier to the next request HEADERS.
+    const auto stream_id = static_cast<std::uint32_t>(nghttp2_session_get_next_stream_id(session_.get()));
+    auto* stream = create_stream(stream_id);
+    if (stream == nullptr) {
+        return http2_request_head_submit_error::local_stream_capacity_reached;
+    }
+    std::int32_t submitted = 0;
+    try {
+        prepare(*stream);
+        const auto fields = fields_.nv();
+        submitted = nghttp2_submit_headers(session_.get(),
+            static_cast<std::uint8_t>(http2_ends_stream(end_stream) ? NGHTTP2_FLAG_END_STREAM : NGHTTP2_FLAG_NONE), -1,
+            nullptr, fields.data(),
+            fields.size(), nullptr);
+        check_nghttp2(submitted);
+    } catch (...) {
+        fields_.clear();
+        (void)streams_.remove(stream_id);
+        throw;
+    }
+    fields_.release();
+    if (static_cast<std::uint32_t>(submitted) != stream_id) {
+        std::terminate();
+    }
+    if (stream->hold_peer_concurrency_slot()) {
+        ++active_local_request_streams_;
+    }
+    flush_session();
+    return stream_id;
+}
+
 std::variant<std::uint32_t, http2_request_head_submit_error>
 http2_connection::submit_regular_request_head(std::string_view method,
     std::string_view scheme, std::optional<std::string_view> authority, std::string_view path,
@@ -145,15 +180,16 @@ http2_connection::submit_regular_request_head(std::string_view method,
     const bool without_content = content.without_content() != nullptr;
     const auto* known_length_content = content.known_length_content();
     const bool streaming_content = content.streaming_content() != nullptr;
-    const auto expected_length = known_length_content != nullptr ? std::optional{known_length_content->length()} : streaming_content ? content.streaming_content()->expected_length()
-                                                                                                                                     : std::nullopt;
+    const auto expected_length = known_length_content != nullptr ? std::optional{known_length_content->length()}
+                                 : streaming_content             ? content.streaming_content()->expected_length()
+                                                                 : std::nullopt;
     if (!without_content && known_length_content == nullptr && !streaming_content) {
         return http2_request_head_submit_error::invalid_message;
     }
     const bool content_will_follow = !without_content && (!expected_length || *expected_length != 0);
     const auto content_indication = content_will_follow ? http_request_content_indication::will_follow
                                                         : http_request_content_indication::no_content;
-    http2_end_stream end_stream = http2_end_stream::keep_open;
+    auto end_stream = http2_end_stream::keep_open;
     // Only the formatted prefix is exposed; an omitted length keeps an empty view.
     std::array<char, http_max_unsigned_decimal_size> length_buffer;
     if (without_content) {
@@ -169,38 +205,29 @@ http2_connection::submit_regular_request_head(std::string_view method,
                                           ? http_format_unsigned(length_buffer, *expected_length)
                                           : std::string_view{};
     // Validate the entire semantic head and decoded-size budget before touching
-    // HPACK storage, outbound bytes, stream metadata, or lifecycle state.
+    // the session, stream metadata, or lifecycle state.
     if (!http2_is_valid_outbound_regular_request_head(method, known_method, scheme, default_port,
             authority, path, headers, content_indication, content_length_value, expectation, source)) {
         return http2_request_head_submit_error::invalid_message;
     }
-    return submit_local_request_head([&](http2_stream_state& stream) {
+    return submit_local_request_head(end_stream, [&](http2_stream_state& stream) {
         stream.assign_request_method(method);
         stream.assign_request_scheme(scheme);
-        auto& block = local_header_block_;
-        block.clear();
-        http2_reserve_field_block(block,
-            3 * hpack_literal_overhead_bytes + method.size() + scheme.size() + path.size() +
-                (authority.has_value() ? authority->size() + hpack_literal_overhead_bytes : 0U) +
-                (emit_length ? content_length_value.size() + hpack_literal_overhead_bytes : 0U),
-            headers);
-        hpack_encoder::encode_header(block, ":method", method);
-        hpack_encoder::encode_header(block, ":scheme", scheme);
+        fields_.clear();
+        fields_.reserve(headers.size() + 6);
+        fields_.add(":method", method);
+        fields_.add(":scheme", scheme);
         if (authority.has_value()) {
-            hpack_encoder::encode_header(block, ":authority", *authority);
+            fields_.add(":authority", *authority);
         }
-        hpack_encoder::encode_header(block, ":path", path);
-        http2_encode_lowercase_fields(block, headers);
+        fields_.add(":path", path);
+        fields_.add_lowercase_fields(headers);
         if (expectation == http_client_request_expectation::continue_value) {
-            hpack_encoder::encode_header(block, "expect", http_continue_expectation_token);
+            fields_.add("expect", http_continue_expectation_token);
         }
         if (emit_length) {
-            hpack_encoder::encode_header(block, "content-length", content_length_value);
+            fields_.add_owned_value("content-length", content_length_value);
         }
-        // This is the commit point for the wire representation. Every operation
-        // above is retryable; append_header_frames pre-reserves the complete
-        // frame sequence, so a throwing resource cannot strand a created stream.
-        append_header_frames(stream, end_stream);
         if (without_content) {
             stream.begin_local_content_forbidden();
         } else if (expected_length) {
@@ -237,20 +264,16 @@ http2_connection::submit_connect_request_head(
         return http2_request_head_submit_error::invalid_message;
     }
 
-    return submit_local_request_head([&](http2_stream_state& stream) {
+    return submit_local_request_head(http2_end_stream::keep_open, [&](http2_stream_state& stream) {
         (void)stream.begin_standard_connect();
         stream.assign_request_method("CONNECT");
         stream.begin_local_content_forbidden();
         (void)stream.begin_local_connect_request();
-
-        auto& block = local_header_block_;
-        block.clear();
-        http2_reserve_field_block(
-            block, 2 * hpack_literal_overhead_bytes + std::string_view("CONNECT").size() + authority.size(), headers);
-        hpack_encoder::encode_header(block, ":method", "CONNECT");
-        hpack_encoder::encode_header(block, ":authority", authority);
-        http2_encode_lowercase_fields(block, headers);
-        append_header_frames(stream, http2_end_stream::keep_open);
+        fields_.clear();
+        fields_.reserve(headers.size() + 2);
+        fields_.add(":method", "CONNECT");
+        fields_.add(":authority", authority);
+        fields_.add_lowercase_fields(headers);
     });
 }
 
@@ -261,7 +284,7 @@ http2_connection::submit_extended_connect_request_head(
     if (const auto error = local_request_admission_error()) {
         return *error;
     }
-    if (!peer_settings_.enable_connect_protocol()) {
+    if (peer_setting(NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL) != 1) {
         return http2_request_head_submit_error::peer_capability_unavailable;
     }
 
@@ -282,31 +305,24 @@ http2_connection::submit_extended_connect_request_head(
         return http2_request_head_submit_error::invalid_message;
     }
 
-    return submit_local_request_head([&](http2_stream_state& stream) {
+    return submit_local_request_head(http2_end_stream::keep_open, [&](http2_stream_state& stream) {
         (void)stream.begin_extended_connect();
         stream.assign_request_method("CONNECT");
         stream.assign_request_scheme(scheme);
         stream.set_protocol(encoded_protocol);
         stream.begin_local_content_forbidden();
         (void)stream.begin_local_connect_request();
-
-        auto& block = local_header_block_;
-        block.clear();
-        constexpr std::string_view protocol_name = ":protocol";
-        http2_reserve_field_block(block,
-            5 * hpack_literal_overhead_bytes + std::string_view("CONNECT").size() + protocol_name.size() +
-                encoded_protocol.size() + scheme.size() + authority.size() + path.size(),
-            headers);
-        hpack_encoder::encode_header(block, ":method", "CONNECT");
+        fields_.clear();
+        fields_.reserve(headers.size() + 5);
+        fields_.add(":method", "CONNECT");
         // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
         // protocol-name matching is case-insensitive, so accept caller spelling but
         // never put a non-canonical websocket token on the wire or in stream state.
-        hpack_encoder::encode_header(block, protocol_name, encoded_protocol);
-        hpack_encoder::encode_header(block, ":scheme", scheme);
-        hpack_encoder::encode_header(block, ":authority", authority);
-        hpack_encoder::encode_header(block, ":path", path);
-        http2_encode_lowercase_fields(block, headers);
-        append_header_frames(stream, http2_end_stream::keep_open);
+        fields_.add(":protocol", encoded_protocol);
+        fields_.add(":scheme", scheme);
+        fields_.add(":authority", authority);
+        fields_.add(":path", path);
+        fields_.add_lowercase_fields(headers);
     });
 }
 
@@ -314,21 +330,21 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     std::uint32_t associated_stream_id, http_push_request_view request) {
     using error_type = http2_push_submit_error;
     const auto* parent_value = streams_.find(associated_stream_id);
-    if (role_ != http2_role::server || preface_phase_ != preface_phase_type::ready ||
+    const auto promised_id = static_cast<std::uint32_t>(nghttp2_session_get_next_stream_id(session_.get()));
+    if (role_ != http2_role::server || !received_peer_settings_ ||
         local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() ||
         (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) ||
         parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() ||
-        next_push_stream_id_ > http2_max_stream_id) {
+        promised_id > http2_max_stream_id) {
         return error_type::invalid_state;
     }
-    if (!peer_settings_.enable_push()) {
+    if (peer_setting(NGHTTP2_SETTINGS_ENABLE_PUSH) == 0) {
         return error_type::push_disabled;
     }
-    // RFC 9113 8.4: the client's SETTINGS_MAX_CONCURRENT_STREAMS bounds pushed
-    // responses. When no pushed stream could open now (the limit is 0 or already
-    // reached by open pushes) the promise is not made. Reserved promises do not
-    // count (RFC 9113 5.1.2); their response head waits for a slot instead.
-    if (active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
+    // RFC 9113 §8.4: the client's SETTINGS_MAX_CONCURRENT_STREAMS bounds pushed
+    // responses. When no pushed stream could open now the promise is not made.
+    // Reserved promises do not count (§5.1.2); their response head waits for a slot.
+    if (active_local_request_streams_ >= peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)) {
         return error_type::stream_limit;
     }
     const auto known_method = request.method_ == "GET"    ? http_known_method::get
@@ -343,20 +359,8 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
             http_request_field_source::generated)) {
         return error_type::invalid_request;
     }
-    auto& block = local_header_block_;
-    block.clear();
-    http2_reserve_field_block(block,
-        4 * hpack_literal_overhead_bytes + request.method_.size() + request.scheme_.size() +
-            request.authority_.size() + request.path_.size(),
-        request.headers_);
-    hpack_encoder::encode_header(block, ":method", request.method_.view());
-    hpack_encoder::encode_header(block, ":scheme", request.scheme_.view());
-    hpack_encoder::encode_header(block, ":authority", request.authority_.view());
-    hpack_encoder::encode_header(block, ":path", request.path_.view());
-    http2_encode_lowercase_fields(block, request.headers_);
-    auto* stream = create_stream(next_push_stream_id_);
-    if (!stream) {
-        http2_release_local_header_block(local_header_block_);
+    auto* stream = create_stream(promised_id);
+    if (stream == nullptr) {
         return error_type::stream_limit;
     }
     try {
@@ -390,16 +394,28 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         (void)stream->record_remote_head_end_stream();
         (void)stream->finalize_remote_content_head();
         stream->reserve_push(http2_push_reservation::local);
-        append_field_block_frames(associated_stream_id, next_push_stream_id_, 0);
+        fields_.clear();
+        fields_.reserve(request.headers_.size() + 4);
+        fields_.add(":method", request.method_.view());
+        fields_.add(":scheme", request.scheme_.view());
+        fields_.add(":authority", request.authority_.view());
+        fields_.add(":path", request.path_.view());
+        fields_.add_lowercase_fields(request.headers_);
+        const auto fields = fields_.nv();
+        const auto submitted = nghttp2_submit_push_promise(session_.get(), NGHTTP2_FLAG_NONE,
+            static_cast<std::int32_t>(associated_stream_id), fields.data(), fields.size(), nullptr);
+        check_nghttp2(submitted);
+        if (static_cast<std::uint32_t>(submitted) != promised_id) {
+            std::terminate();
+        }
     } catch (...) {
-        local_header_block_.clear();
-        streams_.remove(next_push_stream_id_);
+        fields_.clear();
+        streams_.remove(promised_id);
         throw;
     }
-    http2_release_local_header_block(local_header_block_);
-    const auto id = next_push_stream_id_;
-    next_push_stream_id_ += 2;
-    return id;
+    fields_.release();
+    flush_session();
+    return promised_id;
 }
 
 }  // namespace ruvia::detail

@@ -74,37 +74,13 @@ namespace ruvia::detail {
 }
 
 // How a failed request-head read closes. A clean peer end (FIN, or TLS
-// close_notify), or a timeout or drain that the scanner signalled by
-// cancelling the read, ends a connection that owes no response: TLS answers
-// with close_notify. Any other failure closes at once.
+// close_notify), or a timeout that the scanner signalled by cancelling the
+// read, ends a connection that owes no response: TLS answers with
+// close_notify. Any other failure closes at once.
 [[nodiscard]] inline http_connection_close http1_request_head_read_close(
     const std::error_code& error, const connection_scanner::entry& scanner_entry) noexcept {
     return error == asio::error::eof || scanner_entry.close_requested() ? http_connection_close::notify
                                                                         : http_connection_close::abort;
-}
-
-// A drain cancels a request-head read even when the request has already
-// arrived: the reactor cancels the pending read before performing it. As
-// Pingora's biased select reads ready input before it observes shutdown, the
-// read is then issued once more when input is already waiting -- in the
-// socket, or decrypted in the TLS engine. The close deadline the drain set
-// still bounds that read.
-template <typename stream_type>
-[[nodiscard]] bool input_arrived_before_drain(stream_type& stream, const std::error_code& error,
-    const connection_scanner::entry& scanner_entry, http_server_worker_state worker_state) noexcept {
-    if (error != asio::error::operation_aborted || !scanner_entry.close_requested() ||
-        http_server_worker_running(worker_state)) {
-        return false;
-    }
-    std::error_code available_error;
-    if (stream.lowest_layer().available(available_error) != 0 && !available_error) {
-        return true;
-    }
-    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>) {
-        return false;
-    } else {
-        return SSL_pending(stream.native_handle()) > 0;
-    }
 }
 
 // What every request of one connection shares: the resident state run_stream
@@ -163,7 +139,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     // head) is borrowed from a per-worker pool, and the request state lives in
     // the frame of serve_requests.
     connection_scanner::entry scanner_entry;
-    connection_scanner::guard scanner_guard(scanner_, scanner_entry, socket);
+    connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
     const auto admission_policy = http_request_admission_policy::server(options_);
     const response_file_io file_output{
         .worker_ = worker_,
@@ -208,11 +184,8 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         // already decrypted completes the read at once; whatever exceeds the
         // landing pad stays in the engine for the next read.
         //
-        // A draining worker starts no further read. Bytes a read already
-        // returned are parsed first: a request head they complete is served
-        // with keep-alive off (next_response_close_policy), as Pingora serves
-        // already-buffered requests during shutdown; an incomplete one ends at
-        // the next read in serve_requests.
+        // A stopping worker has already closed the connection; it starts no
+        // further read.
         if (!http_server_worker_running(state_)) {
             co_return http_connection_close::notify;
         }
@@ -226,21 +199,13 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         scanner_entry.read_request_head(session.served_keepalive_request_
                                             ? connection_scanner::phase::idle
                                             : connection_scanner::phase::reading_initial);
-        std::error_code idle_ec;
-        std::size_t idle_bytes = 0;
-        for (bool reissued = false;;) {
-            auto idle_completion = co_await ruvia::async_asio<std::size_t>(
-                [&stream, &idle_read_buffer](auto handler) mutable {
-                    stream.async_read_some(asio::buffer(idle_read_buffer), std::move(handler));
-                });
-            idle_ec = idle_completion.error_code();
-            idle_bytes = idle_completion.result();
-            if (!idle_ec || reissued || !input_arrived_before_drain(stream, idle_ec, scanner_entry, state_)) {
-                break;
-            }
-            reissued = true;
-        }
-        // A clean peer end, timeout or drain is answered as in the request read loop.
+        auto idle_completion =
+            co_await ruvia::async_asio<std::size_t>([&stream, &idle_read_buffer](auto handler) mutable {
+                stream.async_read_some(asio::buffer(idle_read_buffer), std::move(handler));
+            });
+        const auto idle_ec = idle_completion.error_code();
+        const auto idle_bytes = idle_completion.result();
+        // A clean peer end or timeout is answered as in the request read loop.
         if (idle_ec) {
             co_return http1_request_head_read_close(idle_ec, scanner_entry);
         }
@@ -591,9 +556,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             // With no request bytes yet on a reused connection this read is the
             // keepalive idle wait (idle_timeout); once any header bytes are
             // buffered, or on the first request, request_header_timeout governs.
-            // Either way no request is admitted yet: a draining worker starts
-            // no read for one, and a drain that begins during the read cancels
-            // it. Bytes the read already returned are still parsed above.
+            // Either way no request is admitted yet, and a stopping worker
+            // (which already closed the connection) starts no read for one.
             if (!http_server_worker_running(state_)) {
                 co_return http_connection_close::notify;
             }
@@ -612,24 +576,16 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 throw std::logic_error("HTTP/1 request head filled the read buffer unrejected");
             }
 
-            std::error_code ec;
-            std::size_t bytes_read = 0;
-            for (bool reissued = false;;) {
-                auto read_completion =
-                    co_await ruvia::async_asio<std::size_t>([&stream, read_space](auto handler) mutable {
-                        stream.async_read_some(asio::buffer(read_space), std::move(handler));
-                    });
-                ec = read_completion.error_code();
-                bytes_read = read_completion.result();
-                if (!ec || reissued || !input_arrived_before_drain(stream, ec, scanner_entry, state_)) {
-                    break;
-                }
-                reissued = true;
-            }
+            auto read_completion =
+                co_await ruvia::async_asio<std::size_t>([&stream, read_space](auto handler) mutable {
+                    stream.async_read_some(asio::buffer(read_space), std::move(handler));
+                });
+            const auto ec = read_completion.error_code();
+            const auto bytes_read = read_completion.result();
             if (ec) {
-                // A clean peer end, or a timeout or drain that cancelled the
-                // read, is answered with this side's close alert; anything else
-                // closes immediately, as does a stopping worker.
+                // A clean peer end, or a timeout that cancelled the read, is
+                // answered with this side's close alert; anything else closes
+                // immediately, as does a stopping worker.
                 co_return http1_request_head_read_close(ec, scanner_entry);
             }
             if (record_access_timing && read_buffer.empty()) {
@@ -796,8 +752,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             throw std::logic_error("HTTP/1 request completion has no wire alternative");
         }
 
-        // A draining worker closes after the response, even one whose head
-        // already allowed reuse because the drain began while it streamed.
+        // A stopping worker ends the connection after the response.
         if (connection_plan.disposition() == http1_close_policy::close_after_response ||
             !http_server_worker_running(state_)) {
             co_return http_connection_close::linger;

@@ -10,8 +10,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 
-#include "http2/http2_frame_codec.h"
-#include "http2/http2_frame_types.h"
+#include "http2/http2_local_settings.h"
 
 namespace ruvia {
 namespace {
@@ -44,7 +43,8 @@ char* write_prefixed_origin(char* out, std::string_view origin) noexcept {
 std::pmr::vector<char> make_http2_frame(http2_frame_type type, std::uint32_t stream_id, std::size_t payload_size,
     std::pmr::memory_resource* resource) {
     std::pmr::vector<char> bytes(http2_frame_header_bytes + payload_size, resource);
-    detail::http2_write_frame_header(bytes.data(), static_cast<std::uint32_t>(payload_size), type, 0, stream_id);
+    (void)encode_http2_frame_header(
+        std::span(bytes).first(http2_frame_header_bytes), static_cast<std::uint32_t>(payload_size), type, 0, stream_id);
     return bytes;
 }
 }  // namespace

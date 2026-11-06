@@ -27,7 +27,7 @@
 flowchart TB
     subgraph web ["ruvia-web (ruvia::web) — 应用框架与异步 I/O 驱动"]
         w_app["路由 / 中间件 / Model & ORM / Session / 限流 / 静态文件"]
-        w_io["服务端与客户端网络驱动 / TLS (OpenSSL 3.0+) / DB & Redis & JWT 驱动"]
+        w_io["服务端网络驱动 / TLS (OpenSSL 3.0+) / DB & Redis & JWT 驱动"]
     end
     subgraph core ["ruvia-core (ruvia::core) — 独立运行时底座"]
         c_rt["协程 task / standalone Asio 事件循环 / 定时器最小堆 / stop_token"]
@@ -89,11 +89,11 @@ flowchart BT
 ```
 
 - **两级内存池架构**：仅设进程级 `process_resource()` 与线程级 `worker_memory` 两层池，不篡改全局默认 PMR，禁用隐式 `thread_local` 业务池。
-- **请求级借用分工**：`c.arena()` 供随请求销毁的一次性分配；`c.pool()` 直通所属 `worker_memory`，供中途需立即释放复用、循环扩容或与客户端/数据库结果零拷贝 `swap` 的数据。
+- **请求级借用分工**：`c.arena()` 供随请求销毁的一次性分配；`c.pool()` 直通所属 `worker_memory`，供中途需立即释放复用、循环扩容或与数据库/Redis 结果零拷贝 `swap` 的数据。
 - **PMR 资源传递与异常提升**：PMR 对象构造继承源资源、赋值保留目标资源（同资源 `swap`，跨资源递归重绑定后 `swap`）；异常抛出时将动态诊断负载提升至 `process_resource()`。
 - **最短内存生命周期**：异步入口返回前完成输入拥有化，构造冷任务后、进入 I/O 挂起前立即释放临时源容器；空结果或零长消息不分配数据块、不占配额。
 - **栈上 SBO 与缓冲水位线**：高频短数据与小回调采用栈上 SBO；长连接缓冲按水位线保留小容量、超限归还大块并在空闲周期触发 `trim`；流式缓冲 `consume()` 仅推游标，待已消费前缀覆盖存活后缀时才 $O(1)$ 摊销前移压缩。
-- **两级实时内存预算**：入站缓冲与出站结果强制执行 worker 级与单连接/单客户端级两级实时内存上限，超限直接抛出 `std::bad_alloc`。
+- **两级实时内存预算**：入站缓冲强制执行 worker 级与单连接级两级实时内存上限，超限直接抛出 `std::bad_alloc`。
 - **双轨超时与防预分配 DoS**：连接超时区分基于最后 I/O 的“阶段无活动超时”与不可被慢速涓流刷新的“绝对阶段完成截止期”，流式读取以 `std::nullopt` 为唯一 EOF 且单次操作独立计截止期；外部声明长度受初始窗口底线（如 64 KiB）约束并按实际到达字节几何扩容，严禁一次性预分配；嵌套配额“只紧不松”，多级限流独立叠加。
 
 ---
@@ -110,7 +110,7 @@ flowchart LR
         conn["连接全生命周期亲和<br/>(TCP / TLS / HTTP / 定时器)"]
         b_queue["有界业务准入队列<br/>(2x 预分配节点)"]
         c_lane["独立控制与恢复通道<br/>(取消 / defer_cleanup / defer_resume)"]
-        l_pool["Worker-Local 连接池<br/>(DB / Redis / HTTP Client)"]
+        l_pool["Worker-Local 连接池<br/>(DB / Redis)"]
     end
     b_pool["常驻有界线程池 (blocking_pool)<br/>仅携自有数据 / 锁外执行析构 / 禁池内自等待"]
 
@@ -168,13 +168,12 @@ sequenceDiagram
 - **HPACK 状态同步**：入站先构造独立条目防自别名、支持首部块异常回滚，移除等待 `CONTINUATION` 的流转入 `discarded_header_stream_` 保同步；出站 `checkpoint` 原子回滚且敏感首部标 `never_indexed`。
 - **全双工会话（WebSocket / SSE / Capsule）**：读、写、心跳与关闭保持单向线性通道互斥（读活跃驱动心跳超时，写超期独立判定失活），任一方向出错或关闭协同唤醒排空另一方向；WebSocket 写通道仅在完整消息边界间轮询控制帧，`permessage-deflate` 禁用单帧压缩时绕过字典更新；`CONNECT-UDP`（RFC 9298）强制 `Capsule-Protocol: ?1`，未知 Capsule 零缓冲流式跳过。
 
-### Web、数据访问与客户端
+### Web 与数据访问
 - **控制器与中间件**：`final` 控制器经宏自动注册封存；`final` 中间件三态 `next` 强制 single-shot，`use_at` 按归一化完整路径段匹配；`controller`、中间件与 `use_worker_state` 保持 per-worker。
 - **三层响应与流式提交**：响应元数据分为消耗型 `draft()`、缓冲修改 `edit_response()` 与跨替换 `policy()`（HSTS 仅限 `https`）；一旦提交流式或升级输出，下游异常必须重抛关连；`session` 在响应头 commit 时轮换 ID；静态文件构造期全量内存索引、禁二次百分比解码并在打开时校验 `device / inode / mtime`。
 - **Model Schema 与 ORM**：`model_type` 编译期 schema 中必填、可选、可空、默认值与清空语义正交独立；ORM 与直接查询路线独立，映射结果递归拥有数据，分页关联加载经根主键子查询复用外层 `WITH`。
 - **数据库驱动与事务**：严禁持有数据库事务或锁等待远程网络 I/O；建连前异步预解析地址（PG 生成平行 `host / hostaddr`），预处理缓存“二次命中才 prepare”与代际 LRU 淘汰；PG `PQflush` 期间同步 `PQconsumeInput` 防死锁，MariaDB 禁 `LOCAL INFILE` 并释放 >64 KiB 宽列缓冲；事务内独占连接且禁读写共享查询缓存，流式结果在四个出口精确归还连接一次，迁移限单语句、防篡改且只追加。
 - **Redis 与查询缓存（`RUVIAQC2`）**：常规池与阻塞池物理隔离，ORM Lua 写前先校验类型与必填字段；`RUVIAQC2` 查询缓存对八元组算 SHA-256、按形状分键失效并在解码 `reserve` 前校验行列数上界防预分配 DoS（取消或停机立即上抛）。
-- **出站客户端**：启动前固定 outbound origin，支持字面量 IP 预解析与 Happy Eyeballs（RFC 8305，250ms 交错并发）；强制执行两级结果内存预算与全周期 `request_timeout_`；已复用 HTTP/1 连接遇 `io_error` 仅在未收到响应头的非流式幂等请求上透明重试一次。
 
 ---
 

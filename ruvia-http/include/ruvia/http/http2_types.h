@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -19,6 +20,10 @@ enum class http2_finish_status : std::uint8_t {
     accepted,
     // The stream disappeared or was reset while its owner was finishing it.
     closed,
+    // An empty trailer section ends the stream with an empty DATA frame, which
+    // nghttp2 sends only with positive connection and stream send windows
+    // (RFC 9113 §6.9). Nothing changed; retry after the window opens.
+    backpressured,
 };
 
 enum class http2_role : std::uint8_t {
@@ -59,23 +64,28 @@ struct http2_setting_entry final {
     std::uint32_t value_{0};
 };
 
-// received_settings 事件：已应用的非 ACK SETTINGS 的借用视图，保留未知项、
-// 重复项和线上顺序。借用已接受的 feed() 输入，与其他事件派生的字节视图一样，
-// 在下一次 feed() 前有效；不保存连接历史，也不分配条目数组。
+// received_settings 事件：已应用的非 ACK SETTINGS 中 nghttp2 解码后的条目。
+// nghttp2 将重复出现的已知 ID 合并为一项（取最后的值，位置为首次出现处），
+// 未知 ID 按线上顺序保留；若同一帧先降低后升高 HEADER_TABLE_SIZE，末尾另附一项
+// 携带其中的最小值（RFC 7541 §4.2 要求编码器先确认该最小值）。超过
+// max_frame_entries 项的 SETTINGS 帧本身即以 GOAWAY(ENHANCE_YOUR_CALM) 结束连接，
+// 因此事件以定长数组内联保存，不分配内存，也不借用 feed() 输入。
 class http2_received_settings final {
 public:
+    static constexpr std::size_t max_frame_entries = 32;
+    static constexpr std::size_t max_entries = max_frame_entries + 1;
+
     http2_received_settings() = default;
     [[nodiscard]] std::size_t size() const noexcept {
-        return payload_.size() / 6;
+        return size_;
     }
     // 越界抛 std::out_of_range。
     [[nodiscard]] http2_setting_entry at(std::size_t index) const;
 
 private:
     friend class detail::http2_connection;
-    explicit http2_received_settings(std::string_view payload) noexcept
-        : payload_(payload) {}
-    std::string_view payload_{};
+    std::array<http2_setting_entry, max_entries> entries_{};
+    std::size_t size_{0};
 };
 
 // received_window_update 事件：连接实际应用的 WINDOW_UPDATE（stream 0 或存活流）。
@@ -84,8 +94,9 @@ struct http2_received_window_update final {
     std::uint32_t increment_{0};
 };
 
-// received_priority 事件：RFC 9113 §6.2/§6.3 的原始 dependency/weight 元数据，
-// 来自 PRIORITY 帧或带 PRIORITY 标志的 HEADERS 帧，不代表调度策略。
+// received_priority 事件：带 PRIORITY 标志的 HEADERS 帧中 RFC 9113 §5.3.2 的原始
+// dependency/weight（1..256）元数据，不代表调度策略。独立的 PRIORITY 帧
+// （RFC 9113 §6.3 已弃用）不产生事件。
 struct http2_received_priority final {
     std::uint32_t stream_id_{0};
     std::uint32_t stream_dependency_{0};
@@ -101,12 +112,12 @@ struct http2_send_window_state final {
     std::uint32_t available_{0};
 };
 
-// feed() has all-or-nothing ownership for each supplied span; it never partially
-// consumes caller input.
+// feed() has all-or-nothing ownership for each supplied span: events_pending
+// consumes nothing, every other result consumed the whole span. nghttp2 buffers
+// an incomplete trailing frame itself, so accepted also covers partial input.
 enum class http2_feed_result : std::uint8_t {
     events_pending,
     accepted,
-    need_input,
     protocol_failure,
 };
 

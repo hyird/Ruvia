@@ -1,21 +1,25 @@
+#include <string_view>
+
 #include "context/context_services.h"
 #include "http/http_cors.h"
 #include "router/route_table.h"
+#include "server/http_alternative_service.h"
 #include "server/http_buffered_response.h"
 #include "server/http_request_admission.h"
 
 namespace ruvia::detail {
 namespace {
 
-// One synchronous representation pass: apply CORS and run the compression
-// policy up to its offload boundary, which only a worker with a blocking pool
-// can cross.
+// One synchronous representation pass: apply CORS and the listener's Alt-Svc,
+// and run the compression policy up to its offload boundary, which only a
+// worker with a blocking pool can cross.
 [[nodiscard]] http_buffered_compression_step prepare_representation(const http_request& request,
-    const http_response_coding_policy& policy, http_response& response, const http_server_options& options,
-    const worker_handle& worker) {
+    const http_response_coding_policy& policy, std::string_view alternative_service, http_response& response,
+    const http_server_options& options, const worker_handle& worker) {
     if (options.cors_.has_value()) {
         apply_cors_headers(request, response, *options.cors_);
     }
+    apply_alternative_service(response, alternative_service);
     if (options.compression_.has_value()) {
         if (const auto* selection = policy.selection()) {
             return apply_response_compression(*selection, request.known_method(), response, *options.compression_,
@@ -30,7 +34,8 @@ namespace {
 http_response_preparation http_response_tail::prepare(
     http_response& response, const http_server_options& options, const worker_handle& worker) const {
     const auto& request = *request_;
-    const auto first_pass = prepare_representation(request, coding_policy_, response, options, worker);
+    const auto first_pass =
+        prepare_representation(request, coding_policy_, alternative_service_, response, options, worker);
     if (!first_pass.offload_) {
         auto policy = coding_policy_;
         buffered_response_recovery recovery;
@@ -72,7 +77,7 @@ task<prepared_application_response> http_response_tail::finish_prepare(const htt
         if (step.action_ == buffered_response_recovery_action::handle_error) {
             response = co_await routes.handle_error(request, memory, *step.error_, services);
         }
-        pass = prepare_representation(request, policy, response, options, services.worker());
+        pass = prepare_representation(request, policy, alternative_service_, response, options, services.worker());
     }
 }
 

@@ -29,14 +29,6 @@ struct http2_stored_header_view final {
 
 class http2_header_list final {
 public:
-    struct checkpoint_type final {
-        std::size_t storage_size_;
-        std::size_t overflow_storage_size_;
-        std::size_t overflow_field_count_;
-        std::uint16_t count_;
-        bool using_overflow_storage_;
-    };
-
     explicit http2_header_list(std::pmr::memory_resource* resource = nullptr)
         : http2_header_list(http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {}
 
@@ -46,45 +38,6 @@ public:
 
     [[nodiscard]] bool full() const noexcept {
         return count_ == UINT16_MAX;
-    }
-
-    void swap(http2_header_list& other) noexcept {
-        if (overflow_storage_.get_allocator().resource() !=
-            other.overflow_storage_.get_allocator().resource()) {
-            std::terminate();
-        }
-        using std::swap;
-        const auto inline_bytes = std::max(using_overflow_storage_ ? std::size_t{0} : storage_size_,
-            other.using_overflow_storage_ ? std::size_t{0} : other.storage_size_);
-        std::swap_ranges(inline_storage_.begin(), inline_storage_.begin() + inline_bytes,
-            other.inline_storage_.begin());
-        overflow_storage_.swap(other.overflow_storage_);
-        const auto inline_field_count =
-            std::min<std::size_t>(std::max(count_, other.count_), inline_header_fields);
-        std::swap_ranges(inline_fields_.begin(), inline_fields_.begin() + inline_field_count,
-            other.inline_fields_.begin());
-        overflow_fields_.swap(other.overflow_fields_);
-        swap(storage_size_, other.storage_size_);
-        swap(count_, other.count_);
-        swap(using_overflow_storage_, other.using_overflow_storage_);
-    }
-
-    [[nodiscard]] checkpoint_type checkpoint() const noexcept {
-        return checkpoint_type{storage_size_, overflow_storage_.size(), overflow_fields_.size(), count_,
-            using_overflow_storage_};
-    }
-
-    void rollback(checkpoint_type checkpoint) noexcept {
-        if (checkpoint.storage_size_ > storage_size_ ||
-            checkpoint.overflow_storage_size_ > overflow_storage_.size() ||
-            checkpoint.overflow_field_count_ > overflow_fields_.size() || checkpoint.count_ > count_) {
-            std::terminate();
-        }
-        overflow_storage_.resize(checkpoint.overflow_storage_size_);
-        overflow_fields_.resize(checkpoint.overflow_field_count_);
-        storage_size_ = checkpoint.storage_size_;
-        count_ = checkpoint.count_;
-        using_overflow_storage_ = checkpoint.using_overflow_storage_;
     }
 
     [[nodiscard]] http2_stored_header_view at(std::size_t index) const& noexcept {
