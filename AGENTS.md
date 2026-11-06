@@ -102,9 +102,9 @@ flowchart LR
 - **Share-Nothing 与锁外执行铁律**：生产 `application` 为进程单例（`ruvia::app()`），`core` 独占线程与事件循环生命周期；连接从 accept 到关闭全程留在 origin worker，跨线程仅传独立所有权数据或不可变快照；已准入操作的取消、清理与恢复走独立控制通道；互斥锁内仅交换指针或整链摘取，**用户回调执行、对象移动与析构严格在互斥锁外进行**；同线程槽位移交与唤醒统一延迟至下一轮事件循环防栈递归。
 - **结构化惰性协程与取消最小堆**：`ruvia::task<T>` 仅允许右值 `co_await`，冷任务移至最终宿主才标运行态，挂起与完成竞争由 `suspend_race_state` 原子裁决，交付回调前先回收协程帧；已启动任务取消后必须 `co_await / join`（`root_task` 被放弃时将未消费异常路由至 failure sink）；作用域与投递闭包挂载防重入及析构守卫；多源取消由地址稳定的 `stop_group` 拥有，跨线程取消经持有可分离指针与 `operation_id / generation` 的轻量代理投递；每 worker 由单一 `steady_timer` 与最小堆驱动全部定时任务；等待槽在持锁期间完成结果转移、置零代际解链与唤醒。
 - **连接池流水线与脏连接淘汰**：连接池预分配槽位；共享流水线遇更早独占请求或队首放弃（`stalled`）时停止并入防饥饿，无进展超时跨读者交接连续计量，非读者取消由后续读者静默吸收孤儿结果；借出槽位仅在协议流排空、空闲干净、未关 `autocommit` 且无未决事务时才可归还复用，**任何超时、取消、I/O 异常、半关闭或未捕获退出必须在释放租约前立即关闭并淘汰底层连接**。
-- **两阶段启动与四阶段停机**：
+- **两阶段启动与直接断连停机**：
   - **启动**：`start()`（各 worker 独立绑定监听，拒绝重复端点，发布 Windows 共享矩阵）$\rightarrow$ `serve()`（全员 barrier 后发起 accept），任一失败逆序原子回滚全部资源。
-  - **停机**：`停止接入`（取消 pending accept）$\rightarrow$ `有界排空`（关空闲连接，在 `drain_timeout` 内完成在途请求，HTTP/2 两阶段 `GOAWAY`，WebSocket `1001` 关闭，2 秒有界 TLS 单向 `close_notify` + 4 MiB TCP Lingering Close）$\rightarrow$ `强制关闭` $\rightarrow$ `先停 I/O 再 Join 后台`（`join()` 前校验调用线程不属于目标 worker 集合防自等待死锁，停机清理钩子严禁抛异常）。
+  - **停机**：不设连接排空等待阶段，按 `停止接入`（取消 pending accept）$\rightarrow$ `直接断开全部连接` $\rightarrow$ `先停 I/O 再 Join 后台操作` 推进（`join()` 前校验调用线程不属于目标 worker 集合防自等待死锁，停机清理钩子严禁抛异常）。
 
 ---
 
