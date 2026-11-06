@@ -82,7 +82,7 @@ ruvia::app().database({
 | `template <typename E> db_repository<E, db_handle> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
 | `db_query_result_cache query_result_cache() const` | （需 `RUVIA_ENABLE_REDIS`）获取查询结果缓存控制器 |
 
-查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号；从旧版本升级后，先前写入的条目不再命中，随各自的过期时间失效。
+查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号。
 
 缓存条目的大小受所用 Redis 连接的 `max_reply_bytes_` 约束：编码后读取回复会超过该上限的结果照常返回给调用方，但不写入缓存（否则之后每次命中都会因回复超限而失败并关闭一条 Redis 连接）。同一 worker 上同一缓存键的并发未命中只由第一个调用方查询数据库（单飞），其余调用方在各自的超时与停止令牌约束内等待它的结果并直接使用；它失败、被取消或超时后，等待者重新读取缓存，由下一个仍未命中的调用方接着查询。合并只在单个 worker 内进行，不跨 worker 或进程加锁。`remove()` / `clear()` 之后到达的调用方不会合并到此前已开始的查询上。
 
@@ -155,7 +155,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 // report.applied(), report.skipped(), report.changed()
 ```
 
-迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不再自动建列或把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
+迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不自动建列，也不把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
 
 迁移锁（MariaDB `GET_LOCK`、PostgreSQL 会话级咨询锁）归属取得它的会话，因此迁移器只使用一条连接，且该连接结束后不再重连：会话因传输失败而断开，或某条 `unwrapped` 迁移使连接停留在事务中（如单独执行 `BEGIN`、MariaDB 的 `SET autocommit = 0`）而在归还时被关闭后，后续迁移与历史记录都以 `db_error`（`io_error`）失败，不会在未持锁的新会话上继续执行。失败时迁移器不显式释放锁，而是关闭会话使锁随之释放。
 
@@ -181,11 +181,11 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 - **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。`clone()` 只复制当前语句可达的节点与子查询，不携带被替换子句、退役来源与废弃节点。
 - **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from`、`subquery`、`exists` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载在实参与当前 Query 使用同一 PMR resource 时直接接管其 AST，否则复制。两种右值路径都会让实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。
 - **语句类型切换**：`insert_into`、`update`、`delete_from` 把 Query 切换到另一种语句时，只保留 `WHERE` 与 `WITH`；已有 `FROM` / `JOIN`、投影、`VALUES` / 赋值、`GROUP BY` / `HAVING`、`ORDER BY`、`LIMIT` / `OFFSET`、锁、集合操作或 `DISTINCT` 时抛出 `std::invalid_argument`，以免残留的 `FROM` 静默变成 `UPDATE ... FROM` / `DELETE ... USING` 扩大目标范围。需要关联来源时显式使用 `update_from` / `delete_using`；同类语句重新指定目标不受影响。
-- **标识符**：`FROM` / `JOIN` 别名、`INSERT` / `UPDATE` / `DELETE` 目标别名、CTE 名与 `lock` 的 `OF` 目标必须是不含 `.` 的单个标识符（表名本身仍可带 schema 限定）；投影别名与列名规则不变。
+- **标识符**：`FROM` / `JOIN` 别名、`INSERT` / `UPDATE` / `DELETE` 目标别名、CTE 名与 `lock` 的 `OF` 目标必须是不含 `.` 的单个标识符（表名本身仍可带 schema 限定）；投影别名与列名遵循相同的唯一性规则。
 - **原始 SQL（`sql()` / `db_expr::raw_sql`）**：语法片段以 `-` 或 `/` 结尾时，编译器在其后的参数前补一个空格，避免负数字面量或 `*` 拼出 `--` / `/*` 注释。PostgreSQL 绑定模式下片段不得包含位置参数（`$` 后接数字且不处于标识符中，如 `$1`），否则抛出 `std::invalid_argument`，值请通过 `value()` 参数传入；字面量模式（如函数体 DDL）与 MariaDB 不受此限制。
 - **参数与嵌套上限**：PostgreSQL 绑定模式按节点为每个值只分配一个 `$n`（分组表达式在 `SELECT` / `GROUP BY` / `HAVING` 中复用同一编号），单条语句超过 65535 个绑定参数（协议 Bind 消息的 Int16 计数）时 `compile()` 抛出 `std::length_error`，请分批写入。表达式与子查询嵌套上限为 256 层；同一运算符的左深 `AND` / `OR` 链（`and_where` 循环、`p = std::move(p) && q`）只算一层，编译为扁平的 `(a AND b AND c)`。`render_expression()` 只以字面量渲染单个表达式。
 - **携带表名的表达式**：`db_expr::from_expression(expr, table)` 与 `db_expr(expr, table)` 记录的表名只在导入方未指定表名（`expression(query, {}, alias)`）时参与限定名重写；导入方指定表名时以导入方为准，其他表的限定名保持不变。`db_expr(expr, table)` 的 `table` 为借用文本，拒绝 `std::string` 等拥有型右值。
-- **关系路径**：`*_join_and_select` 的路径首段同时是根实体关系名、又是根别名或另一条已加载关系的别名时抛出 `std::invalid_argument`，不再按别名静默改写为其他关系；`join_relation` 的多对多中间表别名 `<alias>_junction` 已被占用时同样拒绝。
+- **关系路径**：`*_join_and_select` 的路径首段同时是根实体关系名、又是根别名或另一条已加载关系的别名时抛出 `std::invalid_argument`，拒绝有歧义的关系路径；`join_relation` 的多对多中间表别名 `<alias>_junction` 已被占用时同样拒绝。
 
 ### 2.2 `ruvia::db_schema` 与 `ruvia::db_procedure`
 
@@ -234,9 +234,9 @@ RUVIA_DB_PROJECTION(device_summary,
 - **映射结果必须拥有数据**：公开概念 `ruvia::db_mapped_value<T>` 统一约束实体/投影的 `db_column`、读 Builder 与写 `RETURNING` Builder 的 `get_scalar<T>()` / `get_scalars<T>()` 以及字段解码。支持既有数值类型、`bool`、`std::pmr::string`、`ruvia::string`，以及这些值的一维 `std::pmr::vector`；`std::optional` 递归保留此约束，数组元素可用 `std::optional<T>` 表示 `NULL`。`std::string_view`、引用、含借用元素的数组与嵌套数组在编译期被拒绝；`std::string` 不属于既有映射字符串类型，请使用上述两种 owning 字符串。结果不借用局部 `db_rows` 或数组解析 token，也不会通过隐藏缓存延长其寿命；结果所使用的 PMR 资源仍须覆盖结果寿命。
 - **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::pmr::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
 - **可空列约定**：顶层列类型直接使用值类型（如 `std::int64_t`、`std::pmr::string`），并在 `db_column_options` 中设置 `.nullable_ = true`。通过 `entity.set_null<"notes">()` 置空，通过 `entity.is_null<"notes">()` 检查是否为 `NULL`。
-- **实体数值输入**：SQL 与 Redis 实体的 `set<"field">()` 在发布字段前检查整数范围和有限浮点溢出，超界抛出 `std::out_of_range`，保留原值及 unset/null 状态。SQL 数组及 optional 元素递归应用同一规则，后续元素失败不会发布部分新数组。整数列不再隐式接受浮点输入（包括模型标量包装及数组元素），调用方须先显式选择整数转换策略；浮点字段保留通常的精度舍入和显式非有限值语义。检查仅覆盖 `set()`，不拦截调用方经可变 `get()` 或显式转换自行执行的赋值。
+- **实体数值输入**：SQL 与 Redis 实体的 `set<"field">()` 在发布字段前检查整数范围和有限浮点溢出，超界抛出 `std::out_of_range`，保留原值及 unset/null 状态。SQL 数组及 optional 元素递归应用同一规则，后续元素失败不会发布部分新数组。整数列拒绝隐式浮点输入（包括模型标量包装及数组元素），调用方须先显式选择整数转换策略；浮点字段保留通常的精度舍入和显式非有限值语义。检查仅覆盖 `set()`，不拦截调用方经可变 `get()` 或显式转换自行执行的赋值。
 - **生成列（Computed Columns）**：设置 `db_column_options{.generated_type_ = ruvia::db_generated_type::stored}`，ORM 在 `INSERT` / `UPDATE` 时自动跳过该列并在 `RETURNING` 中回填数据库计算结果。
-- **列选项编译期校验**：`db_column` 以 `requires` 约束拒绝互相矛盾的选项，非法组合不构成合法类型、直接编译失败，不再等到 `create_table<Entity>()` 运行期才报错，Repository 也不会接受这类声明：
+- **列选项编译期校验**：`db_column` 以 `requires` 约束拒绝互相矛盾的选项，非法组合不构成合法类型、直接编译失败，Repository 也不会接受这类声明：
   - `.generated_`（自增标识）与 `.generated_type_`（计算列）互斥，二者都不能与 `.read_only_` 同用；`.generated_` 要求非空整数列。
   - `.enum_name_` 只能与推断类型或数组类型同用。
   - `.version_` 要求非空整数列；主键不能 `.nullable_`，也不能是 `.delete_date_`。
@@ -328,7 +328,7 @@ mixed.with("samples", samples).from_cte("samples")
 
 - 实体 / DTO 中与实际返回列同名的字段被解码；通配部分没有返回的字段保持 unset。通配带出的其他字段保留在 raw rows 中，不强迫 DTO 声明它们。
 - 显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `db_conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
-- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。无通配项的投影（包括原始 SQL、CTE 或 JOIN 带出的同名列）同样适用：需要映射的列名必须在结果中唯一，不再取第一个匹配列。
+- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。无通配项的投影（包括原始 SQL、CTE 或 JOIN 带出的同名列）同样适用：需要映射的列名必须在结果中唯一，重复匹配列被拒绝。
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
 - 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
@@ -378,7 +378,7 @@ ruvia::app()
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
 | RediSearch ORM | `repository<Entity>(redis_repository_config)` |
 
-`redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。原先用空字符串清除过滤的调用须改为 `match_ = std::nullopt` 或 `match_.reset()`，不得再依赖空模式被忽略。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
+`redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。清除过滤时设置 `match_ = std::nullopt` 或调用 `match_.reset()`。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
 
 `redis_scan_options::count_` 与 `redis_x_read_group_options::count_` 使用 `std::optional<redis_positive_count>`：未指定不发送 `COUNT`，指定整数时在构造阶段检查 `1..INT64_MAX`，零、负数或超范围抛出 `std::invalid_argument`，无异常探测用 `redis_positive_count::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。
 
@@ -427,7 +427,7 @@ while (auto event = co_await sub.read()) {
 }
 ```
 
-`read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，不再通过空字符串判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；原先按 `pattern().empty()` 分流的调用方改为检查 optional 是否有值。
+`read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，通过对应访问器判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；按 optional 是否有值区分直接投递与模式投递。
 
 线上 `message` / `pmessage` 与四种确认字段的定义见 [Redis Pub/Sub 推送格式](https://redis.io/docs/latest/develop/pubsub/#format-of-pushed-messages)。
 
@@ -475,7 +475,7 @@ auto rows = co_await repo.find({
 
 ORM 写入和删除先按脚本摘要执行；收到 `NOSCRIPT` 后释放该错误回复，再以脚本正文重试。两次执行共享同一操作超时与取消边界。
 
-NUMERIC 谓词保留输入精度，不再把 double 边界先窄化成 float32 列类型；比较、`between`、`in` / `not_in` 共用该规则。`0.1f` 与 float 字段写入使用同一 float 十进制编码，向其他数值列比较时只提升为 double；`0.1` 则始终保留 double 编码，两者可能不同。索引比较的对象仍是 RediSearch 解析 HASH 十进制文本得到的 double，而非未序列化的宿主浮点位模式。原先依赖 double 自动舍入至列类型的调用方须显式传入 float；窄列不能吞掉 `16777216.5` 等更宽的范围边界。
+NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类型；比较、`between`、`in` / `not_in` 共用该规则。`0.1f` 与 float 字段写入使用同一 float 十进制编码，向其他数值列比较时只提升为 double；`0.1` 则始终保留 double 编码，两者可能不同。索引比较的对象仍是 RediSearch 解析 HASH 十进制文本得到的 double，而非未序列化的宿主浮点位模式。需要 float 精度边界时须显式传入 float；窄列不能吞掉 `16777216.5` 等更宽的范围边界。
 
 ---
 
@@ -522,7 +522,7 @@ if (bearer) {
 
 - `jwt_bearer_token` 只返回符合 RFC 6750 `b64token` 语法（`ALPHA / DIGIT / - . _ ~ + /`，末尾可跟 `=`）的令牌；含空格、逗号等其他字符时返回 `std::nullopt`。
 - 自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。
-- 时间声明遵循 [RFC 7519 §2 NumericDate](https://www.rfc-editor.org/rfc/rfc7519#section-2)。`expires_at()`、`not_before()`、`issued_at()` 返回借用的 `const jwt_numeric_date*`，`nullptr` 表示声明缺失；不再返回 `optional<system_clock::time_point>`。`text()` 保留完整十进制数字（包括小数和指数），`to_time_point()` 仅在宿主时钟能精确表示其范围与精度时返回时间点，否则返回 `nullopt`，不会饱和、舍入或把亚 tick 的非零值当作零。
+- 时间声明遵循 [RFC 7519 §2 NumericDate](https://www.rfc-editor.org/rfc/rfc7519#section-2)。`expires_at()`、`not_before()`、`issued_at()` 返回借用的 `const jwt_numeric_date*`，`nullptr` 表示声明缺失。`text()` 保留完整十进制数字（包括小数和指数），`to_time_point()` 仅在宿主时钟能精确表示其范围与精度时返回时间点，否则返回 `nullopt`，不会饱和、舍入或把亚 tick 的非零值当作零。
 - `exp` / `nbf` 验证直接比较精确 NumericDate 与当前时间及 `leeway_`，不经过宿主时间点转换；边界分别为 `exp == now - leeway` 已过期、`nbf == now + leeway` 已生效（[§4.1.4–4.1.5](https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4)）。签发的正 `expires_in_` / `not_before_delay_` 向上取整到整秒，零偏移向下取整；超出宿主时钟范围的结果仍保留所请求的秒数。`leeway_` 只应补偿实际时钟偏差，通常不超过几分钟。
 - 载荷及 NumericDate 独立拥有解码内容，不借用输入 token；指定的 PMR resource 必须覆盖整个结果及其析构。时间指针、`text()` 和其他载荷视图不可跨越 payload 的移动或销毁；需要长期保留时复制文本。移出的源 NumericDate 表示数学零，不再代表原声明。
 - `jwt_decode_unverified` 在不校验签名与时间声明的前提下解码载荷，但仍按 RFC 7519 §7.2 校验三段式结构与 JOSE Header（要求合法的 Base64url/JSON 对象、唯一的键名、非空字符串 `"alg"`，并拒绝 `"crit"` 与 `"b64"` 扩展）。

@@ -434,13 +434,13 @@ const auto& user = c.request_state<current_user>();
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
 
-两级限流按 key 计算滑动窗口估计值（与 pingora-limits 的 `Rate`、Cloudflare 的做法相同）：每个 key 的窗口从它的首个请求开始、按 `window_` 首尾相接地滚动，分别记录当前窗口与上一窗口已放行的请求数；请求在 `上一窗口计数 × 当前窗口尚未经过的比例 + 当前窗口计数 < max_requests_` 时放行并计入当前窗口，被拒绝的请求不计数。窗口滚动时当前计数转为上一窗口计数；距当前窗口起点已过两个或更多窗口时两者都清零。上一窗口的计数随时间线性淡出而不是在边界处一次清空，因此不再允许在一个窗口末尾用完配额、紧接着在下一窗口开头再用完一整份配额（此前的固定窗口在边界附近最多放行约两倍配额）；相邻请求间隔（按毫秒计）都大于 `window_ / max_requests_` 的流量始终放行，恰好以该间隔对齐窗口起点到达的请求会因估计值等于上限而被拒绝。拒绝时 `X-RateLimit-Remaining` 为 `0`；`Retry-After` 为估计值再次放行的最早时刻（向上取整到秒，按它等待不会早于真实放行时刻）；`X-RateLimit-Reset` 为估计值降到零、整份配额恢复的时刻（向上取整到秒，不小于 `Retry-After`）。表满时按 `overflow_policy_ = deny` 拒绝的请求两者均为 `1`。估计值的比较使用 128 位精确乘积，延迟按无符号毫秒计算后再向上取整到秒，因此即使 `window_` 接近 `std::chrono::milliseconds::max()`、`max_requests_` 取到 `std::size_t` 上限也不会溢出，最长约两个窗口的 `X-RateLimit-Reset` 也不会被截短。
+两级限流按 key 计算滑动窗口估计值（与 pingora-limits 的 `Rate`、Cloudflare 的做法相同）：每个 key 的窗口从它的首个请求开始、按 `window_` 首尾相接地滚动，分别记录当前窗口与上一窗口已放行的请求数；请求在 `上一窗口计数 × 当前窗口尚未经过的比例 + 当前窗口计数 < max_requests_` 时放行并计入当前窗口，被拒绝的请求不计数。窗口滚动时当前计数转为上一窗口计数；距当前窗口起点已过两个或更多窗口时两者都清零。上一窗口的计数随时间线性淡出而不是在边界处一次清空，因此不允许在一个窗口末尾用完配额、紧接着在下一窗口开头再用完一整份配额；相邻请求间隔（按毫秒计）都大于 `window_ / max_requests_` 的流量始终放行，恰好以该间隔对齐窗口起点到达的请求会因估计值等于上限而被拒绝。拒绝时 `X-RateLimit-Remaining` 为 `0`；`Retry-After` 为估计值再次放行的最早时刻（向上取整到秒，按它等待不会早于真实放行时刻）；`X-RateLimit-Reset` 为估计值降到零、整份配额恢复的时刻（向上取整到秒，不小于 `Retry-After`）。表满时按 `overflow_policy_ = deny` 拒绝的请求两者均为 `1`。估计值的比较使用 128 位精确乘积，延迟按无符号毫秒计算后再向上取整到秒，因此即使 `window_` 接近 `std::chrono::milliseconds::max()`、`max_requests_` 取到 `std::size_t` 上限也不会溢出，最长约两个窗口的 `X-RateLimit-Reset` 也不会被截短。
 
 每个 worker 预分配 `capacity_per_worker_`（默认 `8192`）个滑动窗口计数槽。key 的起始槽位由每个 worker 启动时随机抽取密钥的 SipHash-1-3 计算，攻击者无法离线算出哪些 key 落入同一探测窗口；一次查找或插入只探测该起始槽位起的连续槽位（`min(capacity_per_worker_, 32)` 个），单次请求的开销与表容量无关；这些槽位全被其他 key 的未过期计数占用时，该请求按规则的 `overflow_policy_` 处理（默认 `deny`），即使表的其他部分仍有空位。槽位在其 key 当前窗口起点之后满两个窗口才过期、可被其他 key 复用；在此之前上一窗口计数仍参与估计。容量需要为活跃客户端数留出余量。
 
-会话仅接受固定 48 位小写十六进制 ID，其他长度或字符按不存在的会话处理，不读取或修改其拼接的 Redis key。已有合法 ID 与 `key_prefix_ + ID` 存储格式保持不变；旧的非标准 ID 不再被识别。固定长度防止不同前缀通过变长 ID 穿透命名空间；使用同一 Redis 数据库和相同前缀则共享会话命名空间，隔离责任由配置方承担。
+会话仅接受固定 48 位小写十六进制 ID，其他长度或字符按不存在的会话处理，不读取或修改其拼接的 Redis key。会话按 `key_prefix_ + ID` 存储。固定长度防止不同前缀通过变长 ID 穿透命名空间；使用同一 Redis 数据库和相同前缀则共享会话命名空间，隔离责任由配置方承担。
 
-CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字段，例如 `X-App-CSRF` 或 `CSRF-Token`。构造时拒绝 CORS-safelisted、浏览器保留及已知自动生成/代理字段，如 `Accept`、`Content-Type`、`Origin`、`Sec-*`、`X-Forwarded-*`；旧配置需更换字段并同步前端。这里依赖 [Fetch 的自定义请求头与预检边界](https://fetch.spec.whatwg.org/#cors-safelisted-request-header)，不是给任意等值字段赋予认证意义。部署方须保证代理不注入所选 token 字段，且仅向可信 origin 授予携带凭据的 CORS 权限；该中间件不替代用户认证，也不隔离已经被应用信任的跨源脚本。
+CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字段，例如 `X-App-CSRF` 或 `CSRF-Token`。构造时拒绝 CORS-safelisted、浏览器保留及已知自动生成/代理字段，如 `Accept`、`Content-Type`、`Origin`、`Sec-*`、`X-Forwarded-*`，前后端须使用同一 token 字段。这里依赖 [Fetch 的自定义请求头与预检边界](https://fetch.spec.whatwg.org/#cors-safelisted-request-header)，不是给任意等值字段赋予认证意义。部署方须保证代理不注入所选 token 字段，且仅向可信 origin 授予携带凭据的 CORS 权限；该中间件不替代用户认证，也不隔离已经被应用信任的跨源脚本。
 
 ---
 

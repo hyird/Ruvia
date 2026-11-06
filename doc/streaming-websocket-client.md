@@ -57,7 +57,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 | 方法签名 | 说明 |
 | --- | --- |
 | `task<stream_commit_result> commit() &` | 显式提交头和 session；返回 `body` 才可生产正文，返回 `completed` 必须停止生产（HEAD、304 等正常无正文完成） |
-| `task<void> write(std::span<const std::byte> chunk) &` | 在正文阶段写入字节块（HTTP/1.1 chunked，HTTP/2 DATA）；不再隐式提交，提交前或完成后写入抛 `std::logic_error` |
+| `task<void> write(std::span<const std::byte> chunk) &` | 在正文阶段写入字节块（HTTP/1.1 chunked，HTTP/2 DATA）；要求显式提交，提交前或完成后写入抛 `std::logic_error` |
 | `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
 | `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
 | `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
@@ -109,7 +109,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 - 单独到达的请求（同一批输入中前面没有其他请求）遇 EOF、TLS `close_notify`；任何请求遇 TLS 截断（无 `close_notify` 的 TCP 结束）、TCP RST 或写失败，都停止 `c.stop_token()`，`aborted()` 随之为 `true`，之后的写入抛传输异常；当前流按截断结束并关闭连接。正常结束与异常退出都先取消并等待检测结束，再释放连接资源。
 - **TCP 写半关闭**：[RFC 9112 §9.6](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6) 指出客户端半关闭本身不表示放弃响应，但单个 FIN 无法区分“关闭整个客户端”与“仅关闭发送方向”。流式响应把单独到达请求之后的 FIN 视为客户端离开：只发送一个请求即 `shutdown(SHUT_WR)`、仍要读取完整流式响应的客户端会被截断，这类客户端应改为保持发送方向打开或使用缓冲响应路由。缓冲响应路由不受影响。
 - **Pipeline**：检测期间读到的后续请求字节按原顺序完整保留，不将“可读”误判为断开。pipeline 内的干净结束（TCP FIN 或 TLS `close_notify`）是请求方向半关闭，与 FIN 到达的时机无关：当前请求排在前一请求之后到达（客户端在前一响应结束前已发出它，无论前一路由是缓冲还是流式），或其后已有后续请求字节时，不取消当前响应；FIN 之前已收到的请求（包括流式响应，其 `c.stop_token()` 不因该 FIN 停止）照常处理，全部响应后关闭连接，不再读取 transport。TCP RST 与 TLS 截断仍中止。预读达到既有请求头大小上限时暂停检测，直到当前响应结束；不为探测无界缓冲。
-- HTTP/2 不新增读操作：本流 `RST_STREAM` 或使该流终止的连接关闭停止 `c.stop_token()`，不取消同连接其他 stream。请求方向正常的 `END_STREAM` 不取消响应；`GOAWAY` 仍遵循原有排空规则。
+- HTTP/2 不新增读操作：本流 `RST_STREAM` 或使该流终止的连接关闭停止 `c.stop_token()`，不取消同连接其他 stream。请求方向正常的 `END_STREAM` 不取消响应；`GOAWAY` 遵循连接排空规则。
 - 网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理，不新增保活探测。
 - 取消是协作式的：未绑定 `c.stop_token()` 的自定义等待须显式传入它，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
 
@@ -230,7 +230,7 @@ private:
 | `std::optional<std::uint16_t> peer_close_code() const noexcept` / `std::string_view peer_close_reason() const& noexcept` | 读取对端发送的 Close 帧状态码与 UTF-8 原因（收到对端 Close 帧后可用） |
 | `void abort() noexcept` | 立即中止底层传输而不执行关闭握手 |
 
-`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，不再接受隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
+`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
 
 `websocket_message` 方法：
 - `opcode()`（`websocket_opcode::text` 或 `binary`）
