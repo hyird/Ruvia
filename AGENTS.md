@@ -104,7 +104,7 @@ flowchart BT
 flowchart LR
     subgraph listener ["平台监听接入"]
         posix["POSIX: SO_REUSEPORT<br/>Worker 直接 Accept"]
-        win["Windows: 共享矩阵 AcceptEx<br/>预留完成槽唤醒 Origin"]
+        win["Windows: 独立 Acceptor Worker (SO_EXCLUSIVEADDRUSE)<br/>接收裸 SOCKET 派发至业务 Worker 首次绑 IOCP"]
     end
     subgraph worker ["Share-Nothing 同构 Worker (独占 Asio 事件循环)"]
         conn["连接全生命周期亲和<br/>(TCP / TLS / HTTP / 定时器)"]
@@ -122,12 +122,13 @@ flowchart LR
     conn <-->|"显式卸载 CPU/阻塞任务"| b_pool
 ```
 
-- **Share-Nothing 与连接亲和**：生产 `application` 为进程单例（`ruvia::app()`），`core` 独占线程与事件循环生命周期；连接从 accept 到关闭全程留在 origin worker，跨线程仅传独立所有权数据或不可变快照。
+- **Share-Nothing 与连接亲和**：生产 `application` 为进程单例（`ruvia::app()`），`core` 独占线程与事件循环生命周期；$N$ 个业务 worker 完全同构，连接绑定后全程留在该业务 worker，跨线程仅传独立所有权数据或不可变快照。
+- **平台监听模型**：POSIX 下各业务 worker 用 `SO_REUSEPORT` 直接 accept；Windows 下设独立轻量 Acceptor Worker（`SO_EXCLUSIVEADDRUSE` 独占监听），接收未绑 IOCP 的裸 `SOCKET` 并均衡派发至目标业务 worker 首次绑定 IOCP。
 - **独立控制通道与锁外执行**：已准入操作的取消、清理与恢复走独立控制通道（不受业务队列满阻塞）；互斥锁内仅交换指针或整链摘取，**用户回调执行、对象移动与析构严格在互斥锁外进行**；同线程移交与唤醒统一延迟至下一轮事件循环防栈递归。
 - **结构化惰性协程**：`ruvia::task<T>` 仅允许右值 `co_await`，冷任务移至最终宿主才标运行态，挂起与完成竞争由 `suspend_race_state` 原子裁决，交付回调前先回收协程帧；已启动任务取消后必须 `co_await / join`（`root_task` 被放弃时将未消费异常路由至 failure sink）；作用域与投递闭包挂载防重入及析构守卫。
 - **多源取消与单一定时器最小堆**：多源取消由地址稳定的 `stop_group` 拥有，跨线程取消经持有可分离指针与 `operation_id / generation` 的轻量代理投递；每 worker 由单一 `steady_timer` 与最小堆驱动全部定时任务；等待槽在持锁期间完成结果转移、置零代际解链与唤醒。
 - **连接池流水线与脏连接淘汰**：连接池预分配槽位；共享流水线遇更早独占请求或队首放弃（`stalled`）时停止并入防饥饿，无进展超时跨读者交接连续计量，非读者取消由后续读者静默吸收孤儿结果；**任何超时、取消、I/O 异常、半关闭或未捕获退出必须在释放租约前立即关闭并淘汰底层连接**。
-- **两阶段启动**：`start()`（各 worker 独立绑定监听，拒绝重复端点，发布 Windows 共享矩阵）$\rightarrow$ `serve()`（全员 barrier 后发起 accept），任一失败逆序原子回滚全部资源。
+- **两阶段启动**：`start()`（绑定监听端点，拒绝重复端点）$\rightarrow$ `serve()`（全员 barrier 后发起 accept），任一失败逆序原子回滚全部资源。
 - **直接断连停机**：不设连接排空等待阶段，按 `停止接入`（取消 pending accept）$\rightarrow$ `直接断开全部连接` $\rightarrow$ `先停 I/O 再 Join 后台操作` 推进；`join()` 前校验调用线程不属于目标 worker 集合防自等待死锁，停机清理钩子严禁抛异常。
 
 ---
