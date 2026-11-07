@@ -965,10 +965,6 @@ public:
         }
         crypto_.reset(crypto);
         const auto& config = pool_.config();
-        if (config.http3_.max_datagram_bytes_ < 1200 || config.http3_.max_datagram_bytes_ > 65527 ||
-            config.http3_.max_concurrent_streams_ > (std::numeric_limits<std::uint32_t>::max)()) {
-            throw std::invalid_argument("HTTP/3 transport limits exceed QUIC bounds");
-        }
         auto callbacks = crypto_callbacks();
         callbacks.handshake_completed = [](ngtcp2_conn*, void* target) noexcept {
             auto& owner = *static_cast<session*>(target);
@@ -1820,6 +1816,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         response.headers_.clear();
         response.trailers_.clear();
         response.informational_.clear();
+        response.informational_budget_ = {};
         self.release(response);
         response.discard_response_body();
         if (!self.usable()) {

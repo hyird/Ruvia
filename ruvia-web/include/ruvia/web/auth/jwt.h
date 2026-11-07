@@ -71,12 +71,12 @@ public:
     jwt_claim(jwt_claim&&) noexcept = default;
     jwt_claim& operator=(jwt_claim&& other);
 
-    [[nodiscard]] std::string_view name() const& noexcept {
+    [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         return name_;
     }
     [[nodiscard]] std::string_view name() const&& = delete;
 
-    [[nodiscard]] std::string_view value() const& noexcept {
+    [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
     [[nodiscard]] std::string_view value() const&& = delete;
@@ -137,7 +137,7 @@ public:
     jwt_numeric_date(jwt_numeric_date&& other) noexcept;
     jwt_numeric_date& operator=(jwt_numeric_date&& other);
 
-    [[nodiscard]] std::string_view text() const& noexcept;
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view text() const&& = delete;
     // 仅在范围及小数精度都能被宿主时钟精确表示时转换；否则返回 nullopt。
     // JWT 验证直接比较 NumericDate，不依赖此转换。
@@ -155,33 +155,33 @@ public:
     jwt_payload& operator=(const jwt_payload&) = delete;
     jwt_payload(jwt_payload&&) noexcept = default;
     jwt_payload& operator=(jwt_payload&& other);
-    [[nodiscard]] std::string_view issuer() const& noexcept;
+    [[nodiscard]] std::string_view issuer() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view issuer() const&& = delete;
-    [[nodiscard]] std::string_view subject() const& noexcept;
+    [[nodiscard]] std::string_view subject() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view subject() const&& = delete;
     // The first "aud" value, or empty if none. A JWT may carry multiple audiences
     // (RFC 7519 §4.1.3); use has_audience to test membership across all of them.
-    [[nodiscard]] std::string_view audience() const& noexcept;
+    [[nodiscard]] std::string_view audience() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view audience() const&& = delete;
     [[nodiscard]] std::span<const std::pmr::string> audiences() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::pmr::string> audiences() const&& = delete;
     [[nodiscard]] bool has_audience(std::string_view audience) const noexcept;
-    [[nodiscard]] std::string_view id() const& noexcept;
+    [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view id() const&& = delete;
     // nullptr 表示声明缺失。返回值及 text() 是借用，payload 移动或销毁前须结束使用。
-    [[nodiscard]] const jwt_numeric_date* expires_at() const& noexcept;
+    [[nodiscard]] const jwt_numeric_date* expires_at() const& noexcept RUVIA_LIFETIMEBOUND;
     const jwt_numeric_date* expires_at() const&& = delete;
-    [[nodiscard]] const jwt_numeric_date* not_before() const& noexcept;
+    [[nodiscard]] const jwt_numeric_date* not_before() const& noexcept RUVIA_LIFETIMEBOUND;
     const jwt_numeric_date* not_before() const&& = delete;
-    [[nodiscard]] const jwt_numeric_date* issued_at() const& noexcept;
+    [[nodiscard]] const jwt_numeric_date* issued_at() const& noexcept RUVIA_LIFETIMEBOUND;
     const jwt_numeric_date* issued_at() const&& = delete;
     // String-valued custom claims, decoded. A claim value may be any JSON
     // value (RFC 7519 §2) and unknown claims are ignored (§4): custom claims
     // holding numbers, booleans, null, arrays or objects are syntax- and
     // uniqueness-checked with the rest of the payload, then not exposed here.
-    [[nodiscard]] std::span<const jwt_claim> claims() const& noexcept;
+    [[nodiscard]] std::span<const jwt_claim> claims() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const jwt_claim> claims() const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const&& = delete;
 
 private:
@@ -211,7 +211,7 @@ private:
 // *"="), or nullopt for another scheme or a malformed token. The scheme name
 // is case-insensitive and is followed by one or more SP.
 [[nodiscard]] std::optional<std::string_view> jwt_bearer_token(
-    std::string_view authorization) noexcept;
+    std::string_view authorization RUVIA_LIFETIMEBOUND) noexcept;
 
 template <typename authorization_type>
     requires(std::convertible_to<authorization_type&&, std::string_view> &&

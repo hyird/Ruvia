@@ -389,6 +389,12 @@ void http3_session::reset_stream(std::int64_t stream_id, http3_error_code error)
     }
     if (auto* stream = find_stream(stream_id)) {
         stream->mark_aborted();
+        if (!stream->dispatched() || stream->handler_done()) {
+            stream->close_request_body_timing();
+            consume_stream_data(stream_id, stream->unconsumed_bytes());
+            stream->discard_body();
+            remove_stream_if_done(stream_id);
+        }
     }
     wake_writer();
 }
@@ -474,6 +480,7 @@ void http3_session::drain_events() {
             }
         }
     }
+    set_inactivity_phase();
 }
 
 void http3_session::start_application() {
@@ -505,11 +512,14 @@ void http3_session::start_application() {
         wake_writer();
     }
     // Authenticate the connection before releasing its bounded 0-RTT requests.
-    for (auto& [stream_id, stream] : streams_) {
-        if (stream->aborted()) {
+    for (auto it = streams_.begin(); it != streams_.end();) {
+        const auto stream_id = it->first;
+        auto& stream = *it->second;
+        ++it;
+        if (stream.aborted()) {
             continue;
         }
-        if (stream->take_continue_pending() && !stream->request_ended() && !stream->body_failure().has_value()) {
+        if (stream.take_continue_pending() && !stream.request_ended() && !stream.body_failure().has_value()) {
             if (codec().submit_interim_response_head(
                     stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_status::accepted) {
                 reset_stream(stream_id, http3_error_code::internal_error);
@@ -517,7 +527,7 @@ void http3_session::start_application() {
             }
             wake_writer();
         }
-        if (stream->dispatch_pending() && !admit_stream(stream_id)) {
+        if (stream.dispatch_pending() && !admit_stream(stream_id)) {
             reset_stream(stream_id, http3_error_code::internal_error);
         }
     }
@@ -696,6 +706,7 @@ void http3_session::on_stream_abort(std::int64_t stream_id) noexcept {
 void http3_session::on_stream_close(const http3_stream_close_event& event) noexcept {
     auto* stream = find_stream(event.stream_id_);
     if (stream == nullptr) {
+        finish_drain_if_ready();
         return;
     }
     stream->mark_closed();
@@ -723,10 +734,14 @@ void http3_session::remove_stream_if_done(std::int64_t stream_id) noexcept {
     }
     auto& stream = *found->second;
     // A dispatched handler still borrows the stream until it finishes.
-    if (!stream.closed() || (stream.dispatched() && !stream.handler_done())) {
+    if (stream.dispatched() ? !stream.handler_done() : (!stream.closed() && !stream.aborted())) {
         return;
     }
     consume_stream_data(stream_id, stream.unconsumed_bytes());
+    stream.discard_body();
+    if (stream.tunnel()) {
+        --tunnel_streams_;
+    }
     streams_.erase(found);
     set_inactivity_phase();
     finish_drain_if_ready();
@@ -758,11 +773,15 @@ void http3_session::set_inactivity_phase() noexcept {
     if (lifecycle_ != lifecycle_type::open) {
         return;
     }
-    // The handshake is bounded like a request head; then, as for HTTP/2, an
-    // open stream keeps the handler's inactivity deadman and idleness starts
-    // when the last stream ends.
-    if (!base_services_.has_value()) {
+    // The handshake, the peer's SETTINGS, and an incomplete header block are
+    // bounded like a request head; a tunnel is long-lived; an open stream
+    // keeps the handler's inactivity deadman and idleness starts when the last
+    // stream ends.
+    if (!base_services_.has_value() || !codec().peer_settings().has_value() ||
+        codec().header_block_in_progress()) {
         scanner_entry_.set_phase(connection_scanner::phase::reading_initial);
+    } else if (tunnel_streams_ != 0) {
+        scanner_entry_.set_phase(connection_scanner::phase::long_lived);
     } else if (!streams_.empty() || active_handler_tasks_ != 0) {
         scanner_entry_.set_phase(connection_scanner::phase::idle);
     } else {
@@ -772,19 +791,19 @@ void http3_session::set_inactivity_phase() noexcept {
 
 void http3_session::expire_stream_deadlines(std::int64_t now_ms) noexcept {
     const auto& server = services_.options_.server_;
-    // Each expiry is one-shot (the body timing closes, an output wait expires
-    // once), so resetting inside the walk never revisits a stream; a reset
-    // never removes a stream from the table synchronously.
-    for (auto& [stream_id, stream] : streams_) {
-        if (stream->aborted()) {
+    for (auto it = streams_.begin(); it != streams_.end();) {
+        const auto stream_id = it->first;
+        auto& stream = *it->second;
+        ++it;
+        if (stream.aborted()) {
             continue;
         }
-        if (stream->request_body_overdue(now_ms, server.request_body_timeout_, server.body_completion_timeout_)) {
-            stream->close_request_body_timing();
+        if (stream.request_body_overdue(now_ms, server.request_body_timeout_, server.body_completion_timeout_)) {
+            stream.close_request_body_timing();
             reset_stream(stream_id, http3_error_code::request_cancelled);
             continue;
         }
-        auto* signal = stream->signal();
+        auto* signal = stream.signal();
         if (signal != nullptr && server.write_timeout_.has_value() &&
             signal->output_wait_expired(now_ms, *server.write_timeout_)) {
             reset_stream(stream_id, http3_error_code::request_cancelled);
@@ -935,7 +954,12 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         if (codec().submit_connect_response_head(stream->id(), head_response)) {
                             throw std::invalid_argument("HTTP/3 CONNECT response head rejected");
                         }
+                        if (!stream->tunnel()) {
+                            stream->mark_tunnel();
+                            ++tunnel_streams_;
+                        }
                         stream->mark_response_committed();
+                        set_inactivity_phase();
                         context_access::commit_upgrade(context_value);
                         wake_writer();
                         admission.tail().record_access(options.access_log_, head_response.status());
@@ -968,7 +992,12 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         if (handshake == nullptr) {
                             throw std::invalid_argument("HTTP/3 WebSocket handshake rejected");
                         }
+                        if (!stream->tunnel()) {
+                            stream->mark_tunnel();
+                            ++tunnel_streams_;
+                        }
                         stream->mark_response_committed();
+                        set_inactivity_phase();
                         context_access::commit_upgrade(context_value);
                         wake_writer();
                         admission.tail().record_access(options.access_log_, http_status::ok);

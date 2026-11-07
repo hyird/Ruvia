@@ -203,6 +203,7 @@ private:
     http3_buffered_response_writer buffered_response_writer_;
     std::size_t active_handler_tasks_{0};
     std::size_t accepted_request_heads_{0};
+    std::size_t tunnel_streams_{0};
     lifecycle_type lifecycle_{lifecycle_type::open};
     bool drain_begun_{false};
     // A connection timeout started (or joined) the drain: its time bound ends

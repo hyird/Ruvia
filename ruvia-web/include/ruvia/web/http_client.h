@@ -566,9 +566,10 @@ public:
             throw std::logic_error("HTTP request builder was consumed");
         }
         auto encoded = to_json(value, {.resource_ = body_.get_allocator().resource()});
-        body_ = std::move(encoded);
+        header("Content-Type", "application/json");
+        body_.swap(encoded);
         has_body_ = true;
-        return header("Content-Type", "application/json");
+        return *this;
     }
     http_client_request& redirects(std::size_t maximum) noexcept {
         max_redirects_ = maximum;

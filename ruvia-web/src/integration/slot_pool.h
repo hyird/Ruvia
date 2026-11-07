@@ -79,6 +79,11 @@ public:
         acquire_awaiter(owner_type& owner, pool_lease_acquire acquire) noexcept
             : owner_(owner),
               acquire_(std::move(acquire)) {}
+        acquire_awaiter(const acquire_awaiter&) = delete;
+        acquire_awaiter& operator=(const acquire_awaiter&) = delete;
+        acquire_awaiter(acquire_awaiter&&) noexcept = default;
+        acquire_awaiter& operator=(acquire_awaiter&&) = delete;
+        void operator&() const = delete;
 
         [[nodiscard]] bool await_ready() {
             return acquire_.await_ready();

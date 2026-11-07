@@ -11,21 +11,18 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/detail/util/pmr_resource.h"
+
 #include "util/http_c_library_memory.h"
 
 namespace ruvia {
 namespace {
 
-[[nodiscard]] std::pmr::memory_resource* resolve_resource(
-    std::pmr::memory_resource* resource) noexcept {
-    return resource == nullptr ? std::pmr::get_default_resource() : resource;
-}
-
 [[nodiscard]] http3_connection_options resolve_http3_options(
     const http3_quic_connection_options& options) {
     auto http_options = options.http3_;
     if (http_options.resource_ == nullptr) {
-        http_options.resource_ = resolve_resource(options.resource_);
+        http_options.resource_ = detail::http_pmr_resource_or_default(options.resource_);
     }
     http_options.own_data_events_ = true;
     return http_options;
@@ -35,7 +32,7 @@ namespace {
 
 http3_quic_datagram::http3_quic_datagram(
     std::pmr::memory_resource* resource)
-    : bytes_(resolve_resource(resource)) {
+    : bytes_(detail::http_pmr_resource_or_default(resource)) {
     ngtcp2_path_storage_zero(&path_);
 }
 
@@ -61,7 +58,7 @@ public:
           callback_user_data_(options.callback_user_data_),
           max_udp_payload_size_(options.max_udp_payload_size_),
           max_pending_datagram_bytes_(options.max_pending_datagram_bytes_),
-          memory_(resolve_resource(options.resource_)),
+          memory_(detail::http_pmr_resource_or_default(options.resource_)),
           memory_table_{
               .user_data = &memory_,
               .malloc = detail::http_c_library_memory::allocate,
@@ -206,6 +203,9 @@ public:
     }
 
     http3_quic_result fail_transport(int error) noexcept {
+        if (state_ == close_state::close_pending) {
+            return error_result();
+        }
         if (state_ != close_state::open) {
             return closed_result();
         }
@@ -222,6 +222,9 @@ public:
     }
 
     http3_quic_result fail_application(std::uint64_t error) noexcept {
+        if (state_ == close_state::close_pending) {
+            return error_result();
+        }
         if (state_ != close_state::open) {
             return closed_result();
         }
@@ -604,9 +607,12 @@ http3_quic_status http3_quic_connection::start_early_http3(
         impl_->rethrow_if_failed(result);
         return http3_quic_status::invalid_state;
     }
-    impl_->http3_.remember_peer_settings(settings);
-    impl_->early_http3_ = true;
-    return start_http3();
+    const auto status = start_http3();
+    if (status == http3_quic_status::accepted) {
+        impl_->http3_.remember_peer_settings(settings);
+        impl_->early_http3_ = true;
+    }
+    return status;
 }
 
 http3_quic_status http3_quic_connection::reject_early_data() {
@@ -726,9 +732,6 @@ http3_quic_result http3_quic_connection::receive_datagram(
             return impl_->enter_draining();
         default:
             break;
-    }
-    if (impl_->state_ == impl::close_state::close_pending) {
-        return impl_->error_result();
     }
     return impl_->fail_transport(result);
 }
@@ -934,6 +937,7 @@ void http3_quic_connection::reset_stream(
     // nghttp3 stops producing the stream first, so no frame of it is written
     // after the RESET_STREAM.
     (void)impl_->http3_.shutdown_stream_write(stream_id);
+    (void)impl_->http3_.shutdown_stream_read(stream_id);
     const int result = ngtcp2_conn_shutdown_stream(impl_->connection_, 0, stream_id, application_error_code);
     if (result != 0 && result != NGTCP2_ERR_STREAM_NOT_FOUND) {
         (void)impl_->fail_transport(result);

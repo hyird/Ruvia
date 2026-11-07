@@ -1,7 +1,8 @@
 #pragma once
 
-#include <cstddef>
 #include <string_view>
+
+#include <openssl/crypto.h>
 
 namespace ruvia::detail {
 
@@ -15,11 +16,7 @@ namespace ruvia::detail {
     if (left.size() != right.size()) {
         return false;
     }
-    unsigned char diff = 0;
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        diff |= static_cast<unsigned char>(left[i] ^ right[i]);
-    }
-    return diff == 0;
+    return left.empty() || CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
 }
 
 }  // namespace ruvia::detail

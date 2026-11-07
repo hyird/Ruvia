@@ -10,6 +10,7 @@
 #include "ruvia/core/failure_report.h"
 
 #include "worker_dispatcher_impl.h"
+
 namespace ruvia::detail {
 namespace {
 

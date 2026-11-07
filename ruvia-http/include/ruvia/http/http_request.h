@@ -48,7 +48,7 @@ public:
     http_request(http_request&&) noexcept = default;
     http_request& operator=(http_request&&) noexcept = default;
 
-    [[nodiscard]] std::string_view method() const noexcept {
+    [[nodiscard]] std::string_view method() const noexcept RUVIA_LIFETIMEBOUND {
         return method_;
     }
 
@@ -64,21 +64,21 @@ public:
         *this = http_request();
     }
 
-    [[nodiscard]] std::string_view target() const noexcept {
+    [[nodiscard]] std::string_view target() const noexcept RUVIA_LIFETIMEBOUND {
         return target_;
     }
 
-    [[nodiscard]] std::string_view scheme() const noexcept {
+    [[nodiscard]] std::string_view scheme() const noexcept RUVIA_LIFETIMEBOUND {
         return scheme_;
     }
 
-    [[nodiscard]] std::string_view authority() const noexcept {
+    [[nodiscard]] std::string_view authority() const noexcept RUVIA_LIFETIMEBOUND {
         return authority_;
     }
 
     // The HTTP/2 :protocol pseudo-field (RFC 8441 extended CONNECT). Empty for
     // HTTP/1 requests and for HTTP/2 requests that carry no :protocol.
-    [[nodiscard]] std::string_view protocol() const noexcept {
+    [[nodiscard]] std::string_view protocol() const noexcept RUVIA_LIFETIMEBOUND {
         return protocol_;
     }
 
@@ -86,11 +86,11 @@ public:
         return target_form_;
     }
 
-    [[nodiscard]] std::string_view path() const noexcept {
+    [[nodiscard]] std::string_view path() const noexcept RUVIA_LIFETIMEBOUND {
         return path_;
     }
 
-    [[nodiscard]] std::string_view query_string() const noexcept {
+    [[nodiscard]] std::string_view query_string() const noexcept RUVIA_LIFETIMEBOUND {
         return query_string_;
     }
 
@@ -127,15 +127,15 @@ public:
     [[nodiscard]] std::span<const std::byte> body_bytes() const&& = delete;
 
     // Case-insensitive semantic lookup; the last repeated field wins.
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
     // Exact raw lookup over the encoded query string. Both `raw_name` and the
     // returned value retain their percent-encoded bytes; no application/x-www-
     // form-urlencoded `+` conversion is applied. Later duplicate fields win.
     [[nodiscard]] std::optional<std::string_view> last_raw_query_value(
-        std::string_view raw_name) const noexcept;
+        std::string_view raw_name) const noexcept RUVIA_LIFETIMEBOUND;
     // Case-sensitive Cookie lookup; the last matching pair across field lines wins.
     // The returned view borrows the corresponding header text.
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept RUVIA_LIFETIMEBOUND;
 
 private:
     friend struct detail::http_request_access;

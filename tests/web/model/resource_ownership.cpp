@@ -319,3 +319,6 @@ RUVIA_TEST(model_resource_scalar_array_moves_transfer_same_resource_storage) {
     check.template operator()<ruvia::array<ruvia::int32>>();
     check.template operator()<ruvia::boxed_array<ruvia::int32>>();
 }
+
+static_assert(!std::is_copy_constructible_v<resource_parent>);
+static_assert(std::is_constructible_v<resource_parent, resource_child&>);

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -74,6 +75,10 @@ namespace ruvia::detail {
     if (config.http3_.max_concurrent_streams_ == 0 || config.http3_.max_alt_svc_entries_ == 0 ||
         config.http3_.max_datagram_bytes_ == 0 || config.http3_.max_stream_output_bytes_ == 0) {
         throw std::invalid_argument("HTTP/3 resource bounds must be positive");
+    }
+    if (config.http3_.max_datagram_bytes_ < 1200 || config.http3_.max_datagram_bytes_ > 65527 ||
+        config.http3_.max_concurrent_streams_ > (std::numeric_limits<std::uint32_t>::max)()) {
+        throw std::invalid_argument("HTTP/3 transport limits exceed QUIC bounds");
     }
     validate_client_tls_config(config.tls_);
     if (scheme == http_scheme::https && config.tls_.mode_ == client_tls_mode::disabled) {

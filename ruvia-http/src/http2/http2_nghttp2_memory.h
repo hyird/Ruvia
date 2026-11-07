@@ -11,7 +11,13 @@ namespace ruvia::detail {
 // Routes every nghttp2 allocation through one PMR resource via http_c_library_memory.
 class http2_nghttp2_memory final {
 public:
-    explicit http2_nghttp2_memory(std::pmr::memory_resource* resource) noexcept;
+    explicit http2_nghttp2_memory(std::pmr::memory_resource* resource) noexcept
+        : memory_(resource),
+          table_{.mem_user_data = &memory_,
+              .malloc = &http_c_library_memory::allocate,
+              .free = &http_c_library_memory::deallocate,
+              .calloc = &http_c_library_memory::allocate_zeroed,
+              .realloc = &http_c_library_memory::reallocate} {}
     http2_nghttp2_memory(const http2_nghttp2_memory&) = delete;
     http2_nghttp2_memory& operator=(const http2_nghttp2_memory&) = delete;
 

@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_known_method.h"
@@ -62,10 +63,7 @@ http3_request_head::http3_request_head(http3_headers_event event, std::pmr::memo
 
 std::optional<http3_request_head> http3_request_head::parse(
     http3_headers_event event, std::pmr::memory_resource* resource) {
-    if (resource == nullptr) {
-        resource = std::pmr::get_default_resource();
-    }
-    http3_request_head head(std::move(event), resource);
+    http3_request_head head(std::move(event), detail::http_pmr_resource_or_default(resource));
     if (!head.validate()) {
         return std::nullopt;
     }

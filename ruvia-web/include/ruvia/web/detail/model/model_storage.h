@@ -45,7 +45,8 @@ public:
             return *this;
         }
         // Consuming a source that owns this model would destroy the destination.
-        if (other.owns(this)) {
+        if (::ruvia::detail::model_address_within(this, std::addressof(other), sizeof(model_storage)) ||
+            other.owns(this)) {
             ::ruvia::detail::throw_model_move_source_owns_destination();
         }
 

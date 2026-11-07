@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/fixed_string.h"
 #include "ruvia/web/model.h"
 
@@ -222,14 +224,24 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         } else if constexpr (std::is_same_v<element_type, std::pmr::string>) {
             auto owned = entity_value_slot<t_type>::make_value(resource);
             owned.reserve(value.size());
-            for (auto& item : value) {
-                if constexpr (movable_rvalue &&
-                              std::is_same_v<std::remove_cvref_t<decltype(item)>, std::pmr::string>) {
-                    if (item.get_allocator().resource() == resource) {
-                        owned.emplace_back(std::move(item));
-                        continue;
+            if constexpr (movable_rvalue &&
+                          std::is_same_v<std::remove_cvref_t<decltype(*value.begin())>, std::pmr::string>) {
+                bool all_same_resource = true;
+                for (const auto& item : value) {
+                    if (item.get_allocator().resource() != resource) {
+                        all_same_resource = false;
+                        break;
                     }
                 }
+                if (all_same_resource) {
+                    for (auto& item : value) {
+                        owned.emplace_back(std::move(item));
+                    }
+                    commit_entity_value(out, std::move(owned));
+                    return;
+                }
+            }
+            for (const auto& item : value) {
                 owned.emplace_back(std::string_view(item));
             }
             commit_entity_value(out, std::move(owned));
@@ -291,7 +303,7 @@ public:
     entity_value_storage(entity_value_storage&&) noexcept = default;
     entity_value_storage& operator=(entity_value_storage&&) = delete;
     template <fixed_string name>
-    auto& get() & {
+    auto& get() & RUVIA_LIFETIMEBOUND {
         auto& value = slot<name>();
         if (value.state_ != decltype(value.state_)::value) {
             throw std::logic_error("entity value is not set");
@@ -299,7 +311,9 @@ public:
         return value.value_;
     }
     template <fixed_string name>
-    const auto& get() const& {
+    auto& get() && = delete;
+    template <fixed_string name>
+    const auto& get() const& RUVIA_LIFETIMEBOUND {
         return const_cast<entity_value_storage*>(this)->template get<name>();
     }
     template <fixed_string name>
@@ -400,24 +414,26 @@ public:                                                                         
 // Public value facades only forward; state transitions belong to the owner.
 #define RUVIA_DETAIL_ENTITY_VALUE_API(member)                       \
     template <::ruvia::fixed_string name>                           \
-    auto& get() & {                                                 \
+    auto& get() & RUVIA_LIFETIMEBOUND {                             \
         return member.template get<name>();                         \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
-    const auto& get() const& {                                      \
+    auto& get() && = delete;                                        \
+    template <::ruvia::fixed_string name>                           \
+    const auto& get() const& RUVIA_LIFETIMEBOUND {                  \
         return member.template get<name>();                         \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
     const auto& get() const&& = delete;                             \
     template <::ruvia::fixed_string name, typename value_type>      \
-    auto& set(value_type&& value) & {                               \
+    auto& set(value_type&& value) & RUVIA_LIFETIMEBOUND {           \
         member.template set<name>(std::forward<value_type>(value)); \
         return *this;                                               \
     }                                                               \
     template <::ruvia::fixed_string name, typename value_type>      \
     auto& set(value_type&&) && = delete;                            \
     template <::ruvia::fixed_string name>                           \
-    auto& set_null() &                                              \
+    auto& set_null() & RUVIA_LIFETIMEBOUND                          \
         requires requires { member.template set_null<name>(); }     \
     {                                                               \
         member.template set_null<name>();                           \
@@ -428,7 +444,7 @@ public:                                                                         
         requires requires { member.template set_null<name>(); }     \
     = delete;                                                       \
     template <::ruvia::fixed_string name>                           \
-    auto& reset() & {                                               \
+    auto& reset() & RUVIA_LIFETIMEBOUND {                           \
         member.template reset<name>();                              \
         return *this;                                               \
     }                                                               \

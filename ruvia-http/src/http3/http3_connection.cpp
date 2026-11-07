@@ -18,6 +18,7 @@
 #include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_status.h"
@@ -34,11 +35,6 @@
 namespace ruvia {
 
 namespace {
-
-[[nodiscard]] std::pmr::memory_resource* resolve_resource(
-    std::pmr::memory_resource* resource) noexcept {
-    return resource != nullptr ? resource : std::pmr::get_default_resource();
-}
 
 [[nodiscard]] std::string_view rcbuf_view(nghttp3_rcbuf* buffer) noexcept {
     const auto value = nghttp3_rcbuf_get_buf(buffer);
@@ -114,14 +110,14 @@ template <typename field_range_type>
 
 http3_field::http3_field(std::string_view name, std::string_view value,
     std::pmr::memory_resource* resource)
-    : header_(name, value, resolve_resource(resource)) {}
+    : header_(name, value, detail::http_pmr_resource_or_default(resource)) {}
 
 http3_data_event::http3_data_event(std::int64_t stream_id,
     std::string_view bytes, std::pmr::memory_resource* resource,
     bool own_bytes)
     : stream_id_(stream_id),
       bytes_(bytes),
-      owned_bytes_(resolve_resource(resource)),
+      owned_bytes_(detail::http_pmr_resource_or_default(resource)),
       owns_bytes_(own_bytes) {
     if (owns_bytes_) {
         owned_bytes_.assign(bytes);
@@ -210,7 +206,7 @@ public:
     };
     impl(http3_role role, const http3_connection_options& options)
         : role_(role),
-          resource_(resolve_resource(options.resource_)),
+          resource_(detail::http_pmr_resource_or_default(options.resource_)),
           memory_(resource_),
           memory_table_{
               .user_data = &memory_,
@@ -329,7 +325,11 @@ public:
         if (result == NGHTTP3_ERR_WOULDBLOCK) {
             return http3_status::would_block;
         }
+        if (result == NGHTTP3_ERR_CONN_CLOSING) {
+            return http3_status::closed;
+        }
         if (result == NGHTTP3_ERR_STREAM_NOT_FOUND ||
+            result == NGHTTP3_ERR_STREAM_IN_USE ||
             result == NGHTTP3_ERR_INVALID_ARGUMENT ||
             result == NGHTTP3_ERR_INVALID_STATE) {
             return http3_status::invalid_state;
@@ -761,10 +761,9 @@ public:
         return std::nullopt;
     }
 
-    // Admission already proved the stream open and headless, so a failed
-    // submission means the stream or the connection is gone.
-    [[nodiscard]] static http3_response_head_error head_error_from(http3_status) noexcept {
-        return http3_response_head_error::closed;
+    [[nodiscard]] static http3_response_head_error head_error_from(http3_status status) noexcept {
+        return status == http3_status::invalid_state ? http3_response_head_error::invalid_message
+                                                     : http3_response_head_error::closed;
     }
 
     [[nodiscard]] std::optional<http3_response_head_error> submit_final_response(
@@ -1257,8 +1256,13 @@ http3_status http3_connection::submit_trailers(std::int64_t stream_id,
     stream->trailers_submitted_ = true;
     stream->finished_ = true;
     const int resume_result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
-    impl_->throw_if_no_memory(resume_result);
-    return impl_->status_from(resume_result);
+    if (resume_result != 0) {
+        stream->trailers_submitted_ = false;
+        stream->finished_ = false;
+        impl_->throw_if_no_memory(resume_result);
+        return impl_->status_from(resume_result);
+    }
+    return http3_status::accepted;
 }
 
 std::variant<http_buffered_response_write_plan, http3_response_head_error>
@@ -1380,8 +1384,13 @@ http3_status http3_connection::finish_response(
     stream->trailers_submitted_ = true;
     stream->finished_ = true;
     const int resume_result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
-    impl_->throw_if_no_memory(resume_result);
-    return impl_->status_from(resume_result);
+    if (resume_result != 0) {
+        stream->trailers_submitted_ = false;
+        stream->finished_ = false;
+        impl_->throw_if_no_memory(resume_result);
+        return impl_->status_from(resume_result);
+    }
+    return http3_status::accepted;
 }
 
 std::optional<http3_response_head_error> http3_connection::submit_connect_response_head(
@@ -1491,6 +1500,10 @@ std::optional<http3_datagram_prefix> http3_connection::datagram_prefix(std::int6
 
 std::optional<http3_peer_settings> http3_connection::peer_settings() const noexcept {
     return impl_->peer_settings_;
+}
+
+bool http3_connection::header_block_in_progress() const noexcept {
+    return impl_->building_headers_.has_value();
 }
 
 http3_status http3_connection::submit_origin_advertisement(
@@ -1611,7 +1624,12 @@ http3_status http3_connection::close_stream(std::int64_t stream_id,
         return http3_status::protocol_error;
     }
     if (result == 0 || result == NGHTTP3_ERR_STREAM_NOT_FOUND) {
+        if (impl_->building_headers_ && impl_->building_headers_->stream_id_ == stream_id) {
+            impl_->building_headers_.reset();
+            impl_->building_header_bytes_ = 0;
+        }
         impl_->streams_.erase(stream_id);
+        return http3_status::accepted;
     }
     return impl_->status_from(result);
 }
@@ -1676,6 +1694,10 @@ http3_status http3_connection::shutdown_stream_read(
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
+    if (impl_->building_headers_ && impl_->building_headers_->stream_id_ == stream_id) {
+        impl_->building_headers_.reset();
+        impl_->building_header_bytes_ = 0;
+    }
     if (auto* stream = impl_->find_stream(stream_id)) {
         stream->read_aborted_ = true;
     }
@@ -1713,6 +1735,8 @@ http3_status http3_connection::shutdown_stream_write(
     }
     if (auto* stream = impl_->find_stream(stream_id)) {
         stream->write_aborted_ = true;
+        stream->body_.clear();
+        stream->pending_bytes_ = 0;
     }
     nghttp3_conn_shutdown_stream_write(impl_->connection_, stream_id);
     if (application_error_code.has_value()) {

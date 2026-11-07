@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "worker_notification.h"
+
 namespace ruvia::detail {
 
 namespace {

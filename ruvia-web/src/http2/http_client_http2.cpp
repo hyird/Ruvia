@@ -717,6 +717,8 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         }
         if (retryable && (request.output() == nullptr || stream.stream_id_ == 0) &&
             attempt_value == 0 && !timeout.expired()) {
+            state_value.informational_.clear();
+            state_value.informational_budget_ = {};
             continue;
         }
         if (retryable) {

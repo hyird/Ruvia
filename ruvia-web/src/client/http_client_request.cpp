@@ -147,8 +147,17 @@ http_client_request& http_client_request::headers(std::span<const http_header_vi
     if (consumed_) {
         throw std::logic_error("HTTP request builder was consumed");
     }
-    for (const auto& field : fields) {
-        headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+    const auto old_size = headers_.size();
+    headers_.reserve(old_size + fields.size());
+    try {
+        for (const auto& field : fields) {
+            headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+        }
+    } catch (...) {
+        while (headers_.size() > old_size) {
+            headers_.pop_back();
+        }
+        throw;
     }
     return *this;
 }
@@ -189,10 +198,11 @@ std::pmr::vector<http_header_view> http_client_request::field_views() const {
 }
 
 task<http_client_response> http_client_request::send() {
-    if (std::exchange(consumed_, true)) {
+    if (consumed_) {
         throw std::logic_error("HTTP request builder was consumed");
     }
     client_.registration_.require_active();
+    consumed_ = true;
     return make_scoped_operation(client_.registration_.scope(), send_owned(std::move(*this)));
 }
 
@@ -291,14 +301,20 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
 }
 
 task<http_client_exchange> http_client_request::upload(http_client_upload_config config) {
-    if (std::exchange(consumed_, true)) {
+    if (consumed_) {
         throw std::logic_error("HTTP request builder was consumed");
     }
     if (has_body_) {
         throw std::invalid_argument("streamed upload cannot also have a buffered body");
     }
     const auto fields = field_views();
-    return client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields}, config);
+    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields}, config);
+    consumed_ = true;
+    std::pmr::string(method_.get_allocator()).swap(method_);
+    std::pmr::string(target_.get_allocator()).swap(target_);
+    std::pmr::vector<http_header>(headers_.get_allocator()).swap(headers_);
+    std::pmr::string(body_.get_allocator()).swap(body_);
+    return dispatched;
 }
 
 http_client_connect_request::http_client_connect_request(const http_client_handle& client,
@@ -328,8 +344,17 @@ http_client_connect_request& http_client_connect_request::headers(std::span<cons
     if (consumed_) {
         throw std::logic_error("CONNECT builder was consumed");
     }
-    for (const auto& field : fields) {
-        headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+    const auto old_size = headers_.size();
+    headers_.reserve(old_size + fields.size());
+    try {
+        for (const auto& field : fields) {
+            headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+        }
+    } catch (...) {
+        while (headers_.size() > old_size) {
+            headers_.pop_back();
+        }
+        throw;
     }
     return *this;
 }
@@ -348,7 +373,7 @@ http_client_connect_request& http_client_connect_request::target(std::string_vie
     return *this;
 }
 task<http_client_tunnel_result> http_client_connect_request::open(http_client_tunnel_config config) {
-    if (std::exchange(consumed_, true)) {
+    if (consumed_) {
         throw std::logic_error("CONNECT builder was consumed");
     }
     std::pmr::vector<http_header_view> fields(headers_.get_allocator().resource());
@@ -356,10 +381,16 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
     for (const auto& field : headers_) {
         fields.emplace_back(field.name(), field.value());
     }
-    if (udp_) {
-        return client_.dispatch_udp({.target_ = target_, .headers_ = fields}, config);
-    }
-    return client_.dispatch_connect({.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields}, config);
+    auto dispatched = udp_
+                          ? client_.dispatch_udp({.target_ = target_, .headers_ = fields}, config)
+                          : client_.dispatch_connect(
+                                {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields}, config);
+    consumed_ = true;
+    std::pmr::string(authority_.get_allocator()).swap(authority_);
+    std::pmr::string(protocol_.get_allocator()).swap(protocol_);
+    std::pmr::string(target_.get_allocator()).swap(target_);
+    std::pmr::vector<http_header>(headers_.get_allocator()).swap(headers_);
+    return dispatched;
 }
 
 task<void> http_client_response::pipe_to(context& output) & {

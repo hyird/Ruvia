@@ -23,21 +23,18 @@ template <typename field_type>
         return std::nullopt;
     }
     const auto field_count = retained.size();
-    const auto roll_back = [&]() noexcept {
-        retained.erase(retained.begin() + static_cast<std::ptrdiff_t>(field_count), retained.end());
-    };
-    try {
-        retained.reserve(field_count + fields.size());
-        auto* const resource = retained.get_allocator().resource();
-        for (const auto& field : fields) {
-            retained.push_back(http_header::copy_with_lowercase_name(field.name(), field.value(), resource));
-        }
-        retained_budget = budget;
-        return std::nullopt;
-    } catch (...) {
-        roll_back();
-        throw;
+    auto* const resource = retained.get_allocator().resource();
+    std::pmr::vector<http_header> staged(resource);
+    staged.reserve(fields.size());
+    for (const auto& field : fields) {
+        staged.push_back(http_header::copy_with_lowercase_name(field.name(), field.value(), resource));
     }
+    retained.reserve(field_count + staged.size());
+    for (auto& field : staged) {
+        retained.push_back(std::move(field));
+    }
+    retained_budget = budget;
+    return std::nullopt;
 }
 
 }  // namespace

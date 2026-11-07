@@ -58,7 +58,7 @@ public:
         return state_.committed();
     }
 
-    [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
+    [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept RUVIA_LIFETIMEBOUND {
         return state_.commit_plan();
     }
     const http_response_stream_commit_plan* commit_plan() const&& = delete;

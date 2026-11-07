@@ -8,6 +8,8 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/borrowed_text.h"
+
 namespace ruvia::detail {
 
 // Concatenates pieces into inline storage when they fit, otherwise into one
@@ -36,9 +38,10 @@ public:
     inline_text_concat(const inline_text_concat&) = delete;
     inline_text_concat& operator=(const inline_text_concat&) = delete;
 
-    [[nodiscard]] std::string_view view() const noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         return size_ <= inline_capacity ? std::string_view(inline_.data(), size_) : std::string_view(heap_);
     }
+    std::string_view view() const&& = delete;
 
 private:
     std::array<char, inline_capacity> inline_;

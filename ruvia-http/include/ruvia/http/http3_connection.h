@@ -356,6 +356,7 @@ public:
     [[nodiscard]] std::optional<http3_datagram_prefix> datagram_prefix(std::int64_t stream_id) const noexcept;
     // nullopt until the peer's SETTINGS frame arrived.
     [[nodiscard]] std::optional<http3_peer_settings> peer_settings() const noexcept;
+    [[nodiscard]] bool header_block_in_progress() const noexcept;
 
     // Server only: queues an RFC 9412 ORIGIN frame on the bound control stream.
     [[nodiscard]] http3_status submit_origin_advertisement(

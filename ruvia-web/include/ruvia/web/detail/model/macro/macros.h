@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <memory_resource>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"

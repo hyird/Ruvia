@@ -122,9 +122,10 @@ public:
         return termination_.error();
     }
 
-    [[nodiscard]] http3_termination& termination() noexcept {
+    [[nodiscard]] http3_termination& termination() & noexcept RUVIA_LIFETIMEBOUND {
         return termination_;
     }
+    http3_termination& termination() && = delete;
 
     // Spans one whole wait for peer acknowledgements to free output budget;
     // the connection scanner times it against write_timeout_.
@@ -155,9 +156,10 @@ public:
         return signal_.wait();
     }
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return signal_.worker();
     }
+    const worker_handle& worker() const&& = delete;
 
 private:
     worker_signal signal_;
@@ -192,21 +194,25 @@ public:
     [[nodiscard]] std::int64_t id() const noexcept {
         return head_.stream_id();
     }
-    [[nodiscard]] const http3_request_head& head() const noexcept {
+    [[nodiscard]] const http3_request_head& head() const& noexcept RUVIA_LIFETIMEBOUND {
         return head_;
     }
-    [[nodiscard]] const route_resolution& resolution() const noexcept {
+    const http3_request_head& head() const&& = delete;
+    [[nodiscard]] const route_resolution& resolution() const& noexcept RUVIA_LIFETIMEBOUND {
         return resolution_;
     }
+    const route_resolution& resolution() const&& = delete;
     [[nodiscard]] request_body_mode body_mode() const noexcept {
         return body_mode_;
     }
-    [[nodiscard]] http_request_trailers& trailers() noexcept {
+    [[nodiscard]] http_request_trailers& trailers() & noexcept RUVIA_LIFETIMEBOUND {
         return trailers_;
     }
-    [[nodiscard]] const std::optional<http_priority>& priority() const& noexcept {
+    http_request_trailers& trailers() && = delete;
+    [[nodiscard]] const std::optional<http_priority>& priority() const& noexcept RUVIA_LIFETIMEBOUND {
         return priority_;
     }
+    const std::optional<http_priority>& priority() const&& = delete;
     void set_priority(std::optional<http_priority> priority) noexcept {
         priority_ = priority;
     }
@@ -276,19 +282,21 @@ public:
         return http3_body_store_status::stored;
     }
 
-    [[nodiscard]] std::string_view buffered_body() const noexcept {
+    [[nodiscard]] std::string_view buffered_body() const& noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }
+    std::string_view buffered_body() const&& = delete;
 
     // Streaming reader: hands out every queued byte as one chunk, valid until
     // the next pop(). Returns how many bytes the previous chunk held, whose
     // flow-control credit the caller now returns.
-    [[nodiscard]] std::pair<std::string_view, std::size_t> pop() {
+    [[nodiscard]] std::pair<std::string_view, std::size_t> pop() & RUVIA_LIFETIMEBOUND {
         const auto consumed = active_chunk_.size();
         http_clear_pmr_string_retaining_small(active_chunk_);
         active_chunk_.swap(body_);
         return {active_chunk_, consumed};
     }
+    std::pair<std::string_view, std::size_t> pop() && = delete;
 
     // Streamed content received and not yet handed back as credit, returned
     // when the handler ends so a stopped reader cannot strand
@@ -312,9 +320,10 @@ public:
             body_failure_ = failure;
         }
     }
-    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const noexcept {
+    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return body_failure_;
     }
+    const std::optional<http_request_body_failure>& body_failure() const&& = delete;
 
     // The request content ended (the peer's FIN, or no content at all).
     void mark_request_ended() noexcept {
@@ -345,6 +354,13 @@ public:
         return request_body_open_ &&
                ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->count()) ||
                    (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->count()));
+    }
+
+    void mark_tunnel() noexcept {
+        tunnel_ = true;
+    }
+    [[nodiscard]] bool tunnel() const noexcept {
+        return tunnel_;
     }
 
     void mark_response_committed() noexcept {
@@ -386,9 +402,14 @@ public:
     [[nodiscard]] bool dispatched() const noexcept {
         return signal_.has_value();
     }
-    [[nodiscard]] http3_stream_signal* signal() noexcept {
+    [[nodiscard]] http3_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
         return signal_ ? &*signal_ : nullptr;
     }
+    http3_stream_signal* signal() && = delete;
+    [[nodiscard]] const http3_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
+        return signal_ ? &*signal_ : nullptr;
+    }
+    const http3_stream_signal* signal() const&& = delete;
 
     void mark_handler_done() noexcept {
         handler_done_ = true;
@@ -416,6 +437,7 @@ private:
     std::int64_t request_body_progress_ms_{0};
     bool request_body_open_{false};
     bool request_ended_{false};
+    bool tunnel_{false};
     bool response_committed_{false};
     bool aborted_{false};
     bool closed_{false};

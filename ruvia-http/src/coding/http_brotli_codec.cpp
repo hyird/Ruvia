@@ -8,6 +8,7 @@
 
 #include "coding/http_brotli_stream.h"
 #include "coding/http_content_codec.h"
+
 // br (RFC 7932) through the Brotli reference library.
 
 namespace ruvia::detail {

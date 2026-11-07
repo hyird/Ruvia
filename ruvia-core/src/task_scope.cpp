@@ -212,8 +212,10 @@ void task_scope::finish(node_type* node_value) noexcept {
     {
         retiring_guard retiring(*this);
         std::pmr::polymorphic_allocator<node_type> allocator(resource_);
-        node_value->task_.finish_direct_completion();
+        task<void> retired_task(std::move(node_value->task_));
         allocator.delete_object(node_value);
+        retired_task.finish_direct_completion();
+        retired_task.reset();
         if (retiring.destroyed_) {
             return;
         }

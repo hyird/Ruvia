@@ -12,7 +12,6 @@
 #include "http3/http3_session.h"
 #include "server/inbound_transport_error.h"
 #include "tls/tls_stream_end.h"
-#include "util/steady_clock.h"
 
 namespace ruvia::detail {
 
@@ -27,7 +26,6 @@ public:
 
     template <typename buffer_type>
     [[nodiscard]] task<bool> read_more(buffer_type& buffer) {
-        read_deadline deadline(stream_);
         for (;;) {
             require_live();
             auto chunk = stream_.take_tunnel_bytes();
@@ -46,7 +44,6 @@ public:
     }
 
     [[nodiscard]] task<std::optional<http_tunnel_input>> read_datagram() {
-        read_deadline deadline(stream_);
         for (;;) {
             require_live();
             // Reliable input is not starved by a native datagram flood.
@@ -108,18 +105,6 @@ public:
     }
 
 private:
-    struct read_deadline final {
-        http3_stream& stream_;
-        explicit read_deadline(http3_stream& stream)
-            : stream_(stream) {
-            if (!stream_.request_ended()) {
-                stream_.mark_request_body_open(steady_now_ms());
-            }
-        }
-        ~read_deadline() {
-            stream_.close_request_body_timing();
-        }
-    };
     struct output_deadline final {
         http3_stream_signal& signal_;
         explicit output_deadline(http3_stream_signal& signal)

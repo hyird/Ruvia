@@ -257,3 +257,19 @@ RUVIA_TEST(received_response_trailers_discard_fields_not_permitted_as_trailers) 
     visited.clear();
     RUVIA_CHECK(!ruvia::visit_http_response_trailers("Content-Type: text/plain\r\nbad line", visit));
 }
+
+RUVIA_TEST(request_trailers_append_handles_self_aliasing_across_reallocation) {
+    ruvia::http_request_trailers trailers(std::pmr::new_delete_resource());
+    RUVIA_CHECK(!trailers.append("X-One", "first-value").has_value());
+    RUVIA_CHECK(!trailers.append("X-Two", "second-value").has_value());
+    // Appending the container's own span across capacity growth must not read
+    // from invalidated elements.
+    for (int round = 0; round < 3; ++round) {
+        RUVIA_CHECK(!trailers.append(trailers.fields()).has_value());
+    }
+    RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{16});
+    RUVIA_CHECK_EQ(trailers.fields()[0].name(), "x-one");
+    RUVIA_CHECK_EQ(trailers.fields()[0].value(), "first-value");
+    RUVIA_CHECK_EQ(trailers.fields()[15].name(), "x-two");
+    RUVIA_CHECK_EQ(trailers.fields()[15].value(), "second-value");
+}

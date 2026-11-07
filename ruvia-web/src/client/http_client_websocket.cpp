@@ -674,9 +674,17 @@ http_client_websocket_request& http_client_websocket_request::header(std::string
 }
 http_client_websocket_request& http_client_websocket_request::headers(std::span<const http_header_view> fields) {
     require_open();
-    headers_.reserve(headers_.size() + fields.size());
-    for (const auto& field : fields) {
-        headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+    const auto old_size = headers_.size();
+    headers_.reserve(old_size + fields.size());
+    try {
+        for (const auto& field : fields) {
+            headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+        }
+    } catch (...) {
+        while (headers_.size() > old_size) {
+            headers_.pop_back();
+        }
+        throw;
     }
     return *this;
 }

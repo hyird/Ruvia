@@ -63,13 +63,15 @@ public:
           sql_(std::move(options.sql_)),
           atomicity_(options.atomicity_) {}
 
-    [[nodiscard]] std::string_view id() const noexcept {
+    [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND {
         return id_;
     }
+    std::string_view id() const&& = delete;
 
-    [[nodiscard]] std::string_view sql() const noexcept {
+    [[nodiscard]] std::string_view sql() const& noexcept RUVIA_LIFETIMEBOUND {
         return sql_;
     }
+    std::string_view sql() const&& = delete;
 
     [[nodiscard]] constexpr db_migration_atomicity atomicity() const noexcept {
         return atomicity_;
