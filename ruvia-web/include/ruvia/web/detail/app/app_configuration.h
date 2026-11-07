@@ -50,14 +50,14 @@ public:
     app_configuration(app_configuration&&) = delete;
     app_configuration& operator=(app_configuration&&) = delete;
 
-    void add_middleware(owned_middleware_descriptor descriptor);
-    void add_worker_state(worker_state_definition definition);
-    void on_error(http_error_handler handler);
-    void on_error(scoped_error_handler_options options);
+    void add_middleware(owned_middleware_descriptor&& descriptor);
+    void add_worker_state(worker_state_definition&& definition);
+    void on_error(http_error_handler&& handler);
+    void on_error(scoped_error_handler_options&& options);
     // Returns the cleared handler so the caller destroys it after releasing its lock.
     [[nodiscard]] http_error_handler on_error(std::nullptr_t) noexcept;
-    void on_not_found(http_not_found_handler handler);
-    void on_not_found(scoped_not_found_handler_options options);
+    void on_not_found(http_not_found_handler&& handler);
+    void on_not_found(scoped_not_found_handler_options&& options);
     [[nodiscard]] http_not_found_handler on_not_found(std::nullptr_t) noexcept;
 
     [[nodiscard]] std::span<const worker_state_definition> worker_states() const noexcept {

@@ -32,6 +32,11 @@ public:
             task_.registration_.start();
         }
     }
+    task_awaiter(const task_awaiter&) = delete;
+    task_awaiter& operator=(const task_awaiter&) = delete;
+    task_awaiter(task_awaiter&&) = delete;
+    task_awaiter& operator=(task_awaiter&&) = delete;
+    void operator&() const = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {
         return task_.handle_.done();

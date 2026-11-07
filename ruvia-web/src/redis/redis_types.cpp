@@ -114,6 +114,14 @@ redis_stream_entry::redis_stream_entry(redis_stream_entry&& other, allocator_typ
     other.fields_.clear();
 }
 
+redis_stream_entry& redis_stream_entry::operator=(const redis_stream_entry& other) {
+    if (this != &other) {
+        redis_stream_entry owned(other, allocator_type(id_.get_allocator().resource()));
+        id_.swap(owned.id_);
+        fields_.swap(owned.fields_);
+    }
+    return *this;
+}
 redis_stream_entry& redis_stream_entry::operator=(redis_stream_entry&& other) {
     if (this != &other) {
         redis_stream_entry owned(std::move(other), allocator_type(id_.get_allocator().resource()));
@@ -134,6 +142,14 @@ redis_stream_read_result::redis_stream_read_result(redis_stream_read_result&& ot
     other.entries_.clear();
 }
 
+redis_stream_read_result& redis_stream_read_result::operator=(const redis_stream_read_result& other) {
+    if (this != &other) {
+        redis_stream_read_result owned(other, allocator_type(stream_.get_allocator().resource()));
+        stream_.swap(owned.stream_);
+        entries_.swap(owned.entries_);
+    }
+    return *this;
+}
 redis_stream_read_result& redis_stream_read_result::operator=(redis_stream_read_result&& other) {
     if (this != &other) {
         redis_stream_read_result owned(std::move(other), allocator_type(stream_.get_allocator().resource()));

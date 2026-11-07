@@ -224,9 +224,6 @@ void stream_body_reader<stream_type>::require_not_failed() const {
 
 template <typename stream_type>
 task<void> stream_body_reader<stream_type>::read_more() {
-    if (peer_eof_observed_) {
-        throw_incomplete_request_body();
-    }
     // Every view handed out by an earlier read is dead once more input is
     // needed, so this is where the consumed prefix is finally dropped. Only the
     // unread framing suffix moves, once per socket read, instead of once per
@@ -246,7 +243,7 @@ task<void> stream_body_reader<stream_type>::read_more() {
         const auto doubled = buffer_.capacity() > hard_limit / 2 ? hard_limit : buffer_.capacity() * 2;
         buffer_.reserve(std::min(std::max(doubled, old_size + writable), hard_limit));
     }
-    const auto read_space = buffer_.prepare(writable);
+    const auto read_space = buffer_.prepare_spare().first(writable);
 
     scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
     auto read_completion =

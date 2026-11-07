@@ -120,43 +120,52 @@ template <typename visitor_type>
 [[nodiscard]] inline std::optional<std::string_view> decode_url_component(
     borrowed_text text, std::pmr::string& storage, url_decode_mode mode = url_decode_mode::percent) {
     const auto input = text.view();
-    std::size_t decoded_size = 0;
-    bool transformed = false;
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        const char c = input[i];
-        if (mode == url_decode_mode::form && c == '+') {
-            transformed = true;
-        } else if (c == '%') {
-            if (http_try_decode_percent_byte(input, i).has_value()) {
-                transformed = true;
-                i += 2;
-            } else if (mode != url_decode_mode::form) {
-                return std::nullopt;
-            }
-        }
-        ++decoded_size;
-    }
-    if (!transformed) {
-        return input;
-    }
-    std::pmr::string output(storage.get_allocator());
-    auto& target = detail::http_text_aliases_string(input, storage) ? output : storage;
-    target.clear();
-    target.reserve(decoded_size);
+    std::pmr::string staged(storage.get_allocator());
+    std::pmr::string* target = nullptr;
     for (std::size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
+        std::size_t advance = 0;
+        bool transformed = false;
         if (mode == url_decode_mode::form && c == '+') {
             c = ' ';
+            transformed = true;
         } else if (c == '%') {
             if (const auto byte = http_try_decode_percent_byte(input, i)) {
                 c = static_cast<char>(*byte);
-                i += 2;
+                advance = 2;
+                transformed = true;
+            } else if (mode != url_decode_mode::form) {
+                if (target == &storage) {
+                    storage.clear();
+                }
+                return std::nullopt;
             }
         }
-        target.push_back(c);
+        if (!transformed) {
+            if (target != nullptr) {
+                target->push_back(c);
+            }
+            continue;
+        }
+        if (target == nullptr) {
+            const bool can_write_in_place =
+                (mode == url_decode_mode::form || storage.empty()) &&
+                !detail::http_text_aliases_string(input, storage);
+            target = can_write_in_place ? &storage : &staged;
+            target->reserve(input.size() - advance);
+            target->clear();
+            if (i != 0) {
+                target->append(input.data(), i);
+            }
+        }
+        target->push_back(c);
+        i += advance;
     }
-    if (&target == &output) {
-        storage = std::move(output);
+    if (target == nullptr) {
+        return input;
+    }
+    if (target == &staged) {
+        storage = std::move(staged);
     }
     return std::string_view(storage);
 }

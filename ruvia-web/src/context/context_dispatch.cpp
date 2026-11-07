@@ -55,6 +55,10 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     if (options.body_.size() > services().max_decoded_body_bytes()) {
         throw std::invalid_argument("subrequest body exceeds the configured limit");
     }
+    if (options.method_.size() > max_subrequest_header_bytes ||
+        options.target_.size() > max_subrequest_header_bytes - options.method_.size()) {
+        throw std::invalid_argument("subrequest headers exceed the configured limit");
+    }
     std::size_t header_bytes = options.method_.size() + options.target_.size();
     for (const auto& header : options.headers_) {
         if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
@@ -63,10 +67,11 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
         if (is_http_protocol_managed_request_field(header.name())) {
             throw std::invalid_argument("subrequest framing headers are owned by dispatch");
         }
-        header_bytes += header.name().size() + header.value().size();
-        if (header_bytes > max_subrequest_header_bytes) {
+        if (header.name().size() > max_subrequest_header_bytes - header_bytes ||
+            header.value().size() > max_subrequest_header_bytes - header_bytes - header.name().size()) {
             throw std::invalid_argument("subrequest headers exceed the configured limit");
         }
+        header_bytes += header.name().size() + header.value().size();
     }
     // The operation is lazy and the options borrow caller storage: take owned
     // copies now. The subrequest is built directly as a parsed request; it

@@ -184,6 +184,7 @@ private:
     [[nodiscard]] db_driver query_driver() const;
     [[nodiscard]] std::pmr::memory_resource* query_resource() const;
     [[nodiscard]] task<db_exec_result> execute_query(const db_query& query);
+    [[nodiscard]] task<db_exec_result> execute_prepared(std::pmr::string sql);
     [[nodiscard]] task<db_rows> query_task(const db_query& query);
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count);
     template <typename result_type, typename mapper_type>
@@ -292,7 +293,7 @@ public:
     // Inherits an empty token; a supplied state replaces user cancellation.
     // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
     [[nodiscard]] db_handle with_options(operation_options options) const;
-    [[nodiscard]] const worker_handle& worker() const&;
+    [[nodiscard]] const worker_handle& worker() const& RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 #ifdef RUVIA_ENABLE_REDIS
     [[nodiscard]] db_query_result_cache query_result_cache() const;
@@ -382,6 +383,7 @@ private:
     [[nodiscard]] db_driver query_driver() const;
     [[nodiscard]] std::pmr::memory_resource* query_resource() const;
     [[nodiscard]] task<db_exec_result> execute_query(const db_query& query) const;
+    [[nodiscard]] task<db_exec_result> execute_prepared(std::pmr::string sql) const;
     [[nodiscard]] task<db_rows> query_task(const db_query& query) const;
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count) const;
     template <typename result_type, typename mapper_type>
@@ -468,7 +470,7 @@ public:
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept;
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 
 private:

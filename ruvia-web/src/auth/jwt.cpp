@@ -1,5 +1,7 @@
 #include "ruvia/web/auth/jwt.h"
 
+#ifdef RUVIA_ENABLE_JWT
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -55,7 +57,7 @@ struct jwt_decoded_section final {
     std::size_t size_{0};
 
     jwt_decoded_section(std::string_view input, std::pmr::memory_resource* resource)
-        : heap_(resource) {
+        : heap_(pmr_resource_or_default(resource)) {
         const auto bound = http_base64_decoded_size_bound(input.size());
         char* target = inline_.data();
         if (bound > inline_capacity) {
@@ -74,9 +76,10 @@ struct jwt_decoded_section final {
         }
     }
 
-    [[nodiscard]] std::string_view view() const noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         return heap_.empty() ? std::string_view(inline_.data(), size_) : std::string_view(heap_);
     }
+    std::string_view view() const&& = delete;
 };
 
 [[nodiscard]] hmac_digest jwt_hmac_digest(jwt_algorithm algorithm) {
@@ -476,3 +479,5 @@ std::optional<std::string_view> jwt_bearer_token(std::string_view authorization)
 }
 
 }  // namespace ruvia
+
+#endif  // RUVIA_ENABLE_JWT

@@ -146,8 +146,8 @@ public:
     owned_middleware_descriptor& operator=(owned_middleware_descriptor&&) = delete;
 
     ~owned_middleware_descriptor() {
-        if (release_args_ != nullptr) {
-            release_args_(descriptor_.args());
+        if (auto* const release = std::exchange(release_args_, nullptr)) {
+            release(descriptor_.args());
         }
     }
 

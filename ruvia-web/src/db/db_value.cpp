@@ -1,7 +1,6 @@
 #include <utility>
 
 #include "ruvia/web/db/db_types.h"
-
 namespace ruvia {
 
 db_value::db_value(std::nullptr_t)

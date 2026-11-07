@@ -75,10 +75,10 @@ public:
     [[nodiscard]] websocket_feed_status feed(std::string_view input);
     template <detail::http_temporary_owning_char_string input_type>
     websocket_feed_status feed(input_type&&) = delete;
-    [[nodiscard]] std::optional<websocket_event> next_event() &;
+    [[nodiscard]] std::optional<websocket_event> next_event() & RUVIA_LIFETIMEBOUND;
     std::optional<websocket_event> next_event() && = delete;
     [[nodiscard]] std::size_t needed_input_bytes() const noexcept;
-    [[nodiscard]] websocket_output_plan output_plan() const& noexcept;
+    [[nodiscard]] websocket_output_plan output_plan() const& noexcept RUVIA_LIFETIMEBOUND;
     websocket_output_plan output_plan() const&& = delete;
     [[nodiscard]] websocket_output_consume_status consume_output(std::size_t bytes) noexcept;
     void commit_transport_end() noexcept;
@@ -94,6 +94,9 @@ public:
     // output_plan() exposes it as borrowed_bytes() after the frame header.
     [[nodiscard]] websocket_frame_submit_status submit_borrowed_frame(
         websocket_opcode opcode, std::string_view payload, bool compress = true);
+    template <detail::http_temporary_owning_char_string payload_type>
+    websocket_frame_submit_status submit_borrowed_frame(
+        websocket_opcode opcode, payload_type&& payload, bool compress = true) = delete;
     [[nodiscard]] websocket_close_submit_status submit_close(
         websocket_close_code code, std::string_view reason);
 

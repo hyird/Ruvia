@@ -20,12 +20,14 @@ public:
     [[nodiscard]] http1_request_body_consumption consumption() const noexcept {
         return reader_.consumption();
     }
-    [[nodiscard]] stream_body_reader<stream_type>& reader() noexcept {
+    [[nodiscard]] stream_body_reader<stream_type>& reader() & noexcept RUVIA_LIFETIMEBOUND {
         return reader_;
     }
-    [[nodiscard]] const http_request_trailers& trailers() const& noexcept {
+    stream_body_reader<stream_type>& reader() && = delete;
+    [[nodiscard]] const http_request_trailers& trailers() const& noexcept RUVIA_LIFETIMEBOUND {
         return reader_.trailers();
     }
+    const http_request_trailers& trailers() const&& = delete;
 
     [[nodiscard]] std::size_t pipeline_size() const noexcept {
         return reader_.pipeline_size();

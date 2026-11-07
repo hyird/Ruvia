@@ -12,7 +12,7 @@ namespace ruvia::detail {
 namespace {
 
 template <typename handlers_type, typename handler_type>
-void append_prefix_handler(handlers_type& handlers, std::string_view prefix, handler_type handler) {
+void append_prefix_handler(handlers_type& handlers, std::string_view prefix, handler_type&& handler) {
     if (!handler) {
         throw std::invalid_argument("fallback handler must not be null");
     }
@@ -48,7 +48,7 @@ app_configuration::app_configuration(std::pmr::memory_resource* resource)
       middlewares_(pmr_resource_or_default(resource)),
       worker_states_(pmr_resource_or_default(resource)) {}
 
-void app_configuration::add_middleware(owned_middleware_descriptor descriptor) {
+void app_configuration::add_middleware(owned_middleware_descriptor&& descriptor) {
     const auto& value = descriptor.descriptor();
     if (value.validated_model_type_key() != nullptr) {
         throw std::invalid_argument("validator middleware binds to a route and cannot be app-wide");
@@ -65,13 +65,13 @@ void app_configuration::add_middleware(owned_middleware_descriptor descriptor) {
     middlewares_.push_back(std::move(descriptor));
 }
 
-void app_configuration::add_worker_state(worker_state_definition definition) {
+void app_configuration::add_worker_state(worker_state_definition&& definition) {
     append_worker_state_definition(worker_states_, std::move(definition));
 }
 
 // A second app-wide registration throws like a duplicate scoped prefix rather
 // than silently replacing the first by call order.
-void app_configuration::on_error(http_error_handler handler) {
+void app_configuration::on_error(http_error_handler&& handler) {
     if (!handler) {
         throw std::invalid_argument("error handler must not be null");
     }
@@ -85,11 +85,11 @@ http_error_handler app_configuration::on_error(std::nullptr_t) noexcept {
     return std::exchange(error_handler_, nullptr);
 }
 
-void app_configuration::on_error(scoped_error_handler_options options) {
+void app_configuration::on_error(scoped_error_handler_options&& options) {
     append_prefix_handler(prefix_error_handlers_, options.prefix_.view(), std::move(options.handler_));
 }
 
-void app_configuration::on_not_found(http_not_found_handler handler) {
+void app_configuration::on_not_found(http_not_found_handler&& handler) {
     if (!handler) {
         throw std::invalid_argument("not found handler must not be null");
     }
@@ -103,7 +103,7 @@ http_not_found_handler app_configuration::on_not_found(std::nullptr_t) noexcept 
     return std::exchange(not_found_handler_, nullptr);
 }
 
-void app_configuration::on_not_found(scoped_not_found_handler_options options) {
+void app_configuration::on_not_found(scoped_not_found_handler_options&& options) {
     append_prefix_handler(prefix_not_found_handlers_, options.prefix_.view(), std::move(options.handler_));
 }
 

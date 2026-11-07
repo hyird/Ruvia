@@ -346,3 +346,23 @@ RUVIA_TEST(response_header_block_iterates_without_const_qualification) {
     RUVIA_CHECK_EQ(visited, std::size_t{2});
     RUVIA_CHECK(std::distance(staged.begin(), staged.end()) == 2);
 }
+
+RUVIA_TEST(response_header_stable_view_and_allow_methods_handle_self_aliasing) {
+    ruvia::http_response response(std::pmr::new_delete_resource());
+    response.header("X-Owned", "X-CopyValue");
+    const auto existing = response.header("X-Owned").value_or("");
+    RUVIA_CHECK_EQ(existing, "X-CopyValue");
+
+    // A contiguous slice inside an existing owned header must be copied before
+    // any table growth or replacement could release the source descriptor.
+    response.header_stable_view(existing.substr(0, 6), existing.substr(6));
+    response.header("X-Owned", "replaced-with-longer-owned-header-value");
+    RUVIA_CHECK_EQ(response.header("X-Copy").value_or(""), "Value");
+
+    response.header("Allow", "GET, WEBDAX");
+    const auto current_allow = response.header("Allow").value_or("");
+    RUVIA_CHECK_EQ(current_allow, "GET, WEBDAX");
+    const std::array<std::string_view, 1> borrowed_ext{current_allow.substr(5)};
+    response.allow_methods(ruvia::http_known_method_bit(ruvia::http_known_method::get), borrowed_ext);
+    RUVIA_CHECK_EQ(response.header("Allow").value_or(""), "GET, WEBDAX");
+}

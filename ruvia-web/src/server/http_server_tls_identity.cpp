@@ -17,11 +17,24 @@
 
 #include "tls/tls_credential.h"
 #include "tls/tls_files.h"
-#include "tls/tls_host.h"
 #include "tls/tls_protocol_policy.h"
+#include "util/dns_host.h"
 
 namespace ruvia::detail {
 namespace {
+
+[[nodiscard]] bool is_valid_sni_host(std::string_view host) noexcept {
+    return !host.empty() && !host.ends_with('.') && detail::is_valid_dns_host(host);
+}
+
+void ensure_sni_host(std::string_view host) {
+    if (host.empty()) {
+        throw std::invalid_argument("SNI host must not be empty");
+    }
+    if (!is_valid_sni_host(host)) {
+        throw std::invalid_argument("SNI host is invalid");
+    }
+}
 
 [[nodiscard]] asio::ssl::verify_mode http_server_tls_verify_mode(
     tls_client_certificate_requirement requirement) noexcept {

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -123,7 +124,7 @@ struct http_request_access final {
     // Binding happens before allocation; changing the auxiliary request resource
     // later does not change ownership of an existing descriptor block.
     static void reserve_headers(http_request& request, std::size_t count) {
-        if (count > UINT16_MAX || !request.headers_.empty()) {
+        if (count > (std::numeric_limits<std::uint16_t>::max)() || !request.headers_.empty()) {
             throw std::logic_error("invalid request header block reservation");
         }
         request.headers_.reserve(count, request.resource());
@@ -131,7 +132,7 @@ struct http_request_access final {
 
     static bool add_header(
         http_request& request, http_header_view header_value, request_header_kind kind) {
-        if (request.headers_.size() == UINT16_MAX) {
+        if (request.headers_.size() == (std::numeric_limits<std::uint16_t>::max)()) {
             return false;
         }
         const auto known_slot = known_header_slot(kind);

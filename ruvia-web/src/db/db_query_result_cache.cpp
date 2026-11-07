@@ -317,7 +317,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
         throw_db_cache_timeout();
     }
     const auto elapsed =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+        std::chrono::ceil<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
     auto& filled = lead.get();
     const bool store = elapsed < duration;
     if (!store && !filled.awaited_) {

@@ -47,7 +47,9 @@ public:
     // fires: the acquire completes only through release(), close() (closed),
     // or its stop token (cancelled). It never throws for that.
     [[nodiscard]] pool_lease_acquire acquire(
-        const std::optional<std::chrono::milliseconds>& timeout = std::nullopt, stop_token stop = {});
+        const std::optional<std::chrono::milliseconds>& timeout = std::nullopt, stop_token stop = {}) &;
+    pool_lease_acquire acquire(
+        const std::optional<std::chrono::milliseconds>& = std::nullopt, stop_token = {}) && = delete;
 
     // Return a caller-owned slot on the bound worker. A queued acquire takes
     // ownership before this call returns, but its coroutine resumes in a later
@@ -76,6 +78,7 @@ public:
     pool_lease_acquire(const pool_lease_acquire&) = delete;
     pool_lease_acquire& operator=(const pool_lease_acquire&) = delete;
     pool_lease_acquire& operator=(pool_lease_acquire&&) = delete;
+    void operator&() const = delete;
     ~pool_lease_acquire();
 
     [[nodiscard]] bool await_ready();

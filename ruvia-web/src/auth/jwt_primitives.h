@@ -24,7 +24,7 @@ public:
     static constexpr std::size_t inline_capacity = 512;
 
     explicit jwt_json_buffer(std::pmr::memory_resource* resource, std::size_t reserve_hint = 0)
-        : heap_(resource),
+        : heap_(pmr_resource_or_default(resource)),
           reserve_hint_(reserve_hint) {
         if (reserve_hint_ > inline_capacity) {
             heap_.reserve(reserve_hint_);
@@ -57,9 +57,10 @@ public:
         append(text.data(), text.size());
     }
 
-    [[nodiscard]] std::string_view view() const noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         return heap_.empty() ? std::string_view(inline_.data(), size_) : std::string_view(heap_);
     }
+    std::string_view view() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return heap_.empty() ? size_ : heap_.size();

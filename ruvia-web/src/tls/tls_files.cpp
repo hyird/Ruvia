@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 
+#include "ruvia/core/memory/pmr_object.h"
+
 namespace ruvia::detail {
 
 tls_file_name make_tls_file_name(const std::filesystem::path& file, std::pmr::memory_resource* resource) {
@@ -9,7 +11,7 @@ tls_file_name make_tls_file_name(const std::filesystem::path& file, std::pmr::me
         throw std::invalid_argument("TLS file paths must not be empty");
     }
     auto name = file.string<char8_t, std::char_traits<char8_t>, std::pmr::polymorphic_allocator<char8_t>>(
-        std::pmr::polymorphic_allocator<char8_t>(resource));
+        std::pmr::polymorphic_allocator<char8_t>(pmr_resource_or_default(resource)));
     if (name.find(u8'\0') != tls_file_name::npos) {
         throw std::invalid_argument("TLS file paths must not contain NUL bytes");
     }
@@ -24,9 +26,10 @@ tls_identity_files make_tls_identity_files(const tls_identity_config& identity, 
 }
 
 tls_identity_files copy_tls_identity_files(const tls_identity_files& files, std::pmr::memory_resource* resource) {
+    auto* const target = pmr_resource_or_default(resource);
     return {
-        .certificate_chain_file_ = tls_file_name(files.certificate_chain_file_, resource),
-        .private_key_file_ = tls_file_name(files.private_key_file_, resource),
+        .certificate_chain_file_ = tls_file_name(files.certificate_chain_file_, target),
+        .private_key_file_ = tls_file_name(files.private_key_file_, target),
     };
 }
 

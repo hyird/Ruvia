@@ -48,9 +48,17 @@ void stop_state::request_stop() noexcept {
     }
 }
 
-bool stop_state::link(stop_callback_node& node) noexcept {
+bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_phase>& phase) noexcept {
     std::lock_guard lock(mutex_);
     if ((flags_.load(std::memory_order_relaxed) & requested_flag) != 0) {
+        return false;
+    }
+    auto expected = stop_registration_phase::registering;
+    if (!phase.compare_exchange_strong(expected, stop_registration_phase::registered,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (expected != stop_registration_phase::reset_pending) {
+            std::terminate();
+        }
         return false;
     }
     node.next_ = head_;

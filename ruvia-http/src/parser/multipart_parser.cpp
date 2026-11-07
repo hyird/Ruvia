@@ -197,6 +197,12 @@ std::string_view multipart_parser::buffer_view() const noexcept {
 
 void multipart_parser::consume(std::size_t bytes_value) noexcept {
     input_.consume(bytes_value);
+    header_scan_offset_ = header_scan_offset_ >= bytes_value ? header_scan_offset_ - bytes_value : 0;
+    delimiter_scan_offset_ =
+        delimiter_scan_offset_ >= bytes_value ? delimiter_scan_offset_ - bytes_value : 0;
+}
+
+void multipart_parser::reset_scan_cursors() noexcept {
     header_scan_offset_ = 0;
     delimiter_scan_offset_ = 0;
     delimiter_padding_offset_ = 0;
@@ -316,6 +322,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
             return multipart_parse_error::delimiter_line_too_large;
         }
         consume(preamble_bytes + line_bytes);
+        reset_scan_cursors();
         first_boundary_ = false;
         if (part != nullptr) {
             state_ = progress_state_type::headers;
@@ -327,6 +334,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
 
     if (buffer_view().starts_with("\r\n")) {
         consume(2);
+        reset_scan_cursors();
     }
 
     const auto delimiter =
@@ -343,6 +351,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
             return multipart_parse_error::delimiter_line_too_large;
         }
         consume(part->line_bytes());
+        reset_scan_cursors();
         state_ = progress_state_type::headers;
         return step_progress_type::continue_value;
     }
@@ -351,6 +360,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
             return multipart_parse_error::delimiter_line_too_large;
         }
         consume(close->line_bytes());
+        reset_scan_cursors();
         state_ = progress_state_type::done;
         return step_progress_type::done;
     }
@@ -436,6 +446,7 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
     --remaining_parts_;
     remaining_metadata_bytes_ -= headers_end + 4;
     consume(headers_end + 4);
+    reset_scan_cursors();
     next_chunk_is_first_ = true;
     state_ = progress_state_type::body;
     return step_progress_type::continue_value;
@@ -470,9 +481,12 @@ multipart_poll_result multipart_parser::read_body_chunk() {
         }
         const auto delimiter_offset =
             part_delimiter != nullptr ? part_delimiter->offset() : close_delimiter->offset();
+        const auto crlf_bytes =
+            buffer.substr(delimiter_offset).starts_with("\r\n") ? std::size_t{2} : std::size_t{0};
         auto part = make_part(buffer.substr(0, delimiter_offset), true);
-        pending_erase_bytes_ = delimiter_offset;
-        state_ = progress_state_type::boundary;
+        pending_erase_bytes_ = delimiter_offset + crlf_bytes + delimiter_line_bytes;
+        reset_scan_cursors();
+        state_ = part_delimiter != nullptr ? progress_state_type::headers : progress_state_type::done;
         return multipart_poll_result::make_part(part);
     }
     if (const auto* need_input = delimiter.need_input()) {

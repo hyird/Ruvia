@@ -28,8 +28,10 @@ public:
     worker_runtime_context(worker_runtime_context&&) = delete;
     worker_runtime_context& operator=(worker_runtime_context&&) = delete;
 
-    [[nodiscard]] asio::io_context& io_context() const noexcept;
-    [[nodiscard]] const worker_handle& handle() const noexcept;
+    [[nodiscard]] asio::io_context& io_context() const& noexcept;
+    asio::io_context& io_context() const&& = delete;
+    [[nodiscard]] const worker_handle& handle() const& noexcept;
+    const worker_handle& handle() const&& = delete;
 
     void run();
     void run(move_only_function<void()> startup_handler,

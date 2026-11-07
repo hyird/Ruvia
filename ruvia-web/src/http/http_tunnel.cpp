@@ -294,11 +294,10 @@ task<void> http_capsule_stream::write(std::uint64_t type, std::string_view paylo
 task<void> http_capsule_stream::write_frame(std::string_view prefix, std::string_view payload_value, bool datagram) {
     const auto write = +[](detail::capsule_write_input input) -> task<void> {
         auto& state_value = input.pin_.state();
-        state_value.require();
+        detail::running_capsule_operation running(state_value, true);
         if (state_value.send_ended_) {
             throw std::logic_error("capsule sending direction is closed");
         }
-        detail::running_capsule_operation running(state_value, true);
         try {
             if (input.datagram_) {
                 if (co_await state_value.send_datagram(input.bytes_)) {

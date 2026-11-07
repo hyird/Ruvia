@@ -14,7 +14,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/url_encoding.h"
-#include "ruvia/web/detail/util/decimal_number.h"
+#include "ruvia/web/detail/decimal_number.h"
 #include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"
 

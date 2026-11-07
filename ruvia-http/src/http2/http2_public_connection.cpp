@@ -297,12 +297,9 @@ http2_connection::submit_websocket_handshake(
     std::uint32_t stream_id, const http_request& request,
     const websocket_handshake_validation_result& validation,
     websocket_server_handshake_options options) {
-    if (impl_->connection_.find_outbound_stream(stream_id) == nullptr) {
-        return http2_websocket_handshake_submit_error::closed;
-    }
-    auto negotiation = detail::make_websocket_server_negotiation(request, options, impl_->resource_);
+    impl_->connection_.retry_deferred_stream_leases();
     return impl_->connection_.submit_websocket_handshake(
-        stream_id, validation, std::move(negotiation));
+        stream_id, request, validation, options);
 }
 
 http2_role http2_connection::role() const noexcept {
@@ -349,6 +346,7 @@ bool http2_connection::wants_write() const noexcept {
 
 std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(
     const http2_regular_request_head_view& request) {
+    impl_->connection_.retry_deferred_stream_leases();
     std::optional<std::string_view> authority;
     if (request.authority_) {
         authority = request.authority_->view();
@@ -363,6 +361,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
 
 std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(
     const http2_connect_request_head_view& request) {
+    impl_->connection_.retry_deferred_stream_leases();
     auto result_value = impl_->connection_.submit_connect_request_head(
         request.authority_.view(), static_cast<std::span<const http_header_view>>(request.headers_),
         request.field_source_);
@@ -372,6 +371,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
 
 std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(
     const http2_extended_connect_request_head_view& request) {
+    impl_->connection_.retry_deferred_stream_leases();
     auto result_value = impl_->connection_.submit_extended_connect_request_head(request.protocol_.view(),
         request.scheme_.view(), request.authority_.view(), request.target_.view(),
         static_cast<std::span<const http_header_view>>(request.headers_), request.field_source_);
@@ -404,6 +404,7 @@ std::variant<http_buffered_response_write_plan, http2_response_head_submit_error
 http2_connection::submit_response_head(
     std::uint32_t stream_id, const http_response& response,
     http_buffered_response_write_plan write_plan) {
+    impl_->connection_.retry_deferred_stream_leases();
     return impl_->connection_.submit_response_head(stream_id, response, std::move(write_plan));
 }
 
@@ -411,6 +412,7 @@ std::variant<http_response_stream_commit_plan, http2_response_head_submit_error>
 http2_connection::submit_streaming_response_head(
     std::uint32_t stream_id, http_response response,
     http_response_trailer_intent trailer_intent) {
+    impl_->connection_.retry_deferred_stream_leases();
     return impl_->connection_.submit_streaming_response_head(
         stream_id, std::move(response), trailer_intent);
 }
@@ -435,6 +437,7 @@ http2_finish_status http2_connection::finish_response(
 
 std::variant<http2_request_head_event, http2_push_submit_error> http2_connection::submit_push_request(
     std::uint32_t associated_stream_id, http_push_request_view request) {
+    impl_->connection_.retry_deferred_stream_leases();
     const auto id = impl_->connection_.submit_push_promise(associated_stream_id, request);
     if ((id.index() != 0)) {
         return std::get<1>(id);
@@ -478,11 +481,16 @@ http2_received_data_acknowledge_status http2_connection::acknowledge(http2_recei
     if (!credit.valid() || credit.endpoint_ != impl_.get()) {
         throw std::logic_error("invalid HTTP/2 received data credit");
     }
-    const bool acknowledged = impl_->connection_.acknowledge_received_data(credit.stream_id_, credit.bytes_);
-    auto* endpoint = std::exchange(credit.endpoint_, nullptr);
-    credit.stream_id_ = 0;
-    credit.bytes_ = 0;
-    endpoint->release();
+    auto* const endpoint = std::exchange(credit.endpoint_, nullptr);
+    const auto stream_id = std::exchange(credit.stream_id_, 0);
+    const auto bytes = std::exchange(credit.bytes_, 0);
+    struct endpoint_guard final {
+        detail::http2_connection_owner_endpoint* endpoint_;
+        ~endpoint_guard() {
+            endpoint_->release();
+        }
+    } guard{endpoint};
+    const bool acknowledged = impl_->connection_.acknowledge_received_data(stream_id, bytes);
     return acknowledged ? http2_received_data_acknowledge_status::acknowledged
                         : http2_received_data_acknowledge_status::closed;
 }
@@ -509,6 +517,7 @@ http2_server_request_release_status http2_connection::release(http2_request_head
         request.endpoint_ != impl_.get()) {
         throw std::logic_error("invalid HTTP/2 server request lease");
     }
+    impl_->connection_.retry_deferred_stream_leases();
     const bool live = impl_->connection_.stream(request.stream_id_) != nullptr;
     if (live) {
         impl_->connection_.release_stream_lease(request.stream_id_);

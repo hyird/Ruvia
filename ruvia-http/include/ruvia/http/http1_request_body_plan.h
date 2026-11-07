@@ -42,9 +42,10 @@ private:
 
 class http1_chunked_request_body final {
 public:
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const noexcept {
+    [[nodiscard]] const http_transfer_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
         return transfer_codings_;
     }
+    const http_transfer_codings& transfer_codings() const&& = delete;
 
 private:
     friend class http1_request_body_plan;
@@ -61,17 +62,17 @@ private:
 // alternative. A caller cannot synthesize a plan that bypasses wire validation.
 class http1_request_body_plan final {
 public:
-    [[nodiscard]] constexpr const http1_request_without_body* without_body() const& noexcept {
+    [[nodiscard]] constexpr const http1_request_without_body* without_body() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_request_without_body>(&framing_);
     }
     [[nodiscard]] constexpr const http1_request_without_body* without_body() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_known_length_request_body* known_length() const& noexcept {
+    [[nodiscard]] constexpr const http1_known_length_request_body* known_length() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_known_length_request_body>(&framing_);
     }
     [[nodiscard]] constexpr const http1_known_length_request_body* known_length() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_chunked_request_body* chunked() const& noexcept {
+    [[nodiscard]] constexpr const http1_chunked_request_body* chunked() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_chunked_request_body>(&framing_);
     }
     [[nodiscard]] constexpr const http1_chunked_request_body* chunked() const&& = delete;

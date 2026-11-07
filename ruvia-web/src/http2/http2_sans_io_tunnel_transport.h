@@ -75,9 +75,6 @@ public:
                 }
                 co_return true;
             }
-            if (!body_queue_.empty()) {
-                continue;
-            }
             if (receive_status == http2_stream_receive_status::ended) {
                 co_return false;
             }
@@ -109,7 +106,6 @@ public:
                 co_return std::make_error_code(std::errc::connection_reset);
             case http2_stream_data_write_status::invalid_state:
             case http2_stream_data_write_status::content_length_exceeded:
-            case http2_stream_data_write_status::content_length_incomplete:
                 co_return std::make_error_code(std::errc::protocol_error);
         }
         co_return std::make_error_code(std::errc::protocol_error);

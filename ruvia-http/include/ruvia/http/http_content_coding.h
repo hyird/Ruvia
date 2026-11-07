@@ -83,7 +83,7 @@ public:
 // malformed field syntax. Codings are listed in the order they were applied.
 class http_content_coding_field_result final {
 public:
-    [[nodiscard]] std::span<const http_content_coding> codings() const& noexcept {
+    [[nodiscard]] std::span<const http_content_coding> codings() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* codings = std::get_if<content_coding_sequence>(&value_)) {
             return std::span<const http_content_coding>(codings->values_.data(), codings->size_);
         }
@@ -91,12 +91,12 @@ public:
     }
     std::span<const http_content_coding> codings() const&& = delete;
 
-    [[nodiscard]] const http_unsupported_content_coding* unsupported() const& noexcept {
+    [[nodiscard]] const http_unsupported_content_coding* unsupported() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_unsupported_content_coding>(&value_);
     }
     const http_unsupported_content_coding* unsupported() const&& = delete;
 
-    [[nodiscard]] const http_invalid_content_coding_field* invalid() const& noexcept {
+    [[nodiscard]] const http_invalid_content_coding_field* invalid() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_invalid_content_coding_field>(&value_);
     }
     const http_invalid_content_coding_field* invalid() const&& = delete;

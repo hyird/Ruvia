@@ -23,6 +23,10 @@ public:
     explicit http2_stream_request_data(std::pmr::memory_resource* resource = nullptr)
         : http2_stream_request_data(http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {
     }
+    http2_stream_request_data(const http2_stream_request_data&) = delete;
+    http2_stream_request_data& operator=(const http2_stream_request_data&) = delete;
+    http2_stream_request_data(http2_stream_request_data&&) = delete;
+    http2_stream_request_data& operator=(http2_stream_request_data&&) = delete;
 
     [[nodiscard]] std::string_view method() const& noexcept {
         return known_method_ != http_known_method::unknown

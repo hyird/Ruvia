@@ -71,12 +71,19 @@ private:
     const http_response_coding_policy& policy, const http_request& request,
     const http_response& response, http_response_compression_status compression) noexcept {
     const auto* selection = policy.selection();
-    if (selection != nullptr && compression == http_response_compression_status::failed &&
-        selection->coding() != http_content_coding::identity && !selection->identity_accepted() &&
+    if (selection != nullptr && selection->coding() != http_content_coding::identity &&
+        !selection->identity_accepted() &&
         plan_http_response_body(request.known_method(), response.status()).status_allows_body()) {
-        return http_error_info({.status_ = http_status::internal_server_error,
-            .code_ = "response_compression_failed",
-            .message_ = "response compression failed"});
+        if (compression == http_response_compression_status::failed) {
+            return http_error_info({.status_ = http_status::internal_server_error,
+                .code_ = "response_compression_failed",
+                .message_ = "response compression failed"});
+        }
+        if (compression == http_response_compression_status::unavailable) {
+            return http_error_info({.status_ = http_status::service_unavailable,
+                .code_ = "blocking_pool_unavailable",
+                .message_ = "blocking pool cannot accept the operation"});
+        }
     }
     if (http_response_needs_not_acceptable(policy, request, response)) {
         return http_error_info(http_not_acceptable_coding_error());

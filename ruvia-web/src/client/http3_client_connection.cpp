@@ -7,21 +7,25 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <coroutine>
 #include <cstring>
 #include <limits>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <system_error>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include <asio/bind_allocator.hpp>
 #include <asio/ip/udp.hpp>
-#include <openssl/rand.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
@@ -30,18 +34,26 @@
 #include "ruvia/http/http_known_method.h"
 
 #include "client/client_happy_eyeballs.h"
+#include "client/client_host_resolver.h"
 #include "client/client_tls.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_response_decoding.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
+#include "http3/http3_udp_receive.h"
+#include "tls/tls_random.h"
 
 namespace ruvia::detail {
 namespace {
 using error_code = http_client_error::code_type;
 using clock_type = std::chrono::steady_clock;
 struct worker_turn final {
-    const worker_handle& worker_;
+    explicit worker_turn(const worker_handle& worker_value) noexcept
+        : worker_(worker_value) {}
+    worker_turn(worker_handle&&) = delete;
+    const worker_turn* operator&() const = delete;
+    worker_turn* operator&() = delete;
+
     bool await_ready() const noexcept {
         return false;
     }
@@ -49,7 +61,26 @@ struct worker_turn final {
         worker_.defer_resume(continuation);
     }
     void await_resume() const noexcept {}
+
+    const worker_handle& worker_;
 };
+void initialize_quic_crypto() {
+    static const bool initialized = ngtcp2_crypto_ossl_init() == 0;
+    if (!initialized) {
+        throw http_client_error(error_code::tls_failed, "failed to initialize the QUIC TLS backend");
+    }
+}
+[[nodiscard]] bool is_valid_lowercase_field_name(std::string_view name) noexcept {
+    if (!is_valid_http_header_name(name)) {
+        return false;
+    }
+    for (const char byte : name) {
+        if (byte >= 'A' && byte <= 'Z') {
+            return false;
+        }
+    }
+    return true;
+}
 ngtcp2_tstamp timestamp() noexcept {
     return static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now().time_since_epoch()).count());
 }
@@ -60,18 +91,20 @@ ngtcp2_duration quic_duration(std::chrono::milliseconds value) noexcept {
 ngtcp2_cid random_cid() {
     ngtcp2_cid cid{};
     cid.datalen = 18;
-    if (RAND_bytes(cid.data, 18) != 1) {
+    if (!fill_random_bytes(std::span<unsigned char>(cid.data, cid.datalen))) {
         throw http_client_error(error_code::tls_failed, "QUIC connection ID generation failed");
     }
     return cid;
 }
 void fill_random(std::uint8_t* bytes, std::size_t size, const ngtcp2_rand_ctx*) noexcept {
-    if (RAND_bytes(bytes, static_cast<int>(size)) != 1) {
+    if (!fill_random_bytes(std::span<unsigned char>(bytes, size))) {
         std::terminate();
     }
 }
 int new_cid(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t size, void*) noexcept {
-    if (RAND_bytes(cid->data, static_cast<int>(size)) != 1 || RAND_bytes(token->data, NGTCP2_STATELESS_RESET_TOKENLEN) != 1) {
+    if (size == 0 || size > NGTCP2_MAX_CIDLEN ||
+        !fill_random_bytes(std::span<unsigned char>(cid->data, size)) ||
+        !fill_random_bytes(std::span<unsigned char>(token->data, NGTCP2_STATELESS_RESET_TOKENLEN))) {
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
     cid->datalen = size;
@@ -104,6 +137,32 @@ void require_accepted(http3_status status) {
 }
 }  // namespace
 
+struct http3_client_connection::tls_state final {
+    struct free_ticket {
+        void operator()(SSL_SESSION* value) const noexcept {
+            SSL_SESSION_free(value);
+        }
+    };
+    explicit tls_state(http_client_pool& pool)
+        : context_(asio::ssl::context::tls_client),
+          ticket_host_(pool.resource()) {
+        initialize_quic_crypto();
+        configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
+        if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
+            throw http_client_error(error_code::tls_failed, "QUIC requires TLS 1.3");
+        }
+        SSL_CTX_set_session_cache_mode(context_.native_handle(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
+    }
+    asio::ssl::context context_;
+    std::pmr::string ticket_host_;
+    std::uint16_t ticket_port_{};
+    std::array<std::uint8_t, 4096> ticket_params_{};
+    std::size_t ticket_params_size_{};
+    http3_peer_settings ticket_settings_{};
+    bool ticket_settings_valid_{};
+    std::unique_ptr<SSL_SESSION, free_ticket> ticket_;
+};
+
 class http3_client_connection::session final {
 public:
     struct free_tls {
@@ -116,11 +175,7 @@ public:
             ngtcp2_crypto_ossl_ctx_del(value);
         }
     };
-    struct free_ticket {
-        void operator()(SSL_SESSION* value) const noexcept {
-            SSL_SESSION_free(value);
-        }
-    };
+    using free_ticket = tls_state::free_ticket;
     struct operation_lease final {
         explicit operation_lease(session& owner) noexcept
             : owner_(owner) {
@@ -159,25 +214,23 @@ public:
         bool early_{};
         bool retry_{};
         bool retry_425_{};
+        bool write_stopped_{};
         worker_timer_registration timer_;
     };
-    session(http_client_pool& pool, std::size_t index)
+    session(http_client_pool& pool, tls_state& shared_tls, std::size_t index)
         : pool_(pool),
+          tls_state_(shared_tls),
           index_(index),
-          context_(asio::ssl::context::tls_client),
           connect_slots_(1, pool.worker(), pool.resource()),
           changed_(pool.worker()),
           writer_(pool.worker()),
           streams_(pool.resource()),
           endpoint_host_(pool.resource()),
-          ticket_host_(pool.resource()),
+          receive_buffers_{std::pmr::vector<std::byte>(pool.resource()), std::pmr::vector<std::byte>(pool.resource())},
+          socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{pool.resource()}),
+          old_socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{pool.resource()}),
           packet_(pool.resource()) {
-        configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
-        if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
-            throw http_client_error(error_code::tls_failed, "QUIC requires TLS 1.3");
-        }
-        SSL_CTX_set_session_cache_mode(context_.native_handle(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
-        SSL_CTX_sess_set_new_cb(context_.native_handle(), save_ticket);
+        SSL_CTX_sess_set_new_cb(tls_state_.context_.native_handle(), save_ticket);
         streams_.reserve(pool.config().http3_.max_concurrent_streams_);
     }
     ~session() {
@@ -195,7 +248,8 @@ public:
         if (!self.quic_ || SSL_get_verify_result(tls) != X509_V_OK) {
             return 0;
         }
-        const auto size = ngtcp2_conn_encode_0rtt_transport_params2(self.quic_->native_handle(), self.ticket_params_.data(), self.ticket_params_.size());
+        const auto size = ngtcp2_conn_encode_0rtt_transport_params2(self.quic_->native_handle(),
+            self.tls_state_.ticket_params_.data(), self.tls_state_.ticket_params_.size());
         if (size < 0) {
             return 0;
         }
@@ -205,12 +259,12 @@ public:
         if (saved == nullptr) {
             return 0;
         }
-        self.ticket_.reset(saved);
-        self.ticket_params_size_ = static_cast<std::size_t>(size);
-        self.ticket_settings_valid_ = false;
+        self.tls_state_.ticket_.reset(saved);
+        self.tls_state_.ticket_params_size_ = static_cast<std::size_t>(size);
+        self.tls_state_.ticket_settings_valid_ = false;
         if (const auto settings = self.quic_->http3().peer_settings()) {
-            self.ticket_settings_ = *settings;
-            self.ticket_settings_valid_ = true;
+            self.tls_state_.ticket_settings_ = *settings;
+            self.tls_state_.ticket_settings_valid_ = true;
         }
         return 0;
     }
@@ -244,6 +298,9 @@ public:
             if (item == preserve) {
                 continue;
             }
+            if (item->id_ < 0 && connecting_stream_ != item && code != error_code::closing) {
+                continue;
+            }
             if (!item->error_) {
                 item->error_ = code;
             }
@@ -252,6 +309,9 @@ public:
             }
         }
         wake();
+        if (race_signal_) {
+            race_signal_->notify();
+        }
     }
     void begin_idle() noexcept {
         if (!open_ || !streams_.empty() || !pool_.config().idle_timeout_) {
@@ -317,8 +377,13 @@ public:
         });
     }
     void read_progress(stream& item) {
-        if (item.websocket_ && item.response_.head_ready_) {
+        if ((item.websocket_ && item.response_.head_ready_) ||
+            (item.response_.tunnel_ && item.response_.tunnel_->accepted_)) {
             item.read_deadline_.reset();
+            if (!item.write_deadline_ && !item.timeout_.deadline()) {
+                item.timer_.cancel();
+                item.timer_at_.reset();
+            }
             return;
         }
         if (pool_.config().read_timeout_ && !item.done_ && item.response_.http3_data_credit_ == 0) {
@@ -384,7 +449,10 @@ public:
                 draining_ = true;
                 for (auto* item : streams_) {
                     if (item->id_ >= away->id_ && !item->response_.head_ready_) {
-                        item->error_ = error_code::protocol_unavailable;
+                        item->retry_ = true;
+                        if (auto* output = item->response_.output()) {
+                            output->stop();
+                        }
                         item->signal_.notify();
                     }
                 }
@@ -406,54 +474,103 @@ public:
                             if (item->retry_425_) {
                                 return;
                             }
-                            std::pmr::vector<http_header> fields(response.resource_);
-                            unsigned status = 0;
-                            for (const auto& field : value.fields_) {
-                                if (field.name() == ":status") {
-                                    const auto text = field.value();
-                                    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), status);
-                                    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
-                                        throw http_client_error(error_code::protocol_error, "invalid HTTP/3 status");
-                                    }
-                                } else {
-                                    fields.emplace_back(field.name(), field.value(), response.resource_);
-                                }
-                            }
                             if (value.trailers_) {
+                                if (!response.head_ready_) {
+                                    throw http_client_error(error_code::protocol_error, "HTTP/3 trailers before final response head");
+                                }
+                                std::pmr::vector<http_header> fields(response.resource_);
+                                fields.reserve(value.fields_.size());
+                                auto budget = http_trailer_section_budget();
+                                for (const auto& field : value.fields_) {
+                                    const auto name = field.name();
+                                    const auto text = field.value();
+                                    if (name.empty() || name.front() == ':' || !is_valid_lowercase_field_name(name) ||
+                                        !is_valid_http_header_value(text) || is_forbidden_http_binary_response_field(name) ||
+                                        !budget.add_field(name, text)) {
+                                        throw http_client_error(error_code::protocol_error, "invalid HTTP/3 response trailer");
+                                    }
+                                    if (!is_forbidden_response_trailer_name(name)) {
+                                        fields.emplace_back(name, text, response.resource_);
+                                    }
+                                }
                                 response.trailers_ = std::move(fields);
-                            } else if (status >= 100 && status < 200) {
-                                response.retain_informational(http_status_code::from_value(status), std::move(fields), status == 100 ? std::optional(http_client_request_content_signal::continue_value) : std::nullopt);
                             } else {
-                                if (status < 200 || status > 599) {
-                                    throw http_client_error(error_code::protocol_error, "invalid HTTP/3 final status");
+                                if (response.head_ready_) {
+                                    throw http_client_error(error_code::protocol_error, "duplicate HTTP/3 final response head");
                                 }
-                                if (status == 425 && item->early_) {
-                                    item->retry_425_ = true;
-                                    return;
-                                }
-                                response.headers_ = std::move(fields);
-                                if (item->websocket_) {
-                                    const auto received_status = http_status_code::from_value(status);
-                                    if (status >= 300) {
-                                        throw http_client_error(error_code::handshake_rejected, "HTTP/3 WebSocket CONNECT rejected", received_status);
+                                std::pmr::vector<http_header> fields(response.resource_);
+                                fields.reserve(value.fields_.size());
+                                std::optional<http_received_status> received_status;
+                                bool regular_seen = false;
+                                for (const auto& field : value.fields_) {
+                                    const auto name = field.name();
+                                    const auto text = field.value();
+                                    if (!name.empty() && name.front() == ':') {
+                                        if (regular_seen || name != ":status" || received_status.has_value()) {
+                                            throw http_client_error(error_code::protocol_error, "invalid HTTP/3 pseudo-header");
+                                        }
+                                        received_status = http_received_status::try_parse(text);
+                                        if (!received_status || received_status->value() < 100 || received_status->value() > 599 ||
+                                            received_status->value() == 101) {
+                                            throw http_client_error(error_code::protocol_error, "invalid HTTP/3 status");
+                                        }
+                                        continue;
                                     }
+                                    regular_seen = true;
+                                    if (!is_valid_lowercase_field_name(name) || !is_valid_http_header_value(text) ||
+                                        is_forbidden_http_binary_response_field(name)) {
+                                        throw http_client_error(error_code::protocol_error, "invalid HTTP/3 response field");
+                                    }
+                                    fields.emplace_back(name, text, response.resource_);
+                                }
+                                if (!received_status) {
+                                    throw http_client_error(error_code::protocol_error, "missing HTTP/3 :status");
+                                }
+                                const auto status = received_status->value();
+                                if (status >= 100 && status < 200) {
                                     if (value.stream_ended_) {
-                                        throw http_client_error(error_code::handshake_rejected, "WebSocket CONNECT response ended its stream", received_status);
+                                        throw http_client_error(error_code::protocol_error, "HTTP/3 informational response ended stream");
                                     }
-                                    const auto negotiated = item->websocket_->negotiation_.validate_fields(response.headers_);
-                                    if (const auto* error = std::get_if<websocket_client_handshake_error>(&negotiated)) {
-                                        (void)error;
-                                        throw http_client_error(error_code::handshake_rejected, "invalid HTTP/3 WebSocket negotiation", received_status);
+                                    response.retain_informational(http_status_code::from_value(status), std::move(fields),
+                                        status == 100 ? std::optional(http_client_request_content_signal::continue_value) : std::nullopt);
+                                } else {
+                                    if (status == 425 && item->early_) {
+                                        item->retry_425_ = true;
+                                        return;
                                     }
-                                    const auto& selection = std::get<websocket_client_negotiation_result_view>(negotiated);
-                                    item->websocket_->selected_subprotocol_.assign(selection.selected_subprotocol_);
-                                    item->websocket_->compression_ = selection.compression_;
-                                    item->timeout_ = operation_timeout(std::nullopt);
-                                }
-                                publish_http_client_final_head(response, pool_.policy(), {.status_ = http_received_status(http_status_code::from_value(status)), .protocol_version_ = http_protocol_version::http3, .request_content_signal_ = std::nullopt, .origin_target_ = item->origin_ ? std::optional(item->target_) : std::nullopt, .opens_tunnel_ = response.tunnel_.has_value() && status < 300});
-                                if (response.tunnel_ && response.tunnel_->accepted_) {
-                                    const auto settings = quic_->http3().peer_settings();
-                                    response.http3_native_datagrams_ = settings && settings->h3_datagram_;
+                                    response.headers_ = std::move(fields);
+                                    if (item->websocket_) {
+                                        const auto status_code = http_status_code::from_value(status);
+                                        if (status >= 300) {
+                                            throw http_client_error(error_code::handshake_rejected, "HTTP/3 WebSocket CONNECT rejected", status_code);
+                                        }
+                                        if (value.stream_ended_) {
+                                            throw http_client_error(error_code::handshake_rejected, "WebSocket CONNECT response ended its stream", status_code);
+                                        }
+                                        const auto negotiated = item->websocket_->negotiation_.validate_fields(response.headers_);
+                                        if (const auto* error = std::get_if<websocket_client_handshake_error>(&negotiated)) {
+                                            (void)error;
+                                            throw http_client_error(error_code::handshake_rejected, "invalid HTTP/3 WebSocket negotiation", status_code);
+                                        }
+                                        const auto& selection = std::get<websocket_client_negotiation_result_view>(negotiated);
+                                        item->websocket_->selected_subprotocol_.assign(selection.selected_subprotocol_);
+                                        item->websocket_->compression_ = selection.compression_;
+                                        item->timeout_ = operation_timeout(std::nullopt);
+                                    }
+                                    publish_http_client_final_head(response, pool_.policy(),
+                                        {.status_ = http_received_status(http_status_code::from_value(status)),
+                                            .protocol_version_ = http_protocol_version::http3,
+                                            .request_content_signal_ = value.stream_ended_
+                                                                           ? std::optional(http_client_request_content_signal::exchange_complete)
+                                                                           : std::nullopt,
+                                            .origin_target_ = item->origin_ ? std::optional(item->target_) : std::nullopt,
+                                            .opens_tunnel_ = response.tunnel_.has_value() && status < 300});
+                                    if (response.tunnel_ && response.tunnel_->accepted_) {
+                                        const auto settings = quic_->http3().peer_settings();
+                                        response.http3_native_datagrams_ = settings && settings->h3_datagram_;
+                                        item->timeout_ = operation_timeout(std::nullopt);
+                                        item->read_deadline_.reset();
+                                    }
                                 }
                             }
                             read_progress(*item);
@@ -482,8 +599,12 @@ public:
                         } else if constexpr (std::same_as<event_type, http3_stream_end_event>) {
                             if (item->retry_425_) {
                                 item->retry_ = true;
+                                item->done_ = true;
                             } else if (response.tunnel_ && response.tunnel_->accepted_) {
                                 response.tunnel_->receive_ended_ = true;
+                                if (response.tunnel_->output_.ended_ || response.tunnel_->output_.stopped_) {
+                                    item->done_ = true;
+                                }
                             } else {
                                 if (!response.head_ready_) {
                                     throw http_client_error(error_code::protocol_error, "HTTP/3 response ended without a final head");
@@ -492,15 +613,38 @@ public:
                                                      response.response_body_plan_->content_semantics() == http_response_content_semantics::with_content;
                                 finish_http_client_response_body(response, item->timeout_, content, pool_.config().max_response_bytes_);
                                 response.complete_ = true;
+                                if (response.upload_ && !response.upload_->output_.ended_) {
+                                    response.upload_->output_.stop();
+                                }
+                                item->done_ = true;
                             }
-                            item->done_ = true;
                             item->read_deadline_.reset();
                             response.data_signal_.notify();
-                        } else if constexpr (std::same_as<event_type, http3_stream_close_event>) {
-                            if (!item->done_ && !item->retry_) {
-                                throw http_client_error(error_code::io_error, "HTTP/3 request stream reset");
+                        } else if constexpr (std::same_as<event_type, http3_transport_action_event>) {
+                            if (value.action_ == http3_transport_action::stop_sending) {
+                                item->write_stopped_ = true;
+                                if (auto* output = response.output()) {
+                                    output->stop();
+                                }
+                            } else if (!item->done_ && !item->retry_) {
+                                item->error_ = error_code::io_error;
+                                if (auto* output = response.output()) {
+                                    output->stop();
+                                }
                             }
-                            if (auto* output = response.output(); output && item->done_) {
+                        } else if constexpr (std::same_as<event_type, http3_stream_close_event>) {
+                            if (item->websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
+                                response.tunnel_->receive_ended_ && !value.application_error_code_) {
+                                item->done_ = true;
+                                response.complete_ = true;
+                                response.tunnel_->output_.stop();
+                                response.data_signal_.notify();
+                            } else if (!item->done_ && !item->retry_) {
+                                item->error_ = error_code::io_error;
+                                if (auto* output = response.output()) {
+                                    output->stop();
+                                }
+                            } else if (auto* output = response.output(); output && item->done_) {
                                 output->stop();
                             }
                         } else if constexpr (std::same_as<event_type, http3_datagram_event>) {
@@ -524,10 +668,10 @@ public:
             },
                 *event);
         }
-        if (ticket_) {
+        if (tls_state_.ticket_) {
             if (const auto settings = quic_->http3().peer_settings()) {
-                ticket_settings_ = *settings;
-                ticket_settings_valid_ = true;
+                tls_state_.ticket_settings_ = *settings;
+                tls_state_.ticket_settings_valid_ = true;
             }
         }
         changed_.notify();
@@ -537,20 +681,54 @@ public:
             throw http_client_error(tls_ && SSL_get_verify_result(tls_.get()) != X509_V_OK ? error_code::tls_failed : error_code::io_error, "QUIC connection failed");
         }
     }
-    task<void> receive(asio::ip::udp::socket& socket, asio::ip::udp::endpoint local) {
+    void send_close_packet() noexcept {
+        if (!quic_ || !socket_ || !socket_->is_open()) {
+            return;
+        }
         try {
-            std::array<std::byte, 65536> bytes;
+            const auto close_result = quic_->next_datagram(
+                pool_.config().http3_.max_datagram_bytes_, timestamp(), packet_);
+            if (close_result.status_ == http3_quic_status::accepted && !packet_.bytes_.empty()) {
+                asio::ip::udp::endpoint remote;
+                const auto& address = packet_.path_.path.remote;
+                if (address.addr != nullptr && address.addrlen != 0 && address.addrlen <= remote.capacity()) {
+                    std::memcpy(remote.data(), address.addr, address.addrlen);
+                    remote.resize(address.addrlen);
+                    std::error_code error;
+                    (void)socket_->send_to(asio::buffer(packet_.bytes_), remote, 0, error);
+                    if (error) {
+                        (void)socket_->send(asio::buffer(packet_.bytes_), 0, error);
+                    }
+                }
+            }
+        } catch (...) {
+        }
+    }
+    task<void> receive(asio::ip::udp::socket& socket, asio::ip::udp::endpoint local, std::pmr::vector<std::byte>& bytes) {
+        try {
             while (open_ && socket.is_open()) {
                 asio::ip::udp::endpoint remote;
-                const auto result = co_await async_asio<std::size_t>([&](auto handler) { socket.async_receive_from(asio::buffer(bytes), remote, std::move(handler)); });
+                const auto result = co_await async_asio<std::size_t>([&](auto handler) {
+                    socket.async_receive_from(asio::buffer(bytes), remote,
+                        asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(pool_.resource()), std::move(handler)));
+                });
                 if (!open_ || !socket.is_open()) {
                     break;
                 }
                 if (result.error_code()) {
+                    if (http3_ignorable_receive_error(result.error_code())) {
+                        continue;
+                    }
                     throw std::system_error(result.error_code());
                 }
-                check_quic(quic_->receive_datagram(path(local, remote), 0, std::span(bytes).first(result.result()), timestamp()).status_);
+                const auto received = quic_->receive_datagram(
+                    path(local, remote), 0, std::span(bytes.data(), result.result()), timestamp());
                 consume_events();
+                if (received.status_ == http3_quic_status::transport_error ||
+                    received.status_ == http3_quic_status::application_error) {
+                    send_close_packet();
+                }
+                check_quic(received.status_);
                 writer_.notify();
                 for (auto* item : streams_) {
                     item->signal_.notify();
@@ -575,20 +753,30 @@ public:
             return;
         }
         const auto max = static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)());
-        const auto deadline = clock_type::time_point(std::chrono::duration_cast<clock_type::duration>(std::chrono::nanoseconds(static_cast<std::int64_t>((std::min)(time, max)))));
+        const auto deadline = clock_type::time_point(std::chrono::ceil<clock_type::duration>(
+            std::chrono::nanoseconds(static_cast<std::int64_t>((std::min)(time, max)))));
         (void)pool_.worker().schedule_timer(expiry_, deadline, [this](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { writer_.notify(); } });
     }
     task<void> write_packets() {
         try {
             while (open_) {
                 if (quic_->expiry() <= timestamp()) {
-                    check_quic(quic_->handle_expiry(timestamp()).status_);
+                    const auto expired = quic_->handle_expiry(timestamp());
                     consume_events();
+                    if (expired.status_ == http3_quic_status::transport_error ||
+                        expired.status_ == http3_quic_status::application_error) {
+                        send_close_packet();
+                    }
+                    check_quic(expired.status_);
                 }
                 std::size_t burst = 0;
                 for (; open_ && burst != 32; ++burst) {
                     const auto result = quic_->next_datagram(pool_.config().http3_.max_datagram_bytes_, timestamp(), packet_);
                     consume_events();
+                    if (result.status_ == http3_quic_status::transport_error ||
+                        result.status_ == http3_quic_status::application_error) {
+                        send_close_packet();
+                    }
                     check_quic(result.status_);
                     if (result.status_ == http3_quic_status::would_block) {
                         break;
@@ -605,7 +793,10 @@ public:
                         output = old_socket_.get();
                     }
                     sending_socket_ = output;
-                    const auto sent = co_await async_asio<std::size_t>([&](auto handler) { output->async_send_to(asio::buffer(packet_.bytes_), remote, std::move(handler)); });
+                    const auto sent = co_await async_asio<std::size_t>([&](auto handler) {
+                        output->async_send_to(asio::buffer(packet_.bytes_), remote,
+                            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(pool_.resource()), std::move(handler)));
+                    });
                     sending_socket_ = nullptr;
                     changed_.notify();
                     if (!open_) {
@@ -658,9 +849,35 @@ public:
         if (usable()) {
             co_return;
         }
-        for (const auto* existing : streams_) {
-            if (existing != &item && existing->id_ >= 0) {
-                throw http_client_error(error_code::protocol_unavailable, "HTTP/3 draining session still has active requests");
+        const auto has_active_streams = [this, &item]() noexcept {
+            for (const auto* existing : streams_) {
+                if (existing != &item && existing->id_ >= 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (has_active_streams()) {
+            worker_timer_registration drain_timer;
+            bool drain_expired = false;
+            if (const auto deadline = acquire_timeout.deadline()) {
+                (void)pool_.worker().schedule_timer(drain_timer, *deadline,
+                    [this, &drain_expired](worker_timer_outcome outcome) noexcept {
+                        if (outcome == worker_timer_outcome::expired) {
+                            drain_expired = true;
+                            changed_.notify();
+                        }
+                    });
+            }
+            while (open_ && has_active_streams()) {
+                check(item);
+                if (stop.stop_requested()) {
+                    throw http_client_error(error_code::cancelled, "HTTP/3 connection drain wait cancelled");
+                }
+                if (drain_expired || acquire_timeout.expired()) {
+                    throw http_client_error(error_code::timeout, "HTTP/3 connection drain wait timed out");
+                }
+                co_await changed_.wait();
             }
         }
         struct connect_attempt final {
@@ -709,11 +926,11 @@ public:
             throw std::logic_error("HTTP/3 connect requires a selected resolver endpoint");
         }
         remote_ = *connect_endpoint_;
-        socket_ = std::make_unique<asio::ip::udp::socket>(pool_.io_context());
+        socket_ = make_pmr_object<asio::ip::udp::socket>(pool_.resource(), pool_.io_context());
         socket_->open(remote_.protocol());
         socket_->connect(remote_);
         local_ = socket_->local_endpoint();
-        tls_.reset(SSL_new(context_.native_handle()));
+        tls_.reset(SSL_new(tls_state_.context_.native_handle()));
         const auto identity = pool_.config().tls_.server_name_ ? std::string_view(*pool_.config().tls_.server_name_) : std::string_view(pool_.config().host_);
         if (!tls_ || prepare_client_tls_stream(*tls_, identity, client_alpn::none) != client_tls_setup_error::none ||
             ngtcp2_crypto_ossl_configure_client_session(tls_.get()) != 0) {
@@ -727,21 +944,21 @@ public:
         reference_.user_data = this;
         SSL_set_app_data(tls_.get(), &reference_);
         SSL_set_connect_state(tls_.get());
-        const bool same_endpoint = ticket_host_ == host && ticket_port_ == port;
-        if (ticket_ && same_endpoint) {
+        const bool same_endpoint = tls_state_.ticket_host_ == host && tls_state_.ticket_port_ == port;
+        if (tls_state_.ticket_ && same_endpoint) {
             // The next SSL must not mutate the cached copy on its teardown.
-            std::unique_ptr<SSL_SESSION, free_ticket> restored(SSL_SESSION_dup(ticket_.get()));
+            std::unique_ptr<SSL_SESSION, free_ticket> restored(SSL_SESSION_dup(tls_state_.ticket_.get()));
             if (!restored || SSL_set_session(tls_.get(), restored.get()) != 1) {
-                ticket_.reset();
+                tls_state_.ticket_.reset();
             }
         }
         if (!same_endpoint) {
-            ticket_.reset();
-            ticket_params_size_ = 0;
-            ticket_settings_valid_ = false;
+            tls_state_.ticket_.reset();
+            tls_state_.ticket_params_size_ = 0;
+            tls_state_.ticket_settings_valid_ = false;
         }
-        ticket_host_.assign(host);
-        ticket_port_ = port;
+        tls_state_.ticket_host_.assign(host);
+        tls_state_.ticket_port_ = port;
         ngtcp2_crypto_ossl_ctx* crypto = nullptr;
         if (ngtcp2_crypto_ossl_ctx_new(&crypto, tls_.get()) != 0) {
             throw http_client_error(error_code::tls_failed, "HTTP/3 crypto setup failed");
@@ -770,17 +987,23 @@ public:
         };
         quic_.emplace(http3_quic_connection::client({.callbacks_ = callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = timestamp(), .handshake_timeout_ = quic_duration(config.connect_timeout_), .idle_timeout_ = 0, .initial_max_data_ = (std::max)(std::uint64_t{64 * 1024}, (std::min)(std::uint64_t{16 * 1024 * 1024}, static_cast<std::uint64_t>(config.max_response_bytes_))), .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_user_data_ = this, .resource_ = pool_.resource(), .http3_ = {.resource_ = pool_.resource(), .max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}}));
         quic_->set_tls_native_handle(crypto_.get());
-        if (allow_early && config.http3_.enable_early_data_ && ticket_ && ticket_params_size_ && ticket_settings_valid_ && SSL_SESSION_get_max_early_data(ticket_.get()) != 0) {
+        if (allow_early && config.http3_.enable_early_data_ && tls_state_.ticket_ &&
+            tls_state_.ticket_params_size_ && tls_state_.ticket_settings_valid_ &&
+            SSL_SESSION_get_max_early_data(tls_state_.ticket_.get()) != 0) {
             if (SSL_set_quic_tls_early_data_enabled(tls_.get(), 1) != 1) {
                 throw http_client_error(error_code::tls_failed, "cannot enable QUIC early data");
             }
-            early_started_ = quic_->start_early_http3(std::as_bytes(std::span(ticket_params_.data(), ticket_params_size_)), ticket_settings_) == http3_quic_status::accepted;
+            early_started_ = quic_->start_early_http3(
+                                 std::as_bytes(std::span(tls_state_.ticket_params_.data(), tls_state_.ticket_params_size_)),
+                                 tls_state_.ticket_settings_) == http3_quic_status::accepted;
         }
         ++generation_;
         open_ = true;
+        active_receive_buffer_ = 0;
+        receive_buffers_[0].resize(http3_max_udp_payload_bytes);
         ++io_tasks_;
         try {
-            pool_.tasks().spawn(receive(*socket_, local_));
+            pool_.tasks().spawn(receive(*socket_, local_, receive_buffers_[0]));
         } catch (...) {
             --io_tasks_;
             throw;
@@ -820,7 +1043,7 @@ public:
         schedule(item);
         while (!bytes.empty()) {
             check(item);
-            if (item.retry_ || (item.response_.output() && item.response_.output()->stopped_)) {
+            if (item.retry_ || item.write_stopped_ || (item.response_.output() && item.response_.output()->stopped_)) {
                 co_return;
             }
             const auto sent = quic_->http3().submit_data(item.id_, std::as_bytes(std::span(bytes.data(), bytes.size())));
@@ -841,7 +1064,7 @@ public:
         auto outstanding = quic_->http3().pending_output_bytes(item.id_);
         while (outstanding != 0) {
             check(item);
-            if (item.retry_ || (item.response_.output() && item.response_.output()->stopped_)) {
+            if (item.retry_ || item.write_stopped_ || (item.response_.output() && item.response_.output()->stopped_)) {
                 co_return;
             }
             co_await item.signal_.wait();
@@ -856,26 +1079,21 @@ public:
     }
 
     http_client_pool& pool_;
+    tls_state& tls_state_;
     std::size_t index_;
-    asio::ssl::context context_;
     pool_lease_scheduler connect_slots_;
     worker_signal changed_;
     worker_signal writer_;
     std::pmr::vector<stream*> streams_;
     std::pmr::string endpoint_host_;
-    std::pmr::string ticket_host_;
-    std::uint16_t ticket_port_{};
-    std::array<std::uint8_t, 4096> ticket_params_{};
-    std::size_t ticket_params_size_{};
-    http3_peer_settings ticket_settings_{};
-    bool ticket_settings_valid_{};
-    std::unique_ptr<SSL_SESSION, free_ticket> ticket_;
+    std::array<std::pmr::vector<std::byte>, 2> receive_buffers_;
+    std::size_t active_receive_buffer_{0};
     std::unique_ptr<SSL, free_tls> tls_;
     std::unique_ptr<ngtcp2_crypto_ossl_ctx, free_crypto> crypto_;
     ngtcp2_crypto_conn_ref reference_{};
     std::optional<http3_quic_connection> quic_;
-    std::unique_ptr<asio::ip::udp::socket> socket_;
-    std::unique_ptr<asio::ip::udp::socket> old_socket_;
+    std::unique_ptr<asio::ip::udp::socket, pmr_object_deleter<asio::ip::udp::socket>> socket_;
+    std::unique_ptr<asio::ip::udp::socket, pmr_object_deleter<asio::ip::udp::socket>> old_socket_;
     asio::ip::udp::socket* sending_socket_{};
     asio::ip::udp::endpoint local_, old_local_, remote_;
     std::optional<asio::ip::udp::endpoint> connect_endpoint_;
@@ -894,13 +1112,14 @@ public:
 class http3_client_connection::address_race final {
 public:
     struct candidate final {
-        std::unique_ptr<session> connection_;
+        std::unique_ptr<session, pmr_object_deleter<session>> connection_{nullptr, pmr_object_deleter<session>{nullptr}};
         bool running_{false};
     };
-    address_race(http_client_pool& pool, std::size_t index)
+    address_race(http_client_pool& pool, tls_state& shared_tls, std::size_t index)
         : pool_(pool),
+          tls_state_(shared_tls),
           index_(index),
-          resolver_(pool.io_context()),
+          resolver_(pool.worker()),
           selection_(1, pool.worker(), pool.resource()),
           changed_(pool.worker()) {}
 
@@ -969,8 +1188,9 @@ public:
             });
     }
     http_client_pool& pool_;
+    tls_state& tls_state_;
     std::size_t index_;
-    asio::ip::udp::resolver resolver_;
+    client_host_resolver resolver_;
     pool_lease_scheduler selection_;
     worker_signal changed_;
     // Only two QUIC/TLS sessions are live, independently of DNS answer count.
@@ -1009,13 +1229,13 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
     if (response.abandoned_ || stop.stop_requested()) {
         throw http_client_error(error_code::cancelled, "HTTP/3 endpoint selection cancelled");
     }
-    if (session_ && (session_->usable() || !session_->streams_.empty())) {
+    if (session_ && session_->usable()) {
         co_return;
     }
     // A previously authenticated endpoint can send a safe request in 0-RTT.
     // An initial address race never sends request bytes on multiple paths.
-    if (session_ && allow_early && race.pool_.config().http3_.enable_early_data_ &&
-        session_->ticket_ && session_->connect_endpoint_ && session_->ticket_host_ == host && session_->ticket_port_ == port) {
+    if (session_ && session_->streams_.empty() && allow_early && race.pool_.config().http3_.enable_early_data_ &&
+        tls_->ticket_ && session_->connect_endpoint_ && tls_->ticket_host_ == host && tls_->ticket_port_ == port) {
         co_return;
     }
     race.selecting_ = true;
@@ -1039,12 +1259,22 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
         (void)race.pool_.worker().schedule_timer(deadline_timer, *deadline,
             [&race](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { race.cancel(error_code::timeout); } });
     }
-    std::unique_ptr<session> retained;
+    std::unique_ptr<session, pmr_object_deleter<session>> retained{
+        nullptr, pmr_object_deleter<session>{race.pool_.resource()}};
     std::exception_ptr failure;
     try {
         if (session_) {
-            race.retained_ = session_.get();
             session_->race_signal_ = &race.changed_;
+            while (session_->open_ && !session_->streams_.empty() && !race.reason_ && !response.abandoned_) {
+                co_await race.changed_.wait();
+            }
+            if (race.reason_ || response.abandoned_ || stop.stop_requested()) {
+                session_->race_signal_ = nullptr;
+                throw http_client_error(
+                    race.retired_ ? error_code::closing : race.reason_.value_or(error_code::cancelled),
+                    "HTTP/3 endpoint selection stopped");
+            }
+            race.retained_ = session_.get();
             session_->close();
             while (session_->io_tasks_ != 0 || session_->borrowed_operations_ != 0) {
                 co_await race.changed_.wait();
@@ -1060,22 +1290,37 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
         if (race.reason_) {
             throw http_client_error(*race.reason_, "HTTP/3 endpoint selection stopped");
         }
-        const auto resolved = co_await async_asio<asio::ip::udp::resolver::results_type>([&](auto handler) {
-            race.resolver_.async_resolve(host, std::to_string(port), std::move(handler));
-        });
+        client_resolve_result resolved;
+        {
+            auto pending = race.resolver_.resolve(host, port, bound);
+            if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+                resolved = std::move(*immediate);
+            } else {
+                resolved = co_await std::move(std::get<task<client_resolve_result>>(pending));
+            }
+        }
         if (race.reason_) {
             throw http_client_error(*race.reason_, "HTTP/3 resolution stopped");
         }
-        if (resolved.error_code() || resolved.result().empty()) {
+        if (resolved.error_ || (!resolved.literal_ && resolved.addresses_.empty())) {
             throw http_client_error(error_code::resolve_failed, "HTTP/3 DNS resolution failed");
         }
-        client_address_sequence sequence(resolved.result());
-        auto counter = sequence;
+        std::optional<client_address_sequence<asio::ip::tcp::resolver::results_type>> sequence;
         std::size_t remaining = 0;
-        while (counter.next()) {
-            ++remaining;
+        std::optional<asio::ip::udp::endpoint> next;
+        if (resolved.literal_) {
+            remaining = 1;
+            next.emplace(resolved.literal_->address(), resolved.literal_->port());
+        } else {
+            sequence.emplace(resolved.addresses_);
+            auto counter = *sequence;
+            while (counter.next()) {
+                ++remaining;
+            }
+            if (const auto first = sequence->next()) {
+                next.emplace(first->address(), first->port());
+            }
         }
-        auto next = sequence.next();
         while (!race.winner_ && !race.reason_ && !race.failure_) {
             if (response.abandoned_) {
                 race.cancel(error_code::cancelled);
@@ -1095,7 +1340,8 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                         race.retained_ = nullptr;
                         entry.connection_ = std::move(retained);
                     } else {
-                        entry.connection_ = std::make_unique<session>(race.pool_, race.index_);
+                        entry.connection_ = make_pmr_object<session>(
+                            race.pool_.resource(), race.pool_, race.tls_state_, race.index_);
                     }
                     entry.connection_->connect_endpoint_ = *next;
                     entry.connection_->race_signal_ = &race.changed_;
@@ -1120,8 +1366,12 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                         throw;
                     }
                     --remaining;
-                    next = sequence.next();
-                    race.launch_ready_ = false;
+                    next.reset();
+                    if (sequence) {
+                        if (const auto following = sequence->next()) {
+                            next.emplace(following->address(), following->port());
+                        }
+                    }
                     if (next) {
                         race.arm_next();
                     }
@@ -1216,8 +1466,9 @@ bool http3_client_connection::active() const noexcept {
 }
 
 http3_client_connection::http3_client_connection(http_client_pool& pool, std::size_t index)
-    : session_(std::make_unique<session>(pool, index)),
-      race_(std::make_unique<address_race>(pool, index)) {}
+    : tls_(make_pmr_object<tls_state>(pool.resource(), pool)),
+      session_(make_pmr_object<session>(pool.resource(), pool, *tls_, index)),
+      race_(make_pmr_object<address_race>(pool.resource(), pool, *tls_, index)) {}
 http3_client_connection::~http3_client_connection() = default;
 void http3_client_connection::close() noexcept {
     race_->cancel(error_code::io_error);
@@ -1341,7 +1592,14 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             item_.response_.cancellation_id_ = 0;
             std::erase(owner_.streams_, &item_);
             owner_.changed_.notify();
-            owner_.begin_idle();
+            if (owner_.race_signal_) {
+                owner_.race_signal_->notify();
+            }
+            if (owner_.draining_ && owner_.streams_.empty() && owner_.open_) {
+                owner_.close();
+            } else {
+                owner_.begin_idle();
+            }
         }
     } registered{self, item};
     worker_cancellation_registration cancellation(self.pool_.cancellation_target(), item.cancellation_id_);
@@ -1403,6 +1661,10 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                 throw http_client_error(error_code::timeout, "HTTP/3 stream admission timed out");
             }
             if (!self.usable()) {
+                if (attempt == 0) {
+                    item.retry_ = true;
+                    break;
+                }
                 throw http_client_error(error_code::protocol_unavailable, "HTTP/3 session is draining");
             }
             std::size_t active = 0;
@@ -1418,135 +1680,158 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             co_await item.signal_.wait();
         }
         admission_timer.cancel();
-        response.stream_id_ = static_cast<std::uint64_t>(item.id_);
-        item.early_ = !self.quic_->handshake_completed();
-        client_prepared_request_scratch scratch(self.pool_.resource());
-        const auto prepared = self.pool_.policy().prepare_request(request, scratch);
-        std::pmr::vector<http3_field_view> fields(self.pool_.resource());
-        fields.reserve(static_cast<std::span<const http_header_view>>(prepared.headers_).size() + 12);
-        fields.push_back({":method", request.is_tunnel() ? std::string_view("CONNECT") : request.method()});
-        fields.push_back({":authority", request.is_tunnel() ? request.tunnel_authority() : std::string_view(self.pool_.config().authority_)});
-        if (!request.is_tunnel() || !request.tunnel_protocol().empty()) {
-            fields.push_back({":scheme", "https"});
-            fields.push_back({":path", request.target()});
-        }
-        if (request.is_tunnel() && !request.tunnel_protocol().empty()) {
-            fields.push_back({":protocol", request.tunnel_protocol()});
-        }
-        for (const auto& field : static_cast<std::span<const http_header_view>>(prepared.headers_)) {
-            if (field.name() == "host" || field.name() == "content-length") {
-                continue;
+        if (!item.retry_) {
+            response.stream_id_ = static_cast<std::uint64_t>(item.id_);
+            item.early_ = !self.quic_->handshake_completed();
+            client_prepared_request_scratch scratch(self.pool_.resource());
+            const auto prepared = self.pool_.policy().prepare_request(request, scratch);
+            std::pmr::vector<http3_field_view> fields(self.pool_.resource());
+            fields.reserve(static_cast<std::span<const http_header_view>>(prepared.headers_).size() + 12);
+            fields.push_back({":method", request.is_tunnel() ? std::string_view("CONNECT") : request.method()});
+            fields.push_back({":authority", request.is_tunnel() ? request.tunnel_authority() : std::string_view(self.pool_.config().authority_)});
+            if (!request.is_tunnel() || !request.tunnel_protocol().empty()) {
+                fields.push_back({":scheme", "https"});
+                fields.push_back({":path", request.target()});
             }
-            fields.push_back({field.name(), field.value(), field.name() == "authorization" || field.name() == "cookie"});
-        }
-        if (request.websocket()) {
-            for (const auto& field : request.websocket()->negotiation_.request_fields()) {
-                fields.push_back({field.name(), field.value()});
+            if (request.is_tunnel() && !request.tunnel_protocol().empty()) {
+                fields.push_back({":protocol", request.tunnel_protocol()});
             }
-        }
-        std::array<char, 32> length{};
-        std::optional<std::uint64_t> content_length;
-        if (request.upload()) {
-            if (const auto declared = request.upload()->config_.content_length_) {
-                content_length = declared->value();
+            for (const auto& field : static_cast<std::span<const http_header_view>>(prepared.headers_)) {
+                if (field.name() == "host" || field.name() == "content-length") {
+                    continue;
+                }
+                fields.push_back({field.name(), field.value(), field.name() == "authorization" || field.name() == "cookie"});
             }
-        } else if (request.has_body()) {
-            content_length = request.body().size();
-        }
-        if (content_length && !request.is_tunnel()) {
-            const auto text = std::to_chars(length.data(), length.data() + length.size(), *content_length);
-            fields.push_back({"content-length", std::string_view(length.data(), static_cast<std::size_t>(text.ptr - length.data()))});
-        }
-        if (request.upload() && request.upload()->config_.expectation_ != http_client_request_expectation::none) {
-            fields.push_back({"expect", "100-continue"});
-        }
-        const bool streaming = request.output() != nullptr || !request.body().empty();
-        try {
-            require_accepted(self.quic_->http3().submit_request(item.id_, fields, !streaming));
-            self.writer_.notify();
-            if (!request.body().empty()) {
-                co_await self.send_body(item, request.body());
-                if (!item.retry_) {
-                    require_accepted(self.quic_->http3().finish_stream(item.id_));
-                    self.writer_.notify();
+            if (request.websocket()) {
+                for (const auto& field : request.websocket()->negotiation_.request_fields()) {
+                    fields.push_back({field.name(), field.value()});
                 }
             }
-            self.read_progress(item);
-            if (auto* output = request.output()) {
-                output->wake_target_ = &item.signal_;
-                output->wake_ = [](void* target) noexcept { static_cast<worker_signal*>(target)->notify(); };
-                worker_timer_registration continue_timer;
-                if (request.upload() && !request.upload()->content_released_) {
-                    (void)self.pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(request.upload()->config_.continue_timeout_),
-                        [&item, upload = request.upload()](worker_timer_outcome outcome) noexcept {
-                            if (outcome == worker_timer_outcome::expired) {
-                                upload->content_released_ = true;
-                                item.signal_.notify();
-                            }
-                        });
+            std::array<char, 32> length{};
+            std::optional<std::uint64_t> content_length;
+            if (request.upload()) {
+                if (const auto declared = request.upload()->config_.content_length_) {
+                    content_length = declared->value();
                 }
-                while (!output->ended_ && !output->stopped_) {
-                    self.check(item);
-                    if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
-                        co_await item.signal_.wait();
-                        continue;
-                    }
-                    continue_timer.cancel();
-                    if (output->chunk_ready_) {
-                        co_await self.send_body(item, output->chunk_);
-                        if (!output->stopped_) {
-                            output->acknowledge_chunk();
-                        }
-                    } else if (output->end_requested_) {
-                        if (request.upload() && !request.upload()->trailers_.empty()) {
-                            std::pmr::vector<http3_field_view> trailers(self.pool_.resource());
-                            for (const auto& field : request.upload()->trailers_) {
-                                trailers.push_back({field.name(), field.value()});
-                            }
-                            require_accepted(self.quic_->http3().submit_trailers(item.id_, trailers));
-                        } else {
-                            require_accepted(self.quic_->http3().finish_stream(item.id_));
-                        }
-                        output->finish();
+            } else if (request.has_body()) {
+                content_length = request.body().size();
+            }
+            if (content_length && !request.is_tunnel()) {
+                const auto text = std::to_chars(length.data(), length.data() + length.size(), *content_length);
+                fields.push_back({"content-length", std::string_view(length.data(), static_cast<std::size_t>(text.ptr - length.data()))});
+            }
+            if (request.upload() && request.upload()->config_.expectation_ != http_client_request_expectation::none) {
+                fields.push_back({"expect", "100-continue"});
+            }
+            const bool streaming = request.output() != nullptr || !request.body().empty();
+            try {
+                require_accepted(self.quic_->http3().submit_request(item.id_, fields, !streaming));
+                self.writer_.notify();
+                if (!request.body().empty()) {
+                    co_await self.send_body(item, request.body());
+                    if (!item.retry_ && !item.write_stopped_) {
+                        require_accepted(self.quic_->http3().finish_stream(item.id_));
                         self.writer_.notify();
-                    } else {
-                        co_await item.signal_.wait();
                     }
                 }
-            }
-            while (!item.done_ && !item.retry_) {
+                self.read_progress(item);
+                if (auto* output = request.output()) {
+                    output->wake_target_ = &item.signal_;
+                    output->wake_ = [](void* target) noexcept { static_cast<worker_signal*>(target)->notify(); };
+                    worker_timer_registration continue_timer;
+                    if (request.upload() && !request.upload()->content_released_) {
+                        (void)self.pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(request.upload()->config_.continue_timeout_),
+                            [&item, upload = request.upload()](worker_timer_outcome outcome) noexcept {
+                                if (outcome == worker_timer_outcome::expired) {
+                                    upload->content_released_ = true;
+                                    item.signal_.notify();
+                                }
+                            });
+                    }
+                    while (!output->ended_ && !output->stopped_) {
+                        self.check(item);
+                        if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
+                            co_await item.signal_.wait();
+                            continue;
+                        }
+                        continue_timer.cancel();
+                        if (output->chunk_ready_) {
+                            co_await self.send_body(item, output->chunk_);
+                            if (!output->stopped_) {
+                                output->acknowledge_chunk();
+                            }
+                        } else if (output->end_requested_) {
+                            if (request.upload() && !request.upload()->trailers_.empty()) {
+                                std::pmr::vector<http3_field_view> trailers(self.pool_.resource());
+                                for (const auto& field : request.upload()->trailers_) {
+                                    trailers.push_back({field.name(), field.value()});
+                                }
+                                require_accepted(self.quic_->http3().submit_trailers(item.id_, trailers));
+                            } else {
+                                require_accepted(self.quic_->http3().finish_stream(item.id_));
+                            }
+                            output->finish();
+                            self.writer_.notify();
+                        } else {
+                            co_await item.signal_.wait();
+                        }
+                    }
+                    if (response.tunnel_ && response.tunnel_->accepted_ && response.tunnel_->receive_ended_ &&
+                        (output->ended_ || output->stopped_)) {
+                        item.done_ = true;
+                    }
+                }
+                while (!item.done_ && !item.retry_) {
+                    self.check(item);
+                    co_await item.signal_.wait();
+                }
                 self.check(item);
-                co_await item.signal_.wait();
+            } catch (...) {
+                self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+                self.writer_.notify();
+                throw;
             }
-            self.check(item);
-        } catch (...) {
-            self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
-            self.writer_.notify();
-            throw;
         }
         if (!item.retry_) {
             co_return true;
         }
-        if (!may_send_early || attempt != 0) {
-            throw http_client_error(error_code::protocol_error, "HTTP/3 early request replay exhausted");
-        }
-        if (!self.early_rejected_) {
-            self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+        if (self.usable()) {
+            if (!may_send_early || attempt != 0) {
+                throw http_client_error(error_code::protocol_error, "HTTP/3 early request replay exhausted");
+            }
+            if (!self.early_rejected_ && item.id_ >= 0) {
+                self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+            }
+        } else {
+            if (attempt != 0 || (item.id_ >= 0 && request.output() != nullptr)) {
+                throw http_client_error(error_code::protocol_unavailable, "HTTP/3 request was not processed by the server (GOAWAY)");
+            }
+            if (item.id_ >= 0 && self.quic_) {
+                self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+                self.writer_.notify();
+            }
         }
         item.id_ = -1;
         item.done_ = false;
         item.retry_ = false;
         item.retry_425_ = false;
+        item.write_stopped_ = false;
+        item.error_.reset();
         response.headers_.clear();
         response.trailers_.clear();
         response.informational_.clear();
         self.release(response);
         response.discard_response_body();
+        if (!self.usable()) {
+            co_await self.connect(
+                item, host, port, false, timeout.constrained_by(self.pool_.config().acquire_timeout_), stop);
+            response.connection_generation_ = self.generation_;
+        }
     }
     throw http_client_error(error_code::protocol_error, "HTTP/3 request attempts exhausted");
 }
 
-task<void> http3_client_connection::migrate(std::string local_address, std::uint16_t port) {
+task<void> http3_client_connection::migrate(std::string_view local_address, std::uint16_t port) {
     if (!session_) {
         throw http_client_error(error_code::protocol_unavailable, "HTTP/3 endpoint selection is in progress");
     }
@@ -1565,12 +1850,22 @@ task<void> http3_client_connection::migrate(std::string local_address, std::uint
             flag_ = false;
         }
     } guard{self.migrating_};
-    auto replacement = std::make_unique<asio::ip::udp::socket>(self.pool_.io_context());
-    const asio::ip::udp::endpoint requested(asio::ip::make_address(local_address), port);
-    replacement->open(requested.protocol());
-    replacement->bind(requested);
-    replacement->connect(self.remote_);
-    auto local = replacement->local_endpoint();
+    auto replacement = make_pmr_object<asio::ip::udp::socket>(self.pool_.resource(), self.pool_.io_context());
+    asio::ip::udp::endpoint local;
+    try {
+        const asio::ip::udp::endpoint requested(asio::ip::make_address(local_address), port);
+        if (requested.protocol() != self.remote_.protocol()) {
+            throw http_client_error(error_code::connect_failed, "HTTP/3 migration address family mismatch");
+        }
+        replacement->open(requested.protocol());
+        replacement->bind(requested);
+        replacement->connect(self.remote_);
+        local = replacement->local_endpoint();
+    } catch (const http_client_error&) {
+        throw;
+    } catch (const std::system_error&) {
+        throw http_client_error(error_code::connect_failed, "HTTP/3 migration socket setup failed");
+    }
     bool expired = false;
     worker_timer_registration timer;
     (void)self.pool_.worker().schedule_timer(timer, worker_timer_deadline_after(self.pool_.config().connect_timeout_),
@@ -1596,39 +1891,60 @@ task<void> http3_client_connection::migrate(std::string local_address, std::uint
     self.old_socket_ = std::move(self.socket_);
     self.socket_ = std::move(replacement);
     self.local_ = local;
+    const auto next_buffer = 1 - self.active_receive_buffer_;
+    self.receive_buffers_[next_buffer].resize(http3_max_udp_payload_bytes);
     ++self.io_tasks_;
+    std::exception_ptr spawn_failure;
     try {
-        self.pool_.tasks().spawn(self.receive(*self.socket_, self.local_));
+        self.pool_.tasks().spawn(self.receive(*self.socket_, self.local_, self.receive_buffers_[next_buffer]));
     } catch (...) {
+        spawn_failure = std::current_exception();
+    }
+    if (spawn_failure) {
         --self.io_tasks_;
         self.close();
-        throw;
+        while (self.io_tasks_ != 0) {
+            co_await self.changed_.wait();
+        }
+        self.old_socket_.reset();
+        std::rethrow_exception(spawn_failure);
     }
     self.writer_.notify();
-    for (;;) {
-        if (!self.open_ || expired) {
-            self.close();
-            throw http_client_error(expired ? error_code::timeout : error_code::io_error, "HTTP/3 path validation failed");
+    std::exception_ptr failure;
+    try {
+        for (;;) {
+            if (!self.open_ || expired) {
+                self.close();
+                throw http_client_error(expired ? error_code::timeout : error_code::io_error, "HTTP/3 path validation failed");
+            }
+            const auto* active = ngtcp2_conn_get_path2(self.quic_->native_handle());
+            if (active->local.addrlen == self.local_.size() && std::memcmp(active->local.addr, self.local_.data(), self.local_.size()) == 0) {
+                break;
+            }
+            co_await self.changed_.wait();
         }
-        const auto* active = ngtcp2_conn_get_path(self.quic_->native_handle());
-        if (active->local.addrlen == self.local_.size() && std::memcmp(active->local.addr, self.local_.data(), self.local_.size()) == 0) {
-            break;
+        while (self.sending_socket_ == self.old_socket_.get()) {
+            if (!self.open_ || expired) {
+                self.close();
+                throw http_client_error(error_code::timeout, "HTTP/3 old path output did not retire");
+            }
+            co_await self.changed_.wait();
         }
-        co_await self.changed_.wait();
-    }
-    while (self.sending_socket_ == self.old_socket_.get()) {
-        if (!self.open_ || expired) {
-            self.close();
-            throw http_client_error(error_code::timeout, "HTTP/3 old path output did not retire");
-        }
-        co_await self.changed_.wait();
+    } catch (...) {
+        failure = std::current_exception();
     }
     std::error_code ignored;
-    self.old_socket_->close(ignored);
-    while (self.io_tasks_ > 2) {
+    if (self.old_socket_) {
+        self.old_socket_->close(ignored);
+    }
+    while (self.io_tasks_ > (self.open_ ? std::size_t{2} : std::size_t{0})) {
         co_await self.changed_.wait();
     }
     self.old_socket_.reset();
+    self.active_receive_buffer_ = next_buffer;
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }
 
 task<bool> http3_client_connection::send_datagram(http_client_response_state& response, std::span<const std::byte> bytes) {

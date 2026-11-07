@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "ruvia/http/borrowed_text.h"
+
 #include "context/context_services.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
@@ -20,17 +22,20 @@ public:
           options_(options),
           scanner_entry_(scanner_entry) {}
 
-    [[nodiscard]] const http_server_options& options() const noexcept {
+    [[nodiscard]] const http_server_options& options() const& noexcept RUVIA_LIFETIMEBOUND {
         return options_;
     }
+    const http_server_options& options() const&& = delete;
 
-    [[nodiscard]] connection_scanner::entry& scanner_entry() const noexcept {
+    [[nodiscard]] connection_scanner::entry& scanner_entry() const& noexcept RUVIA_LIFETIMEBOUND {
         return scanner_entry_;
     }
+    connection_scanner::entry& scanner_entry() const&& = delete;
 
-    [[nodiscard]] const context_services& services() const noexcept {
+    [[nodiscard]] const context_services& services() const& noexcept RUVIA_LIFETIMEBOUND {
         return services_;
     }
+    const context_services& services() const&& = delete;
 
 private:
     context_services services_;

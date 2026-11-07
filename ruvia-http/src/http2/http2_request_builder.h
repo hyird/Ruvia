@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -68,7 +69,7 @@ struct http2_request_target_parts final {
     const bool synthesize_host = http2_request_synthesizes_host(stream);
     const auto header_count = stream.remote_header_count() + static_cast<std::size_t>(synthesize_host) +
                               static_cast<std::size_t>(stream.has_cookie());
-    if (header_count > UINT16_MAX) {
+    if (header_count > (std::numeric_limits<std::uint16_t>::max)()) {
         throw std::logic_error("validated HTTP/2 request cannot be materialized");
     }
     http_request_access::reserve_headers(request, header_count);

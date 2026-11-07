@@ -15,6 +15,9 @@ constexpr std::string_view udp_payload_context_id{"\0", 1};
 // followed by the borrowed payload.
 std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_session::plan_datagram_capsule(
     std::span<const char> payload_value, std::string_view context_prefix) noexcept {
+    if (payload_value.size() > detail::quic_varint_max - context_prefix.size()) {
+        return http_datagram_error::payload_too_large;
+    }
     http_datagram_write_plan plan;
     plan.payload_ = payload_value;
     const auto header = encode_http_capsule_header(
@@ -85,16 +88,16 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
     if (status_ != http_capsule_status::need_more_data) {
         return {.status_ = status_};
     }
-    struct guard {
+    struct feeding_guard final {
         bool& value_;
-        guard(bool& v)
-            : value_(v) {
+        explicit feeding_guard(bool& value) noexcept
+            : value_(value) {
             value_ = true;
         }
-        ~guard() {
+        ~feeding_guard() {
             value_ = false;
         }
-    } guard(feeding_);
+    } feeding_scope(feeding_);
     const auto initial_size = input.size();
     bool completed{};
     const auto limit_reached = [&] {

@@ -525,7 +525,7 @@ http_scheme http_client_handle::scheme() const {
     return pool_->scheme();
 }
 
-http_origin_view http_client_handle::origin() const {
+http_origin_view http_client_handle::origin() const& {
     registration_.require_active();
     return pool_->origin();
 }

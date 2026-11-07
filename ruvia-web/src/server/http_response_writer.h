@@ -171,7 +171,7 @@ public:
 
     connection_gather_write(const connection_gather_write&) = delete;
     connection_gather_write& operator=(const connection_gather_write&) = delete;
-
+    connection_gather_write* operator&() = delete;
     [[nodiscard]] bool await_ready() noexcept {
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
             const std::array<asio::const_buffer, 2> buffers{asio::buffer(head_), asio::buffer(body_)};
@@ -342,6 +342,7 @@ public:
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
                     std::make_error_code(std::errc::io_error), response_head_bytes);
             }
+            progress.note_write_progress();
             if (const auto written = co_await connection_gather_write(stream, chunk.bytes(), {}, progress); written.error_) {
                 co_return classify_http1_buffered_response_write(
                     response_plan, response_head_bytes, written.error_, response_head_bytes);

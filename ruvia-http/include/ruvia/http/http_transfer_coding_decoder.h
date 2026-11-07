@@ -8,6 +8,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_transfer_coding.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
@@ -41,7 +42,7 @@ public:
     [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
         return consumed_bytes_;
     }
-    [[nodiscard]] constexpr std::string_view bytes() const& noexcept {
+    [[nodiscard]] constexpr std::string_view bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return bytes_;
     }
     std::string_view bytes() const&& = delete;
@@ -112,23 +113,23 @@ public:
     [[nodiscard]] std::size_t consumed_bytes() const noexcept {
         return std::visit([](const auto& result_value) { return result_value.consumed_bytes(); }, value_);
     }
-    [[nodiscard]] const http_transfer_coding_decode_need_input* need_input() const& noexcept {
+    [[nodiscard]] const http_transfer_coding_decode_need_input* need_input() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_transfer_coding_decode_need_input>(&value_);
     }
     const http_transfer_coding_decode_need_input* need_input() const&& = delete;
-    [[nodiscard]] const http_transfer_coding_decode_output_view* output() const& noexcept {
+    [[nodiscard]] const http_transfer_coding_decode_output_view* output() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_transfer_coding_decode_output_view>(&value_);
     }
     const http_transfer_coding_decode_output_view* output() const&& = delete;
-    [[nodiscard]] const http_transfer_coding_decode_complete* complete() const& noexcept {
+    [[nodiscard]] const http_transfer_coding_decode_complete* complete() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_transfer_coding_decode_complete>(&value_);
     }
     const http_transfer_coding_decode_complete* complete() const&& = delete;
-    [[nodiscard]] const http_transfer_coding_decode_failure* failure() const& noexcept {
+    [[nodiscard]] const http_transfer_coding_decode_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_transfer_coding_decode_failure>(&value_);
     }
     const http_transfer_coding_decode_failure* failure() const&& = delete;
-    [[nodiscard]] const http_transfer_coding_decoder_failure* decoder_failure() const& noexcept {
+    [[nodiscard]] const http_transfer_coding_decoder_failure* decoder_failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_transfer_coding_decoder_failure>(&value_);
     }
     const http_transfer_coding_decoder_failure* decoder_failure() const&& = delete;

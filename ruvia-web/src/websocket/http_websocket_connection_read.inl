@@ -43,16 +43,18 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                     if (write_lane_.write_in_progress()) {
                         co_await wait_for_write_idle(write_wait_type::reader);
                     }
-                    write_guard_type write_guard(*this);
+                    write_guard_type write_guard(*this, write_claim_type::acquire, false);
                     event = protocol_.next_event();
                     if (event.has_value()) {
                         if (event->ping() != nullptr) {
+                            write_guard.note_write();
                             co_await flush_protocol_output_now();
                         } else if (event->close() != nullptr || event->protocol_error() != nullptr || event->transport_end() != nullptr) {
                             if (const auto* close_event = event->close()) {
                                 record_peer_close(*close_event);
                             }
                             liveness_state_ = websocket_liveness_idle{};
+                            write_guard.note_write();
                             co_await flush_protocol_output_now();
                         }
                     }
@@ -84,6 +86,7 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                 if (event->pong() != nullptr) {
                     if (websocket_heartbeat_pong_matches(liveness_state_, event->pong()->payload())) {
                         liveness_state_ = websocket_liveness_idle{};
+                        scanner_entry_.touch();
                     }
                     continue;
                 }
@@ -94,7 +97,7 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                 }
                 throw std::logic_error("unexpected WebSocket protocol event");
             }
-        } catch (const inbound_buffer_limit_error&) {
+        } catch (...) {
             abort_transport(true);
             throw;
         }
@@ -107,8 +110,7 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
         try {
             co_return co_await stream_.read_more(buffer_);
         } catch (const inbound_transport_error&) {
-            close_stream();
-            (void)protocol_.abort();
+            abort_transport(true);
             throw;
         }
     } else {
@@ -156,8 +158,7 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
             co_return false;
         }
         if (ec) {
-            close_stream();
-            (void)protocol_.abort();
+            abort_transport(true);
             throw inbound_transport_error(ec, "failed to read websocket bytes");
         }
         buffer_.commit(bytes_read);

@@ -114,19 +114,19 @@ http_error::http_error(http_error_info_options options)
 
 http_error::http_error(http_error_info_options options, std::pmr::memory_resource* resource)
     : status_(options.status_),
-      status_text_(options.status_text_.view(), resource),
-      code_(options.code_.view(), resource),
-      message_(options.message_.view(), resource),
-      validation_issues_(
-          detail::clone_validation_issues(options.validation_issues_.view(), resource)) {}
+      status_text_(options.status_text_.view(), pmr_resource_or_default(resource)),
+      code_(options.code_.view(), pmr_resource_or_default(resource)),
+      message_(options.message_.view(), pmr_resource_or_default(resource)),
+      validation_issues_(detail::clone_validation_issues(
+          options.validation_issues_.view(), pmr_resource_or_default(resource))) {}
 
 http_error::http_error(http_status_code status, std::string_view code, std::string_view message,
     std::string_view status_text, std::pmr::vector<validation_issue>&& issues,
     std::pmr::memory_resource* resource)
     : status_(status),
-      status_text_(status_text, resource),
-      code_(code, resource),
-      message_(message, resource),
+      status_text_(status_text, pmr_resource_or_default(resource)),
+      code_(code, pmr_resource_or_default(resource)),
+      message_(message, pmr_resource_or_default(resource)),
       validation_issues_(std::move(issues)) {}
 
 http_error::http_error(const http_error& other)
@@ -134,10 +134,11 @@ http_error::http_error(const http_error& other)
 
 http_error::http_error(const http_error& other, std::pmr::memory_resource* resource)
     : status_(other.status_),
-      status_text_(other.status_text_, resource),
-      code_(other.code_, resource),
-      message_(other.message_, resource),
-      validation_issues_(detail::clone_validation_issues(other.validation_issues_, resource)) {}
+      status_text_(other.status_text_, pmr_resource_or_default(resource)),
+      code_(other.code_, pmr_resource_or_default(resource)),
+      message_(other.message_, pmr_resource_or_default(resource)),
+      validation_issues_(
+          detail::clone_validation_issues(other.validation_issues_, pmr_resource_or_default(resource))) {}
 
 http_error& http_error::operator=(const http_error& other) {
     if (this != &other) {

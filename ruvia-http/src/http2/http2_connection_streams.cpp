@@ -52,13 +52,9 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
                            : http2_error_code::cancel;
     (void)submit_reset(stream_id, error);
     if (auto* retained_stream = streams_.find(stream_id)) {
-        if (retained_stream->is_aborted()) {
-            flush_window_debt(*retained_stream);
-            release_local_request_stream(*retained_stream);
-            streams_.remove(stream_id);
-            return;
-        }
-        retained_stream->set_pinned(false);
+        flush_window_debt(*retained_stream);
+        release_local_request_stream(*retained_stream);
+        streams_.remove(stream_id);
     }
 }
 
@@ -164,16 +160,6 @@ void http2_connection::release_local_request_stream(http2_stream_state& stream) 
 void http2_connection::release_local_request_stream_if_closed(http2_stream_state& stream) noexcept {
     if (http2_stream_is_closed(stream)) {
         release_local_request_stream(stream);
-    }
-}
-
-void http2_connection::retire_completed_local_push(std::uint32_t stream_id) {
-    if (role_ != http2_role::server || (stream_id & 1U) != 0) {
-        return;
-    }
-    const auto* stream = streams_.find(stream_id);
-    if (stream != nullptr && !stream->pinned() && !stream->has_pending_events() && http2_stream_is_closed(*stream)) {
-        unpin_stream(stream_id);
     }
 }
 

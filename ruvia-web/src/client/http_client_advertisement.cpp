@@ -68,7 +68,7 @@ private:
         if (retained_bytes_ != 0 || references_ != 1) {
             std::terminate();
         }
-        destroy_pmr_object(this, std::pmr::new_delete_resource());
+        destroy_pmr_object(this, process_resource());
     }
     worker_memory memory_;
     worker_handle worker_;
@@ -135,7 +135,7 @@ http_client_advertisement_queue::http_client_advertisement_queue(const worker_ha
         throw std::invalid_argument("HTTP advertisement queue requires worker, memory and positive bounds");
     }
     if (config.receive_origins_ || config.receive_alternative_services_) {
-        memory_ = make_pmr_object<http_client_advertisement_memory>(std::pmr::new_delete_resource(), worker_value).release();
+        memory_ = make_pmr_object<http_client_advertisement_memory>(process_resource(), worker_value).release();
     }
 }
 http_client_advertisement_queue::~http_client_advertisement_queue() {
@@ -234,10 +234,10 @@ http_client_advertisement::~http_client_advertisement() {
     detail::release_advertisement(state_);
 }
 http_protocol_version http_client_advertisement::protocol_version() const noexcept {
-    return state_->protocol_;
+    return state_ == nullptr ? http_protocol_version::http11 : state_->protocol_;
 }
 std::size_t http_client_advertisement::connection_slot() const noexcept {
-    return state_->slot_;
+    return state_ == nullptr ? 0 : state_->slot_;
 }
 const http_origin_advertisement* http_client_advertisement::origins() const& noexcept {
     return state_ == nullptr ? nullptr : std::get_if<http_origin_advertisement>(&state_->value_);

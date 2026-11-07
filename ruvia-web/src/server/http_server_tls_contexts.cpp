@@ -93,20 +93,19 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
     const unsigned char* extension = nullptr;
     std::size_t extension_size = 0;
     if (SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &extension, &extension_size) == 1) {
-        // One host_name entry, the only shape OpenSSL accepts; it fails any
-        // other shape later in this handshake, so the context is irrelevant.
+        // One non-empty host_name entry: any other ServerNameList shape fails
+        // the handshake before OpenSSL could resume a session under it.
         if (extension_size < 5 || static_cast<std::size_t>((extension[0] << 8) | extension[1]) != extension_size - 2 ||
             extension[2] != TLSEXT_NAMETYPE_host_name) {
-            return SSL_CLIENT_HELLO_SUCCESS;
+            *alert = SSL_AD_DECODE_ERROR;
+            return SSL_CLIENT_HELLO_ERROR;
         }
         const auto name_size = static_cast<std::size_t>((extension[3] << 8) | extension[4]);
-        if (name_size != extension_size - 5 || name_size > TLSEXT_MAXLEN_host_name) {
-            return SSL_CLIENT_HELLO_SUCCESS;
+        if (name_size == 0 || name_size != extension_size - 5 || name_size > TLSEXT_MAXLEN_host_name) {
+            *alert = SSL_AD_DECODE_ERROR;
+            return SSL_CLIENT_HELLO_ERROR;
         }
-        if (name_size == 0) {
-            // An empty name differs from an absent one: two NUL bytes.
-            context_size = 2;
-        } else if (name_size <= context.size()) {
+        if (name_size <= context.size()) {
             for (std::size_t i = 0; i < name_size; ++i) {
                 context[i] = http_ascii_to_lower(extension[5 + i]);
             }
@@ -176,7 +175,11 @@ void configure_family(http_server_session_config& session, tls_context_family fa
     auto& ticket_keys = *session.ticket_keys_;
     const bool quic = family == tls_context_family::quic;
     const bool early_data = quic && session.http3_->early_data_;
-    const auto configure = [tls, &ticket_keys, quic, early_data](asio::ssl::context& context_value,
+    auto& sni_contexts = quic ? session.quic_sni_contexts_ : session.sni_contexts_;
+    auto& primary = quic ? session.quic_tls_context_ : session.tls_context_;
+    auto& selection = quic ? session.quic_sni_ : session.tls_sni_;
+    const bool has_sni = !tls->sni_identities_.empty();
+    const auto configure = [tls, &ticket_keys, &selection, quic, early_data, has_sni](asio::ssl::context& context_value,
                                const tls_certificate& certificate) {
         auto* native = context_value.native_handle();
         if (quic) {
@@ -206,11 +209,15 @@ void configure_family(http_server_session_config& session, tls_context_family fa
         SSL_CTX_set_options(native, SSL_OP_CIPHER_SERVER_PREFERENCE);
         configure_http_server_tls_identity(native, certificate, tls->client_certificates_);
         ticket_keys.install(*native);
+        // The client hello callback runs before OpenSSL looks up the offered
+        // session, which the server_name callback would be too late for.
+        SSL_CTX_set_client_hello_cb(native, &bind_session_to_server_name, nullptr);
+        if (has_sni) {
+            SSL_CTX_set_tlsext_servername_callback(native, &select_sni_context);
+            SSL_CTX_set_tlsext_servername_arg(native, &selection);
+        }
     };
 
-    auto& sni_contexts = quic ? session.quic_sni_contexts_ : session.sni_contexts_;
-    auto& primary = quic ? session.quic_tls_context_ : session.tls_context_;
-    auto& selection = quic ? session.quic_sni_ : session.tls_sni_;
     // Per-host SNI certificates first, so the lookup can point at stable storage.
     sni_contexts.reserve(tls->sni_identities_.size());
     for (const auto& sni : tls->sni_identities_) {
@@ -218,15 +225,7 @@ void configure_family(http_server_session_config& session, tls_context_family fa
         configure(context_value, sni.certificate_);
     }
     primary.emplace(asio::ssl::context::tls_server);
-    auto& context_value = *primary;
-    configure(context_value, tls->certificate_);
-    // The client hello callback runs before OpenSSL looks up the offered
-    // session, which the server_name callback would be too late for.
-    SSL_CTX_set_client_hello_cb(context_value.native_handle(), &bind_session_to_server_name, nullptr);
-    if (!sni_contexts.empty()) {
-        SSL_CTX_set_tlsext_servername_callback(context_value.native_handle(), &select_sni_context);
-        SSL_CTX_set_tlsext_servername_arg(context_value.native_handle(), &selection);
-    }
+    configure(*primary, tls->certificate_);
 }
 
 }  // namespace

@@ -42,7 +42,7 @@ namespace {
 }
 
 [[nodiscard]] bool names_key(const std::optional<tls_session_ticket_key>& key, const unsigned char* name) noexcept {
-    return key.has_value() && std::equal(key->name_.begin(), key->name_.end(), name);
+    return key.has_value() && CRYPTO_memcmp(key->name_.data(), name, key->name_.size()) == 0;
 }
 
 }  // namespace
@@ -74,24 +74,34 @@ std::chrono::steady_clock::time_point tls_session_ticket_key_ring::next_rotation
 }
 
 bool tls_session_ticket_key_ring::copy_to(std::chrono::steady_clock::time_point now, tls_session_ticket_key_set& target) {
-    const std::lock_guard lock(mutex_);
-    const auto epoch = epoch_at(now);
-    if (epoch > epoch_) {
-        // The previous key's validity ended with the old epoch; the current
-        // key stays valid for decryption through exactly one more epoch.
-        previous_.reset();
-        if (epoch == epoch_ + 1) {
-            previous_ = current_;
+    std::optional<tls_session_ticket_key> retired_previous;
+    std::optional<tls_session_ticket_key> retired_current;
+    std::optional<tls_session_ticket_key> retired_target_current;
+    std::optional<tls_session_ticket_key> retired_target_previous;
+    bool has_current = false;
+    {
+        const std::lock_guard lock(mutex_);
+        const auto epoch = epoch_at(now);
+        if (epoch > epoch_) {
+            // The previous key's validity ended with the old epoch; the current
+            // key stays valid for decryption through exactly one more epoch.
+            retired_previous = std::move(previous_);
+            previous_.reset();
+            if (epoch == epoch_ + 1) {
+                previous_ = current_;
+            }
+            retired_current = std::move(current_);
+            current_.reset();
+            epoch_ = epoch;
         }
-        current_.reset();
-        epoch_ = epoch;
+        if (!current_.has_value()) {
+            current_ = generate_ticket_key();
+        }
+        retired_target_current = std::exchange(target.current_, current_);
+        retired_target_previous = std::exchange(target.previous_, previous_);
+        has_current = current_.has_value();
     }
-    if (!current_.has_value()) {
-        current_ = generate_ticket_key();
-    }
-    target.current_ = current_;
-    target.previous_ = previous_;
-    return current_.has_value();
+    return has_current;
 }
 
 tls_session_ticket_key_set::tls_session_ticket_key_set()

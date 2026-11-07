@@ -36,7 +36,7 @@ struct db_query_backend final {
     db_pool_ref_type pool_;
     std::optional<std::size_t> slot_;
     std::pmr::memory_resource* resource_;
-    // The request's counter block for pooled statements; null otherwise.
+    // The request's counter block; null outside a request.
     request_io_metrics* io_metrics_{nullptr};
     // Set when the database statement itself failed: a transaction statement
     // failure has already retired the transaction's lease.

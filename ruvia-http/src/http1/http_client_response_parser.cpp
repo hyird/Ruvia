@@ -6,7 +6,6 @@
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_status.h"
 
 #include "client/http_client_access.h"

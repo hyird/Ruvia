@@ -495,6 +495,9 @@ void http_response_headers::add_vary_token(std::string_view token) {
         return;
     }
     const bool wildcard_token = token == "*";
+    if (!wildcard_token && !is_valid_http_header_name(token)) {
+        throw std::invalid_argument("invalid HTTP Vary header token");
+    }
 
     // The existing non-empty lines comma-joined in wire order, collected while
     // checking membership. Short lists stay on the stack; the PMR string takes
@@ -532,9 +535,6 @@ void http_response_headers::add_vary_token(std::string_view token) {
     if (wildcard_token) {
         header("Vary", "*");
         return;
-    }
-    if (!is_valid_http_header_name(token)) {
-        throw std::invalid_argument("invalid HTTP Vary header token");
     }
     append_joined(token);
     header("Vary", spilled_joined.empty() ? std::string_view(inline_joined.data(), inline_size)

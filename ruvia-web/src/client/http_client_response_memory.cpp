@@ -73,9 +73,7 @@ http_client_response_memory_domain::owner http_client_response_memory_domain::cr
 http_client_response_memory_domain::owner http_client_response_memory_domain::create_response_owned(
     const worker_handle& worker_value,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    // The object cannot live in the memory it owns; new_delete is the only
-    // other worker-free choice (the process resource is lock-shared).
-    return allocate(worker_value, result_budget_domain, nullptr, *std::pmr::new_delete_resource());
+    return allocate(worker_value, result_budget_domain, nullptr, *process_resource());
 }
 
 http_client_response_memory_domain::owner http_client_response_memory_domain::allocate(

@@ -44,11 +44,11 @@ public:
         budget_ = http_trailer_section_budget();
         return std::move(fields_);
     }
-    [[nodiscard]] std::span<const http_header> fields() const& noexcept {
+    [[nodiscard]] std::span<const http_header> fields() const& noexcept RUVIA_LIFETIMEBOUND {
         return fields_;
     }
     std::span<const http_header> fields() const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> field(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> field(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> field(std::string_view) const&& = delete;
 
 private:

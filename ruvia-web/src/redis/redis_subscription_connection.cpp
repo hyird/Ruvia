@@ -240,7 +240,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
     const auto interval = worker_timer_saturating_duration_cast(*owner_.config_.subscription_ping_interval_);
     const auto now = clock_type::now();
     const auto idle_since = std::max(last_input_, read_started_);
-    if (probe_started_.has_value() && *probe_started_ < idle_since) {
+    if (probe_started_.has_value() && *probe_started_ <= idle_since) {
         // Input after the probe began answered it.
         probe_started_.reset();
     }

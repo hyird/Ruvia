@@ -216,6 +216,12 @@ public:
     [[nodiscard]] bool dispatch_pending() const noexcept {
         return dispatch_pending_ && !dispatched();
     }
+    void defer_continue() noexcept {
+        continue_pending_ = true;
+    }
+    [[nodiscard]] bool take_continue_pending() noexcept {
+        return std::exchange(continue_pending_, false);
+    }
 
     void store_datagram(std::string_view payload, std::size_t byte_limit) {
         if ((datagrams_ && datagrams_->size() >= 64) || datagram_bytes_ > byte_limit ||
@@ -415,6 +421,7 @@ private:
     bool closed_{false};
     bool handler_done_{false};
     bool dispatch_pending_{false};
+    bool continue_pending_{false};
 };
 
 }  // namespace ruvia::detail

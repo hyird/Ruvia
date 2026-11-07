@@ -333,27 +333,27 @@ public:
     [[nodiscard]] websocket_event_kind kind() const noexcept {
         return static_cast<websocket_event_kind>(value_.index());
     }
-    [[nodiscard]] const websocket_message* message() const& noexcept {
+    [[nodiscard]] const websocket_message* message() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<websocket_message>(&value_);
     }
     const websocket_message* message() const&& = delete;
-    [[nodiscard]] const websocket_ping_event* ping() const& noexcept {
+    [[nodiscard]] const websocket_ping_event* ping() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<websocket_ping_event>(&value_);
     }
     const websocket_ping_event* ping() const&& = delete;
-    [[nodiscard]] const websocket_pong_event* pong() const& noexcept {
+    [[nodiscard]] const websocket_pong_event* pong() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<websocket_pong_event>(&value_);
     }
     const websocket_pong_event* pong() const&& = delete;
-    [[nodiscard]] const websocket_close_event* close() const& noexcept {
+    [[nodiscard]] const websocket_close_event* close() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<websocket_close_event>(&value_);
     }
     const websocket_close_event* close() const&& = delete;
-    [[nodiscard]] const websocket_protocol_error_event* protocol_error() const& noexcept {
+    [[nodiscard]] const websocket_protocol_error_event* protocol_error() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<websocket_protocol_error_event>(&value_);
     }
     const websocket_protocol_error_event* protocol_error() const&& = delete;
-    [[nodiscard]] const websocket_transport_end_event* transport_end() const& noexcept {
+    [[nodiscard]] const websocket_transport_end_event* transport_end() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<websocket_transport_end_event>(&value_);
     }
     const websocket_transport_end_event* transport_end() const&& = delete;

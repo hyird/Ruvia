@@ -26,6 +26,7 @@ class tls_tunnel_output final {
 public:
     tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket, const worker_handle& worker_value,
         std::pmr::memory_resource& resource);
+    tls_tunnel_output(SSL&, asio::ip::tcp::socket&, worker_handle&&, std::pmr::memory_resource&) = delete;
     ~tls_tunnel_output();
     tls_tunnel_output(const tls_tunnel_output&) = delete;
     tls_tunnel_output& operator=(const tls_tunnel_output&) = delete;

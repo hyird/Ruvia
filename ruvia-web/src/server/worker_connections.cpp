@@ -314,7 +314,7 @@ task<void> worker_connections::rotate_tls_ticket_keys() {
             next = std::min(next, ring.next_rotation(now));
         }
         if (next == std::chrono::steady_clock::time_point::max() ||
-            co_await sleep_for(worker_, next - now) == timer_sleep_result::stop_requested) {
+            co_await sleep_until(worker_, next, stop_token_) == timer_sleep_result::stop_requested) {
             co_return;
         }
     }
@@ -332,11 +332,6 @@ http_server_stats worker_connections::stats() const noexcept {
 void worker_connections::close_listeners() noexcept {
     for (auto& configured : listeners_) {
         asio::error_code ignored;
-        try {
-            (void)configured->retry_.cancel();
-        } catch (...) {
-            ruvia::report_unhandled_failure("web accept retry cancellation", std::current_exception());
-        }
         configured->socket_.close(ignored);
     }
 }
@@ -363,22 +358,17 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
             if (action == accept_error_action::fail) {
                 throw std::system_error(error, "fatal TCP accept error");
             }
-            if (action == accept_error_action::report_and_retry) {
-                try {
-                    throw std::system_error(error, "recoverable TCP accept error");
-                } catch (...) {
-                    report_accept_failure(std::current_exception(), false);
-                }
+            if (action == accept_error_action::retry) {
+                continue;
             }
-            configured.retry_.expires_after(std::chrono::milliseconds(25));
-            const auto retry = co_await ruvia::async_asio([this, &configured](auto handler) {
-                configured.retry_.async_wait(asio::bind_allocator(memory_.allocator(), std::move(handler)));
-            });
-            if (!http_server_worker_running(state_) || !configured.socket_.is_open()) {
+            try {
+                throw std::system_error(error, "recoverable TCP accept error");
+            } catch (...) {
+                report_accept_failure(std::current_exception(), false);
+            }
+            if (co_await sleep_for(worker_, std::chrono::milliseconds(25), stop_token_) ==
+                timer_sleep_result::stop_requested) {
                 co_return;
-            }
-            if (retry.error_code()) {
-                throw std::system_error(retry.error_code(), "TCP accept retry failed");
             }
         }
     } catch (...) {

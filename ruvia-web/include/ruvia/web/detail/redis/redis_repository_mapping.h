@@ -105,15 +105,24 @@ struct redis_map_search final {
         if (count < documents) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity search count");
         }
-        entity_rows<entity_type> rows(resource);
-        rows.reserve(documents);
+        std::size_t present_documents = 0;
         for (std::size_t i = 1; i < values.size(); i += 2) {
-            const auto key = redis_value_string(values[i]);
-            // A document may expire between index matching and field loading.
-            if (values[i + 1].null()) {
-                continue;
+            (void)redis_value_string(values[i]);
+            if (!values[i + 1].null()) {
+                ++present_documents;
             }
-            rows.push_back(decode_redis_entity<entity_type>(values[i + 1], key, resource, prefix_));
+        }
+        entity_rows<entity_type> rows(resource);
+        if (present_documents != 0) {
+            rows.reserve(present_documents);
+            for (std::size_t i = 1; i < values.size(); i += 2) {
+                const auto key = redis_value_string(values[i]);
+                // A document may expire between index matching and field loading.
+                if (values[i + 1].null()) {
+                    continue;
+                }
+                rows.push_back(decode_redis_entity<entity_type>(values[i + 1], key, resource, prefix_));
+            }
         }
         return {std::move(rows), count};
     }

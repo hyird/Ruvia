@@ -63,7 +63,6 @@ class response_stream_writer;
 class sse_writer;
 class multipart_reader;
 class multipart_part;
-class multipart_boundary;
 #ifdef RUVIA_ENABLE_DATABASE
 class db_handle;
 #endif
@@ -88,12 +87,9 @@ request_binding_handle<std::remove_cvref_t<t_type>> bind_validated_model(context
 [[noreturn]] void throw_invalid_query();
 [[noreturn]] void throw_invalid_param();
 
-class request_query_values;
 struct context_access;
 class context_services;
 struct session_access;
-struct request_name_value_view_access;
-struct request_name_value_list_access;
 }  // namespace detail
 
 class plain_connection_transport final {
@@ -181,12 +177,12 @@ public:
         return scheme_;
     }
 
-    [[nodiscard]] constexpr const plain_connection_transport* plain() const& noexcept {
+    [[nodiscard]] constexpr const plain_connection_transport* plain() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<plain_connection_transport>(&transport_);
     }
     const plain_connection_transport* plain() const&& = delete;
 
-    [[nodiscard]] constexpr const tls_connection_transport* tls() const& noexcept {
+    [[nodiscard]] constexpr const tls_connection_transport* tls() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<tls_connection_transport>(&transport_);
     }
     const tls_connection_transport* tls() const&& = delete;
@@ -271,15 +267,15 @@ public:
     [[nodiscard]] http_status_code status() const noexcept {
         return status_;
     }
-    [[nodiscard]] std::string_view body() const& noexcept {
+    [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }
     std::string_view body() const&& = delete;
-    [[nodiscard]] std::span<const http_header> headers() const& noexcept {
+    [[nodiscard]] std::span<const http_header> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_;
     }
     std::span<const http_header> headers() const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     std::optional<std::string_view> header(std::string_view) const&& = delete;
 
 private:

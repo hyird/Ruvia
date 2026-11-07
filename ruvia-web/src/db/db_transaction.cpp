@@ -117,7 +117,7 @@ std::pmr::memory_resource* db_transaction::query_resource() const {
 // own uncommitted writes, which must neither be published nor be replaced by
 // rows cached outside the transaction.
 detail::db_query_backend db_transaction::query_backend(const lease_type& lease) const {
-    return detail::db_query_backend{lease.client_, lease.slot_, lease.resource_};
+    return detail::db_query_backend{lease.client_, lease.slot_, lease.resource_, io_metrics_};
 }
 
 task<db_rows> db_transaction::query_task(const db_query& query) {
@@ -169,6 +169,14 @@ task<db_exec_result> db_transaction::execute_query(const db_query& query) {
     operation_guard_type operation(state_->operation_);
     return ::ruvia::make_scoped_operation(registration_.scope(),
         execute_prepared(std::move(statement.sql_), std::move(statement.params_), io_metrics_, std::move(operation)));
+}
+
+task<db_exec_result> db_transaction::execute_prepared(std::pmr::string sql) {
+    registration_.require_active();
+    const auto& lease_value = state_->operation_.preparation_payload();
+    operation_guard_type operation(state_->operation_);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        execute_prepared(std::move(sql), std::pmr::vector<db_value>(lease_value.resource_), io_metrics_, std::move(operation)));
 }
 
 task<db_rows> db_transaction::query(

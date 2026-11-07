@@ -747,7 +747,7 @@ public:
             detail::make_immediate_db_parameter(std::forward<upper_type>(upper)), true));
     }
 
-    [[nodiscard]] const detail::db_owned_expression& owned() const& noexcept {
+    [[nodiscard]] const detail::db_owned_expression& owned() const& noexcept RUVIA_LIFETIMEBOUND {
         return owned_;
     }
     [[nodiscard]] detail::db_owned_expression&& owned() && noexcept {
@@ -1068,11 +1068,11 @@ public:
     db_statement& operator=(const db_statement&) = delete;
     db_statement(db_statement&&) noexcept = default;
     db_statement& operator=(db_statement&& other);
-    [[nodiscard]] std::string_view sql() const& noexcept {
+    [[nodiscard]] std::string_view sql() const& noexcept RUVIA_LIFETIMEBOUND {
         return sql_;
     }
     std::string_view sql() const&& = delete;
-    [[nodiscard]] std::span<const db_value> params() const& noexcept {
+    [[nodiscard]] std::span<const db_value> params() const& noexcept RUVIA_LIFETIMEBOUND {
         return params_;
     }
     std::span<const db_value> params() const&& = delete;
@@ -1088,6 +1088,8 @@ private:
     friend class db_handle;
     friend class db_transaction;
     friend struct detail::db_query_plan;
+    template <typename, typename>
+    friend class db_query_builder;
     db_statement(std::pmr::string sql, std::pmr::vector<db_value> params, bool rows)
         : sql_(std::move(sql)),
           params_(std::move(params)),

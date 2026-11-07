@@ -219,7 +219,8 @@ public:
                  std::same_as<std::invoke_result_t<fn_type&>, task<void>> &&
                  std::move_constructible<std::decay_t<fn_type>>
     [[nodiscard]] event_loop_stop_registration on_stop(fn_type&& fn) const {
-        return register_stop_callback(
+        const event_loop snapshot = *this;
+        return snapshot.register_stop_callback(
             move_only_function<task<void>()>(std::forward<fn_type>(fn)));
     }
 

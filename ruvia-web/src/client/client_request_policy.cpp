@@ -81,9 +81,8 @@ std::string_view default_cookie_path(std::string_view target) noexcept {
 std::chrono::system_clock::time_point cookie_expiration(
     std::chrono::system_clock::time_point now, std::int64_t max_age_seconds) noexcept {
     using clock_type = std::chrono::system_clock;
-    const std::chrono::duration<long double> requested{std::chrono::seconds(max_age_seconds)};
-    const std::chrono::duration<long double> available{clock_type::time_point::max() - now};
-    if (requested >= available) {
+    const auto available = std::chrono::duration_cast<std::chrono::seconds>(clock_type::time_point::max() - now);
+    if (std::chrono::seconds(max_age_seconds) >= available) {
         return clock_type::time_point::max();
     }
     return now + std::chrono::duration_cast<clock_type::duration>(std::chrono::seconds(max_age_seconds));

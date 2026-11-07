@@ -199,7 +199,7 @@ public:
         return native_code_;
     }
 
-    [[nodiscard]] std::optional<std::string_view> sql_state() const& noexcept {
+    [[nodiscard]] std::optional<std::string_view> sql_state() const& noexcept RUVIA_LIFETIMEBOUND {
         if (sql_state_.empty()) {
             return std::nullopt;
         }
@@ -208,7 +208,7 @@ public:
 
     [[nodiscard]] std::optional<std::string_view> sql_state() const&& = delete;
 
-    [[nodiscard]] std::optional<std::string_view> constraint_name() const& noexcept {
+    [[nodiscard]] std::optional<std::string_view> constraint_name() const& noexcept RUVIA_LIFETIMEBOUND {
         if (constraint_name_.empty()) {
             return std::nullopt;
         }
@@ -348,7 +348,7 @@ private:
     db_value(std::in_place_type_t<std::pmr::string>, std::pmr::string value);
 
     [[nodiscard]] detail::db_value_type type() const noexcept;
-    [[nodiscard]] std::string_view text() const& noexcept;
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view text() const&& = delete;
     [[nodiscard]] std::int64_t signed_value() const noexcept;
     [[nodiscard]] std::uint64_t unsigned_value() const noexcept;

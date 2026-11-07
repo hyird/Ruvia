@@ -25,10 +25,12 @@ inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
 inline constexpr std::size_t max_http2_encoded_header_block_bytes = 4 * max_http_header_bytes;
 
 // RFC 7541 §7.1.3: credential-bearing fields use the never-indexed literal so an
-// intermediary never places them in a shared dynamic table. Names are lowercase.
+// intermediary never places them in a shared dynamic table.
 [[nodiscard]] inline bool hpack_header_name_is_sensitive(std::string_view name) noexcept {
-    return name == "authorization" || name == "proxy-authorization" || name == "cookie" ||
-           name == "set-cookie";
+    return http_ascii_equals_ignore_case(name, "authorization") ||
+           http_ascii_equals_ignore_case(name, "proxy-authorization") ||
+           http_ascii_equals_ignore_case(name, "cookie") ||
+           http_ascii_equals_ignore_case(name, "set-cookie");
 }
 
 // Stack-backed results expose only fully written prefixes; an already-lowercase

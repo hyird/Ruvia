@@ -15,7 +15,6 @@
 #include <sys/eventfd.h>
 #endif
 #include <unistd.h>
-
 namespace ruvia::detail {
 
 namespace {

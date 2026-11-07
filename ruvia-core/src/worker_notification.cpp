@@ -396,7 +396,7 @@ worker_notification_status worker_notification::notify() noexcept {
     return state_->notify();
 }
 
-worker_notification::wait_operation& worker_notification::wait() noexcept {
+worker_notification::wait_operation& worker_notification::wait() & noexcept {
     return wait_awaiter_;
 }
 

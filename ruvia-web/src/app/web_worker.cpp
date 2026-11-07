@@ -5,6 +5,15 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/web/http_client.h"
+
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db_handle.h"
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis_handle.h"
+#endif
 
 #include "app/web_worker_dispatch.h"
 #include "integration/worker_capabilities.h"
@@ -17,8 +26,9 @@ web_worker_context::web_worker_context(const worker_handle& worker_value, std::p
     const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept
     : capabilities_(worker_value, stop_token_value, worker_states),
       resource_(resource),
-      client_registries_(client_registries) {}
-
+      client_registries_(client_registries) {
+    operation_scope_.bind_worker(worker_value);
+}
 const worker_handle& web_worker_context::worker() const& noexcept {
     return capabilities_.worker();
 }

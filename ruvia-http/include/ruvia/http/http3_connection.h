@@ -12,7 +12,10 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_connection_advertisement.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_priority.h"
@@ -59,8 +62,8 @@ struct http3_result final {
 };
 
 struct http3_field_view final {
-    std::string_view name_;
-    std::string_view value_;
+    borrowed_text name_{};
+    borrowed_text value_{};
     bool sensitive_{false};
 };
 
@@ -69,16 +72,17 @@ public:
     http3_field(std::string_view name, std::string_view value,
         std::pmr::memory_resource* resource);
 
-    [[nodiscard]] std::string_view name() const noexcept {
-        return name_;
+    [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
+        return header_.name();
     }
-    [[nodiscard]] std::string_view value() const noexcept {
-        return value_;
+    std::string_view name() const&& = delete;
+    [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
+        return header_.value();
     }
+    std::string_view value() const&& = delete;
 
 private:
-    std::pmr::string name_;
-    std::pmr::string value_;
+    http_header header_;
 };
 
 // One decoded field section: the initial request or response head, or a
@@ -173,7 +177,7 @@ struct http3_peer_settings final {
 // The Quarter Stream ID that prefixes every HTTP/3 Datagram of one request
 // stream (RFC 9297 §2.1), as a QUIC variable-length integer.
 struct http3_datagram_prefix final {
-    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept {
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::span<const std::byte>(bytes_.data(), size_);
     }
     std::span<const std::byte> bytes() const&& = delete;
@@ -235,7 +239,7 @@ struct http3_connection_options final {
     bool own_data_events_{false};
     // Server only: serialized origins (RFC 9412 §2) sent in an ORIGIN frame on
     // the control stream immediately after SETTINGS.
-    std::span<const std::string_view> origins_{};
+    borrowed_span<std::string_view> origins_{};
 };
 
 // HTTP/3 stream codec. QUIC owns stream identifiers, retransmission, flow
@@ -387,16 +391,20 @@ private:
     void mark_early_data(std::int64_t stream_id);
     void remember_peer_settings(http3_peer_settings settings) noexcept;
     [[nodiscard]] bool events_pending() const noexcept;
+    [[nodiscard]] std::optional<http3_event> next_event(bool& local_transport_action);
+    void rethrow_if_failed();
     [[nodiscard]] http3_status block_stream(std::int64_t stream_id) noexcept;
     [[nodiscard]] http3_status shutdown_stream_read(
-        std::int64_t stream_id) noexcept;
+        std::int64_t stream_id,
+        std::optional<std::uint64_t> application_error_code = std::nullopt) noexcept;
     [[nodiscard]] http3_status shutdown_stream_write(
-        std::int64_t stream_id) noexcept;
+        std::int64_t stream_id,
+        std::optional<std::uint64_t> application_error_code = std::nullopt) noexcept;
     void set_max_client_streams_bidi(std::uint64_t max_streams) noexcept;
     class impl;
     explicit http3_connection(http3_role role,
         const http3_connection_options& options);
-    std::unique_ptr<impl> impl_;
+    std::unique_ptr<impl, detail::http_pmr_object_deleter<impl>> impl_;
 };
 
 }  // namespace ruvia

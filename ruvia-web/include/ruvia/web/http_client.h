@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -222,27 +223,34 @@ public:
     [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view) const&& = delete;
-    [[nodiscard]] http_client_response_body& stream() & noexcept {
+    [[nodiscard]] http_client_response_body& stream() & noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }
     http_client_response_body& stream() && = delete;
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() & {
         return body_.read();
     }
+    task<std::optional<std::span<const std::byte>>> read() && = delete;
     [[nodiscard]] task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes) & {
         return body_.read_all(max_bytes);
     }
+    task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes) && = delete;
     [[nodiscard]] task<http_client_response_bytes> text(std::size_t max_bytes = default_max_buffered_body_bytes) & {
         return body_.read_all(max_bytes);
     }
+    task<http_client_response_bytes> text(std::size_t = default_max_buffered_body_bytes) && = delete;
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
     [[nodiscard]] task<value_type> json(std::size_t max_bytes = default_max_buffered_body_bytes) & {
         return decode_json<value_type>(bytes(max_bytes));
     }
+    template <typename value_type>
+        requires detail::is_model_json_value<value_type>
+    task<value_type> json(std::size_t = default_max_buffered_body_bytes) && = delete;
     // Forwards status, end-to-end fields, unread body and trailers. The cold
     // operation expires with either this response or the destination context.
     [[nodiscard]] task<void> pipe_to(context& output) &;
+    task<void> pipe_to(context&) && = delete;
 
 private:
     template <typename value_type>
@@ -352,11 +360,11 @@ public:
     http_client_tunnel_result& operator=(const http_client_tunnel_result&) = delete;
     http_client_tunnel_result(http_client_tunnel_result&&) noexcept = default;
     http_client_tunnel_result& operator=(http_client_tunnel_result&&) noexcept = default;
-    [[nodiscard]] http_client_tunnel* tunnel() & noexcept {
+    [[nodiscard]] http_client_tunnel* tunnel() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_client_tunnel>(&value_);
     }
     http_client_tunnel* tunnel() && = delete;
-    [[nodiscard]] http_client_response* response() & noexcept {
+    [[nodiscard]] http_client_response* response() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_client_response>(&value_);
     }
     http_client_response* response() && = delete;
@@ -387,9 +395,9 @@ public:
 
     [[nodiscard]] http_protocol_version protocol_version() const noexcept;
     [[nodiscard]] std::size_t connection_slot() const noexcept;
-    [[nodiscard]] const http_origin_advertisement* origins() const& noexcept;
+    [[nodiscard]] const http_origin_advertisement* origins() const& noexcept RUVIA_LIFETIMEBOUND;
     const http_origin_advertisement* origins() const&& = delete;
-    [[nodiscard]] const http_alternative_service_advertisement* alternative_service() const& noexcept;
+    [[nodiscard]] const http_alternative_service_advertisement* alternative_service() const& noexcept RUVIA_LIFETIMEBOUND;
     const http_alternative_service_advertisement* alternative_service() const&& = delete;
 
 private:
@@ -409,7 +417,7 @@ public:
     http_client_push(http_client_push&&) noexcept;
     http_client_push& operator=(http_client_push&&) noexcept;
     ~http_client_push();
-    [[nodiscard]] const http_push_request& request() const&;
+    [[nodiscard]] const http_push_request& request() const& RUVIA_LIFETIMEBOUND;
     const http_push_request& request() const&& = delete;
     // Transfers the response once, when the operation is started. Promise
     // metadata remains available through this push until it is destroyed.
@@ -468,7 +476,7 @@ public:
     http_client_exchange(http_client_exchange&& other) noexcept;
     http_client_exchange& operator=(http_client_exchange&& other) noexcept;
     ~http_client_exchange();
-    [[nodiscard]] http_client_request_body_writer& body() & noexcept {
+    [[nodiscard]] http_client_request_body_writer& body() & noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }
     http_client_request_body_writer& body() && = delete;
@@ -510,7 +518,8 @@ public:
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;
     [[nodiscard]] http_scheme scheme() const;
-    [[nodiscard]] http_origin_view origin() const;
+    [[nodiscard]] http_origin_view origin() const& RUVIA_LIFETIMEBOUND;
+    http_origin_view origin() const&& = delete;
 
 private:
     friend class http_client_request;
@@ -638,7 +647,7 @@ public:
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept;
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 
 private:

@@ -3,13 +3,15 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/memory/memory_pool.h"
+
 namespace ruvia::detail {
 
 http3_worker_directory::http3_worker_directory(std::size_t worker_count, std::pmr::memory_resource* resource)
     : slots_(resource) {
     slots_.reserve(worker_count);
     for (std::size_t index = 0; index < worker_count; ++index) {
-        slots_.push_back(std::make_unique<slot>());
+        slots_.push_back(make_pmr_object<slot>(resource));
     }
 }
 
@@ -32,8 +34,8 @@ void http3_worker_directory::detach(std::size_t index) noexcept {
     value.receive_ = nullptr;
 }
 
-bool http3_worker_directory::hand_off(
-    std::size_t owner, std::size_t listener_index, http3_handoff_datagram&& datagram) noexcept {
+bool http3_worker_directory::hand_off(std::size_t owner, std::size_t listener_index,
+    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, std::uint32_t ecn) noexcept {
     if (owner >= slots_.size()) {
         return false;
     }
@@ -43,14 +45,21 @@ bool http3_worker_directory::hand_off(
         return false;
     }
     try {
-        const auto posted = target.worker_.post(
-            [&target, listener_index, owned = std::move(datagram), token = std::move(token)]() mutable noexcept {
+        const auto status = target.worker_.post_factory([&]() -> move_only_function<void()> {
+            std::pmr::vector<std::byte> copied(bytes.begin(), bytes.end(), process_resource());
+            http3_handoff_datagram datagram{
+                .bytes_ = std::move(copied),
+                .remote_ = remote,
+                .ecn_ = ecn,
+            };
+            return [&target, listener_index, owned = std::move(datagram), token = std::move(token)]() mutable noexcept {
                 // The target pointer is confined to this, the owner's, thread.
                 if (target.receive_ != nullptr) {
                     target.receive_(target.target_, listener_index, owned);
                 }
-            });
-        return posted.status() == post_status::accepted;
+            };
+        });
+        return status == post_status::accepted;
     } catch (...) {
         return false;
     }

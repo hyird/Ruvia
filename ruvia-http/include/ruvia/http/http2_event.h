@@ -62,7 +62,7 @@ public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
         return stream_id_;
     }
-    [[nodiscard]] const http_client_response_head& head() const& noexcept {
+    [[nodiscard]] const http_client_response_head& head() const& noexcept RUVIA_LIFETIMEBOUND {
         return head_;
     }
     const http_client_response_head& head() const&& = delete;
@@ -110,11 +110,11 @@ public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
         return stream_id_;
     }
-    [[nodiscard]] const http2_server_request_snapshot& snapshot() const& noexcept {
+    [[nodiscard]] const http2_server_request_snapshot& snapshot() const& noexcept RUVIA_LIFETIMEBOUND {
         return snapshot_;
     }
     const http2_server_request_snapshot& snapshot() const&& = delete;
-    [[nodiscard]] http2_server_request_view request_view() const& noexcept;
+    [[nodiscard]] http2_server_request_view request_view() const& noexcept RUVIA_LIFETIMEBOUND;
     http2_server_request_view request_view() const&& = delete;
     [[nodiscard]] http_request build_request(
         std::pmr::memory_resource* resource = nullptr, std::string_view body = {}) const;
@@ -141,7 +141,7 @@ public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
         return stream_id_;
     }
-    [[nodiscard]] const http_client_response_head& head() const& noexcept {
+    [[nodiscard]] const http_client_response_head& head() const& noexcept RUVIA_LIFETIMEBOUND {
         return head_;
     }
     const http_client_response_head& head() const&& = delete;
@@ -207,7 +207,7 @@ public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
         return stream_id_;
     }
-    [[nodiscard]] std::span<const http_header> trailers() const& noexcept {
+    [[nodiscard]] std::span<const http_header> trailers() const& noexcept RUVIA_LIFETIMEBOUND {
         return trailers_;
     }
     std::span<const http_header> trailers() const&& = delete;
@@ -334,77 +334,77 @@ public:
     http2_event& operator=(const http2_event&) = delete;
     http2_event(http2_event&&) noexcept = default;
     http2_event& operator=(http2_event&&) = delete;
-    [[nodiscard]] const http2_informational_head_event* informational_head() const& noexcept {
+    [[nodiscard]] const http2_informational_head_event* informational_head() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_informational_head_event>(&value_);
     }
     const http2_informational_head_event* informational_head() const&& = delete;
-    [[nodiscard]] http2_request_head_event* request_head() & noexcept {
+    [[nodiscard]] http2_request_head_event* request_head() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_request_head_event>(&value_);
     }
-    [[nodiscard]] const http2_request_head_event* request_head() const& noexcept {
+    [[nodiscard]] const http2_request_head_event* request_head() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_request_head_event>(&value_);
     }
     const http2_request_head_event* request_head() const&& = delete;
-    [[nodiscard]] const http2_response_head_event* response_head() const& noexcept {
+    [[nodiscard]] const http2_response_head_event* response_head() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_response_head_event>(&value_);
     }
-    [[nodiscard]] http2_response_head_event* response_head() & noexcept {
+    [[nodiscard]] http2_response_head_event* response_head() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_response_head_event>(&value_);
     }
     const http2_response_head_event* response_head() const&& = delete;
-    [[nodiscard]] http2_message_body_chunk_event* message_body_chunk() & noexcept {
+    [[nodiscard]] http2_message_body_chunk_event* message_body_chunk() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_message_body_chunk_event>(&value_);
     }
-    [[nodiscard]] const http2_message_body_chunk_event* message_body_chunk() const& noexcept {
+    [[nodiscard]] const http2_message_body_chunk_event* message_body_chunk() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_message_body_chunk_event>(&value_);
     }
     const http2_message_body_chunk_event* message_body_chunk() const&& = delete;
-    [[nodiscard]] const http2_message_end_event* message_end() const& noexcept {
+    [[nodiscard]] const http2_message_end_event* message_end() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_message_end_event>(&value_);
     }
-    [[nodiscard]] http2_message_end_event* message_end() & noexcept {
+    [[nodiscard]] http2_message_end_event* message_end() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_message_end_event>(&value_);
     }
     const http2_message_end_event* message_end() const&& = delete;
-    [[nodiscard]] http2_tunnel_data_event* tunnel_data() & noexcept {
+    [[nodiscard]] http2_tunnel_data_event* tunnel_data() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_tunnel_data_event>(&value_);
     }
-    [[nodiscard]] const http2_tunnel_data_event* tunnel_data() const& noexcept {
+    [[nodiscard]] const http2_tunnel_data_event* tunnel_data() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_tunnel_data_event>(&value_);
     }
     const http2_tunnel_data_event* tunnel_data() const&& = delete;
-    [[nodiscard]] const http2_tunnel_end_event* tunnel_end() const& noexcept {
+    [[nodiscard]] const http2_tunnel_end_event* tunnel_end() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_tunnel_end_event>(&value_);
     }
     const http2_tunnel_end_event* tunnel_end() const&& = delete;
-    [[nodiscard]] const http2_stream_closed_event* stream_closed() const& noexcept {
+    [[nodiscard]] const http2_stream_closed_event* stream_closed() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_stream_closed_event>(&value_);
     }
     const http2_stream_closed_event* stream_closed() const&& = delete;
-    [[nodiscard]] const http2_request_unprocessed_event* request_unprocessed() const& noexcept {
+    [[nodiscard]] const http2_request_unprocessed_event* request_unprocessed() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_request_unprocessed_event>(&value_);
     }
     const http2_request_unprocessed_event* request_unprocessed() const&& = delete;
-    [[nodiscard]] const http2_goaway_event* goaway() const& noexcept {
+    [[nodiscard]] const http2_goaway_event* goaway() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_goaway_event>(&value_);
     }
     const http2_goaway_event* goaway() const&& = delete;
 
-    [[nodiscard]] http_origin_advertisement* origin_advertisement() & noexcept {
+    [[nodiscard]] http_origin_advertisement* origin_advertisement() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_origin_advertisement>(&value_);
     }
-    [[nodiscard]] const http_origin_advertisement* origin_advertisement() const& noexcept {
+    [[nodiscard]] const http_origin_advertisement* origin_advertisement() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_origin_advertisement>(&value_);
     }
     const http_origin_advertisement* origin_advertisement() const&& = delete;
-    [[nodiscard]] http_alternative_service_advertisement* alternative_service_advertisement() & noexcept {
+    [[nodiscard]] http_alternative_service_advertisement* alternative_service_advertisement() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_alternative_service_advertisement>(&value_);
     }
-    [[nodiscard]] const http_alternative_service_advertisement* alternative_service_advertisement() const& noexcept {
+    [[nodiscard]] const http_alternative_service_advertisement* alternative_service_advertisement() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_alternative_service_advertisement>(&value_);
     }
     const http_alternative_service_advertisement* alternative_service_advertisement() const&& = delete;
-    [[nodiscard]] const http_priority_update* priority_update() const& noexcept {
+    [[nodiscard]] const http_priority_update* priority_update() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_priority_update>(&value_);
     }
     const http_priority_update* priority_update() const&& = delete;
@@ -420,20 +420,20 @@ public:
     // - received_priority: the priority fields of an accepted HEADERS frame,
     //   ahead of every event that frame produces (such as its request head).
     //   A PRIORITY frame yields none.
-    [[nodiscard]] const http2_received_settings* received_settings() const& noexcept {
+    [[nodiscard]] const http2_received_settings* received_settings() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_received_settings>(&value_);
     }
     const http2_received_settings* received_settings() const&& = delete;
-    [[nodiscard]] const http2_received_window_update* received_window_update() const& noexcept {
+    [[nodiscard]] const http2_received_window_update* received_window_update() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_received_window_update>(&value_);
     }
     const http2_received_window_update* received_window_update() const&& = delete;
-    [[nodiscard]] const http2_received_priority* received_priority() const& noexcept {
+    [[nodiscard]] const http2_received_priority* received_priority() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_received_priority>(&value_);
     }
     const http2_received_priority* received_priority() const&& = delete;
 
-    [[nodiscard]] const http2_push_promise_event* push_promise() const& noexcept {
+    [[nodiscard]] const http2_push_promise_event* push_promise() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_push_promise_event>(&value_);
     }
     const http2_push_promise_event* push_promise() const&& = delete;

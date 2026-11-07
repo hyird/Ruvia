@@ -61,13 +61,15 @@ public:
         }
     }
 
-    [[nodiscard]] std::span<const std::string_view> values(std::string_view name) const noexcept {
+    [[nodiscard]] std::span<const std::string_view> values(
+        std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
         const auto group = std::ranges::lower_bound(groups_, name, {}, &group_type::name_);
         if (group == groups_.end() || group->name_ != name) {
             return {};
         }
         return std::span<const std::string_view>(values_).subspan(group->begin_, group->count_);
     }
+    std::span<const std::string_view> values(std::string_view) const&& = delete;
 
 private:
     struct group_type final {

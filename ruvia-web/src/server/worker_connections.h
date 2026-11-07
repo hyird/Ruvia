@@ -13,9 +13,6 @@
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
-#if !defined(_WIN32)
-#include <asio/steady_timer.hpp>
-#endif
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
@@ -101,8 +98,7 @@ private:
               endpoint_(definition.endpoint_)
 #if !defined(_WIN32)
               ,
-              socket_(io),
-              retry_(io)
+              socket_(io)
 #endif
         {
 #if defined(_WIN32)
@@ -114,7 +110,6 @@ private:
         asio::ip::tcp::endpoint endpoint_;
 #if !defined(_WIN32)
         asio::ip::tcp::acceptor socket_;
-        asio::steady_timer retry_;
 #endif
     };
 #if defined(RUVIA_ENABLE_HTTP3)

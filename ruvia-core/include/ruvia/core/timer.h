@@ -64,6 +64,7 @@ public:
     sleep_operation& operator=(const sleep_operation&) = delete;
     sleep_operation(sleep_operation&& other) noexcept;
     sleep_operation& operator=(sleep_operation&&) = delete;
+    void operator&() const = delete;
 
     [[nodiscard]] bool await_ready();
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);

@@ -3,9 +3,9 @@
 #ifdef RUVIA_ENABLE_HTTP3
 #include <memory>
 #include <span>
-#include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -37,17 +37,19 @@ public:
     void reprioritize(http_client_response_state& response, http_priority priority);
     [[nodiscard]] std::size_t available() const noexcept;
     [[nodiscard]] bool active() const noexcept;
-    [[nodiscard]] task<void> migrate(std::string local_address, std::uint16_t port);
+    [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port);
     [[nodiscard]] task<bool> send_datagram(http_client_response_state& response, std::span<const std::byte> bytes);
 
 private:
+    struct tls_state;
     class session;
     class address_race;
     [[nodiscard]] task<void> select_endpoint(bool allow_early, std::string_view host, std::uint16_t port,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
         stop_token stop, http_client_response_state& response);
-    std::unique_ptr<session> session_;
-    std::unique_ptr<address_race> race_;
+    std::unique_ptr<tls_state, pmr_object_deleter<tls_state>> tls_;
+    std::unique_ptr<session, pmr_object_deleter<session>> session_;
+    std::unique_ptr<address_race, pmr_object_deleter<address_race>> race_;
 };
 }  // namespace ruvia::detail
 #endif

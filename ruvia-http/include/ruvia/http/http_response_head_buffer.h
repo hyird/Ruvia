@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
 namespace ruvia {
 
 inline constexpr std::size_t response_head_stack_bytes = 512;
@@ -34,7 +35,7 @@ public:
     void append_unsigned(std::uint64_t value);
     // Reserve beyond the current size without spilling a fitting inline range.
     void reserve_additional(std::size_t size);
-    [[nodiscard]] std::string_view view() const& noexcept;
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view view() const&& = delete;
     [[nodiscard]] bool can_append_on_stack(std::size_t size) const noexcept;
 
@@ -55,7 +56,7 @@ public:
     // Returns uncommitted inline scratch at the current end if bound fits.
     // This is a capacity check, not a reservation; the buffer must stay alive
     // and unmoved, and intervening mutations may change the logical end.
-    [[nodiscard]] char* stack_cursor(std::size_t bound) & noexcept {
+    [[nodiscard]] char* stack_cursor(std::size_t bound) & noexcept RUVIA_LIFETIMEBOUND {
         auto* const stack_state = std::get_if<stack_state_type>(&state_);
         if (stack_state == nullptr || bound > stack_.size() - stack_state->used_) {
             return nullptr;

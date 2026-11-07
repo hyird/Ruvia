@@ -290,6 +290,10 @@ bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
     return valid && upgrade_protocols.has_protocol() && connect_udp;
 }
 std::optional<http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept {
+    if (request.target_form() == http_request_target_form::absolute &&
+        !detail::is_valid_uri_component(request.query_string(), true, true)) {
+        return http_connect_udp_error::invalid_request;
+    }
     const auto path = request.target_form() == http_request_target_form::absolute
                           ? request.path()
                           : request.target();

@@ -71,7 +71,8 @@ void document_root_publisher::publish(document_root_snapshot snapshot) {
     // still lease it keep their own reference.
 }
 
-task<void> document_root_publisher::refresh(const worker_handle& worker, const http_server_worker_state& state) {
+task<void> document_root_publisher::refresh(
+    const worker_handle& worker, const http_server_worker_state& state, const stop_token& stop) {
     // Shared ownership lets the blocking jobs read the previous snapshot while
     // workers keep serving it, and lets resident bytes and precompression
     // reuse its unchanged file versions.
@@ -80,7 +81,7 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
     try {
         // The unchanged-snapshot comparison walks every entry, so it runs on
         // the pool with the rebuild; an unchanged root yields no candidate.
-        auto rebuilt = co_await ruvia::run_blocking(worker, {}, [previous, &root = root_] {
+        auto rebuilt = co_await ruvia::run_blocking(worker, {.stop_token_ = stop}, [previous, root = root_] {
             auto built = static_root_access::make(process_resource(), root,
                 static_root_access::copy_config(*previous, process_resource()));
             if (static_root_access::fingerprint(*built) == static_root_access::fingerprint(*previous) &&
@@ -113,7 +114,7 @@ task<void> document_root_publisher::refresh(const worker_handle& worker, const h
 
     if (precompression_.enabled() || resident_.enabled()) {
         try {
-            auto prepared = co_await ruvia::run_blocking(worker, {},
+            auto prepared = co_await ruvia::run_blocking(worker, {.stop_token_ = stop},
                 [candidate = std::move(candidate), previous, precompression = precompression_,
                     resident = resident_]() mutable {
                     static_root_access::install_resident_bodies(*candidate, previous.get(), resident);
@@ -181,7 +182,7 @@ void static_root_runtime::adopt_published() {
     adopted_generation_ = generation;
 }
 
-task<void> static_root_runtime::refresh() {
+task<void> static_root_runtime::refresh(const stop_token& stop) {
     if (publisher_ == nullptr) {
         std::terminate();
     }
@@ -190,7 +191,7 @@ task<void> static_root_runtime::refresh() {
         if (!http_server_worker_running(state_)) {
             co_return;
         }
-        if (co_await sleep_for(worker_, interval) == timer_sleep_result::stop_requested) {
+        if (co_await sleep_for(worker_, interval, stop) == timer_sleep_result::stop_requested) {
             co_return;
         }
         if (!http_server_worker_running(state_)) {
@@ -200,7 +201,7 @@ task<void> static_root_runtime::refresh() {
         std::erase_if(retired_, [](const generation_owner& generation) { return !generation->leased(); });
 
         if (refreshes_) {
-            co_await publisher_->refresh(worker_, state_);
+            co_await publisher_->refresh(worker_, state_, stop);
             if (!http_server_worker_running(state_)) {
                 co_return;
             }

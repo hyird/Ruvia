@@ -110,8 +110,20 @@ void http_response_headers::allow_methods(
     if (!extension_methods.empty()) {
         if (auto* const retained = find_header_for_update("Allow", detail::response_header_allow)) {
             bool borrows_allow = false;
+            const auto overlaps_retained = [&](std::string_view token) noexcept {
+                if (!detail::http_response_header_access::append(*retained)) {
+                    return detail::response_header_storage_overlaps(*retained, token);
+                }
+                for (const auto& existing : *this) {
+                    if (detail::http_response_header_access::known_bit(existing) == detail::response_header_allow &&
+                        detail::response_header_storage_overlaps(existing, token)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
             for (const auto token : extension_methods) {
-                if (detail::response_header_storage_overlaps(*retained, token)) {
+                if (overlaps_retained(token)) {
                     borrows_allow = true;
                     break;
                 }

@@ -493,11 +493,11 @@ worker_runtime_state worker_runtime::state() const noexcept {
     return impl_->lifecycle_.state();
 }
 
-asio::io_context& worker_runtime::io_context() noexcept {
+asio::io_context& worker_runtime::io_context() & noexcept {
     return impl_->io_context_;
 }
 
-const worker_handle& worker_runtime::handle() const noexcept {
+const worker_handle& worker_runtime::handle() const& noexcept {
     return impl_->context_.handle();
 }
 

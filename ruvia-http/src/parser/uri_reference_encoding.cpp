@@ -1,11 +1,12 @@
 #include <cstddef>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/http/url_encoding.h"
 
 #include "parser/http_request_target.h"
 #include "parser/http_uri_grammar.h"
-
+#include "util/geometric_reserve.h"
 namespace ruvia {
 namespace {
 
@@ -89,22 +90,6 @@ struct uri_reference_layout final {
     }
 }
 
-[[nodiscard]] std::size_t encoded_uri_reference_size(std::string_view reference,
-    std::size_t first_encoded_index, const uri_reference_layout& layout, bool fragment_seen) noexcept {
-    std::size_t total = reference.size();
-    for (std::size_t i = first_encoded_index; i < reference.size(); ++i) {
-        const auto byte = static_cast<unsigned char>(reference[i]);
-        const bool escape = byte == '%' && http_try_decode_percent_byte(reference, i).has_value();
-        if (escape || (byte != '%' && uri_reference_keeps_literal(byte, i, layout, fragment_seen))) {
-            if (escape) {
-                i += 2;
-            }
-            continue;
-        }
-        total += 2;
-    }
-    return total;
-}
 }  // namespace
 
 std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::string& storage) {
@@ -121,6 +106,10 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::stri
         if (escape || (byte != '%' && uri_reference_keeps_literal(byte, i, layout, fragment_seen))) {
             const std::size_t width = escape ? 3 : 1;
             if (encoded != nullptr) {
+                if (width > encoded->max_size() - encoded->size()) {
+                    throw std::length_error("URI reference exceeds string capacity");
+                }
+                detail::reserve_geometric(*encoded, encoded->size() + width);
                 encoded->append(reference.substr(i, width));
             }
             i += width - 1;
@@ -128,10 +117,17 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::stri
         }
         if (encoded == nullptr) {
             encoded = detail::http_text_aliases_string(reference, storage) ? &aliased_output : &storage;
+            if (reference.size() > encoded->max_size() - 2) {
+                throw std::length_error("URI reference exceeds string capacity");
+            }
+            detail::reserve_geometric(*encoded, reference.size() + 2);
             encoded->clear();
-            encoded->reserve(encoded_uri_reference_size(reference, i, layout, fragment_seen));
             encoded->append(reference.substr(0, i));
         }
+        if (encoded->size() > encoded->max_size() - 3) {
+            throw std::length_error("URI reference exceeds string capacity");
+        }
+        detail::reserve_geometric(*encoded, encoded->size() + 3);
         http_append_percent_byte(*encoded, byte);
     }
     if (encoded == nullptr) {

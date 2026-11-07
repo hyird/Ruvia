@@ -36,7 +36,9 @@ redis_handle redis_client_state::handle(operation_options options) {
 namespace ruvia {
 
 redis_client::redis_client(event_loop loop, const redis_config& config)
-    : state_(std::make_shared<detail::redis_client_state>(std::move(loop), config)) {
+    : state_(std::allocate_shared<detail::redis_client_state>(
+          std::pmr::polymorphic_allocator<detail::redis_client_state>(process_resource()),
+          std::move(loop), config)) {
     state_->bind_stop();
 }
 

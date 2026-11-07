@@ -22,6 +22,13 @@ struct streaming_access final {
         return response_stream_writer(
             resource, target, commit, write, end, sleep, bind_context, release_context, committed, aborted);
     }
+    static void bind_worker(body_reader& reader, const worker_handle& worker_value) noexcept {
+        reader.bind_worker(worker_value);
+    }
+
+    static void bind_worker(response_stream_writer& writer, const worker_handle& worker_value) noexcept {
+        writer.bind_worker(worker_value);
+    }
 
     // The token is supplied by the caller rather than read from `context`:
     // context is incomplete here, and this header is deliberately narrow.

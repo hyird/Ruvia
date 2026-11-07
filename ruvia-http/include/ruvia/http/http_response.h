@@ -441,7 +441,7 @@ public:
     std::string_view body() const&& = delete;
     [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view body_bytes() const&& = delete;
-    [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept;
+    [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const&& = delete;
     [[nodiscard]] bool has_multipart_file_body() const noexcept;
     // True for file_body(), multipart_file_body() and file_bytes_body() bodies:

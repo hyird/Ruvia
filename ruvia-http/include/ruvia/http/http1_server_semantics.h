@@ -103,7 +103,6 @@ inline void http1_mark_connection_close(http_response& response,
             return true;
         });
     }
-    response.remove_header("Connection");
     if (merged.empty()) {
         response.header_stable_view("Connection", base);
     } else {

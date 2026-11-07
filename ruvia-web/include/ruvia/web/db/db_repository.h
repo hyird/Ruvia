@@ -133,9 +133,10 @@ public:
         return query_;
     }
     const db_query& query() const&& = delete;
-    [[nodiscard]] const std::pmr::vector<std::pmr::string>& columns() const noexcept {
+    [[nodiscard]] const std::pmr::vector<std::pmr::string>& columns() const& noexcept RUVIA_LIFETIMEBOUND {
         return columns_;
     }
+    const std::pmr::vector<std::pmr::string>& columns() const&& = delete;
 
 private:
     db_query query_;
@@ -1056,8 +1057,12 @@ public:
     [[nodiscard]] task<db_stream_result> stream() const
         requires std::same_as<executor_type, db_handle>
     {
-        const auto statement = get_query_and_parameters();
-        return executor_.query_stream(statement.sql(), statement.params());
+        executor_.registration_.require_active();
+        auto statement = get_query_and_parameters();
+        auto& scope = executor_.registration_.scope();
+        return make_scoped_operation(scope,
+            db_handle::query_stream_prepared(executor_.client_, std::move(statement.sql_),
+                std::move(statement.params_), executor_.resource_, scope, executor_.io_metrics_, executor_.options_));
     }
     [[nodiscard]] task<std::uint64_t> get_count() const {
         const auto count = count_query();
@@ -1710,8 +1715,8 @@ public:
         return builder.execute();
     }
     [[nodiscard]] task<db_exec_result> clear() const {
-        const auto sql = detail::format_truncate_table(entity_type::table_name(), executor_.query_driver(), executor_.query_resource());
-        return executor_.execute(sql);
+        auto sql = detail::format_truncate_table(entity_type::table_name(), executor_.query_driver(), executor_.query_resource());
+        return executor_.execute_prepared(std::move(sql));
     }
     [[nodiscard]] task<db_exec_result> insert(const entity_type& entity) const {
         return insert(std::span<const entity_type>(&entity, 1));

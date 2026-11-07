@@ -41,7 +41,7 @@ connection_read_buffer::connection_read_buffer(std::pmr::polymorphic_allocator<c
     storage_.reserve(initial_read_buffer_bytes);
 }
 
-std::span<char> connection_read_buffer::prepare_read() {
+std::span<char> connection_read_buffer::prepare_read() & {
     if (storage_.size() == storage_.capacity() && storage_.capacity() < max_http_header_bytes) {
         storage_.reserve(std::min(std::max(storage_.capacity() * 2, initial_read_buffer_bytes), max_http_header_bytes));
     }

@@ -142,8 +142,6 @@ public:
                 throw std::logic_error("invalid HTTP/2 response stream DATA state");
             case http2_stream_data_write_status::content_length_exceeded:
                 throw std::length_error("HTTP/2 response exceeds Content-Length");
-            case http2_stream_data_write_status::content_length_incomplete:
-                throw std::length_error("HTTP/2 response ended before Content-Length");
         }
     }
 

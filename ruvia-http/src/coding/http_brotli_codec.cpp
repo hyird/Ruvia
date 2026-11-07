@@ -1,13 +1,13 @@
 #include <brotli/decode.h>
 
 #include <cstddef>
+#include <new>
 #include <utility>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "coding/http_brotli_stream.h"
 #include "coding/http_content_codec.h"
-
 // br (RFC 7932) through the Brotli reference library.
 
 namespace ruvia::detail {
@@ -74,7 +74,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
             }
             decoder.rethrow_allocation_failure();
             if (brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))) {
-                throw http_content_codec_error("brotli decoder ran out of memory");
+                throw std::bad_alloc();
             }
             return http_content_decode_error::invalid_content;
         }

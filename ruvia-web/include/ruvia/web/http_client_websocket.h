@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -40,28 +41,42 @@ public:
     // timeout may only tighten inherited bounds; a supplied cancellation token
     // replaces inherited user cancellation, while an empty token inherits it.
     [[nodiscard]] task<void> send(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> send(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
     [[nodiscard]] task<void> send(std::span<const std::byte> payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> send(std::span<const std::byte>, websocket_send_options = {}, operation_options = {}) && = delete;
     [[nodiscard]] task<void> send(websocket_message&& message, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> send(websocket_message&&, websocket_send_options = {}, operation_options = {}) && = delete;
     template <std::same_as<std::pmr::string> string_type>
     [[nodiscard]] task<void> send(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
         return write_owned(websocket_opcode::text, std::move(payload), options, std::move(operation));
     }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> send(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
     // Only nullopt is EOF. The message view lasts until the next receive or close.
     [[nodiscard]] task<std::optional<websocket_message>> receive(operation_options operation = {}) &;
+    task<std::optional<websocket_message>> receive(operation_options = {}) && = delete;
     [[nodiscard]] task<void> ping(std::string_view payload = {}, operation_options operation = {}) &;
+    task<void> ping(std::string_view = {}, operation_options = {}) && = delete;
     [[nodiscard]] task<void> pong(std::string_view payload = {}, operation_options operation = {}) &;
+    task<void> pong(std::string_view = {}, operation_options = {}) && = delete;
     template <std::same_as<std::pmr::string> string_type>
     [[nodiscard]] task<void> ping(string_type&& payload, operation_options operation = {}) & {
         return write_owned(websocket_opcode::ping, std::move(payload), {}, std::move(operation));
     }
     template <std::same_as<std::pmr::string> string_type>
+    task<void> ping(string_type&&, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
     [[nodiscard]] task<void> pong(string_type&& payload, operation_options operation = {}) & {
         return write_owned(websocket_opcode::pong, std::move(payload), {}, std::move(operation));
     }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> pong(string_type&&, operation_options = {}) && = delete;
     // Close and automatic heartbeat use the builder's lifecycle policy, further
     // tightened by inherited and per-operation deadlines.
     [[nodiscard]] task<void> close(websocket_close_options options = {}, operation_options operation = {}) &;
+    task<void> close(websocket_close_options = {}, operation_options = {}) && = delete;
     void abort() & noexcept;
+    void abort() && = delete;
     [[nodiscard]] std::string_view subprotocol() const& RUVIA_LIFETIMEBOUND;
     std::string_view subprotocol() const&& = delete;
     [[nodiscard]] http_protocol_version protocol_version() const;

@@ -148,6 +148,15 @@ task<db_exec_result> db_handle::execute_query(const db_query& query) const {
         }));
 }
 
+task<db_exec_result> db_handle::execute_prepared(std::pmr::string sql) const {
+    registration_.require_active();
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        detail::visit_db_pool(client_, [&](auto& client) {
+            return client.execute(
+                std::move(sql), std::pmr::vector<db_value>(resource_), resource_, options_, io_metrics_);
+        }));
+}
+
 task<db_rows> db_handle::query(
     std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();

@@ -1,5 +1,6 @@
 #include "ruvia/http/http3_request_head.h"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -75,23 +76,23 @@ std::string_view http3_request_head::field_value(std::uint32_t index) const noex
     return index == absent ? std::string_view{} : fields_[index].value();
 }
 
-std::string_view http3_request_head::method() const noexcept {
+std::string_view http3_request_head::method() const& noexcept {
     return field_value(method_);
 }
 
-std::string_view http3_request_head::scheme() const noexcept {
+std::string_view http3_request_head::scheme() const& noexcept {
     return field_value(scheme_);
 }
 
-std::string_view http3_request_head::authority() const noexcept {
+std::string_view http3_request_head::authority() const& noexcept {
     return field_value(authority_);
 }
 
-std::string_view http3_request_head::path() const noexcept {
+std::string_view http3_request_head::path() const& noexcept {
     return field_value(path_);
 }
 
-std::string_view http3_request_head::protocol() const noexcept {
+std::string_view http3_request_head::protocol() const& noexcept {
     return field_value(protocol_);
 }
 
@@ -255,7 +256,7 @@ bool http3_request_head::validate() {
     return true;
 }
 
-http_request http3_request_head::build_request(std::pmr::memory_resource* resource, std::string_view body) const {
+http_request http3_request_head::build_request(std::pmr::memory_resource* resource, borrowed_text body) const& {
     auto request = detail::http_request_access::make();
     detail::http_request_access::set_resource(request, resource);
     const auto method_value = method();
@@ -311,23 +312,32 @@ http_request http3_request_head::build_request(std::pmr::memory_resource* resour
 
 std::optional<http_request_trailer_error> append_http3_request_trailers(
     http_request_trailers& trailers, std::span<const http3_field> fields) {
-    std::pmr::vector<http_header_view> retained(std::pmr::get_default_resource());
-    retained.reserve(fields.size());
+    auto budget = http_trailer_section_budget();
+    for (const auto& existing : trailers.fields()) {
+        if (!budget.add_field(existing.name(), existing.value())) {
+            return http_request_trailer_error::section_too_large;
+        }
+    }
+    std::array<http_header_view, max_http_header_fields> retained{};
+    std::size_t retained_count = 0;
     for (const auto& field : fields) {
         const auto name = field.name();
+        const auto value = field.value();
         if (name.empty() || name.front() == ':' || !is_valid_lowercase_field_name(name) ||
-            !is_valid_http_header_value(field.value())) {
+            !is_valid_http_header_value(value)) {
             return http_request_trailer_error::invalid_field;
         }
-        if (detail::is_forbidden_http_request_trailer_name(name)) {
-            continue;
+        if (!budget.add_field(name, value)) {
+            return http_request_trailer_error::section_too_large;
         }
-        retained.push_back(http_header_view{name, field.value()});
+        if (!detail::is_forbidden_http_request_trailer_name(name)) {
+            retained[retained_count++] = http_header_view{name, value};
+        }
     }
-    if (retained.empty()) {
+    if (retained_count == 0) {
         return std::nullopt;
     }
-    return trailers.append(std::span<const http_header_view>(retained));
+    return trailers.append(std::span<const http_header_view>(retained.data(), retained_count));
 }
 
 }  // namespace ruvia

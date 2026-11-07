@@ -281,6 +281,7 @@ test_app& test_app::rate_limit(rate_limit_config config) {
 test_app& test_app::rate_limit(std::nullptr_t) {
     impl_->require_configurable();
     impl_->options_.default_rate_limit_per_worker_.reset();
+    impl_->options_.rate_limit_capacity_per_worker_ = default_rate_limit_capacity_per_worker;
     return *this;
 }
 

@@ -197,9 +197,10 @@ public:
         return code_;
     }
 
-    [[nodiscard]] std::string_view reason() const noexcept {
+    [[nodiscard]] std::string_view reason() const& noexcept RUVIA_LIFETIMEBOUND {
         return {reason_.data(), reason_size_};
     }
+    std::string_view reason() const&& = delete;
 
 private:
     std::optional<std::uint16_t> code_{};

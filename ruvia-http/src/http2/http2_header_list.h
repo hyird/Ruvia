@@ -32,12 +32,17 @@ public:
     explicit http2_header_list(std::pmr::memory_resource* resource = nullptr)
         : http2_header_list(http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {}
 
+    http2_header_list(const http2_header_list&) = delete;
+    http2_header_list& operator=(const http2_header_list&) = delete;
+    http2_header_list(http2_header_list&&) = delete;
+    http2_header_list& operator=(http2_header_list&&) = delete;
+
     [[nodiscard]] std::size_t size() const noexcept {
         return count_;
     }
 
     [[nodiscard]] bool full() const noexcept {
-        return count_ == UINT16_MAX;
+        return count_ == (std::numeric_limits<std::uint16_t>::max)();
     }
 
     [[nodiscard]] http2_stored_header_view at(std::size_t index) const& noexcept {
@@ -59,11 +64,13 @@ public:
             return false;
         }
 
+        if (count_ >= inline_header_fields) {
+            reserve_geometric(overflow_fields_, overflow_fields_.size() + 1);
+        }
         const auto field_bytes = name.size() + value.size();
         if (using_overflow_storage_ || field_bytes > inline_header_storage_bytes - storage_size_) {
             ensure_overflow_storage(field_bytes);
         }
-
         const auto name_offset = static_cast<std::uint32_t>(storage_size_);
         append_bytes(name);
         const auto value_offset = static_cast<std::uint32_t>(storage_size_);

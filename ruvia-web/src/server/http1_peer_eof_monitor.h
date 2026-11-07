@@ -42,7 +42,8 @@ public:
           input_(std::pmr::polymorphic_allocator<char>(resource)),
           allowance_(max_http_header_bytes - std::min(max_http_header_bytes, existing_pipeline_bytes)),
           pipelined_(request_pipelined || existing_pipeline_bytes != 0) {}
-
+    http1_peer_eof_monitor(stream_type&, worker_handle&&, std::pmr::memory_resource*,
+        stop_source&, bool, std::size_t) = delete;
     void start() {
         tasks_.spawn(read_peer());
     }

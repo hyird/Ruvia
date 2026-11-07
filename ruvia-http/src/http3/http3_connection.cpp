@@ -22,10 +22,12 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_status.h"
 
+#include "coding/http_content_length.h"
 #include "field/http_interim_response_validation.h"
 #include "field/http_origin_payload.h"
 #include "response/http_framed_response_head_plan.h"
 #include "server/http_date_cache.h"
+#include "util/http_c_library_memory.h"
 #include "util/quic_varint.h"
 #include "websocket/websocket_server_negotiation.h"
 
@@ -112,8 +114,7 @@ template <typename field_range_type>
 
 http3_field::http3_field(std::string_view name, std::string_view value,
     std::pmr::memory_resource* resource)
-    : name_(name, resolve_resource(resource)),
-      value_(value, resolve_resource(resource)) {}
+    : header_(name, value, resolve_resource(resource)) {}
 
 http3_data_event::http3_data_event(std::int64_t stream_id,
     std::string_view bytes, std::pmr::memory_resource* resource,
@@ -187,7 +188,8 @@ class http3_connection::impl final {
         bool connect_{false};
         bool websocket_{false};
         bool early_data_{false};
-        bool aborted_{false};
+        bool read_aborted_{false};
+        bool write_aborted_{false};
     };
 
 public:
@@ -202,9 +204,21 @@ public:
         bool nghttp3_{true};
         std::size_t bytes_{0};
     };
+    struct queued_event final {
+        http3_event event_;
+        bool local_transport_action_{false};
+    };
     impl(http3_role role, const http3_connection_options& options)
         : role_(role),
           resource_(resolve_resource(options.resource_)),
+          memory_(resource_),
+          memory_table_{
+              .user_data = &memory_,
+              .malloc = detail::http_c_library_memory::allocate,
+              .free = detail::http_c_library_memory::deallocate,
+              .calloc = detail::http_c_library_memory::allocate_zeroed,
+              .realloc = detail::http_c_library_memory::reallocate,
+          },
           max_field_section_size_(options.max_field_section_size_),
           max_stream_output_bytes_(options.max_stream_output_bytes_),
           own_data_events_(options.own_data_events_),
@@ -276,13 +290,14 @@ public:
 
         const int result = role == http3_role::client
                                ? nghttp3_conn_client_new(
-                                     &connection_, &callbacks, &settings, nullptr, this)
+                                     &connection_, &callbacks, &settings, &memory_table_, this)
                                : nghttp3_conn_server_new(
-                                     &connection_, &callbacks, &settings, nullptr, this);
+                                     &connection_, &callbacks, &settings, &memory_table_, this);
         if (result != 0) {
             if (result == NGHTTP3_ERR_NOMEM) {
-                throw std::bad_alloc();
+                memory_.rethrow_allocation_failure();
             }
+            memory_.rethrow_if_failed();
             throw std::runtime_error("failed to create nghttp3 connection");
         }
         nghttp3_conn_set_max_concurrent_streams(
@@ -325,8 +340,9 @@ public:
     void throw_if_no_memory(int result) {
         if (result == NGHTTP3_ERR_NOMEM) {
             connection_error_ = NGHTTP3_H3_INTERNAL_ERROR;
-            throw std::bad_alloc();
+            memory_.rethrow_allocation_failure();
         }
+        memory_.rethrow_if_failed();
     }
 
     void rethrow_callback_error() {
@@ -335,6 +351,7 @@ public:
             auto error = std::exchange(callback_error_, {});
             std::rethrow_exception(error);
         }
+        memory_.rethrow_if_failed();
     }
 
     template <typename function_type>
@@ -415,9 +432,9 @@ public:
         void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
         return callback_guard(self, [&] {
-            self.events_.emplace_back(http3_data_event{stream_id,
+            self.events_.push_back({http3_data_event{stream_id,
                 {reinterpret_cast<const char*>(data), size}, self.resource_,
-                self.own_data_events_});
+                self.own_data_events_}});
         });
     }
 
@@ -425,8 +442,8 @@ public:
         std::size_t bytes, void* user_data, void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
         return callback_guard(self, [&] {
-            self.events_.emplace_back(
-                http3_deferred_consume_event{stream_id, bytes});
+            self.events_.push_back(
+                {http3_deferred_consume_event{stream_id, bytes}});
         });
     }
 
@@ -510,7 +527,7 @@ public:
             }
             self.building_headers_->stream_ended_ = fin != 0;
             self.ensure_stream(stream_id).received_head_ = true;
-            self.events_.emplace_back(std::move(*self.building_headers_));
+            self.events_.push_back({std::move(*self.building_headers_)});
             self.building_headers_.reset();
             self.building_header_bytes_ = 0;
         });
@@ -519,18 +536,26 @@ public:
     static int stop_sending_callback(nghttp3_conn*, std::int64_t stream_id,
         std::uint64_t error, void* user_data, void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
+        if (self.suppress_transport_callbacks_) {
+            return 0;
+        }
         return callback_guard(self, [&] {
-            self.events_.emplace_back(http3_transport_action_event{
-                stream_id, error, http3_transport_action::stop_sending});
+            self.events_.push_back({http3_transport_action_event{
+                                        stream_id, error, http3_transport_action::stop_sending},
+                true});
         });
     }
 
     static int reset_stream_callback(nghttp3_conn*, std::int64_t stream_id,
         std::uint64_t error, void* user_data, void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
+        if (self.suppress_transport_callbacks_) {
+            return 0;
+        }
         return callback_guard(self, [&] {
-            self.events_.emplace_back(http3_transport_action_event{
-                stream_id, error, http3_transport_action::reset_stream});
+            self.events_.push_back({http3_transport_action_event{
+                                        stream_id, error, http3_transport_action::reset_stream},
+                true});
         });
     }
 
@@ -538,14 +563,14 @@ public:
         void* user_data, void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
         return callback_guard(self, [&] {
-            self.events_.emplace_back(http3_stream_end_event{stream_id});
+            self.events_.push_back({http3_stream_end_event{stream_id}});
         });
     }
 
     static int shutdown_callback(nghttp3_conn*, std::int64_t id, void* user_data) noexcept {
         auto& self = *static_cast<impl*>(user_data);
         return callback_guard(self, [&] {
-            self.events_.emplace_back(http3_goaway_event{id});
+            self.events_.push_back({http3_goaway_event{id}});
         });
     }
 
@@ -575,7 +600,7 @@ public:
             if (!self.building_origins_) {
                 self.building_origins_.emplace(self.resource_);
             }
-            self.events_.emplace_back(std::move(*self.building_origins_));
+            self.events_.push_back({std::move(*self.building_origins_)});
             self.building_origins_.reset();
             self.building_origin_bytes_ = 0;
         });
@@ -594,7 +619,7 @@ public:
                        send_error != NGHTTP3_H3_NO_ERROR) {
                 error = send_error;
             }
-            self.events_.emplace_back(http3_stream_close_event{stream_id, error});
+            self.events_.push_back({http3_stream_close_event{stream_id, error}});
         });
     }
 
@@ -648,7 +673,7 @@ public:
             inserted = result.second;
         }
         auto& stream = position->second;
-        if (stream.head_submitted_ || stream.aborted_) {
+        if (stream.head_submitted_ || stream.write_aborted_) {
             return http3_status::invalid_state;
         }
         stream.head_submitted_ = true;
@@ -689,12 +714,32 @@ public:
                 available -= 32 + field.name_.size() + field.value_.size();
             }
         }
+        detail::http_content_length_state content_length_state;
+        bool has_content_length = false;
         std::pmr::vector<nghttp3_nv> native_fields(resource_);
         native_fields.reserve(fields.size());
         for (const auto& field : fields) {
+            if (http_ascii_equals_ignore_case(field.name_, "content-length")) {
+                if (content_length_state.parse_field(field.value_) !=
+                    detail::http_content_length_parse_status::ok) {
+                    return http3_status::invalid_state;
+                }
+                has_content_length = true;
+            }
             native_fields.push_back(make_nv(field.name_, field.value_, field.sensitive_));
         }
-        return submit_head(stream_id, native_fields.data(), native_fields.size(), end_stream, request);
+        std::optional<std::uint64_t> content_length;
+        if (has_content_length) {
+            if (end_stream) {
+                if (request && *content_length_state.value() != 0) {
+                    return http3_status::invalid_state;
+                }
+            } else {
+                content_length = content_length_state.value();
+            }
+        }
+        return submit_head(
+            stream_id, native_fields.data(), native_fields.size(), end_stream, request, content_length);
     }
 
     // A server request stream that exists and has no final head yet.
@@ -707,7 +752,7 @@ public:
             return http3_response_head_error::invalid_state;
         }
         const auto* stream = find_stream(stream_id);
-        if (stream == nullptr || stream->aborted_) {
+        if (stream == nullptr || stream->write_aborted_) {
             return http3_response_head_error::closed;
         }
         if (stream->head_submitted_) {
@@ -791,6 +836,8 @@ public:
 
     http3_role role_;
     std::pmr::memory_resource* resource_;
+    detail::http_c_library_memory memory_;
+    nghttp3_mem memory_table_;
     std::uint64_t max_field_section_size_;
     std::size_t max_stream_output_bytes_;
     bool own_data_events_;
@@ -798,7 +845,7 @@ public:
     std::optional<http3_peer_settings> peer_settings_;
     std::optional<http3_peer_settings> remembered_settings_;
     nghttp3_conn* connection_{nullptr};
-    std::pmr::vector<http3_event> events_;
+    std::pmr::vector<queued_event> events_;
     std::size_t event_offset_{0};
     std::pmr::unordered_map<std::int64_t, stream_state> streams_;
     std::pmr::vector<char> initial_origin_payload_;
@@ -818,12 +865,13 @@ public:
     bool control_stream_shutdown_{false};
     bool peeked_control_extension_{false};
     bool packet_input_{false};
+    bool suppress_transport_callbacks_{false};
     bool drain_final_{false};
 };
 
 http3_connection::http3_connection(
     http3_role role, const http3_connection_options& options)
-    : impl_(std::make_unique<impl>(role, options)) {}
+    : impl_(detail::make_http_pmr_object<impl>(options.resource_, role, options)) {}
 
 http3_connection http3_connection::client(http3_connection_options options) {
     return http3_connection(http3_role::client, options);
@@ -893,11 +941,23 @@ http3_result http3_connection::read_stream(std::int64_t stream_id,
     return {http3_status::accepted, 0, static_cast<std::size_t>(result)};
 }
 
-std::optional<http3_event> http3_connection::next_event() {
+std::optional<http3_event> http3_connection::next_event(bool& local_transport_action) {
     if (impl_->event_offset_ == impl_->events_.size()) {
+        local_transport_action = false;
         return std::nullopt;
     }
-    return std::move(impl_->events_[impl_->event_offset_++]);
+    auto& entry = impl_->events_[impl_->event_offset_++];
+    local_transport_action = entry.local_transport_action_;
+    return std::move(entry.event_);
+}
+
+std::optional<http3_event> http3_connection::next_event() {
+    bool ignored = false;
+    return next_event(ignored);
+}
+
+void http3_connection::rethrow_if_failed() {
+    impl_->rethrow_callback_error();
 }
 
 http3_result http3_connection::peek_output(
@@ -938,6 +998,7 @@ http3_result http3_connection::peek_output(
     const auto result = nghttp3_conn_writev_stream(impl_->connection_,
         &stream_id, &fin, vectors.data(), vectors.size());
     impl_->rethrow_callback_error();
+    impl_->throw_if_no_memory(static_cast<int>(result));
     if (result < 0) {
         return impl_->fail(static_cast<int>(result));
     }
@@ -980,20 +1041,32 @@ http3_status http3_connection::commit_output(
     if (impl_->control_stream_id_.has_value() && stream_id == *impl_->control_stream_id_) {
         const bool from_nghttp3 = !impl_->peeked_control_extension_;
         impl_->peeked_control_extension_ = false;
-        if (bytes != 0) {
-            if (!impl_->control_segments_.empty() &&
-                impl_->control_segments_.back().nghttp3_ == from_nghttp3) {
-                impl_->control_segments_.back().bytes_ += bytes;
-            } else {
-                try {
-                    impl_->control_segments_.push_back({from_nghttp3, bytes});
-                } catch (...) {
-                    impl_->connection_error_ = NGHTTP3_H3_INTERNAL_ERROR;
-                    return http3_status::protocol_error;
+        if (!from_nghttp3) {
+            std::size_t available = 0;
+            for (const auto& frame : impl_->control_extension_frames_) {
+                const auto unwritten = frame.bytes_.size() - frame.written_;
+                if (unwritten >= bytes - available) {
+                    available = bytes;
+                    break;
+                }
+                available += unwritten;
+            }
+            if (available < bytes) {
+                return http3_status::invalid_state;
+            }
+            if (bytes != 0) {
+                if (!impl_->control_segments_.empty() &&
+                    !impl_->control_segments_.back().nghttp3_) {
+                    impl_->control_segments_.back().bytes_ += bytes;
+                } else {
+                    try {
+                        impl_->control_segments_.push_back({false, bytes});
+                    } catch (...) {
+                        impl_->connection_error_ = NGHTTP3_H3_INTERNAL_ERROR;
+                        return http3_status::protocol_error;
+                    }
                 }
             }
-        }
-        if (!from_nghttp3) {
             std::size_t remaining = bytes;
             for (auto& frame : impl_->control_extension_frames_) {
                 if (frame.written_ == frame.bytes_.size()) {
@@ -1006,8 +1079,29 @@ http3_status http3_connection::commit_output(
                     break;
                 }
             }
-            return remaining == 0 ? http3_status::accepted : http3_status::invalid_state;
+            return http3_status::accepted;
         }
+        const bool extend_last = bytes != 0 && !impl_->control_segments_.empty() &&
+                                 impl_->control_segments_.back().nghttp3_;
+        if (bytes != 0 && !extend_last) {
+            try {
+                impl_->control_segments_.push_back({true, 0});
+            } catch (...) {
+                impl_->connection_error_ = NGHTTP3_H3_INTERNAL_ERROR;
+                return http3_status::protocol_error;
+            }
+        }
+        const int result = nghttp3_conn_add_write_offset(impl_->connection_, stream_id, bytes);
+        if (result != 0) {
+            if (bytes != 0 && !extend_last) {
+                impl_->control_segments_.pop_back();
+            }
+            return impl_->status_from(result);
+        }
+        if (bytes != 0) {
+            impl_->control_segments_.back().bytes_ += bytes;
+        }
+        return http3_status::accepted;
     }
     return impl_->status_from(
         nghttp3_conn_add_write_offset(impl_->connection_, stream_id, bytes));
@@ -1085,7 +1179,7 @@ http3_data_result http3_connection::submit_data(
         return {http3_status::closed, 0};
     }
     auto* stream = impl_->find_stream(stream_id);
-    if (stream == nullptr || stream->aborted_ || !stream->body_source_ || stream->finished_ || bytes.empty()) {
+    if (stream == nullptr || stream->write_aborted_ || !stream->body_source_ || stream->finished_ || bytes.empty()) {
         return {http3_status::invalid_state, 0};
     }
     if (stream->content_length_.has_value() &&
@@ -1100,9 +1194,15 @@ http3_data_result http3_connection::submit_data(
     stream->body_.emplace_back(bytes.first(accepted), impl_->resource_);
     stream->pending_bytes_ += accepted;
     stream->submitted_bytes_ += accepted;
-    const auto status = impl_->status_from(
-        nghttp3_conn_resume_stream(impl_->connection_, stream_id));
-    return {status, status == http3_status::accepted ? accepted : 0};
+    const int result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
+    if (result != 0) {
+        stream->body_.pop_back();
+        stream->pending_bytes_ -= accepted;
+        stream->submitted_bytes_ -= accepted;
+        impl_->throw_if_no_memory(result);
+        return {impl_->status_from(result), 0};
+    }
+    return {http3_status::accepted, accepted};
 }
 
 std::size_t http3_connection::pending_output_bytes(std::int64_t stream_id) const noexcept {
@@ -1115,15 +1215,20 @@ http3_status http3_connection::finish_stream(std::int64_t stream_id) {
         return http3_status::closed;
     }
     auto* stream = impl_->find_stream(stream_id);
-    if (stream == nullptr || stream->aborted_ || !stream->body_source_ || stream->finished_) {
+    if (stream == nullptr || stream->write_aborted_ || !stream->body_source_ || stream->finished_) {
         return http3_status::invalid_state;
     }
     if (stream->content_length_.has_value() && stream->submitted_bytes_ != *stream->content_length_) {
         throw std::length_error("HTTP/3 content ended before the declared Content-Length");
     }
     stream->finished_ = true;
-    return impl_->status_from(
-        nghttp3_conn_resume_stream(impl_->connection_, stream_id));
+    const int result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
+    if (result != 0) {
+        stream->finished_ = false;
+        impl_->throw_if_no_memory(result);
+        return impl_->status_from(result);
+    }
+    return http3_status::accepted;
 }
 
 http3_status http3_connection::submit_trailers(std::int64_t stream_id,
@@ -1132,8 +1237,11 @@ http3_status http3_connection::submit_trailers(std::int64_t stream_id,
         return http3_status::closed;
     }
     auto* stream = impl_->find_stream(stream_id);
-    if (stream == nullptr || stream->aborted_ || !stream->body_source_ || stream->finished_) {
+    if (stream == nullptr || stream->write_aborted_ || !stream->body_source_ || stream->finished_) {
         return http3_status::invalid_state;
+    }
+    if (stream->content_length_.has_value() && stream->submitted_bytes_ != *stream->content_length_) {
+        throw std::length_error("HTTP/3 content ended before the declared Content-Length");
     }
     std::pmr::vector<nghttp3_nv> native_fields(impl_->resource_);
     native_fields.reserve(fields.size());
@@ -1148,8 +1256,9 @@ http3_status http3_connection::submit_trailers(std::int64_t stream_id,
     }
     stream->trailers_submitted_ = true;
     stream->finished_ = true;
-    return impl_->status_from(
-        nghttp3_conn_resume_stream(impl_->connection_, stream_id));
+    const int resume_result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
+    impl_->throw_if_no_memory(resume_result);
+    return impl_->status_from(resume_result);
 }
 
 std::variant<http_buffered_response_write_plan, http3_response_head_error>
@@ -1252,7 +1361,7 @@ http3_status http3_connection::finish_response(
         return http3_status::closed;
     }
     auto* stream = impl_->find_stream(stream_id);
-    if (stream == nullptr || stream->aborted_ || !stream->body_source_ || stream->finished_) {
+    if (stream == nullptr || stream->write_aborted_ || !stream->body_source_ || stream->finished_) {
         return http3_status::invalid_state;
     }
     if (stream->content_length_.has_value() && stream->submitted_bytes_ != *stream->content_length_) {
@@ -1270,7 +1379,9 @@ http3_status http3_connection::finish_response(
     }
     stream->trailers_submitted_ = true;
     stream->finished_ = true;
-    return impl_->status_from(nghttp3_conn_resume_stream(impl_->connection_, stream_id));
+    const int resume_result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
+    impl_->throw_if_no_memory(resume_result);
+    return impl_->status_from(resume_result);
 }
 
 std::optional<http3_response_head_error> http3_connection::submit_connect_response_head(
@@ -1352,11 +1463,11 @@ http3_result http3_connection::read_datagram(std::span<const std::byte> payload)
     }
     const auto id = static_cast<std::int64_t>(std::get<0>(parsed).value_ * 4);
     const auto* stream = impl_->find_stream(id);
-    if (stream != nullptr && !stream->aborted_ &&
+    if (stream != nullptr && !stream->read_aborted_ &&
         (stream->received_head_ || (impl_->role_ == http3_role::client && stream->head_submitted_))) {
         const auto content = payload.subspan(std::get<0>(parsed).encoded_bytes_);
-        impl_->events_.emplace_back(http3_datagram_event{
-            id, std::pmr::string(reinterpret_cast<const char*>(content.data()), content.size(), impl_->resource_)});
+        impl_->events_.push_back({http3_datagram_event{
+            id, std::pmr::string(reinterpret_cast<const char*>(content.data()), content.size(), impl_->resource_)}});
     }
     return {};
 }
@@ -1365,7 +1476,7 @@ std::optional<http3_datagram_prefix> http3_connection::datagram_prefix(std::int6
     const auto* stream = impl_->find_stream(stream_id);
     if (impl_->connection_error_ || !impl_->enable_h3_datagram_ || !impl_->peer_settings_ ||
         !impl_->peer_settings_->h3_datagram_ || stream_id < 0 || (stream_id & 3) != 0 ||
-        stream == nullptr || stream->aborted_) {
+        stream == nullptr || stream->write_aborted_) {
         return std::nullopt;
     }
     http3_datagram_prefix prefix;
@@ -1561,19 +1672,37 @@ http3_status http3_connection::block_stream(std::int64_t stream_id) noexcept {
 }
 
 http3_status http3_connection::shutdown_stream_read(
-    std::int64_t stream_id) noexcept {
+    std::int64_t stream_id, std::optional<std::uint64_t> application_error_code) noexcept {
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
     if (auto* stream = impl_->find_stream(stream_id)) {
-        stream->aborted_ = true;
+        stream->read_aborted_ = true;
     }
-    return impl_->status_from(
-        nghttp3_conn_shutdown_stream_read(impl_->connection_, stream_id));
+    impl_->suppress_transport_callbacks_ = true;
+    const int result = nghttp3_conn_shutdown_stream_read(impl_->connection_, stream_id);
+    impl_->suppress_transport_callbacks_ = false;
+    if (result != 0) {
+        return impl_->status_from(result);
+    }
+    if (application_error_code.has_value()) {
+        if (!events_pending() && !impl_->packet_input_) {
+            impl_->events_.clear();
+            impl_->event_offset_ = 0;
+        }
+        if (impl::callback_guard(*impl_, [&] {
+                impl_->events_.push_back({http3_transport_action_event{
+                                              stream_id, *application_error_code, http3_transport_action::reset_stream},
+                    false});
+            }) != 0) {
+            return impl_->fail(NGHTTP3_ERR_CALLBACK_FAILURE).status_;
+        }
+    }
+    return http3_status::accepted;
 }
 
 http3_status http3_connection::shutdown_stream_write(
-    std::int64_t stream_id) noexcept {
+    std::int64_t stream_id, std::optional<std::uint64_t> application_error_code) noexcept {
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
@@ -1583,9 +1712,22 @@ http3_status http3_connection::shutdown_stream_write(
         impl_->control_extension_pending_bytes_ = 0;
     }
     if (auto* stream = impl_->find_stream(stream_id)) {
-        stream->aborted_ = true;
+        stream->write_aborted_ = true;
     }
     nghttp3_conn_shutdown_stream_write(impl_->connection_, stream_id);
+    if (application_error_code.has_value()) {
+        if (!events_pending() && !impl_->packet_input_) {
+            impl_->events_.clear();
+            impl_->event_offset_ = 0;
+        }
+        if (impl::callback_guard(*impl_, [&] {
+                impl_->events_.push_back({http3_transport_action_event{
+                                              stream_id, *application_error_code, http3_transport_action::stop_sending},
+                    false});
+            }) != 0) {
+            return impl_->fail(NGHTTP3_ERR_CALLBACK_FAILURE).status_;
+        }
+    }
     return http3_status::accepted;
 }
 

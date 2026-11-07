@@ -78,13 +78,15 @@ public:
 
     [[nodiscard]] static http_request_rejection rate_limited(rate_limit_rejection rejection) noexcept;
 
-    [[nodiscard]] constexpr const http_error_info& error() const noexcept {
+    [[nodiscard]] constexpr const http_error_info& error() const& noexcept RUVIA_LIFETIMEBOUND {
         return error_;
     }
+    const http_error_info& error() const&& = delete;
 
-    [[nodiscard]] constexpr const rate_limit_rejection* rate_limit() const noexcept {
+    [[nodiscard]] constexpr const rate_limit_rejection* rate_limit() const& noexcept RUVIA_LIFETIMEBOUND {
         return rate_limit_ ? &*rate_limit_ : nullptr;
     }
+    const rate_limit_rejection* rate_limit() const&& = delete;
 
 private:
     constexpr http_request_rejection(http_error_info error, std::optional<rate_limit_rejection> rate_limit) noexcept
@@ -106,9 +108,10 @@ private:
 // through http_response_tail::finish_prepare().
 class http_response_preparation final {
 public:
-    [[nodiscard]] const prepared_application_response* ready() const noexcept {
+    [[nodiscard]] const prepared_application_response* ready() const& noexcept RUVIA_LIFETIMEBOUND {
         return ready_ ? &*ready_ : nullptr;
     }
+    const prepared_application_response* ready() const&& = delete;
 
 private:
     friend class http_response_tail;
@@ -150,17 +153,15 @@ public:
           client_address_(client_address),
           start_(start) {}
 
-    http_response_tail(const http_request& request, http_response_coding_policy coding_policy,
-        std::string_view client_address, std::chrono::steady_clock::time_point start) noexcept
-        : http_response_tail(request, coding_policy, client_address, client_address, start) {}
-
-    [[nodiscard]] const http_response_coding_policy& coding_policy() const noexcept {
+    [[nodiscard]] const http_response_coding_policy& coding_policy() const& noexcept RUVIA_LIFETIMEBOUND {
         return coding_policy_;
     }
+    const http_response_coding_policy& coding_policy() const&& = delete;
 
-    [[nodiscard]] request_io_metrics& io_metrics() const noexcept {
+    [[nodiscard]] request_io_metrics& io_metrics() const& noexcept RUVIA_LIFETIMEBOUND {
         return io_metrics_;
     }
+    request_io_metrics& io_metrics() const&& = delete;
 
     // A generated terminal response must not inherit the negotiated coding
     // promise (and must not be transformed again).
@@ -226,14 +227,16 @@ public:
         return endpoint_;
     }
 
-    [[nodiscard]] const http_request_rejection* rejection() const noexcept {
+    [[nodiscard]] const http_request_rejection* rejection() const& noexcept RUVIA_LIFETIMEBOUND {
         return rejection_ ? &*rejection_ : nullptr;
     }
+    const http_request_rejection* rejection() const&& = delete;
 
     // Null for unresolved requests (404/405/OPTIONS/document root).
-    [[nodiscard]] const resolved_route* resolved() const noexcept {
+    [[nodiscard]] const resolved_route* resolved() const& noexcept RUVIA_LIFETIMEBOUND {
         return resolved_;
     }
+    const resolved_route* resolved() const&& = delete;
 
     // CONNECT-UDP (RFC 9298) tunnel; meaningful for endpoint() == tunnel.
     [[nodiscard]] bool udp_tunnel() const noexcept {
@@ -241,9 +244,10 @@ public:
     }
 
     // The connection's request services after applying admission policy.
-    [[nodiscard]] const context_services& services() const noexcept {
+    [[nodiscard]] const context_services& services() const& noexcept RUVIA_LIFETIMEBOUND {
         return services_;
     }
+    const context_services& services() const&& = delete;
 
     [[nodiscard]] protocol_byte_limit body_limit() const noexcept {
         return body_limit_;
@@ -254,9 +258,10 @@ public:
                                                       : static_file_selection_mode::identity_only;
     }
 
-    [[nodiscard]] http_response_tail& tail() noexcept {
+    [[nodiscard]] http_response_tail& tail() & noexcept RUVIA_LIFETIMEBOUND {
         return tail_;
     }
+    http_response_tail& tail() && = delete;
 
     http_request_admission(const http_request_admission& other) noexcept
         : tail_(other.tail_),

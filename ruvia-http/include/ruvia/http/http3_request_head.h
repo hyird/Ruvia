@@ -38,11 +38,16 @@ public:
     [[nodiscard]] std::int64_t stream_id() const noexcept {
         return stream_id_;
     }
-    [[nodiscard]] std::string_view method() const noexcept;
-    [[nodiscard]] std::string_view scheme() const noexcept;
-    [[nodiscard]] std::string_view authority() const noexcept;
-    [[nodiscard]] std::string_view path() const noexcept;
-    [[nodiscard]] std::string_view protocol() const noexcept;
+    [[nodiscard]] std::string_view method() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view method() const&& = delete;
+    [[nodiscard]] std::string_view scheme() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view scheme() const&& = delete;
+    [[nodiscard]] std::string_view authority() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view authority() const&& = delete;
+    [[nodiscard]] std::string_view path() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view path() const&& = delete;
+    [[nodiscard]] std::string_view protocol() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view protocol() const&& = delete;
     // CONNECT, with or without :protocol (RFC 9114 §4.4, RFC 9220).
     [[nodiscard]] bool connect() const noexcept;
     // The HEADERS frame ended the request stream: no content follows.
@@ -67,7 +72,9 @@ public:
 
     // Views in the request borrow this head; it must outlive the request.
     [[nodiscard]] http_request build_request(
-        std::pmr::memory_resource* resource, std::string_view body = {}) const;
+        std::pmr::memory_resource* resource, borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
+    http_request build_request(
+        std::pmr::memory_resource* resource, borrowed_text body = {}) const&& = delete;
 
 private:
     struct regular_field final {

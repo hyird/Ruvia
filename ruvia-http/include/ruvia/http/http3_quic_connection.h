@@ -55,7 +55,7 @@ struct http3_quic_connection_options final {
     std::optional<ngtcp2_cid> retry_source_connection_id_{};
     // Server only: the validated Retry token from the client's second Initial
     // (RFC 9000 §8.1.2). Lifts the anti-amplification limit in ngtcp2.
-    std::span<const std::uint8_t> retry_token_{};
+    borrowed_span<std::uint8_t> retry_token_{};
     // Server only: the stateless reset token of source_connection_id_
     // (RFC 9000 §10.3), sent as a transport parameter.
     std::optional<http3_quic_stateless_reset_token> stateless_reset_token_{};
@@ -183,7 +183,7 @@ private:
     class impl;
     explicit http3_quic_connection(http3_role role,
         const http3_quic_connection_options& options);
-    std::unique_ptr<impl> impl_;
+    std::unique_ptr<impl, detail::http_pmr_object_deleter<impl>> impl_;
 };
 
 // Writes a QUIC Stateless Reset packet (RFC 9000 §10.3) into `output`, using

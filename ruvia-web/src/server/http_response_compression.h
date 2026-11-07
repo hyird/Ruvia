@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_accept_encoding.h"
@@ -47,6 +48,7 @@ enum class http_response_compression_decision : std::uint8_t {
 enum class http_response_compression_status : std::uint8_t {
     compressed,
     not_applicable,
+    unavailable,
     failed,
 };
 
@@ -175,7 +177,8 @@ struct http_buffered_compression_step final {
 // encoder/commit failures remain typed failures so a client that forbids
 // identity receives a terminal error.
 [[nodiscard]] task<http_response_compression_status> compress_response_offloaded(
-    http_response_coding_selection selection, http_response& response, const worker_handle& worker_value);
+    http_response_coding_selection selection, http_response& response, const worker_handle& worker_value,
+    const stop_token& stop_token_value = {});
 
 // The single decimal Content-Length a handler declared, or nullopt.
 [[nodiscard]] std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept;

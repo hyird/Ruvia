@@ -62,6 +62,11 @@ public:
         : id_(stream_id),
           message_data_(resource) {}
 
+    http2_stream_state(const http2_stream_state&) = delete;
+    http2_stream_state& operator=(const http2_stream_state&) = delete;
+    http2_stream_state(http2_stream_state&&) = delete;
+    http2_stream_state& operator=(http2_stream_state&&) = delete;
+
     void reserve_push(http2_push_reservation reservation) noexcept {
         push_reservation_ = reservation;
     }

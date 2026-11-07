@@ -21,7 +21,6 @@
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
-#include <asio/recycling_allocator.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/memory_pool.h"
@@ -85,7 +84,11 @@ struct interim_target final {
 // Resumes the coroutine on a later turn of its worker, letting other
 // connections run between bursts of one connection's output.
 struct worker_turn final {
-    const worker_handle& worker_;
+    explicit worker_turn(const worker_handle& worker_value) noexcept
+        : worker_(worker_value) {}
+    worker_turn(worker_handle&&) = delete;
+    const worker_turn* operator&() const = delete;
+    worker_turn* operator&() = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {
         return false;
@@ -94,6 +97,8 @@ struct worker_turn final {
         worker_.defer_resume(continuation);
     }
     void await_resume() const noexcept {}
+
+    const worker_handle& worker_;
 };
 
 request_memory& emplace_request_memory(
@@ -131,7 +136,7 @@ void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp2_rand_
         return (std::chrono::steady_clock::time_point::max)();
     }
     return std::chrono::steady_clock::time_point(
-        std::chrono::duration_cast<std::chrono::steady_clock::duration>(nanoseconds(static_cast<nanoseconds::rep>(timestamp))));
+        std::chrono::ceil<std::chrono::steady_clock::duration>(nanoseconds(static_cast<nanoseconds::rep>(timestamp))));
 }
 
 [[nodiscard]] std::uint64_t error_value(http3_error_code code) noexcept {
@@ -491,9 +496,28 @@ void http3_session::start_application() {
             .with_inbound_buffer_pool(inbound_buffers_));
     base_services_->bind_routes(services_.routes_);
     set_inactivity_phase();
+    if (drain_begun_) {
+        if (codec().begin_drain() != http3_status::accepted) {
+            connection_->close(error_value(http3_error_code::internal_error));
+            return;
+        }
+        arm_drain_timer();
+        wake_writer();
+    }
     // Authenticate the connection before releasing its bounded 0-RTT requests.
     for (auto& [stream_id, stream] : streams_) {
-        if (!stream->aborted() && stream->dispatch_pending() && !admit_stream(stream_id)) {
+        if (stream->aborted()) {
+            continue;
+        }
+        if (stream->take_continue_pending() && !stream->request_ended() && !stream->body_failure().has_value()) {
+            if (codec().submit_interim_response_head(
+                    stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_status::accepted) {
+                reset_stream(stream_id, http3_error_code::internal_error);
+                continue;
+            }
+            wake_writer();
+        }
+        if (stream->dispatch_pending() && !admit_stream(stream_id)) {
             reset_stream(stream_id, http3_error_code::internal_error);
         }
     }
@@ -538,9 +562,7 @@ void http3_session::on_request_head(http3_headers_event& event) {
     const auto method = classify_http_method(head->method());
     const auto target = head->path();
     const auto connect = head->connect();
-    const auto protocol = http_ascii_equals_ignore_case(head->protocol(), "websocket")
-                              ? std::string_view("websocket")
-                              : head->protocol();
+    const auto protocol = head->protocol();
     auto resolution = services_.routes_.resolve(route_request_view{
         method, head->method(), target.substr(0, target.find('?')), head->authority(), protocol});
     auto body_mode = request_body_mode::buffered;
@@ -582,12 +604,16 @@ void http3_session::on_request_head(http3_headers_event& event) {
     // head alone (RFC 9110 §10.1.1).
     if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !ended &&
         !body_limit_exceeded && !reject_early_request(stream.head()) && body_mode == request_body_mode::buffered) {
-        if (codec().submit_interim_response_head(
-                stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_status::accepted) {
-            reset_stream(stream_id, http3_error_code::internal_error);
-            return;
+        if (!base_services_.has_value()) {
+            stream.defer_continue();
+        } else {
+            if (codec().submit_interim_response_head(
+                    stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_status::accepted) {
+                reset_stream(stream_id, http3_error_code::internal_error);
+                return;
+            }
+            wake_writer();
         }
-        wake_writer();
     }
     // A buffered body is dispatched once complete; everything else -- a
     // streamed body, CONNECT, an unresolved or oversized
@@ -659,10 +685,11 @@ void http3_session::on_stream_end(std::int64_t stream_id) {
 }
 
 void http3_session::on_stream_abort(std::int64_t stream_id) noexcept {
-    // The peer reset its request or stopped reading the response; the core
-    // already abandoned the other direction (RFC 9114 §4.1.1).
     if (auto* stream = find_stream(stream_id)) {
         stream->mark_aborted();
+        if (!stream->dispatched() || stream->handler_done()) {
+            reset_stream(stream_id, http3_error_code::request_cancelled);
+        }
     }
 }
 
@@ -711,7 +738,9 @@ void http3_session::finish_stream_handler(std::int64_t stream_id) noexcept {
         return;
     }
     stream->mark_handler_done();
-    if (!stream->request_ended() && !stream->aborted() && lifecycle_ == lifecycle_type::open) {
+    if (stream->aborted() && lifecycle_ == lifecycle_type::open) {
+        connection_->reset_stream(stream_id, error_value(http3_error_code::request_cancelled));
+    } else if (!stream->request_ended() && lifecycle_ == lifecycle_type::open) {
         // RFC 9114 §4.1.2: once the response is complete the server may stop
         // reading the request with H3_NO_ERROR.
         connection_->stop_receiving(stream_id, error_value(http3_error_code::no_error));
@@ -775,7 +804,7 @@ bool http3_session::admit_stream(std::int64_t stream_id) {
     ++active_handler_tasks_;
     try {
         asio::co_spawn(services_.io_.get_executor(), ruvia::as_awaitable(dispatch_one(stream_id)),
-            asio::bind_allocator(asio::recycling_allocator<void>(), [this, stream_id](std::exception_ptr exception) noexcept {
+            asio::bind_allocator(services_.memory_.allocator(), [this, stream_id](std::exception_ptr exception) noexcept {
                 if (exception != nullptr) {
                     services_.options_.connection_failure_.invoke(remote_address_, std::move(exception));
                 }
@@ -1278,9 +1307,13 @@ void http3_session::begin_drain() noexcept {
         return;
     }
     if (!connection_->http3_started()) {
-        // No request can be in flight before the handshake completed.
-        connection_->close(error_value(http3_error_code::no_error));
-        wake_writer();
+        if (streams_.empty() && accepted_request_heads_ == 0) {
+            // No request can be in flight before the handshake completed.
+            connection_->close(error_value(http3_error_code::no_error));
+            wake_writer();
+            return;
+        }
+        drain_begun_ = true;
         return;
     }
     if (!drain_begun_) {
@@ -1301,7 +1334,7 @@ void http3_session::arm_drain_timer() noexcept {
     if (drain_timer_.registered() || termination_.terminated() || (codec().drain_final() && !timeout_drain_)) {
         return;
     }
-    const auto round_trip = std::chrono::duration_cast<std::chrono::milliseconds>(
+    const auto round_trip = std::chrono::ceil<std::chrono::milliseconds>(
         std::chrono::nanoseconds(static_cast<std::int64_t>(
             (std::min)(connection_->close_period(), static_cast<ngtcp2_duration>(INT64_MAX)))));
     const auto bound = (std::min)(http3_drain_round_trip_bound, (std::max)(round_trip, std::chrono::milliseconds(1)));

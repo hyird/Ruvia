@@ -50,6 +50,7 @@ public:
     public:
         wait_operation(const wait_operation&) = delete;
         wait_operation& operator=(const wait_operation&) = delete;
+        void operator&() const = delete;
 
         [[nodiscard]] bool await_ready();
         [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);
@@ -84,7 +85,8 @@ public:
     // outstanding wait. Constructing or discarding a cold task around wait()
     // does not register an operation. A notification racing with registration
     // may resume asynchronously.
-    [[nodiscard]] wait_operation& wait() noexcept;
+    [[nodiscard]] wait_operation& wait() & noexcept;
+    wait_operation& wait() && = delete;
 
     // Worker-affine and nonblocking. A pending wait completes as closed after
     // Asio delivers and drains its cancellation completion.

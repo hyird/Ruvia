@@ -59,10 +59,19 @@ std::optional<http_request_trailer_error> http_request_trailers::append(std::spa
 }
 
 std::optional<http_request_trailer_error> http_request_trailers::append_http1(std::string_view block) {
+    if (block.size() > max_http_header_bytes) {
+        return http_request_trailer_error::section_too_large;
+    }
     if (block.ends_with("\r\n\r\n")) {
         block.remove_suffix(4);
+        if (block.empty() || block.ends_with("\r\n")) {
+            return http_request_trailer_error::invalid_field;
+        }
     } else if (block.ends_with("\r\n")) {
         block.remove_suffix(2);
+        if (block.empty() || block.ends_with("\r\n")) {
+            return http_request_trailer_error::invalid_field;
+        }
     }
     // The block is appended all-or-nothing, like append(): it extends the
     // retained section's field count and byte budget, and names are retained

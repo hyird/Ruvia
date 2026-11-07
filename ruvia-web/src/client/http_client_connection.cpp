@@ -98,11 +98,7 @@ void http_client_connection::abort_http1_response() noexcept {
 
 void http_client_connection::close() noexcept {
     end_idle();
-    if (http1_response_ != nullptr) {
-        if (auto* output = http1_response_->output()) {
-            output->stop();
-        }
-    }
+    abort_http1_response();
 #ifdef RUVIA_ENABLE_HTTP2
     if (http2_.running()) {
         http2_.fail({.status_ = client_transport_status::io_failed,

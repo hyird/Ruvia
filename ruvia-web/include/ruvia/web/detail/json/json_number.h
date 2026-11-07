@@ -7,9 +7,8 @@
 #include <system_error>
 #include <type_traits>
 
+#include "ruvia/web/detail/decimal_number.h"
 #include "ruvia/web/detail/json/json_lex.h"
-#include "ruvia/web/detail/util/decimal_number.h"
-
 namespace ruvia::detail {
 
 struct json_number_token final {

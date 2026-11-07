@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "client/http_client_pool.h"
@@ -88,22 +89,16 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
             if (authority.find_first_of("\\\" \t\r\n/@?#") != std::string_view::npos) {
                 continue;
             }
-            const auto colon = authority.rfind(':');
-            if (colon == std::string_view::npos) {
+            const auto parsed_authority = parse_http_authority(authority);
+            if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value ||
+                *parsed_authority->port() == 0) {
                 continue;
             }
-            auto host = authority.substr(0, colon);
-            const auto port_text = authority.substr(colon + 1);
-            unsigned port = 0;
-            const auto parsed = std::from_chars(port_text.data(), port_text.data() + port_text.size(), port);
-            if (parsed.ec != std::errc{} || parsed.ptr != port_text.data() + port_text.size() || port == 0 || port > 65535) {
-                continue;
-            }
+            const auto port = *parsed_authority->port();
+            auto host = parsed_authority->host();
             if (!host.empty() && host.front() == '[' && host.back() == ']') {
                 host.remove_prefix(1);
                 host.remove_suffix(1);
-            } else if (host.find(':') != std::string_view::npos) {
-                continue;
             }
             if (host.empty()) {
                 host = config_.host_;
@@ -128,7 +123,15 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
                     break;
                 }
                 age_seen = true;
-                const auto digits = trim_ows(parameter.substr(separator + 1));
+                auto digits = trim_ows(parameter.substr(separator + 1));
+                if (digits.size() >= 2 && digits.front() == '"' && digits.back() == '"') {
+                    digits.remove_prefix(1);
+                    digits.remove_suffix(1);
+                }
+                if (digits.empty()) {
+                    valid = false;
+                    break;
+                }
                 const auto number = std::from_chars(digits.data(), digits.data() + digits.size(), age);
                 if (number.ec != std::errc{} || number.ptr != digits.data() + digits.size()) {
                     valid = false;
@@ -141,7 +144,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
             const auto now = std::chrono::steady_clock::now();
             const auto maximum = std::chrono::duration_cast<std::chrono::seconds>((std::chrono::steady_clock::time_point::max)() - now).count();
             const auto seconds = (std::min)(age, static_cast<std::uint64_t>(maximum));
-            alternative_services_.push_back({std::pmr::string(host, resource_), static_cast<std::uint16_t>(port), now + std::chrono::seconds(seconds)});
+            alternative_services_.push_back({std::pmr::string(host, resource_), port, now + std::chrono::seconds(seconds)});
         }
     }
 #else

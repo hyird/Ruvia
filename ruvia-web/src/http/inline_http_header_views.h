@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {
@@ -32,6 +33,11 @@ public:
         }
     }
 
+    inline_http_header_views(const inline_http_header_views&) = delete;
+    inline_http_header_views& operator=(const inline_http_header_views&) = delete;
+    inline_http_header_views(inline_http_header_views&&) = delete;
+    inline_http_header_views& operator=(inline_http_header_views&&) = delete;
+
     void push_back(http_header_view field) {
         if (overflow_.capacity() != 0) {
             overflow_.push_back(field);
@@ -40,16 +46,18 @@ public:
         }
     }
 
-    [[nodiscard]] std::span<const http_header_view> view() const noexcept {
+    [[nodiscard]] std::span<const http_header_view> view() const& noexcept RUVIA_LIFETIMEBOUND {
         if (overflow_.capacity() != 0) {
             return overflow_;
         }
         return std::span<const http_header_view>(inline_.data(), size_);
     }
+    std::span<const http_header_view> view() const&& = delete;
 
-    [[nodiscard]] operator std::span<const http_header_view>() const noexcept {
+    [[nodiscard]] operator std::span<const http_header_view>() const& noexcept RUVIA_LIFETIMEBOUND {
         return view();
     }
+    operator std::span<const http_header_view>() const&& = delete;
 
 private:
     std::array<http_header_view, inline_capacity> inline_;

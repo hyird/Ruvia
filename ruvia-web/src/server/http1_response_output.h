@@ -88,6 +88,9 @@ public:
                                        : try_plain_tcp_sync_write(*stream_,
                                              std::array<asio::const_buffer, 2>{asio::buffer(output), asio::buffer(body)},
                                              output.size() + body.size(), flags, written_.error_, written_.bytes_);
+            if (written_.bytes_ != 0) {
+                progress_->note_write_progress();
+            }
             if (completed && !written_.error_ && finish_connection) {
                 shutdown_http_connection_send(*stream_);
             }

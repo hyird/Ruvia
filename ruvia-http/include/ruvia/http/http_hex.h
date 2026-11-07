@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
+#include <cstdint>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -76,10 +76,10 @@ inline void http_append_lower_hex(std::pmr::string& output, std::span<const unsi
     if (bytes.size() > (output.max_size() - start) / 2) {
         throw std::length_error("hex output length is not representable");
     }
-    const auto* const first = reinterpret_cast<const unsigned char*>(output.data());
-    const std::less<const unsigned char*> before;
-    const bool aliased = !bytes.empty() && !before(bytes.data(), first) && !before(first + start, bytes.data());
-    const auto offset = aliased ? static_cast<std::size_t>(bytes.data() - first) : 0;
+    const auto first = reinterpret_cast<std::uintptr_t>(output.data());
+    const auto bytes_address = reinterpret_cast<std::uintptr_t>(bytes.data());
+    const bool aliased = !bytes.empty() && bytes_address >= first && bytes_address - first <= start;
+    const auto offset = aliased ? static_cast<std::size_t>(bytes_address - first) : 0;
     output.resize(start + bytes.size() * 2);
     // An aliased source ends at the latest at the old terminating NUL, index
     // start, which resize rewrote with the same NUL.

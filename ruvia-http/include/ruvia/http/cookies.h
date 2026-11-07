@@ -4,7 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -57,7 +57,8 @@ inline constexpr std::int64_t max_cookie_age_seconds = 34560000;
 // Writes cookie_request_pair_size(name, value) bytes at out and returns the
 // end of the written pair. The inputs may overlap the written bytes; only that
 // case copies them first, from the default resource.
-char* write_cookie_request_pair(char* out, std::string_view name, std::string_view value);
+char* write_cookie_request_pair(
+    char* out, std::string_view name, std::string_view value, std::pmr::memory_resource* resource = nullptr);
 
 // Cookie request pairs always include '=', including for an empty name.
 // Inputs may borrow header_value, including its terminating NUL.
@@ -71,12 +72,15 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
         throw std::length_error("cookie request header length is not representable");
     }
     const auto borrowed_offset = [&](std::string_view input) -> std::optional<std::size_t> {
-        const auto* const first = header_value.data();
-        const std::less<const char*> before;
-        if (input.empty() || before(input.data(), first) || before(first + start, input.data())) {
+        if (input.empty()) {
             return std::nullopt;
         }
-        return static_cast<std::size_t>(input.data() - first);
+        const auto first = reinterpret_cast<std::uintptr_t>(header_value.data());
+        const auto input_address = reinterpret_cast<std::uintptr_t>(input.data());
+        if (input_address < first || input_address - first > start) {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(input_address - first);
     };
     const auto name_offset = borrowed_offset(name);
     const auto value_offset = borrowed_offset(value);
@@ -92,7 +96,11 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
     }
     // The pair is written before the separator, which would otherwise
     // overwrite a borrowed terminator first.
-    (void)write_cookie_request_pair(bytes + start + separator_bytes, name, value);
+    std::pmr::memory_resource* resource = nullptr;
+    if constexpr (requires { header_value.get_allocator().resource(); }) {
+        resource = header_value.get_allocator().resource();
+    }
+    (void)write_cookie_request_pair(bytes + start + separator_bytes, name, value, resource);
     if (separator_bytes != 0) {
         bytes[start] = ';';
         bytes[start + 1] = ' ';

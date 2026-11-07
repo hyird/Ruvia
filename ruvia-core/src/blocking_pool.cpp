@@ -42,6 +42,7 @@ namespace {
     return capacity;
 }
 
+thread_local const void* g_current_blocking_pool = nullptr;
 }  // namespace
 
 std::string_view describe_blocking_status(blocking_status status) noexcept {
@@ -113,6 +114,14 @@ struct blocking_pool::impl_type final {
     }
 
     void run() noexcept {
+        struct current_pool_guard final {
+            const void* previous_;
+            explicit current_pool_guard(const impl_type* pool) noexcept
+                : previous_(std::exchange(g_current_blocking_pool, pool)) {}
+            ~current_pool_guard() {
+                g_current_blocking_pool = previous_;
+            }
+        } current_guard(this);
         std::unique_lock lock(mutex_);
         for (;;) {
             condition_.wait(lock, [this] { return stopping_ || queued_ != 0; });
@@ -164,8 +173,15 @@ struct blocking_pool::impl_type final {
             stopping_ = true;
             discarded_ += queued_;
             dropped = std::exchange(queued_, 0);
+            if (dropped != 0) {
+                stop_draining_ = true;
+                stop_drain_thread_ = std::this_thread::get_id();
+            }
         }
         condition_.notify_all();
+        if (dropped == 0) {
+            return;
+        }
 
         // Once stopping is published no thread pops or pushes the ring again,
         // so the first stop caller owns the remaining slots. Destroy them
@@ -179,14 +195,16 @@ struct blocking_pool::impl_type final {
             node->task_ = nullptr;
             release_node(*node);
         }
+        {
+            std::lock_guard lock(mutex_);
+            stop_draining_ = false;
+            stop_drain_thread_ = {};
+        }
+        condition_.notify_all();
     }
 
-    void throw_if_current() const {
-        if (std::ranges::any_of(threads_, [](const std::thread& thread) {
-                return thread.joinable() && thread.get_id() == std::this_thread::get_id();
-            })) {
-            throw std::logic_error("cannot join a blocking pool from one of its threads");
-        }
+    [[nodiscard]] bool is_current_thread() const noexcept {
+        return g_current_blocking_pool == this;
     }
 
     void join_threads() {
@@ -197,8 +215,51 @@ struct blocking_pool::impl_type final {
         }
     }
 
+    void join() {
+        if (is_current_thread()) {
+            throw std::logic_error("cannot join a blocking pool from one of its threads");
+        }
+        stop();
+        std::pmr::vector<std::thread> joining_threads(process_resource());
+        {
+            std::unique_lock lock(mutex_);
+            if (std::ranges::any_of(threads_, [](const std::thread& thread) {
+                    return thread.joinable() && thread.get_id() == std::this_thread::get_id();
+                })) {
+                throw std::logic_error("cannot join a blocking pool from one of its threads");
+            }
+            condition_.wait(lock, [this] { return !joining_; });
+            if (!joined_) {
+                joining_ = true;
+                joining_threads.swap(threads_);
+            }
+        }
+        for (auto& thread : joining_threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        {
+            std::unique_lock lock(mutex_);
+            if (!joining_threads.empty() || !joined_) {
+                joining_ = false;
+                joined_ = true;
+                condition_.notify_all();
+            }
+            condition_.wait(lock, [this] {
+                return (!stop_draining_ || stop_drain_thread_ == std::this_thread::get_id()) &&
+                       reserved_ == 0;
+            });
+        }
+    }
+
     void detach_threads() noexcept {
-        for (auto& thread : threads_) {
+        std::pmr::vector<std::thread> detached_threads(process_resource());
+        {
+            std::lock_guard lock(mutex_);
+            detached_threads.swap(threads_);
+        }
+        for (auto& thread : detached_threads) {
             if (thread.joinable()) {
                 thread.detach();
             }
@@ -222,6 +283,10 @@ struct blocking_pool::impl_type final {
     std::uint64_t rejected_{0};
     std::uint64_t discarded_{0};
     bool stopping_{false};
+    bool stop_draining_{false};
+    std::thread::id stop_drain_thread_{};
+    bool joining_{false};
+    bool joined_{false};
 };
 
 blocking_pool::blocking_pool(blocking_pool_options options)
@@ -279,11 +344,11 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
     bool stopped = false;
     {
         std::lock_guard lock(owner.mutex_);
-        --owner.reserved_;
         stopped = owner.stopping_;
         if (stopped) {
             ++owner.discarded_;
         } else {
+            --owner.reserved_;
             if (!owner.queue_.try_push(node)) {
                 std::terminate();
             }
@@ -292,7 +357,16 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
     }
     if (stopped) {
         node->task_ = nullptr;
-        owner.release_node(*node);
+        bool notify = false;
+        {
+            std::lock_guard lock(owner.mutex_);
+            node->next_ = owner.free_head_;
+            owner.free_head_ = node;
+            notify = (--owner.reserved_ == 0);
+        }
+        if (notify) {
+            owner.condition_.notify_all();
+        }
         return blocking_submit_status::pool_stopped;
     }
     owner.condition_.notify_one();
@@ -305,9 +379,8 @@ void blocking_pool::stop() noexcept {
 }
 
 void blocking_pool::join() {
-    impl_->throw_if_current();
-    stop();
-    impl_->join_threads();
+    const auto owner = impl_;
+    owner->join();
 }
 
 }  // namespace ruvia

@@ -60,6 +60,18 @@ struct model_validation_access final {
         validate_nested_field_rules(value, root, sink);
     }
     template <typename value_type>
+    [[nodiscard]] static bool value_rules_valid(const value_type& value) {
+        struct boolean_rule_sink final {
+            bool valid_{true};
+            void add(const model::model_path&, std::string_view, std::string_view) noexcept {
+                valid_ = false;
+            }
+        } sink;
+        const model::model_path root;
+        validate_nested_field_rules(value, root, sink);
+        return sink.valid_;
+    }
+    template <typename value_type>
     [[nodiscard]] static bool value_structure_valid(const value_type& value) {
         using t_type = std::remove_cvref_t<value_type>;
         if constexpr (is_model<t_type>) {

@@ -19,8 +19,9 @@ http_client_state::http_client_state(event_loop loop, const http_client_config& 
       memory_(),
       // Responses may outlive this client and its memory_; they own theirs.
       pool_(loop_.io_context(), worker_, http_client_config_storage(config, memory_.resource()),
-          std::make_shared<http_client_result_budget_domain>(result_budget), memory_.resource(),
-          http_client_response_storage::response_owned),
+          std::allocate_shared<http_client_result_budget_domain>(
+              std::pmr::polymorphic_allocator<http_client_result_budget_domain>(process_resource()), result_budget),
+          memory_.resource(), http_client_response_storage::response_owned),
       lifecycle_(*this, loop_, worker_, client_phase::connected) {}
 
 void http_client_state::throw_not_ready() {
@@ -40,7 +41,9 @@ namespace ruvia {
 
 http_client::http_client(event_loop loop, const http_client_config& config,
     http_client_result_budget_config result_budget)
-    : state_(std::make_shared<detail::http_client_state>(std::move(loop), config, result_budget)) {
+    : state_(std::allocate_shared<detail::http_client_state>(
+          std::pmr::polymorphic_allocator<detail::http_client_state>(process_resource()),
+          std::move(loop), config, result_budget)) {
     state_->bind_stop();
 }
 

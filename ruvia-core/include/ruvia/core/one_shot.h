@@ -91,6 +91,7 @@ struct one_shot_awaiter final {
         std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value) noexcept
         : wait_(std::move(value), timeout_value, std::move(stop_token_value)) {}
 
+    void operator&() const = delete;
     [[nodiscard]] bool await_ready() {
         wait_.start("one-shot wait must run on its bound worker");
         auto& owner_value = wait_.state();

@@ -22,7 +22,7 @@ struct tls_context_policy final {
     tls_context_policy(std::string_view host, std::uint64_t limit)
         : host_(host, process_resource()),
           record_limit_(limit) {
-        if (host_.ends_with('.')) {
+        if (!is_client_ip_address(host_) && host_.ends_with('.')) {
             host_.pop_back();
         }
     }

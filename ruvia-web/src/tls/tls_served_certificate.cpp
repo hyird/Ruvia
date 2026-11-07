@@ -25,6 +25,9 @@ bool tls_served_certificate::covers(const http_target_origin& origin) noexcept {
         return false;
     }
     const auto key = origin_key(origin);
+    if (key.empty()) {
+        return false;
+    }
     const bool dns_name = origin.host_kind() == http_target_host_kind::dns_name;
     for (std::size_t i = 0; i < cached_; ++i) {
         const auto& entry = cache_[i];

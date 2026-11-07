@@ -3,7 +3,9 @@
 #include <nghttp2/nghttp2.h>
 
 #include <array>
+#include <cstddef>
 #include <limits>
+#include <memory_resource>
 #include <new>
 #include <stdexcept>
 
@@ -100,9 +102,6 @@ public:
                 nghttp2_hd_inflate_end_headers(inflater_);
                 break;
             }
-            if ((flags & NGHTTP2_HD_INFLATE_EMIT) == 0 && remaining == 0) {
-                break;
-            }
         }
         return rejected ? std::optional(hpack_decode_error::callback_rejected) : std::nullopt;
     }
@@ -116,14 +115,16 @@ private:
 
 namespace {
 
-// One per thread: with a zero-capacity table the deflater carries no state
-// between fields once its initial capacity notification has been consumed.
+// Uses a stack buffer with PMR fallback so encoding neither maintains
+// thread_local state nor touches the global C heap.
 class hpack_field_deflater final {
 public:
-    hpack_field_deflater() {
-        const int result = nghttp2_hd_deflate_new(&deflater_, 0);
+    explicit hpack_field_deflater(std::pmr::memory_resource* resource)
+        : inline_resource_(inline_storage_.data(), inline_storage_.size(), resource),
+          memory_(&inline_resource_) {
+        const int result = nghttp2_hd_deflate_new2(&deflater_, 0, memory_.table());
         if (result == NGHTTP2_ERR_NOMEM) {
-            throw std::bad_alloc();
+            memory_.rethrow_allocation_failure();
         }
         if (result != 0) {
             throw std::runtime_error("nghttp2 failed to create an HPACK deflater");
@@ -162,7 +163,7 @@ public:
         if (encoded < 0) {
             output.resize(previous_size);
             if (encoded == NGHTTP2_ERR_NOMEM) {
-                throw std::bad_alloc();
+                memory_.rethrow_allocation_failure();
             }
             throw std::length_error("nghttp2 rejected the HPACK field");
         }
@@ -170,14 +171,11 @@ public:
     }
 
 private:
+    alignas(std::max_align_t) std::array<std::byte, 512> inline_storage_;
+    std::pmr::monotonic_buffer_resource inline_resource_;
+    http2_nghttp2_memory memory_;
     nghttp2_hd_deflater* deflater_{nullptr};
 };
-
-[[nodiscard]] hpack_field_deflater& thread_field_deflater() {
-    thread_local hpack_field_deflater deflater;
-    return deflater;
-}
-
 }  // namespace
 }  // namespace detail
 
@@ -217,8 +215,8 @@ void hpack_encoder::encode_header(std::pmr::string& output, std::string_view nam
         owned_value.assign(value);
         value = owned_value;
     }
-    detail::thread_field_deflater().encode(
-        output, name, value, detail::hpack_header_name_is_sensitive(name));
+    detail::hpack_field_deflater deflater(output.get_allocator().resource());
+    deflater.encode(output, name, value, detail::hpack_header_name_is_sensitive(name));
 }
 
 void hpack_encoder::encode_status(std::pmr::string& output, http_status_code status) {

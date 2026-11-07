@@ -37,17 +37,17 @@ public:
     http_multipart_byte_range_plan(http_multipart_byte_range_plan&&) noexcept = default;
     http_multipart_byte_range_plan& operator=(http_multipart_byte_range_plan&&) = delete;
 
-    [[nodiscard]] std::string_view content_type() const& noexcept {
+    [[nodiscard]] std::string_view content_type() const& noexcept RUVIA_LIFETIMEBOUND {
         return state_ == nullptr ? std::string_view{} : std::string_view(state_->content_type_);
     }
     [[nodiscard]] std::string_view content_type() const&& = delete;
-    [[nodiscard]] std::string_view metadata() const& noexcept {
+    [[nodiscard]] std::string_view metadata() const& noexcept RUVIA_LIFETIMEBOUND {
         return state_ == nullptr ? std::string_view{} : std::string_view(state_->metadata_);
     }
     [[nodiscard]] std::string_view metadata() const&& = delete;
     /// Ordered wire fragments, not multipart parts. Adjacent metadata may share a
     /// descriptor; consumers must not assume a fixed segment count per range.
-    [[nodiscard]] std::span<const segment> segments() const& noexcept {
+    [[nodiscard]] std::span<const segment> segments() const& noexcept RUVIA_LIFETIMEBOUND {
         return state_ == nullptr
                    ? std::span<const segment>{}
                    : std::span<const segment>(state_->segments_.data(), state_->segment_count_);

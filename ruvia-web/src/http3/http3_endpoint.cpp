@@ -1,9 +1,8 @@
 #include "http3/http3_endpoint.h"
 
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
-
 #include <array>
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <stdexcept>
 #include <system_error>
@@ -14,6 +13,8 @@
 
 #include <cerrno>
 #endif
+
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
 
 #include <asio/bind_allocator.hpp>
 #include <asio/buffer.hpp>
@@ -224,13 +225,7 @@ void http3_endpoint::receive(
     const auto owner = http3_connection_id_owner(secret(), destination, placement.directory_->worker_count());
     // A datagram another thread received was already steered to this worker.
     if (!handed_off && owner.has_value() && *owner != placement.worker_index_) {
-        try {
-            http3_handoff_datagram datagram{
-                .bytes_ = std::vector<std::byte>(bytes.begin(), bytes.end()), .remote_ = remote, .ecn_ = 0};
-            (void)placement.directory_->hand_off(*owner, listener_index_, std::move(datagram));
-        } catch (...) {
-            // Dropped, as the network may drop it.
-        }
+        (void)placement.directory_->hand_off(*owner, listener_index_, bytes, remote);
         return;
     }
     if (header.version != 0) {
@@ -254,7 +249,10 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
     const bool require_retry = session_.http3_->retry_;
     if (require_retry || header.tokenlen != 0) {
         if (header.tokenlen == 0) {
-            send_retry(header, remote, bytes.size() * 3);
+            const auto max_bytes = bytes.size() > (std::numeric_limits<std::size_t>::max)() / 3
+                                       ? (std::numeric_limits<std::size_t>::max)()
+                                       : bytes.size() * 3;
+            send_retry(header, remote, max_bytes);
             return;
         }
         if (header.token[0] != NGTCP2_CRYPTO_TOKEN_MAGIC_RETRY2) {
@@ -267,13 +265,18 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
             const auto timeout_ms = server.header_completion_timeout_.has_value()
                                         ? server.header_completion_timeout_
                                         : server.request_header_timeout_;
+            constexpr auto max_milliseconds = static_cast<std::int64_t>(UINT64_MAX / NGTCP2_MILLISECONDS);
+            const auto milliseconds =
+                timeout_ms.has_value() ? (std::max)(timeout_ms->count(), std::int64_t{1}) : std::int64_t{0};
             const ngtcp2_duration token_lifetime =
                 timeout_ms.has_value()
-                    ? static_cast<ngtcp2_duration>((std::max)(timeout_ms->count(), std::int64_t{1})) * NGTCP2_MILLISECONDS
+                    ? (milliseconds >= max_milliseconds
+                              ? UINT64_MAX
+                              : static_cast<ngtcp2_duration>(milliseconds) * NGTCP2_MILLISECONDS)
                     : 10 * NGTCP2_SECONDS;
             const auto timestamp = static_cast<ngtcp2_tstamp>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::system_clock::now().time_since_epoch())
+                    std::chrono::steady_clock::now().time_since_epoch())
                     .count());
             const int verified = ngtcp2_crypto_verify_retry_token2(&original_dcid,
                 header.token, header.tokenlen, secret().data(), secret().size(),
@@ -360,7 +363,7 @@ void http3_endpoint::send_retry(
     std::array<std::uint8_t, NGTCP2_CRYPTO_MAX_RETRY_TOKENLEN2> token{};
     const auto timestamp = static_cast<ngtcp2_tstamp>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
+            std::chrono::steady_clock::now().time_since_epoch())
             .count());
     const auto token_len = ngtcp2_crypto_generate_retry_token2(token.data(),
         secret().data(), secret().size(), header.version,
@@ -402,8 +405,9 @@ bool http3_endpoint::consume_stateless_reset_budget() noexcept {
     } else if (current > stateless_reset_refill_at_) {
         const auto steps = static_cast<std::size_t>((current - stateless_reset_refill_at_) / refill_interval);
         if (steps != 0) {
-            stateless_reset_tokens_ = (std::min)(max_burst, stateless_reset_tokens_ + steps);
-            stateless_reset_refill_at_ += steps * refill_interval;
+            stateless_reset_tokens_ =
+                steps >= max_burst - stateless_reset_tokens_ ? max_burst : stateless_reset_tokens_ + steps;
+            stateless_reset_refill_at_ = current - ((current - stateless_reset_refill_at_) % refill_interval);
         }
     }
     if (stateless_reset_tokens_ == 0) {

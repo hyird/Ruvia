@@ -14,7 +14,6 @@
 #include <openssl/x509.h>
 
 #include "server/server_tls_stream.h"
-#include "server/web_worker_runtime.h"
 
 // The two pieces the TLS half of a session needs: how a server-side handshake
 // is initiated as an async operation, and how the verified peer identity is

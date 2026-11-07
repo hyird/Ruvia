@@ -34,6 +34,7 @@ public:
             }
         }
         wait_operation& operator=(wait_operation&&) = delete;
+        void operator&() const = delete;
         ~wait_operation() {
             if (state_ != await_state_type::idle) {
                 std::terminate();
@@ -107,14 +108,16 @@ public:
 
     // A cold single-use awaiter reserves the signal until completion or destruction.
     // Creation and starting the wait both require the bound worker.
-    [[nodiscard]] wait_operation wait() {
+    [[nodiscard]] wait_operation wait() & {
         require_current_worker();
         return wait_operation(*this);
     }
+    wait_operation wait() && = delete;
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_handle& worker() const& noexcept {
         return worker_;
     }
+    const worker_handle& worker() const&& = delete;
 
     void notify() noexcept;
 

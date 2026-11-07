@@ -182,7 +182,7 @@ public:
         return redis_set_expiration(keep_existing_type{});
     }
 
-    [[nodiscard]] const std::chrono::milliseconds* duration() const& noexcept {
+    [[nodiscard]] const std::chrono::milliseconds* duration() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<std::chrono::milliseconds>(&value_);
     }
     [[nodiscard]] const std::chrono::milliseconds* duration() const&& = delete;
@@ -225,7 +225,7 @@ public:
         return applied_;
     }
 
-    [[nodiscard]] const std::optional<std::pmr::string>& previous() const& noexcept {
+    [[nodiscard]] const std::optional<std::pmr::string>& previous() const& noexcept RUVIA_LIFETIMEBOUND {
         return previous_;
     }
     const std::optional<std::pmr::string>& previous() const&& = delete;
@@ -298,19 +298,20 @@ public:
     using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
     redis_key_value(const redis_key_value& other, allocator_type allocator);
     redis_key_value(redis_key_value&& other, allocator_type allocator);
-    redis_key_value(const redis_key_value&) = default;
+    redis_key_value(const redis_key_value& other)
+        : redis_key_value(other, other.key_.get_allocator()) {}
     redis_key_value& operator=(const redis_key_value& other);
     redis_key_value(redis_key_value&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     redis_key_value& operator=(redis_key_value&& other);
 
-    [[nodiscard]] std::string_view key() const& noexcept {
+    [[nodiscard]] std::string_view key() const& noexcept RUVIA_LIFETIMEBOUND {
         return key_;
     }
     [[nodiscard]] std::string_view key() const&& = delete;
 
-    [[nodiscard]] std::string_view value() const& noexcept {
+    [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
     [[nodiscard]] std::string_view value() const&& = delete;
@@ -331,14 +332,15 @@ public:
     using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
     redis_scored_value(const redis_scored_value& other, allocator_type allocator);
     redis_scored_value(redis_scored_value&& other, allocator_type allocator);
-    redis_scored_value(const redis_scored_value&) = default;
+    redis_scored_value(const redis_scored_value& other)
+        : redis_scored_value(other, other.value_.get_allocator()) {}
     redis_scored_value& operator=(const redis_scored_value& other);
     redis_scored_value(redis_scored_value&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     redis_scored_value& operator=(redis_scored_value&& other);
 
-    [[nodiscard]] std::string_view value() const& noexcept {
+    [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
     [[nodiscard]] std::string_view value() const&& = delete;
@@ -378,7 +380,7 @@ public:
         return next_cursor_;
     }
 
-    [[nodiscard]] std::span<const std::pmr::string> values() const& noexcept {
+    [[nodiscard]] std::span<const std::pmr::string> values() const& noexcept RUVIA_LIFETIMEBOUND {
         return values_;
     }
     [[nodiscard]] std::span<const std::pmr::string> values() const&& = delete;
@@ -408,7 +410,7 @@ public:
         return next_cursor_;
     }
 
-    [[nodiscard]] std::span<const redis_key_value> entries() const& noexcept {
+    [[nodiscard]] std::span<const redis_key_value> entries() const& noexcept RUVIA_LIFETIMEBOUND {
         return entries_;
     }
     [[nodiscard]] std::span<const redis_key_value> entries() const&& = delete;
@@ -438,7 +440,7 @@ public:
         return next_cursor_;
     }
 
-    [[nodiscard]] std::span<const redis_scored_value> entries() const& noexcept {
+    [[nodiscard]] std::span<const redis_scored_value> entries() const& noexcept RUVIA_LIFETIMEBOUND {
         return entries_;
     }
     [[nodiscard]] std::span<const redis_scored_value> entries() const&& = delete;
@@ -458,20 +460,21 @@ public:
     using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
     redis_stream_entry(const redis_stream_entry& other, allocator_type allocator);
     redis_stream_entry(redis_stream_entry&& other, allocator_type allocator);
-    redis_stream_entry(const redis_stream_entry&) = default;
-    redis_stream_entry& operator=(const redis_stream_entry&) = default;
+    redis_stream_entry(const redis_stream_entry& other)
+        : redis_stream_entry(other, other.id_.get_allocator()) {}
+    redis_stream_entry& operator=(const redis_stream_entry& other);
     redis_stream_entry(redis_stream_entry&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     redis_stream_entry& operator=(redis_stream_entry&& other);
 
-    [[nodiscard]] std::string_view id() const& noexcept {
+    [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND {
         return id_;
     }
     [[nodiscard]] std::string_view id() const&& = delete;
 
     // XREADGROUP retains the ID of a deleted pending message with no fields.
-    [[nodiscard]] std::span<const redis_key_value> fields() const& noexcept {
+    [[nodiscard]] std::span<const redis_key_value> fields() const& noexcept RUVIA_LIFETIMEBOUND {
         return fields_;
     }
     [[nodiscard]] std::span<const redis_key_value> fields() const&& = delete;
@@ -492,19 +495,20 @@ public:
     using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
     redis_stream_read_result(const redis_stream_read_result& other, allocator_type allocator);
     redis_stream_read_result(redis_stream_read_result&& other, allocator_type allocator);
-    redis_stream_read_result(const redis_stream_read_result&) = default;
-    redis_stream_read_result& operator=(const redis_stream_read_result&) = default;
+    redis_stream_read_result(const redis_stream_read_result& other)
+        : redis_stream_read_result(other, other.stream_.get_allocator()) {}
+    redis_stream_read_result& operator=(const redis_stream_read_result& other);
     redis_stream_read_result(redis_stream_read_result&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     redis_stream_read_result& operator=(redis_stream_read_result&& other);
 
-    [[nodiscard]] std::string_view stream() const& noexcept {
+    [[nodiscard]] std::string_view stream() const& noexcept RUVIA_LIFETIMEBOUND {
         return stream_;
     }
     [[nodiscard]] std::string_view stream() const&& = delete;
 
-    [[nodiscard]] std::span<const redis_stream_entry> entries() const& noexcept {
+    [[nodiscard]] std::span<const redis_stream_entry> entries() const& noexcept RUVIA_LIFETIMEBOUND {
         return entries_;
     }
     [[nodiscard]] std::span<const redis_stream_entry> entries() const&& = delete;
@@ -527,7 +531,7 @@ public:
     redis_x_read_group_result(redis_x_read_group_result&&) noexcept = default;
     redis_x_read_group_result& operator=(redis_x_read_group_result&& other);
 
-    [[nodiscard]] std::span<const redis_stream_read_result> streams() const& noexcept {
+    [[nodiscard]] std::span<const redis_stream_read_result> streams() const& noexcept RUVIA_LIFETIMEBOUND {
         return streams_;
     }
     [[nodiscard]] std::span<const redis_stream_read_result> streams() const&& = delete;
@@ -536,8 +540,7 @@ private:
     friend struct detail::redis_types_access;
 
     explicit redis_x_read_group_result(std::pmr::memory_resource* resource)
-        : streams_(resource) {}
-
+        : streams_(pmr_resource_or_default(resource)) {}
     std::pmr::vector<redis_stream_read_result> streams_;
 };
 
@@ -597,7 +600,8 @@ public:
         array,
         error };
 
-    redis_value(const redis_value&) = default;
+    redis_value(const redis_value& other)
+        : redis_value(other, other.string_.get_allocator()) {}
     // The source may be a subtree of this value, and the result keeps this
     // value's PMR resource.
     redis_value& operator=(const redis_value& other);
@@ -623,12 +627,12 @@ public:
     [[nodiscard]] bool is_error() const noexcept {
         return kind() == kind_type::error;
     }
-    [[nodiscard]] std::string_view string() const&;
+    [[nodiscard]] std::string_view string() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view string() const&& = delete;
-    [[nodiscard]] std::string_view error() const&;
+    [[nodiscard]] std::string_view error() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view error() const&& = delete;
     [[nodiscard]] std::int64_t integer() const;
-    [[nodiscard]] std::span<const redis_value> array() const&;
+    [[nodiscard]] std::span<const redis_value> array() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const redis_value> array() const&& = delete;
 
     template <detail::text_scalar t_type>

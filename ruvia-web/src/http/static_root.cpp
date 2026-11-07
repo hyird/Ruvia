@@ -29,7 +29,7 @@
 #include "http/static_root_index.h"
 #include "http/static_root_options_validation.h"
 #include "server/http_native_file.h"
-
+#include "util/inline_text_concat.h"
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after
 // that touch only the index. A request never walks or stats the tree: a
@@ -101,24 +101,9 @@ namespace {
     if (!state_value.has_sidecars_) {
         return nullptr;
     }
-    static constexpr std::size_t inline_path_capacity = 256;
-    std::array<char, inline_path_capacity> inline_path;
-    std::pmr::string variant_path(process_resource());
-    const std::size_t total_size = identity.relative_path_.size() + suffix.size();
-    std::string_view lookup_path;
-    if (total_size <= inline_path.size()) {
-        if (!identity.relative_path_.empty()) {
-            std::memcpy(inline_path.data(), identity.relative_path_.data(), identity.relative_path_.size());
-        }
-        std::memcpy(inline_path.data() + identity.relative_path_.size(), suffix.data(), suffix.size());
-        lookup_path = std::string_view(inline_path.data(), total_size);
-    } else {
-        variant_path.reserve(total_size);
-        variant_path.append(identity.relative_path_.data(), identity.relative_path_.size());
-        variant_path.append(suffix.data(), suffix.size());
-        lookup_path = variant_path;
-    }
-    const auto* variant = find_static_root_entry(state_value.entries_, lookup_path);
+    const detail::inline_text_concat<256> lookup_path(
+        {identity.relative_path_, suffix}, process_resource());
+    const auto* variant = find_static_root_entry(state_value.entries_, lookup_path.view());
     if (variant == nullptr ||
         !static_root_entry_version(*variant).at_least_as_new_as(static_root_entry_version(identity))) {
         return nullptr;

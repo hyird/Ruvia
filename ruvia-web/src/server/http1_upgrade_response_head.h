@@ -17,6 +17,8 @@
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_status.h"
 
+#include "server/connection_scanner.h"
+
 namespace ruvia::detail {
 
 // The single writer of every HTTP/1 final head that hands the connection to
@@ -29,7 +31,8 @@ namespace ruvia::detail {
 // final head; it must stay valid until the returned task completes.
 template <typename stream_type>
 [[nodiscard]] task<std::error_code> write_http1_upgrade_response_head(stream_type& stream,
-    const http_request_expectations& expectations, http_status_code status, std::string_view head) {
+    const http_request_expectations& expectations, http_status_code status, std::string_view head,
+    connection_scanner::entry& scanner_entry) {
     constexpr std::size_t continue_head_capacity = 64;
     std::array<char, continue_head_capacity> continue_bytes;
     std::string_view continue_head;
@@ -43,8 +46,9 @@ template <typename stream_type>
         continue_head = prepared_head->head();
     }
     const std::array<asio::const_buffer, 2> buffers{asio::buffer(continue_head), asio::buffer(head)};
-    const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers](auto handler) {
-        asio::async_write(stream, buffers, std::move(handler));
+    const connection_scanner::entry::write_scope write_stall_clock(scanner_entry);
+    const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers, &scanner_entry](auto handler) {
+        asio::async_write(stream, buffers, connection_write_progress(scanner_entry), std::move(handler));
     });
     co_return written.error_code();
 }

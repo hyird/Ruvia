@@ -145,12 +145,12 @@ class websocket_request_header_validator;
 
 class websocket_handshake_validation_result final {
 public:
-    [[nodiscard]] constexpr const websocket_handshake_accepted* accepted() const& noexcept {
+    [[nodiscard]] constexpr const websocket_handshake_accepted* accepted() const& noexcept RUVIA_LIFETIMEBOUND {
         return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
     }
     const websocket_handshake_accepted* accepted() const&& = delete;
 
-    [[nodiscard]] constexpr const websocket_handshake_failure* failure() const& noexcept {
+    [[nodiscard]] constexpr const websocket_handshake_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
     }
     const websocket_handshake_failure* failure() const&& = delete;
@@ -209,7 +209,7 @@ private:
 // compression/subprotocol tuple.
 class websocket_extended_connect_negotiation final {
 public:
-    [[nodiscard]] std::string_view subprotocol() const& noexcept {
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return subprotocol_;
     }
     std::string_view subprotocol() const&& = delete;
@@ -244,7 +244,7 @@ public:
     websocket_server_handshake(websocket_server_handshake&&) noexcept = default;
     websocket_server_handshake& operator=(websocket_server_handshake&&) = delete;
 
-    [[nodiscard]] std::string_view subprotocol() const& noexcept {
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return subprotocol_;
     }
     std::string_view subprotocol() const&& = delete;

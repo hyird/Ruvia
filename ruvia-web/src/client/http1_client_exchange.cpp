@@ -157,13 +157,17 @@ task<client_transport_result> http1_client_exchange::read_append(
             ? target.prepare_spare().first(std::min(max_bytes, target.capacity() - target.size()))
             : target.prepare(max_bytes);
     // Each read restarts the inactivity bound, inside the exchange deadline.
-    const auto read = co_await connection_.transport_.read_some(
+    auto read = co_await connection_.transport_.read_some(
         read_space, read_inactivity_bound ? timeout.constrained_by(pool_.config().read_timeout_) : timeout);
     // close() may clear the target while the read is pending; never publish
     // bytes of a closed connection into it.
-    if (connection_.connected_) {
-        target.commit(read.bytes_);
+    if (!connection_.connected_) {
+        if (read.ok() || read.status_ == client_transport_status::eof) {
+            read.status_ = client_transport_status::io_failed;
+        }
+        throw_http_client_transport_error(read, "upstream closed the HTTP connection");
     }
+    target.commit(read.bytes_);
     if (read.ok() || read.status_ == client_transport_status::eof) {
         co_return read;
     }
@@ -261,7 +265,9 @@ task<void> http1_client_exchange::run(
     }
     worker_timer_registration upload_completion_timer;
     if (!upload->output_.ended_ && !upload->output_.stopped_) {
-        if (const auto deadline = timeout.deadline()) {
+        if (timeout.expired()) {
+            connection_.cancel(connection_.generation_, client_abort_reason::timeout);
+        } else if (const auto deadline = timeout.deadline()) {
             (void)pool_.worker().schedule_timer(upload_completion_timer, *deadline,
                 [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
@@ -493,8 +499,13 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                 co_await output.data_.wait();
                 continue;
             }
+            const auto write_timeout = timeout.constrained_by(pool_.config().write_timeout_);
+            if (write_timeout.expired()) {
+                expire_tunnel();
+                connection_.throw_if_aborted();
+            }
             worker_timer_registration write_timer;
-            if (const auto deadline = timeout.constrained_by(pool_.config().write_timeout_).deadline()) {
+            if (const auto deadline = write_timeout.deadline()) {
                 (void)pool_.worker().schedule_timer(write_timer, *deadline,
                     [this](worker_timer_outcome outcome) noexcept {
                         if (outcome == worker_timer_outcome::expired) {
@@ -550,6 +561,10 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     std::exception_ptr writer_failure;
     std::exception_ptr receive_failure;
     try {
+        if (timeout.expired()) {
+            expire_tunnel();
+            connection.throw_if_aborted();
+        }
         if (const auto deadline = timeout.deadline()) {
             (void)pool_.worker().schedule_timer(lifetime_timer, *deadline,
                 [this](worker_timer_outcome outcome) noexcept {
@@ -562,12 +577,16 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
         auto& read_buffer = connection.read_buffer_;
         constexpr std::size_t read_chunk_bytes = 4096;
         for (;;) {
-            while (state_value.pending_.size() >= max_response_bytes && !state_value.abandoned_) {
+            while (state_value.pending_.size() >= max_response_bytes && !state_value.abandoned_ &&
+                   connection.connected_ && !writer_failure) {
                 co_await state_value.space_signal_.wait();
                 connection.throw_if_aborted();
             }
             if (state_value.abandoned_) {
                 throw http_client_error(http_client_error::code_type::cancelled, "CONNECT tunnel abandoned");
+            }
+            if (!connection.connected_ || writer_failure) {
+                break;
             }
             const auto room = max_response_bytes - state_value.pending_.size();
             if (!read_buffer.empty()) {

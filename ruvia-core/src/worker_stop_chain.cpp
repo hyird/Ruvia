@@ -11,8 +11,10 @@ worker_stop_chain::worker_stop_chain(worker_runtime_context& context)
       work_(asio::make_work_guard(context.io_context())) {}
 
 void worker_stop_chain::configure(hooks_type hooks) noexcept {
-    const std::lock_guard lock(mutex_);
-    hooks_ = std::move(hooks);
+    {
+        const std::lock_guard lock(mutex_);
+        std::swap(hooks_, hooks);
+    }
 }
 
 void worker_stop_chain::request_stop() noexcept {

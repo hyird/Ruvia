@@ -10,7 +10,6 @@
 #include "ruvia/core/failure_report.h"
 
 #include "worker_dispatcher_impl.h"
-
 namespace ruvia::detail {
 namespace {
 
@@ -70,7 +69,10 @@ worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t c
     // Timer slots are address-stable (deque); they grow on demand.
 }
 
-worker_dispatcher::~worker_dispatcher() = default;
+worker_dispatcher::~worker_dispatcher() {
+    destroy_waiters(idle_waiters_.take_all());
+    destroy_waiters(shutdown_notification_waiters_.take_all());
+}
 
 worker_shutdown_hook::~worker_shutdown_hook() {
     if (registry_) {
@@ -171,7 +173,7 @@ void worker_dispatcher::release_abandoned_node(std::size_t index) noexcept {
     // before returning the slot; user destruction can reenter admission or
     // reconcile higher-level work, and must run unlocked before idle callbacks.
     auto abandoned = std::move(nodes_[index].task_);
-    idle_callbacks_type callbacks{process_resource()};
+    waiter_node_type* callbacks = nullptr;
     bool all_pending_released = false;
     {
         std::lock_guard lock(mutex_);
@@ -181,7 +183,7 @@ void worker_dispatcher::release_abandoned_node(std::size_t index) noexcept {
         callbacks = take_idle_callbacks_locked();
     }
     abandoned = nullptr;
-    notify_idle(std::move(callbacks));
+    notify_waiters(callbacks);
     if (all_pending_released) {
         pending_changed_.notify_all();
     }
@@ -258,55 +260,67 @@ void worker_dispatcher::when_shutdown_notifications_complete(move_only_function<
     if (!callback_value) {
         throw std::invalid_argument("shutdown notification callback requires a callable");
     }
-    bool ready = false;
+    auto node = make_pmr_object<waiter_node_type>(process_resource(), std::move(callback_value));
     {
         std::lock_guard lock(mutex_);
         if (shutdown_notification_active_) {
-            shutdown_notification_waiters_.push_back(std::move(callback_value));
-        } else {
-            ready = true;
+            shutdown_notification_waiters_.push_back(node.release());
+            return;
         }
     }
-    if (ready) {
-        callback_value();
-    }
+    callback_value = std::move(node->callback_);
+    node.reset();
+    callback_value();
 }
 
 void worker_dispatcher::when_idle(move_only_function<void()> callback_value) {
     if (!callback_value) {
         throw std::invalid_argument("worker idle callback requires a callable");
     }
-    bool ready = false;
+    auto node = make_pmr_object<waiter_node_type>(process_resource(), std::move(callback_value));
+    bool detached = false;
     {
         std::lock_guard lock(mutex_);
         if (!context_attached_) {
-            throw std::runtime_error("worker execution context is detached");
-        }
-        ready = pending_count_ == 0 && active_count_ == 0;
-        if (!ready) {
-            idle_waiters_.push_back(std::move(callback_value));
+            detached = true;
+        } else if (pending_count_ != 0 || active_count_ != 0) {
+            idle_waiters_.push_back(node.release());
+            return;
         }
     }
-    if (ready) {
-        callback_value();
+    callback_value = std::move(node->callback_);
+    node.reset();
+    if (detached) {
+        throw std::runtime_error("worker execution context is detached");
     }
+    callback_value();
 }
 
-worker_dispatcher::idle_callbacks_type worker_dispatcher::take_idle_callbacks_locked() {
-    idle_callbacks_type callbacks{process_resource()};
+worker_dispatcher::waiter_node_type* worker_dispatcher::take_idle_callbacks_locked() noexcept {
     if (pending_count_ == 0 && active_count_ == 0) {
-        callbacks.swap(idle_waiters_);
+        return idle_waiters_.take_all();
     }
-    return callbacks;
+    return nullptr;
 }
 
-void worker_dispatcher::notify_idle(idle_callbacks_type callbacks) noexcept {
-    for (auto& callback : callbacks) {
+void worker_dispatcher::notify_waiters(waiter_node_type* head) noexcept {
+    while (head != nullptr) {
+        std::unique_ptr<waiter_node_type, pmr_object_deleter<waiter_node_type>> current(
+            head, pmr_object_deleter<waiter_node_type>{process_resource()});
+        head = current->next_;
         try {
-            callback();
+            current->callback_();
         } catch (...) {
             std::terminate();
         }
+    }
+}
+
+void worker_dispatcher::destroy_waiters(waiter_node_type* head) noexcept {
+    while (head != nullptr) {
+        std::unique_ptr<waiter_node_type, pmr_object_deleter<waiter_node_type>> current(
+            head, pmr_object_deleter<waiter_node_type>{process_resource()});
+        head = current->next_;
     }
 }
 
@@ -491,22 +505,16 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
     notify_each(&operations_type::stopping_);
     notify_each(&operations_type::stopping_complete_);
 
-    idle_callbacks_type waiters{process_resource()};
+    waiter_node_type* waiters = nullptr;
     {
         std::lock_guard lock(mutex_);
         if (!shutdown_notification_active_) {
             std::terminate();
         }
         shutdown_notification_active_ = false;
-        waiters.swap(shutdown_notification_waiters_);
+        waiters = shutdown_notification_waiters_.take_all();
     }
-    for (auto& waiter : waiters) {
-        try {
-            waiter();
-        } catch (...) {
-            std::terminate();
-        }
-    }
+    notify_waiters(waiters);
 }
 
 void worker_dispatcher::abandon_queued() noexcept {
@@ -550,7 +558,7 @@ void worker_dispatcher::drain() {
     std::size_t batch_head = no_node;
     std::size_t batch_count = 0;
     bool abandon = false;
-    idle_callbacks_type callbacks{process_resource()};
+    waiter_node_type* callbacks = nullptr;
     {
         std::lock_guard lock(mutex_);
         if (abandon_drain_) {
@@ -570,12 +578,12 @@ void worker_dispatcher::drain() {
         }
     }
     if (abandon) {
-        notify_idle(std::move(callbacks));
+        notify_waiters(callbacks);
         abandon_queued();
         return;
     }
     if (batch_count == 0) {
-        notify_idle(std::move(callbacks));
+        notify_waiters(callbacks);
         return;
     }
 
@@ -610,12 +618,12 @@ void worker_dispatcher::drain() {
                 remaining = following;
             }
             abandon_queued();
-            idle_callbacks_type failure_callbacks{process_resource()};
+            waiter_node_type* failure_callbacks = nullptr;
             {
                 std::lock_guard lock(mutex_);
                 failure_callbacks = take_idle_callbacks_locked();
             }
-            notify_idle(std::move(failure_callbacks));
+            notify_waiters(failure_callbacks);
             throw;
         }
         node.task_ = nullptr;
@@ -639,7 +647,7 @@ void worker_dispatcher::drain() {
         }
         callbacks = take_idle_callbacks_locked();
     }
-    notify_idle(std::move(callbacks));
+    notify_waiters(callbacks);
     if (abandon) {
         abandon_queued();
     }

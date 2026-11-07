@@ -24,7 +24,7 @@ class http2_data_output_budget final {
 public:
     explicit http2_data_output_budget(const worker_handle& worker_value)
         : changed_(worker_value) {}
-
+    http2_data_output_budget(worker_handle&&) = delete;
     http2_data_output_budget(const http2_data_output_budget&) = delete;
     http2_data_output_budget& operator=(const http2_data_output_budget&) = delete;
 

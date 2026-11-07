@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <span>
@@ -21,7 +22,8 @@ inline constexpr std::size_t request_arena_initial_bytes = std::size_t{4} * 1024
 // reuse after they are freed.
 inline constexpr std::size_t default_retained_block_bytes = std::size_t{8} * 1024 * 1024;
 // Largest accepted retained_block_bytes_: no address space can hold more.
-inline constexpr std::size_t max_retained_block_bytes = static_cast<std::size_t>(PTRDIFF_MAX);
+inline constexpr std::size_t max_retained_block_bytes =
+    static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)());
 
 // request_initial_buffer_bytes_ must be greater than zero: it is the initial
 // block size of every request arena.

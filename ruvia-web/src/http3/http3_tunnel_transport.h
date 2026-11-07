@@ -30,10 +30,12 @@ public:
         read_deadline deadline(stream_);
         for (;;) {
             require_live();
-            const auto [chunk, consumed] = stream_.pop();
-            session_.consume_stream_data(stream_.id(), consumed);
+            auto chunk = stream_.take_tunnel_bytes();
             if (!chunk.empty()) {
+                const auto consumed = chunk.size();
                 buffer.append(chunk);
+                std::pmr::string(chunk.get_allocator()).swap(chunk);
+                session_.consume_stream_data(stream_.id(), consumed);
                 co_return true;
             }
             if (stream_.request_ended()) {

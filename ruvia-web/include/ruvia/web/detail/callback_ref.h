@@ -94,6 +94,9 @@ struct callback_access final {
     [[nodiscard]] static constexpr callback_ref<signature_type> bind(callable_type& callable) noexcept {
         return callback_ref<signature_type>::bind(callable);
     }
+    template <typename signature_type, typename callable_type>
+        requires(!std::is_lvalue_reference_v<callable_type>)
+    static void bind(callable_type&&) = delete;
 
     template <typename ref_type>
     [[nodiscard]] static constexpr void* target(ref_type value) noexcept {

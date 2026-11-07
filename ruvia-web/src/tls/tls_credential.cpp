@@ -119,15 +119,28 @@ tls_certificate tls_certificate::load(const char* certificate_chain_file, const 
 }
 
 tls_certificate::tls_certificate(X509* certificate, STACK_OF(X509) * chain, EVP_PKEY* private_key) {
+    if (certificate == nullptr || private_key == nullptr) {
+        throw std::invalid_argument("TLS certificate and private key must not be null");
+    }
     if (chain != nullptr) {
         chain_ = X509_chain_up_ref(chain);
         if (chain_ == nullptr) {
             throw std::bad_alloc();
         }
     }
-    X509_up_ref(certificate);
+    if (X509_up_ref(certificate) != 1) {
+        OSSL_STACK_OF_X509_free(chain_);
+        chain_ = nullptr;
+        throw std::bad_alloc();
+    }
     certificate_ = certificate;
-    EVP_PKEY_up_ref(private_key);
+    if (EVP_PKEY_up_ref(private_key) != 1) {
+        X509_free(certificate_);
+        certificate_ = nullptr;
+        OSSL_STACK_OF_X509_free(chain_);
+        chain_ = nullptr;
+        throw std::bad_alloc();
+    }
     private_key_ = private_key;
 }
 

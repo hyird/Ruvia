@@ -1,10 +1,5 @@
 #pragma once
 
-#include <nghttp2/nghttp2.h>
-
-#include "ruvia/http/http2_types.h"
-#include "ruvia/http/http_header.h"
-
 // HTTP/2 sans-I/O connection core.
 //
 // A pure protocol state machine: it never touches a socket, a coroutine, a timer,
@@ -22,6 +17,8 @@
 // then failed and the exception rethrown once nghttp2 has returned. Allocation
 // failure inside nghttp2 is likewise fatal for the connection.
 
+#include <nghttp2/nghttp2.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -38,7 +35,9 @@
 #include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http2_request_content.h"
+#include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
@@ -133,8 +132,9 @@ public:
         std::uint32_t stream_id, const http_interim_response_head& response);
     [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error>
     submit_websocket_handshake(
-        std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
-        websocket_server_negotiation&& negotiation);
+        std::uint32_t stream_id, const http_request& request,
+        const websocket_handshake_validation_result& validation,
+        websocket_server_handshake_options options);
     [[nodiscard]] http2_submit_status submit_connect_response_head(
         std::uint32_t stream_id, const http_response& response);
     [[nodiscard]] std::variant<std::uint32_t, http2_push_submit_error> submit_push_promise(
@@ -171,7 +171,7 @@ public:
         return drain != nullptr && !drain->awaiting_round_trip();
     }
     [[nodiscard]] bool header_block_in_progress() const noexcept {
-        return header_block_in_progress_;
+        return header_block_in_progress_ || header_block_.has_value();
     }
     // Queues the role-specific connection preface (client magic, SETTINGS and the
     // connection WINDOW_UPDATE) exactly once.
@@ -337,7 +337,6 @@ private:
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_local_request_head(
         http2_end_stream end_stream, const prepare_type& prepare);
     void release_local_request_stream_if_closed(http2_stream_state& stream) noexcept;
-    void retire_completed_local_push(std::uint32_t stream_id);
     void release_local_request_stream(http2_stream_state& stream) noexcept;
     void unpin_stream(std::uint32_t stream_id);
     [[nodiscard]] bool release_received_data(std::uint32_t stream_id, std::uint32_t bytes);
@@ -435,6 +434,7 @@ private:
     bool header_block_in_progress_{false};
     bool liveness_ping_outstanding_{false};
     std::uint32_t last_peer_stream_id_{0};
+    std::uint32_t highest_peer_stream_id_{0};
     std::uint32_t active_local_request_streams_{0};
     std::optional<http2_goaway_event> peer_goaway_;
     std::size_t header_block_bytes_{0};

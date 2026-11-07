@@ -19,7 +19,8 @@ template <std::size_t n>
     if (name_size == 0 || name_size > n - 1 || bytes_value[n - 1] != '\0') {
         throw "invalid static response header storage";
     }
-    if (known_bit != 0 && response_known_header_slot(known_bit) == response_known_header_count) {
+    if (known_bit != 0 && known_bit != response_header_upgrade &&
+        response_known_header_slot(known_bit) == response_known_header_count) {
         throw "static response header requires one known header bit";
     }
     return http_response_header_access::make(
@@ -94,6 +95,8 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
         "Access-Control-Allow-Credentialstrue";
     static constexpr char access_control_allow_methods_default[] =
         "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS";
+    static constexpr char upgrade_websocket[] = "Upgradewebsocket";
+    static constexpr char upgrade_connect_udp[] = "Upgradeconnect-udp";
 
     switch (known_bit) {
         case response_header_content_type:
@@ -260,6 +263,14 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
                 return static_response_header(access_control_allow_methods_default, 28, response_header_access_control_allow_methods);
             }
             return std::nullopt;
+        case response_header_upgrade:
+            if (value == "websocket") {
+                return static_response_header(upgrade_websocket, 7, response_header_upgrade);
+            }
+            if (value == "connect-udp") {
+                return static_response_header(upgrade_connect_udp, 7, response_header_upgrade);
+            }
+            return std::nullopt;
         default:
             return std::nullopt;
     }
@@ -282,8 +293,6 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
     static constexpr char referrer_policy_no_referrer[] = "Referrer-Policyno-referrer";
     static constexpr char permissions_policy_default[] =
         "Permissions-Policygeolocation=(), microphone=(), camera=()";
-    static constexpr char upgrade_websocket[] = "Upgradewebsocket";
-    static constexpr char upgrade_connect_udp[] = "Upgradeconnect-udp";
     static constexpr char retry_after_one[] = "Retry-After1";
     static constexpr char accept_encoding_all[] = "Accept-Encodinggzip, deflate, br, zstd";
     static constexpr char accept_encoding_identity[] = "Accept-Encodingidentity";
@@ -292,16 +301,6 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
     static constexpr char x_ratelimit_remaining_zero[] = "X-RateLimit-Remaining0";
 
     switch (name.size()) {
-        case 7:
-            if (name == "Upgrade") {
-                if (value == "websocket") {
-                    return static_response_header(upgrade_websocket, 7, 0);
-                }
-                if (value == "connect-udp") {
-                    return static_response_header(upgrade_connect_udp, 7, 0);
-                }
-            }
-            return std::nullopt;
         case 11:
             if (name == "Retry-After" && value == "1") {
                 return static_response_header(retry_after_one, 11, 0);

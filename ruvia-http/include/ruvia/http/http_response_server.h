@@ -2,6 +2,7 @@
 
 // Stable, non-detail entry points for HTTP response serialization plans. The
 // plan implementations remain shared with the HTTP/1 and HTTP/2 protocol code.
+#include <initializer_list>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -67,6 +68,8 @@ void append_http1_response_trailers(
 
 template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
+http_response_trailer_section validate_http_response_trailers(
+    std::initializer_list<http_header_view>) = delete;
 
 // Visit normalized response trailer fields from a received HTTP/1 trailer
 // block: the bytes between the terminal zero-size chunk and the empty line that

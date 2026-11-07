@@ -51,27 +51,44 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
         throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 
+    std::pmr::string frame(detail::http_pmr_resource_or_default(options.resource_));
     std::array<char, http_max_unsigned_decimal_size> retry_buffer{};
     std::string_view retry_digits{};
     std::size_t total_size = 1U;
+    const auto add_size = [&frame, &total_size](std::size_t bytes) {
+        if (bytes > frame.max_size() - total_size) {
+            throw std::length_error("SSE frame exceeds string capacity");
+        }
+        total_size += bytes;
+    };
     if (!message.event_.empty()) {
-        total_size += 7U + message.event_.size() + 1U;
+        add_size(7U);
+        add_size(message.event_.size());
+        add_size(1U);
     }
     if (message.id_.has_value()) {
-        total_size += 3U + (message.id_->empty() ? 0U : 1U + message.id_->size()) + 1U;
+        add_size(3U);
+        if (!message.id_->empty()) {
+            add_size(1U);
+            add_size(message.id_->size());
+        }
+        add_size(1U);
     }
     if (message.retry_.has_value()) {
         retry_digits = http_format_unsigned(
             retry_buffer, static_cast<std::uint64_t>(message.retry_->count()));
-        total_size += 7U + retry_digits.size() + 1U;
+        add_size(7U);
+        add_size(retry_digits.size());
+        add_size(1U);
     }
     if (message.data_.has_value()) {
-        visit_sse_data_lines(message.data_->view(), [&total_size](std::string_view line) noexcept {
-            total_size += 6U + line.size() + 1U;
+        visit_sse_data_lines(message.data_->view(), [&add_size](std::string_view line) {
+            add_size(6U);
+            add_size(line.size());
+            add_size(1U);
         });
     }
 
-    std::pmr::string frame(detail::http_pmr_resource_or_default(options.resource_));
     frame.reserve(total_size);
     if (!message.event_.empty()) {
         frame.append("event: ");

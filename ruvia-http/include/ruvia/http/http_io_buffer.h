@@ -5,6 +5,7 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_pmr_string.h"
 
 namespace ruvia {
@@ -39,10 +40,10 @@ public:
     }
 
     // Readable bytes.
-    [[nodiscard]] char* data() & noexcept {
+    [[nodiscard]] char* data() & noexcept RUVIA_LIFETIMEBOUND {
         return storage_ + begin_;
     }
-    [[nodiscard]] const char* data() const& noexcept {
+    [[nodiscard]] const char* data() const& noexcept RUVIA_LIFETIMEBOUND {
         return storage_ + begin_;
     }
     char* data() && = delete;
@@ -53,7 +54,7 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return begin_ == end_;
     }
-    [[nodiscard]] std::string_view view() const& noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::string_view(data(), size());
     }
     std::string_view view() const&& = delete;
@@ -66,14 +67,14 @@ public:
     // Compacts when the consumed prefix covers the live bytes and makes room;
     // otherwise grows geometrically to amortize small read/write cycles.
     // Throws std::length_error when the size exceeds the addressable range.
-    [[nodiscard]] std::span<char> prepare(std::size_t bytes) &;
+    [[nodiscard]] std::span<char> prepare(std::size_t bytes) & RUVIA_LIFETIMEBOUND;
     std::span<char> prepare(std::size_t) && = delete;
     // Every uninitialized byte of the current storage after the readable
     // ones, never growing it: a consumed prefix is reclaimed by moving the
     // readable bytes to the front. Filling all spare storage this way moves
     // each byte at most once per read, whereas prepare(capacity() - size())
     // may grow geometrically on every call.
-    [[nodiscard]] std::span<char> prepare_spare() & noexcept;
+    [[nodiscard]] std::span<char> prepare_spare() & noexcept RUVIA_LIFETIMEBOUND;
     std::span<char> prepare_spare() && = delete;
     // Appends the first `bytes` bytes of the writable space, which the caller
     // has written. Throws std::length_error past the storage.

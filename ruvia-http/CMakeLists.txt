@@ -41,7 +41,8 @@ endif()
 if(NOT RUVIA_ENABLE_HTTP3)
     list(APPEND _ruvia_http_excluded_headers
         include/ruvia/http/http3_connection.h
-        include/ruvia/http/http3_quic_connection.h)
+        include/ruvia/http/http3_quic_connection.h
+        include/ruvia/http/http3_request_head.h)
 endif()
 
 ruvia_install_public_header_closure(http include/ruvia/http

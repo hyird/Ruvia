@@ -230,12 +230,9 @@ struct websocket_upgrade_session_operation final {
         const auto response_headers_value = websocket_response_headers(context_value);
         std::optional<websocket_upgrade_commit<stream_type>> committed;
         if constexpr (requires { commit_upgrade_(context_value, response_headers_value).operator co_await(); }) {
-            committed = co_await commit_upgrade_(context_value, response_headers_value);
+            committed.emplace(co_await commit_upgrade_(context_value, response_headers_value));
         } else {
             committed.emplace(commit_upgrade_(context_value, response_headers_value));
-        }
-        if (!committed) {
-            co_return;
         }
         session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
             websocket_endpoint_.lifecycle(),

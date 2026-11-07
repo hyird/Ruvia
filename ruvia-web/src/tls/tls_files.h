@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/tls_config.h"
 
 #include "tls/tls_credential.h"
@@ -22,9 +23,10 @@ using tls_file_name = std::pmr::u8string;
 [[nodiscard]] tls_file_name make_tls_file_name(const std::filesystem::path& file, std::pmr::memory_resource* resource);
 
 // The NUL-terminated UTF-8 form handed to OpenSSL and the database drivers.
-[[nodiscard]] inline const char* tls_file_name_c_str(const tls_file_name& name) noexcept {
+[[nodiscard]] inline const char* tls_file_name_c_str(const tls_file_name& name RUVIA_LIFETIMEBOUND) noexcept {
     return reinterpret_cast<const char*>(name.c_str());
 }
+const char* tls_file_name_c_str(tls_file_name&&) = delete;
 
 // One identity's validated file names. The private key password is not kept:
 // it is needed only while the key is loaded.

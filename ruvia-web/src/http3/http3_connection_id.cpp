@@ -2,6 +2,8 @@
 
 #include <ngtcp2/ngtcp2_crypto.h>
 
+#include <utility>
+
 #include "tls/tls_random.h"
 
 namespace ruvia::detail {
@@ -34,6 +36,9 @@ std::size_t http3_cid_key_hash::operator()(const http3_cid_key& key) const noexc
 }
 
 bool make_http3_connection_id(const http3_secret& secret, std::size_t worker_index, ngtcp2_cid& cid) noexcept {
+    if (!std::in_range<std::uint16_t>(worker_index)) {
+        return false;
+    }
     std::array<std::uint8_t, http3_connection_id_length> bytes{};
     if (!fill_random_bytes(std::span<unsigned char>(bytes.data() + 4, bytes.size() - 4))) {
         return false;

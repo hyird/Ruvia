@@ -25,11 +25,12 @@ public:
     // dispatch that can reach output(). Pipelined responses still held back in
     // `pending` precede any interim head on the wire.
     http1_interim_response_sink(stream_type& stream, const http_request& request, std::pmr::memory_resource* resource,
-        http1_response_output<stream_type>& pending)
+        http1_response_output<stream_type>& pending, connection_scanner::entry& scanner_entry)
         : stream_(stream),
           request_(request),
           resource_(resource),
           pending_(pending),
+          scanner_entry_(scanner_entry),
           output_(resource, this, write) {}
     [[nodiscard]] http_interim_response_output& output() noexcept {
         return output_;
@@ -66,8 +67,10 @@ private:
                 throw inbound_transport_error(error, "failed to write HTTP/1 responses before an interim response");
             }
         }
+        const connection_scanner::entry::write_scope write_stall_clock(self.scanner_entry_);
         const auto completion = co_await async_asio<std::size_t>([&self, bytes = prepared->head()](auto handler) {
-            asio::async_write(self.stream_, asio::buffer(bytes), std::move(handler));
+            asio::async_write(
+                self.stream_, asio::buffer(bytes), connection_write_progress(self.scanner_entry_), std::move(handler));
         });
         if (completion.error_code()) {
             throw inbound_transport_error(completion.error_code(), "failed to write HTTP/1 interim response");
@@ -77,6 +80,7 @@ private:
     const http_request& request_;
     std::pmr::memory_resource* resource_;
     http1_response_output<stream_type>& pending_;
+    connection_scanner::entry& scanner_entry_;
     http_interim_response_output output_;
 };
 }  // namespace ruvia::detail

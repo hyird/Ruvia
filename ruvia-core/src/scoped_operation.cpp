@@ -319,6 +319,7 @@ void scoped_operation_registration::bind(operation_scope& scope, void* target,
         std::terminate();
     }
     if (!scope.active()) {
+        scope.check_worker();
         phase_ = phase::retiring;
         retire_cold(target);
         phase_ = phase::expired;

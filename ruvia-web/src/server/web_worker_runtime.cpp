@@ -117,7 +117,7 @@ web_worker_handle web_worker_runtime::web_worker() const {
 
 void web_worker_runtime::serve_on_context() {
     if (static_roots_.enabled()) {
-        background_tasks_.spawn(static_roots_.refresh());
+        background_tasks_.spawn(static_roots_.refresh(stop_token_));
     }
     connections_.open_admission();
 }

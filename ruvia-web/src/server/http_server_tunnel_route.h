@@ -57,7 +57,8 @@ struct http1_tunnel_upgrade_commit final {
         append_http1_response_head(head_response, head, plan);
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_http1_upgrade_response_head(dispatch_.stream_,
-                dispatch_.parsed_.body_plan_.expectations(), head_response.status(), head.view());
+                dispatch_.parsed_.body_plan_.expectations(), head_response.status(), head.view(),
+                dispatch_.scanner_entry_);
             ec) {
             throw inbound_transport_error(ec, "CONNECT head write");
         }

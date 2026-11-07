@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include "ruvia/http/borrowed_text.h"
 namespace ruvia {
 
 enum class http_transfer_coding : std::uint8_t { gzip,
@@ -30,30 +31,38 @@ public:
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
     }
-    [[nodiscard]] http_transfer_coding* data() noexcept {
+    [[nodiscard]] http_transfer_coding* data() & noexcept RUVIA_LIFETIMEBOUND {
         return data_.data();
     }
-    [[nodiscard]] const http_transfer_coding* data() const noexcept {
+    [[nodiscard]] const http_transfer_coding* data() const& noexcept RUVIA_LIFETIMEBOUND {
         return data_.data();
     }
-    [[nodiscard]] http_transfer_coding* begin() noexcept {
+    http_transfer_coding* data() && = delete;
+    const http_transfer_coding* data() const&& = delete;
+    [[nodiscard]] http_transfer_coding* begin() & noexcept RUVIA_LIFETIMEBOUND {
         return data_.data();
     }
-    [[nodiscard]] const http_transfer_coding* begin() const noexcept {
+    [[nodiscard]] const http_transfer_coding* begin() const& noexcept RUVIA_LIFETIMEBOUND {
         return data_.data();
     }
-    [[nodiscard]] http_transfer_coding* end() noexcept {
+    http_transfer_coding* begin() && = delete;
+    const http_transfer_coding* begin() const&& = delete;
+    [[nodiscard]] http_transfer_coding* end() & noexcept RUVIA_LIFETIMEBOUND {
         return data_.data() + size_;
     }
-    [[nodiscard]] const http_transfer_coding* end() const noexcept {
+    [[nodiscard]] const http_transfer_coding* end() const& noexcept RUVIA_LIFETIMEBOUND {
         return data_.data() + size_;
     }
-    [[nodiscard]] http_transfer_coding& operator[](std::size_t index) noexcept {
+    http_transfer_coding* end() && = delete;
+    const http_transfer_coding* end() const&& = delete;
+    [[nodiscard]] http_transfer_coding& operator[](std::size_t index) & noexcept RUVIA_LIFETIMEBOUND {
         return data_[index];
     }
-    [[nodiscard]] const http_transfer_coding& operator[](std::size_t index) const noexcept {
+    [[nodiscard]] const http_transfer_coding& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
         return data_[index];
     }
+    http_transfer_coding& operator[](std::size_t) && = delete;
+    const http_transfer_coding& operator[](std::size_t) const&& = delete;
 
 private:
     std::array<http_transfer_coding, max_transfer_codings> data_{};

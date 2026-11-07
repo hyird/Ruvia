@@ -96,42 +96,51 @@ public:
 
     ~validator() = default;
 
-    validator& add(std::string_view field, std::string_view code, std::string_view message) & {
+    validator& add(std::string_view field, std::string_view code, std::string_view message) & RUVIA_LIFETIMEBOUND {
         issues_.push_back(validation_issue(
             {.field_ = field, .code_ = code, .message_ = message, .resource_ = resource()}));
         return *this;
     }
+    validator& add(std::string_view, std::string_view, std::string_view) && = delete;
 
     template <typename optional_type>
     validator& required(const optional_type& value, std::string_view field,
-        std::string_view message = "is required") & {
+        std::string_view message = "is required") & RUVIA_LIFETIMEBOUND {
         if (!value) {
             add(field, "required", message);
         }
         return *this;
     }
+    template <typename optional_type>
+    validator& required(const optional_type&, std::string_view, std::string_view = "is required") && = delete;
 
     template <typename optional_type>
     validator& min_length(const optional_type& value, std::string_view field, std::size_t min_value,
-        std::string_view message = "is too short") & {
+        std::string_view message = "is too short") & RUVIA_LIFETIMEBOUND {
         if (value && detail::validation_string_view(*value).size() < min_value) {
             add(field, "too_small", message);
         }
         return *this;
     }
+    template <typename optional_type>
+    validator& min_length(
+        const optional_type&, std::string_view, std::size_t, std::string_view = "is too short") && = delete;
 
     template <typename optional_type>
     validator& max_length(const optional_type& value, std::string_view field, std::size_t max_value,
-        std::string_view message = "is too long") & {
+        std::string_view message = "is too long") & RUVIA_LIFETIMEBOUND {
         if (value && detail::validation_string_view(*value).size() > max_value) {
             add(field, "too_big", message);
         }
         return *this;
     }
+    template <typename optional_type>
+    validator& max_length(
+        const optional_type&, std::string_view, std::size_t, std::string_view = "is too long") && = delete;
 
     template <typename optional_type, typename min_type, typename max_type>
     validator& range(const optional_type& value, std::string_view field, min_type min_value, max_type max_value,
-        std::string_view message = "is out of range") & {
+        std::string_view message = "is out of range") & RUVIA_LIFETIMEBOUND {
         if (value) {
             if (detail::validation_less(*value, min_value)) {
                 add(field, "too_small", message);
@@ -141,11 +150,14 @@ public:
         }
         return *this;
     }
+    template <typename optional_type, typename min_type, typename max_type>
+    validator& range(const optional_type&, std::string_view, min_type, max_type,
+        std::string_view = "is out of range") && = delete;
 
     template <typename optional_type>
     validator& one_of(const optional_type& value, std::string_view field,
         std::initializer_list<std::string_view> allowed,
-        std::string_view message = "is not allowed") & {
+        std::string_view message = "is not allowed") & RUVIA_LIFETIMEBOUND {
         if (!value) {
             return *this;
         }
@@ -160,6 +172,9 @@ public:
         add(field, "one_of", message);
         return *this;
     }
+    template <typename optional_type>
+    validator& one_of(const optional_type&, std::string_view, std::initializer_list<std::string_view>,
+        std::string_view = "is not allowed") && = delete;
 
     [[nodiscard]] bool ok() const noexcept {
         return issues_.empty();
@@ -169,7 +184,7 @@ public:
         return ok();
     }
 
-    [[nodiscard]] const issue_list_type& issues() const& noexcept {
+    [[nodiscard]] const issue_list_type& issues() const& noexcept RUVIA_LIFETIMEBOUND {
         return issues_;
     }
     [[nodiscard]] const issue_list_type& issues() const&& = delete;
@@ -256,9 +271,7 @@ template <typename t_type>
         return std::nullopt;
     }
     if constexpr (detail::model_validation_access::contains_model<t_type>()) {
-        validator validator_value({.resource_ = resource_});
-        detail::model_validation_access::validate_value(*parsed_value, validator_value);
-        if (!validator_value.valid()) {
+        if (!detail::model_validation_access::value_rules_valid(*parsed_value)) {
             return std::nullopt;
         }
     }

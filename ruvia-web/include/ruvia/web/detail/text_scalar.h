@@ -39,7 +39,7 @@ template <text_scalar t_type>
     if constexpr (std::is_same_v<t_type, std::string_view>) {
         return result_type(std::in_place_index<0>, text);
     } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-        return result_type(std::in_place_index<0>, text, resource);
+        return result_type(std::in_place_index<0>, text, pmr_resource_or_default(resource));
     } else if constexpr (std::is_same_v<t_type, string>) {
         return result_type(std::in_place_index<0>, text, model_options{.resource_ = resource});
     } else if constexpr (std::is_same_v<t_type, bool>) {

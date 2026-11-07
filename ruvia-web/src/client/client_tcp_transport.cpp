@@ -255,6 +255,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
             co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
         }
         client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_, pool_resource_);
+        resolved = {};
         connecting_ = &connector;
         struct clear_connector final {
             client_happy_eyeballs*& value_;
@@ -340,7 +341,16 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
         tls_close_ready_ = false;
         co_return aborted();
     }
-    writing_ = true;
+    struct write_guard final {
+        bool& writing_;
+        explicit write_guard(bool& writing) noexcept
+            : writing_(writing) {
+            writing_ = true;
+        }
+        ~write_guard() noexcept {
+            writing_ = false;
+        }
+    } guard(writing_);
     const auto completion = secure()
                                 ? co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
                                       asio::async_write(stream_, buffers, std::move(handler));
@@ -348,7 +358,6 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
                                 : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
                                       asio::async_write(stream_.next_layer().socket(), buffers, std::move(handler));
                                   });
-    writing_ = false;
     if (completion.error_code()) {
         tls_close_ready_ = false;
     }

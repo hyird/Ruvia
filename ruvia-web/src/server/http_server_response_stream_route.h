@@ -41,9 +41,10 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     // A body that arrived in full with the head does not cost the stream its
     // reuse even if the handler never reads it: completion consumes it
     // without I/O.
-    const auto unread_body_consumption = buffered_request_body_bytes(d.parsed_.body_plan_, body_and_pipeline)
-                                             ? http1_request_body_consumption::complete
-                                             : http1_request_body_consumption::incomplete;
+    const auto unread_body_consumption =
+        buffered_request_body_bytes(d.parsed_.body_plan_, body_and_pipeline, body_limit_value)
+            ? http1_request_body_consumption::complete
+            : http1_request_body_consumption::incomplete;
     const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy, unread_body_consumption);
     using response_sink_type = response_stream_sink<stream_type>;
     const auto& route = resolved.route();

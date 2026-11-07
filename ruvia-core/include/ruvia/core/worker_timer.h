@@ -73,7 +73,16 @@ template <typename rep_type, typename period_type>
                   std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits &&
                   (factor::num == 1 || factor::den == 1)) {
         using count_type = std::conditional_t<std::is_signed_v<rep_type>, std::intmax_t, std::uintmax_t>;
-        const auto count = static_cast<count_type>(value.count()) / factor::den;
+        const auto raw = static_cast<count_type>(value.count());
+        auto count = raw / factor::den;
+        if constexpr (factor::den > 1) {
+            if (raw > 0 && raw % factor::den != 0) {
+                if (std::cmp_greater_equal(count, target_type::max().count() / factor::num)) {
+                    return target_type::max();
+                }
+                ++count;
+            }
+        }
         if (std::cmp_greater(count, target_type::max().count() / factor::num)) {
             return target_type::max();
         }
@@ -89,15 +98,16 @@ template <typename rep_type, typename period_type>
         if (std::isnan(count)) {
             return target_type::zero();
         }
+        const auto rounded = count > 0.0L ? std::ceil(count) : std::trunc(count);
         const auto maximum = static_cast<long double>(target_type::max().count());
-        if (count >= maximum) {
+        if (rounded >= maximum) {
             return target_type::max();
         }
         const auto minimum = static_cast<long double>(target_type::min().count());
-        if (count <= minimum) {
+        if (rounded <= minimum) {
             return target_type::min();
         }
-        return target_type(static_cast<typename target_type::rep>(count));
+        return target_type(static_cast<typename target_type::rep>(rounded));
     }
 }
 

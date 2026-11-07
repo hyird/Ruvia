@@ -3,6 +3,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <utility>
 
 #include "ruvia/core/pool_lease_scheduler.h"
@@ -20,11 +21,11 @@ public:
         waiter.next_ = nullptr;
         waiter.queued_ = true;
         if (tail_ != nullptr) {
-            tail_->next_ = &waiter;
+            tail_->next_ = std::addressof(waiter);
         } else {
-            head_ = &waiter;
+            head_ = std::addressof(waiter);
         }
-        tail_ = &waiter;
+        tail_ = std::addressof(waiter);
     }
 
     void remove(pool_lease_acquire& waiter) noexcept {
@@ -87,6 +88,7 @@ public:
             return false;
         }
         remove(waiter);
+        waiter.deadline_timer_.cancel();
         waiter.complete(worker_wait_status::cancelled);
         continuation = waiter.take_continuation();
         return true;
@@ -98,6 +100,7 @@ public:
         }
         remove(waiter);
         waiter.complete(worker_wait_status::timed_out);
+        waiter.cancel_registrations();
         waiter.resume();
         return true;
     }

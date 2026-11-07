@@ -41,6 +41,8 @@ public:
             facade_.write_datagram_ = &write_datagram_thunk;
         }
     }
+    http_tunnel_session(transport_type, worker_handle&&, std::pmr::memory_resource&,
+        std::pmr::memory_resource&, bool, std::string_view = {}) = delete;
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }
@@ -88,6 +90,9 @@ private:
         if (!owner_value.pending_.empty()) {
             co_return std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_));
         }
+        if (owner_value.receive_ended_) {
+            co_return std::nullopt;
+        }
         if (!(co_await owner_value.read_some())) {
             owner_value.receive_ended_ = true;
             co_return std::nullopt;
@@ -108,6 +113,9 @@ private:
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
         if (!owner_value.pending_.empty()) {
             co_return http_tunnel_input{std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_)), false};
+        }
+        if (owner_value.receive_ended_) {
+            co_return std::nullopt;
         }
         auto input = co_await owner_value.transport_.read_datagram();
         if (!input) {

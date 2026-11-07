@@ -10,6 +10,7 @@
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request_content_semantics.h"
@@ -47,12 +48,13 @@ public:
         return count_;
     }
     // Both accessors throw std::out_of_range for index >= size().
-    [[nodiscard]] constexpr const range& operator[](std::size_t index) const {
+    [[nodiscard]] constexpr const range& operator[](std::size_t index) const& RUVIA_LIFETIMEBOUND {
         if (index >= count_) {
             throw std::out_of_range("HTTP byte range index out of range");
         }
         return ranges_[index];
     }
+    const range& operator[](std::size_t) const&& = delete;
 
 private:
     friend http_byte_range_set resolve_http_byte_range_set(std::string_view, http_content_length) noexcept;

@@ -57,8 +57,9 @@ application& application::cors(std::nullptr_t) {
 }
 
 application& application::document_root(document_root_config config) {
+    std::optional<detail::app_document_root_config> retired;
     return detail::mutate_stopped_app(*this, *state_,
-        "cannot change document root while app is running", [&config](detail::app_state& state_value) {
+        "cannot change document root while app is running", [&config, &retired](detail::app_state& state_value) {
             if (config.root_.empty()) {
                 throw std::invalid_argument("document root must not be empty");
             }
@@ -78,14 +79,17 @@ application& application::document_root(document_root_config config) {
                 .budget_bytes_ = config.static_options_.resident_budget_bytes_.value_or(std::size_t{16} * 1024 * 1024),
             };
 
-            state_value.document_root_config_ = std::move(replacement);
+            retired = std::exchange(state_value.document_root_config_, std::move(replacement));
         });
 }
 
 application& application::document_root(std::nullptr_t) {
+    std::optional<detail::app_document_root_config> retired;
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change document root while app is running",
-        [](detail::app_state& state_value) { state_value.document_root_config_.reset(); });
+        [&retired](detail::app_state& state_value) {
+            retired = std::exchange(state_value.document_root_config_, std::nullopt);
+        });
 }
 
 application& application::use_middleware(detail::owned_middleware_descriptor descriptor) {
@@ -119,15 +123,13 @@ application& application::use_worker_state_definition(detail::worker_state_defin
 application& application::on_error(http_error_handler handler) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change error handler while app is running",
-        [handler = std::move(handler)](
-            detail::app_state& state_value) mutable { state_value.configuration_.on_error(std::move(handler)); });
+        [&handler](detail::app_state& state_value) { state_value.configuration_.on_error(std::move(handler)); });
 }
 
 application& application::on_not_found(http_not_found_handler handler) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change not found handler while app is running",
-        [handler = std::move(handler)](
-            detail::app_state& state_value) mutable { state_value.configuration_.on_not_found(std::move(handler)); });
+        [&handler](detail::app_state& state_value) { state_value.configuration_.on_not_found(std::move(handler)); });
 }
 
 application& application::on_error(std::nullptr_t) {
@@ -150,7 +152,7 @@ application& application::on_not_found(std::nullptr_t) {
 application& application::on_error(scoped_error_handler_options options) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change error handler while app is running",
-        [options = std::move(options)](detail::app_state& state_value) mutable {
+        [&options](detail::app_state& state_value) {
             state_value.configuration_.on_error(std::move(options));
         });
 }
@@ -158,7 +160,7 @@ application& application::on_error(scoped_error_handler_options options) {
 application& application::on_not_found(scoped_not_found_handler_options options) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change not found handler while app is running",
-        [options = std::move(options)](detail::app_state& state_value) mutable {
+        [&options](detail::app_state& state_value) {
             state_value.configuration_.on_not_found(std::move(options));
         });
 }

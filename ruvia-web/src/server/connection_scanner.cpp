@@ -230,20 +230,22 @@ connection_scanner::impl_type::impl_type(
     reusable_sentinel_.reusable_prev_ = reusable_sentinel_.reusable_next_ = &reusable_sentinel_;
 }
 bool connection_scanner::impl_type::retire() noexcept {
-    stop();
     // scanning_ is worker-local; only the worker thread may observe it. On that
     // thread a set flag means this call is nested inside the scan callback,
     // which already holds the timer mutex.
     const bool on_worker = worker_.is_current();
     const bool nested_in_scan = on_worker && scanning_;
     if (nested_in_scan) {
+        stop();
         timer_state_->owner_ = nullptr;
         release_after_scan_ = true;
     } else if (on_worker) {
+        stop();
         timer_state_->owner_ = nullptr;
     } else {
         // Another thread may be scanning; wait for that callback to finish.
         std::lock_guard lock(timer_state_->mutex_);
+        stop();
         timer_state_->owner_ = nullptr;
     }
     // Unregistration keeps the scan cursors consistent, so a nested scan ends
@@ -368,41 +370,47 @@ void connection_scanner::impl_type::schedule() {
         if (outcome == worker_timer_outcome::cancelled) {
             return;
         }
-        std::lock_guard lock(timer_state->mutex_);
-        auto* scanner = timer_state->owner_;
-        if (scanner == nullptr || !scanner->running_) {
-            return;
-        }
-        // Expiry has consumed this timer. Release its token before callbacks,
-        // which may stop, restart, or destroy the scanner.
-        scanner->timer_.cancel();
-        // 每轮采样一次比较时钟，供超时、协议检查和跨轮空闲判断共用。
-        const auto interval_start = scanner->cached_now_ms_;
-        scanner->cached_now_ms_ = steady_now_ms();
-        scanner->scanning_ = true;
-        const bool idle = scanner->scan(interval_start);
-        scanner->scanning_ = false;
-        if (scanner->release_after_scan_) {
-            // A callback destroyed the scanner; its teardown already ran.
-            destroy_pmr_object(scanner, process_resource());
-            return;
-        }
-        // Never during an exchange or a burst: only after a whole interval
-        // without either, once per such quiet period. The timer runs on the
-        // worker that owns the memory.
-        if (idle && scanner->retired_activity_ms_ < interval_start) {
-            if (!scanner->quiet_trimmed_) {
-                scanner->options_.trim_when_idle_->trim(scanner->worker_);
-                scanner->quiet_trimmed_ = true;
+        impl_type* destroy_after_lock = nullptr;
+        {
+            std::lock_guard lock(timer_state->mutex_);
+            auto* scanner = timer_state->owner_;
+            if (scanner == nullptr || !scanner->running_) {
+                return;
             }
-        } else {
-            scanner->quiet_trimmed_ = false;
+            // Expiry has consumed this timer. Release its token before callbacks,
+            // which may stop, restart, or destroy the scanner.
+            scanner->timer_.cancel();
+            // 每轮采样一次比较时钟，供超时、协议检查和跨轮空闲判断共用。
+            const auto interval_start = scanner->cached_now_ms_;
+            scanner->cached_now_ms_ = steady_now_ms();
+            scanner->scanning_ = true;
+            const bool idle = scanner->scan(interval_start);
+            scanner->scanning_ = false;
+            if (scanner->release_after_scan_) {
+                // A callback destroyed the scanner; its teardown already ran.
+                destroy_after_lock = scanner;
+            } else {
+                // Never during an exchange or a burst: only after a whole interval
+                // without either, once per such quiet period. The timer runs on the
+                // worker that owns the memory.
+                if (idle && scanner->retired_activity_ms_ < interval_start) {
+                    if (!scanner->quiet_trimmed_) {
+                        scanner->options_.trim_when_idle_->trim(scanner->worker_);
+                        scanner->quiet_trimmed_ = true;
+                    }
+                } else {
+                    scanner->quiet_trimmed_ = false;
+                }
+                // With no entry left and the quiet period trimmed, nothing remains to
+                // time: park until register_entry() re-arms the scan.
+                const bool parked = scanner->quiet_trimmed_ && scanner->sentinel_.next_ == &scanner->sentinel_;
+                if (!parked && !scanner->timer_.registered()) {
+                    scanner->schedule();
+                }
+            }
         }
-        // With no entry left and the quiet period trimmed, nothing remains to
-        // time: park until register_entry() re-arms the scan.
-        const bool parked = scanner->quiet_trimmed_ && scanner->sentinel_.next_ == &scanner->sentinel_;
-        if (!parked && !scanner->timer_.registered()) {
-            scanner->schedule();
+        if (destroy_after_lock != nullptr) {
+            destroy_pmr_object(destroy_after_lock, process_resource());
         }
     });
 }

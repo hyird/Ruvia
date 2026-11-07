@@ -123,8 +123,7 @@ public:
     worker_delivery_result& operator=(const worker_delivery_result&) = delete;
     worker_delivery_result(worker_delivery_result&&) noexcept(
         std::is_nothrow_move_constructible_v<t_type>) = default;
-    worker_delivery_result& operator=(worker_delivery_result&&) noexcept(
-        std::is_nothrow_move_constructible_v<t_type> && std::is_nothrow_move_assignable_v<t_type>) = default;
+    worker_delivery_result& operator=(worker_delivery_result&&) = delete;
 
     [[nodiscard]] status_type status() const noexcept {
         return status_;

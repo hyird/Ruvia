@@ -311,7 +311,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         // cleaned up below. Declared before request_completion, which borrows
         // it; a suffix still in the read buffer is compacted in place instead.
         std::pmr::string pipeline_stash(request_memory_value.resource());
-        http1_interim_response_sink interim_sink(stream, parsed_value.request_, memory_.resource(), response_output);
+        http1_interim_response_sink interim_sink(
+            stream, parsed_value.request_, memory_.resource(), response_output, scanner_entry);
         base_route_services.bind_interim_output(interim_sink.output());
         std::optional<http_request_admission> admission;
         std::optional<http1_session_request_completion> request_completion;
@@ -324,9 +325,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         std::size_t header_search_offset = 0;
         // Request timing starts with the request's first bytes: the idle wait
         // above already has them; a pipelined request's arrived earlier.
-        const bool record_access_timing = static_cast<bool>(options_.access_log_.callback_);
-        auto request_start = record_access_timing ? std::chrono::steady_clock::now()
-                                                  : std::chrono::steady_clock::time_point{};
+        const auto request_start = options_.access_log_.callback_ ? std::chrono::steady_clock::now()
+                                                                  : std::chrono::steady_clock::time_point{};
         for (;;) {
 #if defined(RUVIA_ENABLE_HTTP2)
             if constexpr (plain_tcp) {
@@ -336,7 +336,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 // completed an HTTP/1 exchange stays HTTP/1, so both refuse
                 // prior-knowledge HTTP/2.
                 const auto preface_probe =
-                    read_buffer.empty() || session.served_keepalive_request_ || listener_value.redirect() != nullptr
+                    session.served_keepalive_request_ || listener_value.redirect() != nullptr
                         ? http2_cleartext_preface_probe::http1
                         : probe_http2_cleartext_preface(read_buffer.pending());
                 if (preface_probe == http2_cleartext_preface_probe::complete_preface) {
@@ -436,8 +436,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     // An unresolved request never reads its body, whether the
                     // shared Web dispatch selected a document-root file, 404,
                     // 405, or OPTIONS response.
-                    request_completion.emplace(finalize_unread_body_response(
-                        response, parsed_value, *request_head, buffer_view, request_sequence));
+                    request_completion.emplace(finalize_unread_body_response(response, parsed_value,
+                        *request_head, buffer_view, request_sequence, admission->body_limit()));
                     scanner_entry.touch();
                     break;
                 }
@@ -570,9 +570,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             if (request_sequence.request_input_ended()) {
                 co_return http_connection_close::notify;
             }
-            scanner_entry.read_request_head(read_buffer.empty() && session.served_keepalive_request_
-                                                ? connection_scanner::phase::idle
-                                                : connection_scanner::phase::reading_initial);
+            scanner_entry.read_request_head(connection_scanner::phase::reading_initial);
             const auto read_space = read_buffer.prepare_read();
             if (read_space.empty()) {
                 // The buffer only fills at max_http_header_bytes, where
@@ -591,9 +589,6 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 // answered with this side's close alert; anything else closes
                 // immediately, as does a stopping worker.
                 co_return http1_request_head_read_close(ec, scanner_entry);
-            }
-            if (record_access_timing && read_buffer.empty()) {
-                request_start = std::chrono::steady_clock::now();
             }
             read_buffer.commit_read(bytes_read);
             scanner_entry.touch();
@@ -617,10 +612,11 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 request_memory_value, *request_rejection,
                 admission ? admission->services() : base_route_services);
             const auto* rejected_head = parsed_value.head_ready();
-            request_completion.emplace(request_rejection->rate_limit() != nullptr && rejected_head != nullptr
-                                           ? finalize_unread_body_response(response, parsed_value, *rejected_head,
-                                                 read_buffer.pending(), request_sequence)
-                                           : close_with_framework_response(response, parsed_value.connection_plan_));
+            request_completion.emplace(
+                request_rejection->rate_limit() != nullptr && rejected_head != nullptr
+                    ? finalize_unread_body_response(response, parsed_value, *rejected_head,
+                          read_buffer.pending(), request_sequence, admission->body_limit())
+                    : close_with_framework_response(response, parsed_value.connection_plan_));
         }
 
         if (!request_completion) {
@@ -680,9 +676,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     // before its head leaves, so a file that cannot be served
                     // still gets an error response.
                     file_body.emplace(response, file_output);
-                    scanner_entry.set_phase(connection_scanner::phase::writing);
                     if (!(co_await file_body->start(*planned_response))) {
-                        scanner_entry.set_phase(connection_scanner::phase::idle);
                         const auto& file_failure = *file_body->failure();
                         options_.connection_failure_.invoke(remote_address, file_failure.fault());
                         head_failure = file_failure.response_error();

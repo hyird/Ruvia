@@ -70,8 +70,9 @@ public:
     }
 
 private:
-    friend std::optional<json_string_token> parse_json_string(std::string_view& input, std::pmr::string* decoded);
-
+    template <typename escaped_budget_type>
+    friend std::optional<json_string_token> parse_json_string(
+        std::string_view& input, std::pmr::string* decoded, escaped_budget_type&& consume_escaped_bytes);
     json_string_token(std::string_view raw, json_string_encoding encoding) noexcept
         : raw_(raw),
           encoding_(encoding) {}
@@ -89,8 +90,9 @@ private:
 // replaces its contents with the decoded text, starting at the first escape,
 // so escaped input is neither rescanned nor copied before it is known to need
 // decoding. After a failed scan `decoded` holds unspecified contents.
+template <typename escaped_budget_type>
 [[nodiscard]] inline std::optional<json_string_token> parse_json_string(
-    std::string_view& input, std::pmr::string* decoded = nullptr) {
+    std::string_view& input, std::pmr::string* decoded, escaped_budget_type&& consume_escaped_bytes) {
     auto remaining = input;
     skip_json_whitespace(remaining);
     if (remaining.empty() || remaining.front() != '"') {
@@ -160,11 +162,15 @@ private:
                 default:
                     return std::nullopt;
             }
+            const auto next_until = i + escape_length;
             if (decoded != nullptr) {
+                if (!consume_escaped_bytes(next_until - decoded_until)) {
+                    return std::nullopt;
+                }
                 decoded->append(remaining.data() + decoded_until, i - decoded_until);
                 append_utf8(*decoded, code_point);
             }
-            i += escape_length;
+            i = next_until;
             decoded_until = i;
             continue;
         }
@@ -174,6 +180,9 @@ private:
         }
         if (c == '"') {
             if (encoding == json_string_encoding::escaped && decoded != nullptr) {
+                if (!consume_escaped_bytes(i - decoded_until)) {
+                    return std::nullopt;
+                }
                 decoded->append(remaining.data() + decoded_until, i - decoded_until);
             }
             const json_string_token token(remaining.substr(0, i), encoding);
@@ -195,6 +204,10 @@ private:
     return std::nullopt;
 }
 
+[[nodiscard]] inline std::optional<json_string_token> parse_json_string(
+    std::string_view& input, std::pmr::string* decoded = nullptr) {
+    return parse_json_string(input, decoded, [](std::size_t) noexcept { return true; });
+}
 // The text of a string scanned by parse_json_string(input, &decoded).
 [[nodiscard]] inline std::string_view json_string_text(
     const json_string_token& token, const std::pmr::string& decoded) noexcept {

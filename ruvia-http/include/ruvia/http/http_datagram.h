@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 
 namespace ruvia {
@@ -135,7 +136,7 @@ enum class http_datagram_error : std::uint8_t {
 // belongs to this plan; payload() continues to borrow the caller's input.
 class http_datagram_write_plan final {
 public:
-    [[nodiscard]] constexpr std::string_view prefix() const& noexcept {
+    [[nodiscard]] constexpr std::string_view prefix() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::string_view(prefix_.data(), prefix_size_);
     }
     std::string_view prefix() const&& = delete;

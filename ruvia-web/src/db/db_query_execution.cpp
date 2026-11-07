@@ -7,6 +7,7 @@
 
 #include "db/db_pool.h"
 #include "db/db_pool_dispatch.h"
+#include "integration/request_io_metrics.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache.h"
 #include "db/db_query_cache_state.h"
@@ -83,6 +84,8 @@ task<db_query_result<with_count>> execute_db_query_plan(
         } else
 #endif
         {
+            scoped_request_io_timer timer(
+                backend.slot_.has_value() ? backend.io_metrics_ : nullptr, request_io_kind::db);
             try {
                 results[index].emplace(co_await query_db_backend(
                     backend, std::move(step.sql_), std::move(step.params_), step_options));

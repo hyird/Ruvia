@@ -50,7 +50,7 @@ public:
         return size_ == capacity();
     }
 
-    [[nodiscard]] value_type* prepare_push() noexcept {
+    [[nodiscard]] value_type* prepare_push() & noexcept {
         if (prepared_) {
             std::terminate();
         }
@@ -60,6 +60,7 @@ public:
         prepared_ = true;
         return storage_.get() + slot_index(size_);
     }
+    value_type* prepare_push() && = delete;
 
     void commit_push() noexcept {
         if (!prepared_) {
@@ -81,12 +82,14 @@ public:
         return push_value(std::move(value));
     }
 
-    [[nodiscard]] value_type* front() noexcept {
+    [[nodiscard]] value_type* front() & noexcept {
         return size_ == 0 ? nullptr : storage_.get() + head_;
     }
-    [[nodiscard]] const value_type* front() const noexcept {
+    [[nodiscard]] const value_type* front() const& noexcept {
         return size_ == 0 ? nullptr : storage_.get() + head_;
     }
+    value_type* front() && = delete;
+    const value_type* front() const&& = delete;
 
     void pop() noexcept {
         if (size_ == 0) {

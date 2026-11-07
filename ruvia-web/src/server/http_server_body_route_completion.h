@@ -138,9 +138,10 @@ template <typename stream_type>
 // stays reusable; any other unread body closes it after the response.
 [[nodiscard]] inline http1_session_request_completion finalize_unread_body_response(http_response& response,
     const http1_server_request_parse_state& parsed_value, const http1_server_request_head_ready& request_head,
-    std::string_view request_bytes, http1_request_sequence& request_sequence) {
-    const auto body_bytes =
-        buffered_request_body_bytes(parsed_value.body_plan_, http_body_and_pipeline(request_head, request_bytes));
+    std::string_view request_bytes, http1_request_sequence& request_sequence,
+    protocol_byte_limit body_limit = protocol_byte_limit::unlimited()) {
+    const auto body_bytes = buffered_request_body_bytes(
+        parsed_value.body_plan_, http_body_and_pipeline(request_head, request_bytes), body_limit);
     const auto connection_plan = apply_request_body_consumption(parsed_value.connection_plan_,
         body_bytes ? http1_request_body_consumption::complete : http1_request_body_consumption::incomplete);
     return finalize_buffered_route_response(

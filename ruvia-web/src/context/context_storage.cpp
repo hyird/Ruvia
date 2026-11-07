@@ -34,8 +34,9 @@ context::context(request_memory& memory, const http_request& request,
       param_count_(param_count < detail::max_route_params ? param_count : detail::max_route_params),
       route_rate_limit_scope_(route_rate_limit_scope),
       request_storage_(make_pmr_object<detail::context_request_storage>(memory.resource(),
-          services, memory.resource())) {}
-
+          services, memory.resource())) {
+    operation_scope_.bind_worker(services.worker());
+}
 context::~context() = default;
 
 bool context::is_subrequest() const noexcept {

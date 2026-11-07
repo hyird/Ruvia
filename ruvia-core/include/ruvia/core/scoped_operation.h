@@ -47,9 +47,14 @@ public:
     }
     // Borrows the worker handle, which must outlive this scope (the same rule
     // as task_scope). Bind once, before any operation is registered.
-    void bind_worker(const worker_handle& worker) noexcept {
+    void bind_worker(const worker_handle& worker) & noexcept {
+        if (worker_ != nullptr || head_ != nullptr || capability_head_ != nullptr || !active_) {
+            std::terminate();
+        }
         worker_ = &worker;
     }
+    void bind_worker(const worker_handle&) && = delete;
+    void bind_worker(worker_handle&&) = delete;
 
 private:
     friend class detail::scoped_operation_registration;

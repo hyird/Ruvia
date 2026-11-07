@@ -14,7 +14,7 @@
 #include "ruvia/http/http_pmr_string.h"
 
 #include "http2/http2_header_rules.h"
-
+#include "util/geometric_reserve.h"
 namespace ruvia::detail {
 
 // The field section handed to one nghttp2 HEADERS/PUSH_PROMISE submission.
@@ -45,10 +45,12 @@ public:
 
     void reserve(std::size_t fields) {
         entries_.reserve(entries_.size() + fields);
+        nv_.reserve(entries_.size() + fields);
     }
 
     // `name` must already be lowercase; both views must outlive the submission.
     void add(std::string_view name, std::string_view value) {
+        reserve_geometric(entries_, entries_.size() + 1);
         entries_.push_back(entry_type{.name_ = text_type::borrowed(name),
             .value_ = text_type::borrowed(value),
             .sensitive_ = hpack_header_name_is_sensitive(name)});
@@ -56,8 +58,10 @@ public:
 
     // Copies `value`, which may be a temporary formatting buffer.
     void add_owned_value(std::string_view name, std::string_view value) {
+        reserve_geometric(entries_, entries_.size() + 1);
+        const auto owned_value = own(value);
         entries_.push_back(entry_type{.name_ = text_type::borrowed(name),
-            .value_ = own(value),
+            .value_ = owned_value,
             .sensitive_ = hpack_header_name_is_sensitive(name)});
     }
 
@@ -67,7 +71,9 @@ public:
         std::pmr::string scratch(owned_.get_allocator());
         const auto lower = http2_lower_header_name(name, stack, scratch);
         const bool borrowed = lower.data() == name.data();
-        entries_.push_back(entry_type{.name_ = borrowed ? text_type::borrowed(name) : own(lower),
+        reserve_geometric(entries_, entries_.size() + 1);
+        const auto entry_name = borrowed ? text_type::borrowed(name) : own(lower);
+        entries_.push_back(entry_type{.name_ = entry_name,
             .value_ = text_type::borrowed(value),
             .sensitive_ = hpack_header_name_is_sensitive(lower)});
     }
@@ -115,6 +121,7 @@ private:
 
     [[nodiscard]] text_type own(std::string_view text) {
         const auto offset = owned_.size();
+        reserve_geometric(owned_, offset + text.size());
         owned_.append(text.data(), text.size());
         return text_type{.data_ = nullptr, .offset_ = offset, .size_ = text.size()};
     }

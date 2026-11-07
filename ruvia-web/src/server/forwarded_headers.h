@@ -81,14 +81,25 @@ inline void visit_comma_separated(std::string_view value, fn_type&& fn) {
 
 [[nodiscard]] inline forwarded_client parse_forwarded_element(std::string_view element) noexcept {
     forwarded_client hop;
+    bool saw_for = false;
+    bool saw_proto = false;
     // RFC 7239 values are token / quoted-string; a ';' inside quotes is data.
     http_visit_semicolon_parameters_quoted_field(
         element, [&](std::string_view name, std::string_view value) {
-            value = http_trim_quoted_field_value(value);
-            if (http_ascii_equals_ignore_case(name, "for") && hop.address_.empty()) {
-                hop.address_ = forwarded_node_address(value);
-            } else if (http_ascii_equals_ignore_case(name, "proto") && hop.scheme_.empty()) {
-                hop.scheme_ = forwarded_http_scheme_token(value);
+            if (http_ascii_equals_ignore_case(name, "for")) {
+                if (saw_for) {
+                    hop.address_ = {};
+                } else {
+                    saw_for = true;
+                    hop.address_ = forwarded_node_address(value);
+                }
+            } else if (http_ascii_equals_ignore_case(name, "proto")) {
+                if (saw_proto) {
+                    hop.scheme_ = {};
+                } else {
+                    saw_proto = true;
+                    hop.scheme_ = forwarded_http_scheme_token(http_trim_quoted_field_value(value));
+                }
             }
             return true;
         });

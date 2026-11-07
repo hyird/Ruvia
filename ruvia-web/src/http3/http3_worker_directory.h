@@ -5,13 +5,14 @@
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <span>
 #include <utility>
 #include <vector>
 
 #include <asio/ip/udp.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_handle.h"
-
 namespace ruvia::detail {
 
 #if defined(_WIN32)
@@ -21,7 +22,7 @@ class windows_acceptor;
 // One datagram handed to a worker that did not receive it. It owns its bytes
 // because it crosses threads.
 struct http3_handoff_datagram final {
-    std::vector<std::byte> bytes_;
+    std::pmr::vector<std::byte> bytes_;
     asio::ip::udp::endpoint remote_;
     std::uint32_t ecn_{0};
 };
@@ -92,8 +93,9 @@ public:
     void detach(std::size_t index) noexcept;
 
     // Any thread. False when the datagram was dropped.
-    [[nodiscard]] bool hand_off(
-        std::size_t owner, std::size_t listener_index, http3_handoff_datagram&& datagram) noexcept;
+    [[nodiscard]] bool hand_off(std::size_t owner, std::size_t listener_index,
+        std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
+        std::uint32_t ecn = 0) noexcept;
 
 private:
     struct slot final {
@@ -104,7 +106,7 @@ private:
         std::atomic<std::size_t> in_flight_{0};
     };
 
-    std::pmr::vector<std::unique_ptr<slot>> slots_;
+    std::pmr::vector<std::unique_ptr<slot, pmr_object_deleter<slot>>> slots_;
 };
 
 // Where one worker's HTTP/3 endpoints sit among the application's workers:

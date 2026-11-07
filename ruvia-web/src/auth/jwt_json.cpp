@@ -1,8 +1,11 @@
+#include "auth/jwt_primitives.h"
+
+#ifdef RUVIA_ENABLE_JWT
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <forward_list>
-#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -19,8 +22,6 @@
 #include "ruvia/web/detail/json/json_string.h"
 
 #include "auth/jwt_date.h"
-#include "auth/jwt_primitives.h"
-
 namespace ruvia {
 namespace detail {
 
@@ -36,9 +37,9 @@ template <typename visitor_type>
     static constexpr std::size_t inline_capacity = 16;
     std::array<std::string_view, inline_capacity> inline_names;
     std::size_t inline_count = 0;
-    std::pmr::vector<std::string_view> heap_names(resource);
-    std::pmr::forward_list<std::pmr::string> decoded_names(resource);
-    const std::less_equal<> not_after;
+    auto* const resolved = pmr_resource_or_default(resource);
+    std::pmr::vector<std::string_view> heap_names(resolved);
+    std::pmr::forward_list<std::pmr::string> decoded_names(resolved);
     const auto record_name = [&](std::string_view stored_name) {
         if (!heap_names.empty()) {
             heap_names.push_back(stored_name);
@@ -52,10 +53,12 @@ template <typename visitor_type>
     };
     auto input = json;
     auto& visitor_ref = visitor;
-    const bool consumed = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource, 0,
+    const auto json_begin = reinterpret_cast<std::uintptr_t>(json.data());
+    const bool consumed = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resolved, 0,
         [&](std::string_view name, std::string_view& value_input) {
-            if (not_after(json.data(), name.data()) &&
-                not_after(name.data() + name.size(), json.data() + json.size())) {
+            const auto name_begin = reinterpret_cast<std::uintptr_t>(name.data());
+            if (name_begin >= json_begin && name_begin - json_begin <= json.size() &&
+                name.size() <= json.size() - (name_begin - json_begin)) {
                 record_name(name);
             } else {
                 record_name(decoded_names.emplace_front(name));
@@ -110,7 +113,7 @@ template <typename visitor_type>
 
 [[nodiscard]] std::optional<std::pmr::string> jwt_decode_json_string_value(
     std::string_view& value, std::pmr::memory_resource* resource) {
-    std::pmr::string decoded(resource);
+    std::pmr::string decoded(pmr_resource_or_default(resource));
     const auto parsed_value = parse_json_string(value, &decoded);
     if (!parsed_value.has_value()) {
         return std::nullopt;
@@ -145,11 +148,12 @@ void jwt_append_json_numeric_date(
 
 void jwt_validate_jose_header(std::string_view json,
     std::optional<std::string_view> expected_algorithm, std::pmr::memory_resource* resource) {
+    auto* const resolved = pmr_resource_or_default(resource);
     std::optional<std::string_view> algorithm;
-    std::pmr::string decoded_algorithm(resource);
+    std::pmr::string decoded_algorithm(resolved);
     bool unsupported_extension = false;
     const bool valid = visit_unique_jwt_json_object_fields(
-        json, resource, [&](std::string_view name, std::string_view& value) {
+        json, resolved, [&](std::string_view name, std::string_view& value) {
             if (name == "alg") {
                 const auto parsed = parse_json_string(value, &decoded_algorithm);
                 if (!parsed.has_value()) {
@@ -308,3 +312,5 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
 }
 
 }  // namespace ruvia
+
+#endif  // RUVIA_ENABLE_JWT

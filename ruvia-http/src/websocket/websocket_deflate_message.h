@@ -49,6 +49,7 @@ namespace ruvia::detail {
     char buffer[4096];
     for (;;) {
         zlib_refill_input(stream, input, supplied);
+        const auto before_input = stream.avail_in;
         stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = sizeof(buffer);
         const int status = deflate(&stream, supplied == input.size() ? Z_SYNC_FLUSH : Z_NO_FLUSH);
@@ -56,9 +57,14 @@ namespace ruvia::detail {
             deflater.rethrow_allocation_failure();
             return false;
         }
-        out.append(buffer, sizeof(buffer) - stream.avail_out);
+        const auto produced = sizeof(buffer) - stream.avail_out;
+        out.append(buffer, produced);
         if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == input.size()) {
             break;
+        }
+        if (produced == 0 && stream.avail_in == before_input &&
+            !(stream.avail_in == 0 && supplied < input.size())) {
+            return false;
         }
     }
     if (out.size() - start >= 4) {
@@ -81,6 +87,7 @@ namespace ruvia::detail {
     char buffer[8192];
     for (;;) {
         zlib_refill_input(stream, std::string_view(data, size), supplied);
+        const auto before_input = stream.avail_in;
         stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = sizeof(buffer);
         const int status = inflate(&stream, Z_NO_FLUSH);
@@ -101,6 +108,10 @@ namespace ruvia::detail {
         }
         if (stream.avail_out != 0 && stream.avail_in == 0 && supplied == size) {
             break;
+        }
+        if (produced == 0 && stream.avail_in == before_input &&
+            !(stream.avail_in == 0 && supplied < size)) {
+            return websocket_inflate_result::error;
         }
     }
     return websocket_inflate_result::ok;

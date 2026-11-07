@@ -39,14 +39,18 @@ db_handle db_client_state::handle(operation_options options) {
 namespace ruvia {
 
 db_client::db_client(event_loop loop, const db_config& config)
-    : state_(std::make_shared<detail::db_client_state>(std::move(loop), config)) {
+    : state_(std::allocate_shared<detail::db_client_state>(
+          std::pmr::polymorphic_allocator<detail::db_client_state>(process_resource()),
+          std::move(loop), config)) {
     state_->bind_stop();
 }
 
 #ifdef RUVIA_ENABLE_REDIS
 db_client::db_client(event_loop loop, const db_config& config,
     const redis_handle& cache_store, const db_cache_config& cache_policy)
-    : state_(std::make_shared<detail::db_client_state>(std::move(loop), config, cache_store, cache_policy)) {
+    : state_(std::allocate_shared<detail::db_client_state>(
+          std::pmr::polymorphic_allocator<detail::db_client_state>(process_resource()),
+          std::move(loop), config, cache_store, cache_policy)) {
     state_->bind_stop();
 }
 #endif

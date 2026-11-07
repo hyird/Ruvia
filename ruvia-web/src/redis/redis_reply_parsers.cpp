@@ -12,7 +12,7 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/util/decimal_number.h"
+#include "ruvia/web/detail/decimal_number.h"
 
 #include "redis/redis_command_args.h"
 #include "redis/redis_types_access.h"
@@ -130,8 +130,9 @@ void parse_redis_pong(redis_value&& value, std::pmr::memory_resource*) {
 }
 
 std::pmr::vector<bool> parse_redis_bool_array(redis_value&& value, std::pmr::memory_resource* resource) {
+    auto* const resolved = pmr_resource_or_default(resource);
     const auto items = redis_value_array(std::as_const(value));
-    std::pmr::vector<bool> output(resource);
+    std::pmr::vector<bool> output(resolved);
     output.reserve(items.size());
     for (const auto& item : items) {
         output.emplace_back(redis_value_integer_bool(item));
@@ -141,11 +142,12 @@ std::pmr::vector<bool> parse_redis_bool_array(redis_value&& value, std::pmr::mem
 
 std::pmr::vector<std::optional<std::pmr::string>> parse_redis_optional_string_array(
     redis_value&& value, std::pmr::memory_resource* resource) {
+    auto* const resolved = pmr_resource_or_default(resource);
     const auto items = redis_value_array(value);
-    std::pmr::vector<std::optional<std::pmr::string>> output(resource);
+    std::pmr::vector<std::optional<std::pmr::string>> output(resolved);
     output.reserve(items.size());
     for (auto& item : items) {
-        output.emplace_back(parse_redis_optional_string(std::move(item), resource));
+        output.emplace_back(parse_redis_optional_string(std::move(item), resolved));
     }
     return output;
 }
@@ -224,32 +226,34 @@ double parse_redis_double(std::string_view value, std::string_view context_value
 
 std::pmr::vector<redis_key_value> parse_redis_key_value_array(
     redis_value&& value, std::pmr::memory_resource* resource, std::string_view context_value) {
+    auto* const resolved = pmr_resource_or_default(resource);
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);
     }
-    std::pmr::vector<redis_key_value> result(resource);
+    std::pmr::vector<redis_key_value> result(resolved);
     result.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
         result.push_back(redis_types_access::key_value(
-            take_redis_string(std::move(values[i]), resource),
-            take_redis_string(std::move(values[i + 1]), resource)));
+            take_redis_string(std::move(values[i]), resolved),
+            take_redis_string(std::move(values[i + 1]), resolved)));
     }
     return result;
 }
 
 std::pmr::vector<redis_scored_value> parse_redis_scored_array(
     redis_value&& value, std::pmr::memory_resource* resource) {
+    auto* const resolved = pmr_resource_or_default(resource);
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, "unexpected redis scored array reply");
     }
-    std::pmr::vector<redis_scored_value> result(resource);
+    std::pmr::vector<redis_scored_value> result(resolved);
     result.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto score_text = redis_value_string(values[i + 1]);
         result.push_back(redis_types_access::scored_value(
-            take_redis_string(std::move(values[i]), resource),
+            take_redis_string(std::move(values[i]), resolved),
             parse_redis_double(score_text, "invalid redis score")));
     }
     return result;
@@ -257,11 +261,12 @@ std::pmr::vector<redis_scored_value> parse_redis_scored_array(
 
 std::pmr::vector<std::pmr::string> parse_redis_string_array(
     redis_value&& value, std::pmr::memory_resource* resource) {
+    auto* const resolved = pmr_resource_or_default(resource);
     const auto items = redis_value_array(value);
-    std::pmr::vector<std::pmr::string> output(resource);
+    std::pmr::vector<std::pmr::string> output(resolved);
     output.reserve(items.size());
     for (auto& item : items) {
-        output.emplace_back(take_redis_string(std::move(item), resource));
+        output.emplace_back(take_redis_string(std::move(item), resolved));
     }
     return output;
 }

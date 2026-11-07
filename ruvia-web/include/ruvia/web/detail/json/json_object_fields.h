@@ -31,15 +31,19 @@ template <typename visitor_type, typename key_allocation_type>
     key_allocation_type&& consume_key_allocation) {
     auto& visitor_ref = visitor;
     std::pmr::string decoded_key(pmr_resource_or_default(resource));
-    return consume_json_object_members(input, depth, &decoded_key,
+    bool key_started = false;
+    return consume_json_object_members(
+        input, depth, &decoded_key,
         [&](const json_string_token& key, std::string_view& value_input) {
+            key_started = false;
             if (key.encoding() == json_string_encoding::escaped) {
-                if (!consume_key_allocation(key.raw().size())) {
-                    return false;
-                }
                 return static_cast<bool>(visitor_ref(std::string_view(decoded_key), value_input));
             }
             return static_cast<bool>(visitor_ref(key.raw(), value_input));
+        },
+        [&](std::size_t bytes_value) noexcept {
+            const bool first = !std::exchange(key_started, true);
+            return consume_key_allocation(bytes_value, first);
         });
 }
 
@@ -47,7 +51,7 @@ template <typename visitor_type>
 [[nodiscard]] bool consume_json_object_fields(resolved_pmr_resource_tag, std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, visitor_type&& visitor) {
     return consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource, depth,
-        std::forward<visitor_type>(visitor), [](std::size_t) noexcept { return true; });
+        std::forward<visitor_type>(visitor), [](std::size_t, bool) noexcept { return true; });
 }
 
 // Visits every field of one complete JSON object body as a raw value slice

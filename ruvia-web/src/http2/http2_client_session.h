@@ -175,7 +175,8 @@ public:
             if (ping_interval_) {
                 last_input_ = std::chrono::steady_clock::now();
                 ping_pending_ = false;
-                schedule_ping(generation, last_input_ + *ping_interval_);
+                schedule_ping(generation,
+                    worker_timer_saturating_deadline(last_input_, worker_timer_saturating_duration_cast(*ping_interval_)));
             }
         } catch (...) {
             const auto failure = std::current_exception();
@@ -453,20 +454,21 @@ private:
             return;
         }
         const auto now = std::chrono::steady_clock::now();
+        const auto interval = worker_timer_saturating_duration_cast(*ping_interval_);
         try {
             if (ping_pending_ && last_input_ > ping_sent_at_) {
                 ping_pending_ = false;
             }
             if (ping_pending_) {
-                if (now - ping_sent_at_ >= *ping_interval_) {
+                if (now - ping_sent_at_ >= interval) {
                     fail(generation,
                         {.status_ = client_transport_status::aborted, .abort_ = client_abort_reason::timeout}, {});
                 } else {
-                    schedule_ping(generation, ping_sent_at_ + *ping_interval_);
+                    schedule_ping(generation, worker_timer_saturating_deadline(ping_sent_at_, interval));
                 }
                 return;
             }
-            if (const auto idle_deadline = last_input_ + *ping_interval_; idle_deadline > now) {
+            if (const auto idle_deadline = worker_timer_saturating_deadline(last_input_, interval); idle_deadline > now) {
                 schedule_ping(generation, idle_deadline);
                 return;
             }
@@ -477,7 +479,7 @@ private:
             ping_pending_ = true;
             ping_sent_at_ = now;
             wake_writer();
-            schedule_ping(generation, now + *ping_interval_);
+            schedule_ping(generation, worker_timer_saturating_deadline(now, interval));
         } catch (...) {
             fail(generation, {}, std::current_exception());
         }

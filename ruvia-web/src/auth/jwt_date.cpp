@@ -322,7 +322,7 @@ struct clock_parts final {
 }  // namespace
 
 jwt_numeric_date::jwt_numeric_date(std::string_view text, std::pmr::memory_resource* resource)
-    : text_(text, resource != nullptr ? resource : std::pmr::get_default_resource()) {
+    : text_(text, pmr_resource_or_default(resource)) {
 }
 
 jwt_numeric_date::jwt_numeric_date(jwt_numeric_date&& other) noexcept

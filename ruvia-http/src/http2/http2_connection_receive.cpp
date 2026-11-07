@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -14,7 +15,6 @@
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_response_headers.h"
-
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field
 // block per on_begin_headers/on_header/on_frame_recv sequence, DATA payload in
 // chunks borrowed from the fed input. nghttp2 has already enforced framing,
@@ -144,6 +144,7 @@ int http2_connection::begin_request_headers(const nghttp2_frame& frame) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
         }
         last_peer_stream_id_ = stream_id;
+        highest_peer_stream_id_ = (std::max)(highest_peer_stream_id_, stream_id);
         if (end_stream) {
             (void)stream->record_remote_head_end_stream();
         }
@@ -200,6 +201,7 @@ int http2_connection::begin_push_promise(const nghttp2_frame& frame) {
     const auto associated_id = static_cast<std::uint32_t>(frame.hd.stream_id);
     const auto promised_id = static_cast<std::uint32_t>(frame.push_promise.promised_stream_id);
     last_peer_stream_id_ = promised_id;
+    highest_peer_stream_id_ = (std::max)(highest_peer_stream_id_, promised_id);
     const auto* parent = streams_.find(associated_id);
     // The promised request decodes into scratch storage; the pushed stream's own
     // receive state awaits the response.
@@ -359,6 +361,7 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
             return false;
         }
         stream.mark_informational_response();
+        stream.activate_push();
         auto head = http_client_response_head_access::make(*block.status_, http_protocol_version::http2, resource_);
         if (!block.informational_fields_.empty()) {
             http_client_response_head_access::headers(head) = std::move(block.informational_fields_);
@@ -402,7 +405,9 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
             provider.read_callback = &http2_connection::read_outbound_data;
             check_nghttp2(nghttp2_submit_data2(
                 session_.get(), NGHTTP2_FLAG_END_STREAM, static_cast<std::int32_t>(stream.id()), &provider));
-            (void)stream.reject_local_connect();
+            if (can_send_empty_end_stream(stream.id())) {
+                (void)stream.reject_local_connect();
+            }
         }
     } else if (!stream.finalize_remote_content_head()) {
         return false;
@@ -427,8 +432,13 @@ bool http2_connection::finish_trailers(http2_stream_state& stream) {
 void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_block_type& block) {
     const auto promised_id = static_cast<std::uint32_t>(frame.push_promise.promised_stream_id);
     const auto associated_id = push_associated_stream_id_;
-    auto scratch = std::move(*push_scratch_);
-    push_scratch_.reset();
+    struct scratch_guard final {
+        std::optional<http2_stream_state>& scratch_;
+        ~scratch_guard() {
+            scratch_.reset();
+        }
+    } guard{push_scratch_};
+    auto& scratch = *push_scratch_;
     std::optional<http2_error_code> refusal;
     if (block.reject_connected_tunnel_) {
         // RFC 9113 §8.5: on a connected stream only DATA, RST_STREAM,
@@ -438,9 +448,6 @@ void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_bl
     } else if (!finish_request_head(scratch) ||
                (scratch.request_method() != "GET" && scratch.request_method() != "HEAD")) {
         refusal = http2_error_code::protocol_error;
-    } else if (const auto* drain = local_connection_state_.graceful_drain();
-        drain != nullptr && promised_id > drain->last_stream_id()) {
-        refusal = http2_error_code::refused_stream;
     }
     auto* stream = refusal ? nullptr : create_stream(promised_id);
     if (stream == nullptr) {

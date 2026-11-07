@@ -51,14 +51,18 @@ public:
     // the buffers an arena may retain for it: 1 for a single sized copy, more
     // when the text is built by growth or yields a second representation.
     [[nodiscard]] bool consume_owned_text(std::size_t bytes, std::size_t copies = 1) noexcept {
-        constexpr auto string_bytes = sizeof(std::pmr::string);
+        return consume_owned_text_chunk(bytes, copies, true);
+    }
+
+    [[nodiscard]] bool consume_owned_text_chunk(
+        std::size_t bytes, std::size_t copies, bool first_chunk) noexcept {
+        const auto string_bytes = first_chunk ? sizeof(std::pmr::string) : std::size_t{0};
         if (bytes > (std::numeric_limits<std::size_t>::max() - string_bytes) / copies) {
             exhausted_ = true;
             return false;
         }
         return consume_bytes(bytes * copies + string_bytes);
     }
-
     [[nodiscard]] bool consume_element() noexcept {
         if (elements_ == 0) {
             exhausted_ = true;
@@ -208,8 +212,8 @@ private:
                                      std::string_view key, std::string_view& value_input) -> bool {
             return visit_json_field(value, key, value_input, resource, depth, string_storage, budget);
         };
-        const auto consume_key_allocation = [&budget](std::size_t bytes_value) noexcept {
-            return budget.consume_owned_text(bytes_value);
+        const auto consume_key_allocation = [&budget](std::size_t bytes_value, bool first_chunk) noexcept {
+            return budget.consume_owned_text_chunk(bytes_value, 1, first_chunk);
         };
         const bool valid = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resource,
             depth, visit_field, consume_key_allocation);
@@ -358,16 +362,17 @@ template <typename t_type>
     auto remaining = input;
     if constexpr (is_ruvia_string<field_type>) {
         std::pmr::string decoded(pmr_resource_or_default(resource));
-        const auto token = parse_json_string(remaining, &decoded);
+        bool started = false;
+        const auto token = parse_json_string(remaining, &decoded, [&](std::size_t chunk_bytes) noexcept {
+            // Decoding grows its buffer geometrically, and an arena may retain
+            // every superseded buffer.
+            const bool first = !std::exchange(started, true);
+            return budget.consume_owned_text_chunk(chunk_bytes, 2, first);
+        });
         if (!token.has_value()) {
             return std::nullopt;
         }
         if (token->encoding() == json_string_encoding::escaped) {
-            // Decoding grows its buffer geometrically, and an arena may retain
-            // every superseded buffer.
-            if (!budget.consume_owned_text(token->raw().size(), 2)) {
-                return std::nullopt;
-            }
             input = remaining;
             field_type value = make_request_value<field_type>(resource);
             value.assign_owned(std::move(decoded));
@@ -384,9 +389,15 @@ template <typename t_type>
         return field_type(token->raw(), ::ruvia::model_options{.resource_ = resource});
     } else if constexpr (is_ruvia_bytes<field_type>) {
         std::pmr::string decoded(pmr_resource_or_default(resource));
-        const auto token = parse_json_string(remaining, &decoded);
-        // Escaped base64 may retain both decoded text and the byte value.
-        if (!token || !budget.consume_owned_text(token->raw().size(), 2)) {
+        bool started = false;
+        const auto token = parse_json_string(remaining, &decoded, [&](std::size_t chunk_bytes) noexcept {
+            // Escaped base64 may retain both decoded text and the byte value.
+            const bool first = !std::exchange(started, true);
+            return budget.consume_owned_text_chunk(chunk_bytes, 2, first);
+        });
+        if (!token ||
+            (token->encoding() == json_string_encoding::literal &&
+                !budget.consume_owned_text(token->raw().size(), 2))) {
             return std::nullopt;
         }
         auto value = decode_model_binary(json_string_text(*token, decoded), resource);

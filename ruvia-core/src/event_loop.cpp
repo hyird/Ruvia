@@ -56,8 +56,10 @@ public:
     }
 
     void retain(std::shared_ptr<event_loop_state> state_value) noexcept {
-        const std::lock_guard lock(mutex_);
-        state_ = std::move(state_value);
+        {
+            const std::lock_guard lock(mutex_);
+            state_.swap(state_value);
+        }
     }
 
     void release_state(event_loop_state* state_value) noexcept {
@@ -207,6 +209,7 @@ private:
             std::terminate();
         } catch (...) {
             report(std::current_exception());
+            callback_ = nullptr;
             auto active_loop = std::move(active_loop_);
             active_loop->retirement_.finish();
             return;
@@ -219,6 +222,7 @@ private:
                         if (failure != nullptr) {
                             self->report(std::move(failure));
                         }
+                        self->callback_ = nullptr;
                         auto active_loop = std::move(self->active_loop_);
                         active_loop->retirement_.finish();
                     }));
@@ -354,6 +358,9 @@ void event_loop_state::stop() noexcept {
 }
 
 void event_loop_state::schedule_finalize_when_idle() noexcept {
+    if (!runtime_.handle().valid()) {
+        return;
+    }
     const std::weak_ptr<event_loop_state> weak = weak_from_this();
     try {
         worker_handle_access::when_idle(runtime_.handle(), [weak] {
@@ -362,6 +369,9 @@ void event_loop_state::schedule_finalize_when_idle() noexcept {
             }
         });
     } catch (...) {
+        if (!runtime_.handle().valid()) {
+            return;
+        }
         fail_teardown_start(std::current_exception());
     }
 }

@@ -17,6 +17,7 @@
 #include "server/http_server_options.h"
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"
+#include "server/inbound_transport_error.h"
 #include "server/worker_codecs.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_handshake.h"
@@ -36,7 +37,7 @@ struct http1_websocket_upgrade_commit final {
     http_response_tail& tail_;
     const websocket_route_endpoint& websocket_endpoint_;
 
-    [[nodiscard]] task<std::optional<websocket_upgrade_commit<stream_type>>> operator()(
+    [[nodiscard]] task<websocket_upgrade_commit<stream_type>> operator()(
         context& context_value, std::span<const http_header_view> response_headers_value) const {
         const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request_,
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
@@ -45,9 +46,9 @@ struct http1_websocket_upgrade_commit final {
             dispatch_.memory_.resource());
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake,
-                dispatch_.parsed_.body_plan_.expectations(), *dispatch_.memory_.resource());
+                dispatch_.parsed_.body_plan_.expectations(), *dispatch_.memory_.resource(), dispatch_.scanner_entry_);
             ec) {
-            co_return std::nullopt;
+            throw inbound_transport_error(ec, "WebSocket handshake write");
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
         co_return websocket_upgrade_commit<stream_type>(

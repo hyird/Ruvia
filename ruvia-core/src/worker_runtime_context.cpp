@@ -19,11 +19,11 @@ worker_runtime_context::~worker_runtime_context() {
     detach();
 }
 
-asio::io_context& worker_runtime_context::io_context() const noexcept {
+asio::io_context& worker_runtime_context::io_context() const& noexcept {
     return *io_context_;
 }
 
-const worker_handle& worker_runtime_context::handle() const noexcept {
+const worker_handle& worker_runtime_context::handle() const& noexcept {
     return handle_;
 }
 

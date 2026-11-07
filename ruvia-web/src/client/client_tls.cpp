@@ -152,19 +152,6 @@ std::string_view selected_client_alpn(SSL* ssl) noexcept {
     return {reinterpret_cast<const char*>(selected), size};
 }
 
-std::pmr::string client_uri_host(std::string_view host, std::pmr::memory_resource* resource) {
-    std::pmr::string wire_host(pmr_resource_or_default(resource));
-    if ((host.find(':') != std::string_view::npos)) {
-        wire_host.reserve(host.size() + 2);
-        wire_host.push_back('[');
-        wire_host.append(host);
-        wire_host.push_back(']');
-    } else {
-        wire_host.assign(host);
-    }
-    return wire_host;
-}
-
 void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config) {
     if (config.mode_ != client_tls_mode::verify_identity) {
         throw std::invalid_argument("client TLS context requires TLS to be enabled");

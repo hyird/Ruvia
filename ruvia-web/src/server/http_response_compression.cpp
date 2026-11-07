@@ -225,14 +225,14 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     return {commit_compressed_body(response, coding, std::move(encoding)), false};
 }
 
-task<http_response_compression_status> compress_response_offloaded(
-    http_response_coding_selection selection, http_response& response, const worker_handle& worker_value) {
+task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection,
+    http_response& response, const worker_handle& worker_value, const stop_token& stop_token_value) {
     try {
         const auto coding = selection.coding();
         const bool identity_accepted = selection.identity_accepted();
         std::pmr::string plain(response.body_bytes(), process_resource());
-        auto result_value =
-            co_await run_blocking(worker_value, {}, [coding, identity_accepted, plain = std::move(plain)]() {
+        auto result_value = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value},
+            [coding, identity_accepted, plain = std::move(plain)]() {
                 return encode_http_content(
                     coding, plain, compressed_body_options(plain, identity_accepted, process_resource()));
             });
@@ -242,8 +242,9 @@ task<http_response_compression_status> compress_response_offloaded(
         }
         if (!result_value.completed()) {
             // Queue saturation and shutdown are overload/lifecycle outcomes,
-            // not broken encoders. Preserve the identity representation.
-            co_return http_response_compression_status::not_applicable;
+            // not broken encoders. Preserve the identity representation when
+            // identity is acceptable; otherwise report 503 Service Unavailable.
+            co_return http_response_compression_status::unavailable;
         }
         co_return commit_compressed_body(response, coding, std::move(result_value).value());
     } catch (...) {

@@ -33,7 +33,6 @@ enum class http2_stream_data_write_status : std::uint8_t {
     peer_closed,
     invalid_state,
     content_length_exceeded,
-    content_length_incomplete,
 };
 
 // Submits caller-owned input with a credit-sized payload allowance, retaining

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -36,7 +37,7 @@ public:
     public:
         // Only the prefix borrows this snapshot; retain the chunk until the
         // scatter-gather write has consumed it. The payload still borrows input.
-        [[nodiscard]] constexpr std::string_view prefix() const& noexcept {
+        [[nodiscard]] constexpr std::string_view prefix() const& noexcept RUVIA_LIFETIMEBOUND {
             return std::string_view(prefix_.data(), prefix_size_);
         }
         std::string_view prefix() const&& = delete;
@@ -63,6 +64,7 @@ public:
     [[nodiscard]] std::variant<chunk, http1_request_content_write_error> plan_chunk(std::span<const char> payload) noexcept;
     template <detail::http_temporary_owning_range<char> payload_type>
     std::variant<chunk, http1_request_content_write_error> plan_chunk(payload_type&&) noexcept = delete;
+    std::variant<chunk, http1_request_content_write_error> plan_chunk(std::initializer_list<char>) noexcept = delete;
     void commit_chunk();
     // Returns a view into buffer. Transmit it, then commit_finish(). Known-length
     // bodies return an empty view and still require a successful commit_finish().

@@ -9,6 +9,7 @@
 
 #include "ruvia/http/http3_connection.h"
 
+#include "failing_memory_resource.h"
 #include "http3_relay.h"
 #include "test_harness.h"
 
@@ -320,4 +321,50 @@ RUVIA_TEST(http3_priority_headers_and_priority_update_frames_reprioritize_stream
         RUVIA_CHECK_EQ(overridden->urgency_.value(), std::uint8_t{2});
         RUVIA_CHECK(overridden->incremental_);
     }
+}
+
+RUVIA_TEST(http3_connections_route_c_library_allocations_through_pmr) {
+    failing_memory_resource resource;
+    {
+        auto client = ruvia::http3_connection::client({.resource_ = &resource});
+        auto server = ruvia::http3_connection::server({.resource_ = &resource});
+        RUVIA_CHECK(resource.live_allocations() > std::size_t{0});
+        RUVIA_CHECK(client.bind_control_streams(2, 6, 10) == ruvia::http3_status::accepted);
+        RUVIA_CHECK(server.bind_control_streams(3, 7, 11) == ruvia::http3_status::accepted);
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+
+    resource.fail_after(0);
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::http3_connection::client({.resource_ = &resource});
+    }));
+    resource.allow_allocations();
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http3_request_enforces_declared_content_length) {
+    ruvia::testing::http3_peers peers;
+    RUVIA_CHECK(peers.bind());
+    ruvia::testing::http3_event_log client_log;
+    ruvia::testing::http3_event_log server_log;
+    RUVIA_CHECK(peers.to_client(client_log));
+    RUVIA_CHECK(peers.to_server(server_log));
+
+    constexpr std::array post_fields{
+        ruvia::http3_field_view{":method", "POST"},
+        ruvia::http3_field_view{":scheme", "https"},
+        ruvia::http3_field_view{":authority", "example.test"},
+        ruvia::http3_field_view{":path", "/upload"},
+        ruvia::http3_field_view{"content-length", "5"},
+    };
+    RUVIA_CHECK(peers.client_.submit_request(0, post_fields, false) == ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.client_.submit_data(0, ruvia::testing::http3_bytes("abc")).status_ ==
+                ruvia::http3_status::accepted);
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)peers.client_.finish_stream(0); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)peers.client_.submit_data(0, ruvia::testing::http3_bytes("def"));
+    }));
+    RUVIA_CHECK(peers.client_.submit_data(0, ruvia::testing::http3_bytes("de")).status_ ==
+                ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.client_.finish_stream(0) == ruvia::http3_status::accepted);
 }

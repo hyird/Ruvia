@@ -30,10 +30,11 @@ void http2_connection::flush_window_debt(http2_stream_state& stream) {
 
 bool http2_connection::release_received_data(std::uint32_t stream_id, std::uint32_t bytes_value) {
     auto* stream = streams_.find(stream_id);
-    if (stream == nullptr || !stream->take_window_debt(bytes_value)) {
+    if (stream == nullptr || bytes_value == 0 || bytes_value > stream->window_debt()) {
         return false;  // debt (if any) died with the stream; nothing left to credit
     }
     consume_received(stream_id, bytes_value);
+    (void)stream->take_window_debt(bytes_value);
     return true;
 }
 

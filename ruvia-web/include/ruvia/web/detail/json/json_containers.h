@@ -62,9 +62,9 @@ template <typename visitor_type>
 // `decoded_key` is non-null, escaped keys are decoded into it by the key scan
 // itself (see parse_json_string). input advances past '}' only when the whole
 // object is accepted; nested values visited by the caller belong at depth + 1.
-template <typename visitor_type>
-[[nodiscard]] bool consume_json_object_members(
-    std::string_view& input, std::size_t depth, std::pmr::string* decoded_key, visitor_type&& visitor) {
+template <typename visitor_type, typename key_budget_type>
+[[nodiscard]] bool consume_json_object_members(std::string_view& input, std::size_t depth,
+    std::pmr::string* decoded_key, visitor_type&& visitor, key_budget_type&& consume_key_bytes) {
     if (depth > max_json_depth) {
         return false;
     }
@@ -82,7 +82,7 @@ template <typename visitor_type>
 
     auto& visitor_ref = visitor;
     while (true) {
-        const auto key = parse_json_string(remaining, decoded_key);
+        const auto key = parse_json_string(remaining, decoded_key, consume_key_bytes);
         if (!key.has_value() || !consume_json_char(remaining, ':')) {
             return false;
         }
@@ -102,4 +102,10 @@ template <typename visitor_type>
     }
 }
 
+template <typename visitor_type>
+[[nodiscard]] bool consume_json_object_members(
+    std::string_view& input, std::size_t depth, std::pmr::string* decoded_key, visitor_type&& visitor) {
+    return consume_json_object_members(
+        input, depth, decoded_key, std::forward<visitor_type>(visitor), [](std::size_t) noexcept { return true; });
+}
 }  // namespace ruvia::detail

@@ -69,8 +69,8 @@ public:
     // After the reader failed, reports a rejection raised by this builder:
     // the budget's redis_error or the exception a node construction threw.
     // Returns when the failure was the reader's own protocol error.
-    void throw_if_rejected() const;
-
+    void throw_if_rejected();
+    void clear() noexcept;
     // Takes ownership of a complete reply returned by redisReaderGetReply.
     [[nodiscard]] static redis_value take(void* reply) noexcept;
 

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/http_connection_advertisement.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "http2/http2_advertisement_frames.h"
 #include "http2/http2_remote_receive_semantics.h"
@@ -220,8 +221,12 @@ void http2_connection::create_session() {
     constexpr auto unlimited = (std::numeric_limits<std::uint64_t>::max)();
     nghttp2_option_set_stream_reset_rate_limit(option.get(), unlimited, 0);
     nghttp2_option_set_glitch_rate_limit(option.get(), unlimited, 0);
-    nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::alternative_service));
-    nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::origin));
+    if (role_ == http2_role::client) {
+        nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::alternative_service));
+        if (receive_origin_advertisements_) {
+            nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(http2_frame_type::origin));
+        }
+    }
     nghttp2_option_set_builtin_recv_extension_type(option.get(), NGHTTP2_PRIORITY_UPDATE);
 
     nghttp2_session* raw_session = nullptr;
@@ -247,6 +252,9 @@ void http2_connection::fail_connection(http2_error_code error) {
     if (local_connection_state_.fatal_failure() != nullptr) {
         return;
     }
+    header_block_in_progress_ = false;
+    header_block_.reset();
+    push_scratch_.reset();
     local_connection_state_.fail(error);
     // Queues GOAWAY(error) and makes nghttp2 ignore every later inbound frame.
     // An allocation failure here only loses the GOAWAY; the state is already terminal.
@@ -431,25 +439,34 @@ http2_feed_result http2_connection::feed(std::string_view in) {
 int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
     switch (header.type) {
         case NGHTTP2_HEADERS:
+            if (role_ == http2_role::server && (header.stream_id & 1) != 0) {
+                highest_peer_stream_id_ =
+                    (std::max)(highest_peer_stream_id_, static_cast<std::uint32_t>(header.stream_id));
+            }
+            header_block_bytes_ = header.length;
+            header_block_in_progress_ = (header.flags & NGHTTP2_FLAG_END_HEADERS) == 0;
+            break;
         case NGHTTP2_PUSH_PROMISE:
             header_block_bytes_ = header.length;
             header_block_in_progress_ = (header.flags & NGHTTP2_FLAG_END_HEADERS) == 0;
             break;
         case NGHTTP2_CONTINUATION:
-            header_block_bytes_ += header.length;
             header_block_in_progress_ = (header.flags & NGHTTP2_FLAG_END_HEADERS) == 0;
-            if (header_block_bytes_ > max_http2_encoded_header_block_bytes) {
+            if (header.length > max_http2_encoded_header_block_bytes - header_block_bytes_) {
                 // A partial block cannot be skipped without desynchronizing the
                 // connection-wide HPACK state (RFC 9113 §4.3).
-                header_block_.reset();
                 fail_connection(http2_error_code::compression_error);
+                break;
             }
+            header_block_bytes_ += header.length;
             break;
         case static_cast<std::uint8_t>(http2_frame_type::alternative_service):
         case static_cast<std::uint8_t>(http2_frame_type::origin):
+            header_block_in_progress_ = false;
             extension_payload_.clear();
             break;
         default:
+            header_block_in_progress_ = false;
             break;
     }
     return 0;
@@ -567,7 +584,6 @@ void http2_connection::process_goaway(const nghttp2_frame& frame) {
             fail_connection(http2_error_code::protocol_error);
             return;
         }
-        std::ranges::sort(std::span(unprocessed_stream_ids).first(unprocessed_count));
     } else {
         streams_.for_each([&](http2_stream_state& stream) {
             if ((stream.id() & 1U) == 0 && stream.id() > goaway.last_stream_id() && !http2_stream_is_closed(stream)) {
@@ -575,11 +591,16 @@ void http2_connection::process_goaway(const nghttp2_frame& frame) {
             }
         });
     }
+    std::ranges::sort(std::span(unprocessed_stream_ids).first(unprocessed_count));
 
     // A valid peer GOAWAY is graceful shutdown, not a local connection error. Its
     // sender opens no further streams (RFC 9113 §6.8), so our directional GOAWAY
     // follows at once without a round trip.
-    finish_drain();
+    if (local_connection_state_.open() != nullptr) {
+        begin_final_drain();
+    } else {
+        finish_drain_round_trip();
+    }
     peer_goaway_ = goaway;
     publish_event(http2_event(goaway));
     for (std::size_t i = 0; i < unprocessed_count; ++i) {
@@ -598,6 +619,12 @@ void http2_connection::process_goaway(const nghttp2_frame& frame) {
 }
 
 void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
+    struct payload_guard final {
+        std::pmr::string& payload_;
+        ~payload_guard() {
+            http_clear_pmr_string_retaining_small(payload_);
+        }
+    } guard{extension_payload_};
     if (role_ != http2_role::client) {
         return;
     }
@@ -614,9 +641,11 @@ void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
     }
     const auto stream_id = static_cast<std::uint32_t>(header.stream_id);
     if (stream_id != 0) {
-        // ALTSVC is ignored on a CONNECT tunnel (RFC 7838 §4).
+        // ALTSVC is ignored on a CONNECT tunnel or a still-reserved push stream (RFC 7838 §4).
         const auto* stream = streams_.find(stream_id);
-        if (stream == nullptr || http2_stream_is_closed(*stream) || stream->tunnel().not_connect() == nullptr) {
+        if (stream == nullptr || http2_stream_is_closed(*stream) ||
+            stream->push_reservation() != http2_push_reservation::none ||
+            stream->tunnel().not_connect() == nullptr) {
             return;
         }
     }
@@ -642,7 +671,7 @@ void http2_connection::process_priority_update(const nghttp2_frame& frame) {
     }
     const auto fields = std::get<0>(parsed);
     auto* stream = streams_.find(id);
-    const bool idle = stream == nullptr && (id & 1U) != 0 && id > last_peer_stream_id_;
+    const bool idle = stream == nullptr && (id & 1U) != 0 && id > highest_peer_stream_id_;
     if (stream != nullptr) {
         if (http2_stream_is_closed(*stream) || stream->local_send().end_stream_committed() != nullptr) {
             return;
@@ -653,8 +682,11 @@ void http2_connection::process_priority_update(const nghttp2_frame& frame) {
             // Signals for identifiers the peer skipped become unreachable once a
             // higher stream opens; drop those only when the map would grow.
             std::erase_if(priorities_, [this](const auto& entry_value) {
-                return entry_value.first <= last_peer_stream_id_;
+                return entry_value.first <= highest_peer_stream_id_;
             });
+            if (priorities_.size() >= http2_local_settings::max_concurrent_streams) {
+                return;
+            }
         }
         priorities_.insert_or_assign(id, fields);
     } else {
@@ -746,7 +778,19 @@ int http2_connection::on_frame_send(const nghttp2_frame& frame) {
     // already recorded); graceful drain GOAWAYs carry NO_ERROR.
     if (frame.hd.type == NGHTTP2_GOAWAY && frame.goaway.error_code != NGHTTP2_NO_ERROR &&
         local_connection_state_.fatal_failure() == nullptr) {
+        header_block_in_progress_ = false;
+        header_block_.reset();
+        push_scratch_.reset();
         local_connection_state_.fail(static_cast<http2_error_code>(frame.goaway.error_code));
+    } else if (frame.hd.type == NGHTTP2_DATA && (frame.hd.flags & NGHTTP2_FLAG_END_STREAM) != 0) {
+        const auto stream_id = static_cast<std::uint32_t>(frame.hd.stream_id);
+        if (auto* stream = streams_.find(stream_id);
+            stream != nullptr && stream->tunnel().rejected() != nullptr &&
+            stream->local_send().connect_pending() != nullptr) {
+            (void)stream->reject_local_connect();
+            release_local_request_stream_if_closed(*stream);
+            retry_deferred_stream_lease(stream_id);
+        }
     }
     return 0;
 }
@@ -848,7 +892,7 @@ http2_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_
 http2_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
     if (role_ != http2_role::client || local_connection_state_.open() == nullptr || stream_id == 0 ||
         stream_id > http2_max_stream_id ||
-        ((stream_id & 1U) == 0 && stream_id > last_peer_stream_id_)) {
+        ((stream_id & 1U) == 0 && stream_id > highest_peer_stream_id_)) {
         return http2_submit_status::invalid_state;
     }
     std::array<char, 32> encoded{};

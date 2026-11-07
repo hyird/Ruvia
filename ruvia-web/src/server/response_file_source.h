@@ -75,9 +75,10 @@ public:
     // The fault for the connection failure channel, or null for an expected
     // outcome: a file removed, replaced or changed since it was framed, a
     // full pool queue (counted by blocking_pool_stats), or shutdown.
-    [[nodiscard]] const std::exception_ptr& fault() const noexcept {
+    [[nodiscard]] const std::exception_ptr& fault() const& noexcept RUVIA_LIFETIMEBOUND {
         return fault_;
     }
+    const std::exception_ptr& fault() const&& = delete;
 
 private:
     response_file_failure(bool unavailable, std::exception_ptr fault) noexcept
@@ -158,9 +159,10 @@ public:
     // flow-controlled transport can wait for credit before reading it.
     [[nodiscard]] bool file_bytes_pending() const noexcept;
 
-    [[nodiscard]] const response_file_failure* failure() const noexcept {
+    [[nodiscard]] const response_file_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return failure_ ? &*failure_ : nullptr;
     }
+    const response_file_failure* failure() const&& = delete;
 
 private:
     // Owned by exactly one thread at a time: it moves into the blocking

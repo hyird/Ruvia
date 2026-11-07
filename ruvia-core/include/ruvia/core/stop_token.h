@@ -20,11 +20,20 @@ namespace ruvia {
 
 class stop_token;
 class stop_source;
+class stop_registration;
 
 namespace detail {
 
 class stop_state;
 class stop_callback_node;
+
+enum class stop_registration_phase : unsigned char {
+    idle,
+    registering,
+    registered,
+    reset_pending,
+    resetting,
+};
 
 // Shared ownership of one stop_state. Copies retain it; the last owner, on
 // whichever thread it retires, returns the state to its memory resource.
@@ -95,6 +104,7 @@ public:
     void request_stop() noexcept;
 
 private:
+    friend class ::ruvia::stop_registration;
     friend class stop_callback_node;
 
     static constexpr std::uint8_t source_flag = 1;
@@ -104,8 +114,9 @@ private:
     ~stop_state() = default;
 
     void destroy() noexcept;
-    // Returns false, linking nothing, when stop was already requested.
-    [[nodiscard]] bool link(stop_callback_node& node) noexcept;
+    // Returns false, linking nothing, when stop was already requested or
+    // registration was reset before linking.
+    [[nodiscard]] bool link(stop_callback_node& node, std::atomic<stop_registration_phase>& phase) noexcept;
     void unlink(stop_callback_node& node) noexcept;
 
     std::atomic<std::uint8_t> flags_{source_flag};
@@ -179,20 +190,14 @@ private:
     move_only_function<void()> callback_;
 };
 
-// One registration's link into one stop state. Construction records whether
-// it linked before stop; the registration invokes an already-stopped callback.
-// Destruction unlinks it; if the callback is running on another thread, it
-// waits for that run to return, so the callback state can be released next.
+// One registration's link into one stop state. Destruction unlinks it; if the
+// callback is running on another thread, it waits for that run to return, so
+// the callback state can be released next.
 class stop_callback_node final {
 public:
     stop_callback_node(const stop_state_ref& state_value, stop_callback_state& callback) noexcept
         : state_(state_value),
-          callback_(&callback),
-          linked_at_registration_(state_->link(*this)) {}
-
-    [[nodiscard]] bool linked_at_registration() const noexcept {
-        return linked_at_registration_;
-    }
+          callback_(&callback) {}
     ~stop_callback_node() {
         state_->unlink(*this);
     }
@@ -210,9 +215,6 @@ private:
     stop_callback_node* previous_{nullptr};
     stop_callback_node* next_{nullptr};
     bool linked_{false};
-    // Initialize last: link() publishes every field request_stop() may access.
-    // Its result stays stable even if another thread immediately unlinks us.
-    const bool linked_at_registration_;
 };
 
 }  // namespace detail
@@ -259,13 +261,7 @@ public:
 private:
     friend class stop_token;
 
-    enum class registration_phase_type : unsigned char {
-        idle,
-        registering,
-        registered,
-        reset_pending,
-        resetting,
-    };
+    using registration_phase_type = detail::stop_registration_phase;
 
     stop_registration(const detail::stop_state_ref& state, move_only_function<void()> callback_value) {
         register_callback(state, std::move(callback_value));
@@ -287,28 +283,17 @@ private:
         }
         callback_state_.emplace(std::move(callback_value));
         callback_.emplace(state, *callback_state_);
-        if (!callback_->linked_at_registration()) {
-            callback_.reset();
-            auto callback = callback_state_->take();
-            callback_state_.reset();
-            const auto previous_phase =
-                phase_.exchange(registration_phase_type::idle, std::memory_order_acq_rel);
-            if (previous_phase != registration_phase_type::reset_pending && callback.has_value()) {
-                (*callback)();
-            }
+        if (state->link(*callback_, phase_)) {
             return;
         }
-
-        expected = registration_phase_type::registering;
-        if (phase_.compare_exchange_strong(expected, registration_phase_type::registered,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
-            return;
+        callback_.reset();
+        auto callback = callback_state_->take();
+        callback_state_.reset();
+        const auto previous_phase =
+            phase_.exchange(registration_phase_type::idle, std::memory_order_acq_rel);
+        if (previous_phase != registration_phase_type::reset_pending && callback.has_value()) {
+            (*callback)();
         }
-        if (expected != registration_phase_type::reset_pending) {
-            std::terminate();
-        }
-        clear_registration();
-        phase_.store(registration_phase_type::idle, std::memory_order_release);
     }
 
     // Unlink waits for an invocation on another thread before retiring its state.

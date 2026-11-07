@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_known_method.h"
@@ -51,9 +52,10 @@ public:
     explicit connection_read_buffer(std::pmr::polymorphic_allocator<char> allocator);
 
     // Unconsumed bytes, starting with the current request.
-    [[nodiscard]] std::string_view pending() const noexcept {
+    [[nodiscard]] std::string_view pending() const& noexcept RUVIA_LIFETIMEBOUND {
         return storage_.view();
     }
+    std::string_view pending() const&& = delete;
     [[nodiscard]] bool empty() const noexcept {
         return storage_.empty();
     }
@@ -61,7 +63,8 @@ public:
     // Room for the next socket read: all spare storage. When the pending bytes
     // fill the storage, doubles it up to max_http_header_bytes. Empty when the
     // pending bytes already fill that limit.
-    [[nodiscard]] std::span<char> prepare_read();
+    [[nodiscard]] std::span<char> prepare_read() & RUVIA_LIFETIMEBOUND;
+    std::span<char> prepare_read() && = delete;
     // Appends `bytes` read into the span prepare_read() returned.
     void commit_read(std::size_t bytes) noexcept {
         storage_.commit(bytes);

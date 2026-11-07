@@ -94,9 +94,9 @@ public:
     db_migration_report(db_migration_report&&) noexcept = default;
     db_migration_report& operator=(db_migration_report&& other);
 
-    [[nodiscard]] std::span<const std::pmr::string> applied() const& noexcept;
+    [[nodiscard]] std::span<const std::pmr::string> applied() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::pmr::string> applied() const&& = delete;
-    [[nodiscard]] std::span<const std::pmr::string> skipped() const& noexcept;
+    [[nodiscard]] std::span<const std::pmr::string> skipped() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const std::pmr::string> skipped() const&& = delete;
     [[nodiscard]] bool changed() const noexcept;
 
@@ -286,7 +286,7 @@ struct db_function_parameter final {
 
 struct db_function_definition final {
     borrowed_text name_{};
-    std::pmr::vector<db_function_parameter> parameters_{};
+    std::pmr::vector<db_function_parameter> parameters_{process_resource()};
     db_type_definition return_type_{};
     bool returns_set_{false};
     db_function_language language_{db_function_language::plpgsql};
@@ -301,13 +301,13 @@ struct db_trigger_definition final {
     borrowed_text table_{};
     borrowed_text function_{};
     db_trigger_timing timing_{db_trigger_timing::before};
-    std::pmr::vector<db_trigger_event> events_{};
+    std::pmr::vector<db_trigger_event> events_{process_resource()};
     bool for_each_row_{true};
-    std::pmr::vector<borrowed_text> update_columns_{};
+    std::pmr::vector<borrowed_text> update_columns_{process_resource()};
     borrowed_text old_table_{};
     borrowed_text new_table_{};
     db_expression when_{};
-    std::pmr::vector<borrowed_text> arguments_{};
+    std::pmr::vector<borrowed_text> arguments_{process_resource()};
 };
 
 struct db_schema_column final {
@@ -325,9 +325,9 @@ struct db_schema_column final {
 struct db_schema_constraint final {
     borrowed_text name_{};
     db_constraint_kind kind_{db_constraint_kind::check};
-    std::pmr::vector<borrowed_text> columns_{};
+    std::pmr::vector<borrowed_text> columns_{process_resource()};
     borrowed_text referenced_table_{};
-    std::pmr::vector<borrowed_text> referenced_columns_{};
+    std::pmr::vector<borrowed_text> referenced_columns_{process_resource()};
     db_referential_action on_delete_{db_referential_action::no_action};
     db_referential_action on_update_{db_referential_action::no_action};
     bool deferrable_{false};
@@ -338,8 +338,8 @@ struct db_schema_constraint final {
 
 struct db_table_definition final {
     borrowed_text name_{};
-    std::pmr::vector<db_schema_column> columns_{};
-    std::pmr::vector<db_schema_constraint> constraints_{};
+    std::pmr::vector<db_schema_column> columns_{process_resource()};
+    std::pmr::vector<db_schema_constraint> constraints_{process_resource()};
     bool if_not_exists_{false};
     bool temporary_{false};
     bool unlogged_{false};
@@ -356,12 +356,12 @@ struct db_index_key final {
 struct db_index_definition final {
     borrowed_text name_{};
     borrowed_text table_{};
-    std::pmr::vector<db_index_key> keys_{};
+    std::pmr::vector<db_index_key> keys_{process_resource()};
     bool unique_{false};
     bool if_not_exists_{false};
     bool concurrently_{false};
     db_index_method method_{db_index_method::btree};
-    std::pmr::vector<borrowed_text> include_{};
+    std::pmr::vector<borrowed_text> include_{process_resource()};
     db_expression where_{};
 };
 
@@ -379,9 +379,9 @@ struct db_column_generated final {
     db_expression expression_{};
 };
 struct db_entity_table_options final {
-    std::pmr::vector<db_column_default> defaults_{};
-    std::pmr::vector<db_column_generated> generated_columns_{};
-    std::pmr::vector<db_schema_constraint> constraints_{};
+    std::pmr::vector<db_column_default> defaults_{process_resource()};
+    std::pmr::vector<db_column_generated> generated_columns_{process_resource()};
+    std::pmr::vector<db_schema_constraint> constraints_{process_resource()};
     bool if_not_exists_{false};
     bool temporary_{false};
     bool unlogged_{false};
@@ -405,8 +405,8 @@ struct db_compression_order final {
 };
 struct db_compression_options final {
     bool enabled_{true};
-    std::pmr::vector<borrowed_text> segment_by_{};
-    std::pmr::vector<db_compression_order> order_by_{};
+    std::pmr::vector<borrowed_text> segment_by_{process_resource()};
+    std::pmr::vector<db_compression_order> order_by_{process_resource()};
 };
 
 // Explicit, versioned schema changes. Each operation consumes its borrowed

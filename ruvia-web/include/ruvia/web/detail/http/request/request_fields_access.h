@@ -128,7 +128,7 @@ private:
         items_ = owned_;
     }
 
-    std::pmr::vector<http_header_view> owned_{};
+    std::pmr::vector<http_header_view> owned_{process_resource()};
     std::span<const http_header_view> items_{};
     bool case_insensitive_{false};
 };
@@ -136,13 +136,6 @@ private:
 }  // namespace ruvia
 
 namespace ruvia::detail {
-struct request_name_value_view_access final {
-    [[nodiscard]] static constexpr http_header_view make(
-        borrowed_text name, borrowed_text value) noexcept {
-        return http_header_view{name.view(), value.view()};
-    }
-};
-
 struct request_name_value_list_access final {
     [[nodiscard]] static request_name_value_list make(std::pmr::memory_resource* resource) {
         return request_name_value_list(resource);

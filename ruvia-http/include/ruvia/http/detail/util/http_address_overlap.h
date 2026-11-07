@@ -23,7 +23,7 @@ namespace ruvia::detail {
 // Whether `text` views bytes `storage` owns, its terminator included: growing or
 // rewriting `storage` would destroy that input, so the caller owns a copy first.
 [[nodiscard]] inline bool http_text_aliases_string(std::string_view text, const std::pmr::string& storage) noexcept {
-    return http_text_overlaps(text, std::string_view(storage.data(), storage.size() + 1));
+    return http_text_overlaps(text, std::string_view(storage.data(), storage.capacity() + 1));
 }
 
 // Expanding encoders read group k of an input at input + n * k and write its

@@ -117,10 +117,11 @@ public:
     // buffered-response compression, document-root refreshes and the DNS
     // lookups of registered clients. It is enabled by default with bounded
     // CPU-based sizing; nullptr explicitly disables it: run_blocking() then
-    // reports blocking_status::unavailable, large buffered-response compression
-    // runs synchronously, a file response is answered with 503 before its head
-    // instead of blocking a worker on file I/O, and run() fails for a document
-    // root or for a registered client whose host is not an IP literal. On
+    // reports blocking_status::unavailable, buffered responses above
+    // sync_bytes_ stay identity (or 406 when identity is refused), a file
+    // response is answered with 503 before its head instead of blocking a
+    // worker on file I/O, and run() fails for a document root or for a
+    // registered client whose host is not an IP literal. On
     // Windows plain TCP a single file range above 16 KiB still leaves through
     // TransmitFile, which needs no pool. run() starts the threads before the
     // first request; after workers stop, running callables are not awaited and

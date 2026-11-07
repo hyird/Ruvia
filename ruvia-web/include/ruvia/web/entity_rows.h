@@ -90,8 +90,9 @@ public:
         }
         auto* const target = resource();
         if (other.resource() == target) {
-            rows_ = std::move(other.rows_);
+            std::pmr::vector<entity_type> rebound(std::move(other.rows_));
             other.rows_.clear();
+            rows_.swap(rebound);
             return *this;
         }
         std::pmr::vector<entity_type> rebound(target);

@@ -119,6 +119,9 @@ struct node_index_map final {
     [[nodiscard]] std::size_t& operator[](std::size_t index) noexcept {
         return heap_.empty() ? inline_[index] : heap_[index];
     }
+    [[nodiscard]] std::size_t operator[](std::size_t index) const noexcept {
+        return heap_.empty() ? inline_[index] : heap_[index];
+    }
 };
 
 struct node_visit_set final {
@@ -215,10 +218,10 @@ public:
     }
 
     // The copy's index for a source index, or no_db_node if unreachable.
-    [[nodiscard]] std::size_t node(std::size_t index) noexcept {
+    [[nodiscard]] std::size_t node(std::size_t index) const noexcept {
         return index == no_db_node ? no_db_node : nodes_[index];
     }
-    [[nodiscard]] std::size_t query(std::size_t index) noexcept {
+    [[nodiscard]] std::size_t query(std::size_t index) const noexcept {
         return index == no_db_node ? no_db_node : queries_[index];
     }
     [[nodiscard]] std::size_t node_count() const noexcept {
@@ -1602,8 +1605,16 @@ db_query db_query::clone(std::pmr::memory_resource* resource) const {
 
 bool db_query::cacheable() const {
     const auto& s = storage();
-    return (s.kind_ == db_query_kind::select || s.kind_ == db_query_kind::values) && !s.lock_ &&
-           std::ranges::all_of(s.queries_, [](const auto& query) { return query.cacheable(); });
+    if ((s.kind_ != db_query_kind::select && s.kind_ != db_query_kind::values) || s.lock_) {
+        return false;
+    }
+    const detail::reachable_query_graph graph(s, s.resource_);
+    for (std::size_t index = 0; index < s.queries_.size(); ++index) {
+        if (graph.query(index) != no_db_node && !s.queries_[index].cacheable()) {
+            return false;
+        }
+    }
+    return true;
 }
 std::optional<bool> db_query::cache_enabled() const {
     return storage().cache_enabled_;

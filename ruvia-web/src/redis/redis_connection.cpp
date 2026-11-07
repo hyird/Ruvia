@@ -85,7 +85,7 @@ redis_connection::redis_connection(asio::io_context& io_context, asio::ssl::cont
     std::pmr::memory_resource* resource)
     : config_(config),
       resource_(pmr_resource_or_default(resource)),
-      transport_(io_context, tls_context, worker_value, redis_endpoint(config), counters),
+      transport_(io_context, tls_context, worker_value, redis_endpoint(config), counters, resource_),
       write_buffer_(resource_) {}
 
 redis_connection::~redis_connection() = default;
@@ -94,6 +94,9 @@ void redis_connection::close() noexcept {
     transport_.close();
     connected_ = false;
     reader_.reset();
+    if (reply_builder_ != nullptr) {
+        reply_builder_->clear();
+    }
     reply_bytes_ = 0;
 }
 

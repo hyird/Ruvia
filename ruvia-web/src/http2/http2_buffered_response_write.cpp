@@ -70,9 +70,6 @@ task<http2_buffered_response_writer::data_write_result_type> http2_buffered_resp
     std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream) {
     auto* runtime = stream_runtimes_.find(stream_id);
     auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
-    if (signal != nullptr && signal->terminated()) {
-        co_return data_write_result_type::failed;
-    }
     const auto status = co_await write_http2_stream_data(
         connection_, stream_id, signal, write_signal_, output_budget_, chunk, end_stream);
     switch (status) {
@@ -84,7 +81,6 @@ task<http2_buffered_response_writer::data_write_result_type> http2_buffered_resp
             co_return data_write_result_type::peer_aborted;
         case http2_stream_data_write_status::invalid_state:
         case http2_stream_data_write_status::content_length_exceeded:
-        case http2_stream_data_write_status::content_length_incomplete:
             co_return data_write_result_type::failed;
     }
     co_return data_write_result_type::failed;

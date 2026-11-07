@@ -12,6 +12,7 @@
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http_io_buffer.h"
@@ -64,16 +65,18 @@ struct body_pipeline_handover final {
 // without I/O and the connection stays reusable (RFC 9112 section 9.3);
 // nullopt when it still needs input or its chunked framing is invalid.
 [[nodiscard]] inline std::optional<std::size_t> buffered_request_body_bytes(
-    const http1_request_body_plan& body_plan, std::string_view body_and_pipeline) {
+    const http1_request_body_plan& body_plan, std::string_view body_and_pipeline,
+    protocol_byte_limit body_limit = protocol_byte_limit::unlimited()) {
     if (const auto* known_length = body_plan.known_length()) {
         const auto content_length = known_length->content_length();
-        return body_and_pipeline.size() >= content_length ? std::optional<std::size_t>(content_length)
-                                                          : std::nullopt;
+        return !body_limit.exceeds(content_length) && body_and_pipeline.size() >= content_length
+                   ? std::optional<std::size_t>(content_length)
+                   : std::nullopt;
     }
     if (body_plan.chunked() == nullptr) {
         return std::size_t{0};
     }
-    http1_chunked_body_decoder decoder;
+    http1_chunked_body_decoder decoder({.body_limit_ = body_limit});
     std::size_t cursor = 0;
     return skip_buffered_chunked_body(decoder, body_and_pipeline, cursor) ? std::optional<std::size_t>(cursor)
                                                                           : std::nullopt;
@@ -94,9 +97,10 @@ public:
     stream_body_reader& operator=(const stream_body_reader&) = delete;
 
     [[nodiscard]] http1_request_body_consumption consumption() const noexcept;
-    [[nodiscard]] const http_request_trailers& trailers() const& noexcept {
+    [[nodiscard]] const http_request_trailers& trailers() const& noexcept RUVIA_LIFETIMEBOUND {
         return trailers_;
     }
+    const http_request_trailers& trailers() const&& = delete;
     // Consumes, without I/O, the rest of a body that arrived in full with
     // its head and that the route left unread or partly read, so the
     // connection stays reusable. A body that still needs input, or whose
@@ -164,7 +168,6 @@ private:
     // never be consumed further and must stay incomplete.
     bool failed_{false};
     bool continue_pending_{false};
-    bool peer_eof_observed_{false};
     void* completion_target_{};
     completion_observer_type completion_observer_{};
 };

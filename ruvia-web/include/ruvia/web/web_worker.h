@@ -15,25 +15,24 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
-#include "ruvia/web/http_client.h"
-
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_handle.h"
-#endif
-
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_handle.h"
-#endif
 
 namespace ruvia {
+
+class http_client_handle;
+#ifdef RUVIA_ENABLE_DATABASE
+class db_handle;
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+class redis_handle;
+#endif
 
 namespace detail {
 class web_worker_dispatch;
 class worker_client_registry_view;
 class worker_state_registry;
 }  // namespace detail
-
 class web_worker_context final {
 public:
     web_worker_context(const web_worker_context&) = delete;
@@ -41,7 +40,7 @@ public:
     web_worker_context(web_worker_context&&) = delete;
     web_worker_context& operator=(web_worker_context&&) = delete;
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept;
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
     // Same worker-reclaimable pool as context::pool(). Posted jobs have no
     // request arena; allocate temporary and result storage here. Destroy that

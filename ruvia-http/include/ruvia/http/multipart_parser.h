@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/parser/multipart_input_lifecycle.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_protocol_error.h"
@@ -29,7 +30,7 @@ struct multipart_stream_part_access;
 // request body; unfolded header blocks and escaped names own PMR storage.
 class multipart_part final {
 public:
-    [[nodiscard]] std::string_view name() const& noexcept {
+    [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* borrowed = std::get_if<std::string_view>(&name_)) {
             return *borrowed;
         }
@@ -37,7 +38,7 @@ public:
     }
     [[nodiscard]] std::string_view name() const&& = delete;
 
-    [[nodiscard]] std::string_view filename() const& noexcept {
+    [[nodiscard]] std::string_view filename() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* borrowed = std::get_if<std::string_view>(&filename_)) {
             return *borrowed;
         }
@@ -48,7 +49,7 @@ public:
     [[nodiscard]] bool has_filename() const noexcept {
         return filename_present_;
     }
-    [[nodiscard]] std::string_view content_type() const& noexcept {
+    [[nodiscard]] std::string_view content_type() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* borrowed = std::get_if<std::string_view>(&content_type_)) {
             return *borrowed;
         }
@@ -106,7 +107,7 @@ public:
         return boundary;
     }
 
-    [[nodiscard]] constexpr std::string_view value() const& noexcept {
+    [[nodiscard]] constexpr std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::string_view(bytes_.data(), size_);
     }
     [[nodiscard]] std::string_view value() const&& = delete;
@@ -175,17 +176,17 @@ private:
 // its decoded boundary bytes.
 class multipart_boundary_parse_result final {
 public:
-    [[nodiscard]] constexpr const multipart_boundary* boundary() const& noexcept {
+    [[nodiscard]] constexpr const multipart_boundary* boundary() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_boundary>(&value_);
     }
     const multipart_boundary* boundary() const&& = delete;
 
-    [[nodiscard]] constexpr const multipart_boundary_not_applicable* not_applicable() const& noexcept {
+    [[nodiscard]] constexpr const multipart_boundary_not_applicable* not_applicable() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_boundary_not_applicable>(&value_);
     }
     const multipart_boundary_not_applicable* not_applicable() const&& = delete;
 
-    [[nodiscard]] constexpr const multipart_boundary_parse_failure* failure() const& noexcept {
+    [[nodiscard]] constexpr const multipart_boundary_parse_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_boundary_parse_failure>(&value_);
     }
     const multipart_boundary_parse_failure* failure() const&& = delete;
@@ -321,22 +322,22 @@ private:
 // feed(), finish_input(), or poll() call.
 class multipart_poll_result final {
 public:
-    [[nodiscard]] constexpr const multipart_poll_need_input* need_input() const& noexcept {
+    [[nodiscard]] constexpr const multipart_poll_need_input* need_input() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_poll_need_input>(&value_);
     }
     const multipart_poll_need_input* need_input() const&& = delete;
 
-    [[nodiscard]] constexpr const multipart_stream_part* part() const& noexcept {
+    [[nodiscard]] constexpr const multipart_stream_part* part() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_stream_part>(&value_);
     }
     const multipart_stream_part* part() const&& = delete;
 
-    [[nodiscard]] constexpr const multipart_poll_done* done() const& noexcept {
+    [[nodiscard]] constexpr const multipart_poll_done* done() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_poll_done>(&value_);
     }
     const multipart_poll_done* done() const&& = delete;
 
-    [[nodiscard]] constexpr const multipart_poll_failure* failure() const& noexcept {
+    [[nodiscard]] constexpr const multipart_poll_failure* failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<multipart_poll_failure>(&value_);
     }
     const multipart_poll_failure* failure() const&& = delete;
@@ -425,6 +426,7 @@ private:
 
     [[nodiscard]] std::string_view buffer_view() const noexcept;
     void consume(std::size_t bytes) noexcept;
+    void reset_scan_cursors() noexcept;
     void compact_pending();
     [[nodiscard]] multipart_poll_result fail(multipart_parse_error error) noexcept;
     [[nodiscard]] step_result_type process_boundary();

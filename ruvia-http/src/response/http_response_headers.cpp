@@ -105,7 +105,17 @@ http_response_header& http_response_headers::add_stable_view(
     if (const auto static_header = make_static_header(name, value, known_bit)) {
         return append_header(*static_header);
     }
-    if (detail::response_header_views_contiguous(name, value) &&
+    const bool borrows_owned_header = [&]() noexcept {
+        for (const auto& existing : *this) {
+            if (existing.owned_ &&
+                (detail::response_header_storage_overlaps(existing, name) ||
+                    detail::response_header_storage_overlaps(existing, value))) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    if (!borrows_owned_header && detail::response_header_views_contiguous(name, value) &&
         detail::response_header_storage_size_fits(name.size(), value.size())) {
         return append_header(detail::http_response_header_access::make(name.data(),
             static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()),
@@ -186,10 +196,18 @@ void http_response_headers::assign_stable_view(http_response_header& header_valu
         header_value = *static_header;
         return;
     }
-    if (detail::response_header_views_contiguous(name, value) &&
-        detail::response_header_storage_size_fits(name.size(), value.size()) &&
-        !detail::response_header_storage_overlaps(header_value, name) &&
-        !detail::response_header_storage_overlaps(header_value, value)) {
+    const bool borrows_owned_header = [&]() noexcept {
+        for (const auto& existing : *this) {
+            if (existing.owned_ &&
+                (detail::response_header_storage_overlaps(existing, name) ||
+                    detail::response_header_storage_overlaps(existing, value))) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    if (!borrows_owned_header && detail::response_header_views_contiguous(name, value) &&
+        detail::response_header_storage_size_fits(name.size(), value.size())) {
         release_header(header_value);
         header_value = detail::http_response_header_access::make(name.data(),
             static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()),

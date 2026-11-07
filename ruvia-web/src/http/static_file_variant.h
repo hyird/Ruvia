@@ -5,9 +5,9 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/web/static_files.h"
 
 #include "http/static_root_index.h"
 
@@ -37,14 +37,15 @@ public:
           memory_variant_(memory_variant),
           content_coding_(content_coding) {}
 
-    [[nodiscard]] const detail::static_root_entry_view& entry() const noexcept {
+    [[nodiscard]] const detail::static_root_entry_view& entry() const& noexcept RUVIA_LIFETIMEBOUND {
         return entry_;
     }
+    const detail::static_root_entry_view& entry() const&& = delete;
 
-    [[nodiscard]] const detail::static_root_memory_variant_view* memory_variant() const noexcept {
+    [[nodiscard]] const detail::static_root_memory_variant_view* memory_variant() const& noexcept RUVIA_LIFETIMEBOUND {
         return memory_variant_.has_value() ? &*memory_variant_ : nullptr;
     }
-
+    const detail::static_root_memory_variant_view* memory_variant() const&& = delete;
     [[nodiscard]] http_content_coding content_coding() const noexcept {
         return content_coding_;
     }

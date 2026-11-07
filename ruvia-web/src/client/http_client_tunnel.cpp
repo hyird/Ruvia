@@ -30,7 +30,6 @@ void require_output(detail::http_client_response_state* state_value, bool finish
     }
 }
 struct tunnel_output_policy final {
-    static constexpr bool validate_chunk = false;
     static detail::http_client_output_queue& output(detail::http_client_response_state& state_value) noexcept {
         return state_value.tunnel_->output_;
     }

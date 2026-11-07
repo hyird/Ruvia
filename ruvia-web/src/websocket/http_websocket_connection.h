@@ -8,6 +8,7 @@
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
@@ -21,6 +22,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/protocol_byte_limit.h"
@@ -56,11 +58,17 @@ public:
               protocol_options.message_limit_ = message_limit;
               return protocol_options;
           }()),
-          subprotocol_(subprotocol_value),
+          subprotocol_(&resource),
           write_lane_(worker_value),
           reader_done_signal_(worker_value),
           background_tasks_(worker_value, {.resource_ = &resource}) {
-        buffer_.append(initial_bytes);
+        try {
+            subprotocol_.assign(subprotocol_value);
+            buffer_.append(initial_bytes);
+        } catch (...) {
+            close_stream();
+            throw;
+        }
         scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk);
     }
 
@@ -86,21 +94,24 @@ public:
         abort_transport();
     }
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return *worker_;
     }
+    const worker_handle& worker() const&& = delete;
 
-    [[nodiscard]] std::string_view subprotocol() const noexcept {
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return subprotocol_;
     }
+    std::string_view subprotocol() const&& = delete;
 
     [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept {
         return peer_close_.code();
     }
 
-    [[nodiscard]] std::string_view peer_close_reason() const noexcept {
+    [[nodiscard]] std::string_view peer_close_reason() const& noexcept RUVIA_LIFETIMEBOUND {
         return peer_close_.reason();
     }
+    std::string_view peer_close_reason() const&& = delete;
 
     void require_current_worker() const noexcept {
         if (!worker_->is_current()) {
@@ -135,8 +146,9 @@ private:
     class write_guard_type final {
     public:
         explicit write_guard_type(server_websocket_connection& connection,
-            write_claim_type claim = write_claim_type::acquire)
-            : connection_(connection) {
+            write_claim_type claim = write_claim_type::acquire, bool restart_pong = true)
+            : connection_(connection),
+              restart_pong_(restart_pong) {
             if (claim == write_claim_type::acquire) {
                 if (connection_.write_lane_.write_in_progress()) {
                     throw std::logic_error("concurrent websocket writes are not supported");
@@ -147,8 +159,12 @@ private:
             }
         }
 
+        void note_write() noexcept {
+            restart_pong_ = true;
+        }
+
         ~write_guard_type() {
-            connection_.finish_write();
+            connection_.finish_write(restart_pong_);
         }
 
         write_guard_type(const write_guard_type&) = delete;
@@ -156,8 +172,8 @@ private:
 
     private:
         server_websocket_connection& connection_;
+        bool restart_pong_{true};
     };
-
     class write_operation_lease_type final {
     public:
         explicit write_operation_lease_type(server_websocket_connection& connection)
@@ -263,6 +279,7 @@ private:
                 std::terminate();
             }
             connection_->read_phase_ = read_phase_type::active;
+            connection_->resume_pong_window_on_read_start();
         }
 
         ~read_guard_type() {
@@ -279,7 +296,8 @@ private:
         server_websocket_connection* connection_;
     };
 
-    void finish_write() noexcept;
+    void finish_write(bool restart_pong = true) noexcept;
+    void resume_pong_window_on_read_start() noexcept;
     [[nodiscard]] bool pong_observable() const noexcept;
     void restart_pong_window(std::int64_t now) noexcept;
     void heartbeat_tick(std::int64_t now) noexcept;
@@ -318,7 +336,7 @@ private:
     websocket_lifecycle_options lifecycle_options_{};
     http_io_buffer buffer_;
     websocket_connection protocol_;
-    std::string_view subprotocol_{};
+    std::pmr::string subprotocol_;
     websocket_peer_close_info peer_close_{};
     websocket_write_lane write_lane_;
     worker_signal reader_done_signal_;

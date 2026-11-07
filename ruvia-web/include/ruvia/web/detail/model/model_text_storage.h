@@ -20,7 +20,10 @@ public:
 
     model_text_storage(const model_text_storage&) = delete;
     model_text_storage& operator=(const model_text_storage&) = delete;
-    model_text_storage(model_text_storage&&) noexcept = default;
+    model_text_storage(model_text_storage&& other) noexcept
+        : value_(std::move(other.value_)) {
+        other.assign_borrowed({});
+    }
     model_text_storage& operator=(model_text_storage&&) = delete;
 
     [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -55,10 +58,14 @@ public:
     [[nodiscard]] model_text_storage rebind(std::pmr::memory_resource* resource) && {
         if (auto* owned = std::get_if<std::pmr::string>(&value_)) {
             if (owned->get_allocator().resource() == resource) {
-                return model_text_storage(std::move(*owned));
+                model_text_storage rebound(std::move(*owned));
+                assign_borrowed({});
+                return rebound;
             }
         }
-        return static_cast<const model_text_storage&>(*this).rebind(resource);
+        auto rebound = static_cast<const model_text_storage&>(*this).rebind(resource);
+        assign_borrowed({});
+        return rebound;
     }
 
     void assign_from(model_text_storage&& source_value, std::pmr::memory_resource* resource) {

@@ -72,12 +72,15 @@ public:
     // the source resource's lifetime requirement.
     http_header& operator=(const http_header& other) {
         if (this != &other) {
-            if (other.resource_ == nullptr) {
-                release();
-                resource_ = nullptr;
+            if (resource_ == nullptr && other.resource_ == nullptr) {
                 bytes_ = other.bytes_;
                 name_size_ = other.name_size_;
                 value_size_ = other.value_size_;
+            } else if (other.bytes_ == nullptr) {
+                release();
+                if (resource_ == nullptr) {
+                    resource_ = other.resource_;
+                }
             } else {
                 http_header replacement(other.name(), other.value(),
                     resource_ != nullptr ? resource_ : other.resource_);
@@ -89,12 +92,15 @@ public:
 
     http_header& operator=(http_header&& other) {
         if (this != &other) {
-            if (resource_ == nullptr || other.resource_ == nullptr ||
-                resource_->is_equal(*other.resource_)) {
+            if (resource_ == nullptr) {
+                resource_ = other.resource_;
+                bytes_ = std::exchange(other.bytes_, nullptr);
+                name_size_ = std::exchange(other.name_size_, 0);
+                value_size_ = std::exchange(other.value_size_, 0);
+            } else if (other.bytes_ == nullptr) {
                 release();
-                if (resource_ == nullptr || other.resource_ == nullptr) {
-                    resource_ = other.resource_;
-                }
+            } else if (other.resource_ != nullptr && resource_->is_equal(*other.resource_)) {
+                release();
                 bytes_ = std::exchange(other.bytes_, nullptr);
                 name_size_ = std::exchange(other.name_size_, 0);
                 value_size_ = std::exchange(other.value_size_, 0);

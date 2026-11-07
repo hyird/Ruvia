@@ -79,13 +79,19 @@ public:
     }
 
     [[nodiscard]] static constexpr http_target_origin dns_name(std::string_view host) noexcept {
+        if (host.empty() || host.size() > max_dns_name_size) {
+            return misdirected();
+        }
         http_target_origin origin(http_target_origin_action::verify_certificate);
         origin.host_ = host;
         return origin;
     }
 
+    template <detail::http_temporary_owning_char_string host_type>
+    static void dns_name(host_type&&) = delete;
+
     [[nodiscard]] static constexpr http_target_origin decoded_dns_name(std::string_view host) noexcept {
-        if (host.size() > max_dns_name_size) {
+        if (host.empty() || host.size() > max_dns_name_size) {
             return misdirected();
         }
         http_target_origin origin(http_target_origin_action::verify_certificate);
@@ -98,6 +104,11 @@ public:
 
     [[nodiscard]] static constexpr http_target_origin ip_address(
         http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept {
+        if ((kind == http_target_host_kind::ipv4 && address.size() != 4) ||
+            (kind == http_target_host_kind::ipv6 && address.size() != 16) ||
+            (kind != http_target_host_kind::ipv4 && kind != http_target_host_kind::ipv6)) {
+            return misdirected();
+        }
         http_target_origin origin(http_target_origin_action::verify_certificate);
         origin.host_kind_ = kind;
         origin.address_size_ = static_cast<std::uint8_t>(address.size());

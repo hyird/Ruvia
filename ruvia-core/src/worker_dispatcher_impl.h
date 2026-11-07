@@ -150,6 +150,9 @@ public:
     void detach_context() noexcept;
     void wait_for_reservations() noexcept;
     [[nodiscard]] bool attached() const noexcept;
+    [[nodiscard]] bool timers_stopping() const noexcept {
+        return timers_stopping_.load(std::memory_order_acquire);
+    }
     [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
@@ -160,7 +163,32 @@ public:
 private:
     friend class worker_shutdown_hook;
     static constexpr std::size_t no_node = static_cast<std::size_t>(-1);
-    using idle_callbacks_type = std::pmr::vector<move_only_function<void()>>;
+    struct waiter_node_type final {
+        explicit waiter_node_type(move_only_function<void()> callback_value) noexcept
+            : callback_(std::move(callback_value)) {}
+
+        move_only_function<void()> callback_;
+        waiter_node_type* next_{nullptr};
+    };
+    struct waiter_list_type final {
+        waiter_node_type* head_{nullptr};
+        waiter_node_type* tail_{nullptr};
+
+        void push_back(waiter_node_type* node) noexcept {
+            node->next_ = nullptr;
+            if (tail_ == nullptr) {
+                head_ = node;
+            } else {
+                tail_->next_ = node;
+            }
+            tail_ = node;
+        }
+
+        [[nodiscard]] waiter_node_type* take_all() noexcept {
+            tail_ = nullptr;
+            return std::exchange(head_, nullptr);
+        }
+    };
 
     struct node_type final {
         move_only_function<void()> task_;
@@ -179,8 +207,9 @@ private:
     [[nodiscard]] bool running_on_worker() const noexcept {
         return current_worker_dispatcher() == this && attached();
     }
-    [[nodiscard]] idle_callbacks_type take_idle_callbacks_locked();
-    static void notify_idle(idle_callbacks_type callbacks) noexcept;
+    [[nodiscard]] waiter_node_type* take_idle_callbacks_locked() noexcept;
+    static void notify_waiters(waiter_node_type* head) noexcept;
+    static void destroy_waiters(waiter_node_type* head) noexcept;
     // Returns whether this call opened the (single) stopping batch.
     [[nodiscard]] bool begin_stopping(bool abandon_drain) noexcept;
     [[nodiscard]] bool begin_stopping_locked(bool abandon_drain) noexcept;
@@ -226,14 +255,14 @@ private:
     std::size_t ready_count_{0};
     std::size_t pending_count_{0};
     std::size_t active_count_{0};
-    idle_callbacks_type idle_waiters_{process_resource()};
+    waiter_list_type idle_waiters_{};
     worker_id_type worker_id_{0};
     std::atomic_bool accepting_{true};
     std::atomic_bool context_attached_{true};
     bool drain_scheduled_{false};
     bool abandon_drain_{false};
     bool shutdown_notification_active_{false};
-    idle_callbacks_type shutdown_notification_waiters_{process_resource()};
+    waiter_list_type shutdown_notification_waiters_{};
     // Registered shutdown hooks in registration order. A separate mutex keeps
     // registration and unlinking off the admission lock.
     std::mutex hooks_mutex_;

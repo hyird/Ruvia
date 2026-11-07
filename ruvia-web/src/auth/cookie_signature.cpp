@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_base64.h"
 
 #include "auth/hmac.h"
@@ -67,7 +68,7 @@ void write_cookie_signature(
         }
         message_view = std::string_view(inline_message.data(), message_size);
     } else {
-        auto& message = heap_message.emplace(resource);
+        auto& message = heap_message.emplace(pmr_resource_or_default(resource));
         message.reserve(message_size);
         message.append(name_len_bytes.data(), name_len_bytes.size());
         message.append(name.data(), name.size());

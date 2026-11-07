@@ -28,8 +28,6 @@ if exists and kind ~= 'hash' then return redis.error_reply('WRONGTYPE entity key
 if exists and redis.call('HGET', KEYS[1], '__ruvia_entity') ~= '1' then
     return redis.error_reply('entity key is not owned by this repository')
 end
-if ARGV[1] == 'insert' and exists then return 0 end
-if ARGV[1] == 'update' and not exists then return 0 end
 local required = tonumber(ARGV[4])
 local start = 5 + required
 local changes = {}
@@ -37,10 +35,12 @@ for i = start, #ARGV, 3 do changes[ARGV[i + 1]] = ARGV[i] end
 for i = 5, 4 + required do
     local field = ARGV[i]
     if changes[field] == 'd' or
-       (changes[field] ~= 's' and (not exists or redis.call('HEXISTS', KEYS[1], field) == 0)) then
+       (changes[field] ~= 's' and (ARGV[1] == 'insert' or (ARGV[1] ~= 'update' and not exists) or (exists and redis.call('HEXISTS', KEYS[1], field) == 0))) then
         return redis.error_reply('required entity field is missing: ' .. field)
     end
 end
+if ARGV[1] == 'insert' and exists then return 0 end
+if ARGV[1] == 'update' and not exists then return 0 end
 for i = start, #ARGV, 3 do
     if ARGV[i] == 's' then redis.call('HSET', KEYS[1], ARGV[i + 1], ARGV[i + 2])
     else redis.call('HDEL', KEYS[1], ARGV[i + 1]) end

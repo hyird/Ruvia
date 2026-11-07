@@ -509,8 +509,13 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         std::uint32_t stream_id_;
         ~stream_cleanup_guard() noexcept {
             if (auto* runtime = engine_.stream_runtimes_.find(stream_id_)) {
+                runtime->reset_selected_route();
                 if (auto* request_head = runtime->request_head()) {
-                    (void)engine_.connection_.release(std::move(*request_head));
+                    try {
+                        (void)engine_.connection_.release(std::move(*request_head));
+                    } catch (...) {
+                        engine_.terminate(std::make_error_code(std::errc::not_enough_memory));
+                    }
                 }
             }
             engine_.output_budget_.release_and_reconcile(stream_id_, engine_.connection_);
@@ -934,6 +939,10 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
     const auto stream_id = body_chunk.stream_id();
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     if (stream_runtime == nullptr) {
+        if (auto credit = body_chunk.take_credit(); credit.valid()) {
+            (void)connection_.acknowledge(std::move(credit));
+            wake_writer();
+        }
         return;
     }
     // The reader stamped its scanner entry when this input arrived.
@@ -1005,6 +1014,10 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
     if (stream_runtime == nullptr || signal == nullptr) {
+        if (auto credit = tunnel_data.take_credit(); credit.valid()) {
+            (void)connection_.acknowledge(std::move(credit));
+            wake_writer();
+        }
         return;
     }
     auto* selected_route = stream_runtime->selected_route();
@@ -1035,7 +1048,9 @@ void http2_sans_io_session_engine::on_message_end(const http2_message_end_event&
     const auto stream_id = message_end.stream_id();
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     if (stream_runtime == nullptr) {
-        reset_event_stream(stream_id, http2_error_code::internal_error);
+        if (!connection_.stream_aborted(stream_id)) {
+            reset_event_stream(stream_id, http2_error_code::internal_error);
+        }
         return;
     }
     stream_runtimes_.mark_request_body_closed(stream_id);

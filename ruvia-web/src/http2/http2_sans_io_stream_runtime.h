@@ -13,6 +13,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_request_trailers.h"
 
@@ -25,17 +26,17 @@ namespace ruvia::detail {
 
 class http2_sans_io_selected_route final {
 public:
-    [[nodiscard]] const route_resolution& resolution() const& noexcept {
+    [[nodiscard]] const route_resolution& resolution() const& noexcept RUVIA_LIFETIMEBOUND {
         return resolution_;
     }
     const route_resolution& resolution() const&& = delete;
 
-    [[nodiscard]] http2_request_body_runtime& body() & noexcept {
+    [[nodiscard]] http2_request_body_runtime& body() & noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }
     http2_request_body_runtime& body() && = delete;
 
-    [[nodiscard]] const http2_request_body_runtime& body() const& noexcept {
+    [[nodiscard]] const http2_request_body_runtime& body() const& noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }
     const http2_request_body_runtime& body() const&& = delete;
@@ -44,12 +45,12 @@ public:
         return signal() != nullptr;
     }
 
-    [[nodiscard]] http2_sans_io_stream_signal* signal() & noexcept {
+    [[nodiscard]] http2_sans_io_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_sans_io_stream_signal>(&dispatch_);
     }
     [[nodiscard]] http2_sans_io_stream_signal* signal() && = delete;
 
-    [[nodiscard]] const http2_sans_io_stream_signal* signal() const& noexcept {
+    [[nodiscard]] const http2_sans_io_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_sans_io_stream_signal>(&dispatch_);
     }
     [[nodiscard]] const http2_sans_io_stream_signal* signal() const&& = delete;
@@ -100,12 +101,14 @@ public:
     [[nodiscard]] std::uint32_t push_parent() const noexcept {
         return push_parent_;
     }
-    [[nodiscard]] http_request_trailers& trailers() & noexcept {
+    [[nodiscard]] http_request_trailers& trailers() & noexcept RUVIA_LIFETIMEBOUND {
         return trailers_;
     }
-    [[nodiscard]] const std::optional<http_priority>& priority_update() const& noexcept {
+    http_request_trailers& trailers() && = delete;
+    [[nodiscard]] const std::optional<http_priority>& priority_update() const& noexcept RUVIA_LIFETIMEBOUND {
         return priority_update_;
     }
+    const std::optional<http_priority>& priority_update() const&& = delete;
     void reprioritize(http_priority priority) noexcept {
         priority_update_ = priority;
     }
@@ -114,11 +117,10 @@ public:
             body_failure_ = failure;
         }
     }
-    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const& noexcept {
+    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return body_failure_;
     }
     const std::optional<http_request_body_failure>& body_failure() const&& = delete;
-
     void mark_response_committed() noexcept {
         response_committed_ = true;
     }
@@ -137,11 +139,10 @@ public:
         return true;
     }
 
-    [[nodiscard]] http2_request_head_event* request_head() & noexcept {
+    [[nodiscard]] http2_request_head_event* request_head() & noexcept RUVIA_LIFETIMEBOUND {
         return request_head_ ? &*request_head_ : nullptr;
     }
     http2_request_head_event* request_head() && = delete;
-
     [[nodiscard]] bool select_route(route_resolution resolution, request_body_mode body_mode) noexcept {
         if (selected_route_) {
             return false;
@@ -151,31 +152,36 @@ public:
         return true;
     }
 
-    [[nodiscard]] http2_sans_io_selected_route* selected_route() & noexcept {
+    [[nodiscard]] http2_sans_io_selected_route* selected_route() & noexcept RUVIA_LIFETIMEBOUND {
         return selected_route_ ? &*selected_route_ : nullptr;
     }
     http2_sans_io_selected_route* selected_route() && = delete;
 
-    [[nodiscard]] const http2_sans_io_selected_route* selected_route() const& noexcept {
+    [[nodiscard]] const http2_sans_io_selected_route* selected_route() const& noexcept RUVIA_LIFETIMEBOUND {
         return selected_route_ ? &*selected_route_ : nullptr;
     }
     const http2_sans_io_selected_route* selected_route() const&& = delete;
+
+    void reset_selected_route() noexcept {
+        selected_route_.reset();
+    }
 
     [[nodiscard]] bool dispatched() const noexcept {
         const auto* selected = selected_route();
         return selected != nullptr && selected->dispatched();
     }
 
-    [[nodiscard]] http2_sans_io_stream_signal* signal() noexcept {
+    [[nodiscard]] http2_sans_io_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
         auto* selected = selected_route();
         return selected != nullptr ? selected->signal() : nullptr;
     }
+    http2_sans_io_stream_signal* signal() && = delete;
 
-    [[nodiscard]] const http2_sans_io_stream_signal* signal() const noexcept {
+    [[nodiscard]] const http2_sans_io_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
         const auto* selected = selected_route();
         return selected != nullptr ? selected->signal() : nullptr;
     }
-
+    const http2_sans_io_stream_signal* signal() const&& = delete;
     // Request-body DATA arrived at `now_ms` (the time of the read carrying it).
     void note_request_body_progress(std::int64_t now_ms) noexcept {
         request_body_progress_ms_ = now_ms;
@@ -218,19 +224,14 @@ private:
     void mark_request_body_closed() noexcept {
         request_body_open_ = false;
     }
-
-    [[nodiscard]] bool request_body_open() const noexcept {
-        return request_body_open_;
-    }
-
     std::uint32_t stream_id_;
     std::uint32_t push_parent_{};
     std::pmr::memory_resource* resource_;
     std::pmr::memory_resource* body_resource_;
     http_request_trailers trailers_;
     std::optional<http_priority> priority_update_{};
-    std::optional<http2_sans_io_selected_route> selected_route_;
     std::optional<http2_request_head_event> request_head_;
+    std::optional<http2_sans_io_selected_route> selected_route_;
     std::optional<http_request_body_failure> body_failure_{};
     // Valid while request_body_open_, in the connection scanner's clock.
     std::int64_t request_body_opened_ms_{0};

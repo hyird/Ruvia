@@ -25,7 +25,6 @@ void require_writable(detail::http_client_response_state& state_value) {
     }
 }
 struct upload_output_policy final {
-    static constexpr bool validate_chunk = true;
     static detail::http_client_output_queue& output(detail::http_client_response_state& state_value) noexcept {
         return state_value.upload_->output_;
     }
@@ -33,11 +32,6 @@ struct upload_output_policy final {
         auto& queue = output(state_value);
         if (queue.stopped_ || queue.end_requested_) {
             throw http_client_error(http_client_error::code_type::cancelled, "HTTP request upload stopped");
-        }
-    }
-    static void require_empty_chunk(detail::http_client_output_queue& queue) {
-        if (queue.chunk_ready_) {
-            throw std::logic_error("HTTP upload queue still owns a chunk");
         }
     }
     static bool begin_finish(detail::http_client_response_state& state_value, detail::http_client_upload_end_input& input) {
@@ -87,10 +81,7 @@ void http_client_exchange::release() noexcept {
     upload.output_.output_scope_.close();
     upload.response_.release(response_);
     if (abandon_upload && upload.response_.taken() &&
-        !state_value->complete_ && state_value->pool_ != nullptr &&
-        (state_value->transport_ == detail::http_client_response_transport::http1 ||
-            state_value->transport_ == detail::http_client_response_transport::http2)) {
-        // Stopping the writer alone cannot interrupt a pending response read.
+        !state_value->complete_ && state_value->pool_ != nullptr) {
         // Keep the retained consumer's read scope open to observe cancellation.
         state_value->pool_->abandon_response(*state_value);
     } else if (!upload.output_.ended_) {

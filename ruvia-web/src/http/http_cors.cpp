@@ -56,40 +56,74 @@ void add_vary_tokens(http_response& response, const std::string_view* tokens, st
 }
 
 // Validates Origin, Access-Control-Request-Method and the complete
-// Access-Control-Request-Headers list, and sizes the reflected header-name
-// list; reflect_cors_request_header_names then copies it in a second pass.
+// Access-Control-Request-Headers list, folding reflected header names in one pass.
 struct cors_request_fields final {
+    static constexpr std::size_t inline_capacity = 256;
+
+    explicit cors_request_fields(std::pmr::memory_resource* resource)
+        : overflow_(resource) {}
+
+    void append_header_name(std::string_view name) {
+        const std::string_view separator =
+            (inline_size_ != 0 || using_overflow_) ? std::string_view(", ") : std::string_view{};
+        const auto needed = separator.size() + name.size();
+        if (!using_overflow_) {
+            if (needed <= inline_.size() - inline_size_) {
+                if (!separator.empty()) {
+                    std::memcpy(inline_.data() + inline_size_, separator.data(), separator.size());
+                    inline_size_ += separator.size();
+                }
+                std::memcpy(inline_.data() + inline_size_, name.data(), name.size());
+                inline_size_ += name.size();
+                return;
+            }
+            overflow_.reserve((std::max)(inline_size_ + needed, inline_.size() * 2));
+            overflow_.append(inline_.data(), inline_size_);
+            using_overflow_ = true;
+        }
+        overflow_.append(separator);
+        overflow_.append(name);
+    }
+
+    [[nodiscard]] std::string_view reflected_headers() const noexcept {
+        return using_overflow_ ? std::string_view(overflow_)
+                               : std::string_view(inline_.data(), inline_size_);
+    }
+
     std::optional<std::string_view> origin_{};
     std::optional<std::string_view> requested_method_{};
-    std::size_t request_header_names_size_{0};
+    std::array<char, inline_capacity> inline_{};
+    std::pmr::string overflow_;
+    std::size_t inline_size_{0};
+    bool using_overflow_{false};
 };
 
-[[nodiscard]] std::optional<cors_request_fields> scan_cors_request_fields(
-    const http_request& request, bool options) {
-    cors_request_fields result{};
+[[nodiscard]] bool scan_cors_request_fields(
+    const http_request& request, bool options, bool reflect_headers, cors_request_fields& result) {
     // CORS is an application policy, not message framing. Opaque or malformed
     // metadata may reach the handler but must not generate cross-origin grants.
     // Never select one origin from a multi-origin value for a CORS decision.
     const auto origin = request.header("Origin");
     if (origin.has_value()) {
         if (!is_valid_cors_origin(*origin)) {
-            return std::nullopt;
+            return false;
         }
         result.origin_ = *origin;
     }
     if (!options) {
-        return result;
+        return true;
     }
     const auto requested_method = request.header("Access-Control-Request-Method");
     if (requested_method.has_value()) {
         if (!is_valid_http_method_token(*requested_method)) {
-            return std::nullopt;
+            return false;
         }
         result.requested_method_ = *requested_method;
     }
     if (!request.header("Access-Control-Request-Headers").has_value()) {
-        return result;
+        return true;
     }
+    std::size_t request_header_names_size = 0;
     bool first_header_name = true;
     for (const auto& field : request.headers()) {
         if (field.name().size() != 30U ||
@@ -103,49 +137,20 @@ struct cors_request_fields final {
             const auto separator_size = first_header_name ? std::size_t{0} : std::size_t{2};
             const auto maximum = (std::numeric_limits<std::size_t>::max)();
             if (header_name->size() > maximum - separator_size ||
-                result.request_header_names_size_ >
-                    maximum - separator_size - header_name->size()) {
-                return std::nullopt;
+                request_header_names_size > maximum - separator_size - header_name->size()) {
+                return false;
             }
-            result.request_header_names_size_ += separator_size + header_name->size();
+            request_header_names_size += separator_size + header_name->size();
             first_header_name = false;
+            if (reflect_headers) {
+                result.append_header_name(*header_name);
+            }
         }
         if (!saw_name || !names.valid()) {
-            return std::nullopt;
+            return false;
         }
     }
-    return result;
-}
-
-void reflect_cors_request_header_names(
-    const http_request& request, http_response& response, std::size_t size) {
-    if (size == 0 || has_response_header(response, "Access-Control-Allow-Headers")) {
-        return;
-    }
-    static constexpr std::size_t inline_capacity = 256;
-    std::array<char, inline_capacity> inline_buffer;
-    std::pmr::string overflow_buffer(response.memory_resource());
-    char* target = inline_buffer.data();
-    if (size > inline_buffer.size()) {
-        overflow_buffer.resize(size);
-        target = overflow_buffer.data();
-    }
-    std::size_t length = 0;
-    for (const auto& field : request.headers()) {
-        if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
-            continue;
-        }
-        http_field_name_list names(field.value());
-        while (const auto name = names.next()) {
-            if (length != 0) {
-                target[length++] = ',';
-                target[length++] = ' ';
-            }
-            std::memcpy(target + length, name->data(), name->size());
-            length += name->size();
-        }
-    }
-    response.header("Access-Control-Allow-Headers", std::string_view(target, length));
+    return true;
 }
 
 void validate_cors_header_names(const std::vector<std::string>& names, const char* empty_message) {
@@ -254,13 +259,15 @@ cors_options make_cors_options(const cors_config& config, std::pmr::memory_resou
 
 void apply_cors_headers(const http_request& request, http_response& response, const cors_options& cors) {
     const bool options = request.known_method() == http_known_method::options;
-    const auto request_fields = scan_cors_request_fields(request, options);
-    if (!request_fields) {
+    const bool reflect_headers =
+        options && cors.request_headers_mode_ != cors_request_headers_mode::fixed &&
+        !has_response_header(response, "Access-Control-Allow-Headers");
+    cors_request_fields request_fields(response.memory_resource());
+    if (!scan_cors_request_fields(request, options, reflect_headers, request_fields)) {
         return;
     }
-    const auto origin = request_fields->origin_.value_or(std::string_view{});
-    const auto& requested_method = request_fields->requested_method_;
-    const auto request_header_names_size = request_fields->request_header_names_size_;
+    const auto origin = request_fields.origin_.value_or(std::string_view{});
+    const auto& requested_method = request_fields.requested_method_;
     const bool wildcard_origin = cors.origin_mode_ == cors_origin_mode::any;
     std::array<std::string_view, 3> vary_tokens{};
     std::size_t vary_token_count = 0;
@@ -290,8 +297,9 @@ void apply_cors_headers(const http_request& request, http_response& response, co
         if (cors.request_headers_mode_ == cors_request_headers_mode::fixed) {
             set_prefixed_response_header_if_missing(
                 response, cors.request_headers_, allow_headers_header_name.size());
-        } else {
-            reflect_cors_request_header_names(request, response, request_header_names_size);
+        } else if (const auto reflected = request_fields.reflected_headers();
+            !reflected.empty() && !has_response_header(response, "Access-Control-Allow-Headers")) {
+            response.header("Access-Control-Allow-Headers", reflected);
         }
         add_vary_tokens(response, vary_tokens.data(), vary_token_count);
         if (!cors.max_age_.empty()) {

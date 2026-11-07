@@ -32,10 +32,6 @@ enum class client_alpn : std::uint8_t {
     negotiate,
 };
 
-// Converts a validated, unbracketed transport host to the uri-host expected by
-// HTTP origin/authority models. DNS and TLS continue to use the original host.
-[[nodiscard]] std::pmr::string client_uri_host(
-    std::string_view host, std::pmr::memory_resource* resource);
 [[nodiscard]] std::string_view selected_client_alpn(SSL* ssl) noexcept;
 // Startup-only. Applies the shared TLS protocol policy (tls_protocol_policy.h);
 // trust and client identity loading have one implementation; the ALPN offer is

@@ -408,6 +408,9 @@ private:
             return;
         }
         if (node.kind_ == node_kind::logical_not) {
+            if (node.operands_.empty()) {
+                throw std::logic_error("invalid Redis predicate expression");
+            }
             output.append("-(");
             append_expression(output, nodes, nodes[node.operands_[0]], depth + 1U);
             output.push_back(')');
@@ -416,6 +419,9 @@ private:
         switch (node.binary_) {
             case redis_binary_operator::logical_and:
             case redis_binary_operator::logical_or:
+                if (node.operands_.size() < 2U) {
+                    throw std::logic_error("invalid Redis predicate expression");
+                }
                 output.push_back('(');
                 append_expression(output, nodes, nodes[node.operands_[0]], depth + 1U);
                 output.push_back(node.binary_ == redis_binary_operator::logical_and ? ' ' : '|');
@@ -464,18 +470,18 @@ private:
         const auto field = comparison.column_.name_;
         const auto& items = comparison.operand_.operands_;
         const bool negated = node.binary_ == redis_binary_operator::not_in;
+        const auto kind = index_kind(mapping_, field);
+        if (kind == redis_index_kind::text) {
+            throw std::invalid_argument("Redis TEXT predicates are not supported");
+        }
         if (items.empty() && negated) {
-            output.push_back('*');
+            append_presence(output, field);
             return;
         }
-        const auto kind = index_kind(mapping_, field);
         if (items.empty()) {
             // Presence markers only ever hold 1, so this matches nothing.
             append_shadow_tag_term(output, present_shadow, field, "x00");
             return;
-        }
-        if (kind == redis_index_kind::text) {
-            throw std::invalid_argument("Redis TEXT predicates are not supported");
         }
         output.push_back('(');
         if (negated) {
@@ -512,6 +518,9 @@ private:
 
     void append_between(std::pmr::string& output, nodes_type nodes, const redis_predicate_node& node) const {
         const auto comparison = column_comparison(mapping_, nodes, node);
+        if (node.operands_.size() < 3U) {
+            throw std::logic_error("invalid Redis predicate expression");
+        }
         const auto field = comparison.column_.name_;
         const auto& lower = comparison.operand_.literal_;
         const auto& upper = nodes[node.operands_[2]].literal_;

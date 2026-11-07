@@ -334,11 +334,11 @@ private:
 // Copy text that must outlive that boundary.
 class redis_pubsub_event final {
 public:
-    [[nodiscard]] const redis_pubsub_confirmation* confirmation() const& noexcept {
+    [[nodiscard]] const redis_pubsub_confirmation* confirmation() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<redis_pubsub_confirmation>(&value_);
     }
     const redis_pubsub_confirmation* confirmation() const&& = delete;
-    [[nodiscard]] const redis_pubsub_message* message() const& noexcept {
+    [[nodiscard]] const redis_pubsub_message* message() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<redis_pubsub_message>(&value_);
     }
     const redis_pubsub_message* message() const&& = delete;
@@ -475,7 +475,7 @@ public:
     [[nodiscard]] redis_handle with_options(operation_options options) const;
 
     // Borrows the owning worker; an expired capability cannot expose it.
-    [[nodiscard]] const worker_handle& worker() const&;
+    [[nodiscard]] const worker_handle& worker() const& RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 
     // 单次租约没有可依赖的前序写入历史；WAIT/WAITAOF 在此同步拒绝。
@@ -604,8 +604,6 @@ public:
     [[nodiscard]] task<std::pmr::string> script_load(std::string_view script) const;
     [[nodiscard]] task<std::pmr::vector<bool>> script_exists(
         std::span<const std::string_view> sha1s) const;
-    task<std::pmr::vector<bool>> script_exists(
-        std::initializer_list<std::string_view> sha1s) const = delete;
     [[nodiscard]] task<std::optional<redis_key_value>> blpop(
         std::string_view key, redis_block_wait wait) const {
         const std::string_view keys[]{key};
@@ -857,7 +855,7 @@ public:
     // Await on the bound loop to cancel and join all started operations.
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
-    [[nodiscard]] const worker_handle& worker() const& noexcept;
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 
 private:

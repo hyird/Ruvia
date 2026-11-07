@@ -113,9 +113,10 @@ class http1_client_chunked_response final {
 public:
     // Transfer codings preceding the terminal chunked framing. The runtime
     // removes chunk framing first and then drives this decoder list.
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const noexcept {
+    [[nodiscard]] const http_transfer_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
         return transfer_codings_;
     }
+    const http_transfer_codings& transfer_codings() const&& = delete;
 
     [[nodiscard]] constexpr http1_close_policy persistence() const noexcept {
         return persistence_;
@@ -138,9 +139,10 @@ public:
     // Any non-chunked transfer coding is decoded after EOF delimits the message.
     // This alternative always consumes through EOF and always closes; it exposes
     // no independent persistence field that could contradict those facts.
-    [[nodiscard]] const http_transfer_codings& transfer_codings() const noexcept {
+    [[nodiscard]] const http_transfer_codings& transfer_codings() const& noexcept RUVIA_LIFETIMEBOUND {
         return transfer_codings_;
     }
+    const http_transfer_codings& transfer_codings() const&& = delete;
 
 private:
     friend struct detail::http1_client_response_plan_access;
@@ -172,13 +174,13 @@ private:
 class http1_client_response_plan final {
 public:
     [[nodiscard]] constexpr const http1_client_informational_response* informational()
-        const& noexcept {
+        const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_informational_response>(&state_);
     }
     const http1_client_informational_response* informational() const&& = delete;
 
     [[nodiscard]] constexpr const http1_client_response_without_content* without_content()
-        const& noexcept {
+        const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_response_without_content>(&state_);
     }
     const http1_client_response_without_content* without_content() const&& = delete;
@@ -190,28 +192,28 @@ public:
     [[nodiscard]] constexpr bool discards_content() const noexcept {
         return discards_content_;
     }
-    [[nodiscard]] constexpr const http1_client_known_length_response* known_length() const& noexcept {
+    [[nodiscard]] constexpr const http1_client_known_length_response* known_length() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_known_length_response>(&state_);
     }
     const http1_client_known_length_response* known_length() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_chunked_response* chunked() const& noexcept {
+    [[nodiscard]] constexpr const http1_client_chunked_response* chunked() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_chunked_response>(&state_);
     }
     const http1_client_chunked_response* chunked() const&& = delete;
 
     [[nodiscard]] constexpr const http1_client_close_delimited_response* close_delimited()
-        const& noexcept {
+        const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_close_delimited_response>(&state_);
     }
     const http1_client_close_delimited_response* close_delimited() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_connect_tunnel* connect_tunnel() const& noexcept {
+    [[nodiscard]] constexpr const http1_client_connect_tunnel* connect_tunnel() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_connect_tunnel>(&state_);
     }
     const http1_client_connect_tunnel* connect_tunnel() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_protocol_upgrade* protocol_upgrade() const& noexcept {
+    [[nodiscard]] constexpr const http1_client_protocol_upgrade* protocol_upgrade() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_protocol_upgrade>(&state_);
     }
     const http1_client_protocol_upgrade* protocol_upgrade() const&& = delete;
@@ -289,7 +291,7 @@ public:
     http1_parsed_client_response_head(http1_parsed_client_response_head&&) noexcept = default;
     http1_parsed_client_response_head& operator=(http1_parsed_client_response_head&&) = delete;
 
-    [[nodiscard]] const http_client_response_head& head() const& noexcept {
+    [[nodiscard]] const http_client_response_head& head() const& noexcept RUVIA_LIFETIMEBOUND {
         return head_;
     }
     [[nodiscard]] const http_client_response_head& head() const&& = delete;
@@ -298,7 +300,7 @@ public:
         return std::move(head_);
     }
 
-    [[nodiscard]] const http1_client_response_plan& plan() const& noexcept {
+    [[nodiscard]] const http1_client_response_plan& plan() const& noexcept RUVIA_LIFETIMEBOUND {
         return plan_;
     }
     [[nodiscard]] const http1_client_response_plan& plan() const&& = delete;
@@ -330,22 +332,22 @@ public:
     http1_client_response_parse_result(http1_client_response_parse_result&&) noexcept = default;
     http1_client_response_parse_result& operator=(http1_client_response_parse_result&&) = delete;
 
-    [[nodiscard]] const http1_client_response_need_more* need_more() const& noexcept {
+    [[nodiscard]] const http1_client_response_need_more* need_more() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_response_need_more>(&state_);
     }
     const http1_client_response_need_more* need_more() const&& = delete;
 
-    [[nodiscard]] http1_parsed_client_response_head* parsed() & noexcept {
+    [[nodiscard]] http1_parsed_client_response_head* parsed() & noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_parsed_client_response_head>(&state_);
     }
 
-    [[nodiscard]] const http1_parsed_client_response_head* parsed() const& noexcept {
+    [[nodiscard]] const http1_parsed_client_response_head* parsed() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_parsed_client_response_head>(&state_);
     }
     http1_parsed_client_response_head* parsed() && = delete;
     const http1_parsed_client_response_head* parsed() const&& = delete;
 
-    [[nodiscard]] const http1_client_response_parse_error* failure() const& noexcept {
+    [[nodiscard]] const http1_client_response_parse_error* failure() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http1_client_response_parse_error>(&state_);
     }
     const http1_client_response_parse_error* failure() const&& = delete;
@@ -390,8 +392,7 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // (RFC 9112 section 6.3); a successful CONNECT begins its tunnel there.
 // A rejected CONNECT retains ordinary response framing but always closes after
 // that response, in line with RFC 9931 section 8; it never returns to a pool.
-// HEAD/304 Content-Length representation metadata still requires valid,
-// consistent lengths; ignored 1xx/204/CONNECT framing values are not interpreted.
+// Ignored 1xx/204/304/HEAD/CONNECT framing values are not interpreted.
 // Any number of informational heads may precede the final response; each head
 // remains subject to the header limits (max_http_header_bytes and
 // max_http_header_fields) and the supplied memory resource. An invalid status

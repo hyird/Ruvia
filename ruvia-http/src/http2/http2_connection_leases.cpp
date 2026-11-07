@@ -33,8 +33,11 @@ void http2_connection::abandon_stream_lease_checked(std::uint32_t stream_id) {
         leases_.erase_release(stream_id);
         return;
     }
-    if (!stream->is_aborted()) {
-        (void)submit_reset(stream_id, http2_error_code::cancel);
+    if (!stream->is_aborted() && !http2_stream_is_closed(*stream)) {
+        const auto error = stream->local_send().end_stream_committed() != nullptr
+                               ? http2_error_code::no_error
+                               : http2_error_code::cancel;
+        (void)submit_reset(stream_id, error);
     }
     release_stream_lease(stream_id);
 }
@@ -50,7 +53,14 @@ void http2_connection::abandon_received_data(std::uint32_t stream_id, std::uint3
 }
 
 bool http2_connection::acknowledge_received_data(std::uint32_t stream_id, std::uint32_t bytes) {
-    if (!release_received_data(stream_id, bytes)) {
+    bool released = false;
+    try {
+        released = release_received_data(stream_id, bytes);
+    } catch (...) {
+        leases_.defer_credit(stream_id, bytes);
+        throw;
+    }
+    if (!released) {
         return false;
     }
     retry_deferred_stream_lease(stream_id);
@@ -120,15 +130,10 @@ void http2_connection::retry_deferred_stream_leases() noexcept {
             ++index;
         }
     }
-    // Credit-gated releases wait for the event, credit, or stream transition that
-    // satisfies them; only a failed abandon or a failed connection needs a sweep.
-    const bool connection_failed = connection_error().has_value();
     index = 0;
     while (index < leases_.release_count()) {
         const auto release = leases_.release_at(index);
-        if (connection_failed || release.kind_ == http2_stream_lease_ledger::release_kind_type::abandon) {
-            retry_deferred_stream_lease(release.stream_id_);
-        }
+        retry_deferred_stream_lease(release.stream_id_);
         if (index < leases_.release_count() && leases_.release_at(index).stream_id_ == release.stream_id_) {
             ++index;
         }

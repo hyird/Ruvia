@@ -68,7 +68,7 @@ public:
     websocket_client_negotiation& operator=(websocket_client_negotiation&&) = delete;
     websocket_client_negotiation(const websocket_client_negotiation&) = delete;
     websocket_client_negotiation& operator=(const websocket_client_negotiation&) = delete;
-    [[nodiscard]] std::span<const http_header> request_fields() const& noexcept {
+    [[nodiscard]] std::span<const http_header> request_fields() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::span<const http_header>(fields_.data(), field_count_);
     }
     std::span<const http_header> request_fields() const&& = delete;
@@ -124,7 +124,7 @@ prepare_http1_websocket_client_request(const http_origin_view& origin, std::stri
 // against the negotiation. The result view borrows the response head.
 [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
 validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
-    const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response);
+    const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response RUVIA_LIFETIMEBOUND);
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
 validate_http1_websocket_client_response(std::span<const char, 24>,
     const websocket_client_negotiation&, const http1_parsed_client_response_head&&) = delete;

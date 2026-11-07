@@ -92,16 +92,21 @@ public:
 private:
     friend class http_response_body;
 
-    http_owned_response_file(std::pmr::memory_resource* resource, http_native_path_view_type file,
+    http_owned_response_file(http_native_path_string_type&& native_path,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        http_response_file_identity identity, http_response_file_handle opened)
-        : native_path_(file, resource),
+        http_response_file_identity identity, http_response_file_handle opened) noexcept
+        : native_path_(std::move(native_path)),
           size_(size),
           offset_(offset),
           length_(length),
           identity_(identity),
           opened_(std::move(opened)) {}
 
+    http_owned_response_file(std::pmr::memory_resource* resource, http_native_path_view_type file,
+        std::uint64_t size, std::uint64_t offset, std::uint64_t length,
+        http_response_file_identity identity, http_response_file_handle opened)
+        : http_owned_response_file(http_native_path_string_type(file, resource), size, offset,
+              length, identity, std::move(opened)) {}
     http_native_path_string_type native_path_;
     std::uint64_t size_;
     std::uint64_t offset_;
@@ -157,6 +162,17 @@ public:
     }
 
 private:
+    friend class http_response_body;
+
+    http_multipart_response_body(http_native_path_string_type&& native_path,
+        http_multipart_byte_range_plan&& plan, std::uint64_t size,
+        http_response_file_identity identity, http_response_file_handle opened) noexcept
+        : native_path_(std::move(native_path)),
+          plan_(std::move(plan)),
+          size_(size),
+          identity_(identity),
+          opened_(std::move(opened)) {}
+
     http_native_path_string_type native_path_;
     http_multipart_byte_range_plan plan_;
     std::uint64_t size_{};

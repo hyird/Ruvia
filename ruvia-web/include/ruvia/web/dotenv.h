@@ -12,8 +12,10 @@
 #include <system_error>
 #include <type_traits>
 
-namespace ruvia {
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/web/integer.h"
 
+namespace ruvia {
 namespace detail {
 
 struct env_access;
@@ -53,7 +55,7 @@ public:
     env(env&&) = delete;
     env& operator=(env&&) = delete;
 
-    [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> get(std::string_view) const&& = delete;
 
     // Typed lookup distinguishes an absent variable from a malformed one:
@@ -64,8 +66,7 @@ public:
     // point: a typo in a deployment variable should stop startup, not silently
     // select the default.
     template <typename t_type>
-    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view name) const&;
-
+    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view name) const& RUVIA_LIFETIMEBOUND;
     template <typename t_type>
     [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view) const&& = delete;
 
@@ -119,10 +120,13 @@ std::optional<std::remove_cvref_t<t_type>> env::parse_typed_value(std::string_vi
         return value;
     } else if constexpr (std::is_same_v<value_type, bool>) {
         return parse_bool_value(value);
-    } else if constexpr ((std::is_integral_v<value_type> && !std::is_same_v<value_type, char> &&
-                             !std::is_same_v<value_type, wchar_t> && !std::is_same_v<value_type, char8_t> &&
-                             !std::is_same_v<value_type, char16_t> && !std::is_same_v<value_type, char32_t>) ||
-                         std::is_floating_point_v<value_type>) {
+    } else if constexpr (detail::parsed_integer<value_type>) {
+        const auto parsed_value = parse_integer<value_type>(value);
+        if (parsed_value.index() != 0) {
+            return std::nullopt;
+        }
+        return std::get<0>(parsed_value);
+    } else if constexpr (std::is_floating_point_v<value_type>) {
         return parse_arithmetic_value<value_type>(value);
     } else {
         static_assert(unsupported_typed_env_value<value_type>,
@@ -140,13 +144,8 @@ std::optional<t_type> env::parse_arithmetic_value(std::string_view value) noexce
     const auto* first = value.data();
     const auto* last = value.data() + value.size();
     const auto [ptr, ec] = std::from_chars(first, last, parsed_value);
-    if (ec != std::errc{} || ptr != last) {
+    if (ec != std::errc{} || ptr != last || !std::isfinite(parsed_value)) {
         return std::nullopt;
-    }
-    if constexpr (std::is_floating_point_v<t_type>) {
-        if (!std::isfinite(parsed_value)) {
-            return std::nullopt;
-        }
     }
 
     return parsed_value;

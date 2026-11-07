@@ -188,13 +188,27 @@ public:
                 if (partial) {
                     ++writes_;
                 }
-                asio::post(socket_.get_executor(),
-                    asio::append(completion_type(std::forward<handler_type>(handler), *this, partial), error, written));
+                try {
+                    asio::post(socket_.get_executor(),
+                        asio::append(completion_type(std::forward<handler_type>(handler), *this, partial), error, written));
+                } catch (...) {
+                    if (partial) {
+                        --writes_;
+                    }
+                    write_failed_ = true;
+                    throw;
+                }
                 return;
             }
         }
         ++writes_;
-        socket_.async_write_some(buffers, completion_type(std::forward<handler_type>(handler), *this, true));
+        try {
+            socket_.async_write_some(buffers, completion_type(std::forward<handler_type>(handler), *this, true));
+        } catch (...) {
+            --writes_;
+            write_failed_ = true;
+            throw;
+        }
     }
 
 private:

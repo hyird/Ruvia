@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 
 #include "http/static_root_config_storage.h"
@@ -74,7 +75,8 @@ public:
 
     // One rebuild pass on the claiming worker. A changed tree is published; a
     // failed pass is counted and the last complete snapshot stays published.
-    [[nodiscard]] task<void> refresh(const worker_handle& worker, const http_server_worker_state& state);
+    [[nodiscard]] task<void> refresh(
+        const worker_handle& worker, const http_server_worker_state& state, const stop_token& stop = {});
 
 private:
     void publish(document_root_snapshot snapshot);
@@ -113,7 +115,7 @@ public:
     // Once per interval while the worker admits work: reclaim drained
     // generations, run the application's rebuild if this worker claimed it,
     // then adopt the published snapshot.
-    [[nodiscard]] task<void> refresh();
+    [[nodiscard]] task<void> refresh(const stop_token& stop = {});
 
 private:
     using generation_owner =

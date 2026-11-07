@@ -32,9 +32,21 @@ void server_websocket_connection<stream_type>::restart_pong_window(std::int64_t 
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::finish_write() noexcept {
+void server_websocket_connection<stream_type>::resume_pong_window_on_read_start() noexcept {
+    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_);
+        pong != nullptr && !write_lane_.write_in_progress() &&
+        lifecycle_options_.heartbeat_.pong_timeout_.has_value()) {
+        const auto now = steady_now_ms();
+        if (now - pong->sent_at_ms() >= lifecycle_options_.heartbeat_.pong_timeout_->count()) {
+            liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
+        }
+    }
+}
+
+template <typename stream_type>
+void server_websocket_connection<stream_type>::finish_write(bool restart_pong) noexcept {
     write_lane_.release();
-    if (std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
+    if (restart_pong && std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
         restart_pong_window(steady_now_ms());
     }
     write_lane_.notify();

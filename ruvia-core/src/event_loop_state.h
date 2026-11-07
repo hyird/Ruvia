@@ -30,8 +30,10 @@ public:
     event_loop_retirement() = default;
 
     void set_finalize(move_only_function<void()> finalize) noexcept {
-        const std::lock_guard lock(mutex_);
-        finalize_ = std::move(finalize);
+        {
+            const std::lock_guard lock(mutex_);
+            std::swap(finalize_, finalize);
+        }
     }
 
     [[nodiscard]] bool try_begin() noexcept {
@@ -102,9 +104,14 @@ public:
     }
 
     void close_admission() noexcept {
-        const std::lock_guard lock(mutex_);
-        root_admission_closed_ = true;
-        sealed_ = true;
+        move_only_function<void()> abandoned;
+        {
+            const std::lock_guard lock(mutex_);
+            root_admission_closed_ = true;
+            sealed_ = true;
+            finalized_ = true;
+            std::swap(abandoned, finalize_);
+        }
     }
 
     void seal() noexcept {

@@ -1,11 +1,13 @@
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <utility>
 
 #include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/multipart_parser.h"
 
+#include "util/geometric_reserve.h"
 // How a multipart parser's input is held: either a whole borrowed buffer the
 // caller owns, or a streaming buffer the parser appends to and compacts as it
 // consumes. Only this decides where the bytes live; the parser above it sees one
@@ -68,20 +70,20 @@ void multipart_input_lifecycle::feed(std::string_view chunk) {
     if (open == nullptr) {
         throw std::logic_error("multipart input is not open for feed");
     }
-    std::pmr::string owned_chunk("", open->bytes_.get_allocator().resource());
-    if (offset_ >= compact_consumed_prefix_bytes && http_text_overlaps(chunk, open->bytes_)) {
-        owned_chunk.assign(chunk);
-        chunk = owned_chunk;
-        const auto remaining = open->bytes_.size() - offset_;
-        if (chunk.size() > open->bytes_.max_size() - remaining) {
-            throw std::length_error("multipart input exceeds string capacity");
-        }
-        // Complete the only remaining allocation before compaction changes
-        // borrowed input, so either failure leaves that input retryable.
-        open->bytes_.reserve(remaining + chunk.size());
+    std::optional<std::pmr::string> owned_chunk;
+    const auto remaining = open->bytes_.size() - offset_;
+    const bool will_compact = offset_ >= compact_consumed_prefix_bytes && offset_ >= remaining;
+    if (http_text_aliases_string(chunk, open->bytes_)) {
+        chunk = owned_chunk.emplace(chunk, open->bytes_.get_allocator().resource());
     }
+    const auto base_size = will_compact ? remaining : open->bytes_.size();
+    if (chunk.size() > open->bytes_.max_size() - base_size) {
+        throw std::length_error("multipart input exceeds string capacity");
+    }
+    // Complete the only remaining allocation before compaction changes
+    // borrowed input, so either failure leaves that input retryable.
+    reserve_geometric(open->bytes_, base_size + chunk.size());
     compact_consumed_prefix();
-    open = std::get_if<multipart_streaming_input_open>(&value_);
     open->bytes_.append(chunk.data(), chunk.size());
 }
 
@@ -117,10 +119,10 @@ void multipart_input_lifecycle::compact_consumed_prefix() {
         offset_ = 0;
         return;
     }
-    if (offset_ < compact_consumed_prefix_bytes) {
+    const auto remaining = owned->size() - offset_;
+    if (offset_ < compact_consumed_prefix_bytes || offset_ < remaining) {
         return;
     }
-    const auto remaining = owned->size() - offset_;
     std::memmove(owned->data(), owned->data() + offset_, remaining);
     owned->resize(remaining);
     offset_ = 0;

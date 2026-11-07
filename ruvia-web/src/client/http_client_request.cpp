@@ -75,10 +75,11 @@ bool connection_named_field(std::span<const http_header> fields, std::string_vie
     return false;
 }
 
-task<void> pipe_response(http_client_response response, task<void> body, response_stream_writer& output) {
+task<void> pipe_response(http_client_response response, task<void> body, response_stream_writer& output,
+    std::pmr::memory_resource* resource) {
     if (co_await output.commit() == stream_commit_result::body) {
         co_await std::move(body);
-        std::pmr::vector<http_header_view> trailers(process_resource());
+        std::pmr::vector<http_header_view> trailers(pmr_resource_or_default(resource));
         trailers.reserve(response.trailers().size());
         for (const auto& field : response.trailers()) {
             if (!hop_field(field.name()) && !connection_named_field(response.headers(), field.name())) {
@@ -207,12 +208,27 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
             }
             request.client_.options_.timeout_ = *total - elapsed;
         }
-        auto fields = request.field_views();
-        http_client_request_view view{.method_ = request.method_, .target_ = request.target_, .headers_ = fields, .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_) : http_client_request_content_view::none()};
-        auto response = co_await request.client_.dispatch(view);
+        std::optional<task<http_client_response>> dispatched;
+        {
+            auto fields = request.field_views();
+            const http_client_request_view view{
+                .method_ = request.method_,
+                .target_ = request.target_,
+                .headers_ = fields,
+                .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
+                                              : http_client_request_content_view::none()};
+            dispatched.emplace(request.client_.dispatch(view));
+        }
+        if (redirects == request.max_redirects_) {
+            std::pmr::string(request.method_.get_allocator()).swap(request.method_);
+            std::pmr::string(request.target_.get_allocator()).swap(request.target_);
+            std::pmr::vector<http_header>(request.headers_.get_allocator()).swap(request.headers_);
+            std::pmr::string(request.body_.get_allocator()).swap(request.body_);
+            co_return co_await std::move(*dispatched);
+        }
+        auto response = co_await std::move(*dispatched);
         const auto status = response.status().value();
-        if (redirects == request.max_redirects_ ||
-            (status != 301 && status != 302 && status != 303 && status != 307 && status != 308)) {
+        if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) {
             co_return response;
         }
         std::optional<std::string_view> location;
@@ -248,6 +264,11 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                 co_return response;
             }
         }
+        const http_client_request_view view{
+            .method_ = request.method_,
+            .target_ = request.target_,
+            .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
+                                          : http_client_request_content_view::none()};
         const auto plan = plan_http_client_redirect_request(view, {.status_ = response.status(), .resource_ = request.client_.resource_});
         request.method_.assign(plan.method());
         request.target_.assign(next->target());
@@ -263,7 +284,7 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
         });
         if (drop) {
             request.has_body_ = false;
-            request.body_.clear();
+            std::pmr::string(request.body_.get_allocator()).swap(request.body_);
         }
         request.client_.pool_ = next_pool;
     }
@@ -342,6 +363,13 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
 }
 
 task<void> http_client_response::pipe_to(context& output) & {
+    if (state_ == nullptr) {
+        throw std::logic_error("response owner has moved");
+    }
+    state_->require_owner_worker("HTTP response requires its owner worker");
+    if (!state_->body_operation_scope_.active() || !output.operation_scope_.active()) {
+        throw std::logic_error("HTTP response pipe_to scope is closed");
+    }
     output.draft().status(status());
     const auto fields = headers();
     for (auto field = fields.begin(); field != fields.end(); ++field) {
@@ -356,7 +384,7 @@ task<void> http_client_response::pipe_to(context& output) & {
     }
     auto& writer = output.stream();
     auto source = make_scoped_operation(state_->body_operation_scope_,
-        pipe_response(http_client_response(state_), body_.pipe_to(writer), writer));
+        pipe_response(http_client_response(state_), body_.pipe_to(writer), writer, state_->resource_));
     return make_scoped_operation(output.operation_scope_,
         pipe_response_in_context(std::move(source)));
 }

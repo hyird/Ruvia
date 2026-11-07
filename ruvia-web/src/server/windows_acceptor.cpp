@@ -6,6 +6,7 @@
 
 #include <array>
 #include <chrono>
+#include <limits>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -15,7 +16,6 @@
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
-#include <asio/recycling_allocator.hpp>
 #include <asio/socket_base.hpp>
 #include <asio/windows/overlapped_ptr.hpp>
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -24,6 +24,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/timer.h"
 
 #include "server/connection_count.h"
@@ -78,6 +79,11 @@ void claim_exclusive_address(socket_type& socket) {
 
 [[nodiscard]] std::size_t acceptor_queue_capacity(std::size_t worker_count) {
 #if defined(RUVIA_ENABLE_HTTP3)
+    constexpr auto max_workers =
+        ((std::numeric_limits<std::size_t>::max)() - minimum_queue_capacity) / http3_max_datagrams_in_flight;
+    if (worker_count > max_workers) {
+        return (std::numeric_limits<std::size_t>::max)();
+    }
     return minimum_queue_capacity + worker_count * http3_max_datagrams_in_flight;
 #else
     (void)worker_count;
@@ -177,7 +183,7 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
     }
     runtime_.configure({
         .startup_ = [this] { asio::co_spawn(io_, ruvia::as_awaitable(run()),
-                                 asio::bind_allocator(asio::recycling_allocator<void>(),
+                                 asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(resource_),
                                      [this](std::exception_ptr failure) noexcept {
                                          if (failure) {
                                              (void)runtime_.fail(failure);
@@ -432,7 +438,7 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
             asio::ip::udp::endpoint remote;
             const auto completion = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 listener.socket_.async_receive_from(asio::buffer(buffer.data(), buffer.size()), remote,
-                    asio::bind_allocator(asio::recycling_allocator<void>(), std::move(handler)));
+                    asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(resource_), std::move(handler)));
             });
             if (!admitting_) {
                 co_return;
@@ -470,12 +476,7 @@ void windows_acceptor::steer(
         }
         owner = http3_initial_worker(*listener.secret_, destination, workers_.size());
     }
-    try {
-        (void)directory_->hand_off(*owner, listener.index_,
-            http3_handoff_datagram{.bytes_ = std::vector<std::byte>(bytes.begin(), bytes.end()), .remote_ = remote, .ecn_ = 0});
-    } catch (...) {
-        // Dropped, as the network may drop it.
-    }
+    (void)directory_->hand_off(*owner, listener.index_, bytes, remote);
 }
 
 bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_listener_index,
@@ -485,10 +486,14 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
         return false;
     }
     try {
-        const auto posted = runtime_.handle().post(
-            [this, http3_listener_index, remote, owned = std::vector<std::byte>(bytes.begin(), bytes.end()),
-                token = std::move(token)]() mutable noexcept { send_datagram(http3_listener_index, remote, owned); });
-        return posted.status() == post_status::accepted;
+        const auto status = runtime_.handle().post_factory([&]() -> move_only_function<void()> {
+            std::pmr::vector<std::byte> owned(bytes.begin(), bytes.end(), process_resource());
+            return [this, http3_listener_index, remote, owned = std::move(owned),
+                       token = std::move(token)]() mutable noexcept {
+                send_datagram(http3_listener_index, remote, owned);
+            };
+        });
+        return status == post_status::accepted;
     } catch (...) {
         return false;
     }

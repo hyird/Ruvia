@@ -150,6 +150,11 @@ class asio_completion final {
     using result_storage_type = std::conditional_t<std::is_void_v<result_type>, std::monostate, result_type>;
 
 public:
+    asio_completion(const asio_completion&) = default;
+    asio_completion(asio_completion&&) = default;
+    asio_completion& operator=(const asio_completion&) = delete;
+    asio_completion& operator=(asio_completion&&) = delete;
+
     [[nodiscard]] static asio_completion completed(std::error_code error_code) noexcept
         requires std::is_void_v<result_type>
     {
@@ -220,6 +225,9 @@ class asio_completion_awaiter final {
 public:
     explicit asio_completion_awaiter(initiate_type initiate)
         : initiate_(std::move(initiate)) {}
+    asio_completion_awaiter(const asio_completion_awaiter&) = delete;
+    asio_completion_awaiter& operator=(const asio_completion_awaiter&) = delete;
+    void operator&() const = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {
         return false;

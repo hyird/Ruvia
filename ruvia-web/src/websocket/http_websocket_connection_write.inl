@@ -193,11 +193,20 @@ task<std::error_code> server_websocket_connection<stream_type>::write_adapted(co
 
 template <typename stream_type>
 task<void> server_websocket_connection<stream_type>::flush_protocol_output_now() {
+    struct flush_abort_guard final {
+        server_websocket_connection* connection_;
+        ~flush_abort_guard() noexcept {
+            if (connection_ != nullptr) {
+                connection_->abort_transport(true);
+            }
+        }
+    } guard{this};
     for (;;) {
         const auto plan = protocol_.output_plan();
         const auto disposition = plan.disposition();
         const auto size = plan.size();
         if (size == 0 && disposition == websocket_transport_disposition::keep_open) {
+            guard.connection_ = nullptr;
             co_return;
         }
         if (size != 0 || (!native_stream && disposition == websocket_transport_disposition::end_transport)) {
@@ -213,8 +222,6 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
                 ec = co_await write_bytes(plan);
             }
             if (ec) {
-                close_stream();
-                (void)protocol_.abort();
                 throw inbound_transport_error(ec, "failed to write websocket bytes");
             }
         }
@@ -224,6 +231,7 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
         scanner_entry_.touch();
         if (disposition == websocket_transport_disposition::end_transport) {
             protocol_.commit_transport_end();
+            guard.connection_ = nullptr;
             co_return;
         }
     }

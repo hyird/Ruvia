@@ -102,13 +102,13 @@ public:
         return value_.has_value();
     }
 
-    [[nodiscard]] const std::optional<field_value_type>& value() const& noexcept {
+    [[nodiscard]] const std::optional<field_value_type>& value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
 
     [[nodiscard]] const std::optional<field_value_type>& value() const&& = delete;
 
-    [[nodiscard]] const field_value_type& required_value() const&
+    [[nodiscard]] const field_value_type& required_value() const& RUVIA_LIFETIMEBOUND
         requires required
     {
         if (!value_) {
@@ -123,7 +123,7 @@ public:
 
     // Dynamic JSON tokens require whole-value assignment to keep null state
     // synchronized; only values that cannot become JSON null expose mutation.
-    [[nodiscard]] field_value_type& ensure(std::pmr::memory_resource* resource)
+    [[nodiscard]] field_value_type& ensure(std::pmr::memory_resource* resource) & RUVIA_LIFETIMEBOUND
         requires(!detail::is_ruvia_json_value<field_value_type>)
     {
         if (!value_) {
@@ -133,6 +133,10 @@ public:
         state_ = detail::model_field_state::parsed;
         return *value_;
     }
+
+    field_value_type& ensure(std::pmr::memory_resource*) &&
+        requires(!detail::is_ruvia_json_value<field_value_type>)
+    = delete;
 
     template <typename input_type>
     void assign(input_type&& input, std::pmr::memory_resource* resource) {

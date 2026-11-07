@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <span>
@@ -53,15 +54,17 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return size_ == 0;
     }
-    [[nodiscard]] const http_header_view& operator[](std::size_t index) const noexcept {
+    [[nodiscard]] const http_header_view& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
         return fields_[index];
     }
+    const http_header_view& operator[](std::size_t) const&& = delete;
     [[nodiscard]] request_header_kind kind_at(std::size_t index) const noexcept {
         return kinds_[index];
     }
-    [[nodiscard]] std::span<const http_header_view> fields() const noexcept {
+    [[nodiscard]] std::span<const http_header_view> fields() const& noexcept RUVIA_LIFETIMEBOUND {
         return {fields_, size_};
     }
+    std::span<const http_header_view> fields() const&& = delete;
     void mark_repeated_known_slot(std::size_t slot) noexcept {
         if (slot < 32U) {
             repeated_known_bits_ |= (std::uint32_t{1} << slot);
@@ -72,7 +75,7 @@ public:
     }
 
     void reserve(std::size_t count, std::pmr::memory_resource* resource) {
-        if (count > UINT16_MAX) {
+        if (count > (std::numeric_limits<std::uint16_t>::max)()) {
             throw std::logic_error("request header block exceeds field limit");
         }
         if (count <= capacity_) {
@@ -98,11 +101,11 @@ public:
     }
 
     void append(http_header_view field, request_header_kind kind) {
-        if (size_ == UINT16_MAX) {
+        if (size_ == (std::numeric_limits<std::uint16_t>::max)()) {
             throw std::logic_error("request header block is full");
         }
         if (size_ == capacity_) {
-            reserve((std::min)(std::size_t{UINT16_MAX},
+            reserve((std::min)(static_cast<std::size_t>((std::numeric_limits<std::uint16_t>::max)()),
                         (std::max)(std::size_t{1}, std::size_t(capacity_) * 2)),
                 resource_);
         }

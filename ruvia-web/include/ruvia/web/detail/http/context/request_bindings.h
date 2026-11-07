@@ -103,11 +103,17 @@ public:
     [[nodiscard]] request_binding_handle<t_type> bind_validated(const t_type& value) {
         return request_binding_handle<t_type>(*this, value, request_binding_kind::validated_model);
     }
+    template <typename t_type>
+        requires(!std::is_lvalue_reference_v<t_type>)
+    request_binding_handle<std::remove_cvref_t<t_type>> bind_validated(t_type&&) = delete;
 
     template <typename t_type>
     [[nodiscard]] request_binding_handle<t_type> bind_state(const t_type& value) {
         return request_binding_handle<t_type>(*this, value, request_binding_kind::request_state);
     }
+    template <typename t_type>
+        requires(!std::is_lvalue_reference_v<t_type>)
+    request_binding_handle<std::remove_cvref_t<t_type>> bind_state(t_type&&) = delete;
 
 private:
     template <typename t_type>

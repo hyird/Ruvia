@@ -483,7 +483,7 @@ public:
     db_entity_storage& operator=(const db_entity_storage&) = delete;
     db_entity_storage(db_entity_storage&&) noexcept = default;
     template <fixed_string name>
-    auto& get() & {
+    auto& get() & RUVIA_LIFETIMEBOUND {
         if constexpr (is_relation<name>()) {
             auto& s = relation_slot<name>();
             if (s.state_ != decltype(s.state_)::value) {
@@ -495,7 +495,9 @@ public:
         }
     }
     template <fixed_string name>
-    const auto& get() const& {
+    auto& get() && = delete;
+    template <fixed_string name>
+    const auto& get() const& RUVIA_LIFETIMEBOUND {
         return const_cast<db_entity_storage*>(this)->get<name>();
     }
     template <fixed_string name>

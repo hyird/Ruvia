@@ -114,8 +114,10 @@ public:
     // longer reports a failure that was read here.
     [[nodiscard]] std::exception_ptr failure() noexcept;
     [[nodiscard]] worker_runtime_state state() const noexcept;
-    [[nodiscard]] asio::io_context& io_context() noexcept;
-    [[nodiscard]] const worker_handle& handle() const noexcept;
+    [[nodiscard]] asio::io_context& io_context() & noexcept;
+    asio::io_context& io_context() && = delete;
+    [[nodiscard]] const worker_handle& handle() const& noexcept;
+    const worker_handle& handle() const&& = delete;
 
 private:
     friend class worker_group;

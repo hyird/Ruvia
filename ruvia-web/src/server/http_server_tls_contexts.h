@@ -4,10 +4,12 @@
 
 #include "server/http_server_listener.h"
 
+#if defined(RUVIA_ENABLE_HTTP3)
 namespace ruvia {
 class http3_quic_connection;
 struct http3_connection_options;
 }  // namespace ruvia
+#endif
 
 namespace ruvia::detail {
 
@@ -20,10 +22,11 @@ namespace ruvia::detail {
 // A listener without TLS keeps no context.
 void configure_http_server_tls_contexts(http_server_session_config& session);
 
+#if defined(RUVIA_ENABLE_HTTP3)
 // Called after binding the QUIC connection, before receiving its Initial.
 // The caller owns resumption_context for the entire SSL lifetime.
 void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection,
     const http3_connection_options& options, bool early_data,
     std::array<unsigned char, 32>& resumption_context);
-
+#endif
 }  // namespace ruvia::detail

@@ -66,7 +66,13 @@ public:
     task<std::optional<std::string_view>> text() && = delete;
 
 private:
+    void bind_worker(const worker_handle& worker_value) noexcept {
+        worker_ = &worker_value;
+        operation_scope_.bind_worker(worker_value);
+    }
+
     read_type read_;
+    const worker_handle* worker_{nullptr};
     bool read_active_{false};
     ::ruvia::operation_scope operation_scope_;
 };
@@ -157,6 +163,10 @@ private:
           release_context_(release_context),
           committed_(committed),
           aborted_(aborted) {}
+
+    void bind_worker(const worker_handle& worker_value) noexcept {
+        operation_scope_.bind_worker(worker_value);
+    }
 
     // The context's stop token travels with the binding so sleep() observes
     // worker shutdown, the client leaving, and explicit subrequest cancellation.

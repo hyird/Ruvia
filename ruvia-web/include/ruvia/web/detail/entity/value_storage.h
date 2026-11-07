@@ -162,11 +162,7 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         assign_entity_value(out, value.value_, resource);
     } else if constexpr (is_model_integer<t_type> && std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
         // 整数输入先检查范围；浮点输入须由调用方显式选择整数转换策略。
-        if constexpr (is_model_integer<std::remove_cvref_t<v_type>>) {
-            out = integer_value<t_type>(value).value_;
-        } else {
-            out = integer_value<t_type>(+value).value_;
-        }
+        out = integer_value<t_type>(value).value_;
     } else if constexpr (std::is_floating_point_v<t_type> &&
                          std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
         if constexpr (std::is_floating_point_v<std::remove_cvref_t<v_type>>) {
@@ -176,14 +172,11 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         }
     } else if constexpr (std::is_same_v<t_type, string>) {
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, string>) {
-            if (value.resource() == resource) {
-                string owned(std::move(value));
-                commit_entity_value(out, std::move(owned));
-                return;
-            }
+            commit_entity_value(out, rebind_model_value(std::move(value), resource));
+        } else {
+            auto owned = string(std::string_view(value), model_options{.resource_ = resource});
+            commit_entity_value(out, std::move(owned));
         }
-        auto owned = string(std::string_view(value), model_options{.resource_ = resource});
-        commit_entity_value(out, std::move(owned));
     } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::pmr::string>) {
             if (value.get_allocator().resource() == resource) {

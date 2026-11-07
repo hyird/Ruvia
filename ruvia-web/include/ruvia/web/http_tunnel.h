@@ -169,12 +169,6 @@ public:
     task<void> send(std::span<const std::byte>) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload) &;
     task<void> send(std::string_view) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] task<void> send(string_type&& payload) & {
-        return send(std::string_view(payload));
-    }
-    template <std::same_as<std::pmr::string> string_type>
-    task<void> send(string_type&&) && = delete;
     [[nodiscard]] task<void> finish() & {
         return stream_.finish();
     }
@@ -213,12 +207,6 @@ public:
     task<void> send(std::span<const std::byte>) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload) &;
     task<void> send(std::string_view) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] task<void> send(string_type&& payload) & {
-        return send(std::string_view(payload));
-    }
-    template <std::same_as<std::pmr::string> string_type>
-    task<void> send(string_type&&) && = delete;
     [[nodiscard]] task<void> finish() & {
         return stream_.finish();
     }

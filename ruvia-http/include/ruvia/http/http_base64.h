@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
@@ -163,9 +162,9 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
     }
     // Overlap needs reinterpret_cast, which constant evaluation excludes.
     if (!std::is_constant_evaluated() && !data.empty()) {
-        const auto* const encoded = reinterpret_cast<const std::uint8_t*>(data.data());
-        const std::less<const std::uint8_t*> before;
-        if (before(encoded, output.data()) && before(output.data(), encoded + data.size())) {
+        const auto encoded = reinterpret_cast<std::uintptr_t>(data.data());
+        const auto output_address = reinterpret_cast<std::uintptr_t>(output.data());
+        if (output_address > encoded && output_address - encoded < data.size()) {
             return std::nullopt;
         }
     }

@@ -22,7 +22,7 @@ namespace ruvia::detail {
 template <typename stream_type>
 task<std::error_code> write_websocket_handshake(stream_type& stream,
     const websocket_server_handshake& handshake, const http_request_expectations& expectations,
-    std::pmr::memory_resource& resource) {
+    std::pmr::memory_resource& resource, connection_scanner::entry& scanner_entry) {
     static constexpr std::size_t inline_head_capacity = 512;
     std::array<char, inline_head_capacity> inline_head;
     std::pmr::string overflow_head(&resource);
@@ -47,7 +47,7 @@ task<std::error_code> write_websocket_handshake(stream_type& stream,
     const auto head_view = using_overflow ? std::string_view(overflow_head)
                                           : std::string_view(inline_head.data(), inline_size);
     co_return co_await write_http1_upgrade_response_head(
-        stream, expectations, http_status::switching_protocols, head_view);
+        stream, expectations, http_status::switching_protocols, head_view, scanner_entry);
 }
 
 }  // namespace ruvia::detail

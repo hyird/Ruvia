@@ -103,7 +103,6 @@ bool http2_connection::commit_final_response_head(http2_stream_state& stream, co
     if (!append_http2_response_headers(fields_, response, head_plan)) {
         return false;
     }
-    const auto stream_id = stream.id();
     submit_header_frames(stream, end_stream);
     if (head_plan.body_plan().body_suppressed()) {
         stream.begin_local_content_forbidden();
@@ -121,7 +120,6 @@ bool http2_connection::commit_final_response_head(http2_stream_state& stream, co
         (void)stream.reject_connect();
     }
     release_local_request_stream_if_closed(stream);
-    retire_completed_local_push(stream_id);
     flush_session();
     return true;
 }
@@ -271,7 +269,6 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id,
             release_local_request_stream_if_closed(*stream);
         }
         (void)send_data(stream_id, chunk.substr(0, consumed), terminal);
-        retire_completed_local_push(stream_id);
     }
     return {consumed, complete ? http2_data_submit_status::complete
                                : http2_data_submit_status::backpressured};
@@ -313,8 +310,9 @@ http2_submit_status http2_connection::submit_connect_response_head(
 
 std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error>
 http2_connection::submit_websocket_handshake(
-    std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
-    websocket_server_negotiation&& negotiation) {
+    std::uint32_t stream_id, const http_request& request,
+    const websocket_handshake_validation_result& validation,
+    websocket_server_handshake_options options) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
         return http2_websocket_handshake_submit_error::closed;
@@ -326,6 +324,7 @@ http2_connection::submit_websocket_handshake(
         !http2_is_pending_websocket_connect(*stream) || validation.accepted() == nullptr) {
         return http2_websocket_handshake_submit_error::invalid_state;
     }
+    auto negotiation = make_websocket_server_negotiation(request, options, resource_);
     http2_append_websocket_handshake_headers(fields_, negotiation);
     commit_connect_response_head(*stream, http2_remote_peer_half_closed(*stream));
     const auto compression = negotiation.compression();
@@ -385,26 +384,27 @@ http2_finish_status http2_connection::finish_response(
         append_http2_response_trailers(fields_, trailers);
     }
     end_local_stream(*stream, trailers.empty());
-    retire_completed_local_push(stream_id);
     return http2_finish_status::accepted;
 }
 
 void http2_connection::end_local_stream(http2_stream_state& stream, bool empty_data) {
     const auto stream_id = stream.id();
-    // Commit before nghttp2 sends the frame: an END_STREAM that completes the
-    // stream closes it during the same drain.
-    (void)stream.commit_local_end_stream();
-    release_local_request_stream_if_closed(stream);
     if (empty_data) {
+        // Commit before nghttp2 sends the frame: an END_STREAM that completes the
+        // stream closes it during the same drain.
+        (void)stream.commit_local_end_stream();
+        release_local_request_stream_if_closed(stream);
         send_data(stream_id, {}, http2_end_stream::end_stream);
         return;
     }
     submit_header_frames(stream, http2_end_stream::end_stream);
+    (void)stream.commit_local_end_stream();
+    release_local_request_stream_if_closed(stream);
     flush_session();
 }
 
 http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2_error_code error) {
-    if (stream_id == 0) {
+    if (stream_id == 0 || stream_id > http2_max_stream_id) {
         return http2_submit_status::invalid_state;
     }
     auto* stream = streams_.find(stream_id);
@@ -413,7 +413,7 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
         // forget closed streams); a known identifier is simply closed.
         const bool local_id = ((stream_id & 1U) != 0) == (role_ == http2_role::client);
         const bool used = local_id ? stream_id < nghttp2_session_get_next_stream_id(session_.get())
-                                   : stream_id <= last_peer_stream_id_;
+                                   : stream_id <= highest_peer_stream_id_;
         return used ? http2_submit_status::closed : http2_submit_status::invalid_state;
     }
     if (stream->is_aborted()) {
@@ -435,7 +435,9 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
         (http2_stream_is_closed(*stream) && error != http2_error_code::protocol_error)) {
         return http2_submit_status::invalid_state;
     }
-    submit_owner_reset(stream_id, error);
+    if (!http2_stream_is_closed(*stream)) {
+        submit_owner_reset(stream_id, error);
+    }
     cancel_push_promise_on(stream_id);
     (void)close_stream_impl(stream_id, http2_stream_close_source::local, error,
         close_notification_type::owner_already_knows);

@@ -32,6 +32,7 @@ public:
           first_(addresses.begin()),
           other_(addresses.begin()),
           first_is_v6_(!addresses.empty() && addresses.begin()->endpoint().address().is_v6()) {}
+    client_address_sequence(results_type&&) = delete;
 
     [[nodiscard]] std::optional<endpoint_type> next() {
         for (unsigned family = 0; family != 2; ++family) {
@@ -115,7 +116,6 @@ private:
 
     const worker_handle& worker_;
     worker_signal changed_;
-    worker_timer_registration delay_;
     std::pmr::vector<attempt> attempts_;
     std::size_t next_{0};
     std::size_t active_{0};
@@ -124,6 +124,7 @@ private:
     std::error_code last_error_;
     bool launch_ready_{false};
     bool cancelled_{false};
+    worker_timer_registration delay_;
 };
 
 }  // namespace ruvia::detail

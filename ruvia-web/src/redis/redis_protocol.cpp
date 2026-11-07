@@ -213,8 +213,13 @@ void redis_reply_builder::begin(std::pmr::memory_resource* resource) noexcept {
     failure_ = nullptr;
 }
 
-void redis_reply_builder::throw_if_rejected() const {
-    switch (rejection_) {
+void redis_reply_builder::throw_if_rejected() {
+    const auto rejection = rejection_;
+    auto failure = std::move(failure_);
+    if (rejection != rejection_type::none) {
+        clear();
+    }
+    switch (rejection) {
         case rejection_type::none:
             return;
         case rejection_type::elements:
@@ -222,8 +227,16 @@ void redis_reply_builder::throw_if_rejected() const {
         case rejection_type::depth:
             throw redis_error(redis_error::code_type::protocol_error, "redis array nesting is too deep");
         case rejection_type::failed:
-            std::rethrow_exception(failure_);
+            std::rethrow_exception(failure);
     }
+}
+
+void redis_reply_builder::clear() noexcept {
+    root_.reset();
+    resource_ = nullptr;
+    remaining_elements_ = maximum_elements_;
+    rejection_ = rejection_type::none;
+    failure_ = nullptr;
 }
 
 redis_value redis_reply_builder::take(void* reply) noexcept {
@@ -231,6 +244,7 @@ redis_value redis_reply_builder::take(void* reply) noexcept {
     auto* owner = root->owner_;
     redis_value value(std::move(root->value_));
     owner->root_.reset();
+    owner->resource_ = nullptr;
     return value;
 }
 

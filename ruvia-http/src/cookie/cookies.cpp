@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/util/http_address_overlap.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_number_format.h"
 
@@ -103,7 +104,8 @@ set_cookie_plan::set_cookie_plan(
     detail::validate_cookie(name, value, options, secure_, partitioned_);
 }
 
-char* write_cookie_request_pair(char* out, std::string_view name, std::string_view value) {
+char* write_cookie_request_pair(
+    char* out, std::string_view name, std::string_view value, std::pmr::memory_resource* resource) {
     const std::string_view written(out, cookie_request_pair_size(name, value));
     if (detail::http_text_overlaps(name, written) || detail::http_text_overlaps(value, written)) {
         // Consume the inputs before any output byte overwrites them.
@@ -118,11 +120,12 @@ char* write_cookie_request_pair(char* out, std::string_view name, std::string_vi
             }
             return write_cookie_request_pair(out,
                 std::string_view(stack_snapshot.data(), name.size()),
-                std::string_view(stack_snapshot.data() + name.size(), value.size()));
+                std::string_view(stack_snapshot.data() + name.size(), value.size()), resource);
         }
-        const std::pmr::string snapshot_name(name);
-        const std::pmr::string snapshot_value(value);
-        return write_cookie_request_pair(out, snapshot_name, snapshot_value);
+        auto* const resolved_resource = detail::http_pmr_resource_or_default(resource);
+        const std::pmr::string snapshot_name(name, resolved_resource);
+        const std::pmr::string snapshot_value(value, resolved_resource);
+        return write_cookie_request_pair(out, snapshot_name, snapshot_value, resolved_resource);
     }
     detail::http_raw_wire_sink sink(out);
     sink.append(name);

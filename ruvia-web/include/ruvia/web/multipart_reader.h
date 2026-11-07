@@ -20,6 +20,9 @@ public:
         if (body_reader_value.operation_scope_.active()) {
             state_.emplace<receiving_state_type>(options);
             body_reader_ = &body_reader_value;
+            if (body_reader_value.worker_ != nullptr) {
+                operation_scope_.bind_worker(*body_reader_value.worker_);
+            }
             registration_.bind(body_reader_value.operation_scope_, this, &multipart_reader::expire_capability);
         }
     }
@@ -54,7 +57,7 @@ private:
             : reader_(reader_value) {}
 
         ~read_guard_type() {
-            if (!committed_) {
+            if (!committed_ && std::holds_alternative<receiving_state_type>(reader_.state_)) {
                 reader_.state_.emplace<failed_state_type>();
             }
         }

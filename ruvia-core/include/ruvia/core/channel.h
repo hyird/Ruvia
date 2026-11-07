@@ -191,6 +191,7 @@ struct channel_receive_awaiter final {
         std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value) noexcept
         : wait_(std::move(value), timeout_value, std::move(stop_token_value)) {}
 
+    void operator&() const = delete;
     [[nodiscard]] bool await_ready() {
         wait_.start("channel receive must run on its bound worker");
         auto& owner_value = wait_.state();
@@ -321,6 +322,8 @@ public:
         } catch (...) {
             auto lock = state->lock_state();
             --state->reserved_;
+            state->recycle(slot);
+            guard.release();
             throw;
         }
         {

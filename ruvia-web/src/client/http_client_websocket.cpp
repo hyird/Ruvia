@@ -35,17 +35,18 @@ public:
         : worker_(worker),
           tunnel_(std::move(tunnel)),
           transport_state_(*tunnel_.response_.state_),
-          input_(memory_.resource()),
+          input_(transport_state_.resource_),
           protocol_(input_, {.message_limit_ = protocol_byte_limit::limited(message_limit),
                                 .compression_ = handshake.compression_,
                                 .role_ = websocket_connection_role::client,
                                 .mask_key_generator_ = &mask_key,
                                 .deflater_ = deflate.deflater_}),
-          subprotocol_(handshake.selected_subprotocol_, memory_.resource()),
+          subprotocol_(handshake.selected_subprotocol_, transport_state_.resource_),
           options_(std::move(options)),
           lifecycle_(normalize_websocket_lifecycle_options(lifecycle)),
           read_timeout_(read_timeout),
           write_lane_(worker),
+          heartbeat_signal_(worker),
           cancellation_(make_worker_cancellation_target(*this, worker)) {}
 
     ~http_client_websocket_state() {
@@ -76,6 +77,7 @@ public:
         }
         heartbeat_timer_.cancel();
         tunnel_.abort();
+        heartbeat_signal_.notify();
         write_lane_.notify();
     }
 
@@ -86,7 +88,7 @@ public:
     }
 
     std::pmr::memory_resource* resource() noexcept {
-        return memory_.resource();
+        return transport_state_.resource_;
     }
 
     std::string_view subprotocol() const noexcept {
@@ -130,11 +132,12 @@ public:
                         if (std::holds_alternative<websocket_sending_ping>(state->liveness_)) {
                             state->liveness_ = websocket_awaiting_pong(steady_now_ms(), challenge);
                         }
+                        lane.commit();
                     }
                 }
                 state->refresh_heartbeat();
                 if (state->heartbeat_open()) {
-                    co_await state->output().data_.wait();
+                    co_await state->heartbeat_signal_.wait();
                 }
             }
         } catch (...) {
@@ -165,6 +168,7 @@ public:
                     throw http_client_error(http_client_error::code_type::protocol_error, "invalid WebSocket message");
             }
             co_await state->flush();
+            lane.commit();
         } catch (...) {
             state->abort();
             if (state->failure_ == http_client_error::code_type::timeout) {
@@ -230,6 +234,7 @@ public:
                 }
                 std::pmr::string(reason.get_allocator()).swap(reason);
                 co_await state->flush();
+                lane.commit();
             }
             while (!state->ended_) {
                 const auto event = co_await state->next_event();
@@ -282,13 +287,21 @@ private:
             state_.write_lane_.begin();
         }
         ~write_guard() {
+            if (!committed_) {
+                state_.abort();
+            }
             state_.finish_write();
         }
         write_guard(const write_guard&) = delete;
         write_guard& operator=(const write_guard&) = delete;
 
+        void commit() noexcept {
+            committed_ = true;
+        }
+
     private:
         http_client_websocket_state& state_;
+        bool committed_{false};
     };
 
     static bool mask_key(void*, websocket_mask_key_type& key) noexcept {
@@ -331,7 +344,7 @@ private:
                         return;
                     }
                     heartbeat_due_ = decision == websocket_liveness_decision::send_ping;
-                    output().data_.notify();
+                    heartbeat_signal_.notify();
                     // A blocked Ping/application write cannot run the background
                     // coroutine; its timer still enforces the independent stall bound.
                     if (!heartbeat_due_) {
@@ -362,7 +375,7 @@ private:
     void finish_write() noexcept {
         write_lane_.finish();
         try {
-            resume_pong_deadline();
+            refresh_heartbeat();
         } catch (...) {
             abort(http_client_error::code_type::closing);
         }
@@ -388,6 +401,7 @@ private:
                 protocol_.commit_transport_end();
                 ended_ = true;
                 heartbeat_timer_.cancel();
+                heartbeat_signal_.notify();
                 output().data_.notify();
                 write_lane_.notify();
             }
@@ -433,6 +447,7 @@ private:
                         }
                     }
                 }
+                lane.commit();
             }
             if (event) {
                 if (event->protocol_error()) {
@@ -482,7 +497,21 @@ private:
         }
         std::exception_ptr failure;
         try {
-            while (co_await tunnel_.read()) {
+            for (;;) {
+                worker_timer_registration read_timer;
+                if (!lifecycle_.close_handshake_timeout_ && read_timeout_) {
+                    (void)worker_.schedule_timer(read_timer, worker_timer_deadline_after(*read_timeout_),
+                        [this](worker_timer_outcome outcome) noexcept {
+                            if (outcome == worker_timer_outcome::expired) {
+                                abort(http_client_error::code_type::timeout);
+                            }
+                        });
+                }
+                const auto bytes = co_await tunnel_.read();
+                read_timer.cancel();
+                if (!bytes) {
+                    break;
+                }
             }
         } catch (...) {
             failure = std::current_exception();
@@ -494,6 +523,7 @@ private:
         }
         if (expired) {
             ended_ = true;
+            heartbeat_signal_.notify();
             write_lane_.notify();
             co_return;
         }
@@ -501,10 +531,10 @@ private:
         co_await write_lane_.wait_for_idle(true, [this] { check(); });
         write_guard lane(*this);
         co_await flush();
+        lane.commit();
     }
 
     worker_handle worker_;
-    worker_memory memory_;
     http_client_tunnel tunnel_;
     http_client_response_state& transport_state_;
     http_io_buffer input_;
@@ -514,6 +544,7 @@ private:
     websocket_lifecycle_options lifecycle_;
     std::optional<std::chrono::milliseconds> read_timeout_;
     websocket_write_lane write_lane_;
+    worker_signal heartbeat_signal_;
     websocket_peer_close_info peer_close_;
     std::optional<http_client_error::code_type> failure_;
     bool ended_{};
@@ -681,19 +712,26 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
     request.client_.registration_.require_active();
     auto& pool = *request.client_.pool_;
     auto* resource = pool.resource();
-    const detail::inline_http_header_views headers(request.headers_, resource);
-    validate_http1_websocket_client_handshake_configuration(headers.view());
-    std::pmr::vector<std::string_view> protocols(resource);
-    protocols.reserve(request.subprotocols_.size());
-    for (const auto& protocol : request.subprotocols_) {
-        protocols.emplace_back(protocol);
+    std::shared_ptr<detail::http_client_websocket_handshake> handshake;
+    std::optional<detail::http_client_request_storage> stored;
+    {
+        const detail::inline_http_header_views headers(request.headers_, resource);
+        validate_http1_websocket_client_handshake_configuration(headers.view());
+        std::pmr::vector<std::string_view> protocols(resource);
+        protocols.reserve(request.subprotocols_.size());
+        for (const auto& protocol : request.subprotocols_) {
+            protocols.emplace_back(protocol);
+        }
+        handshake = std::allocate_shared<detail::http_client_websocket_handshake>(
+            std::pmr::polymorphic_allocator<detail::http_client_websocket_handshake>(resource),
+            websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_}, resource);
+        stored.emplace("GET", request.path_, headers.view(), resource);
+        stored->set_tunnel(pool.config().authority_, "websocket");
+        stored->set_websocket(handshake);
     }
-    auto handshake = std::allocate_shared<detail::http_client_websocket_handshake>(
-        std::pmr::polymorphic_allocator<detail::http_client_websocket_handshake>(resource),
-        websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_}, resource);
-    detail::http_client_request_storage stored("GET", request.path_, headers.view(), resource);
-    stored.set_tunnel(pool.config().authority_, "websocket");
-    stored.set_websocket(handshake);
+    std::pmr::string(request.path_.get_allocator()).swap(request.path_);
+    std::pmr::vector<http_header>(request.headers_.get_allocator()).swap(request.headers_);
+    std::pmr::vector<std::pmr::string>(request.subprotocols_.get_allocator()).swap(request.subprotocols_);
     // The opening deadline covers admission, transport establishment and every
     // handshake byte, but must not become the established tunnel's lifetime.
     // After opening, user cancellation belongs to each operation's snapshot.
@@ -713,7 +751,7 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
     opening_options.stop_token_ = opening_stop.token();
     std::optional<http_client_tunnel_result> opened;
     try {
-        opened.emplace(co_await pool.open_tunnel(std::move(stored), {}, std::move(opening_options)));
+        opened.emplace(co_await pool.open_tunnel(std::move(*stored), {}, std::move(opening_options)));
     } catch (...) {
         opening_timer.cancel();
         if (opening_expired) {

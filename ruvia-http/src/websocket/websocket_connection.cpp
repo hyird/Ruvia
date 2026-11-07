@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -14,6 +15,7 @@
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_utf8.h"
 
+#include "util/geometric_reserve.h"
 #include "websocket/http_websocket_frame_reader.h"
 #include "websocket/http_websocket_inbound_assembler.h"
 #include "websocket/http_websocket_permessage_deflate.h"
@@ -23,7 +25,7 @@ namespace ruvia {
 
 namespace {
 
-enum class ws_payload_storage : std::uint8_t {
+enum class websocket_payload_storage : std::uint8_t {
     copy,
     borrow,
 };
@@ -130,14 +132,22 @@ public:
     }
 
     void append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1 = false,
-        ws_payload_storage storage = ws_payload_storage::copy) {
+        websocket_payload_storage storage = websocket_payload_storage::copy) {
         std::optional<std::pmr::string> owned_payload;
         if (detail::http_text_aliases_string(payload_value, out_buffer_)) {
             // output_plan() exposes a borrowed view. Copy only for this aliasing
             // case so reserve() below cannot invalidate its own append source; the
             // copy dies here, so it cannot be borrowed either.
             payload_value = owned_payload.emplace(payload_value, out_buffer_.get_allocator().resource());
-            storage = ws_payload_storage::copy;
+            storage = websocket_payload_storage::copy;
+        }
+        if (out_offset_ > 0 && out_offset_ >= out_buffer_.size() - out_offset_) {
+            const auto remaining = out_buffer_.size() - out_offset_;
+            if (remaining != 0) {
+                std::memmove(out_buffer_.data(), out_buffer_.data() + out_offset_, remaining);
+            }
+            out_buffer_.resize(remaining);
+            out_offset_ = 0;
         }
         detail::websocket_frame_header_type header;
         const bool masked = role_ == websocket_connection_role::client;
@@ -145,7 +155,7 @@ public:
         if (masked && !mask_key_generator_(mask_key_context_, mask)) {
             throw std::runtime_error("failed to generate WebSocket client mask key");
         }
-        const bool borrow = storage == ws_payload_storage::borrow && !masked;
+        const bool borrow = storage == websocket_payload_storage::borrow && !masked;
         const auto header_size =
             detail::encode_websocket_frame_header(header, opcode, payload_value.size(), rsv1, masked);
         const auto mask_size = masked ? mask.size() : std::size_t{0};
@@ -158,7 +168,7 @@ public:
         }
         // One reserve is the transaction boundary. Once it succeeds, no append
         // can allocate, so an exception can never publish an orphan wire header.
-        out_buffer_.reserve(total_size);
+        detail::reserve_geometric(out_buffer_, total_size);
         // An earlier borrowed payload precedes this frame on the wire.
         out_buffer_.append(borrowed_output_);
         borrowed_output_ = {};
@@ -217,7 +227,7 @@ public:
     }
 
     [[nodiscard]] websocket_frame_submit_status submit_frame(
-        websocket_opcode opcode, std::string_view payload_value, bool compress, ws_payload_storage storage) {
+        websocket_opcode opcode, std::string_view payload_value, bool compress, websocket_payload_storage storage) {
         if (close_phase_ != close_phase_type::open) {
             return websocket_frame_submit_status::not_open;
         }
@@ -251,7 +261,7 @@ public:
             }
             // A compressed payload lives in outbound_deflated_, which the next
             // message reuses, so only the caller's own bytes can be borrowed.
-            append_frame(opcode, payload_value, rsv1, rsv1 ? ws_payload_storage::copy : storage);
+            append_frame(opcode, payload_value, rsv1, rsv1 ? websocket_payload_storage::copy : storage);
         } catch (...) {
             if (compression_attempted) {
                 http_clear_pmr_string_retaining_small(
@@ -433,6 +443,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             const auto& message = inbound_message.message();
             if (inbound_message.content_encoding() == detail::websocket_inbound_content_encoding::identity) {
                 if (impl_->close_phase_ != close_phase_type::open) {
+                    impl_->assembler_.release_completed();
                     continue;
                 }
                 return websocket_event::message(message.opcode(), message.payload());
@@ -458,6 +469,9 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 return protocol_failure_event(detail::websocket_protocol_failure::invalid_payload_data);
             }
             if (impl_->close_phase_ != close_phase_type::open) {
+                impl_->assembler_.release_completed();
+                http_clear_pmr_string_retaining_small(
+                    impl_->inbound_inflated_, websocket_retained_buffer_bytes);
                 continue;
             }
             return websocket_event::message(message.opcode(), view);
@@ -561,12 +575,12 @@ websocket_liveness_mode websocket_connection::liveness_mode() const noexcept {
 
 websocket_frame_submit_status websocket_connection::submit_frame(
     websocket_opcode opcode, std::string_view payload_value, bool compress) {
-    return impl_->submit_frame(opcode, payload_value, compress, ws_payload_storage::copy);
+    return impl_->submit_frame(opcode, payload_value, compress, websocket_payload_storage::copy);
 }
 
 websocket_frame_submit_status websocket_connection::submit_borrowed_frame(
     websocket_opcode opcode, std::string_view payload_value, bool compress) {
-    return impl_->submit_frame(opcode, payload_value, compress, ws_payload_storage::borrow);
+    return impl_->submit_frame(opcode, payload_value, compress, websocket_payload_storage::borrow);
 }
 
 websocket_close_submit_status websocket_connection::submit_close(

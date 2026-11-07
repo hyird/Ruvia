@@ -85,20 +85,60 @@ private:
         controller_lifetime(controller_lifetime&& other) noexcept
             : target_(std::exchange(other.target_, nullptr)),
               destroy_(std::exchange(other.destroy_, nullptr)) {}
+        void reset() noexcept {
+            auto* const target = std::exchange(target_, nullptr);
+            auto* const destroy = std::exchange(destroy_, nullptr);
+            if (target != nullptr && destroy != nullptr) {
+                destroy(target);
+            }
+        }
         controller_lifetime& operator=(controller_lifetime&& other) noexcept {
             if (this != &other) {
-                if (target_ != nullptr) {
-                    destroy_(target_);
-                }
+                reset();
                 target_ = std::exchange(other.target_, nullptr);
                 destroy_ = std::exchange(other.destroy_, nullptr);
             }
             return *this;
         }
         ~controller_lifetime() {
-            if (target_ != nullptr) {
-                destroy_(target_);
+            reset();
+        }
+    };
+
+    struct controller_lifetime_list final {
+        std::pmr::vector<controller_lifetime> items_{process_resource()};
+
+        controller_lifetime_list() = default;
+        controller_lifetime_list(const controller_lifetime_list&) = delete;
+        controller_lifetime_list& operator=(const controller_lifetime_list&) = delete;
+        controller_lifetime_list(controller_lifetime_list&&) noexcept = default;
+        controller_lifetime_list& operator=(controller_lifetime_list&& other) noexcept {
+            if (this != &other) {
+                clear_reverse();
+                items_ = std::move(other.items_);
             }
+            return *this;
+        }
+        ~controller_lifetime_list() {
+            clear_reverse();
+        }
+        void clear_reverse() noexcept {
+            while (!items_.empty()) {
+                items_.pop_back();
+            }
+        }
+        void reserve(std::size_t count) {
+            items_.reserve(count);
+        }
+        [[nodiscard]] std::size_t size() const noexcept {
+            return items_.size();
+        }
+        [[nodiscard]] const controller_lifetime& operator[](std::size_t index) const noexcept {
+            return items_[index];
+        }
+        template <typename... args_type>
+        void emplace_back(args_type&&... args) {
+            items_.emplace_back(std::forward<args_type>(args)...);
         }
     };
 
@@ -109,7 +149,7 @@ private:
         destroy_pmr_object(static_cast<t_type*>(target), process_resource());
     }
 
-    std::pmr::vector<controller_lifetime> lifetimes_{process_resource()};
+    controller_lifetime_list lifetimes_{};
 };
 
 class controller_route_builder final {

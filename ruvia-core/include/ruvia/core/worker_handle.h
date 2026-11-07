@@ -126,6 +126,7 @@ struct worker_handle_access {
         const worker_handle& worker, move_only_function<void()> callback);
     static void when_idle(const worker_handle& worker, move_only_function<void()> callback);
     static void wait_for_reservations(const worker_handle& worker) noexcept;
+    [[nodiscard]] static bool timers_stopping(const worker_handle& worker) noexcept;
     // The pool the worker's event loop borrows, or null.
     [[nodiscard]] static ruvia::blocking_pool* blocking_pool(const worker_handle& worker) noexcept;
 };

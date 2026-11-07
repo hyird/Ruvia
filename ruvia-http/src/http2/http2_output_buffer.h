@@ -86,6 +86,24 @@ public:
         if (observer != nullptr) {
             ++observer_depth_;
         }
+        struct observer_depth_guard final {
+            http2_output_buffer& buffer_;
+            bool active_;
+            ~observer_depth_guard() {
+                if (!active_) {
+                    return;
+                }
+                --buffer_.observer_depth_;
+                if (buffer_.observer_depth_ == 0) {
+                    if (buffer_.segment_offset_ == buffer_.segments_.size()) {
+                        buffer_.segments_.clear();
+                        buffer_.segment_offset_ = 0;
+                    } else {
+                        buffer_.compact_consumed_prefix();
+                    }
+                }
+            }
+        } guard{*this, observer != nullptr};
         if (transfer_storage) {
             reset_after_drain();
         } else {
@@ -99,15 +117,6 @@ public:
                 if (segment.is_data_) {
                     observer(observer_context, segment.stream_id_,
                         segment.end_ - segment.begin_ - http2_frame_header_bytes);
-                }
-            }
-            --observer_depth_;
-            if (observer_depth_ == 0) {
-                if (segment_offset_ == segments_.size()) {
-                    segments_.clear();
-                    segment_offset_ = 0;
-                } else {
-                    compact_consumed_prefix();
                 }
             }
         }

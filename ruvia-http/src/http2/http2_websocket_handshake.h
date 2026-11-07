@@ -12,6 +12,7 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http2/http2_field_list.h"
+#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_response_headers.h"
@@ -75,6 +76,18 @@ inline void http2_append_websocket_handshake_headers(
     const auto date = has_date ? std::string_view{} : cached_date_value();
     const auto subprotocol = negotiation.subprotocol();
     const auto extensions = negotiation.extensions();
+    http2_header_list_size section_size;
+    if (!section_size.add(":status", "200") ||
+        (!date.empty() && !section_size.add("date", date)) ||
+        (!subprotocol.empty() && !section_size.add("sec-websocket-protocol", subprotocol)) ||
+        (!extensions.empty() && !section_size.add("sec-websocket-extensions", extensions))) {
+        throw std::invalid_argument("WebSocket response headers exceed HTTP/2 header list limit");
+    }
+    for (const auto& field : fields_value) {
+        if (!section_size.add(field.name(), field.value())) {
+            throw std::invalid_argument("WebSocket response headers exceed HTTP/2 header list limit");
+        }
+    }
     fields.reserve(fields_value.size() + 4);
     fields.add(":status", "200");
     if (!date.empty()) {

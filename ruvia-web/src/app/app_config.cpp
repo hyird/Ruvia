@@ -133,36 +133,38 @@ private:
 
 application& application::listen(listen_config config) {
     const detail::tls_password_cleanser password_cleanser(config.tls_);
+    {
+        std::lock_guard lock(state_->mutex_);
+        detail::ensure_app_not_running(state_->lifecycle_.active(), "cannot change listeners while app is running");
+    }
+    std::pmr::vector<detail::http_server_listener_definition> replacement(process_resource());
+    replacement.reserve(config.http_.has_value() && config.https_.has_value() ? 2 : 1);
+    append_listen_config(replacement, config);
     return detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running",
-        [&config](detail::app_state& state_value) {
-            auto* const resource = process_resource();
-            std::pmr::vector<detail::http_server_listener_definition> replacement(resource);
-            replacement.reserve(config.http_.has_value() && config.https_.has_value() ? 2 : 1);
-            append_listen_config(replacement, config);
-            state_value.listeners_ = std::move(replacement);
-        });
+        [&replacement](detail::app_state& state_value) { state_value.listeners_.swap(replacement); });
 }
 
 application& application::listen(std::span<const listen_config> configs) {
     const tls_password_span_cleanser password_cleanser(configs);
+    {
+        std::lock_guard lock(state_->mutex_);
+        detail::ensure_app_not_running(state_->lifecycle_.active(), "cannot change listeners while app is running");
+    }
+    if (configs.empty()) {
+        throw std::invalid_argument("listen config list must not be empty");
+    }
+    std::pmr::vector<detail::http_server_listener_definition> replacement(process_resource());
+    std::size_t endpoint_count = 0;
+    for (const auto& config : configs) {
+        endpoint_count +=
+            static_cast<std::size_t>(config.http_.has_value()) + static_cast<std::size_t>(config.https_.has_value());
+    }
+    replacement.reserve(endpoint_count);
+    for (const auto& config : configs) {
+        append_listen_config(replacement, config);
+    }
     return detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running",
-        [configs](detail::app_state& state_value) {
-            if (configs.empty()) {
-                throw std::invalid_argument("listen config list must not be empty");
-            }
-            auto* const resource = process_resource();
-            std::pmr::vector<detail::http_server_listener_definition> replacement(resource);
-            std::size_t endpoint_count = 0;
-            for (const auto& config : configs) {
-                endpoint_count += static_cast<std::size_t>(config.http_.has_value()) +
-                                  static_cast<std::size_t>(config.https_.has_value());
-            }
-            replacement.reserve(endpoint_count);
-            for (const auto& config : configs) {
-                append_listen_config(replacement, config);
-            }
-            state_value.listeners_ = std::move(replacement);
-        });
+        [&replacement](detail::app_state& state_value) { state_value.listeners_.swap(replacement); });
 }
 
 application& application::listen(std::initializer_list<listen_config> configs) {
@@ -223,7 +225,10 @@ application& application::rate_limit(rate_limit_config config) {
 application& application::rate_limit(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the default rate limit per worker while app is running",
-        [](detail::app_state& state_value) { state_value.options_.default_rate_limit_per_worker_.reset(); });
+        [](detail::app_state& state_value) {
+            state_value.options_.default_rate_limit_per_worker_.reset();
+            state_value.options_.rate_limit_capacity_per_worker_ = default_rate_limit_capacity_per_worker;
+        });
 }
 
 application& application::trusted_proxies(trusted_proxy_config config) {

@@ -31,21 +31,10 @@ template <std::floating_point t_type>
     return value;
 }
 
-// Explicit inf/nan tokens are values; overflow or underflow of a finite
-// decimal is an error. Callers decide whether non-finite values are allowed.
+// Overflow or underflow of a finite decimal is an error.
 template <std::floating_point t_type = double>
     requires std::same_as<t_type, std::remove_cv_t<t_type>>
 [[nodiscard]] std::optional<t_type> parse_decimal_number(std::string_view text) noexcept {
-    if (text == "inf" || text == "infinity") {
-        return std::numeric_limits<t_type>::infinity();
-    }
-    if (text == "-inf" || text == "-infinity") {
-        return -std::numeric_limits<t_type>::infinity();
-    }
-    if (text == "nan" || text == "-nan") {
-        return std::numeric_limits<t_type>::quiet_NaN();
-    }
-
     // Keep the accepted grammar narrower than from_chars: no leading '+',
     // whitespace, empty fraction, NaN payloads, or other non-finite spellings.
     const bool negative = text.starts_with('-');

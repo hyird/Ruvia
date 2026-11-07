@@ -127,14 +127,22 @@ private:
         const auto offset = storage.nodes_.size();
         const auto right_root = right.storage_->root_ + offset;
         const auto count = right.storage_->nodes_.size();
+        detail::redis_predicate_node root_node(detail::redis_predicate_node::kind_type::binary, storage.resource_);
+        root_node.binary_ = operation;
+        root_node.operands_ = {left_root, right_root};
         storage.nodes_.reserve(offset + count + 1);
-        for (std::size_t index = 0; index < count; ++index) {
-            storage.nodes_.emplace_back(right.storage_->nodes_[index], storage.resource_, offset);
+        try {
+            for (std::size_t index = 0; index < count; ++index) {
+                storage.nodes_.emplace_back(right.storage_->nodes_[index], storage.resource_, offset);
+            }
+            storage.nodes_.push_back(std::move(root_node));
+        } catch (...) {
+            while (storage.nodes_.size() > offset) {
+                storage.nodes_.pop_back();
+            }
+            throw;
         }
-        storage.root_ = storage.add(detail::redis_predicate_node::kind_type::binary);
-        auto& root = storage.nodes_[storage.root_];
-        root.binary_ = operation;
-        root.operands_ = {left_root, right_root};
+        storage.root_ = storage.nodes_.size() - 1;
     }
     std::unique_ptr<detail::redis_predicate_storage, pmr_object_deleter<detail::redis_predicate_storage>> storage_;
 };

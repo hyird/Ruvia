@@ -41,8 +41,10 @@ public:
     worker_state_definition& operator=(worker_state_definition&&) = delete;
 
     ~worker_state_definition() {
-        if (factory_ != nullptr && destroy_factory_ != nullptr) {
-            destroy_factory_(factory_);
+        auto* const factory = std::exchange(factory_, nullptr);
+        auto* const destroy = std::exchange(destroy_factory_, nullptr);
+        if (factory != nullptr && destroy != nullptr) {
+            destroy(factory);
         }
     }
 
@@ -192,8 +194,10 @@ private:
         type_index_.clear();
         for (std::size_t i = entries_.size(); i > 0; --i) {
             auto& entry_value = entries_[i - 1];
-            if (entry_value.instance_ != nullptr && entry_value.destroy_ != nullptr) {
-                entry_value.destroy_(entry_value.instance_, resource_);
+            auto* const instance = std::exchange(entry_value.instance_, nullptr);
+            auto* const destroy = std::exchange(entry_value.destroy_, nullptr);
+            if (instance != nullptr && destroy != nullptr) {
+                destroy(instance, resource_);
             }
         }
         entries_.clear();

@@ -52,17 +52,17 @@ struct validation_issue_options final {
 
 class validation_issue final {
 public:
-    [[nodiscard]] std::string_view field() const& noexcept {
+    [[nodiscard]] std::string_view field() const& noexcept RUVIA_LIFETIMEBOUND {
         return field_;
     }
     [[nodiscard]] std::string_view field() const&& = delete;
 
-    [[nodiscard]] std::string_view code() const& noexcept {
+    [[nodiscard]] std::string_view code() const& noexcept RUVIA_LIFETIMEBOUND {
         return code_;
     }
     [[nodiscard]] std::string_view code() const&& = delete;
 
-    [[nodiscard]] std::string_view message() const& noexcept {
+    [[nodiscard]] std::string_view message() const& noexcept RUVIA_LIFETIMEBOUND {
         return message_;
     }
     [[nodiscard]] std::string_view message() const&& = delete;
@@ -104,10 +104,11 @@ struct validation_issue_access final {
 // propagate allocation failure while the source diagnostics remain intact.
 [[nodiscard]] inline std::pmr::vector<validation_issue> clone_validation_issues(
     std::span<const validation_issue> issues, std::pmr::memory_resource* resource) {
-    std::pmr::vector<validation_issue> copied(std::initializer_list<validation_issue>{}, resource);
+    auto* const target = pmr_resource_or_default(resource);
+    std::pmr::vector<validation_issue> copied(std::initializer_list<validation_issue>{}, target);
     copied.reserve(issues.size());
     for (const auto& issue : issues) {
-        copied.push_back(validation_issue_access::copy(issue, resource));
+        copied.push_back(validation_issue_access::copy(issue, target));
     }
     return copied;
 }
@@ -183,29 +184,29 @@ public:
     http_error& operator=(http_error&& other);
 
     [[nodiscard]] const char* what() const noexcept override;
-    [[nodiscard]] http_error_info info() const& noexcept;
+    [[nodiscard]] http_error_info info() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] http_error_info info() const&& = delete;
 
     [[nodiscard]] http_status_code status() const noexcept {
         return status_;
     }
 
-    [[nodiscard]] std::string_view status_text() const& noexcept {
+    [[nodiscard]] std::string_view status_text() const& noexcept RUVIA_LIFETIMEBOUND {
         return status_text_;
     }
     [[nodiscard]] std::string_view status_text() const&& = delete;
 
-    [[nodiscard]] std::string_view code() const& noexcept {
+    [[nodiscard]] std::string_view code() const& noexcept RUVIA_LIFETIMEBOUND {
         return code_;
     }
     [[nodiscard]] std::string_view code() const&& = delete;
 
-    [[nodiscard]] std::string_view message() const& noexcept {
+    [[nodiscard]] std::string_view message() const& noexcept RUVIA_LIFETIMEBOUND {
         return message_;
     }
     [[nodiscard]] std::string_view message() const&& = delete;
 
-    [[nodiscard]] std::span<const validation_issue> validation_issues() const& noexcept {
+    [[nodiscard]] std::span<const validation_issue> validation_issues() const& noexcept RUVIA_LIFETIMEBOUND {
         return validation_issues_;
     }
     [[nodiscard]] std::span<const validation_issue> validation_issues() const&& = delete;

@@ -4,6 +4,7 @@
 #include <optional>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
 namespace ruvia {
@@ -61,15 +62,15 @@ public:
         return http2_request_content(http2_streaming_request_content(
             length ? std::optional<std::uint64_t>(length->value()) : std::nullopt));
     }
-    [[nodiscard]] constexpr const http2_request_without_content* without_content() const& noexcept {
+    [[nodiscard]] constexpr const http2_request_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_request_without_content>(&value_);
     }
     const http2_request_without_content* without_content() const&& = delete;
-    [[nodiscard]] constexpr const http2_known_length_request_content* known_length_content() const& noexcept {
+    [[nodiscard]] constexpr const http2_known_length_request_content* known_length_content() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_known_length_request_content>(&value_);
     }
     const http2_known_length_request_content* known_length_content() const&& = delete;
-    [[nodiscard]] constexpr const http2_streaming_request_content* streaming_content() const& noexcept {
+    [[nodiscard]] constexpr const http2_streaming_request_content* streaming_content() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http2_streaming_request_content>(&value_);
     }
     const http2_streaming_request_content* streaming_content() const&& = delete;

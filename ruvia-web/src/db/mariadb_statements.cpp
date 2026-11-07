@@ -766,12 +766,10 @@ void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output, std:
             db_result_access::clear(*output);
             run.output_failure_ = std::current_exception();
         }
-        // Buffers a much smaller result left over from a wide one are given
-        // back; a run of wide results keeps them.
-        if (cache.column_bytes_ > mariadb_column_bytes_kept && cache.column_needed_ * 4 < cache.column_bytes_) {
-            cache.columns_.clear();
-            cache.column_bytes_ = 0;
-        }
+    }
+    if (cache.column_bytes_ > mariadb_column_bytes_kept) {
+        cache.columns_.clear();
+        cache.column_bytes_ = 0;
     }
     run.returned_rows_ = true;
     (void)mysql_stmt_free_result(&statement);

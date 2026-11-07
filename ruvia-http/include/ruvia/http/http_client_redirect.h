@@ -31,7 +31,7 @@ struct http_client_response_header_lookup final {
 };
 
 [[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(
-    const http_client_response_head& head, std::string_view name) noexcept;
+    const http_client_response_head& head RUVIA_LIFETIMEBOUND, std::string_view name) noexcept;
 [[nodiscard]] http_client_response_header_lookup lookup_unique_http_client_response_header(
     const http_client_response_head&& head, std::string_view name) = delete;
 
@@ -56,7 +56,7 @@ public:
     http_client_redirect_request_plan(http_client_redirect_request_plan&&) noexcept = default;
     http_client_redirect_request_plan& operator=(http_client_redirect_request_plan&&) = delete;
 
-    [[nodiscard]] std::string_view method() const& noexcept {
+    [[nodiscard]] std::string_view method() const& noexcept RUVIA_LIFETIMEBOUND {
         return method_;
     }
     std::string_view method() const&& = delete;
@@ -123,7 +123,7 @@ public:
     http_client_resolved_redirect(http_client_resolved_redirect&&) noexcept = default;
     http_client_resolved_redirect& operator=(http_client_resolved_redirect&&) = delete;
 
-    [[nodiscard]] std::string_view target() const& noexcept {
+    [[nodiscard]] std::string_view target() const& noexcept RUVIA_LIFETIMEBOUND {
         return target_;
     }
     std::string_view target() const&& = delete;
@@ -134,7 +134,7 @@ public:
 
     // RFC 3986 uri-host of the destination; IP literals keep their brackets,
     // matching the http_origin_view factory contract.
-    [[nodiscard]] std::string_view host() const& noexcept {
+    [[nodiscard]] std::string_view host() const& noexcept RUVIA_LIFETIMEBOUND {
         return host_;
     }
     std::string_view host() const&& = delete;
@@ -149,7 +149,7 @@ public:
 
     // Borrows host() storage: the returned origin is valid only while this
     // resolved redirect is alive.
-    [[nodiscard]] http_origin_view origin() const&;
+    [[nodiscard]] http_origin_view origin() const& RUVIA_LIFETIMEBOUND;
     http_origin_view origin() const&& = delete;
 
 private:

@@ -377,7 +377,9 @@ public:
 
     bytes(bytes&& other) noexcept
         : resource_(other.resource_),
-          items_(std::move(other.items_)) {}
+          items_(std::move(other.items_)) {
+        other.items_.clear();
+    }
 
     bytes& operator=(bytes&& other) {
         if (this == &other) {
@@ -443,6 +445,7 @@ private:
         } else {
             rebound.assign_owned(view());
         }
+        items_.clear();
         return rebound;
     }
 
@@ -570,40 +573,58 @@ public:
     }
 
     void resize(size_type count) {
-        if (count < size()) {
+        const auto old_size = size();
+        if (count < old_size) {
             items_.resize(count);
             return;
         }
-        while (size() < count) {
-            emplace_back();
+        reserve(count);
+        try {
+            while (size() < count) {
+                emplace_back();
+            }
+        } catch (...) {
+            items_.resize(old_size);
+            throw;
         }
     }
 
     void resize(size_type count, const t_type& value) {
-        if (count <= size()) {
-            if (count < size()) {
+        const auto old_size = size();
+        if (count <= old_size) {
+            if (count < old_size) {
                 items_.resize(count);
             }
             return;
         }
         t_type stable = detail::rebind_model_value(value, resource_);
-        while (size() < count) {
-            push_back(stable);
+        reserve(count);
+        try {
+            while (size() < count) {
+                push_back(stable);
+            }
+        } catch (...) {
+            items_.resize(old_size);
+            throw;
         }
     }
 
     template <typename... args_type>
-    t_type& emplace_back(args_type&&... args) & {
+    t_type& emplace_back(args_type&&... args) & RUVIA_LIFETIMEBOUND {
         return detail::emplace_model_value<t_type>(resource_, this, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
     }
+    template <typename... args_type>
+    t_type& emplace_back(args_type&&...) && = delete;
 
     void push_back(const t_type& value) & {
         (void)emplace_back(value);
     }
+    void push_back(const t_type&) && = delete;
 
     void push_back(t_type&& value) & {
         (void)emplace_back(std::move(value));
     }
+    void push_back(t_type&&) && = delete;
 
     friend bool operator==(const array& left, const array& right) {
         return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin());
@@ -768,7 +789,8 @@ public:
     }
 
     void resize(std::size_t count) {
-        if (count < size()) {
+        const auto old_size = size();
+        if (count < old_size) {
             while (size() > count) {
                 auto* value = items_.back();
                 items_.pop_back();
@@ -776,23 +798,37 @@ public:
             }
             return;
         }
-        while (size() < count) {
-            emplace_back();
+        reserve(count);
+        try {
+            while (size() < count) {
+                emplace_back();
+            }
+        } catch (...) {
+            while (size() > old_size) {
+                auto* value = items_.back();
+                items_.pop_back();
+                destroy_pmr_object(resolved_pmr_resource_tag{}, value, resource_);
+            }
+            throw;
         }
     }
 
     template <typename... args_type>
-    t_type& emplace_back(args_type&&... args) & {
+    t_type& emplace_back(args_type&&... args) & RUVIA_LIFETIMEBOUND {
         return detail::emplace_model_value<t_type>(resource_, this, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
     }
+    template <typename... args_type>
+    t_type& emplace_back(args_type&&...) && = delete;
 
     void push_back(const t_type& value) & {
         (void)emplace_back(value);
     }
+    void push_back(const t_type&) && = delete;
 
     void push_back(t_type&& value) & {
         (void)emplace_back(std::move(value));
     }
+    void push_back(t_type&&) && = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
@@ -1181,11 +1217,11 @@ public:
         return status_;
     }
 
-    [[nodiscard]] std::optional<t_type>& value() & noexcept {
+    [[nodiscard]] std::optional<t_type>& value() & noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
 
-    [[nodiscard]] const std::optional<t_type>& value() const& noexcept {
+    [[nodiscard]] const std::optional<t_type>& value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
 

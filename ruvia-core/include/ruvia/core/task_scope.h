@@ -69,6 +69,7 @@ public:
         join_operation& operator=(const join_operation&) = delete;
         join_operation(join_operation&& other) noexcept;
         join_operation& operator=(join_operation&&) = delete;
+        void operator&() const = delete;
 
         [[nodiscard]] bool await_ready();
         void await_suspend(std::coroutine_handle<> continuation) noexcept;

@@ -61,9 +61,6 @@ public:
             if (!chunk.empty()) {
                 co_return ::ruvia::as_bytes(chunk);
             }
-            if (!body_queue_.empty()) {
-                continue;
-            }
             if (body_queue_.ended()) {
                 co_return std::nullopt;
             }

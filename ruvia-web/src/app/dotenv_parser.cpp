@@ -85,49 +85,38 @@ namespace {
 
 [[nodiscard]] std::pmr::string parse_double_quoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
-    std::size_t decoded_size = 0;
-    std::size_t close_index = std::string_view::npos;
+    std::pmr::string result(process_resource());
+    std::size_t literal_start = 1;
+    bool has_escape = false;
     for (std::size_t index = 1; index < value.size(); ++index) {
         const char current = value[index];
         if (current == '"') {
-            close_index = index;
-            break;
+            consumed = index + 1;
+            if (!has_escape) {
+                return std::pmr::string(value.substr(1, index - 1), process_resource());
+            }
+            result.append(value.substr(literal_start, index - literal_start));
+            return result;
         }
         if (current == '\\') {
             if (index + 1 == value.size()) {
                 throw std::invalid_argument(
                     location_message(path, line_number, "unfinished escape sequence").c_str());
             }
-            ++index;
-            if (!decode_double_quoted_escape(value[index]).has_value()) {
-                ++decoded_size;
+            has_escape = true;
+            result.append(value.substr(literal_start, index - literal_start));
+            const char escaped = value[++index];
+            if (const auto decoded = decode_double_quoted_escape(escaped); decoded.has_value()) {
+                result.push_back(*decoded);
+            } else {
+                result.push_back('\\');
+                result.push_back(escaped);
             }
-        }
-        ++decoded_size;
-    }
-    if (close_index == std::string_view::npos) {
-        throw std::invalid_argument(
-            location_message(path, line_number, "unterminated double-quoted value").c_str());
-    }
-
-    consumed = close_index + 1;
-    std::pmr::string result(process_resource());
-    result.reserve(decoded_size);
-    for (std::size_t index = 1; index < close_index; ++index) {
-        const char current = value[index];
-        if (current != '\\') {
-            result.push_back(current);
-            continue;
-        }
-        const char escaped = value[++index];
-        if (const auto decoded = decode_double_quoted_escape(escaped); decoded.has_value()) {
-            result.push_back(*decoded);
-        } else {
-            result.push_back('\\');
-            result.push_back(escaped);
+            literal_start = index + 1;
         }
     }
-    return result;
+    throw std::invalid_argument(
+        location_message(path, line_number, "unterminated double-quoted value").c_str());
 }
 
 [[nodiscard]] std::pmr::string parse_single_quoted_value(std::string_view value,

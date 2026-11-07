@@ -19,6 +19,7 @@
 #include "ruvia/web/context.h"
 
 #include "context/context_capabilities.h"
+#include "http/streaming_access.h"
 #include "integration/request_io_metrics.h"
 #include "integration/worker_client_registry_view.h"
 #include "server/trusted_proxies.h"
@@ -205,9 +206,9 @@ public:
 
     // Bind on a request-local copy; the worker and connection views stay shared.
     void bind_streaming_request_body(body_reader& value) noexcept {
+        streaming_access::bind_worker(value, worker());
         request_services_.body_source_ = context_request_body_source::streaming(value);
     }
-
     void bind_lazy_request_body(request_body_loader& value) noexcept {
         request_services_.body_source_ = context_request_body_source::lazy(value);
     }
@@ -255,6 +256,7 @@ public:
     }
 
     void bind_response_stream(response_stream_writer& value) noexcept {
+        streaming_access::bind_worker(value, worker());
         request_services_.response_output_ = context_response_output::response_stream(value);
     }
 
@@ -268,8 +270,11 @@ public:
         services.connection_services_.info_ = connection_services_.info_;
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
         services.request_services_.io_metrics_ = request_services_.io_metrics_;
+        services.request_services_.early_data_ = request_services_.early_data_;
+        services.request_services_.pinned_arrival_ = request_services_.pinned_arrival_;
         return services;
     }
+    context_services for_subrequest(stop_token&&) const = delete;
 
     // Server-owned static-file policy. When response compression is enabled,
     // static_file() may negotiate an indexed precompressed variant. It never
