@@ -4985,7 +4985,22 @@ TEST(Ruvia, http2_public_outbound_request_headers_and_trailers_lowercase_standar
 
     const std::string long_mixed_name = "X-Mixed-" + std::string(80, 'N');
     const std::string long_lower_name = "x-mixed-" + std::string(80, 'n');
-    const std::array<ruvia::http_header_view, 2> headers{{{long_mixed_name, "head-value"}, {"X-Custom-Head", "short"}}};
+    const std::string last_upper_name = std::string(62, 'a') + "Z";
+    const std::string first_upper_name = "Z" + std::string(63, 'b');
+    const std::string middle_upper_name = std::string(32, 'c') + "Z" + std::string(32, 'c');
+    const std::string last_lower_name = std::string(62, 'a') + "z";
+    const std::string first_lower_name = "z" + std::string(63, 'b');
+    const std::string middle_lower_name = std::string(32, 'c') + "z" + std::string(32, 'c');
+    const std::array headers{ruvia::http_header_view{long_mixed_name, "head-value"},
+        ruvia::http_header_view{"X-Custom-Head", "short"},
+        ruvia::http_header_view{last_upper_name, "last-upper"},
+        ruvia::http_header_view{first_upper_name, "first-upper"},
+        ruvia::http_header_view{middle_upper_name, "middle-upper"}};
+    const std::array normalized{ruvia::http_header_view{long_lower_name, "head-value"},
+        ruvia::http_header_view{"x-custom-head", "short"},
+        ruvia::http_header_view{last_lower_name, "last-upper"},
+        ruvia::http_header_view{first_lower_name, "first-upper"},
+        ruvia::http_header_view{middle_lower_name, "middle-upper"}};
     const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{
         .method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/mixed", .headers_ = headers, .content_ = ruvia::http2_request_content::streaming()});
     EXPECT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
@@ -4998,8 +5013,9 @@ TEST(Ruvia, http2_public_outbound_request_headers_and_trailers_lowercase_standar
     while (auto event = server.next_event()) {
         if (auto* head = event->request_head()) {
             const auto built = head->build_request(&resource);
-            EXPECT_EQ(built.header(long_lower_name).value_or(""), "head-value");
-            EXPECT_EQ(built.header("x-custom-head").value_or(""), "short");
+            for (const auto& field : normalized) {
+                EXPECT_EQ(built.header(field.name()).value_or(""), field.value());
+            }
             parent.emplace(std::move(*head));
         } else if (const auto* end = event->message_end()) {
             EXPECT_EQ(end->trailers().size(), std::size_t{2});
@@ -5012,25 +5028,53 @@ TEST(Ruvia, http2_public_outbound_request_headers_and_trailers_lowercase_standar
         }
     }
     EXPECT_TRUE(parent.has_value());
-    const std::array<ruvia::http_header_view, 1> push_headers{{{"X-Push-Mixed", "pushed-value"}}};
-    auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/pushed", .headers_ = push_headers});
+    auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/pushed", .headers_ = headers});
     EXPECT_TRUE(pushed.index() == 0);
     if (pushed.index() == 0) {
         const auto built_push = std::get<0>(pushed).build_request(&resource);
-        EXPECT_EQ(built_push.header("x-push-mixed").value_or(""), "pushed-value");
+        for (const auto& field : normalized) {
+            EXPECT_EQ(built_push.header(field.name()).value_or(""), field.value());
+        }
         (void)server.release(std::move(std::get<0>(pushed)));
     }
     exchange_value(server, client);
     auto promise = client.next_event();
     EXPECT_TRUE(promise && promise->push_promise());
     if (promise && promise->push_promise()) {
-        EXPECT_EQ(promise->push_promise()->request_.headers_.size(), std::size_t{1});
-        if (!promise->push_promise()->request_.headers_.empty()) {
-            EXPECT_EQ(promise->push_promise()->request_.headers_[0].name(), "x-push-mixed");
+        const auto& fields = promise->push_promise()->request_.headers_;
+        EXPECT_EQ(fields.size(), normalized.size());
+        if (fields.size() == normalized.size()) {
+            for (std::size_t i = 0; i < fields.size(); ++i) {
+                EXPECT_EQ(fields[i].name(), normalized[i].name());
+                EXPECT_EQ(fields[i].value(), normalized[i].value());
+            }
         }
     }
+    // Consume the abandoned push's terminal event before the next input batch.
+    while (client.next_event()) {
+    }
     if (parent) {
+        ruvia::http_response response(&resource);
+        response.status(ruvia::http_status::no_content);
+        for (const auto& field : headers) {
+            response.header(field.name(), field.value());
+        }
+        const auto result = server.submit_response_head(parent->stream_id(), response,
+            ruvia::plan_buffered_http_response_write(ruvia::http_known_method::post, response));
+        EXPECT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(result));
         (void)server.release(std::move(*parent));
+        exchange_value(server, client);
+        bool received_response = false;
+        while (auto event = client.next_event()) {
+            if (const auto* head = event->response_head()) {
+                EXPECT_TRUE(head->head().status() == ruvia::http_status::no_content);
+                for (const auto& field : normalized) {
+                    EXPECT_EQ(head->head().header(field.name()).value_or(""), field.value());
+                }
+                received_response = true;
+            }
+        }
+        EXPECT_TRUE(received_response);
     }
 }
 

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <memory_resource>
+#include <string>
 #include <utility>
 
 #include "ruvia/http/http_number_format.h"
@@ -371,7 +372,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         stream->mark_scheme(default_port);
         stream->mark_authority();
         stream->mark_path();
-        std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
+        std::array<char, 64> lower_name_stack;
         std::pmr::string lower_name_scratch(resource_);
         for (std::size_t i = 0; i < request.headers_.size(); ++i) {
             const auto& header = request.headers_[i];
@@ -384,8 +385,13 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
                     throw std::length_error("HTTP/2 push request cookie is too large");
                 }
             } else {
-                const auto lower_name =
-                    http2_lower_header_name(header.name(), lower_name_stack, lower_name_scratch);
+                const auto lower_name = http2_lower_header_name(header.name(), [&](std::size_t size) {
+                    if (size <= lower_name_stack.size()) {
+                        return lower_name_stack.data();
+                    }
+                    lower_name_scratch.resize(size);
+                    return lower_name_scratch.data();
+                });
                 if (!stream->append_remote_header(lower_name, header.value(), kind)) {
                     throw std::length_error("HTTP/2 push request has too many fields");
                 }

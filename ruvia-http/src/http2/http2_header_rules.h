@@ -1,10 +1,7 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstring>
-#include <memory_resource>
-#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
@@ -15,8 +12,6 @@
 #include "http2/http2_field_name.h"
 
 namespace ruvia::detail {
-
-inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
 
 // SETTINGS_MAX_HEADER_LIST_SIZE limits the decoded field section, not the
 // serialized HPACK block. Huffman coding can spend up to 30 bits per decoded
@@ -33,32 +28,24 @@ inline constexpr std::size_t max_http2_encoded_header_block_bytes = 4 * max_http
            http_ascii_equals_ignore_case(name, "set-cookie");
 }
 
-// Stack-backed results expose only fully written prefixes; an already-lowercase
-// name continues to borrow the input, so unused scratch bytes are never read.
-[[nodiscard]] inline std::string_view http2_lower_header_name(std::string_view name,
-    std::array<char, http2_lower_header_stack_bytes>& stack, std::pmr::string& scratch) {
-    const auto write_lower_from = [](std::string_view source_value, std::size_t first_upper,
-                                      char* target) noexcept {
-        if (first_upper != 0) {
-            std::memcpy(target, source_value.data(), first_upper);
-        }
-        for (std::size_t i = first_upper; i < source_value.size(); ++i) {
-            target[i] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(source_value[i])));
-        }
-    };
-
+// Borrow unchanged names; request writable storage only at the first uppercase
+// byte. The provider must keep the input alive and return name.size() bytes.
+template <typename prepare_type>
+[[nodiscard]] inline std::string_view http2_lower_header_name(
+    std::string_view name, const prepare_type& prepare) {
     for (std::size_t i = 0; i < name.size(); ++i) {
         const auto byte = static_cast<unsigned char>(name[i]);
         if (byte < 'A' || byte > 'Z') {
             continue;
         }
-        if (name.size() <= stack.size()) {
-            write_lower_from(name, i, stack.data());
-            return std::string_view(stack.data(), name.size());
+        auto* target = prepare(name.size());
+        if (i != 0) {
+            std::memcpy(target, name.data(), i);
         }
-        scratch.resize(name.size());
-        write_lower_from(name, i, scratch.data());
-        return scratch;
+        for (std::size_t index = i; index < name.size(); ++index) {
+            target[index] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(name[index])));
+        }
+        return std::string_view(target, name.size());
     }
     return name;
 }

@@ -2,7 +2,6 @@
 
 #include <nghttp2/nghttp2.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -75,12 +74,16 @@ public:
 
     // HTTP/2 field names are lowercase on the wire (RFC 9113 §8.2.1).
     void add_lowercase(std::string_view name, std::string_view value) {
-        std::array<char, http2_lower_header_stack_bytes> stack;
-        std::pmr::string scratch(owned_.get_allocator());
-        const auto lower = http2_lower_header_name(name, stack, scratch);
-        const bool borrowed = lower.data() == name.data();
         reserve_geometric(entries_, entries_.size() + 1);
-        const auto entry_name = borrowed ? text_type::borrowed(name) : own(lower);
+        const auto offset = owned_.size();
+        const auto lower = http2_lower_header_name(name, [this, offset](std::size_t size) {
+            reserve_geometric(owned_, offset + size);
+            owned_.resize(offset + size);
+            return owned_.data() + offset;
+        });
+        const auto entry_name = lower.data() == name.data()
+                                    ? text_type::borrowed(name)
+                                    : text_type{.data_ = nullptr, .offset_ = offset, .size_ = lower.size()};
         entries_.push_back(entry_type{.name_ = entry_name,
             .value_ = text_type::borrowed(value),
             .sensitive_ = hpack_header_name_is_sensitive(lower)});
