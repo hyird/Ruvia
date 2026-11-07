@@ -25,6 +25,7 @@
 
 #include "coding/http_content_length.h"
 #include "field/http_interim_response_validation.h"
+#include "field/http_lower_header_name.h"
 #include "field/http_origin_payload.h"
 #include "response/http_framed_response_head_plan.h"
 #include "server/http_date_cache.h"
@@ -53,46 +54,54 @@ namespace {
     };
 }
 
-// One outbound field section. RFC 9114 §4.2 requires lowercase field names;
-// response and trailer names keep the application's spelling, so each is
-// lowered into one reserved buffer whose views stay valid until submission.
+// One outbound field section. Already-lowercase names borrow their source;
+// changed names share one lazily reserved buffer that stays address-stable.
 // nghttp3 copies the section when it is submitted.
 class outbound_field_section final {
 public:
     outbound_field_section(std::pmr::memory_resource* resource, std::size_t name_bytes,
         std::size_t field_count)
-        : names_(resource),
+        : name_bytes_(name_bytes),
+          names_(resource),
           fields_(resource) {
-        names_.reserve(name_bytes);
         fields_.reserve(field_count);
     }
+
+    outbound_field_section(const outbound_field_section&) = delete;
+    outbound_field_section& operator=(const outbound_field_section&) = delete;
+    outbound_field_section(outbound_field_section&&) = delete;
+    outbound_field_section& operator=(outbound_field_section&&) = delete;
 
     void add_literal(std::string_view name, std::string_view value) {
         fields_.push_back(make_nv(name, value));
     }
 
     void add_lowercased(std::string_view name, std::string_view value) {
-        const auto offset = names_.size();
-        if (names_.capacity() - offset < name.size()) {
-            throw std::logic_error("HTTP/3 field section name storage underestimated");
-        }
-        for (const char byte : name) {
-            names_.push_back(static_cast<char>(
-                http_ascii_to_lower(static_cast<unsigned char>(byte))));
-        }
-        fields_.push_back(make_nv(
-            std::string_view(names_.data() + offset, name.size()), value));
+        const auto lower = detail::http_lower_header_name(name, [this](std::size_t size) {
+            const auto offset = names_.size();
+            if (size > name_bytes_ - offset) {
+                throw std::logic_error("HTTP/3 field section name storage underestimated");
+            }
+            if (names_.empty()) {
+                names_.reserve(name_bytes_);
+            }
+            names_.resize(offset + size);
+            return names_.data() + offset;
+        });
+        fields_.push_back(make_nv(lower, value));
     }
 
-    [[nodiscard]] const nghttp3_nv* data() const noexcept {
+    [[nodiscard]] const nghttp3_nv* data() const& noexcept RUVIA_LIFETIMEBOUND {
         return fields_.data();
     }
+    const nghttp3_nv* data() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return fields_.size();
     }
 
 private:
+    const std::size_t name_bytes_;
     std::pmr::string names_;
     std::pmr::vector<nghttp3_nv> fields_;
 };

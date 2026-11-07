@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstring>
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
@@ -26,28 +25,6 @@ inline constexpr std::size_t max_http2_encoded_header_block_bytes = 4 * max_http
            http_ascii_equals_ignore_case(name, "proxy-authorization") ||
            http_ascii_equals_ignore_case(name, "cookie") ||
            http_ascii_equals_ignore_case(name, "set-cookie");
-}
-
-// Borrow unchanged names; request writable storage only at the first uppercase
-// byte. The provider must keep the input alive and return name.size() bytes.
-template <typename prepare_type>
-[[nodiscard]] inline std::string_view http2_lower_header_name(
-    std::string_view name, const prepare_type& prepare) {
-    for (std::size_t i = 0; i < name.size(); ++i) {
-        const auto byte = static_cast<unsigned char>(name[i]);
-        if (byte < 'A' || byte > 'Z') {
-            continue;
-        }
-        auto* target = prepare(name.size());
-        if (i != 0) {
-            std::memcpy(target, name.data(), i);
-        }
-        for (std::size_t index = i; index < name.size(); ++index) {
-            target[index] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(name[index])));
-        }
-        return std::string_view(target, name.size());
-    }
-    return name;
 }
 
 // Request TE values are validated with the other request-field semantics

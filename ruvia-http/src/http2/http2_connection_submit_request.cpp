@@ -8,6 +8,7 @@
 #include "ruvia/http/http_request_content_semantics.h"
 
 #include "field/http_expect_token.h"
+#include "field/http_lower_header_name.h"
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_list_size.h"
@@ -385,7 +386,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
                     throw std::length_error("HTTP/2 push request cookie is too large");
                 }
             } else {
-                const auto lower_name = http2_lower_header_name(header.name(), [&](std::size_t size) {
+                const auto lower_name = http_lower_header_name(header.name(), [&](std::size_t size) {
                     if (size <= lower_name_stack.size()) {
                         return lower_name_stack.data();
                     }

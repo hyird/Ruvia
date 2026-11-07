@@ -12,6 +12,7 @@
 
 #include "ruvia/http/http_pmr_string.h"
 
+#include "field/http_lower_header_name.h"
 #include "http2/http2_header_rules.h"
 #include "util/geometric_reserve.h"
 namespace ruvia::detail {
@@ -76,7 +77,7 @@ public:
     void add_lowercase(std::string_view name, std::string_view value) {
         reserve_geometric(entries_, entries_.size() + 1);
         const auto offset = owned_.size();
-        const auto lower = http2_lower_header_name(name, [this, offset](std::size_t size) {
+        const auto lower = http_lower_header_name(name, [this, offset](std::size_t size) {
             reserve_geometric(owned_, offset + size);
             owned_.resize(offset + size);
             return owned_.data() + offset;
