@@ -214,7 +214,9 @@ public:
         bool early_{};
         bool retry_{};
         bool retry_425_{};
+        bool rejected_{};
         bool write_stopped_{};
+        std::optional<std::uint64_t> stop_sending_error_;
         worker_timer_registration timer_;
     };
     session(http_client_pool& pool, tls_state& shared_tls, std::size_t index)
@@ -298,8 +300,18 @@ public:
             if (item == preserve) {
                 continue;
             }
-            if (item->id_ < 0 && connecting_stream_ != item && code != error_code::closing) {
-                continue;
+            if (code != error_code::closing) {
+                if (item->done_ || item->retry_) {
+                    continue;
+                }
+                if (item->id_ < 0 && connecting_stream_ != item) {
+                    continue;
+                }
+                if (draining_ && code == error_code::io_error && !item->response_.head_ready_ &&
+                    item->response_.output() == nullptr) {
+                    item->retry_ = true;
+                    continue;
+                }
             }
             if (!item->error_) {
                 item->error_ = code;
@@ -450,6 +462,7 @@ public:
                 for (auto* item : streams_) {
                     if (item->id_ >= away->id_ && !item->response_.head_ready_) {
                         item->retry_ = true;
+                        item->error_.reset();
                         if (auto* output = item->response_.output()) {
                             output->stop();
                         }
@@ -602,7 +615,14 @@ public:
                                 item->done_ = true;
                             } else if (response.tunnel_ && response.tunnel_->accepted_) {
                                 response.tunnel_->receive_ended_ = true;
-                                if (response.tunnel_->output_.ended_ || response.tunnel_->output_.stopped_) {
+                                if (item->websocket_ && item->write_stopped_ &&
+                                    item->stop_sending_error_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
+                                    item->done_ = true;
+                                    response.complete_ = true;
+                                    response.tunnel_->output_.ended_ = true;
+                                    response.tunnel_->output_.notify_data();
+                                    response.tunnel_->output_.space_.notify();
+                                } else if (response.tunnel_->output_.ended_ || response.tunnel_->output_.stopped_) {
                                     item->done_ = true;
                                 }
                             } else {
@@ -623,13 +643,30 @@ public:
                         } else if constexpr (std::same_as<event_type, http3_transport_action_event>) {
                             if (value.action_ == http3_transport_action::stop_sending) {
                                 item->write_stopped_ = true;
-                                if (auto* output = response.output()) {
+                                item->stop_sending_error_ = value.application_error_code_;
+                                if (item->websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
+                                    response.tunnel_->receive_ended_ &&
+                                    value.application_error_code_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
+                                    item->done_ = true;
+                                    response.complete_ = true;
+                                    response.tunnel_->output_.ended_ = true;
+                                    response.tunnel_->output_.notify_data();
+                                    response.tunnel_->output_.space_.notify();
+                                    response.data_signal_.notify();
+                                } else if (auto* output = response.output()) {
                                     output->stop();
                                 }
                             } else if (!item->done_ && !item->retry_) {
-                                item->error_ = error_code::io_error;
-                                if (auto* output = response.output()) {
-                                    output->stop();
+                                if (value.application_error_code_ ==
+                                        static_cast<std::uint64_t>(http3_error_code::request_rejected) &&
+                                    !response.head_ready_ && response.output() == nullptr) {
+                                    item->retry_ = true;
+                                    item->rejected_ = true;
+                                } else {
+                                    item->error_ = error_code::io_error;
+                                    if (auto* output = response.output()) {
+                                        output->stop();
+                                    }
                                 }
                             }
                         } else if constexpr (std::same_as<event_type, http3_stream_close_event>) {
@@ -637,12 +674,21 @@ public:
                                 response.tunnel_->receive_ended_ && !value.application_error_code_) {
                                 item->done_ = true;
                                 response.complete_ = true;
-                                response.tunnel_->output_.stop();
+                                response.tunnel_->output_.ended_ = true;
+                                response.tunnel_->output_.notify_data();
+                                response.tunnel_->output_.space_.notify();
                                 response.data_signal_.notify();
                             } else if (!item->done_ && !item->retry_) {
-                                item->error_ = error_code::io_error;
-                                if (auto* output = response.output()) {
-                                    output->stop();
+                                if (value.application_error_code_ ==
+                                        static_cast<std::uint64_t>(http3_error_code::request_rejected) &&
+                                    !response.head_ready_ && response.output() == nullptr) {
+                                    item->retry_ = true;
+                                    item->rejected_ = true;
+                                } else {
+                                    item->error_ = error_code::io_error;
+                                    if (auto* output = response.output()) {
+                                        output->stop();
+                                    }
                                 }
                             } else if (auto* output = response.output(); output && item->done_) {
                                 output->stop();
@@ -788,8 +834,11 @@ public:
                     std::memcpy(remote.data(), packet_.path_.path.remote.addr, packet_.path_.path.remote.addrlen);
                     remote.resize(packet_.path_.path.remote.addrlen);
                     auto* output = socket_.get();
-                    if (old_socket_ && packet_.path_.path.local.addrlen == old_local_.size() &&
+                    if (packet_.path_.path.local.addrlen == old_local_.size() &&
                         std::memcmp(packet_.path_.path.local.addr, old_local_.data(), old_local_.size()) == 0) {
+                        if (!old_socket_ || !old_socket_->is_open()) {
+                            continue;
+                        }
                         output = old_socket_.get();
                     }
                     sending_socket_ = output;
@@ -803,6 +852,9 @@ public:
                         break;
                     }
                     if (sent.error_code()) {
+                        if (output != socket_.get()) {
+                            continue;
+                        }
                         throw std::system_error(sent.error_code());
                     }
                     for (auto* item : streams_) {
@@ -851,7 +903,7 @@ public:
         }
         const auto has_active_streams = [this, &item]() noexcept {
             for (const auto* existing : streams_) {
-                if (existing != &item && existing->id_ >= 0) {
+                if (existing != &item && existing->id_ >= 0 && !existing->done_ && !existing->retry_) {
                     return true;
                 }
             }
@@ -981,6 +1033,13 @@ public:
             }
             return 0;
         };
+        handshake_confirmed_ = false;
+        callbacks.handshake_confirmed = [](ngtcp2_conn*, void* target) noexcept {
+            auto& owner = *static_cast<session*>(target);
+            owner.handshake_confirmed_ = true;
+            owner.changed_.notify();
+            return 0;
+        };
         quic_.emplace(http3_quic_connection::client({.callbacks_ = callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = timestamp(), .handshake_timeout_ = quic_duration(config.connect_timeout_), .idle_timeout_ = 0, .initial_max_data_ = (std::max)(std::uint64_t{64 * 1024}, (std::min)(std::uint64_t{16 * 1024 * 1024}, static_cast<std::uint64_t>(config.max_response_bytes_))), .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_user_data_ = this, .resource_ = pool_.resource(), .http3_ = {.resource_ = pool_.resource(), .max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}}));
         quic_->set_tls_native_handle(crypto_.get());
         if (allow_early && config.http3_.enable_early_data_ && tls_state_.ticket_ &&
@@ -1100,7 +1159,7 @@ public:
     std::size_t io_tasks_{};
     std::size_t borrowed_operations_{};
     stream* connecting_stream_{};
-    bool open_{}, retired_{}, draining_{}, early_started_{}, early_rejected_{}, migrating_{};
+    bool open_{}, retired_{}, draining_{}, early_started_{}, early_rejected_{}, handshake_confirmed_{}, migrating_{};
     worker_timer_registration expiry_;
     worker_timer_registration idle_timer_;
 };
@@ -1792,10 +1851,11 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             co_return true;
         }
         if (self.usable()) {
-            if (!may_send_early || attempt != 0) {
+            if ((!may_send_early && !item.rejected_) || attempt != 0 ||
+                (item.id_ >= 0 && request.output() != nullptr)) {
                 throw http_client_error(error_code::protocol_error, "HTTP/3 early request replay exhausted");
             }
-            if (!self.early_rejected_ && item.id_ >= 0) {
+            if (!self.early_rejected_ && !item.rejected_ && item.id_ >= 0) {
                 self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
             }
         } else {
@@ -1812,7 +1872,9 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         item.done_ = false;
         item.retry_ = false;
         item.retry_425_ = false;
+        item.rejected_ = false;
         item.write_stopped_ = false;
+        item.stop_sending_error_.reset();
         item.error_.reset();
         response.headers_.clear();
         response.trailers_.clear();
@@ -1872,6 +1934,11 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
         if (!self.open_ || expired) {
             self.close();
             throw http_client_error(expired ? error_code::timeout : error_code::io_error, "HTTP/3 migration connection ID unavailable");
+        }
+        if (!self.handshake_confirmed_) {
+            self.writer_.notify();
+            co_await self.changed_.wait();
+            continue;
         }
         const auto result = self.quic_->migrate(self.path(local, self.remote_), timestamp());
         if (result.status_ == http3_quic_status::accepted) {

@@ -43,6 +43,7 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http3_quic_connection.h"
 #include "ruvia/http/http3_request_head.h"
@@ -1389,6 +1390,58 @@ ruvia::task<void> exercise_outbound_features(ruvia::event_loop loop,
     }
 }
 
+ruvia::task<void> run_resumption_lane(ruvia::http_client_handle c,
+    ruvia::http_client_handle rc, int lane, ruvia::testing::test_context& ruvia_ctx) {
+    for (int round = 0; round < 4; ++round) {
+        auto r1 = co_await c.get("/resumption/retry").send();
+        RUVIA_CHECK(r1.ok());
+        auto t1 = co_await r1.text();
+        RUVIA_CHECK_EQ(t1.text(), "retried");
+
+        const std::string payload = "payload-" + std::to_string(lane) + "-" + std::to_string(round);
+        auto r2 = co_await c.get("/resumption/body").body(payload).send();
+        RUVIA_CHECK(r2.ok());
+        auto t2 = co_await r2.text();
+        RUVIA_CHECK(t2.text() == "early:" + payload || t2.text() == "one-rtt:" + payload);
+
+        auto r3 = co_await rc.get("/resumption/safe").send();
+        RUVIA_CHECK(r3.ok());
+        auto t3 = co_await r3.text();
+        RUVIA_CHECK_EQ(t3.text(), "one-rtt");
+    }
+}
+
+ruvia::task<void> exercise_concurrent_early_data_and_retry_worker(ruvia::event_loop loop,
+    ruvia::http_client_config config, ruvia::http_client_config retry_config,
+    ruvia::testing::test_context& ruvia_ctx) {
+    config.connection_count_ = 2;
+    config.http3_.enable_early_data_ = true;
+    config.advertisements_.receive_origins_ = true;
+    retry_config.connection_count_ = 2;
+    ruvia::http_client owner(loop, config);
+    ruvia::http_client retry_owner(loop, retry_config);
+    std::exception_ptr err;
+    try {
+        {
+            auto seed = co_await owner.client().get("/resumption/safe").send();
+            RUVIA_CHECK(seed.ok());
+            (void)co_await seed.text();
+        }
+        ruvia::task_scope scope(loop.handle());
+        for (int lane = 0; lane < 8; ++lane) {
+            scope.spawn(run_resumption_lane(owner.client(), retry_owner.client(), lane, ruvia_ctx));
+        }
+        co_await scope.join();
+    } catch (...) {
+        err = std::current_exception();
+    }
+    co_await retry_owner.shutdown();
+    co_await owner.shutdown();
+    if (err) {
+        std::rethrow_exception(err);
+    }
+}
+
 }  // namespace http3_resumption_test
 
 RUVIA_TEST(http3_outbound_idle_reconnect_serves_requests_and_bounds_425_retries) {
@@ -1594,6 +1647,32 @@ RUVIA_TEST(http3_outbound_advertises_origins_and_reprioritizes_active_streams) {
         loop.start(http3_resumption_test::exercise_outbound_features(
                        loop, config, retry_config, ruvia_ctx))
             .get();
+    } catch (...) {
+        loops.stop();
+        loops.join();
+        throw;
+    }
+    loops.stop();
+    loops.join();
+}
+
+RUVIA_TEST(http3_outbound_concurrent_early_data_retry_and_goaway_drain_stress) {
+    const auto config = http3_resumption_test::server::shared().outbound_config();
+    const auto retry_config = http3_resumption_test::server::shared().retry_outbound_config();
+    ruvia::blocking_pool blocking;
+    ruvia::event_loop_pool loops({.loop_count_ = 4, .blocking_pool_ = &blocking});
+    loops.start();
+    try {
+        std::vector<ruvia::root_task<void>> futures;
+        futures.reserve(4);
+        for (std::size_t idx = 0; idx < 4; ++idx) {
+            auto loop = loops.loop(idx);
+            futures.push_back(loop.start(http3_resumption_test::exercise_concurrent_early_data_and_retry_worker(
+                loop, config, retry_config, ruvia_ctx)));
+        }
+        for (auto& f : futures) {
+            f.get();
+        }
     } catch (...) {
         loops.stop();
         loops.join();

@@ -189,7 +189,7 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
         return std::nullopt;
     }
 
-    std::array<std::uint16_t, 8> groups;
+    std::array<std::uint16_t, 8> groups{};
     std::size_t offset = 0;
     std::size_t size = 0;
     auto compression = std::string_view::npos;
@@ -241,7 +241,7 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
     if (compression == std::string_view::npos) {
         return size == groups.size() ? std::optional(groups) : std::nullopt;
     }
-    if (size == groups.size()) {
+    if (size >= groups.size() || compression > size) {
         return std::nullopt;
     }
     // Expand the omitted zero groups without changing the suffix's order.

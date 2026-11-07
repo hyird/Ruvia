@@ -376,21 +376,38 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         }
     }
     {
+        bool resource_clean_on_retire = true;
         struct unjoined_scope_holder final {
-            explicit unjoined_scope_holder(const ruvia::worker_handle& w)
-                : scope_(w) {}
+            explicit unjoined_scope_holder(const ruvia::worker_handle& w, bool& clean)
+                : clean_(clean),
+                  scope_(w, {.resource_ = &resource_}) {}
+            ~unjoined_scope_holder() {
+                if (resource_.live_allocations() != 0) {
+                    clean_ = false;
+                }
+            }
+            bool& clean_;
+            failing_memory_resource resource_;
             ruvia::task_scope scope_;
         };
-        auto holder = std::make_shared<unjoined_scope_holder>(worker_value);
-        auto child_with_holder = [](std::shared_ptr<unjoined_scope_holder> owned) -> ruvia::task<void> {
+        auto holder = std::make_shared<unjoined_scope_holder>(worker_value, resource_clean_on_retire);
+        auto child_with_holder = [worker_value](std::shared_ptr<unjoined_scope_holder> owned, int delay_ms) -> ruvia::task<void> {
+            if (delay_ms > 0) {
+                static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(delay_ms)));
+            }
             static_cast<void>(owned);
             co_return;
         };
-        holder->scope_.spawn(child_with_holder(holder));
+        for (int index = 0; index < 16; ++index) {
+            holder->scope_.spawn(child_with_holder(holder, index % 3));
+        }
         std::weak_ptr<unjoined_scope_holder> weak_holder = holder;
         holder.reset();
         while (!weak_holder.expired()) {
             static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
+        }
+        if (!resource_clean_on_retire) {
+            co_return;
         }
     }
 

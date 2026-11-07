@@ -406,6 +406,9 @@ public:
                 return;
             }
             auto& stream = position->second;
+            if (stream.write_aborted_) {
+                return;
+            }
             auto& chunks = stream.body_;
             while (bytes != 0 && !chunks.empty()) {
                 auto& chunk = chunks.front();

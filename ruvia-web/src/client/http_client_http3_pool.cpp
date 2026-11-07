@@ -89,19 +89,34 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
             if (authority.find_first_of("\\\" \t\r\n/@?#") != std::string_view::npos) {
                 continue;
             }
-            const auto parsed_authority = parse_http_authority(authority);
-            if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value ||
-                *parsed_authority->port() == 0) {
-                continue;
-            }
-            const auto port = *parsed_authority->port();
-            auto host = parsed_authority->host();
-            if (!host.empty() && host.front() == '[' && host.back() == ']') {
-                host.remove_prefix(1);
-                host.remove_suffix(1);
-            }
-            if (host.empty()) {
+            std::string_view host;
+            std::uint16_t port = 0;
+            if (!authority.empty() && authority.front() == ':') {
+                const auto port_text = authority.substr(1);
+                unsigned parsed_port = 0;
+                const auto parsed = std::from_chars(
+                    port_text.data(), port_text.data() + port_text.size(), parsed_port);
+                if (parsed.ec != std::errc{} || parsed.ptr != port_text.data() + port_text.size() ||
+                    parsed_port == 0 || parsed_port > 65535) {
+                    continue;
+                }
+                port = static_cast<std::uint16_t>(parsed_port);
                 host = config_.host_;
+            } else {
+                const auto parsed_authority = parse_http_authority(authority);
+                if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value ||
+                    *parsed_authority->port() == 0) {
+                    continue;
+                }
+                port = *parsed_authority->port();
+                host = parsed_authority->host();
+                if (!host.empty() && host.front() == '[' && host.back() == ']') {
+                    host.remove_prefix(1);
+                    host.remove_suffix(1);
+                }
+                if (host.empty()) {
+                    host = config_.host_;
+                }
             }
             if (host.size() > 253) {
                 continue;
