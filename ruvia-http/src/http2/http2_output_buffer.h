@@ -44,6 +44,8 @@ public:
         if (bytes_value.empty()) {
             return;
         }
+        // Reclaim an amortizable prefix before new frames grow the live suffix.
+        compact_consumed_prefix();
         reserve_segment();
         if (bytes_value.size() > bytes_.max_size() - bytes_.size()) {
             throw std::length_error("HTTP/2 output buffer size overflow");
@@ -74,10 +76,15 @@ public:
                 break;
             }
         }
-        const auto first_segment = segment_offset_;
+        // Only a storage handoff benefits from compacting this batch in place.
         const auto batch_bytes = end - consumed_;
-        const bool transfer_storage = consumed_ == 0 && end == bytes_.size() &&
-                                      into.empty() && into.get_allocator() == bytes_.get_allocator();
+        const bool complete_batch = end == bytes_.size();
+        const bool transferable = into.empty() && into.get_allocator() == bytes_.get_allocator();
+        if (complete_batch && transferable) {
+            compact_consumed_prefix();
+        }
+        const auto first_segment = segment_offset_;
+        const bool transfer_storage = consumed_ == 0 && complete_batch && transferable;
         if (transfer_storage) {
             into.swap(bytes_);
         } else {
@@ -94,13 +101,10 @@ public:
                     return;
                 }
                 --buffer_.observer_depth_;
-                if (buffer_.observer_depth_ == 0) {
-                    if (buffer_.segment_offset_ == buffer_.segments_.size()) {
-                        buffer_.segments_.clear();
-                        buffer_.segment_offset_ = 0;
-                    } else {
-                        buffer_.compact_consumed_prefix();
-                    }
+                if (buffer_.observer_depth_ == 0 &&
+                    buffer_.segment_offset_ == buffer_.segments_.size()) {
+                    buffer_.segments_.clear();
+                    buffer_.segment_offset_ = 0;
                 }
             }
         } guard{*this, observer != nullptr};
@@ -144,7 +148,6 @@ private:
         }
         consumed_ += bytes_value;
         segment_offset_ += segment_count;
-        compact_consumed_prefix();
     }
 
     void reset_after_drain() noexcept {

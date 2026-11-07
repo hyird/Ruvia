@@ -4747,6 +4747,81 @@ TEST(Ruvia, http2_public_full_output_batch_transfers_storage_and_accounts_data) 
     EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
+TEST(Ruvia, http2_public_output_tail_preserves_storage_transfer_and_data_observations) {
+    toggle_allocation_resource resource;
+    {
+        auto client = ruvia::http2_connection::client({.resource_ = &resource});
+        (void)ruvia::testing::drain_output(client);
+        const std::string padding(4096, 'p');
+        const std::array fields{ruvia::http_header_view{"x-padding", padding}};
+        std::array<std::uint32_t, 2> ids{};
+        for (std::size_t index = 0; index < 64; ++index) {
+            const auto request = client.submit_request_head(ruvia::http2_regular_request_head_view{
+                .method_ = "POST", .authority_ = "example.test", .headers_ = fields, .content_ = ruvia::http2_request_content::streaming()});
+            EXPECT_TRUE(std::holds_alternative<std::uint32_t>(request));
+            if (!std::holds_alternative<std::uint32_t>(request)) {
+                return;
+            }
+            if (index < ids.size()) {
+                ids[index] = std::get<std::uint32_t>(request);
+            }
+        }
+        const std::array<std::string_view, 2> bodies{"left", "right"};
+        for (std::size_t index = 0; index < ids.size(); ++index) {
+            EXPECT_TRUE(client.submit_data(ids[index], bodies[index], ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http2_data_submit_status::complete);
+        }
+        std::pmr::string prefix;
+        data_output_observations observed;
+        const auto first = client.take_output_batch(160 * 1024, prefix, &data_output_observations::observe, &observed);
+        EXPECT_TRUE(first.status_ == ruvia::http2_output_batch_status::taken);
+        EXPECT_TRUE(client.wants_write());
+        EXPECT_EQ(observed.count_, std::size_t{0});
+
+        std::pmr::string tail(&resource);
+        if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+            resource.reject();
+        }
+        bool threw = false;
+        try {
+            const auto last = client.take_output_batch((std::numeric_limits<std::size_t>::max)(), tail, &data_output_observations::observe, &observed);
+            EXPECT_TRUE(last.status_ == ruvia::http2_output_batch_status::taken);
+            EXPECT_EQ(last.bytes_, tail.size());
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        resource.reject(false);
+        EXPECT_TRUE(!threw);
+        EXPECT_TRUE(!client.wants_write());
+        EXPECT_EQ(observed.count_, ids.size());
+        for (std::size_t index = 0; index < ids.size(); ++index) {
+            EXPECT_EQ(client.pending_data_output_bytes(ids[index]), std::size_t{0});
+            EXPECT_TRUE(observed.entries_[index].stream_id_ == ids[index] &&
+                        observed.entries_[index].payload_bytes_ == bodies[index].size());
+        }
+        std::string_view pending(tail);
+        std::size_t data_index = 0;
+        while (!pending.empty()) {
+            const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(pending.data(), pending.size()));
+            EXPECT_TRUE(frame && frame->length_ <= pending.size() - ruvia::http2_frame_header_bytes);
+            if (!frame || frame->length_ > pending.size() - ruvia::http2_frame_header_bytes) {
+                break;
+            }
+            const auto payload = pending.substr(ruvia::http2_frame_header_bytes, frame->length_);
+            if (frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                EXPECT_TRUE(data_index < ids.size());
+                if (data_index < ids.size()) {
+                    EXPECT_EQ(frame->stream_id_, ids[data_index]);
+                    EXPECT_EQ(payload, bodies[data_index]);
+                }
+                ++data_index;
+            }
+            pending.remove_prefix(ruvia::http2_frame_header_bytes + frame->length_);
+        }
+        EXPECT_EQ(data_index, ids.size());
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+}
+
 TEST(Ruvia, http2_public_output_batch_copy_failure_preserves_frame_boundaries) {
     std::pmr::unsynchronized_pool_resource resource;
     toggle_allocation_resource output_resource;
