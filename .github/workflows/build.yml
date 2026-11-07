@@ -47,14 +47,15 @@ jobs:
           printf '%s\0' "${files[@]}" | xargs -0 -n 80 clang-format --dry-run --Werror
 
   resolve_toolchain:
-    name: Resolve latest LLVM musl toolchain and vcpkg
+    name: Resolve latest LLVM musl toolchain and pinned vcpkg
     runs-on: ubuntu-24.04
     outputs:
       release: ${{ steps.resolve.outputs.release }}
       sha256: ${{ steps.resolve.outputs.sha256 }}
       vcpkg_commit: ${{ steps.resolve.outputs.vcpkg_commit }}
     steps:
-      - name: Resolve latest toolchain release, checksum, and vcpkg commit
+      - uses: actions/checkout@v6
+      - name: Resolve latest toolchain release, checksum, and vcpkg baseline
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,7 +70,7 @@ jobs:
           checksum="$(curl -fsSL "https://github.com/cross-tools/clang-cross/releases/download/$release/$asset.sha256")"
           read -r sha256 _ <<< "$checksum"
           [[ "$sha256" =~ ^[[:xdigit:]]{64}$ ]]
-          vcpkg_commit="$(gh api repos/microsoft/vcpkg/commits/HEAD --jq '.sha')"
+          vcpkg_commit="$(jq -er '."builtin-baseline"' vcpkg.json)"
           [[ "$vcpkg_commit" =~ ^[[:xdigit:]]{40}$ ]]
           printf 'release=%s\nsha256=%s\nvcpkg_commit=%s\n' "$release" "${sha256,,}" "${vcpkg_commit,,}" >> "$GITHUB_OUTPUT"
 

@@ -14,6 +14,8 @@ Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声
 
 顶层构建在未指定 `CMAKE_TOOLCHAIN_FILE` 时从 `VCPKG_ROOT` 自动选择 vcpkg 工具链，并按启用的构建选项选择 [vcpkg.json](vcpkg.json) 中的依赖特性；作为子项目或外部包接入时，宿主工程自行提供工具链与依赖清单。
 
+依赖版本由 `vcpkg.json` 的 `builtin-baseline` 固定，CI 使用同一提交；HTTP/3 要求 ngtcp2 1.26.0 或更新版本。更新依赖时先更新并重新引导 vcpkg，再更新清单基线、重新运行 CMake 配置与构建；不要只替换静态库而保留旧头文件。
+
 | CMake 选项 | 默认值 | 说明与边界 |
 | --- | --- | --- |
 | `RUVIA_BUILD_CORE` | `ON` | 构建 `ruvia::core`。 |

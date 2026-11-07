@@ -1567,9 +1567,26 @@ task<void> http3_client_connection::migrate(std::string local_address, std::uint
     replacement->bind(requested);
     replacement->connect(self.remote_);
     auto local = replacement->local_endpoint();
-    const auto result = self.quic_->migrate(self.path(local, self.remote_), timestamp());
-    if (result.status_ != http3_quic_status::accepted) {
-        throw http_client_error(error_code::protocol_unavailable, "peer or QUIC state forbids active migration");
+    bool expired = false;
+    worker_timer_registration timer;
+    (void)self.pool_.worker().schedule_timer(timer, worker_timer_deadline_after(self.pool_.config().connect_timeout_),
+        [&self, &expired](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { expired = true; self.changed_.notify(); } });
+    for (;;) {
+        if (!self.open_ || expired) {
+            self.close();
+            throw http_client_error(expired ? error_code::timeout : error_code::io_error, "HTTP/3 migration connection ID unavailable");
+        }
+        const auto result = self.quic_->migrate(self.path(local, self.remote_), timestamp());
+        if (result.status_ == http3_quic_status::accepted) {
+            break;
+        }
+        if (result.status_ != http3_quic_status::would_block) {
+            throw http_client_error(error_code::protocol_unavailable, "peer or QUIC state forbids active migration");
+        }
+        // CID replenishment is protocol backpressure, not a rejected migration.
+        // Receive and expiry events drive progress under the same overall deadline.
+        self.writer_.notify();
+        co_await self.changed_.wait();
     }
     self.old_local_ = self.local_;
     self.old_socket_ = std::move(self.socket_);
@@ -1584,10 +1601,6 @@ task<void> http3_client_connection::migrate(std::string local_address, std::uint
         throw;
     }
     self.writer_.notify();
-    worker_timer_registration timer;
-    bool expired = false;
-    (void)self.pool_.worker().schedule_timer(timer, worker_timer_deadline_after(self.pool_.config().connect_timeout_),
-        [&self, &expired](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { expired = true; self.changed_.notify(); } });
     for (;;) {
         if (!self.open_ || expired) {
             self.close();

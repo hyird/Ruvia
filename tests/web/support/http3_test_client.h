@@ -534,7 +534,15 @@ public:
         migration_socket_.emplace(replacement_socket());
         migration_local_ = migration_socket_->local_endpoint();
         const auto candidate = path(migration_local_);
-        const auto result = connection_->migrate(candidate, timestamp());
+        http3_quic_result result;
+        // Consecutive migrations can consume the spare CIDs before the peer's
+        // replacement NEW_CONNECTION_ID frames arrive. Drive that protocol
+        // backpressure, rather than treating would_block as a failed migration.
+        wait_or_throw([&] {
+            result = connection_->migrate(candidate, timestamp());
+            return result.status_ != http3_quic_status::would_block;
+        },
+            "HTTP/3 client migration connection ID did not arrive");
         if (result.status_ != http3_quic_status::accepted) {
             migration_socket_.reset();
             throw std::runtime_error("HTTP/3 client migration was not accepted");

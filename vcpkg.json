@@ -1,6 +1,7 @@
 {
   "name": "ruvia",
   "version-string": "1.0.0",
+  "builtin-baseline": "28e2bd9c120210315ac31066952fcbfd45789e27",
   "default-features": [
     "runtime",
     "protocol",
@@ -44,7 +45,10 @@
       "description": "Enable sans-I/O HTTP/3 and QUIC through nghttp3 and ngtcp2.",
       "dependencies": [
         "nghttp3",
-        "ngtcp2"
+        {
+          "name": "ngtcp2",
+          "version>=": "1.26.0"
+        }
       ]
     },
     "http3-openssl": {

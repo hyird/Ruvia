@@ -362,7 +362,7 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
 
-迁移沿用 ngtcp2 的路径验证机制；连续迁移的已知限制见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)，不能把单次成功当作无限次连续迁移保证。
+迁移沿用 ngtcp2 的路径验证机制；CID 容量、补充等待与截止期见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。迁移保持原连接，不自动重放失败请求。
 
 Server Push 与 ORIGIN/ALTSVC 帧观察仅适用于 HTTP/2。HTTP/3 不授权 Server Push；Alt-Svc 从已验证源站的响应字段获取，不把 HTTP/2 扩展帧接口当作 HTTP/3 能力。
 

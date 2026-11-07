@@ -625,22 +625,37 @@ RUVIA_TEST(a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     }
 
     {
+        // Keep one connection through consecutive active migrations, then NAT
+        // rebindings. ngtcp2 1.25.0 could retire the fallback CID when the next
+        // migration began after new-path validation but before old-path probing
+        // ended. Do not wait for those probes to expire between path changes.
         auto client = connect(port, identity);
-        const auto worker = client.request("GET", "/worker").body_;
-        const auto original_port = client.local_port();
-        client.rebind();
-        RUVIA_CHECK(client.local_port() != original_port);
-        RUVIA_CHECK_EQ(client.request("GET", "/worker").body_, worker);
-    }
-    {
-        // Independent path changes cover both mechanisms without chaining the
-        // upstream ngtcp2 path-validation/CID-retirement limitation.
-        auto client = connect(port, identity);
-        const auto worker = client.request("GET", "/worker").body_;
-        const auto original_port = client.local_port();
-        client.migrate();
-        RUVIA_CHECK(client.local_port() != original_port);
-        RUVIA_CHECK_EQ(client.request("GET", "/worker").body_, worker);
+        const auto* connection = client.native_handle();
+        auto previous_stream = client.start_request("GET", "/worker");
+        const auto initial = client.finish_response(previous_stream);
+        RUVIA_CHECK_EQ(initial.status_, 200);
+        RUVIA_CHECK(!initial.reset_error_);
+        RUVIA_CHECK(!initial.body_.empty());
+        for (const bool active_migration : {true, false}) {
+            for (int change = 0; change < 16; ++change) {
+                const auto previous_port = client.local_port();
+                if (active_migration) {
+                    client.migrate();
+                } else {
+                    client.rebind();
+                }
+                RUVIA_CHECK(client.local_port() != previous_port);
+                const auto stream = client.start_request("GET", "/worker");
+                RUVIA_CHECK_EQ(stream, previous_stream + 4);
+                const auto response = client.finish_response(stream);
+                RUVIA_CHECK_EQ(response.status_, 200);
+                RUVIA_CHECK(!response.reset_error_);
+                RUVIA_CHECK_EQ(response.body_, initial.body_);
+                RUVIA_CHECK(client.native_handle() == connection);
+                RUVIA_CHECK(!client.closed());
+                previous_stream = stream;
+            }
+        }
     }
 
     // nghttp3 treats a request it cannot frame (here a :path that is no

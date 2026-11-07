@@ -63,7 +63,9 @@ struct http3_quic_connection_options final {
     std::uint64_t initial_max_stream_data_{1024 * 1024};
     std::uint64_t initial_max_streams_bidi_{100};
     std::uint64_t initial_max_streams_uni_{16};
-    std::uint64_t active_connection_id_limit_{2};
+    // Leave spare CIDs for a new candidate while the current path and an
+    // old-path validation coexist (RFC 9000 §5.1.1).
+    std::uint64_t active_connection_id_limit_{4};
     std::size_t max_udp_payload_size_{1350};
     // Bounded unreliable output retained until ngtcp2 accepts each frame.
     std::size_t max_pending_datagram_bytes_{64 * 1024};
