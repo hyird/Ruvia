@@ -1292,6 +1292,76 @@ TEST(Ruvia, ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
     }
 }
 
+TEST(Ruvia, ws_output_retries_growth_and_aliased_submission_after_partial_write) {
+    for (const auto role : {websocket_connection_role::server, websocket_connection_role::client}) {
+        counting_resource memory;
+        {
+            mask_source mask;
+            websocket_connection sender({.resource_ = &memory,
+                .message_limit_ = protocol_byte_limit::unlimited(),
+                .role_ = role,
+                .mask_key_generator_ = &mask_source::generate,
+                .mask_key_context_ = &mask});
+            const std::string first(128 * 1024, 'a');
+            const std::string second(64 * 1024, 'b');
+            const std::string large(512 * 1024, 'c');
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, first, false) == websocket_frame_submit_status::accepted);
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, second, false) == websocket_frame_submit_status::accepted);
+            const std::string initial(sender.output_plan().bytes());
+            const auto consumed = initial.size() - 32 * 1024;
+            std::string wire = initial.substr(0, consumed);
+            EXPECT_TRUE(sender.consume_output(consumed) == websocket_output_consume_status::pending);
+            const std::string pending(sender.output_plan().bytes());
+
+            // Reject payload storage without rejecting STL debug bookkeeping.
+            memory.reject_min_bytes_ = 1024;
+            memory.reject_ = true;
+            bool growth_rejected = false;
+            try {
+                (void)sender.submit_frame(websocket_opcode::binary, large, false);
+            } catch (const std::bad_alloc&) {
+                growth_rejected = true;
+            }
+            memory.reject_ = false;
+            EXPECT_TRUE(growth_rejected);
+            EXPECT_EQ(sender.output_plan().bytes(), pending);
+            EXPECT_TRUE(sender.liveness_mode() == websocket_liveness_mode::open);
+
+            const auto alias = sender.output_plan().bytes();
+            const std::string alias_value(alias);
+            memory.reject_ = true;
+            bool alias_rejected = false;
+            try {
+                (void)sender.submit_borrowed_frame(websocket_opcode::binary, alias, false);
+            } catch (const std::bad_alloc&) {
+                alias_rejected = true;
+            }
+            memory.reject_ = false;
+            EXPECT_TRUE(alias_rejected);
+            EXPECT_EQ(alias, alias_value);
+            EXPECT_TRUE(sender.submit_borrowed_frame(websocket_opcode::binary, alias, false) == websocket_frame_submit_status::accepted);
+            EXPECT_TRUE(sender.output_plan().borrowed_bytes().empty());
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, large, false) == websocket_frame_submit_status::accepted);
+            wire.append(drain(sender));
+
+            websocket_connection receiver({.message_limit_ = protocol_byte_limit::unlimited(),
+                .role_ = role == websocket_connection_role::server ? websocket_connection_role::client : websocket_connection_role::server,
+                .mask_key_generator_ = &mask_source::generate,
+                .mask_key_context_ = &mask});
+            EXPECT_TRUE(receiver.feed(wire) == websocket_feed_status::accepted);
+            for (const auto* expected : {&first, &second, &alias_value, &large}) {
+                const auto event = receiver.next_event();
+                EXPECT_TRUE(event && event->message());
+                if (event && event->message()) {
+                    EXPECT_EQ(event->message()->payload(), *expected);
+                }
+            }
+            EXPECT_TRUE(!receiver.next_event());
+        }
+        EXPECT_EQ(memory.live_bytes_, std::size_t{0});
+    }
+}
+
 TEST(Ruvia, ws_server_borrowed_frame_follows_pending_output_until_drained) {
     http_io_buffer input;
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited()});

@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -15,7 +15,6 @@
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_utf8.h"
 
-#include "util/geometric_reserve.h"
 #include "websocket/http_websocket_frame_reader.h"
 #include "websocket/http_websocket_inbound_assembler.h"
 #include "websocket/http_websocket_permessage_deflate.h"
@@ -61,7 +60,7 @@ public:
           input_(input != nullptr ? input : &owned_input_.emplace(http_io_buffer::allocator_type(memory))),
           max_buffered_input_bytes_(options.max_buffered_input_bytes_),
           message_limit_(options.message_limit_),
-          out_buffer_(input_->get_allocator().resource()),
+          out_buffer_(input_->get_allocator()),
           assembler_(input_->get_allocator().resource()),
           inbound_inflated_(input_->get_allocator().resource()),
           outbound_deflated_(input_->get_allocator().resource()),
@@ -134,20 +133,11 @@ public:
     void append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1 = false,
         websocket_payload_storage storage = websocket_payload_storage::copy) {
         std::optional<std::pmr::string> owned_payload;
-        if (detail::http_text_aliases_string(payload_value, out_buffer_)) {
-            // output_plan() exposes a borrowed view. Copy only for this aliasing
-            // case so reserve() below cannot invalidate its own append source; the
-            // copy dies here, so it cannot be borrowed either.
+        if (detail::http_text_overlaps(payload_value, out_buffer_.view())) {
+            // A plan may be its own append source. Snapshot it before prepare()
+            // can move storage, and never borrow the temporary snapshot.
             payload_value = owned_payload.emplace(payload_value, out_buffer_.get_allocator().resource());
             storage = websocket_payload_storage::copy;
-        }
-        if (out_offset_ > 0 && out_offset_ >= out_buffer_.size() - out_offset_) {
-            const auto remaining = out_buffer_.size() - out_offset_;
-            if (remaining != 0) {
-                std::memmove(out_buffer_.data(), out_buffer_.data() + out_offset_, remaining);
-            }
-            out_buffer_.resize(remaining);
-            out_offset_ = 0;
         }
         detail::websocket_frame_header_type header;
         const bool masked = role_ == websocket_connection_role::client;
@@ -159,30 +149,30 @@ public:
         const auto header_size =
             detail::encode_websocket_frame_header(header, opcode, payload_value.size(), rsv1, masked);
         const auto mask_size = masked ? mask.size() : std::size_t{0};
-        auto total_size = out_buffer_.size();
+        std::size_t additional_size = 0;
         for (const auto size : {borrowed_output_.size(), header_size, mask_size, borrow ? 0 : payload_value.size()}) {
-            if (size > out_buffer_.max_size() - total_size) {
+            if (size > std::numeric_limits<std::size_t>::max() - additional_size) {
                 throw std::length_error("WebSocket output frame size overflow");
             }
-            total_size += size;
+            additional_size += size;
         }
-        // One reserve is the transaction boundary. Once it succeeds, no append
-        // can allocate, so an exception can never publish an orphan wire header.
-        detail::reserve_geometric(out_buffer_, total_size);
+        // Prepare every byte before publishing anything. The appends below
+        // then fit without allocation, so a failure cannot orphan a wire header.
+        (void)out_buffer_.prepare(additional_size);
         // An earlier borrowed payload precedes this frame on the wire.
         out_buffer_.append(borrowed_output_);
         borrowed_output_ = {};
-        out_buffer_.append(header.data(), header_size);
+        out_buffer_.append(std::string_view(header.data(), header_size));
         if (masked) {
-            out_buffer_.append(mask.data(), mask.size());
+            out_buffer_.append(std::string_view(mask.data(), mask.size()));
             const auto payload_start = out_buffer_.size();
-            out_buffer_.append(payload_value.data(), payload_value.size());
+            out_buffer_.append(payload_value);
             detail::decode_masked_websocket_payload(
                 out_buffer_.data() + payload_start, payload_value.size(), mask.data());
         } else if (borrow) {
             borrowed_output_ = payload_value;
         } else {
-            out_buffer_.append(payload_value.data(), payload_value.size());
+            out_buffer_.append(payload_value);
         }
     }
 
@@ -197,7 +187,7 @@ public:
         if (close_phase_ == close_phase_type::local_close_queued) {
             close_phase_ = close_phase_type::final_output_queued;
         } else if (close_phase_ == close_phase_type::awaiting_peer_close) {
-            close_phase_ = out_offset_ < out_buffer_.size() || !borrowed_output_.empty()
+            close_phase_ = !out_buffer_.empty() || !borrowed_output_.empty()
                                ? close_phase_type::final_output_queued
                                : close_phase_type::transport_end_ready;
         }
@@ -207,7 +197,7 @@ public:
     // end with a Close echo) is flushed. A server then ends the transport; a
     // client waits for the server to do so.
     [[nodiscard]] close_phase_type handshake_complete_phase() const noexcept {
-        const bool output_queued = out_offset_ < out_buffer_.size() || !borrowed_output_.empty();
+        const bool output_queued = !out_buffer_.empty() || !borrowed_output_.empty();
         if (role_ == websocket_connection_role::client) {
             return output_queued ? close_phase_type::handshake_output_queued : close_phase_type::awaiting_peer_eof;
         }
@@ -295,8 +285,7 @@ public:
     std::size_t pending_consume_{0};
     std::size_t needed_input_bytes_{0};
 
-    std::pmr::string out_buffer_;
-    std::size_t out_offset_{0};
+    http_io_buffer out_buffer_;
     // An unmasked, uncompressed payload that follows out_buffer_ on the wire
     // without being copied into it. Only the newest frame can borrow; queuing
     // more output first appends it to out_buffer_.
@@ -504,8 +493,7 @@ websocket_output_plan websocket_connection::output_plan() const& noexcept {
                 ? websocket_transport_disposition::end_transport
                 : websocket_transport_disposition::keep_open);
     }
-    const auto bytes_value = std::string_view(
-        impl_->out_buffer_.data() + impl_->out_offset_, impl_->out_buffer_.size() - impl_->out_offset_);
+    const auto bytes_value = impl_->out_buffer_.view();
     const auto disposition = impl_->close_phase_ == close_phase_type::final_output_queued
                                  ? websocket_transport_disposition::end_transport
                                  : websocket_transport_disposition::keep_open;
@@ -521,19 +509,17 @@ websocket_output_consume_status websocket_connection::consume_output(std::size_t
                                 impl_->close_phase_ == close_phase_type::closed)) {
         return websocket_output_consume_status::drained;
     }
-    const auto owned = impl_->out_buffer_.size() - impl_->out_offset_;
+    const auto owned = impl_->out_buffer_.size();
     if (bytes_value > owned && bytes_value - owned > impl_->borrowed_output_.size()) {
         return websocket_output_consume_status::out_of_range;
     }
     if (bytes_value < owned) {
-        impl_->out_offset_ += bytes_value;
+        impl_->out_buffer_.consume(bytes_value);
         return websocket_output_consume_status::pending;
     }
     // The transport has written every owned byte, so a large frame's storage
     // can go back to the resource instead of staying with the connection.
-    http_clear_pmr_string_retaining_small(
-        impl_->out_buffer_, websocket_retained_buffer_bytes);
-    impl_->out_offset_ = 0;
+    impl_->out_buffer_.clear_retaining_small(websocket_retained_buffer_bytes);
     if (bytes_value - owned < impl_->borrowed_output_.size()) {
         impl_->borrowed_output_.remove_prefix(bytes_value - owned);
         return websocket_output_consume_status::pending;
