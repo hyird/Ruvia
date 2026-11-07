@@ -171,6 +171,8 @@ class http3_connection::impl final {
             : body_(resource) {}
 
         std::pmr::deque<body_chunk> body_;
+        std::optional<http3_headers_event> building_headers_;
+        std::uint64_t building_header_bytes_{0};
         // Submitted DATA payload not yet acknowledged by the peer.
         std::size_t pending_bytes_{0};
         // The exact content total a declared length binds the stream to.
@@ -452,18 +454,19 @@ public:
 
     static int begin_section(impl& self, nghttp3_conn* connection, std::int64_t stream_id, bool trailers) noexcept {
         return callback_guard(self, [&] {
-            if (self.building_headers_) {
+            auto& stream = self.ensure_stream(stream_id);
+            if (stream.building_headers_) {
                 throw std::logic_error("overlapping nghttp3 header callbacks");
             }
-            auto& stream = self.ensure_stream(stream_id);
             const auto result = nghttp3_conn_set_stream_user_data(
                 connection, stream_id, &stream);
             if (result != 0) {
                 throw std::logic_error("failed to bind nghttp3 stream state");
             }
-            self.building_headers_.emplace(http3_headers_event{
+            stream.building_headers_.emplace(http3_headers_event{
                 stream_id, std::pmr::vector<http3_field>(self.resource_), false, trailers, stream.early_data_});
-            self.building_header_bytes_ = 0;
+            stream.building_header_bytes_ = 0;
+            ++self.active_header_blocks_;
         });
     }
 
@@ -481,8 +484,8 @@ public:
         std::int32_t, nghttp3_rcbuf* name, nghttp3_rcbuf* value,
         std::uint8_t, void* user_data, void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
-        if (!self.building_headers_ ||
-            self.building_headers_->stream_id_ != stream_id) {
+        auto* stream = self.find_stream(stream_id);
+        if (stream == nullptr || !stream->building_headers_) {
             self.callback_error_ = std::make_exception_ptr(
                 std::logic_error("nghttp3 header callback without section"));
             return NGHTTP3_ERR_CALLBACK_FAILURE;
@@ -500,21 +503,20 @@ public:
             return NGHTTP3_ERR_CALLBACK_FAILURE;
         }
         const auto field_bytes = field_overhead + name_bytes + value_bytes;
-        if (self.building_header_bytes_ >
+        if (stream->building_header_bytes_ >
             self.max_field_section_size_ - field_bytes) {
             self.connection_error_ = NGHTTP3_H3_EXCESSIVE_LOAD;
             return NGHTTP3_ERR_CALLBACK_FAILURE;
         }
         return callback_guard(self, [&] {
-            self.building_headers_->fields_.emplace_back(
+            stream->building_headers_->fields_.emplace_back(
                 name_view, value_view, self.resource_);
-            self.building_header_bytes_ += field_bytes;
-            if (!self.building_headers_->trailers_) {
-                auto& stream = self.ensure_stream(stream_id);
+            stream->building_header_bytes_ += field_bytes;
+            if (!stream->building_headers_->trailers_) {
                 if (name_view == ":method") {
-                    stream.connect_ = value_view == "CONNECT";
+                    stream->connect_ = value_view == "CONNECT";
                 } else if (name_view == ":protocol") {
-                    stream.websocket_ = value_view == "websocket";
+                    stream->websocket_ = value_view == "websocket";
                 }
             }
         });
@@ -524,15 +526,16 @@ public:
         int fin, void* user_data, void*) noexcept {
         auto& self = *static_cast<impl*>(user_data);
         return callback_guard(self, [&] {
-            if (!self.building_headers_ ||
-                self.building_headers_->stream_id_ != stream_id) {
+            auto* stream = self.find_stream(stream_id);
+            if (stream == nullptr || !stream->building_headers_) {
                 throw std::logic_error("nghttp3 ended unknown field section");
             }
-            self.building_headers_->stream_ended_ = fin != 0;
-            self.ensure_stream(stream_id).received_head_ = true;
-            self.events_.push_back({std::move(*self.building_headers_)});
-            self.building_headers_.reset();
-            self.building_header_bytes_ = 0;
+            stream->building_headers_->stream_ended_ = fin != 0;
+            stream->received_head_ = true;
+            self.events_.push_back({std::move(*stream->building_headers_)});
+            stream->building_headers_.reset();
+            stream->building_header_bytes_ = 0;
+            --self.active_header_blocks_;
         });
     }
 
@@ -856,10 +859,9 @@ public:
     std::pmr::deque<control_frame_chunk> control_extension_frames_;
     std::pmr::deque<control_output_segment> control_segments_;
     std::size_t control_extension_pending_bytes_{0};
-    std::optional<http3_headers_event> building_headers_;
-    std::uint64_t building_header_bytes_{0};
     std::optional<http_origin_advertisement> building_origins_;
     std::uint64_t building_origin_bytes_{0};
+    std::size_t active_header_blocks_{0};
     std::optional<std::uint64_t> connection_error_;
     std::exception_ptr callback_error_;
     bool control_streams_bound_{false};
@@ -1506,7 +1508,7 @@ std::optional<http3_peer_settings> http3_connection::peer_settings() const noexc
 }
 
 bool http3_connection::header_block_in_progress() const noexcept {
-    return impl_->building_headers_.has_value();
+    return impl_->active_header_blocks_ != 0;
 }
 
 http3_status http3_connection::submit_origin_advertisement(
@@ -1627,16 +1629,18 @@ http3_status http3_connection::close_stream(std::int64_t stream_id,
         return http3_status::protocol_error;
     }
     if (result == 0 || result == NGHTTP3_ERR_STREAM_NOT_FOUND) {
-        if (impl_->building_headers_ && impl_->building_headers_->stream_id_ == stream_id) {
-            impl_->building_headers_.reset();
-            impl_->building_header_bytes_ = 0;
+        if (auto* stream = impl_->find_stream(stream_id)) {
+            if (stream->building_headers_) {
+                stream->building_headers_.reset();
+                stream->building_header_bytes_ = 0;
+                --impl_->active_header_blocks_;
+            }
+            impl_->streams_.erase(stream_id);
         }
-        impl_->streams_.erase(stream_id);
         return http3_status::accepted;
     }
     return impl_->status_from(result);
 }
-
 http3_status http3_connection::begin_drain() noexcept {
     if (impl_->connection_error_) {
         return http3_status::closed;
@@ -1697,11 +1701,12 @@ http3_status http3_connection::shutdown_stream_read(
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
-    if (impl_->building_headers_ && impl_->building_headers_->stream_id_ == stream_id) {
-        impl_->building_headers_.reset();
-        impl_->building_header_bytes_ = 0;
-    }
     if (auto* stream = impl_->find_stream(stream_id)) {
+        if (stream->building_headers_) {
+            stream->building_headers_.reset();
+            stream->building_header_bytes_ = 0;
+            --impl_->active_header_blocks_;
+        }
         stream->read_aborted_ = true;
     }
     impl_->suppress_transport_callbacks_ = true;

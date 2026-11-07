@@ -219,12 +219,16 @@ public:
     RUVIA_GET("/hello", hello);
     RUVIA_POST("/echo", echo);
     RUVIA_GET("/stream", stream);
+    RUVIA_POST("/upload-trailer", upload_trailer, ruvia::stream_body);
+    RUVIA_GET("/events", events);
+    RUVIA_GET("/push-and-origin", push_and_origin);
     RUVIA_GET("/file", file);
     RUVIA_GET("/worker", worker);
     RUVIA_GET("/slow", slow);
     RUVIA_CONNECT("echo.test:443", tcp_tunnel);
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/echo.test/53/", udp_tunnel);
-    RUVIA_GET_WS("/websocket", websocket);
+    RUVIA_GET_WS("/websocket", websocket,
+        (ruvia::websocket_route_config{.deflate_ = {.enabled_ = true}}));
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> hello(ruvia::context& context) {
@@ -244,6 +248,50 @@ public:
             (void)co_await writer.sleep(2ms);
         }
         co_await writer.end();
+    }
+    ruvia::task<void> upload_trailer(ruvia::context& context) {
+        const std::array<ruvia::http_header_view, 1> hint_fields{{{"link", "</app.css>; rel=preload"}}};
+        co_await context.inform(
+            ruvia::http_interim_response_head(ruvia::http_status::early_hints, hint_fields));
+        std::size_t bytes = 0;
+        auto& reader = context.req().body_reader();
+        while (auto chunk = co_await reader.read()) {
+            bytes += chunk->size();
+        }
+        const auto checksum = context.req().trailer("x-upload-checksum").value_or("missing");
+        context.draft().header("Trailer", "x-response-trailer");
+        auto& out = context.stream_text();
+        if (co_await out.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await out.write("uploaded:" + std::to_string(bytes) + ":" + std::string(checksum));
+        const ruvia::http_header_view trailers[] = {{"x-response-trailer", "verified"}};
+        co_await out.end(trailers);
+    }
+    ruvia::task<void> events(ruvia::context& context) {
+        auto writer = context.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        for (int idx = 0; idx < 3; ++idx) {
+            const std::string id = std::to_string(idx);
+            const std::string data = "item-" + id;
+            co_await writer.write({.data_ = data, .event_ = "tick", .id_ = id});
+        }
+        co_await writer.end();
+    }
+    ruvia::task<ruvia::http_response> push_and_origin(ruvia::context& context) {
+        const std::string origin = "https://" + std::string(context.req().authority());
+        const std::array<std::string_view, 1> origins{origin};
+        context.advertise_origins(origins);
+        if (context.req().protocol_version() == ruvia::http_protocol_version::http2) {
+            const std::array<ruvia::http_header_view, 1> push_headers{{{"x-pushed", "1"}}};
+            (void)context.push({.scheme_ = "https",
+                .authority_ = context.req().authority(),
+                .path_ = "/hello",
+                .headers_ = push_headers});
+        }
+        co_return context.text("origin-and-push");
     }
     ruvia::task<ruvia::http_response> file(ruvia::context& context) {
         co_return co_await context.file({.path_ = file_path()});
@@ -489,14 +537,75 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_handle client,
             auto body = co_await resp.text();
             RUVIA_CHECK_EQ(body.text().size(), expected_file.size());
             RUVIA_CHECK(body.text() == expected_file);
+
+            // Mid-stream response abandonment: read one chunk and drop the response.
+            {
+                auto partial = co_await client.get("/stream").send();
+                RUVIA_CHECK(partial.ok());
+                auto first_chunk = co_await partial.stream().text();
+                RUVIA_CHECK(first_chunk.has_value());
+            }
+
+            auto sse_resp = co_await client.get("/events").send();
+            RUVIA_CHECK(sse_resp.ok());
+            std::string sse_collected;
+            while (auto chunk = co_await sse_resp.stream().text()) {
+                sse_collected.append(*chunk);
+            }
+            RUVIA_CHECK(sse_collected.find("event: tick\nid: 0\ndata: item-0\n\n") != std::string::npos);
+            RUVIA_CHECK(sse_collected.find("event: tick\nid: 2\ndata: item-2\n\n") != std::string::npos);
+
+            if (expected_version != ruvia::http_protocol_version::http11) {
+                auto po_resp = co_await client.get("/push-and-origin").send();
+                RUVIA_CHECK(po_resp.ok());
+                auto po_body = co_await po_resp.text();
+                RUVIA_CHECK_EQ(po_body.text(), "origin-and-push");
+                while (auto pushed = client.next_push()) {
+                    auto p_resp = co_await pushed->response();
+                    RUVIA_CHECK(p_resp.ok());
+                    auto p_text = co_await p_resp.text();
+                    RUVIA_CHECK_EQ(p_text.text(), "hello over http/3");
+                }
+            }
         }
         if (round == 1) {
-            auto ws = co_await client.websocket("/websocket").connect();
+            // Mid-upload abandonment: write one chunk and drop the exchange.
+            {
+                auto abandoned = co_await client.post("/upload-trailer").upload({});
+                co_await abandoned.body().write("abandoned-chunk");
+            }
+            {
+                auto exchange = co_await client.post("/upload-trailer")
+                                    .header("trailer", "x-upload-checksum")
+                                    .upload({.expectation_ =
+                                                 ruvia::http_client_request_expectation::continue_value});
+                co_await exchange.body().write("part-1:");
+                co_await exchange.body().write("part-2");
+                const std::array<ruvia::http_header_view, 1> req_trailers{
+                    {{"x-upload-checksum", "crc-ok"}}};
+                co_await exchange.body().end(req_trailers);
+                auto resp = co_await exchange.response();
+                RUVIA_CHECK(resp.ok());
+                RUVIA_CHECK(resp.informational_responses().size() >= std::size_t{1});
+                std::string uploaded_text;
+                while (auto chunk = co_await resp.stream().text()) {
+                    uploaded_text.append(*chunk);
+                }
+                RUVIA_CHECK_EQ(uploaded_text, "uploaded:13:crc-ok");
+                RUVIA_CHECK_EQ(
+                    resp.trailer("x-upload-checksum").has_value(), false);
+                RUVIA_CHECK_EQ(
+                    resp.trailer("x-response-trailer"), std::optional<std::string_view>{"verified"});
+            }
+            auto ws = co_await client.websocket("/websocket")
+                          .deflate({.compression_ = {.enabled_ = true}})
+                          .connect();
             RUVIA_CHECK(ws.connected());
             for (int msg_idx = 0; msg_idx < 3; ++msg_idx) {
-                const std::string msg = "ws-" + std::to_string(loop_idx) + "-" +
+                const std::string msg = std::string(512, static_cast<char>('a' + msg_idx)) +
+                                        "-ws-" + std::to_string(loop_idx) + "-" +
                                         std::to_string(lane) + "-" + std::to_string(msg_idx);
-                co_await ws.send(msg);
+                co_await ws.send(msg, {.compress_ = (msg_idx % 2 == 0)});
                 auto reply = co_await ws.receive();
                 RUVIA_CHECK(reply.has_value());
                 if (reply) {
@@ -598,6 +707,8 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
         cfg.write_timeout_ = 5s;
         cfg.request_timeout_ = 10s;
         cfg.tls_.ca_file_ = ca_file;
+        cfg.push_.enabled_ = protocol == ruvia::http_client_protocol::http2_only;
+        cfg.advertisements_.receive_origins_ = protocol != ruvia::http_client_protocol::http1_only;
         return cfg;
     };
 

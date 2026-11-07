@@ -319,8 +319,11 @@ RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_condi
             context_value.draft().header("X-Context", "preserved");
             std::optional<ruvia::http_response> response;
             try {
-                response.emplace(indexed ? co_await context_value.static_file(root, {.relative_path_ = "payload.txt"})
-                                         : co_await context_value.file({.path_ = path}));
+                if (indexed) {
+                    response.emplace(co_await context_value.static_file(root, {.relative_path_ = "payload.txt"}));
+                } else {
+                    response.emplace(co_await context_value.file({.path_ = path}));
+                }
             } catch (const ruvia::http_error&) {
             }
             RUVIA_CHECK(response.has_value());

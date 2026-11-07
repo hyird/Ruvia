@@ -368,3 +368,59 @@ RUVIA_TEST(http3_request_enforces_declared_content_length) {
                 ruvia::http3_status::accepted);
     RUVIA_CHECK(peers.client_.finish_stream(0) == ruvia::http3_status::accepted);
 }
+
+RUVIA_TEST(http3_concurrent_streams_interleave_partial_header_blocks) {
+    ruvia::testing::http3_peers peers;
+    RUVIA_CHECK(peers.bind());
+    ruvia::testing::http3_event_log client_log;
+    ruvia::testing::http3_event_log server_log;
+    RUVIA_CHECK(peers.to_client(client_log));
+    RUVIA_CHECK(peers.to_server(server_log));
+
+    RUVIA_CHECK(peers.client_.submit_request(0, get_request_fields, true) == ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.client_.submit_request(4, get_request_fields, true) == ruvia::http3_status::accepted);
+
+    std::vector<std::byte> stream0;
+    std::vector<std::byte> stream4;
+    ruvia::http3_stream_output out;
+    while (peers.client_.peek_output(64 * 1024, out).status_ == ruvia::http3_status::accepted) {
+        const auto size = out.size();
+        if (out.stream_id_ == 0 || out.stream_id_ == 4) {
+            auto& dst = out.stream_id_ == 0 ? stream0 : stream4;
+            for (std::size_t idx = 0; idx < out.buffer_count_; ++idx) {
+                dst.insert(dst.end(), out.buffers_[idx].begin(), out.buffers_[idx].end());
+            }
+        } else {
+            for (std::size_t idx = 0; idx < out.buffer_count_; ++idx) {
+                RUVIA_CHECK(peers.server_.read_stream(out.stream_id_, out.buffers_[idx], out.fin_, 1).status_ ==
+                            ruvia::http3_status::accepted);
+            }
+        }
+        RUVIA_CHECK(peers.client_.commit_output(out.stream_id_, size) == ruvia::http3_status::accepted);
+        if (size != 0) {
+            RUVIA_CHECK(peers.client_.acknowledge_output(out.stream_id_, size) == ruvia::http3_status::accepted);
+        }
+    }
+    RUVIA_CHECK(stream0.size() > std::size_t{4});
+    RUVIA_CHECK(stream4.size() > std::size_t{4});
+
+    // Feed the first half of stream 0's HEADERS frame, then all of stream 4's
+    // HEADERS frame, then the rest of stream 0's HEADERS frame.
+    const auto split = stream0.size() / 2;
+    RUVIA_CHECK(peers.server_.read_stream(0, std::span(stream0.data(), split), false, 1).status_ ==
+                ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.server_.header_block_in_progress());
+    RUVIA_CHECK(peers.server_.read_stream(4, stream4, true, 2).status_ == ruvia::http3_status::accepted);
+    while (auto ev = peers.server_.next_event()) {
+        server_log(*ev);
+    }
+    RUVIA_CHECK(peers.server_.header_block_in_progress());
+    RUVIA_CHECK(peers.server_.read_stream(
+                                 0, std::span(stream0.data() + split, stream0.size() - split), true, 3)
+                    .status_ == ruvia::http3_status::accepted);
+    while (auto ev = peers.server_.next_event()) {
+        server_log(*ev);
+    }
+    RUVIA_CHECK(!peers.server_.header_block_in_progress());
+    RUVIA_CHECK_EQ(server_log.headers_.size(), std::size_t{2});
+}

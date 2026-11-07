@@ -1,7 +1,24 @@
 #include "ruvia/core/memory/memory_pool.h"
 
-#include <mimalloc.h>
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define RUVIA_SANITIZER_ALLOCATOR 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || __has_feature(memory_sanitizer)
+#define RUVIA_SANITIZER_ALLOCATOR 1
+#else
+#define RUVIA_SANITIZER_ALLOCATOR 0
+#endif
+#else
+#define RUVIA_SANITIZER_ALLOCATOR 0
+#endif
 
+#if RUVIA_SANITIZER_ALLOCATOR
+#include <cstdlib>
+#else
+#include <mimalloc.h>
+#endif
+
+#include <algorithm>
 #include <new>
 #include <stdexcept>
 
@@ -17,10 +34,36 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] void* allocate_mimalloc(std::size_t bytes_value, std::size_t alignment) {
-    if (void* block = mi_malloc_aligned(bytes_value == 0 ? 1 : bytes_value, alignment)) {
+    const std::size_t size = bytes_value == 0 ? 1 : bytes_value;
+#if RUVIA_SANITIZER_ALLOCATOR
+#if defined(_WIN32)
+    if (void* block = _aligned_malloc(size, (std::max)(alignment, alignof(void*)))) {
         return block;
     }
+#else
+    void* block = nullptr;
+    if (::posix_memalign(&block, (std::max)(alignment, alignof(void*)), size) == 0 && block != nullptr) {
+        return block;
+    }
+#endif
+#else
+    if (void* block = mi_malloc_aligned(size, alignment)) {
+        return block;
+    }
+#endif
     throw std::bad_alloc();
+}
+
+void free_mimalloc(void* block) noexcept {
+#if RUVIA_SANITIZER_ALLOCATOR
+#if defined(_WIN32)
+    _aligned_free(block);
+#else
+    std::free(block);
+#endif
+#else
+    mi_free(block);
+#endif
 }
 
 class mimalloc_memory_resource final : public std::pmr::memory_resource {
@@ -29,8 +72,8 @@ private:
         return allocate_mimalloc(bytes_value, alignment);
     }
 
-    void do_deallocate(void* block, std::size_t, std::size_t) override {
-        mi_free(block);
+    void do_deallocate(void* block, std::size_t, std::size_t) noexcept override {
+        free_mimalloc(block);
     }
 
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -147,7 +190,7 @@ struct task_frame_cache final {
     }
 
     void release_all() noexcept {
-        bins_.drain([](void* block, std::size_t) noexcept { mi_free(block); });
+        bins_.drain([](void* block, std::size_t) noexcept { free_mimalloc(block); });
     }
 
     task_frame_bins bins_;
@@ -159,21 +202,27 @@ thread_local task_frame_cache frame_cache;
 
 void* task_frame_allocate(std::size_t bytes_value) {
     const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
+#if !RUVIA_SANITIZER_ALLOCATOR
     if (!task_frame_cache_destroyed && class_bytes <= task_frame_bins::max_block_bytes) {
         if (void* cached = frame_cache.bins_.take(class_bytes)) {
             return cached;
         }
     }
+#endif
     return allocate_mimalloc(class_bytes, alignof(std::max_align_t));
 }
 
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
+#if !RUVIA_SANITIZER_ALLOCATOR
     const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
     if (!task_frame_cache_destroyed && class_bytes <= task_frame_bins::max_block_bytes &&
         frame_cache.bins_.store(pointer, class_bytes, task_frame_cache_budget_bytes)) {
         return;
     }
-    mi_free(pointer);
+#else
+    (void)bytes_value;
+#endif
+    free_mimalloc(pointer);
 }
 
 void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment) {
@@ -181,7 +230,7 @@ void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment
 }
 
 void task_frame_deallocate_aligned(void* pointer) noexcept {
-    mi_free(pointer);
+    free_mimalloc(pointer);
 }
 
 void task_frame_cache_release() noexcept {
