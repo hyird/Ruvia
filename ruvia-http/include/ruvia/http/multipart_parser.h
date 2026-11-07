@@ -390,7 +390,7 @@ public:
     multipart_parser& operator=(multipart_parser&&) = delete;
 
     // Copies input into parser-owned PMR storage, including chunks borrowed from
-    // the latest part body. Overlapping input is saved before storage compaction.
+    // the latest part body. Allocation failure leaves that body valid for retry.
     // finish_input() marks the enclosing HTTP body's end so a close delimiter
     // ending exactly at EOF can be distinguished from a line split across chunks.
     // A protocol failure is terminal: later poll() calls repeat the exact error

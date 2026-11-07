@@ -2,10 +2,11 @@
 
 #include <cstddef>
 #include <memory_resource>
-#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
+
+#include "ruvia/http/http_io_buffer.h"
 
 namespace ruvia::detail {
 
@@ -14,15 +15,15 @@ struct multipart_borrowed_input final {
 };
 
 struct multipart_streaming_input_open final {
-    explicit multipart_streaming_input_open(std::pmr::memory_resource* resource)
-        : bytes_(resource) {}
-    std::pmr::string bytes_;
+    explicit multipart_streaming_input_open(std::pmr::memory_resource* resource) noexcept
+        : bytes_(http_io_buffer::allocator_type(resource)) {}
+    http_io_buffer bytes_;
 };
 
 struct multipart_streaming_input_eof final {
-    explicit multipart_streaming_input_eof(std::pmr::string&& input)
+    explicit multipart_streaming_input_eof(http_io_buffer&& input) noexcept
         : bytes_(std::move(input)) {}
-    std::pmr::string bytes_;
+    http_io_buffer bytes_;
 };
 
 // Owns the multipart byte source and its EOF lifecycle. Parser grammar progress
@@ -45,18 +46,16 @@ public:
     void feed(std::string_view chunk);
     void finish_input() noexcept;
     void consume(std::size_t bytes) noexcept;
-    void compact_consumed_prefix();
 
 private:
-    static constexpr std::size_t compact_consumed_prefix_bytes = std::size_t{64} * 1024;
     using value_type = std::variant<multipart_borrowed_input, multipart_streaming_input_open,
         multipart_streaming_input_eof>;
 
-    [[nodiscard]] std::pmr::string* owned_bytes() noexcept;
-    [[nodiscard]] const std::pmr::string* owned_bytes() const noexcept;
+    [[nodiscard]] http_io_buffer* owned_buffer() noexcept;
+    [[nodiscard]] const http_io_buffer* owned_buffer() const noexcept;
 
     value_type value_;
-    std::size_t offset_{0};
+    std::size_t borrowed_offset_{0};
 };
 
 }  // namespace ruvia::detail

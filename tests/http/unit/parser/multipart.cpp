@@ -126,12 +126,11 @@ TEST(Ruvia, multipart_parser_handles_deterministic_arbitrary_bytes) {
     }
 }
 
-TEST(Ruvia, multipart_parser_feed_preserves_borrowed_body_before_input_compaction) {
-    for (const bool compact_prefix : {false, true}) {
-        for (const int allocation_failure : {-1, 0, 1}) {
-            if (!compact_prefix && allocation_failure == 1) {
-                continue;
-            }
+TEST(Ruvia, multipart_parser_feed_preserves_borrowed_body_after_allocation_failure) {
+    for (const bool with_preamble : {false, true}) {
+        bool reached_success = false;
+        bool saw_allocation_failure = false;
+        for (std::size_t failure_index = 0; failure_index < 64; ++failure_index) {
             failing_memory_resource resource;
             {
                 ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .resource_ = &resource});
@@ -139,7 +138,7 @@ TEST(Ruvia, multipart_parser_feed_preserves_borrowed_body_before_input_compactio
                 for (std::size_t index = 0; index < payload.size(); ++index) {
                     payload[index] = static_cast<char>('a' + (index * 29 + index / 17) % 26);
                 }
-                std::string wire = compact_prefix ? std::string(64 * 1024 - 2, 'p') + "\r\n" : std::string{};
+                std::string wire = with_preamble ? std::string(64 * 1024 - 2, 'p') + "\r\n" : std::string{};
                 wire += "--abc\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n";
                 wire += payload;
                 parser.feed(wire);
@@ -152,21 +151,20 @@ TEST(Ruvia, multipart_parser_feed_preserves_borrowed_body_before_input_compactio
                 EXPECT_TRUE(part->phase() == ruvia::multipart_chunk_phase::first);
                 const std::string copied(part->body());
                 std::string received = copied;
-                if (allocation_failure >= 0) {
-                    resource.fail_after(static_cast<std::size_t>(allocation_failure));
-                    bool failed = false;
-                    try {
-                        parser.feed(part->body());
-                    } catch (const std::bad_alloc&) {
-                        failed = true;
-                    }
-                    EXPECT_TRUE(failed);
-                    resource.allow_allocations();
-                    // The rejected append must leave the original body available
-                    // for this exact retry, before any input storage is compacted.
-                    EXPECT_TRUE(part->body() == copied);
+                resource.fail_after(failure_index);
+                bool failed = false;
+                try {
+                    parser.feed(part->body());
+                    reached_success = true;
+                } catch (const std::bad_alloc&) {
+                    failed = true;
+                    saw_allocation_failure = true;
                 }
-                parser.feed(part->body());
+                resource.allow_allocations();
+                if (failed) {
+                    EXPECT_EQ(part->body(), std::string_view(copied));
+                    parser.feed(part->body());
+                }
                 parser.feed("\r\n--abc--\r\n");
                 parser.finish_input();
                 bool completed = false;
@@ -183,7 +181,12 @@ TEST(Ruvia, multipart_parser_feed_preserves_borrowed_body_before_input_compactio
                 EXPECT_TRUE(received == payload + copied);
             }
             EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+            if (reached_success) {
+                break;
+            }
         }
+        EXPECT_TRUE(reached_success);
+        EXPECT_TRUE(saw_allocation_failure);
     }
 }
 

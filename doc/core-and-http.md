@@ -156,6 +156,9 @@ pool.join();
 | `"ruvia/http/multipart_parser.h"` | `parse_multipart_boundary`、`parse_multipart_body`、`class multipart_parser final` | 一次性与流式增量（`feed` / `poll`）的 `multipart/form-data` 解析器 |
 | `"ruvia/http/sse.h"` | `struct sse_message final`、`format_sse_message` | Server-Sent Events 消息格式化与校验 |
 
+- **Multipart 流式缓冲**：`multipart_parser` 复用 `http_io_buffer`，增长时只复制未消费字节。
+- **Multipart 借用重试**：`feed()` 可接收最新分片的正文视图；分配失败后，该视图仍可用于原样重试。
+
 `http_response::body_segment_count()` 枚举表示的存储片段，不等同于待发送的字节数。长度为零的文件范围仍返回一个 file segment，保留路径、句柄与 identity，调用方必须完成适用的文件验证，不能因 `send_body() == false` 丢弃它；普通空字节正文没有 segment。`send_body()` 仍只表示方法/状态允许且正文长度非零时需要传送 payload。
 
 `encode_http_content` 的两个 overload（单个 coding，或按声明顺序依次编码的 coding 列表）与 `http_content_encode_context::encode` 统一返回 `std::optional<std::pmr::string>`：有值表示完整编码成功，`std::nullopt` 只表示结果超过 `max_encoded_bytes_`。预算为零只允许零字节表示；多 coding 按声明顺序编码，每个中间表示都受同一预算约束。输出使用 `options.resource_`；可复用上下文的状态使用构造时的资源，该资源必须覆盖上下文寿命，且上下文不可并发使用。成功、超预算或异常后上下文均可继续编码独立表示，不携带上一次的压缩历史；异常后内部状态直接丢弃，下次编码重新创建。`decode_http_content` 接受单个 coding 或 `Content-Encoding` 给出的 coding 列表，列表按逆序解码，每个中间表示都受同一解码上限约束；超过上限的 identity 表示在分配前即被拒绝；`http_content_decode_error` 只描述表示本身的数据错误（`unsupported_coding`、`invalid_content`、`decoded_size_exceeded`）。解码器工作内存同样受解码上限约束：`br` 声明的环形缓冲超出该上限可容纳的大小时（约为上限的三倍加 3 MiB 固定表空间）直接返回 `decoded_size_exceeded`，不按对端声明的窗口分配；`zstd` 解码器按 RFC 9659 接受最大 8 MiB 窗口，这是协议要求的下限。编码、解码与增量编码器在编解码器自身无法运行（状态无法创建或重置、库内部错误）时统一抛出 `http_content_codec_error`，分配异常保留原始类型。接收方用 `parse_http_content_coding`（单个字段值）、`parse_http_content_coding_headers`（字段行序列或 `http_response_headers`）或 `request_content_coding`（已解析的请求）读取 `Content-Encoding`。
