@@ -51,4 +51,18 @@ application& application::redis(std::nullptr_t) {
         [](detail::app_state& state_value) { state_value.redis_.clear(); });
 }
 #endif
+
+application& application::client(http_client_config config) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
+            detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_.view(), config,
+                "HTTP client alias must not be empty");
+        });
+}
+
+application& application::client(std::nullptr_t) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot configure HTTP client while app is running",
+        [](detail::app_state& state_value) { state_value.http_clients_.clear(); });
+}
 }  // namespace ruvia

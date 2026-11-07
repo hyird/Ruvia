@@ -22,6 +22,7 @@
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/detail/callback.h"
 #include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/static_files.h"
 #include "ruvia/web/tls_config.h"
 
@@ -140,6 +141,8 @@ struct server_config final {
     // connection_scan_interval_ with no request exchange in progress and no
     // connection activity.
     memory_pool_config memory_pool_{};
+    // Shared by all registered outbound HTTP client aliases on each worker.
+    http_client_result_budget_config http_client_result_budget_{};
 };
 
 struct trusted_proxy_config final {
@@ -203,6 +206,8 @@ struct listen_config final {
     std::optional<port_number> http3_{};
     // Alt-Svc freshness lifetime (RFC 7838 §3 "ma"); must be positive.
     std::chrono::seconds http3_alt_svc_max_age_{std::chrono::hours(24)};
+    // Enable replayable QUIC 0-RTT; unsafe methods are rejected with 425.
+    bool http3_early_data_{false};
     tls_config tls_{};
     bool auto_https_redirect_{false};
 };

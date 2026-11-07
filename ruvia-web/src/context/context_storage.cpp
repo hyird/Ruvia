@@ -42,6 +42,10 @@ bool context::is_subrequest() const noexcept {
     return services().dispatch_depth() != 0;
 }
 
+bool context::early_data() const noexcept {
+    return services().early_data();
+}
+
 detail::context_services& context::services() noexcept {
     return request_storage().services_;
 }

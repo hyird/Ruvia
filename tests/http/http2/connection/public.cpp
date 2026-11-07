@@ -2641,6 +2641,21 @@ RUVIA_TEST(http2_public_receive_allocation_failure_fails_the_connection) {
     ruvia::hpack_encoder::encode_header(block, "x-trace", trailer_value);
     std::pmr::string trailers(&resource);
     append_frame(trailers, ruvia::http2_frame_type::headers, 0x5, 1, block);
+    if (!ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+        RUVIA_CHECK(client.feed(trailers) == ruvia::http2_feed_result::accepted);
+        const auto end = client.next_event();
+        RUVIA_CHECK(end && end->message_end() != nullptr);
+        if (end && end->message_end()) {
+            const auto fields = end->message_end()->trailers();
+            RUVIA_CHECK_EQ(fields.size(), std::size_t{1});
+            if (fields.size() == 1) {
+                RUVIA_CHECK_EQ(fields.front().name(), "x-trace");
+                RUVIA_CHECK_EQ(fields.front().value(), trailer_value);
+            }
+        }
+        RUVIA_CHECK(!client.connection_error().has_value());
+        return;
+    }
     resource.reject();
     bool threw = false;
     try {
@@ -4867,8 +4882,8 @@ RUVIA_TEST(http2_public_websocket_handshake_validates_required_subprotocols_and_
             .supported_subprotocols_ = supported,
             .deflate_ = {.enabled_ = true, .context_takeover_ = true},
         });
-    RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted1));
-    if (const auto* negotiation = std::get_if<ruvia::http2_websocket_negotiation>(&submitted1)) {
+    RUVIA_CHECK(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(submitted1));
+    if (const auto* negotiation = std::get_if<ruvia::websocket_extended_connect_negotiation>(&submitted1)) {
         RUVIA_CHECK_EQ(negotiation->subprotocol(), std::string_view("chat.v1"));
         RUVIA_CHECK(negotiation->compression().enabled_);
         RUVIA_CHECK(!negotiation->compression().server_no_context_takeover_);
@@ -4895,8 +4910,8 @@ RUVIA_TEST(http2_public_websocket_handshake_validates_required_subprotocols_and_
         {
             .deflate_ = {.enabled_ = false},
         });
-    RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted3));
-    if (const auto* negotiation = std::get_if<ruvia::http2_websocket_negotiation>(&submitted3)) {
+    RUVIA_CHECK(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(submitted3));
+    if (const auto* negotiation = std::get_if<ruvia::websocket_extended_connect_negotiation>(&submitted3)) {
         RUVIA_CHECK(negotiation->subprotocol().empty());
         RUVIA_CHECK(!negotiation->compression().enabled_);
     }
@@ -4947,8 +4962,8 @@ RUVIA_TEST(http2_public_websocket_handshake_ignores_rfc6455_key_exchange_fields)
         RUVIA_CHECK(validation.accepted() != nullptr);
         const auto submitted =
             server.submit_websocket_handshake(id, request, validation, {.supported_subprotocols_ = supported});
-        RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted));
-        if (const auto* negotiation = std::get_if<ruvia::http2_websocket_negotiation>(&submitted)) {
+        RUVIA_CHECK(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(submitted));
+        if (const auto* negotiation = std::get_if<ruvia::websocket_extended_connect_negotiation>(&submitted)) {
             RUVIA_CHECK_EQ(negotiation->subprotocol(), std::string_view(i == 2 ? "chat" : ""));
         }
         RUVIA_CHECK(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);

@@ -2,6 +2,21 @@ find_path(nghttp2_INCLUDE_DIR
     NAMES nghttp2/nghttp2.h
 )
 
+# Multi-config toolchains may put a debug prefix first in CMAKE_PREFIX_PATH.
+# Prefer the matching installation's explicit library directories on Windows.
+if(WIN32 AND nghttp2_INCLUDE_DIR)
+    find_library(nghttp2_LIBRARY_RELEASE
+        NAMES nghttp2
+        PATHS "${nghttp2_INCLUDE_DIR}/../lib"
+        NO_DEFAULT_PATH
+    )
+    find_library(nghttp2_LIBRARY_DEBUG
+        NAMES nghttp2d nghttp2
+        PATHS "${nghttp2_INCLUDE_DIR}/../debug/lib"
+        NO_DEFAULT_PATH
+    )
+endif()
+
 find_library(nghttp2_LIBRARY_RELEASE
     NAMES nghttp2
     PATH_SUFFIXES lib

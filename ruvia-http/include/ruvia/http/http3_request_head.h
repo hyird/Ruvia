@@ -49,6 +49,9 @@ public:
     [[nodiscard]] bool stream_ended() const noexcept {
         return stream_ended_;
     }
+    [[nodiscard]] bool early_data() const noexcept {
+        return early_data_;
+    }
     [[nodiscard]] http_request_content_indication content() const noexcept {
         return stream_ended_ || declared_content_length_ == std::uint64_t{0}
                    ? http_request_content_indication::no_content
@@ -91,6 +94,7 @@ private:
     std::optional<std::uint64_t> declared_content_length_;
     http_request_expectations expectations_{};
     bool stream_ended_{false};
+    bool early_data_{false};
 };
 
 // Appends a received request trailer section. Fields not permitted in a
@@ -98,5 +102,10 @@ private:
 // malformed (RFC 9114 §4.3) and leave `trailers` unchanged.
 [[nodiscard]] std::optional<http_request_trailer_error> append_http3_request_trailers(
     http_request_trailers& trailers, std::span<const http3_field> fields);
+
+// RFC 9220 uses the extended CONNECT request in place of the HTTP/1 key exchange.
+[[nodiscard]] websocket_handshake_validation_result validate_http3_websocket_handshake(
+    const http3_request_head& head, const http_request& request,
+    websocket_handshake_validation_options options = {}) noexcept;
 
 }  // namespace ruvia

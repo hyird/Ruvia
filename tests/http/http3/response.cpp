@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_known_method.h"
@@ -352,4 +353,69 @@ RUVIA_TEST(http3_submit_data_is_bounded_by_unacknowledged_output) {
     RUVIA_CHECK_EQ(client.data(0), std::string(payload));
     RUVIA_CHECK(client.ended(0));
     RUVIA_CHECK_EQ(peers.server_.pending_output_bytes(0), std::size_t{0});
+}
+
+RUVIA_TEST(http3_connect_response_has_no_content_framing_and_preserves_half_close) {
+    ruvia::testing::http3_peers peers;
+    RUVIA_CHECK(peers.bind());
+    constexpr std::array fields{
+        ruvia::http3_field_view{":method", "CONNECT"},
+        ruvia::http3_field_view{":authority", "echo.test:443"},
+    };
+    ruvia::testing::http3_event_log server;
+    RUVIA_CHECK(peers.send_request(0, fields, false, server));
+    ruvia::http_response response;
+    response.status(ruvia::http_status::ok);
+    response.header("content-length", "0");
+    RUVIA_CHECK(peers.server_.submit_connect_response_head(0, response) ==
+                ruvia::http3_response_head_error::invalid_message);
+    ruvia::http_response accepted;
+    accepted.status(ruvia::http_status::ok);
+    RUVIA_CHECK(!peers.server_.submit_connect_response_head(0, accepted));
+    ruvia::testing::http3_event_log client;
+    RUVIA_CHECK(peers.to_client(client));
+    RUVIA_CHECK(client.headers_.size() == 1 && !client.headers_[0].stream_ended_ &&
+                !client.headers_[0].field("content-length") && !client.headers_[0].field("transfer-encoding"));
+    RUVIA_CHECK(peers.client_.submit_data(0, ruvia::testing::http3_bytes("request")).accepted_bytes_ == 7);
+    RUVIA_CHECK(peers.client_.finish_stream(0) == ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.to_server(server));
+    RUVIA_CHECK(server.data(0) == "request" && server.ended(0));
+    RUVIA_CHECK(peers.server_.submit_data(0, ruvia::testing::http3_bytes("reply")).accepted_bytes_ == 5);
+    RUVIA_CHECK(peers.server_.finish_stream(0) == ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.to_client(client));
+    RUVIA_CHECK(client.data(0) == "reply" && client.ended(0));
+}
+
+RUVIA_TEST(http3_websocket_extended_connect_commits_negotiated_200) {
+    ruvia::testing::http3_peers peers({.enable_connect_protocol_ = true});
+    RUVIA_CHECK(peers.bind());
+    ruvia::testing::http3_event_log client;
+    RUVIA_CHECK(peers.to_client(client));
+    constexpr std::array fields{
+        ruvia::http3_field_view{":method", "CONNECT"},
+        ruvia::http3_field_view{":scheme", "https"},
+        ruvia::http3_field_view{":authority", "example.test"},
+        ruvia::http3_field_view{":path", "/ws"},
+        ruvia::http3_field_view{":protocol", "websocket"},
+        ruvia::http3_field_view{"sec-websocket-version", "13"},
+    };
+    RUVIA_CHECK(peers.client_.submit_request(0, fields, false) == ruvia::http3_status::accepted);
+    std::optional<ruvia::http3_request_head> head;
+    RUVIA_CHECK(peers.to_server([&](ruvia::http3_event& event) {
+        if (auto* headers = std::get_if<ruvia::http3_headers_event>(&event)) {
+            head = ruvia::http3_request_head::parse(std::move(*headers), std::pmr::get_default_resource());
+        }
+    }));
+    RUVIA_CHECK(head.has_value());
+    if (!head) {
+        return;
+    }
+    const auto request = head->build_request(std::pmr::get_default_resource());
+    const auto validation = ruvia::validate_http3_websocket_handshake(*head, request);
+    RUVIA_CHECK(validation.accepted() != nullptr);
+    RUVIA_CHECK(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(
+        peers.server_.submit_websocket_handshake(0, request, validation)));
+    RUVIA_CHECK(peers.to_client(client));
+    RUVIA_CHECK(client.headers_.size() == 1 && client.headers_[0].field(":status") == "200" &&
+                !client.headers_[0].field("content-length") && !client.headers_[0].field("sec-websocket-accept"));
 }

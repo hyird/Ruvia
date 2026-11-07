@@ -4,6 +4,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -202,6 +203,45 @@ public:
     [[nodiscard]] http_request_trailers& trailers() noexcept {
         return trailers_;
     }
+    void defer_dispatch() noexcept {
+        dispatch_pending_ = true;
+    }
+    [[nodiscard]] bool dispatch_pending() const noexcept {
+        return dispatch_pending_ && !dispatched();
+    }
+
+    void store_datagram(std::string_view payload, std::size_t byte_limit) {
+        if ((datagrams_ && datagrams_->size() >= 64) || datagram_bytes_ > byte_limit ||
+            payload.size() > byte_limit - datagram_bytes_) {
+            return;  // RFC 9221 permits loss; never backpressure reliable DATA.
+        }
+        try {
+            if (!datagrams_) {
+                datagrams_.emplace(body_.get_allocator().resource());
+            }
+            datagrams_->emplace_back(payload);
+            datagram_bytes_ += payload.size();
+        } catch (const inbound_buffer_limit_error&) {
+            return;
+        }
+        if (signal_) {
+            signal_->wake();
+        }
+    }
+    [[nodiscard]] std::optional<std::pmr::string> pop_datagram() {
+        if (!datagrams_ || datagrams_->empty()) {
+            return std::nullopt;
+        }
+        auto payload = std::move(datagrams_->front());
+        datagrams_->pop_front();
+        datagram_bytes_ -= payload.size();
+        return payload;
+    }
+    [[nodiscard]] std::pmr::string take_tunnel_bytes() {
+        std::pmr::string result(body_.get_allocator());
+        result.swap(body_);
+        return result;
+    }
 
     // Buffered body: the whole content, borrowed by the request at dispatch.
     // Streaming body: the bytes queued for the reader.
@@ -250,6 +290,8 @@ public:
     void discard_body() noexcept {
         std::pmr::string(body_.get_allocator()).swap(body_);
         std::pmr::string(active_chunk_.get_allocator()).swap(active_chunk_);
+        datagrams_.reset();
+        datagram_bytes_ = 0;
     }
 
     void mark_body_failure(http_request_body_failure failure) noexcept {
@@ -351,6 +393,8 @@ private:
     // reader drains (streaming). active_chunk_ backs the last popped view.
     std::pmr::string body_;
     std::pmr::string active_chunk_;
+    std::optional<std::pmr::deque<std::pmr::string>> datagrams_;
+    std::size_t datagram_bytes_{0};
     std::size_t received_bytes_{0};
     std::optional<http_request_body_failure> body_failure_{};
     std::optional<http3_stream_signal> signal_;
@@ -362,6 +406,7 @@ private:
     bool aborted_{false};
     bool closed_{false};
     bool handler_done_{false};
+    bool dispatch_pending_{false};
 };
 
 }  // namespace ruvia::detail

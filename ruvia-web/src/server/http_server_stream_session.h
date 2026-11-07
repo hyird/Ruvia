@@ -246,6 +246,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         if (const auto* close_mode = std::get_if<http_connection_close>(&served)) {
             co_return *close_mode;
         }
+#if defined(RUVIA_ENABLE_HTTP2)
         if (std::get<http1_serve_handoff>(served) == http1_serve_handoff::cleartext_http2) {
             // The session consumes the buffered input in its first feed, before
             // it suspends, and reads into its own buffer afterwards: the HTTP/1
@@ -258,6 +259,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             co_return co_await run_http2_sans_io_session(stream, routes_, memory_,
                 http2_sans_io_session_context(std::move(http2_services), options_, scanner_entry), pending_input);
         }
+#endif
         work_sets_.release(std::exchange(work_set, nullptr));
     }
 }
@@ -326,6 +328,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         auto request_start = record_access_timing ? std::chrono::steady_clock::now()
                                                   : std::chrono::steady_clock::time_point{};
         for (;;) {
+#if defined(RUVIA_ENABLE_HTTP2)
             if constexpr (plain_tcp) {
                 // The client preface must be the first bytes of the connection
                 // (RFC 9113 section 3.4). auto_https reserves the cleartext
@@ -349,6 +352,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     continue;
                 }
             }
+#endif
             const auto buffer_view = read_buffer.pending();
             parsed_value.parse_head(buffer_view, header_search_offset, request_memory_value.resource());
             const auto* const ready_head = parsed_value.head_ready();

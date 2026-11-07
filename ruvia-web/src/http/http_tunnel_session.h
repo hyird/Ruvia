@@ -19,7 +19,7 @@
 #include "tls/tls_stream_end.h"
 #include "util/steady_clock.h"
 namespace ruvia::detail {
-// A tunnel over an HTTP/1 socket transport or one HTTP/2 stream. Received
+// A tunnel over an HTTP/1 socket transport or one HTTP/2 or HTTP/3 stream. Received
 // chunks use the connection's inbound budget; sent data and facade state
 // use the worker resource. The transport owns protocol-specific flow control.
 template <typename transport_type>
@@ -32,7 +32,15 @@ public:
           inbound_(inbound),
           read_buffer_(&inbound),
           pending_(pending, &inbound),
-          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {}
+          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {
+        if constexpr (requires(transport_type& value, std::string_view bytes) {
+                          value.read_datagram();
+                          value.write_datagram(bytes);
+                      }) {
+            facade_.read_datagram_ = &read_datagram_thunk;
+            facade_.write_datagram_ = &write_datagram_thunk;
+        }
+    }
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }
@@ -95,6 +103,24 @@ private:
         if (error) {
             throw inbound_transport_error(error, "HTTP tunnel write");
         }
+    }
+    static task<std::optional<http_tunnel_input>> read_datagram_thunk(void* raw) {
+        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        if (!owner_value.pending_.empty()) {
+            co_return http_tunnel_input{std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_)), false};
+        }
+        auto input = co_await owner_value.transport_.read_datagram();
+        if (!input) {
+            owner_value.receive_ended_ = true;
+        }
+        co_return input;
+    }
+    static task<bool> write_datagram_thunk(void* raw, std::string_view bytes) {
+        auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        if (owner_value.ended_) {
+            throw std::logic_error("HTTP tunnel send direction has ended");
+        }
+        co_return co_await owner_value.transport_.write_datagram(bytes);
     }
     static task<void> finish_thunk(void* raw) {
         return static_cast<http_tunnel_session*>(raw)->finish();

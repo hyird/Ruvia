@@ -311,7 +311,7 @@ http2_submit_status http2_connection::submit_connect_response_head(
     return http2_submit_status::accepted;
 }
 
-std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
+std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error>
 http2_connection::submit_websocket_handshake(
     std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
     websocket_server_negotiation&& negotiation) {
@@ -329,7 +329,7 @@ http2_connection::submit_websocket_handshake(
     http2_append_websocket_handshake_headers(fields_, negotiation);
     commit_connect_response_head(*stream, http2_remote_peer_half_closed(*stream));
     const auto compression = negotiation.compression();
-    return http2_websocket_negotiation(std::move(negotiation).take_subprotocol(), compression);
+    return websocket_extended_connect_negotiation(std::move(negotiation).take_subprotocol(), compression);
 }
 
 http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,

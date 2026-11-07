@@ -211,6 +211,7 @@ bool wait_until(predicate ready, std::chrono::milliseconds timeout = 2s) {
     return ready();
 }
 
+#if defined(RUVIA_ENABLE_HTTP2)
 void append_http2_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags, std::uint32_t stream,
     std::string_view payload) {
     std::array<char, ruvia::http2_frame_header_bytes> header{};
@@ -254,6 +255,8 @@ std::string http2_request_without_reading(bool tunnel) {
     }
     return wire;
 }
+
+#endif
 
 // 异步客户端给每次 I/O 设置独立截止时间，回归失败不会挂住测试进程。
 class peer final {
@@ -731,6 +734,7 @@ RUVIA_TEST(http1_stream_peer_close_stops_request_and_recycles_connections) {
                     stalled.close(false, true);
                 }
             }
+#if defined(RUVIA_ENABLE_HTTP2)
             // The HTTP/2 reader keeps its connection idle (or long_lived for
             // a tunnel) while the writer is blocked; write_timeout_ still
             // closes a connection whose peer stopped reading.
@@ -748,6 +752,7 @@ RUVIA_TEST(http1_stream_peer_close_stops_request_and_recycles_connections) {
                 }
                 stalled.close(false, true);
             }
+#endif
             peer explicit_peer(io, plain_endpoint, false);
             const auto explicit_before = cancelled.load();
             const auto explicit_context_before = context_cancelled.load();

@@ -292,7 +292,7 @@ websocket_handshake_validation_result validate_http2_websocket_handshake(
     return detail::validate_http2_websocket_handshake(*stream, request, options);
 }
 
-std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
+std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error>
 http2_connection::submit_websocket_handshake(
     std::uint32_t stream_id, const http_request& request,
     const websocket_handshake_validation_result& validation,
@@ -470,6 +470,9 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
 }
 http2_submit_status http2_connection::submit_ping() {
     return impl_->connection_.submit_ping();
+}
+http2_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_t limit) {
+    return impl_->connection_.submit_max_concurrent_streams(limit);
 }
 http2_received_data_acknowledge_status http2_connection::acknowledge(http2_received_data_credit&& credit) {
     if (!credit.valid() || credit.endpoint_ != impl_.get()) {

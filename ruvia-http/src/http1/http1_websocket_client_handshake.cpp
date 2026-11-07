@@ -52,11 +52,13 @@ void validate_http1_websocket_client_handshake_configuration(std::span<const htt
     }
 }
 
+namespace {
+template <typename header_type>
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
     http1_client_request_prepare_error>
-prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
+prepare_websocket_request(const http_origin_view& origin, std::string_view target,
     std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-    std::span<const http_header> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource) {
+    std::span<const header_type> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource) {
     const auto negotiation_fields = negotiation.request_fields();
     detail::http_header_descriptor_storage<http_header_view> staged_headers(resource);
     staged_headers.reserve(headers.size() + 3U + negotiation_fields.size());
@@ -73,6 +75,24 @@ prepare_http1_websocket_client_request(const http_origin_view& origin, std::stri
     }
     return http1_client_request_writer(resource)
         .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = staged_headers.view()}, head_buffer);
+}
+
+}  // namespace
+
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
+    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
+    std::span<const http_header> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource) {
+    return prepare_websocket_request(origin, target, encoded_key, negotiation, headers, head_buffer, resource);
+}
+
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
+    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
+    std::span<const http_header_view> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource) {
+    return prepare_websocket_request(origin, target, encoded_key, negotiation, headers, head_buffer, resource);
 }
 
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>

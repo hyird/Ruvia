@@ -12,11 +12,13 @@
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_version.h"
+#include "ruvia/http/http_request_target.h"
 
 #include "coding/http_content_length.h"
 #include "field/http_request_field_validation.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
+#include "websocket/http_websocket_handshake_fields.h"
 
 namespace ruvia {
 namespace {
@@ -54,7 +56,8 @@ http3_request_head::http3_request_head(http3_headers_event event, std::pmr::memo
       regular_(resource),
       cookie_(resource),
       stream_id_(event.stream_id_),
-      stream_ended_(event.stream_ended_) {}
+      stream_ended_(event.stream_ended_),
+      early_data_(event.early_data_) {}
 
 std::optional<http3_request_head> http3_request_head::parse(
     http3_headers_event event, std::pmr::memory_resource* resource) {
@@ -94,6 +97,23 @@ std::string_view http3_request_head::protocol() const noexcept {
 
 bool http3_request_head::connect() const noexcept {
     return classify_http_method(method()) == http_known_method::connect;
+}
+
+websocket_handshake_validation_result validate_http3_websocket_handshake(
+    const http3_request_head& head, const http_request& request,
+    websocket_handshake_validation_options options) noexcept {
+    if (!head.connect() || head.protocol() != "websocket" || head.stream_ended() ||
+        (head.declared_content_length().has_value() && *head.declared_content_length() != 0)) {
+        return websocket_handshake_validation_result::make_invalid_request();
+    }
+    detail::websocket_request_header_validator validator(detail::http_field_list_role::recipient);
+    const auto headers = request.headers();
+    for (std::size_t index = 0; index < headers.size(); ++index) {
+        if (!validator.observe_header(detail::http_request_access::header_kind(request, index), headers[index].value())) {
+            return websocket_handshake_validation_result::make_invalid_request();
+        }
+    }
+    return validator.finish(options);
 }
 
 bool http3_request_head::validate() {
@@ -190,8 +210,10 @@ bool http3_request_head::validate() {
 
     if (connect_method && protocol_ == absent) {
         // RFC 9114 §4.4: CONNECT names only its authority.
+        const auto target = authority();
+        const auto parsed = parse_http_authority(target);
         if (scheme_ != absent || path_ != absent || authority_ == absent ||
-            !detail::is_valid_uri_authority(authority())) {
+            !parsed || parsed->host().empty() || parsed->port_kind() != http_authority_port_kind::value) {
             return false;
         }
     } else {

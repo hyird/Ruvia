@@ -84,6 +84,10 @@ void validate_server_limits(const server_config& config) {
         "connection inbound buffer budget must be greater than zero");
     detail::ensure_positive_optional_durations("completion deadlines must be greater than zero",
         config.header_completion_timeout_, config.body_completion_timeout_);
+    detail::ensure_positive_size(config.http_client_result_budget_.max_retained_bytes_,
+        "HTTP client retained result byte budget must be greater than zero");
+    detail::ensure_positive_size(config.http_client_result_budget_.max_in_flight_bytes_,
+        "HTTP client in-flight response budget must be greater than zero");
 }
 
 namespace {

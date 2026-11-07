@@ -3,6 +3,7 @@
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -68,7 +69,7 @@ class http3_session final {
 public:
     // Accepts the connection the client Initial `initial` opens (RFC 9000
     // §7.2): a server connection ID owned by this worker, the client's chosen
-    // ID as original_destination_connection_id, and active migration disabled.
+    // ID as original_destination_connection_id.
     http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial,
         const asio::ip::udp::endpoint& remote);
     ~http3_session();
@@ -101,6 +102,7 @@ public:
     void consume_stream_data(std::int64_t stream_id, std::size_t bytes) noexcept;
     [[nodiscard]] const worker_handle& worker() const noexcept;
     [[nodiscard]] std::pmr::memory_resource* worker_resource() const noexcept;
+    [[nodiscard]] http3_quic_status submit_datagram(std::int64_t stream_id, std::span<const std::byte> payload);
 
 private:
     using stream_pointer = std::unique_ptr<http3_stream, pmr_object_deleter<http3_stream>>;
@@ -137,6 +139,7 @@ private:
     void on_headers(http3_headers_event& event);
     void on_request_head(http3_headers_event& event);
     void on_data(const http3_data_event& event);
+    void on_datagram(http3_datagram_event& event);
     void on_stream_end(std::int64_t stream_id);
     void on_stream_abort(std::int64_t stream_id) noexcept;
     void on_stream_close(const http3_stream_close_event& event) noexcept;
@@ -179,6 +182,7 @@ private:
     // Keys this connection holds in the endpoint's table.
     std::pmr::vector<http3_cid_key> connection_ids_;
     std::unique_ptr<SSL, free_tls> tls_;
+    std::array<unsigned char, 32> tls_resumption_context_{};
     std::unique_ptr<ngtcp2_crypto_ossl_ctx, free_crypto> crypto_;
     ngtcp2_crypto_conn_ref connection_reference_{};
     // Destroyed first: ngtcp2 still references the TLS objects above.

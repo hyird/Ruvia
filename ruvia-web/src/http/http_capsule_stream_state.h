@@ -17,8 +17,12 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_datagram.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/http_tunnel.h"
 
+#include "client/http_client_pool.h"
+#include "client/http_client_response_memory.h"
+#include "client/http_client_response_state.h"
 #include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
@@ -31,8 +35,16 @@ public:
           decoder_(config),
           config_(config),
           payload_(resource_) {}
+    http_capsule_stream_state(http_client_tunnel&& tunnel, http_capsule_config config)
+        : worker_(tunnel.response_.state_->memory_domain().worker()),
+          resource_(tunnel.response_.state_->resource_),
+          memory_pin_(http_client_response(tunnel.response_.state_)),
+          client_(std::move(tunnel)),
+          decoder_(config),
+          config_(config),
+          payload_(resource_) {}
     void require() const {
-        if (closed_) {
+        if (closed_ || (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr))) {
             throw std::logic_error("capsule stream is closed");
         }
         if (!worker_.is_current()) {
@@ -53,6 +65,9 @@ public:
         if (--references_ != 0) {
             return;
         }
+        // Keep the client domain alive until after this object is deallocated
+        // from its pool. Capsule results and cold/running operations pin it.
+        auto pin = std::move(memory_pin_);
         auto* allocator = resource_;
         std::destroy_at(this);
         allocator->deallocate(this, sizeof(http_capsule_stream_state), alignof(http_capsule_stream_state));
@@ -71,12 +86,22 @@ public:
         if (closed_) {
             return;
         }
+        if (client_ && (!client_->response_.state_ || client_->response_.state_->pool_ == nullptr)) {
+            closed_ = true;
+            return;
+        }
         if (!worker_.is_current()) {
             std::terminate();
         }
         closed_ = true;
         if (server_) {
             server_->abort_input(malformed);
+        } else if (client_) {
+            if (malformed) {
+                client_->abort_malformed();
+            } else {
+                client_->abort();
+            }
         }
     }
     void close() noexcept {
@@ -88,7 +113,11 @@ public:
         if (running_ != 0) {
             std::terminate();
         }
-        closed_ = true;
+        if (client_) {
+            abort();
+        } else {
+            closed_ = true;
+        }
         read_scope_.close();
         output_scope_.close();
         // Results pin the worker/client payload domain, not transport input.
@@ -122,24 +151,91 @@ public:
         }
         return result_value.capsule_complete_;
     }
-    [[nodiscard]] task<bool> read_input() {
+    [[nodiscard]] task<bool> read_input(bool datagrams = false) {
         input_ = {};
         owned_input_.reset();
         offset_ = 0;
-        auto chunk = co_await server_->read_raw();
-        if (!chunk) {
-            co_return false;
+        native_input_ = false;
+        if (datagrams && has_native_transport()) {
+            std::optional<http_tunnel_input> chunk;
+            if (server_) {
+                chunk = co_await server_->read_datagram_raw();
+            }
+#ifdef RUVIA_ENABLE_HTTP3
+            else {
+                auto& state = *client_->response_.state_;
+                chunk = co_await state.pool_->read_http3_tunnel_input(state);
+            }
+#endif
+            if (!chunk) {
+                co_return false;
+            }
+            native_input_ = chunk->datagram_;
+            owned_input_.emplace(std::move(chunk->bytes_));
+            input_ = *owned_input_;
+            co_return true;
         }
-        owned_input_.emplace(std::move(*chunk));
-        input_ = *owned_input_;
+        if (server_) {
+            auto chunk = co_await server_->read_raw();
+            if (!chunk) {
+                co_return false;
+            }
+            owned_input_.emplace(std::move(*chunk));
+            input_ = *owned_input_;
+        } else {
+            auto chunk = co_await client_->read();
+            if (!chunk) {
+                co_return false;
+            }
+            // The owned tunnel keeps this view valid until the next read.
+            // Consume it completely before read_input() advances the source.
+            input_ = as_chars(*chunk);
+        }
         co_return true;
     }
+    [[nodiscard]] bool has_native_transport() const noexcept {
+        if (server_) {
+            return server_->read_datagram_ != nullptr && server_->write_datagram_ != nullptr;
+        }
+#ifdef RUVIA_ENABLE_HTTP3
+        return client_ && client_->response_.state_->transport_ == http_client_response_transport::http3;
+#else
+        return false;
+#endif
+    }
+    [[nodiscard]] task<bool> send_datagram(std::string_view bytes) {
+        if (server_) {
+            co_return co_await server_->write_datagram_raw(bytes);
+        }
+#ifdef RUVIA_ENABLE_HTTP3
+        auto& state = *client_->response_.state_;
+        co_return co_await state.pool_->send_http3_datagram(state, bytes);
+#else
+        co_return false;
+#endif
+    }
     [[nodiscard]] task<void> send_bytes(std::pmr::string&& bytes_value) {
-        co_await server_->write_raw(std::move(bytes_value));
+        if (server_ != nullptr) {
+            co_await server_->write_raw(std::move(bytes_value));
+            co_return;
+        }
+        const auto limit = client_->response_.state_->tunnel_->config_.max_chunk_bytes_;
+        if (bytes_value.size() <= limit) {
+            co_await client_->write_owned(std::move(bytes_value));
+            co_return;
+        }
+        std::string_view remaining = bytes_value;
+        while (!remaining.empty()) {
+            const auto chunk = remaining.substr(0, limit);
+            co_await client_->write(chunk);
+            remaining.remove_prefix(chunk.size());
+        }
     }
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
+    std::optional<http_client_response> memory_pin_;
     http_tunnel* server_{};
+    std::optional<http_client_tunnel> client_;
     http_capsule_decoder decoder_;
     http_capsule_config config_;
     // Server chunks belong to the connection's inbound budget, unlike payload_.
@@ -147,6 +243,7 @@ public:
     std::optional<std::pmr::string> owned_input_;
     std::string_view input_;
     std::size_t offset_{};
+    bool native_input_{};
     std::pmr::string payload_;
     std::uint64_t type_{};
     bool receive_ended_{};
@@ -183,6 +280,7 @@ private:
 struct capsule_write_input final {
     capsule_state_pin pin_;
     std::pmr::string bytes_;
+    bool datagram_{};
 };
 class running_capsule_operation final {
 public:

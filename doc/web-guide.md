@@ -44,6 +44,7 @@ int main() {
 | `application& blocking_pool(blocking_pool_options config)` / `blocking_pool(std::nullptr_t)` | 配置各 worker 事件循环借用的常驻阻塞卸载线程池（默认启用）；注册的数据库与 Redis 客户端也在其上执行 DNS 查询。禁用后 `run_blocking` 返回 `blocking_status::unavailable`，文件响应在响应头前以 `503` 回答（Windows 明文 TCP 上大于 16 KiB 的单范围仍走 `TransmitFile`），配置了文档根或主机不是 IP 字面量的注册数据库或 Redis 客户端会使 `run()` 启动失败 |
 | `application& database(db_registration_config config)` / `database(std::nullptr_t)` | 注册 per-worker SQL 数据库连接池（需 `RUVIA_ENABLE_DATABASE`） |
 | `application& redis(redis_registration_config config)` / `redis(std::nullptr_t)` | 注册 per-worker Redis 连接池（需 `RUVIA_ENABLE_REDIS`） |
+| `application& client(http_client_config config)` / `client(std::nullptr_t)` | 按 alias 与 `base_url_` 注册或清除 per-worker 出站 HTTP 客户端；链式调用见 [客户端手册](streaming-websocket.md#5-出站-http-客户端) |
 | `application& on_error(http_error_handler handler)` | 注册全局错误处理器，重复注册抛出 `std::invalid_argument`（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
 | `application& on_not_found(http_not_found_handler handler)` | 注册全局 404 处理器，重复注册抛出 `std::invalid_argument`（另有 `scoped_not_found_handler_options` 重载支持按路径前缀注册） |
 | `application& on_access(access_log_callback callback)` | 注册请求访问日志回调（`noexcept`） |
@@ -127,9 +128,12 @@ ruvia::app().listen({
 ```
 
 - `http_` 与 `https_` 至少指定一个；同时指定且 `auto_https_redirect_ = true` 时，明文 `http_` 端口上的请求会自动重定向至 `https_` 端口。
-- `http3_` 在该地址的 UDP 端口上提供 HTTP/3（RFC 9114，QUIC v1），要求 `https_` 与启用 `RUVIA_ENABLE_HTTP3` 的构建（否则 `listen()` 报错）；UDP 与 TCP 端口互不冲突，可与 `https_` 同号。它复用 `tls_` 的证书、SNI 与客户端证书策略，但只协商 TLS 1.3 与 ALPN `h3`，不接受 0-RTT 早期数据。HTTPS 监听器的每个 HTTP/1.1 与 HTTP/2 响应随之携带 `Alt-Svc: h3=":<端口>"; ma=<秒>`（RFC 7838 §3；`http3_alt_svc_max_age_` 默认 24 小时且须为正），应用已自行设置 `Alt-Svc` 的响应保持原值；HTTP/3 响应本身不加。`context::advertise_alternative_service()` 仍只发送 HTTP/2 ALTSVC 帧。
+- `http3_` 在该地址的 UDP 端口上提供 HTTP/3（RFC 9114，QUIC v1），要求 `https_` 与启用 `RUVIA_ENABLE_HTTP3` 的构建（否则 `listen()` 报错）；UDP 与 TCP 端口互不冲突，可与 `https_` 同号。它复用 `tls_` 的证书、SNI 与客户端证书策略，只协商 TLS 1.3 与 ALPN `h3`。HTTPS 监听器的每个 HTTP/1.1 与 HTTP/2 响应随之携带 `Alt-Svc: h3=":<端口>"; ma=<秒>`（RFC 7838 §3；`http3_alt_svc_max_age_` 默认 24 小时且须为正），应用已自行设置 `Alt-Svc` 的响应保持原值；HTTP/3 响应本身不加。`context::advertise_alternative_service()` 仍只发送 HTTP/2 ALTSVC 帧。
 - HTTP/3 的 worker 模型：POSIX 上每个 worker 以 `SO_REUSEADDR` + `SO_REUSEPORT` 绑定同一 UDP 端口，内核按四元组分发数据报；服务器签发的连接 ID 编码所属 worker（按监听器密钥校验），数据报落到其他 worker 时经有界队列（每 worker 至多 256 个在途，满则丢弃，由 QUIC 重传恢复）转交给所属 worker。Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占 UDP socket：按连接 ID 把数据报转交所属 worker，新连接的 Initial（客户端自选 ID）按监听器密钥加盐的哈希选定 worker（重传的 Initial 落到同一 worker，Acceptor 不保存连接状态）；业务 worker 的出站数据报经每 worker 至多 256 个在途的有界队列交回 Acceptor 发送，满则丢弃。业务 worker 在两种平台上同构，连接始终留在接受它的 worker 上；连接数与 TCP 共用 `max_connections_per_worker_` 计数与“淘汰最久空闲连接”策略。
-- HTTP/3 的限制与错误处理：不支持连接迁移（`disable_active_migration`，NAT 重绑定仍由 QUIC 处理）、Retry、0-RTT 与无状态重置（未知连接的数据报直接丢弃，对端由空闲超时得知）；CONNECT 隧道与 WebSocket 不经 HTTP/3 提供（CONNECT 与 WebSocket 路由回 `501`，不通告 RFC 9220 扩展 CONNECT，携带 `:protocol` 的请求视为格式错误）；不支持服务端推送、ORIGIN 与 ALTSVC 帧。`:authority` 与 `Host` 不一致等请求语义错误以 `H3_MESSAGE_ERROR` 只重置该流；nghttp3 在帧层识别的格式错误（如非 origin-form 的 `:path`、非法伪首部）按 RFC 9114 §8 允许的方式升级为连接错误 `H3_MESSAGE_ERROR`。`100 Continue` 与 `103 Early Hints` 等 1xx 照常发送。
+- `http3_early_data_` 默认关闭；显式启用后接受可恢复会话的 QUIC 0-RTT。非安全方法自动返回 `425 Too Early`，不调用路由处理器；安全方法的处理器仍等待 TLS 握手认证完成后才启动（[RFC 8470 §3](https://www.rfc-editor.org/rfc/rfc8470.html#section-3)），不能仅凭方法名称推断业务无副作用。`c.early_data()` 保留该请求实际使用早期数据的来源标记，应用仍须评估重放风险。
+- HTTP/3 支持客户端主动迁移与 NAT 重绑定：ngtcp2 完成路径验证，按 CID 将数据报转交原连接所属 worker，连接及处理器不跨线程迁移。支持普通 CONNECT（RFC 9114 §4.4）、WebSocket Extended CONNECT（RFC 9220）与 CONNECT-UDP（RFC 9298）；HTTP Datagrams 使用 QUIC DATAGRAM（RFC 9221 / RFC 9297）。
+- **已知上游迁移限制**：当前 ngtcp2 1.25.0 在连续迁移交叠路径验证时，可能退休仍被备用路径引用的连接 ID，随后以 `CONNECTION_ID_LIMIT_ERROR` 关闭连接。单次迁移与 NAT 重绑定不代表任意连续迁移均已可靠支持；增大连接 ID 上限不能消除此问题。Ruvia 保留协议错误并关闭连接，不修改第三方状态、不自动重放失败请求。
+- HTTP/3 不提供 Retry、无状态重置（未知连接的数据报直接丢弃）、服务端推送、ORIGIN 与 ALTSVC 帧。`:authority` 与 `Host` 不一致等请求语义错误以 `H3_MESSAGE_ERROR` 只重置该流；nghttp3 在帧层识别的格式错误按 RFC 9114 §8 允许的方式升级为连接错误。`100 Continue` 与 `103 Early Hints` 等 1xx 照常发送。
 - HTTP/3 的超时与连接级排空复用 HTTP/2 的语义：`idle_timeout_` 同时作为 QUIC `max_idle_timeout`（未设置则不启用），握手受 `request_header_timeout_` / `header_completion_timeout_` 约束；请求体超过 `request_body_timeout_` / `body_completion_timeout_`、或对端超过 `write_timeout_` 未确认输出的流以 `H3_REQUEST_CANCELLED` 单独重置；达到 `max_requests_per_connection_` 或连接超时时先发 shutdown-notice GOAWAY，经 `min(1 s, 3×PTO)` 后发最终 GOAWAY，所有已接纳流结束后以 `H3_NO_ERROR` 关闭连接；`stop()` 则立即以 `H3_NO_ERROR` 关闭。
 - 服务端与数据库、Redis 客户端共用 `ruvia/web/tls_config.h` 中的 `tls_identity_config`（证书链、私钥与可选口令）。路径为 `std::filesystem::path`，不得为空或含 NUL，以 UTF-8 交给 OpenSSL 与数据库驱动，Windows 原生路径不经过 ANSI 代码页。
 - `tls_.client_certificates_.requirement_` 支持 `tls_client_certificate_requirement::optional` 或 `required`（双向 TLS / mTLS）。先用 `const auto connection = c.conn();` 保存元数据，再通过 `connection.tls()->client_certificate_subject()` 读取 optional 主题：无值表示未出示证书，有值空串表示已验证但 Subject DN 为空的证书（[RFC 5280 §4.1.2.6](https://www.rfc-editor.org/rfc/rfc5280.html#section-4.1.2.6)）；不能用文本是否为空判断证书存在性。主题提取失败终止该连接并报告，不降级为未认证身份。
@@ -207,7 +211,7 @@ for (const auto& worker : ruvia::app().workers()) {
 }
 ```
 
-`ruvia::web_worker_context` 提供与控制器一致的 worker 级能力访问：`worker()`、`pool()`、`stop_token()`、`worker_state<T>()`、`run_blocking(...)`、`db()`、`redis()`。
+`ruvia::web_worker_context` 提供与控制器一致的 worker 级能力访问：`worker()`、`pool()`、`stop_token()`、`worker_state<T>()`、`run_blocking(...)`、`db()`、`redis()`、`client()` / `client(alias)`。
 
 ---
 
@@ -279,6 +283,8 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 | `co_await c.req().json_if<T>()` / `co_await c.req().form_if<T>()` | 按需结构化解析并校验 JSON 或 Form 为 `std::optional<T>`（仅当 `Content-Type` 不匹配时返回 `std::nullopt`） |
 | `c.conn().remote()` / `c.conn().client()` | 直连对端地址端口（`.address()` / `.port()`）与经过 `trusted_proxies` 解析后的真实客户端地址 |
 | `c.conn().via_trusted_proxy()` / `c.conn().scheme()` / `c.conn().tls()` | 是否经过可信代理、连接有效 scheme（`http` / `https`）及 TLS 传输信息指针 |
+| `c.client()` / `c.client(alias)` | 获取当前请求作用域内的出站 HTTP 客户端句柄；与 `c.conn().client()`（客户端地址）不同 |
+| `c.early_data()` | 请求流是否实际携带 QUIC 0-RTT 数据；不会因为处理时握手已完成而清除此来源标记 |
 
 HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接借用连接缓冲并同步完成该读取步骤，不创建额外的正文 I/O 协程；返回的视图仍只在当前请求内有效。
 

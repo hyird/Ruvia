@@ -50,8 +50,10 @@ class context;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
-// where they are used: websocket.h, http_tunnel.h,
+// where they are used: http_client.h, websocket.h, http_tunnel.h,
 // session.h, streaming.h and multipart_reader.h.
+class http_client_handle;
+class http_client_response;
 class websocket;
 class http_tunnel;
 class test_app;
@@ -520,6 +522,7 @@ class context final {
 private:
     friend class context_request;
     friend class context_response_editor;
+    friend class http_client_response;
     friend struct detail::context_access;
     friend struct detail::session_access;
     template <typename t_type>
@@ -709,6 +712,9 @@ public:
     [[nodiscard]] redis_handle redis() const;
     [[nodiscard]] redis_handle redis(std::string_view alias) const;
 #endif
+    [[nodiscard]] http_client_handle client() const;
+    [[nodiscard]] http_client_handle client(std::string_view alias) const;
+    [[nodiscard]] bool early_data() const noexcept;
     [[nodiscard]] ::ruvia::websocket& websocket() const;
     [[nodiscard]] http_tunnel& tunnel() const;
 

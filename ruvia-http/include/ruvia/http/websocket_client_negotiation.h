@@ -114,6 +114,11 @@ void validate_http1_websocket_client_handshake_configuration(std::span<const htt
 prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
     std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
     std::span<const http_header> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource);
+[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
+    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
+    std::span<const http_header_view> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource);
 
 // Validates the 101 response against the key, then the server's selection
 // against the negotiation. The result view borrows the response head.

@@ -26,9 +26,16 @@ class http_capsule_stream_state;
 class capsule_state_pin;
 template <typename stream_type>
 class http_tunnel_session;
+// Transport input for a single tunnel read lane. Datagram bytes exclude the
+// HTTP/3 Quarter Stream ID but retain any protocol-specific Context ID.
+struct http_tunnel_input final {
+    std::pmr::string bytes_;
+    bool datagram_{};
+};
 }  // namespace detail
 
 class http_tunnel;
+class http_client_tunnel;
 class http_udp_tunnel;
 class http_datagram_stream;
 
@@ -70,8 +77,8 @@ private:
 };
 
 // RFC 9297 reliable Capsule Protocol over an established tunnel. The protocol
-// using the capsules owns negotiation. Streams borrow their route
-// tunnel. Use this adapter exclusively:
+// using the capsules owns negotiation. Server streams borrow their route
+// tunnel; client streams take tunnel ownership. Use this adapter exclusively:
 // do not interleave raw tunnel operations with capsule operations. Abort wakes
 // pending I/O; join started operations before destroying their scope owner.
 // Operations occupy their read or write/finish lane when started; unstarted
@@ -98,17 +105,19 @@ public:
 
 private:
     friend class http_tunnel;
+    friend class http_client_tunnel;
     friend class http_udp_tunnel;
     friend class http_datagram_stream;
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin);
-    [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload);
+    [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload, bool datagram = false);
     explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
+    explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
     void release() noexcept;
     detail::http_capsule_stream_state* state_{};
 };
 
 // Owned opaque HTTP Datagram payload, valid across later reads, stream and
-// connection retirement even if input remains unread.
+// connection retirement, and client shutdown even if input remains unread.
 // Destroy results on their worker before the worker retires.
 class http_datagram final {
 public:
@@ -141,8 +150,9 @@ private:
     std::size_t offset_{};
 };
 
-// RFC 9297 channel using reliable DATAGRAM capsules over a negotiated tunnel.
-// Create through http_tunnel::datagrams();
+// RFC 9297 channel using native QUIC DATAGRAMs when available, with reliable
+// DATAGRAM capsule fallback. Reads accept both representations concurrently.
+// Create through http_tunnel::datagrams() or http_client_tunnel::datagrams();
 // arbitrary Capsule Protocol streams cannot be promoted to this channel.
 // Empty payloads are data; an empty optional is EOF. Use exclusively with the tunnel.
 // Operations occupy separate read and send/finish lanes when started; unstarted
@@ -176,6 +186,7 @@ public:
 
 private:
     friend class http_tunnel;
+    friend class http_client_tunnel;
     friend class http_udp_tunnel;
     explicit http_datagram_stream(http_capsule_stream&& stream);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp);
@@ -219,6 +230,7 @@ public:
 
 private:
     friend class http_tunnel;
+    friend class http_client_tunnel;
     explicit http_udp_tunnel(http_datagram_stream stream) noexcept
         : stream_(std::move(stream)) {}
     http_datagram_stream stream_;
@@ -227,11 +239,12 @@ struct http_tunnel_route_config final {
     // Once the handler returns, bound flushing the local FIN and draining peer
     // input. A handler may half-close and continue reading without this deadline.
     std::chrono::milliseconds peer_transport_fin_timeout_{5000};
-    // Declares HTTP Datagram semantics (capsules) for an upgrade-protocol
+    // Declares HTTP Datagram semantics for an upgrade-protocol
     // tunnel: a 2xx response carries Capsule-Protocol: ?1 (RFC 9297 section
     // 3.4) and the handler may use http_tunnel::datagrams(), udp() and
-    // capsules(). CONNECT-UDP enables this automatically; plain CONNECT
-    // rejects it.
+    // capsules(). HTTP/3 datagrams use native transport when negotiated and
+    // within the path limit, otherwise capsules. CONNECT-UDP enables this
+    // automatically; plain CONNECT rejects it.
     bool datagrams_{};
 };
 
@@ -268,8 +281,8 @@ public:
     // Borrow the established route tunnel for HTTP Datagrams. The route protocol
     // owns negotiation: these throw std::logic_error unless the route declared
     // http_tunnel_route_config::datagrams_. Use only in the negotiated datagram
-    // handler, exclusively with this tunnel. Capsule Protocol limits apply to
-    // encoded datagrams.
+    // handler, exclusively with this tunnel. Capsule Protocol payload limits
+    // apply to both native datagrams and reliable DATAGRAM capsules.
     [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &;
     http_datagram_stream datagrams(http_capsule_config = {}) && = delete;
     [[nodiscard]] http_udp_tunnel udp(http_capsule_config config = {}) &;
@@ -284,15 +297,20 @@ private:
     friend class http_capsule_stream;
     using read_type = task<std::optional<std::pmr::string>> (*)(void*);
     using write_type = task<void> (*)(void*, std::string_view);
+    using read_datagram_type = task<std::optional<detail::http_tunnel_input>> (*)(void*);
+    using write_datagram_type = task<bool> (*)(void*, std::string_view);
     using finish_type = task<void> (*)(void*);
     // malformed: the received tunnel data is malformed (RFC 9297 section 3.3).
     using abort_type = void (*)(void*, bool malformed) noexcept;
     http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
         void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
-        bool datagrams) noexcept;
+        bool datagrams, read_datagram_type read_datagram = nullptr,
+        write_datagram_type write_datagram = nullptr) noexcept;
     [[nodiscard]] task<std::optional<std::pmr::string>> read_raw();
     [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
     [[nodiscard]] task<void> write_raw(std::pmr::string&& bytes);
+    [[nodiscard]] task<std::optional<detail::http_tunnel_input>> read_datagram_raw();
+    [[nodiscard]] task<bool> write_datagram_raw(std::string_view bytes);
     void abort_input(bool malformed) noexcept;
     void require_active() const;
     void require_unadapted() const;
@@ -303,6 +321,8 @@ private:
     write_type write_;
     finish_type finish_;
     abort_type abort_;
+    read_datagram_type read_datagram_;
+    write_datagram_type write_datagram_;
     bool datagrams_;
     bool adapted_{false};
     bool read_active_{false};

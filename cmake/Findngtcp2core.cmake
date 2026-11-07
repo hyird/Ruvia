@@ -2,6 +2,21 @@ find_path(ngtcp2core_INCLUDE_DIR
     NAMES ngtcp2/ngtcp2.h
 )
 
+# Multi-config toolchains may put a debug prefix first in CMAKE_PREFIX_PATH.
+# Prefer the matching installation's explicit library directories on Windows.
+if(WIN32 AND ngtcp2core_INCLUDE_DIR)
+    find_library(ngtcp2core_LIBRARY_RELEASE
+        NAMES ngtcp2
+        PATHS "${ngtcp2core_INCLUDE_DIR}/../lib"
+        NO_DEFAULT_PATH
+    )
+    find_library(ngtcp2core_LIBRARY_DEBUG
+        NAMES ngtcp2d ngtcp2
+        PATHS "${ngtcp2core_INCLUDE_DIR}/../debug/lib"
+        NO_DEFAULT_PATH
+    )
+endif()
+
 find_library(ngtcp2core_LIBRARY_RELEASE
     NAMES ngtcp2
     PATH_SUFFIXES lib

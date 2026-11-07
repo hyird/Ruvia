@@ -131,7 +131,7 @@ public:
         std::string_view chunk, http2_end_stream end_stream, std::size_t max_payload_bytes);
     [[nodiscard]] http2_submit_status submit_interim_response_head(
         std::uint32_t stream_id, const http_interim_response_head& response);
-    [[nodiscard]] std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
+    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error>
     submit_websocket_handshake(
         std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
         websocket_server_negotiation&& negotiation);
@@ -150,6 +150,7 @@ public:
 
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
     [[nodiscard]] http2_submit_status submit_ping();
+    [[nodiscard]] http2_submit_status submit_max_concurrent_streams(std::uint32_t limit);
 
     // --- lifecycle -------------------------------------------------------------
     // A connection error is terminal: its GOAWAY has been queued (unless the

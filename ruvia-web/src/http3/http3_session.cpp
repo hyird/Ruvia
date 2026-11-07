@@ -38,12 +38,15 @@
 #include "http3/http3_endpoint.h"
 #include "http3/http3_request_body_reader.h"
 #include "http3/http3_response_stream_sink.h"
+#include "http3/http3_tunnel_transport.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_resolution.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_response_stream_dispatch.h"
+#include "server/http_server_tls_contexts.h"
 #include "server/http_server_tls_handshake.h"
+#include "server/http_upgrade_route.h"
 #include "server/peer_address.h"
 #include "tls/tls_random.h"
 
@@ -64,6 +67,14 @@ constexpr std::size_t http3_flush_burst = 32;
 constexpr std::uint64_t http3_max_stream_receive_window = 1024 * 1024;
 constexpr std::uint64_t http3_max_connection_receive_window = 16 * 1024 * 1024;
 constexpr std::uint64_t http3_max_concurrent_requests = 100;
+
+[[nodiscard]] bool reject_early_request(const http3_request_head& head) noexcept {
+    if (!head.early_data()) {
+        return false;
+    }
+    const auto method = head.method();
+    return method != "GET" && method != "HEAD" && method != "OPTIONS" && method != "TRACE";
+}
 
 struct interim_target final {
     http3_session& session_;
@@ -209,13 +220,18 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     callbacks.remove_connection_id = remove_connection_id;
     const auto handshake_timeout = duration_nanoseconds(
         server.header_completion_timeout_.has_value() ? server.header_completion_timeout_ : server.request_header_timeout_);
+    const http3_connection_options http3_options{
+        .resource_ = services_.memory_.resource(),
+        .max_concurrent_streams_ = static_cast<std::size_t>(http3_max_concurrent_requests),
+        .max_stream_output_bytes_ = http3_stream_output_bytes,
+        .enable_connect_protocol_ = true,
+        .enable_h3_datagram_ = true};
     connection_.emplace(http3_quic_connection::server({
         .callbacks_ = callbacks,
         .source_connection_id_ = source,
         .destination_connection_id_ = initial.scid,
         .original_destination_connection_id_ = initial.dcid,
         .stateless_reset_token_ = reset_token,
-        .disable_active_migration_ = true,
         .initial_path_ = path(remote_),
         .version_ = initial.version,
         .initial_timestamp_ = now(),
@@ -231,11 +247,11 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .max_udp_payload_size_ = http3_max_datagram_bytes,
         .callback_user_data_ = this,
         .resource_ = services_.memory_.resource(),
-        .http3_ = {.resource_ = services_.memory_.resource(),
-            .max_concurrent_streams_ = static_cast<std::size_t>(http3_max_concurrent_requests),
-            .max_stream_output_bytes_ = http3_stream_output_bytes},
+        .http3_ = http3_options,
     }));
     connection_->set_tls_native_handle(crypto_.get());
+    configure_http3_server_tls_session(*tls_, *connection_, http3_options,
+        endpoint.session_config().http3_->early_data_, tls_resumption_context_);
 
     scanner_guard_.emplace(services_.scanner_, scanner_entry_,
         connection_transport(
@@ -373,6 +389,23 @@ void http3_session::consume_stream_data(std::int64_t stream_id, std::size_t byte
     }
 }
 
+http3_quic_status http3_session::submit_datagram(std::int64_t stream_id, std::span<const std::byte> payload) {
+    const auto status = connection_->submit_datagram(stream_id, payload);
+    if (status == http3_quic_status::accepted || status == http3_quic_status::would_block) {
+        wake_writer();
+    }
+    return status;
+}
+
+void http3_session::on_datagram(http3_datagram_event& event) {
+    auto* stream = find_stream(event.stream_id_);
+    if (stream == nullptr || stream->aborted() || stream->handler_done() || !stream->head().connect()) {
+        return;
+    }
+    stream->note_request_body_progress(scanner_entry_.last_active_ms());
+    stream->store_datagram(event.payload_, services_.options_.server_.max_buffered_body_bytes_);
+}
+
 void http3_session::receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote) noexcept {
     if (lifecycle_ != lifecycle_type::open || connection_->closed()) {
         // The closing period absorbs late packets (RFC 9000 §10.2).
@@ -411,6 +444,8 @@ void http3_session::drain_events() {
             on_headers(*headers);
         } else if (const auto* data = std::get_if<http3_data_event>(&*event)) {
             on_data(*data);
+        } else if (auto* datagram = std::get_if<http3_datagram_event>(&*event)) {
+            on_datagram(*datagram);
         } else if (const auto* end = std::get_if<http3_stream_end_event>(&*event)) {
             on_stream_end(end->stream_id_);
         } else if (const auto* action = std::get_if<http3_transport_action_event>(&*event)) {
@@ -443,6 +478,12 @@ void http3_session::start_application() {
             .with_inbound_buffer_pool(inbound_buffers_));
     base_services_->bind_routes(services_.routes_);
     set_inactivity_phase();
+    // Authenticate the connection before releasing its bounded 0-RTT requests.
+    for (auto& [stream_id, stream] : streams_) {
+        if (!stream->aborted() && stream->dispatch_pending() && !admit_stream(stream_id)) {
+            reset_stream(stream_id, http3_error_code::internal_error);
+        }
+    }
 }
 
 void http3_session::on_headers(http3_headers_event& event) {
@@ -464,7 +505,7 @@ void http3_session::on_headers(http3_headers_event& event) {
 
 void http3_session::on_request_head(http3_headers_event& event) {
     const auto stream_id = event.stream_id_;
-    if (base_services_ == std::nullopt || find_stream(stream_id) != nullptr) {
+    if (find_stream(stream_id) != nullptr) {
         reset_stream(stream_id, http3_error_code::internal_error);
         return;
     }
@@ -484,12 +525,18 @@ void http3_session::on_request_head(http3_headers_event& event) {
     const auto method = classify_http_method(head->method());
     const auto target = head->path();
     const auto connect = head->connect();
+    const auto protocol = http_ascii_equals_ignore_case(head->protocol(), "websocket")
+                              ? std::string_view("websocket")
+                              : head->protocol();
     auto resolution = services_.routes_.resolve(route_request_view{
-        method, head->method(), target.substr(0, target.find('?')), head->authority(), {}});
+        method, head->method(), target.substr(0, target.find('?')), head->authority(), protocol});
     auto body_mode = request_body_mode::buffered;
     const auto* resolved = resolution.resolved();
     if (resolved != nullptr) {
         body_mode = resolved->route().endpoint().request_body_mode();
+    }
+    if (connect) {
+        body_mode = request_body_mode::stream;
     }
     const bool resolved_route = resolved != nullptr && !connect;
     const auto expectation_plan = head->expectation_plan(http_unsupported_expectation_policy::reject);
@@ -520,7 +567,7 @@ void http3_session::on_request_head(http3_headers_event& event) {
     // read for a streaming one -- and never for a request answered from its
     // head alone (RFC 9110 §10.1.1).
     if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !ended &&
-        !body_limit_exceeded && body_mode == request_body_mode::buffered) {
+        !body_limit_exceeded && !reject_early_request(stream.head()) && body_mode == request_body_mode::buffered) {
         if (codec().submit_interim_response_head(
                 stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_status::accepted) {
             reset_stream(stream_id, http3_error_code::internal_error);
@@ -529,10 +576,10 @@ void http3_session::on_request_head(http3_headers_event& event) {
         wake_writer();
     }
     // A buffered body is dispatched once complete; everything else -- a
-    // streamed body, CONNECT (answered 501), an unresolved or oversized
+    // streamed body, CONNECT, an unresolved or oversized
     // request, a rejected expectation -- is answered from its head.
     if (ended || connect || body_mode == request_body_mode::stream || !resolved_route || body_limit_exceeded ||
-        expectation_plan == http_server_expectation_plan::reject_unsupported) {
+        expectation_plan == http_server_expectation_plan::reject_unsupported || reject_early_request(stream.head())) {
         if (!admit_stream(stream_id)) {
             reset_stream(stream_id, http3_error_code::internal_error);
         }
@@ -544,17 +591,18 @@ void http3_session::on_data(const http3_data_event& event) {
     const auto size = event.bytes_.size();
     auto* stream = find_stream(stream_id);
     // Content nobody will read -- of a stream already answered or abandoned,
-    // a failed body, CONNECT, or a buffered body dispatched early -- returns
+    // a failed body, or a buffered body dispatched early -- returns
     // its credit at once. The request borrows a dispatched buffered body, so
     // appending to it would reallocate under that view.
-    if (stream == nullptr || stream->aborted() || stream->handler_done() || stream->head().connect() ||
-        stream->body_failure().has_value() ||
+    if (stream == nullptr || stream->aborted() || stream->handler_done() ||
+        reject_early_request(stream->head()) || stream->body_failure().has_value() ||
         (stream->body_mode() == request_body_mode::buffered && stream->dispatched())) {
         consume_stream_data(stream_id, size);
         return;
     }
     stream->note_request_body_progress(scanner_entry_.last_active_ms());
-    const auto total_limit = http_request_body_limit(stream->resolution(), stream->body_mode(), admission_policy_);
+    const auto total_limit = stream->head().connect() ? protocol_byte_limit::unlimited()
+                                                      : http_request_body_limit(stream->resolution(), stream->body_mode(), admission_policy_);
     const auto status = stream->store(event.bytes_, total_limit, services_.options_.server_.max_buffered_body_bytes_);
     if (status == http3_body_store_status::backlog_overflow) {
         consume_stream_data(stream_id, size);
@@ -703,6 +751,10 @@ void http3_session::expire_stream_deadlines(std::int64_t now_ms) noexcept {
 
 bool http3_session::admit_stream(std::int64_t stream_id) {
     auto* stream = find_stream(stream_id);
+    if (stream != nullptr && !base_services_) {
+        stream->defer_dispatch();
+        return true;
+    }
     if (stream == nullptr || stream->begin_dispatch(services_.worker_, termination_) == nullptr) {
         return false;
     }
@@ -773,6 +825,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             });
         const auto expectation_plan = head.expectation_plan(http_unsupported_expectation_policy::reject);
         auto admission_services = *base_services_;
+        admission_services.bind_early_data(head.early_data());
         // HTTP/3 has no ORIGIN or ALTSVC frame and this server never pushes,
         // so those request lanes stay unbound.
         admission_services.bind_request_channels({.interim_output_ = &interim_output});
@@ -799,22 +852,21 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         if (body_reader_storage) {
             dispatch_services.bind_streaming_request_body(body_reader_storage->facade());
         }
+        const stop_group request_stop(dispatch_services.get_stop_token(), signal->terminal_stop_token());
+        const auto request_stop_token = request_stop.token();
+        dispatch_services.bind_stop_token(request_stop_token);
 
         bool body_failure_handled = false;
-        if (const auto& body_failure = stream->body_failure();
+        if (reject_early_request(head)) {
+            body_failure_handled = true;
+            admission.tail().disable_response_coding();
+            // Replay rejection bypasses application and error handlers alike.
+            response.status(ruvia::http_status::too_early);
+            response.static_body("Replay-unsafe request requires a completed handshake");
+        } else if (const auto& body_failure = stream->body_failure();
             body_failure.has_value() && admission.endpoint() != http_request_endpoint::rejection) {
             body_failure_handled = true;
             response = co_await respond_body_failure(request, request_memory_value, *body_failure, request_services, admission.tail());
-        } else if (admission.endpoint() != http_request_endpoint::rejection &&
-                   (head.connect() || admission.endpoint() == http_request_endpoint::tunnel ||
-                       admission.endpoint() == http_request_endpoint::websocket)) {
-            // CONNECT tunnels and WebSockets are not served over HTTP/3; they
-            // need the HTTP/1.1 or HTTP/2 listener.
-            admission.tail().disable_response_coding();
-            response = co_await respond_http_request_rejection(routes, request, request_memory_value,
-                http_request_rejection::error(http_error_info({.status_ = ruvia::http_status::not_implemented,
-                    .message_ = "CONNECT and WebSocket are not supported over HTTP/3"})),
-                request_services);
         } else {
             switch (admission.endpoint()) {
                 case http_request_endpoint::rejection:
@@ -822,23 +874,71 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                     response = co_await respond_http_request_rejection(
                         routes, request, request_memory_value, *admission.rejection(), request_services);
                     break;
-                case http_request_endpoint::tunnel:
-                case http_request_endpoint::websocket:
-                    // Answered with 501 above.
+                case http_request_endpoint::tunnel: {
+                    auto commit = [this, stream, signal, &admission, &options](
+                                      context& context_value, const http_response& head_response) {
+                        if (codec().submit_connect_response_head(stream->id(), head_response)) {
+                            throw std::invalid_argument("HTTP/3 CONNECT response head rejected");
+                        }
+                        stream->mark_response_committed();
+                        context_access::commit_upgrade(context_value);
+                        wake_writer();
+                        admission.tail().record_access(options.access_log_, head_response.status());
+                        return http3_tunnel_transport(*this, *stream, *signal);
+                    };
+                    auto buffered = co_await execute_tunnel_upgrade_session<http3_tunnel_transport>(
+                        routes, request, *resolved, request_memory_value, dispatch_services, options,
+                        scanner_entry_, inbound_buffers_, admission.udp_tunnel(), std::string_view{}, commit);
+                    if (!buffered) {
+                        co_return;
+                    }
+                    response = std::move(*buffered);
                     break;
+                }
+                case http_request_endpoint::websocket: {
+                    const auto& endpoint = *resolved->route().endpoint().websocket();
+                    const auto validation = validate_http3_websocket_handshake(head, request, endpoint.handshake_validation());
+                    if (const auto* failure = validation.failure()) {
+                        admission.tail().disable_response_coding();
+                        response = co_await routes.handle_error(request, request_memory_value,
+                            copy_http_protocol_error_info(request_memory_value.resource(), failure->protocol_error()), request_services);
+                        failure->apply_required_response_headers(response);
+                        break;
+                    }
+                    auto commit = [this, stream, signal, &request, &validation, &endpoint, &admission, &options](
+                                      context& context_value, std::span<const http_header_view> headers) {
+                        const auto result = codec().submit_websocket_handshake(stream->id(), request, validation,
+                            {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
+                        const auto* handshake = std::get_if<websocket_extended_connect_negotiation>(&result);
+                        if (handshake == nullptr) {
+                            throw std::invalid_argument("HTTP/3 WebSocket handshake rejected");
+                        }
+                        stream->mark_response_committed();
+                        context_access::commit_upgrade(context_value);
+                        wake_writer();
+                        admission.tail().record_access(options.access_log_, http_status::ok);
+                        return websocket_upgrade_commit<http3_tunnel_transport>(
+                            http3_tunnel_transport(*this, *stream, *signal), handshake->compression(),
+                            handshake->subprotocol(), *context_value.pool());
+                    };
+                    auto buffered = co_await execute_websocket_upgrade_session<http3_tunnel_transport>(
+                        routes, request, *resolved, request_memory_value, dispatch_services, options,
+                        scanner_entry_, inbound_buffers_, std::string_view{}, commit);
+                    if (!buffered) {
+                        co_return;
+                    }
+                    response = std::move(*buffered);
+                    break;
+                }
                 case http_request_endpoint::response_stream: {
                     // A stream reset or the connection ending stops the
                     // request: context::stop_token() combines it with the
                     // worker's stop.
-                    const stop_group request_stop(dispatch_services.get_stop_token(), signal->terminal_stop_token());
-                    const auto request_stop_token = request_stop.token();
-                    auto stream_services = dispatch_services;
-                    stream_services.bind_stop_token(request_stop_token);
                     http3_response_stream_sink sink_value(*this, *stream, *signal, worker_resource(),
                         request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
                         options.compression_ ? &*options.compression_ : nullptr, options.cors_ ? &*options.cors_ : nullptr);
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes, request, *resolved,
-                        request_memory_value, stream_services, [stream]() noexcept { return stream->aborted(); });
+                        request_memory_value, dispatch_services, [stream]() noexcept { return stream->aborted(); });
                     if (result_value.peer_aborted_before_commit() != nullptr) {
                         co_return;
                     }
@@ -969,6 +1069,7 @@ task<void> http3_session::flush() {
         process_events();
         if (result.status_ == http3_quic_status::accepted && !datagram_.bytes_.empty()) {
             co_await send_datagram();
+            wake_output_waiters();
             if (++burst == http3_flush_burst) {
                 burst = 0;
                 co_await worker_turn{services_.worker_};
@@ -992,12 +1093,13 @@ task<void> http3_session::flush() {
 
 task<void> http3_session::send_datagram() {
     // ngtcp2 names the path of every packet it writes.
-    auto destination = remote_;
+    asio::ip::udp::endpoint destination;
     const auto& written_remote = datagram_.path_.path.remote;
-    if (written_remote.addrlen != 0 && written_remote.addrlen <= destination.capacity()) {
-        std::memcpy(destination.data(), written_remote.addr, written_remote.addrlen);
-        destination.resize(written_remote.addrlen);
+    if (written_remote.addr == nullptr || written_remote.addrlen == 0 || written_remote.addrlen > destination.capacity()) {
+        throw std::logic_error("QUIC output has no valid remote path");
     }
+    std::memcpy(destination.data(), written_remote.addr, written_remote.addrlen);
+    destination.resize(written_remote.addrlen);
 #if defined(_WIN32)
     // The acceptor sends it from the listener's socket; a datagram past its
     // bounded queue is lost, as UDP may lose any, and QUIC recovery resends.
@@ -1106,7 +1208,13 @@ void http3_session::close_now() noexcept {
             http3_quic_datagram close_packet(worker_resource());
             const auto result = connection_->next_datagram(http3_max_datagram_bytes, now(), close_packet);
             if (result.status_ == http3_quic_status::accepted && !close_packet.bytes_.empty()) {
-                (void)endpoint_.send(remote_, close_packet.bytes_);
+                asio::ip::udp::endpoint destination;
+                const auto& address = close_packet.path_.path.remote;
+                if (address.addr != nullptr && address.addrlen != 0 && address.addrlen <= destination.capacity()) {
+                    std::memcpy(destination.data(), address.addr, address.addrlen);
+                    destination.resize(address.addrlen);
+                    (void)endpoint_.send(destination, close_packet.bytes_);
+                }
             }
         } catch (...) {
             // The peer then learns of the close from its idle timeout.

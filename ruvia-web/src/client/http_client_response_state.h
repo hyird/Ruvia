@@ -1,0 +1,213 @@
+#pragma once
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <exception>
+#include <memory_resource>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include "ruvia/core/scoped_operation.h"
+#include "ruvia/core/worker_signal.h"
+#ifdef RUVIA_ENABLE_HTTP2
+#include "ruvia/http/http2_connection.h"
+#endif
+#include "ruvia/http/http_client.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_protocol_version.h"
+#include "ruvia/http/http_push.h"
+#include "ruvia/http/http_response.h"
+#include "ruvia/http/http_status.h"
+#include "ruvia/web/http_client.h"
+#include "ruvia/web/http_client_types.h"
+
+#include "client/http_client_response_handoff.h"
+#include "client/http_client_tunnel_state.h"
+#include "client/http_client_upload_state.h"
+
+namespace ruvia {
+class response_stream_writer;
+}
+
+namespace ruvia::detail {
+
+class http_client_pool;
+class http_client_response_memory_domain;
+
+enum class http_client_response_transport : std::uint8_t {
+    unassigned,
+    http1,
+    http2,
+    http3,
+};
+
+// Address-stable response storage. Network stream registration and connection
+// leases are added here rather than to the movable public response wrapper.
+class http_client_response_state final {
+public:
+    explicit http_client_response_state(http_client_response_memory_domain& memory_domain);
+
+    // Body algorithms run on the address-stable storage owner. The public
+    // facade tracks cold frames in body_operation_scope_; the algorithms claim
+    // body_operation_active_ only when their lazy task starts.
+    template <typename view>
+    [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(response_stream_writer* output = nullptr);
+    [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes);
+    void retain_reference() noexcept;
+    void release_reference() noexcept;
+    [[nodiscard]] http_client_response_memory_domain& memory_domain() const noexcept {
+        return memory_domain_;
+    }
+    // Response storage is worker-local: throws std::logic_error(`message`)
+    // when called off the worker that owns it.
+    void require_owner_worker(const char* message) const;
+    void notify_producer_space() noexcept;
+    // The consumer's wait for the final head: rethrows the producer's failure
+    // or reports `head_message` for its error code. An encoded body is decoded
+    // completely before the head is returned, so its failure is observed here.
+    [[nodiscard]] task<void> await_head(std::string_view head_message);
+    void rethrow_response_failure() const;
+    void discard_response_body() noexcept;
+    void discard_failed_encoded_response() noexcept;
+    void release_consumed_body_prefix();
+    [[nodiscard]] bool append_received_body(std::string_view bytes_value, std::size_t max_response_bytes) {
+        const auto retained = buffered_.size() - offset_ + pending_.size();
+        if (collect_all_ && bytes_value.size() > max_response_bytes - (std::min)(retained, max_response_bytes)) {
+            discard_response_body();
+            return false;
+        }
+        // The consumer's last borrowed view lives in buffered, not pending.
+        // Appending producer output must never relocate that view.
+        pending_.append(bytes_value);
+        data_signal_.notify();
+        return true;
+    }
+
+    // One retention path: consume response-owned fields or copy borrowed fields.
+    // Owned fields must already use this response's resource. A 100 (Continue)
+    // releases request content gated on it.
+    template <typename fields_type>
+        requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> ||
+                 std::is_same_v<fields_type, std::pmr::vector<http_header>>)
+    void retain_informational(http_status_code status, fields_type&& fields_value,
+        std::optional<http_client_request_content_signal> request_content_signal) {
+        constexpr bool transferring = std::is_same_v<fields_type, std::pmr::vector<http_header>>;
+        http_client_informational_response head(status, resource_);
+        if constexpr (transferring) {
+            if (fields_value.get_allocator().resource() != resource_) {
+                throw std::logic_error("owned informational fields use a different response resource");
+            }
+        } else {
+            head.headers_.reserve(fields_value.size());
+        }
+        // Fieldless heads still consume response-budgeted vector storage.
+        // Each head's own field count is bounded by its decoder; across heads
+        // only the retained bytes are bounded, so many small interim heads
+        // (e.g. repeated 103 Early Hints) stay acceptable.
+        auto budget = informational_budget_;
+        for (const auto& field : fields_value) {
+            if (!budget.add(field.name().size()) || !budget.add(field.value().size()) ||
+                !budget.add(http_field_line_overhead)) {
+                throw http_client_error(http_client_error::code_type::protocol_error, "informational response metadata exceeds byte limit");
+            }
+            if constexpr (!transferring) {
+                head.headers_.emplace_back(field.name(), field.value(), resource_);
+            }
+        }
+        if constexpr (transferring) {
+            head.headers_ = std::move(fields_value);
+        }
+        informational_.push_back(std::move(head));
+        informational_budget_ = budget;
+        if (upload_ && request_content_signal == http_client_request_content_signal::continue_value) {
+            upload_->content_released_ = true;
+            upload_->output_.notify_data();
+        }
+    }
+
+    [[nodiscard]] http_client_output_queue* output() noexcept {
+        return tunnel_ ? &tunnel_->output_ : upload_ ? &upload_->output_
+                                                     : nullptr;
+    }
+    [[nodiscard]] bool receive_complete() const noexcept {
+        return complete_ || (tunnel_ && tunnel_->accepted_ && tunnel_->receive_ended_);
+    }
+    std::optional<http_client_tunnel_state> tunnel_;
+    std::optional<http_client_upload_state> upload_;
+    worker_signal head_signal_;
+    worker_signal data_signal_;
+    worker_signal space_signal_;
+    http_client_pool* pool_{nullptr};
+    std::pmr::memory_resource* resource_;
+    http_received_status status_{http_status::ok};
+    http_known_method request_method_{http_known_method::unknown};
+    http_protocol_version protocol_version_{http_protocol_version::http11};
+    std::optional<http_response_body_plan> response_body_plan_{};
+    std::pmr::vector<http_client_informational_response> informational_;
+    // One aggregate byte budget across every retained interim head.
+    http_field_section_budget informational_budget_;
+    std::pmr::vector<http_header> headers_;
+    std::pmr::vector<http_header> trailers_;
+    std::pmr::string buffered_;
+    // Producers only append here. The consumer swaps it with `buffered` before
+    // returning a view, so later network progress cannot invalidate that view.
+    std::pmr::string pending_;
+    std::size_t offset_{0};
+    std::size_t buffered_limit_{default_max_buffered_body_bytes};
+    std::exception_ptr failure_;
+    // A late upload failure stays observable to its writer, but cannot change
+    // the EOF of an already validated response. The exception is stored once.
+    bool upload_only_failure_{false};
+    // The pool retired before the exchange completed; consumers report
+    // http_client_error::closing with their own operation message.
+    bool pool_closed_{false};
+    std::size_t references_{1};
+    bool head_ready_{false};
+    bool complete_{false};
+    bool abandoned_{false};
+    bool collect_all_{false};
+    bool body_operation_active_{false};
+    bool body_decode_required_{false};
+    // Content-Encoding parsed with the final head while decoding is pending.
+    std::optional<http_content_coding_field_result> content_coding_{};
+    http_client_response_transport transport_{http_client_response_transport::unassigned};
+#ifdef RUVIA_ENABLE_HTTP2
+    std::optional<::ruvia::http2_received_data_credit> http2_data_credit_{};
+#endif
+    std::size_t http3_data_credit_{0};
+    std::optional<std::pmr::deque<std::pmr::string>> http3_datagrams_;
+    std::size_t http3_datagram_bytes_{0};
+    bool http3_native_datagrams_{false};
+    std::size_t connection_index_{0};
+    std::uint64_t connection_generation_{0};
+    std::uint64_t request_id_{0};
+    std::uint64_t cancellation_id_{0};
+    std::uint64_t stream_id_{0};
+    std::optional<http_push_request> promised_request_{};
+    http_client_response_handoff push_response_;
+    // Declared after every field a body coroutine borrows, so the operation
+    // scope closes while they are alive.
+    ::ruvia::operation_scope body_operation_scope_;
+
+private:
+    void promote_pending_data();
+    void detach_transport_bindings() noexcept;
+
+    http_client_response_memory_domain& memory_domain_;
+    http_client_response_state* previous_memory_state_{};
+    http_client_response_state* next_memory_state_{};
+
+    friend class http_client_response_memory_domain;
+};
+
+}  // namespace ruvia::detail

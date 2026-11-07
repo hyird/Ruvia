@@ -10,7 +10,10 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/web/http_client.h"
 
+#include "client/http_client_response_memory.h"
+#include "client/http_client_response_state.h"
 #include "http/http_capsule_stream_state.h"
 #include "util/operation_lane_lease.h"
 #include "util/pmr_owned_storage.h"
@@ -31,8 +34,9 @@ public:
 private:
     unsigned& count_;
 };
-task<std::optional<std::pmr::string>> read_tunnel(void* target,
-    task<std::optional<std::pmr::string>> (*read)(void*), bool& read_active, unsigned& running) {
+template <typename input_type>
+task<std::optional<input_type>> read_tunnel(void* target,
+    task<std::optional<input_type>> (*read)(void*), bool& read_active, unsigned& running) {
     auto lease = detail::claim_operation_lane(read_active, tunnel_lane_in_progress);
     running_tunnel_operation active(running);
     co_return co_await read(target);
@@ -45,6 +49,15 @@ task<void> write_tunnel(void* target, task<void> (*write)(void*, std::string_vie
     }
     running_tunnel_operation active(running);
     co_await write(target, bytes_value);
+}
+task<bool> write_tunnel_datagram(void* target, task<bool> (*write)(void*, std::string_view),
+    std::string_view bytes, bool& write_active, bool& ended, unsigned& running) {
+    auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
+    if (ended) {
+        throw std::logic_error("HTTP tunnel send direction has ended");
+    }
+    running_tunnel_operation active(running);
+    co_return co_await write(target, bytes);
 }
 task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*),
     bool& ended, bool& write_active, unsigned& running) {
@@ -59,7 +72,7 @@ task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*),
 
 http_tunnel::http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
     void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
-    bool datagrams) noexcept
+    bool datagrams, read_datagram_type read_datagram, write_datagram_type write_datagram) noexcept
     : resource_(resource),
       worker_(worker_value),
       target_(target),
@@ -67,6 +80,8 @@ http_tunnel::http_tunnel(std::pmr::memory_resource& resource, const worker_handl
       write_(write),
       finish_(finish_value),
       abort_(abort),
+      read_datagram_(read_datagram),
+      write_datagram_(write_datagram),
       datagrams_(datagrams) {
     operations_.bind_worker(worker_);
 }
@@ -92,6 +107,14 @@ task<std::optional<std::pmr::string>> http_tunnel::read() & {
 task<std::optional<std::pmr::string>> http_tunnel::read_raw() {
     require_active();
     return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_, running_operations_));
+}
+task<std::optional<detail::http_tunnel_input>> http_tunnel::read_datagram_raw() {
+    require_active();
+    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_datagram_, read_active_, running_operations_));
+}
+task<bool> http_tunnel::write_datagram_raw(std::string_view bytes) {
+    require_active();
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_, running_operations_));
 }
 task<void> http_tunnel::write(std::string_view bytes_value) & {
     require_active();
@@ -177,6 +200,15 @@ http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_confi
     state_ = make_pmr_object<detail::http_capsule_stream_state>(&tunnel.resource_, tunnel, config).release();
     tunnel.adapted_ = true;
 }
+http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config) {
+    if (!tunnel.response_.state_ || !tunnel.response_.state_->memory_domain().worker().is_current()) {
+        throw std::logic_error("capsule stream requires a live tunnel on its worker");
+    }
+    // Validate before consuming the caller's owner.
+    http_capsule_decoder validation(config);
+    auto* resource = tunnel.response_.state_->resource_;
+    state_ = make_pmr_object<detail::http_capsule_stream_state>(resource, std::move(tunnel), config).release();
+}
 http_capsule_stream::http_capsule_stream(http_capsule_stream&& other) noexcept
     : state_(std::exchange(other.state_, nullptr)) {}
 http_capsule_stream& http_capsule_stream::operator=(http_capsule_stream&& other) noexcept {
@@ -209,6 +241,9 @@ http_capsule_stream http_tunnel::capsules(http_capsule_config config) & {
     }
     require_unadapted();
     return http_capsule_stream(*this, config);
+}
+http_capsule_stream http_client_tunnel::capsules(http_capsule_config config) && {
+    return http_capsule_stream(std::move(*this), config);
 }
 task<std::optional<http_capsule>> http_capsule_stream::read() & {
     if (!state_) {
@@ -256,7 +291,7 @@ task<void> http_capsule_stream::write(std::uint64_t type, std::string_view paylo
     }
     return write_frame(std::string_view(header.data(), std::get<0>(encoded)), payload_value);
 }
-task<void> http_capsule_stream::write_frame(std::string_view prefix, std::string_view payload_value) {
+task<void> http_capsule_stream::write_frame(std::string_view prefix, std::string_view payload_value, bool datagram) {
     const auto write = +[](detail::capsule_write_input input) -> task<void> {
         auto& state_value = input.pin_.state();
         state_value.require();
@@ -265,6 +300,17 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, std::string
         }
         detail::running_capsule_operation running(state_value, true);
         try {
+            if (input.datagram_) {
+                if (co_await state_value.send_datagram(input.bytes_)) {
+                    co_return;
+                }
+                std::array<char, 16> header;
+                const auto encoded = encode_http_capsule_header(header, http_datagram_capsule_type, input.bytes_.size());
+                if (encoded.index() != 0) {
+                    throw std::length_error("HTTP Datagram exceeds capsule bound");
+                }
+                input.bytes_.insert(0, header.data(), std::get<0>(encoded));
+            }
             co_await state_value.send_bytes(std::move(input.bytes_));
         } catch (...) {
             state_value.abort();
@@ -275,7 +321,7 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, std::string
     bytes_value.reserve(prefix.size() + payload_value.size());
     bytes_value.append(prefix);
     bytes_value.append(payload_value);
-    return ::ruvia::make_scoped_operation(state_->output_scope_, write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value)}));
+    return ::ruvia::make_scoped_operation(state_->output_scope_, write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value), datagram}));
 }
 task<void> http_capsule_stream::finish() & {
     if (!state_) {
@@ -286,7 +332,11 @@ task<void> http_capsule_stream::finish() & {
         auto& state_value = pin.state();
         detail::running_capsule_operation running(state_value, true);
         if (!state_value.send_ended_) {
-            co_await state_value.server_->finish();
+            if (state_value.server_) {
+                co_await state_value.server_->finish();
+            } else {
+                co_await state_value.client_->finish();
+            }
             state_value.send_ended_ = true;
         }
     };
@@ -305,6 +355,12 @@ http_datagram_stream http_tunnel::datagrams(http_capsule_config config) & {
 http_udp_tunnel http_tunnel::udp(http_capsule_config config) & {
     return http_udp_tunnel(datagrams(config));
 }
+http_datagram_stream http_client_tunnel::datagrams(http_capsule_config config) && {
+    if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->udp_ || !response_.state_->tunnel_->accepted_) {
+        throw std::logic_error("HTTP Datagrams require an accepted datagram tunnel");
+    }
+    return http_datagram_stream(std::move(*this).capsules(config));
+}
 task<std::optional<http_datagram>> http_datagram_stream::read() & {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
@@ -321,15 +377,19 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
         }
         bool fin{};
         if (state_value.offset_ == state_value.input_.size()) {
-            fin = !co_await state_value.read_input();
+            fin = !co_await state_value.read_input(true);
         }
         // The decoder drops other capsule types and, for CONNECT-UDP, unknown
         // Context IDs before the length limit applies (RFC 9297 section 3.2).
-        if (!state_value.poll_capsule(
-                fin, udp ? http_capsule_retention::udp_payloads : http_capsule_retention::datagrams)) {
+        if (!state_value.native_input_ && !state_value.poll_capsule(
+                                              fin, udp ? http_capsule_retention::udp_payloads : http_capsule_retention::datagrams)) {
             continue;
         }
-        auto& owned = state_value.payload_;
+        const bool native = state_value.native_input_;
+        auto& owned = native ? *state_value.owned_input_ : state_value.payload_;
+        if (native) {
+            state_value.offset_ = state_value.input_.size();
+        }
         auto bytes_value = std::span<const char>(owned);
         http_datagram_session datagrams;
         std::size_t offset{};
@@ -340,20 +400,34 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
                 throw std::runtime_error("malformed CONNECT-UDP datagram");
             }
             if (!std::get<0>(decoded)) {
-                owned.clear();
+                if (!native) {
+                    owned.clear();
+                }
                 continue;
             }
             offset = bytes_value.size() - (std::get<0>(decoded))->payload_.size();
         } else {
             auto decoded = datagrams.receive_datagram(bytes_value);
             if (!decoded) {
-                owned.clear();
+                if (!native) {
+                    owned.clear();
+                }
                 continue;
             }
             offset = bytes_value.size() - decoded->size();
         }
-        auto result_value = std::move(owned);
-        state_value.payload_ = std::pmr::string(state_value.resource_);
+        if (native && owned.size() > state_value.config_.max_capsule_length_) {
+            state_value.abort_malformed();
+            throw std::runtime_error("oversized HTTP Datagram");
+        }
+        auto result_value = detail::rebind_owned_storage(owned, state_value.resource_);
+        if (native) {
+            state_value.input_ = {};
+            state_value.owned_input_.reset();
+            state_value.offset_ = 0;
+        } else {
+            state_value.payload_ = std::pmr::string(state_value.resource_);
+        }
         co_return http_datagram(http_capsule(state_value, http_datagram_capsule_type, std::move(result_value)), offset);
     }
 }
@@ -372,14 +446,19 @@ task<void> http_datagram_stream::send_payload(std::string_view payload_value, bo
     if (state_value.send_ended_) {
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
+    const auto context_bytes = udp ? std::size_t{1} : std::size_t{0};
+    if (context_bytes > state_value.config_.max_capsule_length_ ||
+        payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
+        throw std::length_error("HTTP Datagram exceeds capsule bound");
+    }
     http_datagram_session session_value;
     const auto plan = udp ? session_value.prepare_udp_datagram(std::span(payload_value.data(), payload_value.size()))
                           : session_value.prepare_datagram(std::span(payload_value.data(), payload_value.size()));
     if (plan.index() != 0) {
         throw std::length_error("HTTP Datagram payload exceeds its bound");
     }
-    if (payload_value.size() + (udp ? 1 : 0) > state_value.config_.max_capsule_length_) {
-        throw std::length_error("HTTP Datagram exceeds capsule bound");
+    if (state_value.has_native_transport()) {
+        return stream_.write_frame(udp ? std::string_view("\0", 1) : std::string_view{}, payload_value, true);
     }
     return stream_.write_frame(std::get<0>(plan).prefix(), payload_value);
 }

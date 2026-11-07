@@ -22,11 +22,13 @@
 namespace ruvia::detail {
 namespace {
 
+// Redis has no ALPN identifier, so the TLS handshake offers none.
 [[nodiscard]] client_tcp_endpoint redis_endpoint(const redis_config_storage& config) noexcept {
     return {.host_ = config.host_,
         .port_ = config.port_,
         .tls_ = config.tls_.mode_ == client_tls_mode::disabled ? nullptr : &config.tls_,
-        .tcp_ = config.tcp_};
+        .tcp_ = config.tcp_,
+        .alpn_ = client_alpn::none};
 }
 
 [[noreturn]] void throw_redis_abort(client_abort_reason reason, std::string_view timeout_message) {

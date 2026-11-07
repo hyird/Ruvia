@@ -38,13 +38,20 @@ using write_result = http3_buffered_response_write_result;
 // connection ended first.
 [[nodiscard]] task<bool> await_output_budget(
     http3_session& session, std::int64_t stream_id, http3_stream_signal& signal) {
+    struct output_wait final {
+        http3_stream_signal& signal_;
+        ~output_wait() {
+            signal_.set_waiting_output(false);
+        }
+    } waiting{signal};
+    if (output_budget(session, stream_id) == 0) {
+        signal.set_waiting_output(true);
+    }
     while (output_budget(session, stream_id) == 0) {
         if (signal.stopped() || stream_aborted(session, stream_id)) {
             co_return false;
         }
-        signal.set_waiting_output(true);
         co_await signal.wait();
-        signal.set_waiting_output(false);
     }
     co_return !signal.stopped() && !stream_aborted(session, stream_id);
 }

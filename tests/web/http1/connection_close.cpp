@@ -138,6 +138,7 @@ void idle_tls_connection_ends_with_close_notify(
     RUVIA_CHECK(end == asio::error::eof);
 }
 
+#if defined(RUVIA_ENABLE_HTTP2)
 // An HTTP/2 connection that idles past idle_timeout first sends GOAWAY, then
 // close_notify (RFC 9113 §9.1). The peer acknowledges SETTINGS and PING so a
 // graceful drain can complete.
@@ -187,6 +188,7 @@ void idle_http2_connection_sends_goaway_then_close_notify(
     RUVIA_CHECK(goaway);
     RUVIA_CHECK(end == asio::error::eof);
 }
+#endif
 
 // Draining closes a connection that awaits its first request with close_notify.
 std::unique_ptr<tls_stream> open_unused_tls_connection(
@@ -315,7 +317,9 @@ RUVIA_TEST(server_closes_connections_gracefully) {
     if (ready) {
         final_response_survives_unread_request_content(ruvia_ctx, io, plain_endpoint);
         idle_tls_connection_ends_with_close_notify(ruvia_ctx, io, tls_endpoint);
+#if defined(RUVIA_ENABLE_HTTP2)
         idle_http2_connection_sends_goaway_then_close_notify(ruvia_ctx, io, tls_endpoint);
+#endif
         wss_clean_close_handshake_sends_close_notify(ruvia_ctx, io, tls_endpoint);
         wss_truncated_peer_eof_omits_close_notify(ruvia_ctx, io, tls_endpoint);
 

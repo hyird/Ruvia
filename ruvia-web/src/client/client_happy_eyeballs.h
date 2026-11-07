@@ -1,10 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
 #include <optional>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -16,6 +18,54 @@
 #include "ruvia/core/worker_timer.h"
 
 namespace ruvia::detail {
+inline constexpr std::chrono::milliseconds client_connection_attempt_delay{250};
+
+// Traverse RFC 6724 resolver order while alternating families (RFC 8305 §4).
+// The resolver owns the addresses; traversal and duplicate suppression allocate
+// nothing, allowing a bounded transport race to construct candidates lazily.
+template <typename results_type>
+class client_address_sequence final {
+public:
+    using endpoint_type = std::remove_cvref_t<decltype(std::declval<const results_type&>().begin()->endpoint())>;
+    explicit client_address_sequence(const results_type& addresses)
+        : addresses_(addresses),
+          first_(addresses.begin()),
+          other_(addresses.begin()),
+          first_is_v6_(!addresses.empty() && addresses.begin()->endpoint().address().is_v6()) {}
+
+    [[nodiscard]] std::optional<endpoint_type> next() {
+        for (unsigned family = 0; family != 2; ++family) {
+            auto& iterator = next_first_ ? first_ : other_;
+            const bool is_v6 = next_first_ ? first_is_v6_ : !first_is_v6_;
+            next_first_ = !next_first_;
+            while (iterator != addresses_.end()) {
+                const auto current = iterator++;
+                const auto endpoint = current->endpoint();
+                if (endpoint.address().is_v6() != is_v6) {
+                    continue;
+                }
+                bool repeated = false;
+                for (auto previous = addresses_.begin(); previous != current; ++previous) {
+                    if (previous->endpoint() == endpoint) {
+                        repeated = true;
+                        break;
+                    }
+                }
+                if (!repeated) {
+                    return endpoint;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+private:
+    const results_type& addresses_;
+    decltype(std::declval<const results_type&>().begin()) first_;
+    decltype(std::declval<const results_type&>().begin()) other_;
+    bool first_is_v6_;
+    bool next_first_{true};
+};
 
 struct client_happy_eyeballs_result final {
     std::optional<asio::ip::tcp::socket> socket_;

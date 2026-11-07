@@ -3,6 +3,9 @@
 #include <optional>
 
 #include "ruvia/core/operation_timeout.h"
+#include "ruvia/web/http_client.h"
+
+#include "client/http_client_registry.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_handle.h"
@@ -17,7 +20,6 @@
 #endif
 
 namespace ruvia::detail {
-#if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
 namespace {
 
 [[nodiscard]] operation_options context_operation_options(const stop_token& stop_token_value) {
@@ -25,7 +27,6 @@ namespace {
 }
 
 }  // namespace
-#endif
 
 #ifdef RUVIA_ENABLE_DATABASE
 db_handle worker_client_registry_view::db(::ruvia::operation_scope& operation_scope,
@@ -65,5 +66,25 @@ redis_handle worker_client_registry_view::redis(std::string_view alias, ::ruvia:
         .with_options(context_operation_options(stop_token_value));
 }
 #endif
+
+http_client_handle worker_client_registry_view::client(
+    ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw http_client_error(
+            http_client_error::code_type::not_configured, "http client is not configured");
+    }
+    return http_clients_->get(operation_scope)
+        .with_options(context_operation_options(stop_token_value));
+}
+
+http_client_handle worker_client_registry_view::client(std::string_view alias,
+    ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw http_client_error(
+            http_client_error::code_type::not_configured, "http client is not configured");
+    }
+    return http_clients_->get(alias, operation_scope)
+        .with_options(context_operation_options(stop_token_value));
+}
 
 }  // namespace ruvia::detail

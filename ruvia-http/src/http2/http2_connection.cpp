@@ -832,6 +832,19 @@ http2_submit_status http2_connection::submit_ping() {
     return http2_submit_status::accepted;
 }
 
+http2_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_t limit) {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return http2_submit_status::closed;
+    }
+    if (limit > http2_local_settings::max_concurrent_streams) {
+        return http2_submit_status::invalid_message;
+    }
+    const nghttp2_settings_entry entry{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, limit};
+    check_nghttp2(nghttp2_submit_settings(session_.get(), NGHTTP2_FLAG_NONE, &entry, 1));
+    flush_session();
+    return http2_submit_status::accepted;
+}
+
 http2_submit_status http2_connection::submit_priority_update(std::uint32_t stream_id, http_priority_fields fields_value) {
     if (role_ != http2_role::client || local_connection_state_.open() == nullptr || stream_id == 0 ||
         stream_id > http2_max_stream_id ||

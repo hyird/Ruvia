@@ -1,9 +1,6 @@
 #include "client/client_happy_eyeballs.h"
 
-#include <algorithm>
-#include <chrono>
 #include <exception>
-#include <ranges>
 #include <utility>
 
 #include <asio/error.hpp>
@@ -11,13 +8,6 @@
 #include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
-namespace {
-
-using namespace std::chrono_literals;
-
-constexpr auto connection_attempt_delay = 250ms;
-
-}  // namespace
 
 client_happy_eyeballs::client_happy_eyeballs(const worker_handle& worker,
     const asio::ip::tcp::socket::executor_type& executor,
@@ -30,23 +20,9 @@ client_happy_eyeballs::client_happy_eyeballs(const worker_handle& worker,
         return;
     }
     attempts_.reserve(addresses.size());
-    const bool first_is_v6 = addresses.begin()->endpoint().address().is_v6();
-    auto first = addresses.begin();
-    auto other = addresses.begin();
-    const auto append_next = [&](auto& current, bool is_v6) {
-        while (current != addresses.end()) {
-            const auto endpoint = current->endpoint();
-            ++current;
-            if (endpoint.address().is_v6() == is_v6 &&
-                std::ranges::find(attempts_, endpoint, &attempt::endpoint_) == attempts_.end()) {
-                attempts_.emplace_back(executor, endpoint);
-                return;
-            }
-        }
-    };
-    while (first != addresses.end() || other != addresses.end()) {
-        append_next(first, first_is_v6);
-        append_next(other, !first_is_v6);
+    client_address_sequence sequence(addresses);
+    while (auto endpoint = sequence.next()) {
+        attempts_.emplace_back(executor, *endpoint);
     }
 }
 
@@ -90,7 +66,7 @@ void client_happy_eyeballs::schedule_next() noexcept {
         return;
     }
     try {
-        const auto status = worker_.schedule_timer(delay_, worker_timer_deadline_after(connection_attempt_delay),
+        const auto status = worker_.schedule_timer(delay_, worker_timer_deadline_after(client_connection_attempt_delay),
             [this](worker_timer_outcome outcome) noexcept { on_delay(outcome); });
         if (status != worker_timer_schedule_status::worker_stopping) {
             return;

@@ -41,6 +41,14 @@ db_handle web_worker_context::db(std::string_view alias) const {
 }
 #endif
 
+http_client_handle web_worker_context::client() const {
+    return client_registries_.client(operation_scope_, capabilities_.stop_token());
+}
+
+http_client_handle web_worker_context::client(std::string_view alias) const {
+    return client_registries_.client(alias, operation_scope_, capabilities_.stop_token());
+}
+
 #ifdef RUVIA_ENABLE_REDIS
 redis_handle web_worker_context::redis() const {
     return client_registries_.redis(operation_scope_, nullptr, capabilities_.stop_token());

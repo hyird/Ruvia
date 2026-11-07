@@ -55,12 +55,14 @@ void configure_accepted_socket(asio::ip::tcp::socket& socket) {
     }
 }
 
+#if defined(RUVIA_ENABLE_HTTP2)
 bool is_http2_alpn_selected(server_tls_stream& tls_stream) noexcept {
     const unsigned char* selected = nullptr;
     unsigned int selected_length = 0;
     SSL_get0_alpn_selected(tls_stream.native_handle(), &selected, &selected_length);
     return selected_length == 2 && selected != nullptr && std::memcmp(selected, "h2", 2) == 0;
 }
+#endif
 
 #if !defined(_WIN32)
 void configure_listener_address(asio::ip::tcp::acceptor& socket) {
@@ -463,9 +465,13 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         const auto services = capabilities_.make_context_services(stop_token_)
                                   .with_tls_transport(remote_address, client_subject, remote_port, served_certificate)
                                   .with_alternative_service(listener_value.alternative_service_);
+#if defined(RUVIA_ENABLE_HTTP2)
         const auto close_mode = is_http2_alpn_selected(tls_stream)
                                     ? co_await run_http2(tls_stream, socket, services)
                                     : co_await run_stream(listener_value, tls_stream, socket, services);
+#else
+        const auto close_mode = co_await run_stream(listener_value, tls_stream, socket, services);
+#endif
         // A worker stop keeps the immediate close; scanner close_all reaches a
         // graceful close that is already running.
         if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
@@ -477,6 +483,7 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
     }
 }
 
+#if defined(RUVIA_ENABLE_HTTP2)
 template <typename stream_type>
 task<http_connection_close> worker_connections::run_http2(stream_type& stream, tcp_socket_type& socket,
     context_services services) {
@@ -485,6 +492,7 @@ task<http_connection_close> worker_connections::run_http2(stream_type& stream, t
     co_return co_await run_http2_sans_io_session(
         stream, routes_, memory_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
 }
+#endif
 
 void worker_connections::report_session_failure(
     tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept {

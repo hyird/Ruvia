@@ -16,6 +16,7 @@
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/dotenv.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/web_worker.h"
@@ -203,6 +204,8 @@ public:
     application& redis(redis_registration_config config);
     application& redis(std::nullptr_t);
 #endif
+    application& client(http_client_config config);
+    application& client(std::nullptr_t);
     // Serves until stop(); returns after every worker retired. May run again
     // after it returns. The first preparation, startup, or worker failure is
     // rethrown to the caller, who is responsible for printing it; run() does

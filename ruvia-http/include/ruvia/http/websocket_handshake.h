@@ -132,7 +132,10 @@ private:
 
 class websocket_handshake_validation_result;
 class http2_connection;
+class http3_connection;
+class http3_request_head;
 namespace detail {
+class http2_connection;
 class http2_stream_state;
 class websocket_request_header_validator;
 [[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(
@@ -160,6 +163,8 @@ private:
     friend websocket_handshake_validation_result detail::validate_http2_websocket_handshake(
         const detail::http2_stream_state&, const http_request&,
         websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result validate_http3_websocket_handshake(
+        const http3_request_head&, const http_request&, websocket_handshake_validation_options) noexcept;
     friend websocket_handshake_validation_result validate_websocket_handshake(
         const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
 
@@ -196,6 +201,31 @@ private:
     }
 
     value_type value_;
+};
+
+// The negotiation an RFC 8441 (HTTP/2) or RFC 9220 (HTTP/3) extended CONNECT
+// 200 response committed on the wire. The runtime configures its websocket
+// connection from this value, never from a separately recomputed
+// compression/subprotocol tuple.
+class websocket_extended_connect_negotiation final {
+public:
+    [[nodiscard]] std::string_view subprotocol() const& noexcept {
+        return subprotocol_;
+    }
+    std::string_view subprotocol() const&& = delete;
+    [[nodiscard]] websocket_compression compression() const noexcept {
+        return compression_;
+    }
+
+private:
+    friend class http2_connection;
+    friend class detail::http2_connection;
+    friend class http3_connection;
+    websocket_extended_connect_negotiation(std::pmr::string subprotocol, websocket_compression compression) noexcept
+        : subprotocol_(std::move(subprotocol)),
+          compression_(compression) {}
+    std::pmr::string subprotocol_;
+    websocket_compression compression_;
 };
 
 // Validates an RFC 6455 HTTP/1.1 opening handshake, including the parser-owned

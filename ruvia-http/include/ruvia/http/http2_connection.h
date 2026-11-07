@@ -227,7 +227,7 @@ public:
     // (RFC 7838 section 4, RFC 8336 section 2.1).
     [[nodiscard]] http2_submit_status submit_connect_response_head(
         std::uint32_t stream_id, const http_response& response);
-    [[nodiscard]] std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
+    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http2_websocket_handshake_submit_error>
     submit_websocket_handshake(std::uint32_t stream_id, const http_request& request,
         const websocket_handshake_validation_result& validation,
         websocket_server_handshake_options options = {});
@@ -278,6 +278,11 @@ public:
     // calls return accepted without queueing another frame. Returns closed after
     // a connection error.
     [[nodiscard]] http2_submit_status submit_ping();
+    // Queues SETTINGS_MAX_CONCURRENT_STREAMS through the protocol session so
+    // its acknowledgement and admission limits stay synchronized. The limit
+    // may tighten or restore the fixed local capacity (128); a larger value
+    // returns invalid_message, and a failed connection returns closed.
+    [[nodiscard]] http2_submit_status submit_max_concurrent_streams(std::uint32_t limit);
     [[nodiscard]] http2_received_data_acknowledge_status acknowledge(http2_received_data_credit&& credit);
     // Payload bytes in serialized DATA frames still owned by the core output buffer.
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;

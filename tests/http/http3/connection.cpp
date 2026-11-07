@@ -189,3 +189,48 @@ RUVIA_TEST(http3_server_drain_sends_notice_then_final_goaway) {
     RUVIA_CHECK(peers.server_.finish_drain() == ruvia::http3_status::accepted);
     RUVIA_CHECK(peers.server_.drain_final());
 }
+
+RUVIA_TEST(http3_settings_and_datagrams_are_negotiated_and_stream_scoped) {
+    ruvia::testing::http3_peers peers(
+        {.enable_connect_protocol_ = true, .enable_h3_datagram_ = true},
+        {.enable_h3_datagram_ = true});
+    RUVIA_CHECK(peers.bind());
+    RUVIA_CHECK(!peers.client_.peer_settings().has_value());
+    ruvia::testing::http3_event_log log;
+    RUVIA_CHECK(peers.to_client(log));
+    RUVIA_CHECK(peers.to_server(log));
+    const auto settings = peers.client_.peer_settings();
+    RUVIA_CHECK(settings && settings->enable_connect_protocol_ && settings->h3_datagram_);
+    RUVIA_CHECK(!peers.client_.datagram_prefix(0));
+    RUVIA_CHECK(peers.send_request(0, get_request_fields, false, log));
+    const auto prefix = peers.client_.datagram_prefix(0);
+    RUVIA_CHECK(prefix && prefix->size_ == 1 && prefix->bytes_[0] == std::byte{0});
+    const std::string wire("\0\0echo", 6);
+    RUVIA_CHECK(peers.server_.read_datagram(ruvia::testing::http3_bytes(wire)).status_ == ruvia::http3_status::accepted);
+    // Public input calls must drain the prior owned event before appending more.
+    RUVIA_CHECK(peers.server_.read_datagram(ruvia::testing::http3_bytes(wire)).status_ == ruvia::http3_status::events_pending);
+    auto event = peers.server_.next_event();
+    const auto* datagram = event ? std::get_if<ruvia::http3_datagram_event>(&*event) : nullptr;
+    RUVIA_CHECK(datagram && datagram->stream_id_ == 0 && datagram->payload_ == std::string_view("\0echo", 5));
+    RUVIA_CHECK(!peers.server_.next_event());
+    // An unknown request stream is dropped, not retained for future streams.
+    const std::string unknown("\1\0echo", 6);
+    RUVIA_CHECK(peers.server_.read_datagram(ruvia::testing::http3_bytes(unknown)).status_ == ruvia::http3_status::accepted);
+    RUVIA_CHECK(!peers.server_.next_event());
+    RUVIA_CHECK(peers.server_.close_stream(0, request_cancelled, request_cancelled) == ruvia::http3_status::accepted);
+    while (peers.server_.next_event()) {
+    }
+    RUVIA_CHECK(!peers.server_.datagram_prefix(0));
+    RUVIA_CHECK(peers.server_.read_datagram(ruvia::testing::http3_bytes(wire)).status_ == ruvia::http3_status::accepted);
+    RUVIA_CHECK(!peers.server_.next_event());
+}
+
+RUVIA_TEST(http3_datagram_truncated_prefix_and_disabled_setting_are_connection_errors) {
+    auto enabled = ruvia::http3_connection::server({.enable_h3_datagram_ = true});
+    const auto truncated = enabled.read_datagram(ruvia::testing::http3_bytes("\x40"));
+    RUVIA_CHECK(truncated.status_ == ruvia::http3_status::protocol_error);
+    RUVIA_CHECK_EQ(truncated.error_code_, static_cast<std::uint64_t>(ruvia::http3_error_code::datagram_error));
+    auto disabled = ruvia::http3_connection::server();
+    const std::string wire("\0hello", 6);
+    RUVIA_CHECK(disabled.read_datagram(ruvia::testing::http3_bytes(wire)).status_ == ruvia::http3_status::protocol_error);
+}

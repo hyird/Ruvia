@@ -277,6 +277,7 @@ private:
                 .redis_ = std::span<const detail::redis_definition_type>(state_.redis_),
 #endif
                 .worker_states_ = state_.configuration_.worker_states(),
+                .http_clients_ = std::span<const detail::http_client_definition_type>(state_.http_clients_),
             };
 #if defined(RUVIA_ENABLE_HTTP3)
             auto worker_value = make_pmr_object<detail::web_worker_runtime>(runtime_resource_,

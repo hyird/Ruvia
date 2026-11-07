@@ -143,6 +143,9 @@ RUVIA_TEST(http3_request_head_parses_connect_authority_target) {
     RUVIA_CHECK(!parses({{":method", "CONNECT"}, {":scheme", "https"}, {":authority", "proxy.test:443"}}, false));
     RUVIA_CHECK(!parses({{":method", "CONNECT"}, {":authority", "proxy.test:443"}, {":path", "/"}}, false));
     RUVIA_CHECK(!parses({{":method", "CONNECT"}}, false));
+    RUVIA_CHECK(!parses({{":method", "CONNECT"}, {":authority", "proxy.test"}}, false));
+    RUVIA_CHECK(!parses({{":method", "CONNECT"}, {":authority", ":443"}}, false));
+    RUVIA_CHECK(!parses({{":method", "CONNECT"}, {":authority", "user@proxy.test:443"}}, false));
 }
 
 RUVIA_TEST(http3_request_head_rejects_authority_and_host_disagreement) {
@@ -267,4 +270,17 @@ RUVIA_TEST(http3_request_trailers_drop_forbidden_names_and_reject_pseudo_fields)
     RUVIA_CHECK(ruvia::append_http3_request_trailers(trailers, invalid_value) ==
                 std::optional<ruvia::http_request_trailer_error>(ruvia::http_request_trailer_error::invalid_field));
     RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{2});
+}
+
+RUVIA_TEST(http3_request_head_preserves_transport_early_data_provenance) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto event = make_headers_event(&resource,
+        {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}}, true);
+    event.early_data_ = true;
+    auto head = ruvia::http3_request_head::parse(std::move(event), &resource);
+    RUVIA_CHECK(head && head->early_data());
+    auto ordinary = ruvia::http3_request_head::parse(make_headers_event(&resource,
+                                                         {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}}, true),
+        &resource);
+    RUVIA_CHECK(ordinary && !ordinary->early_data());
 }

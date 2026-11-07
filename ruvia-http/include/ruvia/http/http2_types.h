@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "ruvia/http/http2_framing.h"
-#include "ruvia/http/websocket_protocol.h"
 namespace ruvia {
 class http2_connection;
 namespace detail {
@@ -199,28 +198,5 @@ enum class http2_response_head_submit_error : std::uint8_t {
 };
 enum class http2_websocket_handshake_submit_error : std::uint8_t { closed,
     invalid_state };
-
-// The negotiation committed on the wire by the RFC 8441 200 response. The
-// runtime configures its websocket connection from this value, never from a
-// separately recomputed compression/subprotocol tuple.
-class http2_websocket_negotiation final {
-public:
-    [[nodiscard]] std::string_view subprotocol() const& noexcept {
-        return subprotocol_;
-    }
-    std::string_view subprotocol() const&& = delete;
-    [[nodiscard]] websocket_compression compression() const noexcept {
-        return compression_;
-    }
-
-private:
-    friend class http2_connection;
-    friend class detail::http2_connection;
-    http2_websocket_negotiation(std::pmr::string subprotocol, websocket_compression compression) noexcept
-        : subprotocol_(std::move(subprotocol)),
-          compression_(compression) {}
-    std::pmr::string subprotocol_;
-    websocket_compression compression_;
-};
 
 }  // namespace ruvia

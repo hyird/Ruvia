@@ -97,6 +97,7 @@ struct context_request_services final {
     // The arrival instant the request's owner pinned for rate-limit decisions
     // (test_app); empty when those decisions read the steady clock.
     std::optional<std::chrono::steady_clock::time_point> pinned_arrival_{};
+    bool early_data_{false};
 };
 
 class context_services final {
@@ -177,6 +178,13 @@ public:
         request_services_.stop_token_ = token;
     }
     void bind_stop_token(stop_token&&) = delete;
+
+    void bind_early_data(bool value) noexcept {
+        request_services_.early_data_ = value;
+    }
+    [[nodiscard]] bool early_data() const noexcept {
+        return request_services_.early_data_;
+    }
 
     [[nodiscard]] const route_table* routes() const noexcept {
         return worker_services_.routes_;

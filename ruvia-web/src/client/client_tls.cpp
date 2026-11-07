@@ -20,6 +20,25 @@
 namespace ruvia::detail {
 namespace {
 
+constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};
+constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
+    2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+
+[[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept {
+    switch (mode) {
+        case client_alpn::none:
+            return {};
+        case client_alpn::http11:
+            return http11_alpn;
+        case client_alpn::http2:
+            return http2_alpn;
+        case client_alpn::negotiate:
+            return negotiated_http_alpn;
+    }
+    std::terminate();
+}
+
 [[nodiscard]] bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
     X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
     if (ip_address) {
@@ -65,6 +84,8 @@ namespace {
             return "failed to reset TLS stream";
         case client_tls_setup_error::sni_failed:
             return "failed to set TLS SNI host";
+        case client_tls_setup_error::alpn_failed:
+            return "failed to configure TLS ALPN";
         case client_tls_setup_error::peer_identity_failed:
             return "failed to configure TLS peer identity";
     }
@@ -124,6 +145,26 @@ client_tls_config_storage::client_tls_config_storage(
     }
 }
 
+std::string_view selected_client_alpn(SSL* ssl) noexcept {
+    const unsigned char* selected = nullptr;
+    unsigned int size = 0;
+    SSL_get0_alpn_selected(ssl, &selected, &size);
+    return {reinterpret_cast<const char*>(selected), size};
+}
+
+std::pmr::string client_uri_host(std::string_view host, std::pmr::memory_resource* resource) {
+    std::pmr::string wire_host(pmr_resource_or_default(resource));
+    if ((host.find(':') != std::string_view::npos)) {
+        wire_host.reserve(host.size() + 2);
+        wire_host.push_back('[');
+        wire_host.append(host);
+        wire_host.push_back(']');
+    } else {
+        wire_host.assign(host);
+    }
+    return wire_host;
+}
+
 void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config) {
     if (config.mode_ != client_tls_mode::verify_identity) {
         throw std::invalid_argument("client TLS context requires TLS to be enabled");
@@ -143,11 +184,18 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     config.certificate_->install(context_value);
 }
 
-client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host) {
+client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, client_alpn alpn) {
     if (SSL_clear(&ssl) != 1) {
         return client_tls_setup_error::reset_failed;
     }
-    return prepare_client_tls_session(ssl, host);
+    if (const auto prepared = prepare_client_tls_session(ssl, host); prepared != client_tls_setup_error::none) {
+        return prepared;
+    }
+    const auto protocols = client_alpn_bytes(alpn);
+    if (SSL_set_alpn_protos(&ssl, protocols.data(), static_cast<unsigned int>(protocols.size())) != 0) {
+        return client_tls_setup_error::alpn_failed;
+    }
+    return client_tls_setup_error::none;
 }
 
 std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept {

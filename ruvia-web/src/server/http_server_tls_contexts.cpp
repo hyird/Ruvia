@@ -8,16 +8,51 @@
 #include <string_view>
 
 #include <asio/ssl/context.hpp>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/http/http_ascii.h"
+#if defined(RUVIA_ENABLE_HTTP3)
+#include "ruvia/http/http3_quic_connection.h"
+#endif
 
 #include "server/http_server_tls_identity.h"
 #include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {
+
+int quic_resumption_context_index() noexcept {
+    static const int index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    return index;
+}
+
+int generate_quic_ticket(SSL* ssl, void*) noexcept {
+    const auto* context = static_cast<const std::array<unsigned char, 32>*>(
+        SSL_get_ex_data(ssl, quic_resumption_context_index()));
+    return context != nullptr &&
+           SSL_SESSION_set1_ticket_appdata(SSL_get0_session(ssl), context->data(), context->size()) == 1;
+}
+
+SSL_TICKET_RETURN decrypt_quic_ticket(SSL* ssl, SSL_SESSION* ticket,
+    const unsigned char*, std::size_t, SSL_TICKET_STATUS status, void*) noexcept {
+    if (status != SSL_TICKET_SUCCESS && status != SSL_TICKET_SUCCESS_RENEW) {
+        return SSL_TICKET_RETURN_IGNORE_RENEW;
+    }
+    const auto* context = static_cast<const std::array<unsigned char, 32>*>(
+        SSL_get_ex_data(ssl, quic_resumption_context_index()));
+    void* remembered = nullptr;
+    std::size_t remembered_size = 0;
+    // RFC 9001 §4.6.1 and RFC 9114 §7.2.8: changed transport limits or
+    // SETTINGS require a fresh handshake, not acceptance of stale 0-RTT.
+    if (context == nullptr || SSL_SESSION_get0_ticket_appdata(ticket, &remembered, &remembered_size) != 1 ||
+        remembered_size != context->size() ||
+        CRYPTO_memcmp(remembered, context->data(), context->size()) != 0) {
+        return SSL_TICKET_RETURN_IGNORE_RENEW;
+    }
+    return status == SSL_TICKET_SUCCESS ? SSL_TICKET_RETURN_USE : SSL_TICKET_RETURN_USE_RENEW;
+}
 
 // Every HTTP version this server speaks over TLS on TCP, in preference order;
 // RFC 7301 §3.2 reserves the alert for offers naming none of them.
@@ -140,18 +175,26 @@ void configure_family(http_server_session_config& session, tls_context_family fa
     const auto* tls = session.tls();
     auto& ticket_keys = *session.ticket_keys_;
     const bool quic = family == tls_context_family::quic;
-    const auto configure = [tls, &ticket_keys, quic](asio::ssl::context& context_value,
+    const bool early_data = quic && session.http3_->early_data_;
+    const auto configure = [tls, &ticket_keys, quic, early_data](asio::ssl::context& context_value,
                                const tls_certificate& certificate) {
         auto* native = context_value.native_handle();
         if (quic) {
-            // RFC 9001 §4.2: QUIC requires TLS 1.3. Early data is never
-            // enabled (SSL_CTX_set_max_early_data stays 0): 0-RTT requests
-            // are replayable and this server does not accept them.
+            // RFC 9001 §4.2: QUIC requires TLS 1.3.
             if (SSL_CTX_set_min_proto_version(native, TLS1_3_VERSION) != 1 ||
                 SSL_CTX_set_max_proto_version(native, TLS1_3_VERSION) != 1) {
                 throw std::runtime_error("failed to restrict the QUIC TLS context to TLS 1.3");
             }
             SSL_CTX_set_alpn_select_cb(native, select_quic_alpn_protocol, nullptr);
+            if (SSL_CTX_set_max_early_data(native, early_data ? UINT32_MAX : 0) != 1 ||
+                SSL_CTX_set_session_ticket_cb(native, generate_quic_ticket, decrypt_quic_ticket, nullptr) != 1) {
+                throw std::runtime_error("failed to configure QUIC session tickets");
+            }
+            if (early_data) {
+                // Ticket keys are shared across workers, not OpenSSL's local
+                // replay cache. RFC 8470 admission rejects unsafe early requests.
+                SSL_CTX_set_options(native, SSL_OP_NO_ANTI_REPLAY);
+            }
         } else {
             context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
                                       asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
@@ -187,6 +230,51 @@ void configure_family(http_server_session_config& session, tls_context_family fa
 }
 
 }  // namespace
+
+#if defined(RUVIA_ENABLE_HTTP3)
+void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection,
+    const http3_connection_options& options, bool early_data,
+    std::array<unsigned char, 32>& resumption_context) {
+    const auto* parameters = ngtcp2_conn_get_local_transport_params2(connection.native_handle());
+    // Encode only remembered limits: connection IDs and reset tokens change
+    // for each connection and must not prevent legitimate ticket resumption.
+    const std::array<std::uint64_t, 18> values{
+        ngtcp2_conn_get_client_chosen_version2(connection.native_handle()),
+        parameters->initial_max_data,
+        parameters->initial_max_stream_data_bidi_local,
+        parameters->initial_max_stream_data_bidi_remote,
+        parameters->initial_max_stream_data_uni,
+        parameters->initial_max_streams_bidi,
+        parameters->initial_max_streams_uni,
+        parameters->active_connection_id_limit,
+        parameters->max_datagram_frame_size,
+        parameters->max_udp_payload_size,
+        static_cast<std::uint64_t>(parameters->disable_active_migration),
+        parameters->max_idle_timeout,
+        options.max_field_section_size_,
+        options.qpack_max_dtable_capacity_,
+        options.qpack_blocked_streams_,
+        static_cast<std::uint64_t>(options.enable_connect_protocol_),
+        static_cast<std::uint64_t>(options.enable_h3_datagram_),
+        static_cast<std::uint64_t>(early_data)};
+    std::array<unsigned char, values.size() * sizeof(std::uint64_t)> encoded{};
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        for (std::size_t byte = 0; byte < sizeof(std::uint64_t); ++byte) {
+            encoded[i * sizeof(std::uint64_t) + byte] =
+                static_cast<unsigned char>(values[i] >> (8 * (sizeof(std::uint64_t) - byte - 1)));
+        }
+    }
+    unsigned int digest_size = 0;
+    const auto index = quic_resumption_context_index();
+    if (index < 0 ||
+        EVP_Digest(encoded.data(), encoded.size(), resumption_context.data(), &digest_size, EVP_sha256(), nullptr) != 1 ||
+        digest_size != resumption_context.size() ||
+        SSL_set_ex_data(&tls, index, &resumption_context) != 1 ||
+        SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {
+        throw std::runtime_error("failed to bind QUIC TLS resumption settings");
+    }
+}
+#endif
 
 void configure_http_server_tls_contexts(http_server_session_config& session) {
     session.tls_context_.reset();

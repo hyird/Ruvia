@@ -101,6 +101,7 @@ std::string https_exchange(
            "\r\nConnection: close\r\n\r\n";
 }
 
+#if defined(RUVIA_ENABLE_HTTP2)
 struct http2_target final {
     std::string_view scheme_;
     std::string_view authority_;
@@ -173,6 +174,7 @@ std::vector<unsigned> h2_cleartext(
     socket.connect(endpoint);
     return http2_statuses(socket, targets);
 }
+#endif
 
 }  // namespace misdirected_request_test
 
@@ -255,6 +257,7 @@ RUVIA_TEST(requests_the_connection_cannot_carry_are_answered_421) {
                 "HTTP/1.1 421 Misdirected Request");
             RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("https://attacker.example/origin", "localhost")),
                 "HTTP/1.1 421 Misdirected Request");
+#if defined(RUVIA_ENABLE_HTTP2)
             // HTTP/2 refuses only the misdirected stream; the connection
             // still serves the covered one.
             const auto h2 = h2_over_tls(io, https_endpoint,
@@ -265,6 +268,7 @@ RUVIA_TEST(requests_the_connection_cannot_carry_are_answered_421) {
                 RUVIA_CHECK_EQ(h2[1], 200U);
                 RUVIA_CHECK_EQ(h2[2], 200U);
             }
+#endif
 
             // A cleartext connection carries no "https" target.
             RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")),
@@ -273,22 +277,26 @@ RUVIA_TEST(requests_the_connection_cannot_carry_are_answered_421) {
                 "HTTP/1.1 421 Misdirected Request");
             RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("http://a.example/origin", "x")), "HTTP/1.1 200 OK");
             RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("/origin", "attacker.example")), "HTTP/1.1 200 OK");
+#if defined(RUVIA_ENABLE_HTTP2)
             const auto h2c = h2_cleartext(io, http_endpoint, {{"https", "localhost"}, {"http", "localhost"}});
             RUVIA_CHECK_EQ(h2c.size(), std::size_t{2});
             if (h2c.size() == 2) {
                 RUVIA_CHECK_EQ(h2c[0], 421U);
                 RUVIA_CHECK_EQ(h2c[1], 200U);
             }
+#endif
         }
         if (ready && trusted) {
             // A trusted gateway vouches for the target itself.
             RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")), "HTTP/1.1 200 OK");
             RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")), "HTTP/1.1 200 OK");
+#if defined(RUVIA_ENABLE_HTTP2)
             const auto h2 = h2_over_tls(io, https_endpoint, {{"https", "attacker.example"}});
             RUVIA_CHECK_EQ(h2.size(), std::size_t{1});
             if (h2.size() == 1) {
                 RUVIA_CHECK_EQ(h2[0], 200U);
             }
+#endif
         }
         app.stop();
         runner.join();

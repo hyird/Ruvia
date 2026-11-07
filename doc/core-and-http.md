@@ -262,9 +262,13 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 
 `ruvia::web` 的 HTTP/3 服务（`listen_config::http3_`）在这两层之上实现：
 - **端点与连接 ID 分流**：POSIX 上每个 worker 以 `SO_REUSEADDR` + `SO_REUSEPORT` 绑定同一 UDP 端口，接收循环每次唤醒后最多连读 32 个数据报，按 `ngtcp2_pkt_decode_version_cid` 解析目标连接 ID：命中本 worker 连接表即交给该连接；服务器签发的 20 字节连接 ID 以两字节编码所属 worker 并用监听器密钥计算标签，指向其他 worker 的数据报经有界目录（每 worker 至多 256 个在途，满则丢弃）转交；仅合法的客户端 Initial（`ngtcp2_accept`）在本 worker 新建连接，受 `max_connections_per_worker_` 约束（满额时先淘汰最久空闲连接），不支持的版本回复 Version Negotiation（仅对不小于 1200 字节的数据报）；其余数据报（含未知短包头）直接丢弃，不发送无状态重置。Windows 由应用级 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占 UDP socket，按连接 ID（新连接 Initial 按客户端 ID 的密钥哈希）经同一目录转交业务 worker，业务 worker 的出站数据报经每 worker 至多 256 个在途的有界队列交回 Acceptor 发送。
-- **连接会话**：每个连接在所属 worker 上持有 OpenSSL `SSL`（取自监听器的 QUIC TLS 上下文，TLS 1.3、ALPN `h3`、无早期数据）、`ngtcp2_crypto_ossl_ctx` 与一个随 `expiry()` 重新设定的 worker 定时器；写协程循环 `next_datagram()` 并以非阻塞 `send_to` 发出，发送缓冲满时等待可写（受 `write_timeout_` 的写停滞时钟约束），每 32 个数据报让出一次事件循环。握手完成后启动 HTTP/3 控制流并绑定上下文服务；每个请求流经与 HTTP/1、HTTP/2 相同的 `admit_http_request` → 路由分派 → 响应尾处理链，缓冲、文件与流式响应只提交每流输出预算（256 KiB 未确认数据）允许的前缀，其余等待确认；流式请求体只在处理器读取后才通过 `consume_stream_data()` 归还流控额度。
+- **连接会话**：每个连接在所属 worker 上持有 OpenSSL `SSL`（监听器的 QUIC TLS 上下文，TLS 1.3、ALPN `h3`）、`ngtcp2_crypto_ossl_ctx` 与随 `expiry()` 重新设定的 worker 定时器；写协程按 `next_datagram()` 返回的路径发送，发送缓冲满时等待可写，受写停滞期限约束。HTTP/3 控制流在应用密钥就绪后启动，恢复的 0-RTT 可提前启动。每个请求流复用 HTTP/1、HTTP/2 的准入、分派与响应尾处理链；缓冲、文件与流式响应受每流未确认输出预算约束，流式请求体消费后才通过 `consume_stream_data()` 归还额度。
 - **生命周期**：连接计入 worker 的连接计数，由连接扫描器按 HTTP/2 相同的阶段计时；达到 `max_requests_per_connection_` 或连接超时时依次发送 shutdown-notice GOAWAY、`min(1 s, 3×PTO)` 后的最终 GOAWAY，所有已接纳流关闭后以 `H3_NO_ERROR` 发送 CONNECTION_CLOSE，并在 3×PTO 的关闭期内吸收迟到数据报；`stop()`（直接断连，不设排空阶段）、淘汰或超时宽限期满时立即以 `H3_NO_ERROR` 关闭。
-- **限制**：不支持 0-RTT、连接迁移（`disable_active_migration`）、Retry、无状态重置、服务端推送与 ORIGIN/ALTSVC 帧；CONNECT 与 WebSocket 路由回 `501`，不通告 RFC 9220 扩展 CONNECT。
+- **扩展与恢复**：支持 CONNECT、RFC 9220 WebSocket、RFC 9297/9298 HTTP Datagram 与 CONNECT-UDP；Web 层的 0-RTT 准入和路径迁移策略见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。不实现 Retry、无状态重置发送、服务端推送与 ORIGIN/ALTSVC 帧。
+
+独立 QUIC 驱动调用 `start_early_http3()` 时必须提供经认证保存的传输参数及对端 SETTINGS，并同时启用 TLS 早期数据。TLS 拒绝早期数据时调用 `reject_early_data()` 丢弃早期流，是否重发由调用方裁决。`http3_headers_event::early_data_` 保留实际传输来源，不能由请求字段代替。TLS 恢复并接受早期数据，也不保证某个请求属于 0-RTT：发送节拍或重传可能使请求在握手完成后才到达，应用应读取该请求的来源标记，而非连接的 TLS 协商结果。
+
+`migrate(path, timestamp)` 仅用于客户端，先验证新路径；调用方必须按输出数据报的 `path_` 发送，并在验证期间保持新旧路径接收。`submit_datagram(stream_id, payload)` 的载荷位于 Quarter Stream ID 之后；`max_datagram_payload_size()` 给出当前上限，队列满返回 `would_block`，不支持或超长返回 `invalid_state`。
 
 HTTP/2 与 HTTP/3 分别由 `RUVIA_ENABLE_HTTP2`、`RUVIA_ENABLE_HTTP3` 控制。关闭某项时不解析其源码、不安装其连接头文件，也不引入对应的 nghttp2 或 nghttp3/ngtcp2 依赖；两个开关互不要求对方启用。
 ---

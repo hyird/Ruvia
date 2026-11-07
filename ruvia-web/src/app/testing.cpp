@@ -117,6 +117,7 @@ struct test_app::impl_type final {
                                               : detail::route_rate_limit_presence::absent,
                     .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
                     .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
+                    .http_client_result_budget_ = options_.server_.http_client_result_budget_,
                     .env_ = &env_,
                     .trusted_proxies_ =
                         options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,

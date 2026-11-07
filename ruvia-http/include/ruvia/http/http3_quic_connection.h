@@ -39,8 +39,8 @@ using http3_quic_stateless_reset_token =
 struct http3_quic_connection_options final {
     // Crypto callbacks come from the selected ngtcp2 crypto adapter. The
     // wrapper owns stream-data, acknowledgement and stream-close callbacks.
-    // get_new_connection_id2, remove_connection_id and handshake_completed,
-    // when set, receive callback_user_data_ as their user data.
+    // get_new_connection_id2, remove_connection_id, handshake_completed,
+    // handshake_confirmed and tls_early_data_rejected, when set, receive callback_user_data_.
     ngtcp2_callbacks callbacks_{};
     ngtcp2_cid source_connection_id_{};
     ngtcp2_cid destination_connection_id_{};
@@ -51,9 +51,8 @@ struct http3_quic_connection_options final {
     // Server only: the stateless reset token of source_connection_id_
     // (RFC 9000 §10.3), sent as a transport parameter.
     std::optional<http3_quic_stateless_reset_token> stateless_reset_token_{};
-    // Server only: forbids client connection migration (RFC 9000 §9,
-    // disable_active_migration). A server whose datagram steering follows
-    // the UDP 4-tuple cannot deliver a migrated path to its connection.
+    // Server only: forbids client connection migration (RFC 9000 §9).
+    // Leave false when the UDP owner routes connection IDs across paths.
     bool disable_active_migration_{false};
     ngtcp2_path initial_path_{};
     std::uint32_t version_{NGTCP2_PROTO_VER_V1};
@@ -66,6 +65,8 @@ struct http3_quic_connection_options final {
     std::uint64_t initial_max_streams_uni_{16};
     std::uint64_t active_connection_id_limit_{2};
     std::size_t max_udp_payload_size_{1350};
+    // Bounded unreliable output retained until ngtcp2 accepts each frame.
+    std::size_t max_pending_datagram_bytes_{64 * 1024};
     void* callback_user_data_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
     http3_connection_options http3_{};
@@ -116,6 +117,21 @@ public:
     [[nodiscard]] bool http3_started() const noexcept;
     [[nodiscard]] std::optional<std::int64_t> open_request_stream();
 
+    // Restore authenticated transport parameters and peer SETTINGS from a
+    // ticket before opening 0-RTT streams. TLS must enable early data too.
+    [[nodiscard]] http3_quic_status start_early_http3(
+        std::span<const std::byte> transport_parameters, http3_peer_settings settings);
+    // On TLS early rejection, discard the rejected HTTP/3 streams before a
+    // caller explicitly retries requests in 1-RTT; never replays requests.
+    [[nodiscard]] http3_quic_status reject_early_data();
+    // Client only, QUIC v1: validate a new path before switching. The caller
+    // must send packets on output.path_ and keep both paths receiving.
+    [[nodiscard]] http3_quic_result migrate(const ngtcp2_path& path, ngtcp2_tstamp timestamp);
+    // Payload follows the HTTP Datagram Quarter Stream ID. Owned and bounded;
+    // invalid_state means unsupported/oversized, would_block means queue full.
+    [[nodiscard]] http3_quic_status submit_datagram(
+        std::int64_t stream_id, std::span<const std::byte> payload);
+    [[nodiscard]] std::size_t max_datagram_payload_size(std::int64_t stream_id) const noexcept;
     [[nodiscard]] http3_quic_result receive_datagram(const ngtcp2_path& path,
         std::uint32_t ecn, std::span<const std::byte> bytes,
         ngtcp2_tstamp timestamp);

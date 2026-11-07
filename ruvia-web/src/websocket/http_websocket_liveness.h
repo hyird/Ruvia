@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -146,6 +148,37 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
         return websocket_liveness_decision::idle;
     }
     return websocket_liveness_decision::send_ping;
+}
+
+// A stalled writer's deadline is last activity + ping interval + pong timeout,
+// without overflowing that sum or restarting the pong portion on intermediate
+// timer ticks.
+[[nodiscard]] inline std::chrono::milliseconds websocket_heartbeat_delay(
+    const websocket_lifecycle_options& options, const websocket_liveness_state_type& state,
+    bool writing, std::int64_t last_active_ms, std::int64_t now) noexcept {
+    const auto remaining = [now](std::int64_t started, std::int64_t budget) {
+        const auto elapsed = std::max<std::int64_t>(0, now - started);
+        return elapsed >= budget ? std::int64_t{0} : budget - elapsed;
+    };
+    std::int64_t delay = 1;
+    if (writing) {
+        const auto elapsed = std::max<std::int64_t>(0, now - last_active_ms);
+        const auto ping = options.heartbeat_.ping_interval_->count();
+        const auto pong = options.heartbeat_.pong_timeout_->count();
+        if (elapsed >= ping) {
+            delay = elapsed - ping >= pong ? 0 : pong - (elapsed - ping);
+        } else {
+            const auto until_ping = ping - elapsed;
+            delay = pong > std::numeric_limits<std::int64_t>::max() - until_ping
+                        ? std::numeric_limits<std::int64_t>::max()
+                        : until_ping + pong;
+        }
+    } else if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state)) {
+        delay = remaining(pong->sent_at_ms(), options.heartbeat_.pong_timeout_->count());
+    } else if (std::holds_alternative<websocket_liveness_idle>(state)) {
+        delay = remaining(last_active_ms, options.heartbeat_.ping_interval_->count());
+    }
+    return std::chrono::milliseconds(std::max<std::int64_t>(1, delay));
 }
 
 class websocket_peer_close_info final {

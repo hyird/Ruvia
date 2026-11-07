@@ -8,9 +8,9 @@
 | --- | --- |
 | [doc/README.md](README.md) | 架构总览、CMake 构建与工程接入、生命周期与所有权准则、错误处理约定、示例程序全集索引 |
 | [doc/web-guide.md](web-guide.md) | `ruvia::web` 服务端核心：应用配置（`ruvia::app()`）、控制器与路由宏、中间件、`context` / `context_request`、声明式模型 `RUVIA_MODEL` 与校验、静态文件、运维能力与内存级测试 `test_app` |
-| [doc/streaming-websocket.md](streaming-websocket.md) | 流式请求/响应与 SSE、HTTP/1.1 & HTTP/2 高级服务端能力（`103 Early Hints`、优先级、Server Push、Trailer）、WebSocket 服务端与 HTTP `CONNECT` / `CONNECT-UDP` 隧道 |
+| [doc/streaming-websocket.md](streaming-websocket.md) | 流式请求/响应与 SSE、HTTP 高级协议能力、WebSocket、CONNECT / CONNECT-UDP，以及 HTTP/1.1、HTTP/2、HTTP/3 的统一链式出站客户端 |
 | [doc/data-and-auth.md](data-and-auth.md) | SQL 数据库（MariaDB / PostgreSQL 连接池、直接查询、事务、迁移、SQL/DDL/过程构建器）、强类型关系型 ORM、Redis 客户端（命令、Pipeline、事务、Streams、Pub/Sub、RediSearch ORM）与 JWT 认证 |
-| [doc/core-and-http.md](core-and-http.md) | `ruvia::core` 运行时（`task<T>`、`event_loop_pool`、`blocking_pool`、有界通道、停止令牌、定时器、PMR 内存资源）与 `ruvia::http` 独立 Sans-I/O 协议层（HTTP/1、HTTP/2、HPACK、WebSocket、内容压缩、Multipart、SSE） |
+| [doc/core-and-http.md](core-and-http.md) | `ruvia::core` 运行时（`task<T>`、`event_loop_pool`、`blocking_pool`、有界通道、停止令牌、定时器、PMR 内存资源）与 `ruvia::http` 独立 Sans-I/O 协议层（HTTP/1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩、Multipart、SSE） |
 
 ---
 
@@ -21,8 +21,8 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | 库目录 | CMake Target | 头文件前缀 | 职责与边界 |
 | --- | --- | --- | --- |
 | `ruvia-core` | `ruvia::core` | `"ruvia/core/..."` | 协程任务（`task<T>` / `root_task<T>`）、事件循环（`event_loop` / `event_loop_pool` / `event_loop_attachment`）、有界通道（`channel` / `one_shot`）、阻塞卸载池（`blocking_pool`）与 PMR 内存池；仅公开依赖 standalone Asio 与 `Threads::Threads` |
-| `ruvia-http` | `ruvia::http` | `"ruvia/http/..."` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HPACK、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；不依赖 `ruvia::core`、Asio、socket 或 OpenSSL |
-| `ruvia-web` | `ruvia::web` | `"ruvia/web/..."` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
+| `ruvia-http` | `ruvia::http` | `"ruvia/http/..."` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；HTTP/2 使用 nghttp2，HTTP/3 使用 nghttp3 与 ngtcp2 core，不依赖 `ruvia::core`、Asio、socket I/O 或 OpenSSL |
+| `ruvia-web` | `ruvia::web` | `"ruvia/web/..."` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、出站 HTTP 客户端、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
 
 > **头文件使用原则**：只包含 `include/ruvia/{core,http,web}/` 下的非 `detail` 公开头文件，不直接引用任何 `detail/` 子目录下的内部头文件。
 
@@ -43,6 +43,8 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `RUVIA_BUILD_WEB` | `ON` | — | 构建 `ruvia::web`（需开启 `CORE` 与 `HTTP`） |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | — | 构建 `examples/` 下的示例程序（需开启 `WEB`） |
 | `RUVIA_BUILD_TESTS` | `OFF` | — | 构建 `tests/` 测试套件 |
+| `RUVIA_ENABLE_HTTP2` | `ON` | `RUVIA_ENABLE_HTTP2` | 启用 nghttp2 会话与 HTTP/2 公开 API，可独立关闭 |
+| `RUVIA_ENABLE_HTTP3` | `ON` | `RUVIA_ENABLE_HTTP3` | 启用 nghttp3/ngtcp2 协议层与 Web QUIC TLS 接入，可独立关闭 |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"ruvia/web/db/..."` 公开头 |
 | `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"ruvia/web/db/..."` 公开头 |
 | `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"ruvia/web/redis/..."`、服务端 `session_middleware` 与数据库查询缓存 |

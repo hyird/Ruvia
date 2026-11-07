@@ -143,6 +143,19 @@ client_idle_transport_status client_tcp_transport::idle_status() noexcept {
                                 : client_idle_transport_status::closed;
 }
 
+task<void> client_tcp_transport::wait_readable() {
+    // A readiness wait consumes nothing, so a readiness that races the next
+    // exchange leaves its bytes to that exchange's read.
+    (void)co_await async_asio([this](auto handler) mutable {
+        stream_.next_layer().socket().async_wait(asio::socket_base::wait_read, std::move(handler));
+    });
+}
+
+void client_tcp_transport::cancel_wait() noexcept {
+    std::error_code ignored;
+    (void)stream_.next_layer().socket().cancel(ignored);
+}
+
 bool client_tcp_transport::arm(lane_deadline& lane, const operation_timeout& timeout) {
     lane.timer_.cancel();
     const auto remaining = timeout.remaining();
@@ -271,7 +284,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     }
     tls_started_ = true;
     if (const auto prepared =
-            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.tls_->tls_host(endpoint_.host_));
+            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.alpn_);
         prepared != client_tls_setup_error::none) {
         (void)clear(read_);
         co_return client_transport_result{.status_ = client_transport_status::tls_failed,
@@ -283,6 +296,10 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     auto result_value = finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
     tls_close_ready_ = result_value.ok();
     co_return result_value;
+}
+
+std::string_view client_tcp_transport::alpn() noexcept {
+    return tls_started_ ? selected_client_alpn(stream_.native_handle()) : std::string_view{};
 }
 
 task<client_transport_result> client_tcp_transport::read_some(std::span<char> bytes_value, const operation_timeout& timeout) {
@@ -347,6 +364,11 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
 
 task<client_transport_result> client_tcp_transport::write(std::string_view bytes_value, const operation_timeout& timeout) {
     return write_buffers(asio::buffer(bytes_value), timeout);
+}
+
+task<client_transport_result> client_tcp_transport::write(
+    std::span<const asio::const_buffer> buffers, const operation_timeout& timeout) {
+    return write_buffers(buffers, timeout);
 }
 
 }  // namespace ruvia::detail

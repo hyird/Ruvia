@@ -5,6 +5,7 @@
 
 namespace ruvia {
 
+class http_client_handle;
 class stop_token;
 class operation_scope;
 
@@ -20,6 +21,7 @@ namespace detail {
 
 class db_registry;
 struct request_io_metrics;
+class http_client_registry;
 class redis_registry;
 
 // A copyable view of the complete client registry set owned by one worker.
@@ -33,12 +35,14 @@ public:
         return worker_client_registry_view(nullptr);
     }
 
-    constexpr worker_client_registry_view(db_registry& databases, redis_registry& redis) noexcept
+    constexpr worker_client_registry_view(
+        db_registry& databases, redis_registry& redis, http_client_registry& http_clients) noexcept
         : databases_(&databases),
-          redis_(&redis) {}
+          redis_(&redis),
+          http_clients_(&http_clients) {}
 
     [[nodiscard]] constexpr bool attached() const noexcept {
-        return databases_ != nullptr;
+        return http_clients_ != nullptr;
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.
@@ -56,12 +60,17 @@ public:
         request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
+    [[nodiscard]] http_client_handle client(
+        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_handle client(std::string_view alias,
+        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
+
 private:
     explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
 
     db_registry* databases_{nullptr};
-    // Read only by the Redis accessors.
-    [[maybe_unused]] redis_registry* redis_{nullptr};
+    redis_registry* redis_{nullptr};
+    http_client_registry* http_clients_{nullptr};
 };
 
 }  // namespace detail

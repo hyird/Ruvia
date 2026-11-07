@@ -682,7 +682,7 @@ RUVIA_TEST(http2_websocket_connect_accepts_zero_content_length_and_early_data_wi
             const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
             RUVIA_CHECK(val.accepted() != nullptr);
             const auto sub = server.submit_websocket_handshake(1, req, val);
-            RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(sub));
+            RUVIA_CHECK(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(sub));
             (void)server.release(std::move(*head));
         }
     }
@@ -710,7 +710,7 @@ RUVIA_TEST(http2_websocket_connect_accepts_zero_content_length_and_early_data_wi
             const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
             RUVIA_CHECK(val.accepted() != nullptr);
             const auto sub = server.submit_websocket_handshake(1, req, val);
-            RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(sub));
+            RUVIA_CHECK(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(sub));
             auto end_ev = server.next_event();
             RUVIA_CHECK(end_ev && end_ev->tunnel_end() != nullptr);
             (void)server.release(std::move(*head));
@@ -743,7 +743,7 @@ RUVIA_TEST(http2_websocket_connect_accepts_zero_content_length_and_early_data_wi
             const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
             RUVIA_CHECK(val.accepted() != nullptr);
             const auto sub = server.submit_websocket_handshake(1, req, val);
-            RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(sub));
+            RUVIA_CHECK(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(sub));
             auto end_ev = server.next_event();
             RUVIA_CHECK(end_ev && end_ev->tunnel_end() != nullptr);
             (void)server.release(std::move(*head));

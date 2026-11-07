@@ -13,6 +13,7 @@
 #include "ruvia/http/hpack.h"
 
 #include "poisoned_retirement_resource.h"
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -259,6 +260,11 @@ RUVIA_TEST(hpack_public_encoder_preserves_output_when_alias_copy_fails) {
     std::pmr::string output(256, 'a', &resource);
     const std::string before(output);
     const auto borrowed = std::string_view(output);
+    if (!ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+        ruvia::hpack_encoder::encode_header(output, borrowed, borrowed);
+        check_encoded_field(ruvia_ctx, output, before, before, before);
+        return;
+    }
     resource.reject();
     bool threw = false;
     try {

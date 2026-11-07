@@ -4,52 +4,10 @@
 #include <stdexcept>
 
 #include "field/http_structured_fields.h"
+#include "util/quic_varint.h"
 
 namespace ruvia {
 namespace {
-constexpr std::uint64_t capsule_var_int_max = (std::uint64_t{1} << 62) - 1;
-struct capsule_var_int final {
-    std::uint64_t value_;
-    std::size_t encoded_bytes_;
-};
-constexpr std::size_t capsule_var_int_size(std::uint64_t value) noexcept {
-    return value < (std::uint64_t{1} << 6) ? 1 : value < (std::uint64_t{1} << 14) ? 2
-                                             : value < (std::uint64_t{1} << 30)   ? 4
-                                                                                  : 8;
-}
-std::variant<capsule_var_int, http_capsule_codec_error> decode_capsule_var_int(std::span<const char> input) noexcept {
-    if (input.empty()) {
-        return http_capsule_codec_error::need_more_data;
-    }
-    const auto first = static_cast<unsigned char>(input.front());
-    const std::size_t size = std::size_t{1} << (first >> 6);
-    if (input.size() < size) {
-        return http_capsule_codec_error::need_more_data;
-    }
-    std::uint64_t value = first & 0x3f;
-    for (std::size_t i = 1; i < size; ++i) {
-        value = (value << 8) | static_cast<unsigned char>(input[i]);
-    }
-    return capsule_var_int{value, size};
-}
-std::variant<std::size_t, http_capsule_codec_error> encode_capsule_var_int(std::span<char> output, std::uint64_t value) noexcept {
-    if (value > capsule_var_int_max) {
-        return http_capsule_codec_error::value_out_of_range;
-    }
-    const auto size = capsule_var_int_size(value);
-    if (output.size() < size) {
-        return http_capsule_codec_error::output_too_small;
-    }
-    for (std::size_t i = size; i != 0; --i) {
-        output[i - 1] = static_cast<char>(value & 0xff);
-        value >>= 8;
-    }
-    const unsigned tag = size == 1 ? 0 : size == 2 ? 0x40
-                                     : size == 4   ? 0x80
-                                                   : 0xc0;
-    output[0] = static_cast<char>(static_cast<unsigned char>(output[0]) | tag);
-    return size;
-}
 // CONNECT-UDP context ID 0 (RFC 9298 section 5) as its one-byte variable-length integer.
 constexpr std::string_view udp_payload_context_id{"\0", 1};
 }  // namespace
@@ -86,31 +44,31 @@ std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept
 }
 
 std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input) noexcept {
-    auto id = decode_capsule_var_int(input);
+    auto id = detail::decode_quic_varint(input);
     if (id.index() != 0) {
         return std::nullopt;
     }
     return http_udp_datagram_view{std::get<0>(id).value_, input.subspan(std::get<0>(id).encoded_bytes_)};
 }
 std::variant<std::size_t, http_capsule_codec_error> encode_http_udp_datagram_prefix(std::span<char> output, std::uint64_t context_id) noexcept {
-    return encode_capsule_var_int(output, context_id);
+    return detail::encode_quic_varint(output, context_id);
 }
 std::variant<std::size_t, http_capsule_codec_error> encode_http_capsule_header(std::span<char> output, std::uint64_t type, std::uint64_t length) noexcept {
-    if (type > capsule_var_int_max || length > capsule_var_int_max) {
+    if (type > detail::quic_varint_max || length > detail::quic_varint_max) {
         return http_capsule_codec_error::value_out_of_range;
     }
-    const auto type_size = capsule_var_int_size(type);
-    const auto length_size = capsule_var_int_size(length);
+    const auto type_size = detail::quic_varint_size(type);
+    const auto length_size = detail::quic_varint_size(length);
     if (output.size() < type_size + length_size) {
         return http_capsule_codec_error::output_too_small;
     }
-    (void)encode_capsule_var_int(output, type);
-    (void)encode_capsule_var_int(output.subspan(type_size), length);
+    (void)detail::encode_quic_varint(output, type);
+    (void)detail::encode_quic_varint(output.subspan(type_size), length);
     return type_size + length_size;
 }
 http_capsule_decoder::http_capsule_decoder(http_capsule_config config)
     : config_(config) {
-    if (config.max_capsule_length_ > capsule_var_int_max) {
+    if (config.max_capsule_length_ > detail::quic_varint_max) {
         throw std::invalid_argument("capsule length exceeds varint range");
     }
 }
@@ -149,14 +107,14 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                 header_[header_size_++] = input.front();
                 input = input.subspan(1);
                 if (type_size_ == 0) {
-                    auto type = decode_capsule_var_int(std::span<const char>(header_).first(header_size_));
+                    auto type = detail::decode_quic_varint(std::span<const char>(header_).first(header_size_));
                     if ((type.index() != 0)) {
                         continue;
                     }
                     type_ = std::get<0>(type).value_;
                     type_size_ = std::get<0>(type).encoded_bytes_;
                 }
-                auto length = decode_capsule_var_int(std::span<const char>(header_).subspan(type_size_, header_size_ - type_size_));
+                auto length = detail::decode_quic_varint(std::span<const char>(header_).subspan(type_size_, header_size_ - type_size_));
                 if ((length.index() != 0)) {
                     continue;
                 }
@@ -196,7 +154,7 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                 context_id_[context_id_size_++] = input.front();
                 input = input.subspan(1);
                 --remaining_;
-                const auto context_id = decode_capsule_var_int(std::span<const char>(context_id_).first(context_id_size_));
+                const auto context_id = detail::decode_quic_varint(std::span<const char>(context_id_).first(context_id_size_));
                 if (context_id.index() != 0 && remaining_ != 0) {
                     continue;
                 }

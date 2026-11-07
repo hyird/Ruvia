@@ -161,8 +161,11 @@ if(RUVIA_BUILD_WEB)
         web/http/udp_tunnel.cpp)
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_tcp_client_test_sources
+            web/http2/client_tunnel.cpp
+            web/http2/client_upload.cpp
             web/http2/connect.cpp
             web/http2/file_flow_control.cpp
+            web/http2/push.cpp
             web/http2/streaming.cpp)
     endif()
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
@@ -208,10 +211,12 @@ if(RUVIA_BUILD_WEB)
     # pool and a connection-failure hook, then runs it without a pool.
     ruvia_add_web_standalone_test(ruvia_file_response_failure_tests 30
         web/http/file_response_failure.cpp)
+    # Owns named fixed origins and redirect policies on the process application.
+    ruvia_add_web_standalone_test(ruvia_http_client_api_tests 60
+        web/client/handle_and_response.cpp)
     if(RUVIA_ENABLE_HTTP3)
-        # QUIC + TLS loopback suites over ruvia-http and the OpenSSL QUIC
-        # crypto adapter; they need no ruvia-web.
-        ruvia_add_test(ruvia_http3_quic_tests ruvia::http TIMEOUT 30 SOURCES
+        # Exercises QUIC TLS together with real application listeners.
+        ruvia_add_test(ruvia_http3_quic_tests ruvia::web TIMEOUT 60 SOURCES
             web/http3/quic.cpp support/test_main.cpp)
         target_include_directories(ruvia_http3_quic_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
@@ -232,6 +237,9 @@ if(RUVIA_BUILD_WEB)
     list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/(auth|db|redis)/")
     if(NOT RUVIA_ENABLE_HTTP2)
         list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http2/")
+        # Disabled standalone suites must not re-enter through the Web glob.
+        list(REMOVE_ITEM _ruvia_web_unit_sources
+            web/app/http2_goaway.cpp web/app/http2_request_limit.cpp)
     endif()
     if(NOT RUVIA_ENABLE_HTTP3)
         list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http3/")

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -11,29 +12,38 @@
 #include <optional>
 #include <semaphore>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #if !defined(_WIN32)
 #include <sys/socket.h>
 #endif
 
+#include <asio/co_spawn.hpp>
 #include <asio/connect.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ip/udp.hpp>
 #include <asio/read.hpp>
+#include <asio/redirect_error.hpp>
 #include <asio/ssl.hpp>
+#include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/timer.h"
+#include "ruvia/http/http_datagram.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/http_tunnel.h"
+#include "ruvia/web/websocket.h"
 
 #include "http3_test_client.h"
 #include "test_harness.h"
@@ -52,6 +62,121 @@ constexpr auto client_timeout = 5s;
 constexpr std::size_t echo_bytes = 1536 * 1024;
 constexpr std::size_t file_bytes = 300 * 1024;
 constexpr int stream_chunks = 8;
+
+std::atomic<std::uint16_t> tcp_echo_port{};
+std::atomic<std::uint16_t> udp_echo_port{};
+
+std::span<const std::byte> byte_view(std::string_view value) {
+    return std::as_bytes(std::span(value.data(), value.size()));
+}
+
+std::string udp_capsule(std::string_view payload) {
+    std::array<char, 16> prefix{};
+    const auto encoded = ruvia::encode_http_capsule_header(prefix, ruvia::http_datagram_capsule_type, payload.size() + 1);
+    std::string result(prefix.data(), std::get<std::size_t>(encoded));
+    result.push_back('\0');
+    result.append(payload);
+    return result;
+}
+
+std::string masked_frame(unsigned char opcode, std::string_view payload) {
+    if (payload.size() > 125) {
+        throw std::length_error("test frame exceeds short payload");
+    }
+    std::string frame;
+    frame.push_back(static_cast<char>(0x80U | opcode));
+    frame.push_back(static_cast<char>(0x80U | payload.size()));
+    constexpr std::array<char, 4> mask{1, 2, 3, 4};
+    frame.append(mask.data(), mask.size());
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+        frame.push_back(static_cast<char>(payload[index] ^ mask[index % mask.size()]));
+    }
+    return frame;
+}
+
+std::string read_tunnel_bytes(ruvia::test::http3_test_client& client, std::int64_t stream, std::size_t size) {
+    std::string bytes;
+    while (bytes.size() < size) {
+        auto chunk = client.read_body_chunk(stream, client_timeout);
+        if (!chunk) {
+            throw std::runtime_error("tunnel ended before echo");
+        }
+        bytes.append(*chunk);
+    }
+    return bytes;
+}
+
+ruvia::task<void> await_backend(ruvia::context& context, std::chrono::steady_clock::time_point deadline) {
+    if (std::chrono::steady_clock::now() >= deadline ||
+        co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token()) != ruvia::timer_sleep_result::elapsed) {
+        throw std::runtime_error("echo backend deadline");
+    }
+}
+
+// Real loopback TCP and UDP peers, independent of the application's workers.
+class echo_backends final {
+public:
+    echo_backends()
+        : tcp_(io_, {asio::ip::address_v4::loopback(), 0}),
+          udp_(io_, {asio::ip::address_v4::loopback(), 0}) {
+        tcp_echo_port = tcp_.local_endpoint().port();
+        udp_echo_port = udp_.local_endpoint().port();
+        asio::co_spawn(io_, serve_tcp(), [this](std::exception_ptr failure) { tcp_failure_ = failure; });
+        asio::co_spawn(io_, serve_udp(), [this](std::exception_ptr failure) { udp_failure_ = failure; });
+        thread_ = std::thread([this] { io_.run(); });
+    }
+    ~echo_backends() {
+        io_.stop();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+    void finish() {
+        io_.stop();
+        thread_.join();
+        if (tcp_failure_) {
+            std::rethrow_exception(tcp_failure_);
+        }
+        if (udp_failure_) {
+            std::rethrow_exception(udp_failure_);
+        }
+    }
+
+private:
+    asio::awaitable<void> serve_tcp() {
+        for (;;) {
+            auto socket = co_await tcp_.async_accept(asio::use_awaitable);
+            std::array<char, 16384> buffer{};
+            std::error_code error;
+            for (;;) {
+                const auto count = co_await socket.async_read_some(asio::buffer(buffer),
+                    asio::redirect_error(asio::use_awaitable, error));
+                if (error == asio::error::eof) {
+                    break;
+                }
+                if (error) {
+                    throw std::system_error(error);
+                }
+                co_await asio::async_write(socket, asio::buffer(buffer.data(), count), asio::use_awaitable);
+            }
+            socket.shutdown(asio::ip::tcp::socket::shutdown_send);
+        }
+    }
+    asio::awaitable<void> serve_udp() {
+        std::array<char, 65536> buffer{};
+        asio::ip::udp::endpoint sender;
+        for (;;) {
+            const auto count = co_await udp_.async_receive_from(asio::buffer(buffer), sender, asio::use_awaitable);
+            co_await udp_.async_send_to(asio::buffer(buffer.data(), count), sender, asio::use_awaitable);
+        }
+    }
+    asio::io_context io_;
+    asio::ip::tcp::acceptor tcp_;
+    asio::ip::udp::socket udp_;
+    std::exception_ptr tcp_failure_;
+    std::exception_ptr udp_failure_;
+    std::thread thread_;
+};
 
 std::atomic<bool>& slow_entered() {
     static std::atomic<bool> value{false};
@@ -80,6 +205,9 @@ public:
     RUVIA_GET("/file", file);
     RUVIA_GET("/worker", worker);
     RUVIA_GET("/slow", slow);
+    RUVIA_CONNECT("echo.test:443", tcp_tunnel);
+    RUVIA_CONNECT_PROTOCOL("connect-udp", "/.well-known/masque/udp/echo.test/53/", udp_tunnel);
+    RUVIA_GET_WS("/websocket", websocket);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> hello(ruvia::context& context) {
@@ -113,6 +241,86 @@ public:
         slow_entered() = true;
         (void)co_await ruvia::sleep_for(context.worker(), 1h, context.stop_token());
         co_return context.text("slow-done");
+    }
+    ruvia::task<void> tcp_tunnel(ruvia::context& context) {
+        asio::io_context io;
+        asio::ip::tcp::socket socket(io);
+        socket.connect({asio::ip::address_v4::loopback(), tcp_echo_port.load()});
+        socket.non_blocking(true);
+        auto& tunnel = context.tunnel();
+        std::array<char, 16384> buffer{};
+        while (auto chunk = co_await tunnel.read()) {
+            const auto deadline = std::chrono::steady_clock::now() + client_timeout;
+            std::size_t sent = 0;
+            while (sent < chunk->size()) {
+                std::error_code error;
+                sent += socket.write_some(asio::buffer(chunk->data() + sent, chunk->size() - sent), error);
+                if (error == asio::error::would_block || error == asio::error::try_again) {
+                    co_await await_backend(context, deadline);
+                } else if (error) {
+                    throw std::system_error(error);
+                }
+            }
+            std::size_t received = 0;
+            while (received < chunk->size()) {
+                std::error_code error;
+                const auto count = socket.read_some(asio::buffer(buffer.data(),
+                                                        (std::min)(buffer.size(), chunk->size() - received)),
+                    error);
+                if (error == asio::error::would_block || error == asio::error::try_again) {
+                    co_await await_backend(context, deadline);
+                    continue;
+                }
+                if (error) {
+                    throw std::system_error(error);
+                }
+                received += count;
+                co_await tunnel.write(std::string_view(buffer.data(), count));
+            }
+        }
+        socket.shutdown(asio::ip::tcp::socket::shutdown_send);
+        co_await tunnel.finish();
+    }
+    ruvia::task<void> websocket(ruvia::context& context) {
+        auto& socket = context.websocket();
+        while (auto message = co_await socket.read()) {
+            co_await socket.send(std::move(*message));
+        }
+    }
+    ruvia::task<void> udp_tunnel(ruvia::context& context) {
+        asio::io_context io;
+        asio::ip::udp::socket socket(io, asio::ip::udp::v4());
+        socket.connect({asio::ip::address_v4::loopback(), udp_echo_port.load()});
+        socket.non_blocking(true);
+        auto tunnel = context.tunnel().udp();
+        std::array<char, 65536> buffer{};
+        while (auto packet = co_await tunnel.read()) {
+            const auto deadline = std::chrono::steady_clock::now() + client_timeout;
+            for (;;) {
+                std::error_code error;
+                socket.send(asio::buffer(packet->text().data(), packet->text().size()), 0, error);
+                if (!error) {
+                    break;
+                }
+                if (error != asio::error::would_block && error != asio::error::try_again) {
+                    throw std::system_error(error);
+                }
+                co_await await_backend(context, deadline);
+            }
+            for (;;) {
+                std::error_code error;
+                const auto count = socket.receive(asio::buffer(buffer), 0, error);
+                if (!error) {
+                    co_await tunnel.send(std::string_view(buffer.data(), count));
+                    break;
+                }
+                if (error != asio::error::would_block && error != asio::error::try_again) {
+                    throw std::system_error(error);
+                }
+                co_await await_backend(context, deadline);
+            }
+        }
+        co_await tunnel.finish();
     }
 };
 
@@ -256,6 +464,7 @@ RUVIA_TEST(a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     asio::io_context io;
     shared_port_reservation reservation(io);
     const auto port = reservation.port();
+    echo_backends backends;
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};
@@ -325,6 +534,115 @@ RUVIA_TEST(a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         RUVIA_CHECK_EQ(client.request("GET", "/hello").status_, 200);
     }
 
+    {
+        auto client = connect(port, identity);
+        RUVIA_CHECK(client.peer_settings().enable_connect_protocol_);
+        RUVIA_CHECK(client.peer_settings().h3_datagram_);
+        const auto tunnel = client.start_tunnel({{":method", "CONNECT"}, {":authority", "echo.test:443"}});
+        RUVIA_CHECK_EQ(client.wait_for_response_head(tunnel).status_, 200);
+        const std::string payload(128 * 1024, 't');
+        client.send_stream_data(tunnel, byte_view(payload), true);
+        const auto echo = client.finish_response(tunnel);
+        RUVIA_CHECK_EQ(echo.body_, payload);
+        RUVIA_CHECK(!echo.reset_error_);
+        RUVIA_CHECK_EQ(client.request("GET", "/hello").status_, 200);
+        const auto cancelled = client.start_tunnel({{":method", "CONNECT"}, {":authority", "echo.test:443"}});
+        RUVIA_CHECK_EQ(client.wait_for_response_head(cancelled).status_, 200);
+        client.reset_request(cancelled, NGHTTP3_H3_REQUEST_CANCELLED);
+        RUVIA_CHECK_EQ(client.request("GET", "/hello").status_, 200);
+
+        const auto websocket = client.start_tunnel({{":method", "CONNECT"}, {":protocol", "websocket"},
+            {":scheme", "https"}, {":authority", "localhost"}, {":path", "/websocket"}, {"sec-websocket-version", "13"}});
+        const auto& head = client.wait_for_response_head(websocket);
+        RUVIA_CHECK_EQ(head.status_, 200);
+        RUVIA_CHECK(!head.header("sec-websocket-accept"));
+        RUVIA_CHECK(!head.header("upgrade"));
+        const auto frame = masked_frame(1, "websocket-echo");
+        client.send_stream_data(websocket, byte_view(frame));
+        const auto echoed = read_tunnel_bytes(client, websocket, 16);
+        RUVIA_CHECK_EQ(echoed, std::string("\x81\x0e"
+                                           "websocket-echo",
+                                   16));
+        const auto close = masked_frame(8, std::string("\x03\xe8", 2));
+        client.send_stream_data(websocket, byte_view(close), true);
+        const auto closed = client.finish_response(websocket);
+        RUVIA_CHECK_EQ(closed.body_, std::string("\x88\x02\x03\xe8", 4));
+        RUVIA_CHECK(!closed.reset_error_);
+    }
+
+    const ruvia::test::http3_test_fields udp_head{{":method", "CONNECT"}, {":protocol", "connect-udp"},
+        {":scheme", "https"}, {":authority", "localhost"}, {":path", "/.well-known/masque/udp/echo.test/53/"},
+        {"capsule-protocol", "?1"}};
+    {
+        auto client = connect(port, identity);
+        const auto tunnel = client.start_tunnel(udp_head);
+        const auto& head = client.wait_for_response_head(tunnel);
+        RUVIA_CHECK_EQ(head.status_, 200);
+        RUVIA_CHECK_EQ(head.header("capsule-protocol").value_or(""), "?1");
+        const std::string unknown("\x01ignored", 8);
+        client.send_datagram(tunnel, byte_view(unknown));
+
+        // A native packet may interrupt an incomplete reliable capsule.
+        const auto capsule = udp_capsule("capsule");
+        client.send_stream_data(tunnel, byte_view(std::string_view(capsule).substr(0, 1)));
+        const std::string native("\0native", 7);
+        client.send_datagram(tunnel, byte_view(native));
+        RUVIA_CHECK_EQ(client.receive_datagram(tunnel), native);
+        client.send_stream_data(tunnel, byte_view(std::string_view(capsule).substr(1)));
+        RUVIA_CHECK_EQ(client.receive_datagram(tunnel), std::string("\0capsule", 8));
+        const std::string empty(1, '\0');
+        client.send_datagram(tunnel, byte_view(empty));
+        RUVIA_CHECK_EQ(client.receive_datagram(tunnel), empty);
+
+        // Oversize UDP packets use reliable capsules, never truncated QUIC DATAGRAMs.
+        const std::string large(4096, 'u');
+        const auto large_capsule = udp_capsule(large);
+        client.send_stream_data(tunnel, byte_view(large_capsule));
+        RUVIA_CHECK_EQ(read_tunnel_bytes(client, tunnel, large_capsule.size()), large_capsule);
+        client.send_stream_data(tunnel, {}, true);
+        RUVIA_CHECK(!client.finish_response(tunnel).reset_error_);
+        RUVIA_CHECK_EQ(client.request("GET", "/hello").status_, 200);
+        const auto malformed = client.start_tunnel(udp_head);
+        RUVIA_CHECK_EQ(client.wait_for_response_head(malformed).status_, 200);
+        const std::string truncated_context(1, static_cast<char>(0xff));
+        client.send_datagram(malformed, byte_view(truncated_context));
+        RUVIA_CHECK(client.finish_response(malformed).reset_error_.has_value());
+        const auto cancelled = client.start_tunnel(udp_head);
+        RUVIA_CHECK_EQ(client.wait_for_response_head(cancelled).status_, 200);
+        client.reset_request(cancelled, NGHTTP3_H3_REQUEST_CANCELLED);
+        RUVIA_CHECK_EQ(client.request("GET", "/hello").status_, 200);
+    }
+    {
+        ruvia::test::http3_test_client client({asio::ip::address_v4::loopback(), port},
+            identity.ca_file_, "localhost", client_timeout, nullptr, false, false);
+        const auto tunnel = client.start_tunnel(udp_head);
+        RUVIA_CHECK_EQ(client.wait_for_response_head(tunnel).status_, 200);
+        const auto capsule = udp_capsule("capsule-only");
+        client.send_stream_data(tunnel, byte_view(capsule), true);
+        const auto echo = client.finish_response(tunnel);
+        RUVIA_CHECK_EQ(echo.body_, capsule);
+        RUVIA_CHECK(!echo.reset_error_);
+    }
+
+    {
+        auto client = connect(port, identity);
+        const auto worker = client.request("GET", "/worker").body_;
+        const auto original_port = client.local_port();
+        client.rebind();
+        RUVIA_CHECK(client.local_port() != original_port);
+        RUVIA_CHECK_EQ(client.request("GET", "/worker").body_, worker);
+    }
+    {
+        // Independent path changes cover both mechanisms without chaining the
+        // upstream ngtcp2 path-validation/CID-retirement limitation.
+        auto client = connect(port, identity);
+        const auto worker = client.request("GET", "/worker").body_;
+        const auto original_port = client.local_port();
+        client.migrate();
+        RUVIA_CHECK(client.local_port() != original_port);
+        RUVIA_CHECK_EQ(client.request("GET", "/worker").body_, worker);
+    }
+
     // nghttp3 treats a request it cannot frame (here a :path that is no
     // origin-form target) as a connection error of type H3_MESSAGE_ERROR, as
     // RFC 9114 §8 permits.
@@ -375,6 +693,7 @@ RUVIA_TEST(a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         }
     }
     run.join();
+    backends.finish();
 
     // A connection that reaches max_requests_per_connection_ still ends
     // gracefully (RFC 9114 §5.2): its requests are answered, the shutdown

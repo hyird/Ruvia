@@ -481,7 +481,7 @@ struct http2_sans_io_session_engine::websocket_upgrade_commit final {
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
                 .response_headers_ = response_headers_value,
                 .deflate_ = websocket_endpoint_.deflate()});
-        const auto* submitted_handshake = std::get_if<http2_websocket_negotiation>(&handshake_result);
+        const auto* submitted_handshake = std::get_if<websocket_extended_connect_negotiation>(&handshake_result);
         if (submitted_handshake == nullptr || !engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
             // The handshake is not started, so stream dispatch still
             // answers this pending CONNECT with an error response.

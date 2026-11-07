@@ -14,9 +14,11 @@
 
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/websocket_handshake.h"
 
 namespace ruvia {
 class http3_quic_connection;
@@ -32,6 +34,8 @@ enum class http3_error_code : std::uint64_t {
     request_rejected = 0x010b,
     request_cancelled = 0x010c,
     message_error = 0x010e,
+    // RFC 9297 §2.1: a malformed HTTP/3 Datagram.
+    datagram_error = 0x33,
 };
 
 enum class http3_status : std::uint8_t {
@@ -82,6 +86,10 @@ struct http3_headers_event final {
     std::pmr::vector<http3_field> fields_;
     bool stream_ended_{false};
     bool trailers_{false};
+    // Server, set by http3_quic_connection: some of the stream's data arrived
+    // in 0-RTT packets before the handshake completed (RFC 9001 §4.6.1), so
+    // the request may be a replay (RFC 8470 §5, RFC 9001 §9.2).
+    bool early_data_{false};
 };
 
 // DATA payload. The QUIC owner returns its flow-control credit only when the
@@ -137,9 +145,40 @@ struct http3_goaway_event final {
     std::int64_t id_{-1};
 };
 
+// An HTTP/3 Datagram (RFC 9297 §2.1) for a request stream whose head this
+// codec decoded; payload_ follows the Quarter Stream ID.
+struct http3_datagram_event final {
+    std::int64_t stream_id_{-1};
+    std::pmr::string payload_;
+};
+
 using http3_event = std::variant<http3_headers_event, http3_data_event,
     http3_stream_end_event, http3_transport_action_event,
-    http3_deferred_consume_event, http3_stream_close_event, http3_goaway_event>;
+    http3_deferred_consume_event, http3_stream_close_event, http3_goaway_event,
+    http3_datagram_event>;
+
+// The SETTINGS the peer sent (RFC 9114 §7.2.4) that select optional features.
+struct http3_peer_settings final {
+    // SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 9220 §3).
+    bool enable_connect_protocol_{false};
+    // SETTINGS_H3_DATAGRAM (RFC 9297 §2.1.1).
+    bool h3_datagram_{false};
+    std::uint64_t max_field_section_size_{UINT64_MAX};
+    std::uint64_t qpack_max_dtable_capacity_{0};
+    std::uint64_t qpack_blocked_streams_{0};
+};
+
+// The Quarter Stream ID that prefixes every HTTP/3 Datagram of one request
+// stream (RFC 9297 §2.1), as a QUIC variable-length integer.
+struct http3_datagram_prefix final {
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept {
+        return std::span<const std::byte>(bytes_.data(), size_);
+    }
+    std::span<const std::byte> bytes() const&& = delete;
+
+    std::array<std::byte, 8> bytes_{};
+    std::size_t size_{0};
+};
 
 struct http3_stream_output final {
     [[nodiscard]] std::size_t size() const noexcept;
@@ -184,6 +223,11 @@ struct http3_connection_options final {
     // Server SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 9220 §3). Without it a
     // :protocol pseudo-header is a malformed request.
     bool enable_connect_protocol_{false};
+    // SETTINGS_H3_DATAGRAM (RFC 9297 §2.1.1): read_datagram() accepts HTTP/3
+    // Datagrams. The QUIC owner must also advertise a nonzero
+    // max_datagram_frame_size transport parameter (http3_quic_connection
+    // does so whenever this is set).
+    bool enable_h3_datagram_{false};
     // Copies DATA into event-owned PMR storage. QUIC enables this because its
     // decrypted stream callback storage expires before receive_datagram returns.
     bool own_data_events_{false};
@@ -275,6 +319,35 @@ public:
     [[nodiscard]] http3_status finish_response(std::int64_t stream_id,
         const http_response_trailer_section& trailers);
 
+    // Accepts a CONNECT (RFC 9114 §4.4) or extended CONNECT (RFC 9220)
+    // request with a 2xx head that frames no content (no Content-Length, no
+    // Transfer-Encoding, no body). The stream then stays open in both
+    // directions and carries the tunnel bytes as DATA (submit_data(),
+    // finish_stream()). Any other answer takes submit_response_head().
+    [[nodiscard]] std::optional<http3_response_head_error> submit_connect_response_head(
+        std::int64_t stream_id, const http_response& response);
+    // Accepts an RFC 9220 WebSocket bootstrap that
+    // validate_http3_websocket_handshake() accepted: the 200 head carries the
+    // negotiated subprotocol and permessage-deflate parameters, and the
+    // stream continues as a tunnel like submit_connect_response_head().
+    [[nodiscard]] std::variant<websocket_extended_connect_negotiation, http3_response_head_error>
+    submit_websocket_handshake(std::int64_t stream_id, const http_request& request,
+        const websocket_handshake_validation_result& validation,
+        websocket_server_handshake_options options = {});
+
+    // One QUIC DATAGRAM frame payload (RFC 9221) carrying an HTTP/3 Datagram.
+    // A datagram for a stream whose head was not decoded, or that closed, is
+    // dropped (RFC 9297 §2.1); a malformed one, or any while
+    // enable_h3_datagram_ is off, is a connection error of type
+    // H3_DATAGRAM_ERROR.
+    [[nodiscard]] http3_result read_datagram(std::span<const std::byte> payload);
+    // The prefix of HTTP/3 Datagrams on `stream_id`, or nullopt unless both
+    // endpoints enabled them (RFC 9297 §2.1.1) and the stream is a
+    // client-initiated bidirectional stream this codec still tracks.
+    [[nodiscard]] std::optional<http3_datagram_prefix> datagram_prefix(std::int64_t stream_id) const noexcept;
+    // nullopt until the peer's SETTINGS frame arrived.
+    [[nodiscard]] std::optional<http3_peer_settings> peer_settings() const noexcept;
+
     [[nodiscard]] http3_status close_stream(std::int64_t stream_id,
         std::optional<std::uint64_t> receive_error,
         std::optional<std::uint64_t> send_error) noexcept;
@@ -293,6 +366,8 @@ private:
     friend class http3_quic_connection;
     void begin_packet_input() noexcept;
     void end_packet_input() noexcept;
+    void mark_early_data(std::int64_t stream_id);
+    void remember_peer_settings(http3_peer_settings settings) noexcept;
     [[nodiscard]] bool events_pending() const noexcept;
     [[nodiscard]] http3_status block_stream(std::int64_t stream_id) noexcept;
     [[nodiscard]] http3_status shutdown_stream_read(

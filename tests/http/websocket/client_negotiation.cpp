@@ -126,7 +126,7 @@ RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     const ruvia::websocket_client_negotiation negotiation({.deflate_ = {.compression_ = {.enabled_ = true}}});
     std::array<char, 2048> buffer{};
     auto prepared = ruvia::prepare_http1_websocket_client_request(
-        ruvia::http_origin_view::https({.host_ = "example.com"}), "/", encoded_key, negotiation, {}, buffer,
+        ruvia::http_origin_view::https({.host_ = "example.com"}), "/", encoded_key, negotiation, std::span<const ruvia::http_header>{}, buffer,
         std::pmr::get_default_resource());
     auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     RUVIA_CHECK(prepared_req != nullptr);
