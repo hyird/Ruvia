@@ -248,6 +248,8 @@ for (const auto& worker : ruvia::app().workers()) {
 | HTTP 隧道 | `RUVIA_CONNECT(authority, handler, ...)` | `task<void> handler(context&)` | `CONNECT` 字节流隧道（`authority` 为 `"host:port"` 或 `"*"`，首参可传可选的 `http_tunnel_route_config`） |
 | 扩展 CONNECT 隧道 | `RUVIA_CONNECT_PROTOCOL(proto, path, handler, ...)` | `task<void> handler(context&)` | Extended `CONNECT` 路由（如 `"connect-udp"`，首参可传可选的 `http_tunnel_route_config`） |
 
+- **扩展方法索引**：方法标记与规范路径在启动期排序封存；请求期的方法识别、路由匹配和 `Allow` 路径分组采用零分配二分查找。
+
 WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h"`）。允许一个已启动的 `read()` 与一个写操作并行；第二个同方向操作在前一个完成前启动会抛出 `std::logic_error`。单个写者连续发送时，已等待的读者在完整消息边界获得协议轮询机会，并在下一条应用消息写入前处理已收到的 Ping/Close 及自动 Pong/Close 输出；不会中断正在发送的完整消息，也不会隐式创建后台读任务（RFC 6455 §5.5.1–5.5.2）。`send(websocket_message&&)` 借用消息的读取存储，按公开头约定额外占用读 lane，不能与另一个 `read()` 重叠。
 
 ### 2.3 路径模式与反向链接生成（`url_for`）

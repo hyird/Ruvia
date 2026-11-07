@@ -53,30 +53,39 @@ void detail::router::build_static_method_mask() {
     }
 }
 
-void detail::router::build_extension_paths() {
+void detail::router::build_extension_index() {
     auto& plan = *plan_;
-    // Every token lands in exactly one group, so reserving the token count up
-    // front keeps the spans into extension_methods_ valid while it is filled.
-    plan.extension_methods_.reserve(plan.extension_route_indices_.size());
-    for (std::size_t i = 0; i < plan.extension_route_indices_.size(); ++i) {
-        const auto path = plan.routes_[plan.extension_route_indices_[i]].path();
-        const auto seen = std::ranges::any_of(plan.extension_paths_,
-            [path](const auto& entry) noexcept { return uri_paths_equivalent(entry.path_, path); });
-        if (seen) {
-            continue;
-        }
-        // Registration rejects a repeated (token, path) pair, so the tokens
-        // collected for one path are already distinct.
+    auto& indices = plan.extension_route_indices_;
+    // Group canonical paths once; route indices preserve registration order
+    // within each Allow set without a second index or temporary storage.
+    std::ranges::sort(indices, [&plan](std::size_t left, std::size_t right) noexcept {
+        const auto order = compare_uri_paths(plan.routes_[left].path(), plan.routes_[right].path());
+        return order != 0 ? order < 0 : left < right;
+    });
+    // Every route contributes one token. Reserve before publishing spans.
+    plan.extension_methods_.reserve(indices.size());
+    for (std::size_t first = 0; first < indices.size();) {
+        const auto path = plan.routes_[indices[first]].path();
         const auto offset = plan.extension_methods_.size();
-        for (std::size_t j = i; j < plan.extension_route_indices_.size(); ++j) {
-            const auto& route = plan.routes_[plan.extension_route_indices_[j]];
-            if (uri_paths_equivalent(route.path(), path)) {
-                plan.extension_methods_.push_back(route.method_token());
-            }
-        }
+        auto last = first;
+        do {
+            plan.extension_methods_.push_back(plan.routes_[indices[last]].method_token());
+            ++last;
+        } while (last < indices.size() && uri_paths_equivalent(plan.routes_[indices[last]].path(), path));
         plan.extension_paths_.push_back({.path_ = path,
             .methods_ = std::span<const std::string_view>(plan.extension_methods_).subspan(offset)});
+        first = last;
     }
+    // The same storage serves exact (case-sensitive token, canonical path)
+    // lookups after compilation; the path groups above borrow route storage.
+    std::ranges::sort(indices, [&plan](std::size_t left, std::size_t right) noexcept {
+        const auto& left_route = plan.routes_[left];
+        const auto& right_route = plan.routes_[right];
+        if (left_route.method_token() != right_route.method_token()) {
+            return left_route.method_token() < right_route.method_token();
+        }
+        return compare_uri_paths(left_route.path(), right_route.path()) < 0;
+    });
 }
 
 }  // namespace ruvia

@@ -127,11 +127,11 @@ private:
     std::size_t unmatched_middleware_offset_{0};
     std::size_t unmatched_middleware_count_{0};
     std::pmr::vector<std::string_view> param_names_;
+    // Sorted by case-sensitive method token, then canonical path.
     std::pmr::vector<std::size_t> extension_route_indices_;
-    // One entry per distinct path (canonical form) the extension routes serve,
-    // naming every token registered there for a 405/OPTIONS Allow. The spans
-    // slice extension_methods_; both are filled once at compile time and
-    // borrow the routes' own path and token storage.
+    // Sorted distinct canonical paths, naming every registered token for
+    // 405/OPTIONS Allow in registration order. The spans slice
+    // extension_methods_ and borrow the routes' own path and token storage.
     std::pmr::vector<extension_path_type> extension_paths_;
     std::pmr::vector<std::string_view> extension_methods_;
     std::pmr::vector<std::size_t> connect_route_indices_;

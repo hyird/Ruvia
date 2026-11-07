@@ -136,8 +136,8 @@ void detail::router::validate_route_target(
     if (method_token.empty() && !route_table::is_routable_method(method)) {
         throw std::invalid_argument("route method must be routable");
     }
-    // Extension routes are matched by a linear scan over a cold list, which has
-    // no dynamic-segment index behind it.
+    // Only built-in methods have dynamic-segment tries; extension methods
+    // use the immutable static-path index.
     if (!method_token.empty() && is_dynamic_path(path)) {
         throw std::invalid_argument("extension method routes must use a static path");
     }
@@ -163,7 +163,7 @@ detail::compiled_route_plan_ptr_type detail::router::compile() {
             plan.extension_route_indices_.push_back(route.index());
         }
     }
-    build_extension_paths();
+    build_extension_index();
     build_static_method_mask();
     build_static_index();
     build_dynamic_routes();

@@ -280,8 +280,8 @@ private:                                                                        
 //
 // The token is case-sensitive per RFC 9110 9.1, must be a valid method token,
 // and must NOT be one of the classified methods -- those keep the enum as their
-// identity and their own macros. The path must be static: extension routes are
-// matched by a cold linear scan with no dynamic-segment index behind it.
+// identity and their own macros. The path must be static; only the classified
+// methods have dynamic-segment routes.
 #define RUVIA_METHOD(method_token, path, handler, ...)                                              \
     ruvia_controller_access_type::add_extension_method_route(ruvia_route_scope, method_token, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),         \

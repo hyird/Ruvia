@@ -6,6 +6,7 @@
 // than the route pattern. Public API only.
 
 #include <memory_resource>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -205,6 +206,12 @@ public:
     RUVIA_METHOD("EXT-H", "/equiv/many", user);
     RUVIA_METHOD("EXT-I", "/equiv/many", user);
     RUVIA_METHOD("EXT-J", "/equiv/m%61ny", user);
+    RUVIA_METHOD("Z-INDEX", "/indexed/z", guarded);
+    RUVIA_METHOD("A-INDEX-TAIL", "/indexed/m", file);
+    RUVIA_METHOD("A-INDEX", "/indexed/a%2Fb", user);
+    RUVIA_METHOD("Z-INDEX", "/indexed/a/b", file);
+    RUVIA_METHOD("A-INDEX", "/indexed/%61", guarded);
+    RUVIA_METHOD("Z-INDEX", "/indexed/a%2fb", guarded);
     RUVIA_ROUTES_END
 
 private:
@@ -233,6 +240,26 @@ private:
         co_await c.stream().write("chunk");
     }
 };
+
+[[nodiscard]] std::multiset<std::string_view> allow_methods(std::string_view value) {
+    std::multiset<std::string_view> methods;
+    while (!value.empty()) {
+        const auto comma = value.find(',');
+        auto token = value.substr(0, comma);
+        while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) {
+            token.remove_prefix(1);
+        }
+        while (!token.empty() && (token.back() == ' ' || token.back() == '\t')) {
+            token.remove_suffix(1);
+        }
+        methods.insert(token);
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        value.remove_prefix(comma + 1);
+    }
+    return methods;
+}
 
 // A non-200 answer reads as its own value so a mismatch is visible in the check.
 [[nodiscard]] std::string body_of(ruvia::test_app& app, std::string_view path) {
@@ -466,14 +493,15 @@ TEST(Ruvia, route_shapes_encoded_colon_or_star_literal_is_not_a_parameter_or_wil
 TEST(Ruvia, route_shapes_allow_names_every_extension_method_of_a_resource) {
     // RFC 9110 15.5.6: Allow lists the resource's supported methods, however
     // many extension methods it has and however each route spelled the path.
-    constexpr std::string_view expected = "OPTIONS, EXT-A, EXT-B, EXT-C, EXT-D, EXT-E, EXT-F, EXT-G, EXT-H, EXT-I, EXT-J";
+    const std::multiset<std::string_view> expected{
+        "OPTIONS", "EXT-A", "EXT-B", "EXT-C", "EXT-D", "EXT-E", "EXT-F", "EXT-G", "EXT-H", "EXT-I", "EXT-J"};
     ruvia::test_app app;
     const auto options = app.request(ruvia::test_request::options("/equiv/many"));
     EXPECT_EQ(options.status(), ruvia::http_status::no_content);
-    EXPECT_EQ(options.header("Allow").value_or(""), expected);
+    EXPECT_EQ(allow_methods(options.header("Allow").value_or("")), expected);
     const auto get = app.request(ruvia::test_request::get("/equiv/m%61ny"));
     EXPECT_EQ(get.status(), ruvia::http_status::method_not_allowed);
-    EXPECT_EQ(get.header("Allow").value_or(""), expected);
+    EXPECT_EQ(allow_methods(get.header("Allow").value_or("")), expected);
     const auto extension = app.request(ruvia::test_request::method("EXT-J", "/equiv/many"));
     EXPECT_EQ(extension.status(), ruvia::http_status::ok);
 }
@@ -487,4 +515,68 @@ TEST(Ruvia, route_shapes_response_stream_get_route_advertises_head) {
     const auto post = app.request(ruvia::test_request::post("/equiv/stream"));
     EXPECT_EQ(post.status(), ruvia::http_status::method_not_allowed);
     EXPECT_EQ(post.header("Allow").value_or(""), std::string_view("GET, HEAD, OPTIONS"));
+}
+
+TEST(Ruvia, extension_routes_keep_method_and_canonical_path_identity) {
+    struct route_case final {
+        std::string_view method_;
+        std::string_view path_;
+        std::string_view body_;
+    };
+    constexpr route_case cases[] = {
+        {"A-INDEX", "/indexed/a%2fb", "user:-"},
+        {"Z-INDEX", "/indexed/a%2Fb", "guarded"},
+        {"Z-INDEX", "/indexed/a/b", "file:-"},
+        {"A-INDEX", "/indexed/a", "guarded"},
+        {"Z-INDEX", "/indexed/z", "guarded"},
+        {"A-INDEX-TAIL", "/indexed/m", "file:-"}};
+    ruvia::test_app app;
+    for (const auto& item : cases) {
+        SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
+        const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
+        EXPECT_EQ(response.status(), ruvia::http_status::ok);
+        EXPECT_EQ(response.body(), item.body_);
+    }
+}
+
+TEST(Ruvia, extension_route_misses_distinguish_method_and_resource_identity) {
+    struct miss_case final {
+        std::string_view method_;
+        std::string_view path_;
+        ruvia::http_status_code status_;
+    };
+    const miss_case cases[] = {
+        {"A-INDEX", "/0-indexed", ruvia::http_status::not_found},
+        {"A-INDEX", "/zz-indexed", ruvia::http_status::not_found},
+        {"A-INDEX", "/indexed/a%2fbb", ruvia::http_status::not_found},
+        {"A-INDEX", "/indexed/m", ruvia::http_status::method_not_allowed},
+        {"A-INDEX-", "/indexed/a", ruvia::http_status::not_implemented},
+        {"a-index", "/indexed/a", ruvia::http_status::not_implemented},
+        {"000-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented},
+        {"ZZZ-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented}};
+    ruvia::test_app app;
+    for (const auto& item : cases) {
+        SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
+        const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
+        EXPECT_EQ(response.status(), item.status_);
+        if (item.status_ != ruvia::http_status::method_not_allowed) {
+            EXPECT_FALSE(response.header("Allow").has_value());
+        }
+    }
+}
+
+TEST(Ruvia, extension_route_allow_groups_only_canonical_equivalent_paths) {
+    ruvia::test_app app;
+    const auto encoded = app.request(ruvia::test_request::options("/indexed/a%2Fb"));
+    EXPECT_EQ(encoded.status(), ruvia::http_status::no_content);
+    EXPECT_EQ(allow_methods(encoded.header("Allow").value_or("")),
+        (std::multiset<std::string_view>{"OPTIONS", "A-INDEX", "Z-INDEX"}));
+    const auto split = app.request(ruvia::test_request::method("A-INDEX", "/indexed/a/b"));
+    EXPECT_EQ(split.status(), ruvia::http_status::method_not_allowed);
+    EXPECT_EQ(allow_methods(split.header("Allow").value_or("")),
+        (std::multiset<std::string_view>{"OPTIONS", "Z-INDEX"}));
+    const auto plain = app.request(ruvia::test_request::options("/indexed/%61"));
+    EXPECT_EQ(plain.status(), ruvia::http_status::no_content);
+    EXPECT_EQ(allow_methods(plain.header("Allow").value_or("")),
+        (std::multiset<std::string_view>{"OPTIONS", "A-INDEX"}));
 }

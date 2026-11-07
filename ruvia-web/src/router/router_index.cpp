@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <bit>
+#include <utility>
 
 #include "ruvia/core/fnv1a.h"
 #include "ruvia/http/http_connect_udp.h"
@@ -137,19 +138,22 @@ detail::route_resolution detail::route_table::resolve_extension_method(
     // Not registered anywhere means the server does not know this method, which
     // is 501 and not this function's business -- dispatch decides that before
     // asking about any particular resource.
-    bool recognized_method = false;
-    for (const auto index : plan_->extension_route_indices_) {
-        const auto& route = plan_->routes_[index];
-        // RFC 9110 9.1: the method token is case-sensitive.
-        if (route.method_token() != method_token) {
-            continue;
-        }
-        recognized_method = true;
-        if (uri_paths_equivalent(route.path(), path)) {
+    const auto& indices = plan_->extension_route_indices_;
+    const auto found = std::lower_bound(indices.begin(), indices.end(), std::pair{method_token, path},
+        [this](std::size_t index, const auto& key) noexcept {
+            const auto& route = plan_->routes_[index];
+            if (route.method_token() != key.first) {
+                return route.method_token() < key.first;
+            }
+            return compare_uri_paths(route.path(), key.second) < 0;
+        });
+    if (found != indices.end()) {
+        const auto& route = plan_->routes_[*found];
+        if (route.method_token() == method_token && uri_paths_equivalent(route.path(), path)) {
             return resolved(route);
         }
     }
-    if (!recognized_method) {
+    if (!recognizes_method_token(method_token)) {
         return route_resolution{};
     }
 
@@ -165,21 +169,18 @@ detail::route_resolution detail::route_table::resolve_extension_method(
 }
 
 bool detail::route_table::recognizes_method_token(std::string_view method_token) const noexcept {
-    for (const auto index : plan_->extension_route_indices_) {
-        if (plan_->routes_[index].method_token() == method_token) {
-            return true;
-        }
-    }
-    return false;
+    const auto& indices = plan_->extension_route_indices_;
+    const auto found = std::ranges::lower_bound(indices, method_token, {},
+        [this](std::size_t index) noexcept { return plan_->routes_[index].method_token(); });
+    return found != indices.end() && plan_->routes_[*found].method_token() == method_token;
 }
 
 std::span<const std::string_view> detail::route_table::extension_methods_for(std::string_view path) const noexcept {
-    for (const auto& entry : plan_->extension_paths_) {
-        if (uri_paths_equivalent(entry.path_, path)) {
-            return entry.methods_;
-        }
-    }
-    return {};
+    const auto& paths = plan_->extension_paths_;
+    const auto found = std::ranges::lower_bound(paths, path, [](std::string_view left, std::string_view right) noexcept { return compare_uri_paths(left, right) < 0; }, &compiled_route_plan::extension_path_type::path_);
+    return found != paths.end() && uri_paths_equivalent(found->path_, path)
+               ? found->methods_
+               : std::span<const std::string_view>{};
 }
 
 detail::route_resolution detail::route_table::resolve(
