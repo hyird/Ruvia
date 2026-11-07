@@ -121,7 +121,6 @@ bool http3_request_head::validate() {
     if (fields_.size() > (std::numeric_limits<std::uint16_t>::max)()) {
         return false;
     }
-    regular_.reserve(fields_.size());
     detail::request_field_state request_fields{detail::request_field_framing::binary};
     detail::http_content_length_state content_length;
     bool content_length_seen = false;
@@ -204,6 +203,10 @@ bool http3_request_head::validate() {
                 break;
             default:
                 break;
+        }
+        // The remaining suffix bounds every kept index without a second pass.
+        if (regular_.empty()) {
+            regular_.reserve(fields_.size() - index);
         }
         regular_.push_back(regular_field{index, kind});
     }
