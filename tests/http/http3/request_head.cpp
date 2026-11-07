@@ -284,3 +284,29 @@ RUVIA_TEST(http3_request_head_preserves_transport_early_data_provenance) {
         &resource);
     RUVIA_CHECK(ordinary && !ordinary->early_data());
 }
+
+RUVIA_TEST(http3_request_head_enforces_materialized_field_count_limit) {
+    std::pmr::unsynchronized_pool_resource resource;
+    // :authority synthesizes Host, leaving room for max_http_header_fields - 1
+    // regular fields; one more is rejected by parse() rather than failing in
+    // build_request().
+    for (const std::size_t regular_count :
+        {ruvia::max_http_header_fields - 1, ruvia::max_http_header_fields}) {
+        auto event = make_headers_event(&resource,
+            {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}},
+            true);
+        for (std::size_t index = 0; index < regular_count; ++index) {
+            event.fields_.emplace_back("x-field", "v", &resource);
+        }
+        auto parsed = ruvia::http3_request_head::parse(std::move(event), &resource);
+        if (regular_count < ruvia::max_http_header_fields) {
+            RUVIA_CHECK(parsed.has_value());
+            if (parsed) {
+                const auto request = parsed->build_request(&resource);
+                RUVIA_CHECK_EQ(request.headers().size(), ruvia::max_http_header_fields);
+            }
+        } else {
+            RUVIA_CHECK(!parsed.has_value());
+        }
+    }
+}

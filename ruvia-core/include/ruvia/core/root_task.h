@@ -235,9 +235,8 @@ private:
     }
 
     void reset() noexcept {
-        if (state_) {
-            state_->completion().abandon();
-            state_.reset();
+        if (auto state_value = std::exchange(state_, nullptr)) {
+            state_value->completion().abandon();
         }
     }
 

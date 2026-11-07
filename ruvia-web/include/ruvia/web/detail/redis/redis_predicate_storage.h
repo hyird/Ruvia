@@ -65,7 +65,7 @@ public:
         if constexpr (std::is_same_v<value_type, float>) {
             storage_.emplace<float>(value);
         } else {
-            storage_.emplace<double>(static_cast<double>(value));
+            storage_.emplace<double>(checked_model_float<double>(value));
         }
     }
     redis_literal(const string& value, std::pmr::memory_resource* resource)

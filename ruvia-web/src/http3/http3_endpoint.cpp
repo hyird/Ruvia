@@ -325,7 +325,7 @@ task<void> http3_endpoint::serve(session_pointer session) {
     } catch (...) {
         // run() already ended the connection; its reason goes to the
         // connection-failure sink rather than the worker's task scope.
-        services_.options_.connection_failure_.invoke({}, std::current_exception());
+        services_.options_.connection_failure_.invoke(session->remote_address(), std::current_exception());
     }
 }
 

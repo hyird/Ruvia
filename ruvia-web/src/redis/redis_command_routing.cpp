@@ -28,12 +28,22 @@ enum class redis_stream_read_kind : bool { read,
     for (std::size_t i = first_option; i < args.size();) {
         const auto token = args[i];
         if (is_redis_token(token, "STREAMS")) {
+            const auto remaining = args.size() - (i + 1);
+            if (remaining < 2 || (remaining & 1U) != 0) {
+                throw std::invalid_argument("unsupported redis XREAD/XREADGROUP option");
+            }
             return blocking;
         }
         if (is_redis_token(token, "BLOCK")) {
+            if (i + 1 >= args.size()) {
+                throw std::invalid_argument("unsupported redis XREAD/XREADGROUP option");
+            }
             blocking = true;
             i += 2;
         } else if (is_redis_token(token, "COUNT") || (group && is_redis_token(token, "CLAIM"))) {
+            if (i + 1 >= args.size()) {
+                throw std::invalid_argument("unsupported redis XREAD/XREADGROUP option");
+            }
             i += 2;
         } else if (group && is_redis_token(token, "NOACK")) {
             ++i;
@@ -41,12 +51,12 @@ enum class redis_stream_read_kind : bool { read,
             throw std::invalid_argument("unsupported redis XREAD/XREADGROUP option");
         }
     }
-    return blocking;
+    throw std::invalid_argument("unsupported redis XREAD/XREADGROUP option");
 }
 
 [[nodiscard]] bool xread_group_command_is_blocking(std::span<const std::string_view> args) {
     if (args.size() < 4 || !is_redis_token(args[1], "GROUP")) {
-        return false;
+        throw std::invalid_argument("unsupported redis XREAD/XREADGROUP option");
     }
     return stream_read_options_block(args, 4, redis_stream_read_kind::read_group);
 }

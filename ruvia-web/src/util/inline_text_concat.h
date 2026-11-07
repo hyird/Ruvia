@@ -4,7 +4,9 @@
 #include <array>
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -20,6 +22,9 @@ public:
     inline_text_concat(std::initializer_list<std::string_view> pieces, std::pmr::memory_resource* resource)
         : heap_(resource) {
         for (const auto piece : pieces) {
+            if (piece.size() > (std::numeric_limits<std::size_t>::max)() - size_) {
+                throw std::length_error("concatenated text length overflow");
+            }
             size_ += piece.size();
         }
         if (size_ <= inline_capacity) {

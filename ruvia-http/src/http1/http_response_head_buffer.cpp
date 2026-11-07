@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <variant>
 
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_pmr_string.h"
 
@@ -37,6 +38,16 @@ void http_response_head_buffer::append(std::string_view value) {
             throw std::length_error("HTTP response head is too large");
         }
         spill_to_heap(stack_state->used_ + value.size());
+        heap_.append(value);
+        return;
+    }
+    if (value.size() > heap_.max_size() - heap_.size()) {
+        throw std::length_error("HTTP response head is too large");
+    }
+    if (detail::http_text_aliases_string(value, heap_)) {
+        std::pmr::string copy(value, heap_.get_allocator());
+        heap_.append(copy);
+        return;
     }
     heap_.append(value);
 }

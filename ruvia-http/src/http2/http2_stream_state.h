@@ -19,7 +19,7 @@
 #include "http2/http2_local_send_state.h"
 #include "http2/http2_remote_content_state.h"
 #include "http2/http2_remote_receive_state.h"
-#include "http2/http2_stream_request_data.h"
+#include "http2/http2_stream_request_fields.h"
 #include "http2/http2_stream_request_state.h"
 #include "http2/http2_tunnel_state.h"
 
@@ -52,7 +52,7 @@ class http2_stream_state final {
     http2_tunnel_state tunnel_state_;
     // Received DATA bytes delivered to the owner and not yet acknowledged.
     std::uint32_t window_debt_{0};
-    http2_stream_request_data message_data_;
+    http2_stream_request_fields message_data_;
     http2_local_request_content_gate local_request_content_gate_{http2_local_request_content_gate::open};
     bool pinned_{false};
     std::size_t pending_events_{0};

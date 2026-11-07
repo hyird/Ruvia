@@ -427,7 +427,7 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
     runtime->bind_push_parent(associated_stream_id);
     has_pushed_streams_ = true;
     if (!admit_stream(id)) {
-        reset_stream_no_throw(id, http2_error_code::cancel);
+        reset_event_stream(id, http2_error_code::cancel);
         return false;
     }
     wake_writer();
@@ -439,15 +439,21 @@ struct http2_sans_io_session_engine::tunnel_upgrade_commit final {
 
     http2_sans_io_session_engine& engine_;
     std::uint32_t stream_id_;
+    http2_sans_io_stream_runtime& stream_runtime_;
     http2_streaming_request_body& streaming_body_;
     http2_sans_io_stream_signal& stream_signal_;
+    http_response_tail& tail_;
 
     [[nodiscard]] static transport_type finish_commit(http2_sans_io_session_engine& engine_value,
-        std::uint32_t stream_id_value, http2_streaming_request_body& streaming_body_value,
-        http2_sans_io_stream_signal& stream_signal_value, context& context_value) {
+        std::uint32_t stream_id_value, http2_sans_io_stream_runtime& stream_runtime_value,
+        http2_streaming_request_body& streaming_body_value,
+        http2_sans_io_stream_signal& stream_signal_value, http_response_tail& tail_value,
+        http_status_code status, context& context_value) {
+        stream_runtime_value.mark_response_committed();
         engine_value.set_inactivity_phase();
         context_access::commit_upgrade(context_value);
         engine_value.wake_writer();
+        tail_value.record_access(engine_value.session_.options().access_log_, status);
         return transport_type(engine_value, engine_value.connection_, stream_id_value, streaming_body_value.queue(),
             stream_signal_value, engine_value.write_signal_, engine_value.output_budget_);
     }
@@ -459,7 +465,8 @@ struct http2_sans_io_session_engine::tunnel_upgrade_commit final {
             !engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
             throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
         }
-        return finish_commit(engine_, stream_id_, streaming_body_, stream_signal_, context_value);
+        return finish_commit(engine_, stream_id_, stream_runtime_, streaming_body_, stream_signal_, tail_,
+            head_response.status(), context_value);
     }
 };
 
@@ -468,11 +475,13 @@ struct http2_sans_io_session_engine::websocket_upgrade_commit final {
 
     http2_sans_io_session_engine& engine_;
     std::uint32_t stream_id_;
+    http2_sans_io_stream_runtime& stream_runtime_;
     const http_request& request_;
     const websocket_handshake_validation_result& handshake_validation_;
     const websocket_route_endpoint& websocket_endpoint_;
     http2_streaming_request_body& streaming_body_;
     http2_sans_io_stream_signal& stream_signal_;
+    http_response_tail& tail_;
 
     [[nodiscard]] ruvia::detail::websocket_upgrade_commit<transport_type> operator()(
         context& context_value, std::span<const http_header_view> response_headers_value) const {
@@ -489,7 +498,8 @@ struct http2_sans_io_session_engine::websocket_upgrade_commit final {
         }
         return ruvia::detail::websocket_upgrade_commit<transport_type>(
             tunnel_upgrade_commit::finish_commit(
-                engine_, stream_id_, streaming_body_, stream_signal_, context_value),
+                engine_, stream_id_, stream_runtime_, streaming_body_, stream_signal_, tail_,
+                http_status::ok, context_value),
             submitted_handshake->compression(), submitted_handshake->subprotocol(), *context_value.pool());
     }
 };
@@ -642,8 +652,10 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         tunnel_upgrade_commit{
                             .engine_ = *this,
                             .stream_id_ = stream_id,
+                            .stream_runtime_ = *stream_runtime,
                             .streaming_body_ = *streaming_body,
                             .stream_signal_ = *stream_signal,
+                            .tail_ = admission.tail(),
                         });
                     if (!buffered) {
                         co_return;
@@ -676,11 +688,13 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         websocket_upgrade_commit{
                             .engine_ = *this,
                             .stream_id_ = stream_id,
+                            .stream_runtime_ = *stream_runtime,
                             .request_ = request,
                             .handshake_validation_ = handshake_validation,
                             .websocket_endpoint_ = websocket_endpoint,
                             .streaming_body_ = *streaming_body,
                             .stream_signal_ = *stream_signal,
+                            .tail_ = admission.tail(),
                         });
                     if (!buffered) {
                         co_return;
@@ -806,18 +820,19 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
 }
 
 bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
-    auto* signal = stream_runtimes_.begin_dispatch(stream_id, session_.services().worker());
-    if (signal == nullptr) {
-        return false;
-    }
     bool counted = false;
     try {
+        auto* signal = stream_runtimes_.begin_dispatch(stream_id, session_.services().worker());
+        if (signal == nullptr) {
+            return false;
+        }
         ++active_handler_tasks_;
         counted = true;
         asio::co_spawn(executor_, ruvia::as_awaitable(dispatch_one(stream_id)),
             asio::bind_allocator(
                 asio::recycling_allocator<void>(), [this](std::exception_ptr exception) noexcept {
                     if (exception != nullptr) {
+                        session_.options().connection_failure_.invoke(remote_address_, std::move(exception));
                         terminate(std::make_error_code(std::errc::operation_canceled));
                     }
                     --active_handler_tasks_;
@@ -832,7 +847,10 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
         if (counted) {
             --active_handler_tasks_;
         }
-        remove_stream_runtime(stream_id);
+        if (auto* runtime = stream_runtimes_.find(stream_id)) {
+            runtime->reset_selected_route();
+        }
+        session_.options().connection_failure_.invoke(remote_address_, std::current_exception());
         return false;
     }
     return true;

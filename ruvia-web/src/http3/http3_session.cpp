@@ -817,11 +817,16 @@ bool http3_session::admit_stream(std::int64_t stream_id) {
         stream->defer_dispatch();
         return true;
     }
-    if (stream == nullptr || stream->begin_dispatch(services_.worker_, termination_) == nullptr) {
+    if (stream == nullptr) {
         return false;
     }
-    ++active_handler_tasks_;
+    bool counted = false;
     try {
+        if (stream->begin_dispatch(services_.worker_, termination_) == nullptr) {
+            return false;
+        }
+        ++active_handler_tasks_;
+        counted = true;
         asio::co_spawn(services_.io_.get_executor(), ruvia::as_awaitable(dispatch_one(stream_id)),
             asio::bind_allocator(services_.memory_.allocator(), [this, stream_id](std::exception_ptr exception) noexcept {
                 if (exception != nullptr) {
@@ -837,8 +842,11 @@ bool http3_session::admit_stream(std::int64_t stream_id) {
                 wake_writer();
             }));
     } catch (...) {
-        --active_handler_tasks_;
+        if (counted) {
+            --active_handler_tasks_;
+        }
         stream->mark_handler_done();
+        services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
         return false;
     }
     return true;

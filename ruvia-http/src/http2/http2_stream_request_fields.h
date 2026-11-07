@@ -18,15 +18,15 @@
 
 namespace ruvia::detail {
 
-class http2_stream_request_data final {
+class http2_stream_request_fields final {
 public:
-    explicit http2_stream_request_data(std::pmr::memory_resource* resource = nullptr)
-        : http2_stream_request_data(http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {
+    explicit http2_stream_request_fields(std::pmr::memory_resource* resource = nullptr)
+        : http2_stream_request_fields(http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {
     }
-    http2_stream_request_data(const http2_stream_request_data&) = delete;
-    http2_stream_request_data& operator=(const http2_stream_request_data&) = delete;
-    http2_stream_request_data(http2_stream_request_data&&) = delete;
-    http2_stream_request_data& operator=(http2_stream_request_data&&) = delete;
+    http2_stream_request_fields(const http2_stream_request_fields&) = delete;
+    http2_stream_request_fields& operator=(const http2_stream_request_fields&) = delete;
+    http2_stream_request_fields(http2_stream_request_fields&&) = delete;
+    http2_stream_request_fields& operator=(http2_stream_request_fields&&) = delete;
 
     [[nodiscard]] std::string_view method() const& noexcept {
         return known_method_ != http_known_method::unknown
@@ -46,7 +46,7 @@ public:
         return method_.get_allocator().resource();
     }
 
-    void take_request_target_from(http2_stream_request_data& other) noexcept {
+    void take_request_target_from(http2_stream_request_fields& other) noexcept {
         if (resource() != other.resource()) {
             std::terminate();
         }
@@ -154,7 +154,7 @@ public:
     }
 
 private:
-    http2_stream_request_data(http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+    http2_stream_request_fields(http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
         : method_("", resource),
           scheme_("", resource),
           authority_("", resource),

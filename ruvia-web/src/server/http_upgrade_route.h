@@ -178,8 +178,14 @@ public:
         std::string_view subprotocol, std::pmr::memory_resource& resource)
         : stream_(hold_stream(std::forward<stream_argument_type>(stream))),
           compression_(compression),
-          subprotocol_(subprotocol, &resource) {}
-
+          subprotocol_(&resource) {
+        try {
+            subprotocol_.assign(subprotocol);
+        } catch (...) {
+            abort();
+            throw;
+        }
+    }
     [[nodiscard]] stream_argument_type release_stream() noexcept {
         if constexpr (native_stream) {
             return *stream_;
@@ -192,8 +198,21 @@ public:
         return compression_;
     }
 
-    [[nodiscard]] std::string_view subprotocol() const noexcept {
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return subprotocol_;
+    }
+    std::string_view subprotocol() const&& = delete;
+
+    [[nodiscard]] std::pmr::string&& release_subprotocol() noexcept {
+        return std::move(subprotocol_);
+    }
+
+    void abort() noexcept {
+        if constexpr (native_stream) {
+            server_websocket_connection<stream_type>::close_stream(*stream_);
+        } else {
+            stream_.abort();
+        }
     }
 
 private:
@@ -234,13 +253,18 @@ struct websocket_upgrade_session_operation final {
         } else {
             committed.emplace(commit_upgrade_(context_value, response_headers_value));
         }
-        session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
-            websocket_endpoint_.lifecycle(),
-            protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
-            inbound_, pending_frames_,
-            make_server_websocket_connection_options(
-                options_, committed->compression(), websocket_endpoint_.deflate()),
-            committed->subprotocol());
+        try {
+            session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
+                websocket_endpoint_.lifecycle(),
+                protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
+                inbound_, pending_frames_,
+                make_server_websocket_connection_options(
+                    options_, committed->compression(), websocket_endpoint_.deflate()),
+                committed->release_subprotocol());
+        } catch (...) {
+            committed->abort();
+            throw;
+        }
         co_await invoke_websocket_handler(
             *session_, scanner_entry_, resolved_.stream_handler(), context_value);
     }

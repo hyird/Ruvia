@@ -48,7 +48,7 @@ public:
     server_websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
         connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource& resource, std::string_view initial_bytes,
-        websocket_connection_options protocol_options, std::string_view subprotocol_value)
+        websocket_connection_options protocol_options, std::pmr::string&& subprotocol_value)
         : stream_(std::forward<stream_argument_type>(stream)),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
@@ -58,12 +58,11 @@ public:
               protocol_options.message_limit_ = message_limit;
               return protocol_options;
           }()),
-          subprotocol_(&resource),
+          subprotocol_(std::move(subprotocol_value)),
           write_lane_(worker_value),
           reader_done_signal_(worker_value),
           background_tasks_(worker_value, {.resource_ = &resource}) {
         try {
-            subprotocol_.assign(subprotocol_value);
             buffer_.append(initial_bytes);
         } catch (...) {
             close_stream();
@@ -74,7 +73,17 @@ public:
 
     server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
         protocol_byte_limit, std::pmr::memory_resource&, std::string_view, websocket_connection_options,
-        std::string_view) = delete;
+        std::pmr::string&&) = delete;
+
+    static void close_stream(stream_type& stream) noexcept {
+        if constexpr (!native_stream) {
+            stream.abort();
+        } else if constexpr (requires(stream_type& value) { value.next_layer(); }) {
+            ruvia::close_socket(stream.lowest_layer());
+        } else {
+            ruvia::close_socket(stream);
+        }
+    }
     ~server_websocket_connection() = default;
 
     server_websocket_connection(const server_websocket_connection&) = delete;

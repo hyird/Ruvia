@@ -104,6 +104,10 @@ public:
     void consume_stream_data(std::int64_t stream_id, std::size_t bytes) noexcept;
     [[nodiscard]] const worker_handle& worker() const noexcept;
     [[nodiscard]] std::pmr::memory_resource* worker_resource() const noexcept;
+    [[nodiscard]] std::string_view remote_address() const& noexcept RUVIA_LIFETIMEBOUND {
+        return remote_address_;
+    }
+    std::string_view remote_address() const&& = delete;
     [[nodiscard]] http3_quic_status submit_datagram(std::int64_t stream_id, std::span<const std::byte> payload);
 
 private:

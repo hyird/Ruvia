@@ -1808,6 +1808,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             }
         }
         item.id_ = -1;
+        self.changed_.notify();
         item.done_ = false;
         item.retry_ = false;
         item.retry_425_ = false;

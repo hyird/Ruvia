@@ -49,6 +49,9 @@ set_cookie_plan::set_cookie_plan(
         std::memcpy(expires_buffer_.data(), date->data(), expires_size_);
     }
     if (has_max_age_) {
+        if (options.max_age_->count() < 0) {
+            throw std::invalid_argument("cookie Max-Age must not be negative");
+        }
         max_age_value_ = static_cast<std::uint64_t>(options.max_age_->count());
     }
 

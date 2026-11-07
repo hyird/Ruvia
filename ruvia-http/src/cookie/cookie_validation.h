@@ -88,7 +88,8 @@ inline void validate_cookie(std::string_view name, std::string_view value, const
         throw std::invalid_argument("invalid cookie value");
     }
     const auto prefix_size = options.prefix_ ? ::ruvia::http_cookie_prefix_text(*options.prefix_).size() : 0;
-    if (prefix_size + name.size() + value.size() > max_cookie_name_value_bytes) {
+    if (name.size() > max_cookie_name_value_bytes - prefix_size ||
+        value.size() > max_cookie_name_value_bytes - prefix_size - name.size()) {
         throw std::invalid_argument("cookie name and value exceed 4096 bytes");
     }
     // Receivers trim OWS around Path, so edge spaces would not round-trip and

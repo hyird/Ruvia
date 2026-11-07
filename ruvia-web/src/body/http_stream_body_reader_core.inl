@@ -55,8 +55,8 @@ stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
 
 template <typename stream_type>
 http1_request_body_consumption stream_body_reader<stream_type>::consumption() const noexcept {
-    return finished_ ? http1_request_body_consumption::complete
-                     : http1_request_body_consumption::incomplete;
+    return finished_ && !failed_ ? http1_request_body_consumption::complete
+                                 : http1_request_body_consumption::incomplete;
 }
 
 template <typename stream_type>
@@ -126,6 +126,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
         }
         co_return co_await read_known_length(known_length->content_length());
     } catch (...) {
+        finished_ = false;
         failed_ = true;
         throw;
     }
@@ -177,6 +178,7 @@ task<std::string_view> stream_body_reader<stream_type>::read_all(std::pmr::strin
         mark_finished();
         co_return std::string_view(body);
     } catch (...) {
+        finished_ = false;
         failed_ = true;
         throw;
     }

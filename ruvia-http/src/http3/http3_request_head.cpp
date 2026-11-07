@@ -13,6 +13,7 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request_target.h"
 
@@ -20,6 +21,7 @@
 #include "field/http_request_field_validation.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
+#include "util/geometric_reserve.h"
 #include "websocket/http_websocket_handshake_fields.h"
 
 namespace ruvia {
@@ -175,8 +177,16 @@ bool http3_request_head::validate() {
                 // RFC 9114 §4.2.1 joins split crumbs with "; ". An empty crumb
                 // is no cookie-pair (RFC 6265 §4.2.1) and contributes nothing.
                 if (!value.empty()) {
-                    if (!cookie_.empty()) {
-                        cookie_.append("; ");
+                    constexpr std::string_view cookie_separator = "; ";
+                    const auto separator_bytes = cookie_.empty() ? std::size_t{0} : cookie_separator.size();
+                    if (value.size() > max_http_header_bytes ||
+                        cookie_.size() > max_http_header_bytes - separator_bytes ||
+                        cookie_.size() + separator_bytes > max_http_header_bytes - value.size()) {
+                        return false;
+                    }
+                    detail::reserve_geometric(cookie_, cookie_.size() + separator_bytes + value.size());
+                    if (separator_bytes != 0) {
+                        cookie_.append(cookie_separator);
                     }
                     cookie_.append(value);
                 }
@@ -250,6 +260,13 @@ bool http3_request_head::validate() {
         if (stream_ended_ && declared_content_length_ != std::uint64_t{0}) {
             return false;
         }
+    }
+    const bool synthesize_host = host_ == absent && authority_ != absent &&
+                                 (is_http_request_scheme(scheme_value) || detail::is_valid_host_header(authority()));
+    const bool has_cookie = !cookie_.empty();
+    if (regular_.size() + static_cast<std::size_t>(synthesize_host) + static_cast<std::size_t>(has_cookie) >
+        max_http_header_fields) {
+        return false;
     }
     return true;
 }
