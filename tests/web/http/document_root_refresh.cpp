@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -16,7 +18,10 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
@@ -26,7 +31,7 @@
 // runs. This executable owns that application, so the root cannot leak into
 // other suites.
 
-namespace {
+namespace document_root_refresh_test {
 
 namespace fs = std::filesystem;
 using std::chrono::steady_clock;
@@ -34,6 +39,34 @@ using std::chrono::steady_clock;
 constexpr std::size_t worker_count = 3;
 constexpr std::chrono::milliseconds refresh_interval{20};
 constexpr std::chrono::seconds observation_timeout{10};
+
+std::atomic<std::size_t> next_worker_id{0};
+std::atomic<bool> held_request_started{false};
+std::atomic<bool> release_held_request{true};
+
+struct root_worker_state final {
+    std::string label_{std::to_string(next_worker_id.fetch_add(1, std::memory_order_relaxed))};
+};
+
+class root_request_observation final {
+public:
+    static constexpr bool ruvia_runs_on_unmatched_requests = true;
+
+    ruvia::task<void> handle(ruvia::context& context_value, ruvia::next& next_value) {
+        if (context_value.req().header("X-Hold-Root").has_value()) {
+            held_request_started.store(true, std::memory_order_release);
+            while (!release_held_request.load(std::memory_order_acquire)) {
+                if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(1),
+                        context_value.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+                    co_return;
+                }
+            }
+        }
+        co_await next_value();
+        context_value.edit_response().header(
+            "X-Document-Root-Worker", context_value.worker_state<root_worker_state>().label_);
+    }
+};
 
 [[nodiscard]] fs::path document_root_dir() {
     return fs::temp_directory_path() / "ruvia_document_root_refresh_test";
@@ -122,6 +155,7 @@ template <typename fn_type>
         config.static_options_ =
             {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}};
         config.refresh_interval_ = refresh_interval;
+        ruvia::app().use_worker_state<root_worker_state>().use<root_request_observation>();
         ruvia::app().document_root(std::move(config));
         return steady_clock::now();
     }();
@@ -143,13 +177,28 @@ template <typename fn_type>
     return output;
 }
 
-// Connection distribution belongs to the OS. Observe the public refresh
-// behavior without assuming coverage of individual workers.
+// Fresh connections let the OS distribute requests. Observe a successful new
+// version from every identified worker, not merely whichever one accepts first.
 [[nodiscard]] bool eventually_serves(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view body) {
+    std::set<std::string> observed_workers;
     return retry_until_deadline([&] {
         const auto response = exchange(io, endpoint, "/version.txt");
-        return response.starts_with("HTTP/1.1 200") && response.ends_with(body);
+        if (!response.starts_with("HTTP/1.1 200") || !response.ends_with(body)) {
+            return false;
+        }
+        constexpr std::string_view worker_header = "\r\nX-Document-Root-Worker: ";
+        const auto header = response.find(worker_header);
+        if (header == std::string::npos) {
+            return false;
+        }
+        const auto label = header + worker_header.size();
+        const auto end = response.find("\r\n", label);
+        if (end == std::string::npos) {
+            return false;
+        }
+        observed_workers.emplace(response.substr(label, end - label));
+        return observed_workers.size() == worker_count;
     });
 }
 
@@ -157,12 +206,15 @@ template <typename fn_type>
     return ruvia::app().http_stats().document_root_refresh_failures_;
 }
 
-}  // namespace
+}  // namespace document_root_refresh_test
+
+using namespace document_root_refresh_test;
 
 TEST(Ruvia, document_root_refresh_updates_multi_worker_application) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, multi_worker_config());
+    EXPECT_EQ(ruvia::app().workers().size(), worker_count);
 
     // Every version has a distinct size, so a change is indexed even where the
     // filesystem's modification time is coarse.
@@ -171,6 +223,40 @@ TEST(Ruvia, document_root_refresh_updates_multi_worker_application) {
 
     EXPECT_TRUE(write_version("second, longer version"));
     EXPECT_TRUE(eventually_serves(io, server.endpoint(), "second, longer version"));
+    server.finish();
+}
+
+TEST(Ruvia, document_root_refresh_keeps_old_requests_across_multiple_publications) {
+    static_cast<void>(configure_application());
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, multi_worker_config());
+
+    EXPECT_TRUE(write_version("old leased snapshot"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "old leased snapshot"));
+    held_request_started.store(false, std::memory_order_relaxed);
+    release_held_request.store(false, std::memory_order_release);
+
+    asio::ip::tcp::socket held(io);
+    held.connect(server.endpoint());
+    constexpr std::string_view request =
+        "GET /version.txt HTTP/1.1\r\nHost: a\r\nX-Hold-Root: yes\r\nConnection: close\r\n\r\n";
+    asio::write(held, asio::buffer(request));
+    EXPECT_TRUE(retry_until_deadline([] {
+        return held_request_started.load(std::memory_order_acquire);
+    }));
+
+    EXPECT_TRUE(write_version("new snapshot with a request still held"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "new snapshot with a request still held"));
+    EXPECT_TRUE(write_version("another publication before the old request finishes"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "another publication before the old request finishes"));
+
+    release_held_request.store(true, std::memory_order_release);
+    std::string response;
+    std::error_code error;
+    asio::read(held, asio::dynamic_buffer(response), error);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200"));
+    EXPECT_TRUE(response.ends_with("old leased snapshot"));
+    held.close();
     server.finish();
 }
 

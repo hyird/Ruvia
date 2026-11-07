@@ -1,14 +1,17 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -103,6 +106,9 @@ struct http3_headers_event final {
 struct http3_data_event final {
     http3_data_event(std::int64_t stream_id, std::string_view bytes,
         std::pmr::memory_resource* resource, bool own_bytes);
+    template <detail::http_temporary_owning_char_string bytes_type>
+    http3_data_event(std::int64_t, bytes_type&&,
+        std::pmr::memory_resource*, bool) = delete;
     http3_data_event(const http3_data_event&) = delete;
     http3_data_event& operator=(const http3_data_event&) = delete;
     http3_data_event(http3_data_event&& other) noexcept;
@@ -270,6 +276,10 @@ public:
     // ts_nanoseconds uses one monotonic clock and never decreases.
     [[nodiscard]] http3_result read_stream(std::int64_t stream_id,
         std::span<const std::byte> bytes, bool fin, std::uint64_t ts_nanoseconds);
+    template <detail::http_temporary_owning_range<std::byte> bytes_type>
+        requires(!std::same_as<std::remove_cvref_t<bytes_type>, borrowed_span<std::byte>>)
+    http3_result read_stream(std::int64_t, bytes_type&&, bool, std::uint64_t) = delete;
+    http3_result read_stream(std::int64_t, std::initializer_list<std::byte>, bool, std::uint64_t) = delete;
     [[nodiscard]] std::optional<http3_event> next_event();
 
     // Borrows at most max_bytes of one HTTP/3 stream without advancing

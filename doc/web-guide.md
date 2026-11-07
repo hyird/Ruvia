@@ -544,7 +544,11 @@ Ruvia 提供三种静态文件服务方式：
 
 1. **单文件响应**：在路由中调用 `co_return co_await c.file({.path_ = "/path/to/file.pdf", .content_type_ = "application/pdf"})`。
 2. **不可变目录快照 `ruvia::static_root`**：启动前构造 `ruvia::static_root assets("public/", {.cache_control_ = "public, max-age=3600"})`，在路由中调用 `co_return co_await c.static_file(assets, {.relative_path_ = c.req().param("*").value_or("")})`。
-3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 刷新目录索引。在启用 `app().compression(compression_config{})` 后，`precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 控制启动及刷新时生成对应预压缩表示；仅设置预压缩开关而未启用压缩，不会生成这些表示。刷新是事务性的：某一轮重建或采用失败时继续服务上一份完整快照，`http_stats().document_root_refresh_failures_` 计数加一，失败原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。各 worker 只在发布代次变化时才取发布者的锁采用新快照。
+3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 重建并发布不可变目录快照。
+   - **预压缩**：启用 `app().compression(compression_config{})` 后，`precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 控制启动及刷新时生成的表示；仅设置预压缩开关不会生成这些表示。
+   - **失败保留**：重建或采用失败时继续服务上一份完整快照，`http_stats().document_root_refresh_failures_` 计数加一；原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。
+   - **无锁切换**：启动期固定各 Worker 的邮箱；发布者通过无锁原子指针交换移交快照所有权，各 Worker 在请求间隙采用，不获取发布者互斥锁。
+   - **及时回收**：未读取的邮箱节点被后续发布替换回收；正在被请求借用的旧快照保留到租约归还，邮箱宿主活过全部 Worker 的停机与 join。
 
 三者均内置路径穿越防护、点文件策略（`static_dotfile_policy::deny` 默认拒绝隐藏文件）、`ETag` / `Last-Modified` 条件请求（`304 Not Modified`）与 `Range` 分段响应（`206 Partial Content`）。`c.static_file()` 的 `relative_path_` 是已解码的文件路径，`/` 与 `\` 均为段分隔符；含 `.` 或 `..` 段、空的中间段、绝对路径或 NUL 时一律返回 `403`，不做解析或夹取。命名参数（如 `/files/:name`）可在单个段内解码出 `%2F` / `%5C`，因此 `sub%2F..%2Fsecret` 这类拼写同样被拒绝。
 

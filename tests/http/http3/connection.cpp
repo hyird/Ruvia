@@ -3,11 +3,16 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/http3_connection.h"
 
@@ -16,6 +21,58 @@
 #include "test_exceptions.h"
 
 namespace {
+
+template <typename bytes_type>
+constexpr bool can_construct_http3_data_event = std::is_constructible_v<ruvia::http3_data_event, std::int64_t, bytes_type, std::pmr::memory_resource*, bool>;
+
+template <typename bytes_type>
+constexpr bool can_read_http3_stream = requires(ruvia::http3_connection& connection, bytes_type&& bytes) {
+    connection.read_stream(0, std::forward<bytes_type>(bytes), false, 0);
+};
+
+template <typename connection_type>
+constexpr bool can_read_http3_stream_braced_bytes = requires(connection_type& connection) {
+    connection.read_stream(0, {std::byte{1}, std::byte{2}}, false, 0);
+};
+
+static_assert(can_construct_http3_data_event<std::string&>);
+static_assert(can_construct_http3_data_event<const std::string&>);
+static_assert(can_construct_http3_data_event<std::pmr::string&>);
+static_assert(can_construct_http3_data_event<const std::pmr::string&>);
+static_assert(can_construct_http3_data_event<char (&)[4]>);
+static_assert(can_construct_http3_data_event<const char (&)[4]>);
+static_assert(can_construct_http3_data_event<std::string_view>);
+static_assert(can_construct_http3_data_event<ruvia::borrowed_text>);
+static_assert(!can_construct_http3_data_event<std::string>);
+static_assert(!can_construct_http3_data_event<const std::string>);
+static_assert(!can_construct_http3_data_event<std::pmr::string>);
+static_assert(!can_construct_http3_data_event<const std::pmr::string>);
+
+static_assert(can_read_http3_stream<std::vector<std::byte>&>);
+static_assert(can_read_http3_stream<const std::vector<std::byte>&>);
+static_assert(can_read_http3_stream<std::pmr::vector<std::byte>&>);
+static_assert(can_read_http3_stream<const std::pmr::vector<std::byte>&>);
+static_assert(can_read_http3_stream<std::array<std::byte, 3>&>);
+static_assert(can_read_http3_stream<const std::array<std::byte, 3>&>);
+static_assert(can_read_http3_stream<std::byte (&)[3]>);
+static_assert(can_read_http3_stream<const std::byte (&)[3]>);
+static_assert(can_read_http3_stream<std::span<std::byte>>);
+static_assert(can_read_http3_stream<std::span<const std::byte>>);
+static_assert(can_read_http3_stream<std::span<std::byte, 3>>);
+static_assert(can_read_http3_stream<std::span<const std::byte, 3>>);
+static_assert(can_read_http3_stream<ruvia::borrowed_span<std::byte>>);
+static_assert(can_read_http3_stream<const ruvia::borrowed_span<std::byte>>);
+static_assert(can_read_http3_stream<ruvia::borrowed_span<std::byte>&>);
+static_assert(!can_read_http3_stream<std::vector<std::byte>>);
+static_assert(!can_read_http3_stream<const std::vector<std::byte>>);
+static_assert(!can_read_http3_stream<std::pmr::vector<std::byte>>);
+static_assert(!can_read_http3_stream<const std::pmr::vector<std::byte>>);
+static_assert(!can_read_http3_stream<std::array<std::byte, 3>>);
+static_assert(!can_read_http3_stream<const std::array<std::byte, 3>>);
+static_assert(!can_read_http3_stream<std::initializer_list<std::byte>>);
+static_assert(!can_read_http3_stream<std::initializer_list<std::byte>&>);
+static_assert(!can_read_http3_stream<const std::initializer_list<std::byte>&>);
+static_assert(!can_read_http3_stream_braced_bytes<ruvia::http3_connection>);
 
 constexpr std::array get_request_fields{
     ruvia::http3_field_view{":method", "GET"},
@@ -68,6 +125,17 @@ TEST(Ruvia, http3_nghttp3_client_server_exchange_headers_and_stream_end) {
     EXPECT_TRUE(response.headers_[0].field(":status") == std::string_view("204"));
     EXPECT_TRUE(response.ended(0));
     EXPECT_EQ(response.sequence_, std::string("HE"));
+}
+
+TEST(Ruvia, http3_data_event_borrows_or_copies_named_input) {
+    std::string input = "abc";
+    ruvia::http3_data_event borrowed(0, input, nullptr, false);
+    ruvia::http3_data_event owned(4, input, nullptr, true);
+
+    EXPECT_EQ(borrowed.bytes_.data(), input.data());
+    input[0] = 'z';
+    EXPECT_EQ(borrowed.bytes_, std::string_view("zbc"));
+    EXPECT_EQ(owned.bytes_, std::string_view("abc"));
 }
 
 TEST(Ruvia, http3_nghttp3_streaming_body_is_owned_until_acknowledged) {

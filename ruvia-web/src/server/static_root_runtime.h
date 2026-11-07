@@ -3,12 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <memory>
 #include <memory_resource>
-#include <mutex>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -38,7 +36,7 @@ public:
     // Builds the initial snapshot; a failure here fails application startup.
     document_root_publisher(const std::filesystem::path& root, const static_root_config_storage& config,
         std::chrono::milliseconds interval, static_root_precompression_options precompression,
-        static_root_resident_options resident);
+        static_root_resident_options resident, std::size_t worker_count);
     ~document_root_publisher();
 
     document_root_publisher(const document_root_publisher&) = delete;
@@ -61,25 +59,34 @@ public:
     // starts, so a plain flag suffices: the first worker to ask owns the walk.
     [[nodiscard]] bool claim_refresh() noexcept;
 
-    // Advances with every publish, after the snapshot is in place. A worker
-    // compares it with the generation it adopted and takes the publisher lock
-    // only once it changed.
-    [[nodiscard]] std::uint64_t published_generation() const noexcept {
-        return generation_.load(std::memory_order_acquire);
-    }
-
-    // The published snapshot when it is not `adopted`, otherwise null. A
-    // worker holds its adopted snapshot, so a matching address always names
-    // the same live snapshot.
-    [[nodiscard]] document_root_snapshot published_unless(const static_root* adopted) const;
-
     // One rebuild pass on the claiming worker. A changed tree is published; a
     // failed pass is counted and the last complete snapshot stays published.
     [[nodiscard]] task<void> refresh(
         const worker_handle& worker, const http_server_worker_state& state, const stop_token& stop = {});
 
 private:
+    friend class static_root_runtime;
+
+    using publication_owner =
+        std::unique_ptr<document_root_snapshot, pmr_object_deleter<document_root_snapshot>>;
+
+    struct mailbox final {
+        ~mailbox();
+
+        // Exchange transfers exclusive ownership of the node, not a borrowed
+        // shared_ptr source. Exactly one exchanging thread reclaims each node.
+        std::atomic<document_root_snapshot*> pending_{nullptr};
+    };
+
+    static_assert(std::atomic<document_root_snapshot*>::is_always_lock_free);
+
+    // The coordinator registers every worker before starting any of them.
+    // The fixed mailbox storage then outlives all workers and joined tasks.
+    [[nodiscard]] mailbox& register_worker() noexcept;
+
     void publish(document_root_snapshot snapshot);
+    void commit_publication(document_root_snapshot snapshot,
+        std::pmr::vector<publication_owner>& publication) noexcept;
 
     // The configured path, not the snapshot's canonical one: a refresh must
     // re-resolve symlinks so a retargeted root (atomic deploy) is followed.
@@ -87,11 +94,10 @@ private:
     std::chrono::milliseconds interval_;
     static_root_precompression_options precompression_;
     static_root_resident_options resident_;
-    mutable std::mutex mutex_;
-    // Guarded by mutex_ for readers. Only refresh() replaces it, on the
-    // claiming worker, so that pass reads it without the lock.
+    // Only the claiming worker reads or replaces current_ after startup.
     document_root_snapshot current_;
-    std::atomic<std::uint64_t> generation_{0};
+    std::pmr::vector<mailbox> mailboxes_;
+    std::size_t registered_workers_{0};
     bool refresh_claimed_{false};
     std::atomic<std::size_t> failures_{0};
 };
@@ -125,13 +131,15 @@ private:
 
     http_server_options& options_;
     document_root_publisher* publisher_;
+    document_root_publisher::mailbox* mailbox_;
     const worker_handle& worker_;
     const http_server_worker_state& state_;
     std::pmr::memory_resource* resource_;
+    // Retained locally if preparing a worker generation fails; a later
+    // publication supersedes it instead of accumulating missed snapshots.
+    document_root_publisher::publication_owner pending_;
     generation_owner current_;
     std::pmr::vector<generation_owner> retired_;
-    // The publisher generation current_ was adopted at.
-    std::uint64_t adopted_generation_{0};
     bool refreshes_;
 };
 

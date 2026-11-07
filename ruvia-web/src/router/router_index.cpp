@@ -1,7 +1,7 @@
 #include <algorithm>
 #include <bit>
 
-#include "ruvia/core/detail/fnv1a.h"
+#include "ruvia/core/fnv1a.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
@@ -260,11 +260,11 @@ std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
     // FNV-1a over the canonical octets (uri_paths_equivalent), so every
     // spelling of one path hashes alike without decoding into storage. A
     // literal '/' and a decoded "%2F" hash alike; only equality tells them apart.
-    auto hash = detail::fnv1a_offset_basis;
+    auto hash = fnv1a_offset_basis;
     for (std::size_t i = 0; i < path.size();) {
         const auto unit = path[i] == '%' ? next_uri_path_unit(path, i) : static_cast<unsigned char>(path[i++]);
         hash ^= static_cast<unsigned char>(unit);
-        hash *= detail::fnv1a_prime;
+        hash *= fnv1a_prime;
     }
 
     // MurmurHash3's public-domain fmix64 spreads common path prefixes across
@@ -279,7 +279,7 @@ std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
 
 std::uint64_t detail::route_table::route_hash(
     http_known_method method, std::uint64_t hash) noexcept {
-    return hash ^ (static_cast<std::uint64_t>(method) * detail::fnv1a_prime);
+    return hash ^ (static_cast<std::uint64_t>(method) * fnv1a_prime);
 }
 
 const detail::route_entry* detail::route_table::find_static_route(

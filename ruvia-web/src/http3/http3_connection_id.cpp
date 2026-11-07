@@ -2,37 +2,30 @@
 
 #include <ngtcp2/ngtcp2_crypto.h>
 
+#include <string_view>
 #include <utility>
+
+#include "ruvia/core/fnv1a.h"
 
 #include "tls/tls_random.h"
 
 namespace ruvia::detail {
 namespace {
 
-constexpr std::uint64_t fnv_offset_basis = 14695981039346656037ULL;
-constexpr std::uint64_t fnv_prime = 1099511628211ULL;
-
-[[nodiscard]] std::uint64_t fnv1a(std::uint64_t hash, std::span<const std::uint8_t> bytes) noexcept {
-    for (const auto byte : bytes) {
-        hash = (hash ^ byte) * fnv_prime;
-    }
-    return hash;
-}
-
 // Only steers packets between workers: a forged tag merely sends a datagram
 // to a worker that does not know its connection and drops it, so a keyed
 // non-cryptographic hash suffices.
 [[nodiscard]] std::uint16_t connection_id_tag(const http3_secret& secret, const std::uint8_t* cid) noexcept {
-    auto hash = fnv1a(fnv_offset_basis, secret);
-    hash = fnv1a(hash, std::span<const std::uint8_t>(cid, 2));
-    hash = fnv1a(hash, std::span<const std::uint8_t>(cid + 4, http3_connection_id_length - 4));
+    auto hash = fnv1a_accumulate(fnv1a_offset_basis, std::string_view(reinterpret_cast<const char*>(secret.data()), secret.size()));
+    hash = fnv1a_accumulate(hash, std::string_view(reinterpret_cast<const char*>(cid), 2));
+    hash = fnv1a_accumulate(hash, std::string_view(reinterpret_cast<const char*>(cid + 4), http3_connection_id_length - 4));
     return static_cast<std::uint16_t>(hash ^ (hash >> 16) ^ (hash >> 32) ^ (hash >> 48));
 }
 
 }  // namespace
 
 std::size_t http3_cid_key_hash::operator()(const http3_cid_key& key) const noexcept {
-    return static_cast<std::size_t>(fnv1a(fnv_offset_basis, std::span<const std::uint8_t>(key.bytes_.data(), key.size_)));
+    return static_cast<std::size_t>(fnv1a_accumulate(fnv1a_offset_basis, std::string_view(reinterpret_cast<const char*>(key.bytes_.data()), key.size_)));
 }
 
 bool make_http3_connection_id(const http3_secret& secret, std::size_t worker_index, ngtcp2_cid& cid) noexcept {
@@ -71,7 +64,9 @@ std::optional<std::size_t> http3_connection_id_owner(
 #if defined(_WIN32)
 std::size_t http3_initial_worker(
     const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept {
-    return static_cast<std::size_t>(fnv1a(fnv1a(fnv_offset_basis, secret), cid) % worker_count);
+    auto hash = fnv1a_accumulate(fnv1a_offset_basis, std::string_view(reinterpret_cast<const char*>(secret.data()), secret.size()));
+    hash = fnv1a_accumulate(hash, std::string_view(reinterpret_cast<const char*>(cid.data()), cid.size()));
+    return static_cast<std::size_t>(hash % worker_count);
 }
 #endif
 

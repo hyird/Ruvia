@@ -340,6 +340,27 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     }
 
     {
+        ruvia::stop_token retained;
+        int notifications = 0;
+        {
+            ruvia::task_scope scope(worker_value);
+            const auto& observed = scope;
+            retained = observed.token();
+            ruvia::stop_registration registration;
+            retained.register_callback(registration, [&] { ++notifications; });
+            scope.request_stop();
+            scope.request_stop();
+            if (observed.token() != retained || !observed.stop_requested() ||
+                !retained.stop_requested() || notifications != 1) {
+                co_return;
+            }
+        }
+        if (!retained.stop_requested() || notifications != 1) {
+            co_return;
+        }
+    }
+
+    {
         failing_memory_resource resource;
         ruvia::task_scope cancelled_scope(worker_value, {.resource_ = &resource});
         {

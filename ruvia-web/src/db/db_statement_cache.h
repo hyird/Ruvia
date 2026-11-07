@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/fnv1a.h"
+#include "ruvia/core/fnv1a.h"
 #include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {

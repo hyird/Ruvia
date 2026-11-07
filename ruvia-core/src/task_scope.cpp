@@ -38,12 +38,10 @@ struct task_scope::retiring_guard final {
 };
 
 task_scope::task_scope(const worker_handle& worker_value, task_scope_options options)
-    : worker_(worker_value),
-      resource_(pmr_resource_or_default(options.resource_)) {
-    if (!worker_.valid()) {
-        throw std::invalid_argument("task scope requires a valid worker");
-    }
-}
+    : worker_(worker_value.valid()
+                  ? worker_value
+                  : throw std::invalid_argument("task scope requires a valid worker")),
+      resource_(pmr_resource_or_default(options.resource_)) {}
 
 task_scope::~task_scope() {
     if (active_ != 0 || std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
@@ -100,19 +98,11 @@ void task_scope::spawn(task<void> task_value) & {
 
 void task_scope::request_stop() & noexcept {
     stop_requested_ = true;
-    if (stop_source_) {
-        stop_source_->request_stop();
-    }
+    stop_source_.request_stop();
 }
 
 stop_token task_scope::token() const& {
-    if (!stop_source_) {
-        stop_source_.emplace();
-        if (stop_requested_) {
-            stop_source_->request_stop();
-        }
-    }
-    return stop_source_->token();
+    return stop_source_.token();
 }
 
 bool task_scope::stop_requested() const& noexcept {

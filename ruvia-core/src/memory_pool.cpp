@@ -94,7 +94,6 @@ constexpr std::pmr::pool_options worker_pool_options{
 // one block size per request the chosen pool's block size is then a multiple
 // of the alignment, and libstdc++ aligns each chunk to at least its block
 // size. Alignments above std::max_align_t bypass the pools entirely.
-template <typename pool_type>
 class aligned_pool_resource final : public std::pmr::memory_resource {
 public:
     aligned_pool_resource(
@@ -136,7 +135,7 @@ private:
         return this == &other;
     }
 
-    pool_type pool_;
+    std::pmr::unsynchronized_pool_resource pool_;
 };
 
 }  // namespace
@@ -248,7 +247,7 @@ public:
           pool_(worker_pool_options, &blocks_) {}
 
     detail::worker_block_cache blocks_;
-    aligned_pool_resource<std::pmr::unsynchronized_pool_resource> pool_;
+    aligned_pool_resource pool_;
 };
 
 void worker_memory::impl_deleter_type::operator()(impl_type* impl) const noexcept {

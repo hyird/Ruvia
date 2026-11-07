@@ -136,16 +136,13 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
                 }
             }
         } else {
-            // Reclaim any consumed prefix first; grow geometrically within a
-            // frame only when spare storage is smaller than needed.
-            const auto needed = std::clamp(protocol_.needed_input_bytes(), min_read_bytes, max_read_bytes);
-            if (buffer_.capacity() - buffer_.size() >= needed) {
-                read_space = buffer_.prepare_spare();
-                if (read_space.size() > max_read_bytes) {
-                    read_space = read_space.first(max_read_bytes);
-                }
-            } else {
+            // Use the writable tail before growing an incomplete frame.
+            read_space = buffer_.prepare_spare();
+            if (read_space.empty()) {
+                const auto needed = std::clamp(protocol_.needed_input_bytes(), min_read_bytes, max_read_bytes);
                 read_space = buffer_.prepare(needed);
+            } else if (read_space.size() > max_read_bytes) {
+                read_space = read_space.first(max_read_bytes);
             }
         }
         auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {

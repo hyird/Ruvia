@@ -152,10 +152,12 @@ task<void> http1_client_exchange::write(std::span<const asio::const_buffer> part
 
 task<client_transport_result> http1_client_exchange::read_append(
     http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout, bool read_inactivity_bound) {
-    const auto read_space =
-        (target.capacity() >= max_bytes && target.size() <= target.capacity() / 2)
-            ? target.prepare_spare().first(std::min(max_bytes, target.capacity() - target.size()))
-            : target.prepare(max_bytes);
+    auto read_space = target.prepare_spare();
+    if (read_space.empty()) {
+        read_space = target.prepare(max_bytes);
+    } else {
+        read_space = read_space.first(std::min(max_bytes, read_space.size()));
+    }
     // Each read restarts the inactivity bound, inside the exchange deadline.
     auto read = co_await connection_.transport_.read_some(
         read_space, read_inactivity_bound ? timeout.constrained_by(pool_.config().read_timeout_) : timeout);

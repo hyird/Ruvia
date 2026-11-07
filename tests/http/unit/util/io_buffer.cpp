@@ -196,26 +196,80 @@ TEST(Ruvia, io_buffer_small_reads_preserve_the_sliding_window) {
     }
 }
 
-TEST(Ruvia, io_buffer_prepare_spare_reuses_consumed_prefix_without_growing) {
-    // A reader that fills all spare storage after each partial consume must
-    // keep the storage bounded however the live tail compares to the prefix.
+TEST(Ruvia, io_buffer_spare_read_cycles_preserve_content_without_growing) {
     counting_resource resource;
     ruvia::http_io_buffer buffer(&resource);
-    buffer.reserve(64);
-    std::string expected;
-    for (std::size_t round = 0; round < 64; ++round) {
+    buffer.reserve(128);
+    std::string expected(64, 'a');
+    buffer.append(expected);
+    for (std::size_t round = 0; round < 4096; ++round) {
+        buffer.consume(1);
+        expected.erase(0, 1);
         const auto spare = buffer.prepare_spare();
-        EXPECT_EQ(spare.size(), buffer.capacity() - buffer.size());
-        std::string fill(spare.size(), static_cast<char>('a' + round % 26));
-        write_text(spare, fill);
-        buffer.commit(spare.size());
-        expected += fill;
-        // Leave a live tail larger than the consumed prefix.
-        const auto consumed = buffer.size() / 4;
-        buffer.consume(consumed);
-        expected.erase(0, consumed);
+        ASSERT_FALSE(spare.empty());
         EXPECT_EQ(buffer.view(), std::string_view(expected));
-        EXPECT_EQ(buffer.capacity(), std::size_t{64});
+        if (round == 0) {
+            EXPECT_TRUE(ruvia::testing::throws_on([&] { buffer.commit(spare.size() + 1); }));
+            buffer.commit(0);
+            EXPECT_EQ(buffer.view(), std::string_view(expected));
+        }
+        const char byte = static_cast<char>('a' + round % 26);
+        spare[0] = byte;
+        buffer.commit(1);
+        expected.push_back(byte);
+        EXPECT_EQ(buffer.view(), std::string_view(expected));
+        EXPECT_EQ(buffer.capacity(), std::size_t{128});
     }
     EXPECT_EQ(resource.allocations_, std::size_t{1});
+}
+
+TEST(Ruvia, io_buffer_spare_handles_empty_full_and_partial_windows) {
+    counting_resource resource;
+    ruvia::http_io_buffer buffer(&resource);
+    EXPECT_TRUE(buffer.prepare_spare().empty());
+    EXPECT_TRUE(buffer.prepare(0).empty());
+    buffer.commit(0);
+    buffer.consume(0);
+    buffer.append({});
+    EXPECT_EQ(resource.allocations_, std::size_t{0});
+
+    buffer.reserve(8);
+    const auto spare = buffer.prepare_spare();
+    ASSERT_GE(spare.size(), std::size_t{8});
+    write_text(spare, "abcdefgh");
+    buffer.commit(8);
+    EXPECT_TRUE(buffer.prepare_spare().empty());
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { buffer.commit(1); }));
+    buffer.commit(0);
+    EXPECT_EQ(buffer.view(), "abcdefgh");
+
+    buffer.consume(6);
+    const auto reclaimed = buffer.prepare_spare();
+    ASSERT_GE(reclaimed.size(), std::size_t{3});
+    write_text(reclaimed, "ijk");
+    buffer.commit(3);
+    EXPECT_EQ(buffer.view(), "ghijk");
+    EXPECT_EQ(buffer.capacity(), std::size_t{8});
+    EXPECT_EQ(resource.allocations_, std::size_t{1});
+
+    buffer.append(buffer.view().substr(0, 2));
+    EXPECT_EQ(buffer.view(), "ghijkgh");
+    buffer.consume(buffer.size());
+    EXPECT_TRUE(buffer.empty());
+    EXPECT_EQ(buffer.prepare_spare().size(), std::size_t{8});
+}
+
+TEST(Ruvia, io_buffer_reader_prepares_when_no_spare_is_available) {
+    ruvia::http_io_buffer buffer;
+    buffer.reserve(8);
+    buffer.append("abcdefgh");
+    buffer.consume(1);
+    auto space = buffer.prepare_spare();
+    if (space.empty()) {
+        space = buffer.prepare(1);
+    }
+    ASSERT_FALSE(space.empty());
+    space[0] = 'i';
+    buffer.commit(1);
+    EXPECT_EQ(buffer.view(), "bcdefghi");
 }

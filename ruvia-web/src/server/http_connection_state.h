@@ -28,7 +28,7 @@ struct access_log_sink;
 
 // Fresh size of a work set's read buffer: a borrower always starts from at
 // least this capacity. 4 KB holds a typical request head with room to spare,
-// and prepare_read() doubles on demand up to max_http_header_bytes; keeping
+// and prepare_read() grows on demand while bounding pending input; keeping
 // the fresh size small matters because under high concurrency every active
 // connection holds one. reset() keeps modest growth (see
 // retained_read_buffer_bytes) and restores this size only beyond it.
@@ -42,11 +42,9 @@ inline constexpr std::size_t initial_read_buffer_bytes = std::size_t{4} * 1024;
 // connection to save one immediately-completing read per such request.
 inline constexpr std::size_t idle_resident_read_bytes = 256;
 
-// A connection's buffered request input: an http_io_buffer plus its growth and
-// trim policy. A served request is consumed by advancing the window start; the
-// window moves to the front only when a read needs room. A burst of pipelined
-// requests therefore costs one move of its incomplete tail per socket read,
-// not one shift of every remaining byte per request.
+// A connection's buffered request input with its growth and trim policy.
+// Consumption advances the window; reads use the writable tail first and
+// compact only when the consumed prefix covers the remaining bytes.
 class connection_read_buffer final {
 public:
     explicit connection_read_buffer(std::pmr::polymorphic_allocator<char> allocator);
@@ -60,9 +58,9 @@ public:
         return storage_.empty();
     }
 
-    // Room for the next socket read: all spare storage. When the pending bytes
-    // fill the storage, doubles it up to max_http_header_bytes. Empty when the
-    // pending bytes already fill that limit.
+    // Room for the next socket read, bounded by max_http_header_bytes minus
+    // pending bytes. Uses spare storage first, growing only when none remains.
+    // Empty when pending bytes already fill the header limit.
     [[nodiscard]] std::span<char> prepare_read() & RUVIA_LIFETIMEBOUND;
     std::span<char> prepare_read() && = delete;
     // Appends `bytes` read into the span prepare_read() returned.

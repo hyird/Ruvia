@@ -17,7 +17,7 @@
 #include <utility>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/detail/fnv1a.h"
+#include "ruvia/core/fnv1a.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
@@ -206,11 +206,11 @@ void store_precompressed_variant(detail::static_root_entry& entry_value, http_co
 template <typename t_type>
 void hash_value(std::uint64_t& hash, t_type value) noexcept {
     static_assert(std::is_integral_v<t_type>);
-    hash = detail::fnv1a_accumulate_integer(hash, static_cast<std::uint64_t>(value));
+    hash = fnv1a_accumulate_integer(hash, static_cast<std::uint64_t>(value));
 }
 
 [[nodiscard]] std::uint64_t static_root_fingerprint(const detail::static_root_state& state_value) noexcept {
-    std::uint64_t hash = detail::fnv1a_offset_basis;
+    std::uint64_t hash = fnv1a_offset_basis;
 #if defined(__unix__)
     // A root directory replaced by another one with an identical index is
     // still a different snapshot: requests open entries relative to it.
@@ -219,7 +219,7 @@ void hash_value(std::uint64_t& hash, t_type value) noexcept {
 #endif
     hash_value(hash, state_value.entries_.size());
     for (const auto& entry : state_value.entries_) {
-        hash = detail::fnv1a_accumulate(hash, entry.relative_path_);
+        hash = fnv1a_accumulate(hash, entry.relative_path_);
         hash_value(hash, entry.size_);
         hash_value(hash, entry.modified_token_);
         hash_value(hash, entry.modified_seconds_);

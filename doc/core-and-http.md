@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | `"ruvia/core/task.h"` | `template <typename T> class task final` | 结构化惰性协程（仅支持移动构造与右值 `co_await`）。未启动（cold）或已完成（done）可安全析构；**销毁已启动但仍挂起的 `task` 直接触发 `std::terminate()`** |
 | `"ruvia/core/root_task.h"` | `template <typename T> class root_task final` | 由 `event_loop::start(task<T>)` 返回的跨线程等待句柄。提供 `valid()`、`wait()`、`get()`；析构时若未调用 `get()` 则转为后台托管直至完成，**禁止在所属 `event_loop` 自身线程调用 `wait()` / `get()`** |
-| `"ruvia/core/task_scope.h"` | `class task_scope final`、`task_scope::join_operation`、`struct task_scope_options` | 单 Worker 亲和的结构化并发任务域。提供 `spawn(task<void>)`、`request_stop()`、`token()`、`stop_requested()`、`size()`、`empty()`、`join()`；停止状态在首次请求令牌时才创建，第一个子任务失败时作用域自动请求停止；`join()` 返回可丢弃、仅启动前可移动的单次冷 `join_operation`，创建和启动须在绑定 Worker，启动后独占该作用域并关闭 `spawn`，并重新抛出第一个子任务失败；之后与其不等价（同一异常对象，或动态类型与 `what()` 均相同）的子任务失败在该子任务完成时交给 `report_unhandled_failure`，不被静默丢弃；析构前若曾 `spawn` 过任务，必须完成 `co_await scope.join()` |
+| `"ruvia/core/task_scope.h"` | `class task_scope final`、`task_scope::join_operation`、`struct task_scope_options` | 单 Worker 亲和的结构化并发任务域。提供 `spawn(task<void>)`、`request_stop()`、`token()`、`stop_requested()`、`size()`、`empty()`、`join()`；构造期建立停止状态，`token() const&` 只读且不分配，第一个子任务失败时作用域自动请求停止；`join()` 返回可丢弃、仅启动前可移动的单次冷 `join_operation`，创建和启动须在绑定 Worker，启动后独占该作用域并关闭 `spawn`，并重新抛出第一个子任务失败；之后与其不等价（同一异常对象，或动态类型与 `what()` 均相同）的子任务失败在该子任务完成时交给 `report_unhandled_failure`，不被静默丢弃；析构前若曾 `spawn` 过任务，必须完成 `co_await scope.join()` |
 | `"ruvia/core/scoped_operation.h"` | `class operation_scope final`、`class scoped_capability_registration final`、`make_scoped_operation(...)` | 将借用型能力（capability）与惰性协程操作 `task<T>` 绑定到同一 Worker 作用域，`close_and_join()` 先回收冷协程帧并等待已启动操作完成后再失效 capability；`bind_worker(worker)` 借用该 Worker 句柄后，作用域内每个操作的启动、完成与冷帧回收都必须在该 Worker 上，否则 `std::terminate()` |
 | `"ruvia/core/async.h"` | `template <typename T> asio::awaitable<T> as_awaitable(task<T> task_value)`、`template <typename Result = void> class asio_completion final`、`template <typename Result = void, typename Initiate> auto async_asio(Initiate&& initiate)` | 将 `ruvia::task<T>` 适配为 `asio::awaitable<T>`，或将基于完成回调的 Asio 异步启动操作适配为 Ruvia 协程可直接 `co_await` 的 awaiter（返回 `asio_completion<Result>`，提供 `error_code()`、`succeeded()`、`failed()`、`result()` / `take_result()`） |
 
@@ -79,8 +79,9 @@ pool.join();
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消） |
 | `"ruvia/core/memory/memory_pool.h"` | `class worker_memory final`、`class request_memory final`、`struct memory_pool_config` | Worker 级可回收内存池与单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`、`trim(owner)`） |
 | `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_object` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
-| `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器 |
+| `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；移动赋值先提取源对象，再销毁旧目标，支持旧目标拥有源包装器 |
 | `"ruvia/core/local_ring_queue.h"` | `class local_ring_queue<T>` | 预分配容量的单线程零分配环形队列 |
+| `"ruvia/core/fnv1a.h"` | `fnv1a_offset_basis`、`fnv1a_prime`、`fnv1a_accumulate`、`fnv1a_accumulate_integer` | 零分配、可编译期求值的 64 位 FNV-1a 非密码学散列；整数按小端字节混入，跨平台结果一致 |
 | `"ruvia/core/bytes.h"` / `"ruvia/core/failure_report.h"` / `"ruvia/core/socket.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address`、`close_socket` | 字节/字符零拷贝视图转换（拒绝绑定临时拥有型字符串或连续字节容器，调用方须保持底层存储存活到消费完成）、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`）与取消未完成 I/O 后关闭 TCP socket |
 
 `move_only_function<R(Args...)>` 的引用结果必须由目标直接返回兼容引用，允许增加 cv 限定及派生到基类转换；返回值或需要产生临时量的结果不能绑定到引用签名。不同工具链采用相同约束，不依赖编译警告阻止悬垂。需要自定义引用转换（包括按值返回 `std::reference_wrapper`）时，用显式 `-> T&` / `-> const T&` 的适配 lambda 返回实际存活对象；包装器不延长该对象的寿命。值返回签名仍支持正常隐式转换。
@@ -108,7 +109,7 @@ pool.join();
 | `"ruvia/http/borrowed_text.h"` | `class borrowed_text final`、`template <typename element_type> class borrowed_span final` | 只读字符串与连续元素序列借用视图，拒绝直接绑定临时拥有型字符串、临时连续容器（`std::vector`、`std::pmr::vector`、`std::array`）及 `std::initializer_list`，但不延长底层 owner 的生命周期；调用方仍须保持命名存储有效直到消费入口完成读取或拥有化 |
 | `"ruvia/http/port_number.h"` | `class port_number final` | 原始整数宽度受检的端口值；在格式化或原生 API 边界用 `value()` 显式解包 |
 | `"ruvia/http/protocol_byte_limit.h"` | `class protocol_byte_limit final` | 显式有限／无限字节预算：默认和 `unlimited()` 不限量，`limited(n)` 接受原始整数，在窄化前检查严格正数且可表示为 `std::size_t`，否则抛出 `std::invalid_argument`；浮点和枚举不隐式接受，不要预先窄化输入；`SIZE_MAX` 仍是有限预算，不是无限哨兵 |
-| `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)` / `prepare_spare()`、`commit(n)`、`append(bytes)`、`data()` / `view()`、`consume(n)`、`clear_retaining_small()`；返回借用的四个入口只接受左值，缓冲区存储须覆盖异步 I/O 与视图消费 |
+| `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)` / `prepare_spare()`、`commit(n)`、`append(bytes)`、`data()` / `view()`、`consume(n)`、`clear_retaining_small()`；返回借用的四个入口只接受左值，缓冲区存储须覆盖异步 I/O 与视图消费。`prepare_spare()` 优先返回尾部空间，仅尾部耗尽且已消费前缀覆盖存活后缀时压缩；可返回空 span，调用方需要更多空间时使用 `prepare(n)`，并按实际 span 长度读取 |
 | `"ruvia/http/http_protocol_version.h"` / `"ruvia/http/http_known_method.h"` | `http_protocol_version`（`http10`, `http11`, `http2`）、`http_scheme`（`http`, `https`）、`http_known_method`、`classify_http_method`、`is_valid_http_method_token` | 协议版本、Scheme 与 HTTP 方法分类及幂等/安全性判断 |
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
 | `"ruvia/http/http_protocol_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（`http_protocol_error(status, code, message)`：携带 `http_status_code`、静态存储期的稳定 snake_case 机器码 `code()`（如 `missing_host`、`conflicting_content_length`）与定长诊断文本）与解析错误枚举 |
@@ -255,6 +256,8 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 #### 4.3 HTTP/3、QPACK 与 QUIC（`"ruvia/http/http3_connection.h"`, `"ruvia/http/http3_quic_connection.h"`）
 
 `http3_connection` 用 `nghttp3` 封装请求流、控制流与 QPACK，提供 `read_stream()`、`peek_output()` / `commit_output()` / `acknowledge_output()`、请求/响应/正文/Trailer 提交、RFC 9412 `ORIGIN` 帧（`http3_connection_options::origins_` 与 `submit_origin_advertisement()`）以及 RFC 9218 优先级（`submit_priority_update()`、`stream_priority()`、`set_server_stream_priority()`）接口。`peek_output()` 返回借用向量，不复制待发送正文；QUIC 接受前缀后必须以实际字节数调用 `commit_output()`，收到确认后再调用 `acknowledge_output()`，底层正文块才可回收。
+
+- **留存输入借用**：`http3_data_event` 和 `read_stream()` 在编译期拒绝直接传入临时拥有型字符串或连续容器，后者也拒绝 `std::initializer_list`；命名输入及显式借用视图仍可使用。借用模式下，底层存储须覆盖对应事件的消费；显式构造 view/span 不延长 owner 寿命。
 
 `http3_quic_connection` 用 `ngtcp2` 承担 QUIC v1 包处理、丢包恢复、流量控制、流 ID 与定时到期，并把流数据桥接到 `http3_connection`。ngtcp2 的解密回调缓冲在回调返回后失效，因此该包装器强制启用 `own_data_events_`，在返回 `receive_datagram()` 前把 DATA 复制到事件的 PMR 存储；直接使用 `http3_connection` 时可保留默认借用模式。调用方提供 ngtcp2 加密回调、TLS native handle 和 UDP I/O：`receive_datagram()` 输入一个 UDP 数据报，`next_datagram()` 产出一个拥有字节与目标路径的数据报，`expiry()` / `handle_expiry()` 驱动最近到期事件。TLS 使用 `ngtcp2_crypto_ossl` 时适配层属于 `ruvia::web` 的 OpenSSL 依赖；`ruvia::http` 本身只链接 ngtcp2 core 与 nghttp3。
 

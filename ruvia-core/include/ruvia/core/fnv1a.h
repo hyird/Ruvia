@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace ruvia::detail {
+namespace ruvia {
 
 // 64-bit FNV-1a parameters (non-cryptographic; dispatch and fingerprint use only).
 inline constexpr std::uint64_t fnv1a_offset_basis = 14695981039346656037ULL;
@@ -27,4 +27,4 @@ inline constexpr std::uint64_t fnv1a_prime = 1099511628211ULL;
     return hash;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

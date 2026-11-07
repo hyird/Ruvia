@@ -14,10 +14,8 @@
 namespace ruvia::detail {
 namespace {
 
-// Capacity past which a handed-over pipeline grew the read buffer beyond what
-// prepare_read() ever reaches; trim() reclaims it mid-connection once the
-// pending bytes fit the initial size. Expressed in terms of the header limit
-// so the two move together if that limit is ever retuned.
+// Reclaim read storage beyond the header limit once the pending bytes fit the
+// initial size. Amortized growth and handed-over pipelines can both exceed it.
 constexpr std::size_t read_buffer_shrink_capacity_bytes = max_http_header_bytes;
 // Capacity a pooled work set keeps across borrowers. A head of 4-8 KB
 // (cookie-heavy browser requests) would otherwise grow the buffer on every
@@ -42,13 +40,18 @@ connection_read_buffer::connection_read_buffer(std::pmr::polymorphic_allocator<c
 }
 
 std::span<char> connection_read_buffer::prepare_read() & {
-    if (storage_.size() == storage_.capacity() && storage_.capacity() < max_http_header_bytes) {
-        storage_.reserve(std::min(std::max(storage_.capacity() * 2, initial_read_buffer_bytes), max_http_header_bytes));
+    if (storage_.size() >= max_http_header_bytes) {
+        return {};
     }
-    // Reading into the spare storage at most moves the incomplete tail to the
-    // front: every byte moves at most once per read, and only the doubling
-    // above grows the storage however pipelined input is split.
-    return storage_.prepare_spare();
+    const auto remaining = max_http_header_bytes - storage_.size();
+    auto space = storage_.prepare_spare();
+    if (space.empty()) {
+        // Storage may outgrow the protocol window to amortize a short consumed
+        // prefix; only the bytes still allowed in that window are writable.
+        (void)storage_.prepare(std::min(initial_read_buffer_bytes, remaining));
+        space = storage_.prepare_spare();
+    }
+    return space.first(std::min(space.size(), remaining));
 }
 
 void connection_read_buffer::consume(std::size_t bytes) noexcept {

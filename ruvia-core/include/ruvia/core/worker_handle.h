@@ -7,8 +7,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/detail/fnv1a.h"
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
+#include "ruvia/core/fnv1a.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
@@ -18,7 +18,7 @@ namespace ruvia {
 using worker_id_type = std::uint64_t;
 
 [[nodiscard]] constexpr std::uint64_t worker_selection_hash(std::string_view key) noexcept {
-    return detail::fnv1a_accumulate(detail::fnv1a_offset_basis, key);
+    return fnv1a_accumulate(fnv1a_offset_basis, key);
 }
 
 enum class post_status : std::uint8_t {

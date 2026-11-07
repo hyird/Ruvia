@@ -42,9 +42,8 @@ public:
     // created and keep even state/token access on the same explicit owner.
     void spawn(task<void> task) &;
     void spawn(task<void>) && = delete;
-    // Stop control is worker-affine like the rest of the scope. The stop state
-    // is created by the first token request, so a scope whose token is never
-    // observed allocates none; token() may throw std::bad_alloc.
+    // Stop control is worker-affine. Construction creates the stop state so
+    // token() only observes it and never allocates or requests cancellation.
     void request_stop() & noexcept;
     void request_stop() && = delete;
     [[nodiscard]] stop_token token() const&;
@@ -120,7 +119,7 @@ private:
 
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
-    mutable std::optional<stop_source> stop_source_;
+    stop_source stop_source_;
     bool stop_requested_{false};
     std::size_t active_{0};
     retiring_guard* retiring_{nullptr};

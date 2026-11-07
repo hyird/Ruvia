@@ -36,7 +36,9 @@ std::span<char> http_io_buffer::prepare(std::size_t bytes) & {
 }
 
 std::span<char> http_io_buffer::prepare_spare() & noexcept {
-    move_window_to_front();
+    if (end_ == capacity_ && begin_ >= size()) {
+        move_window_to_front();
+    }
     return std::span<char>(storage_ + end_, capacity_ - end_);
 }
 

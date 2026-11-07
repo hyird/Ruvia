@@ -92,8 +92,14 @@ public:
 
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
-            reset();
-            move_from(other);
+            if (operations_ == nullptr) {
+                move_from(other);
+            } else {
+                // Extract a source the old target may own before retiring it.
+                move_only_function incoming(std::move(other));
+                reset();
+                move_from(incoming);
+            }
         }
         return *this;
     }

@@ -80,6 +80,7 @@ if(RUVIA_BUILD_CORE)
         core/ip_address.cpp
         core/local_ring_queue.cpp
         core/memory_pool.cpp
+        core/move_only_function.cpp
         core/scoped_operation.cpp
         core/stop_token.cpp
         core/worker_notification.cpp

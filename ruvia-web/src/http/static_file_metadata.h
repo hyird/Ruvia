@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/detail/fnv1a.h"
+#include "ruvia/core/fnv1a.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_response_file.h"

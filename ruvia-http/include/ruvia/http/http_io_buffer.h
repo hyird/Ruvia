@@ -20,8 +20,8 @@ namespace ruvia {
 //
 // consume() only advances the window, so views of readable bytes stay valid
 // until the next prepare(), prepare_spare(), append(), reserve(), shrink_to()
-// or clear_retaining_small(). prepare_spare() reclaims any consumed prefix;
-// prepare() and append() move the window only when they need the room.
+// or clear_retaining_small(). Compaction only moves live bytes when the
+// consumed prefix covers them; existing writable tail space is used first.
 class http_io_buffer final {
 public:
     using allocator_type = std::pmr::polymorphic_allocator<char>;
@@ -69,11 +69,10 @@ public:
     // Throws std::length_error when the size exceeds the addressable range.
     [[nodiscard]] std::span<char> prepare(std::size_t bytes) & RUVIA_LIFETIMEBOUND;
     std::span<char> prepare(std::size_t) && = delete;
-    // Every uninitialized byte of the current storage after the readable
-    // ones, never growing it: a consumed prefix is reclaimed by moving the
-    // readable bytes to the front. Filling all spare storage this way moves
-    // each byte at most once per read, whereas prepare(capacity() - size())
-    // may grow geometrically on every call.
+    // Returns the current writable tail without growing. Only when that tail
+    // is empty and the consumed prefix covers the live bytes is it reclaimed.
+    // The result may be empty even when capacity() > size(); a reader must
+    // prepare() more room before issuing I/O if no spare space is returned.
     [[nodiscard]] std::span<char> prepare_spare() & noexcept RUVIA_LIFETIMEBOUND;
     std::span<char> prepare_spare() && = delete;
     // Appends the first `bytes` bytes of the writable space, which the caller

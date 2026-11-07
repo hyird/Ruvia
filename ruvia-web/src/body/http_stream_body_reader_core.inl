@@ -226,10 +226,8 @@ void stream_body_reader<stream_type>::require_not_failed() const {
 
 template <typename stream_type>
 task<void> stream_body_reader<stream_type>::read_more() {
-    // Every view handed out by an earlier read is dead once more input is
-    // needed, so this is where the consumed prefix is finally dropped. Only the
-    // unread framing suffix moves, once per socket read, instead of once per
-    // returned chunk.
+    // Earlier body views are dead once more input is needed. Drop the consumed
+    // prefix here; writable tail space is reused before compaction or growth.
     if (read_cursor_ != 0) {
         buffer_.consume(read_cursor_);
         read_cursor_ = 0;
@@ -241,11 +239,12 @@ task<void> stream_body_reader<stream_type>::read_more() {
         throw_request_body_too_large();
     }
     const auto writable = std::min<std::size_t>(http_body_buffer_bytes, hard_limit - old_size);
-    if (buffer_.capacity() - old_size < writable) {
-        const auto doubled = buffer_.capacity() > hard_limit / 2 ? hard_limit : buffer_.capacity() * 2;
-        buffer_.reserve(std::min(std::max(doubled, old_size + writable), hard_limit));
+    auto read_space = buffer_.prepare_spare();
+    if (read_space.empty()) {
+        read_space = buffer_.prepare(writable);
+    } else {
+        read_space = read_space.first(std::min(writable, read_space.size()));
     }
-    const auto read_space = buffer_.prepare_spare().first(writable);
 
     scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
     auto read_completion =
