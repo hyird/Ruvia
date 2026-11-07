@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -5,8 +7,6 @@
 
 #include "ruvia/web/controller.h"
 #include "ruvia/web/testing.h"
-
-#include "test_harness.h"
 
 RUVIA_MODEL(request_binding_params,
     RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(2, "id is too short")));
@@ -87,15 +87,15 @@ public:
     }
 };
 
-RUVIA_TEST(request_binding_enforces_defaults_and_exposes_patch_states) {
+TEST(Ruvia, request_binding_enforces_defaults_and_exposes_patch_states) {
     ruvia::test_app app;
     for (const auto& [body, expected] : {
              std::pair{R"({"token":"ok","retries":1})", "unchanged"},
              std::pair{R"({"token":"ok","retries":1,"remark":null})", "clear"},
              std::pair{R"({"token":"ok","retries":1,"remark":"changed"})", "changed"}}) {
         const auto response = app.request(ruvia::test_request::patch("/request-binding-patch").json(body));
-        RUVIA_CHECK(response.status() == ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(response.body(), std::string_view(expected));
+        EXPECT_TRUE(response.status() == ruvia::http_status::ok);
+        EXPECT_EQ(response.body(), std::string_view(expected));
     }
     for (const auto& [body, code] : {
              std::pair{R"({"token":"ok"})", "too_small"},
@@ -104,24 +104,24 @@ RUVIA_TEST(request_binding_enforces_defaults_and_exposes_patch_states) {
              std::pair{R"({"token":"ok","retries":1,"remark":""})", "too_small"},
              std::pair{R"({"token":"ok","retries":1,"remark":null,"remark":"changed"})", "duplicate"}}) {
         const auto response = app.request(ruvia::test_request::patch("/request-binding-patch").json(body));
-        RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
-        RUVIA_CHECK(response.body().find(code) != std::string_view::npos);
+        EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
+        EXPECT_TRUE(response.body().find(code) != std::string_view::npos);
     }
 }
 
-RUVIA_TEST(request_binding_serializes_the_validated_model_without_copying_fields) {
+TEST(Ruvia, request_binding_serializes_the_validated_model_without_copying_fields) {
     ruvia::test_app app;
     const auto ok = app.request(
         ruvia::test_request::post("/request-binding-echo").json(R"({"name":"A\u006c"})"));
-    RUVIA_CHECK(ok.status() == ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(ok.body(), std::string_view(R"({"name":"Al"})"));
+    EXPECT_TRUE(ok.status() == ruvia::http_status::ok);
+    EXPECT_EQ(ok.body(), std::string_view(R"({"name":"Al"})"));
     for (const auto body : {R"({"name":"A"})", R"({"name":null})", R"({})", R"({"name":"Al","name":"Bob"})"}) {
         const auto rejected = app.request(ruvia::test_request::post("/request-binding-echo").json(body));
-        RUVIA_CHECK(rejected.status() == ruvia::http_status::bad_request);
+        EXPECT_TRUE(rejected.status() == ruvia::http_status::bad_request);
     }
 }
 
-RUVIA_TEST(request_binding_form_keeps_malformed_percent_sequences_literally) {
+TEST(Ruvia, request_binding_form_keeps_malformed_percent_sequences_literally) {
     // WHATWG application/x-www-form-urlencoded parsing keeps a '%' that does not
     // start a valid escape.
     ruvia::test_app app;
@@ -131,49 +131,49 @@ RUVIA_TEST(request_binding_form_keeps_malformed_percent_sequences_literally) {
                  std::string("unknown=").append(invalid) + "&name=Al" + std::string(invalid)}) {
             const auto response = app.request(
                 ruvia::test_request::post("/request-binding-form").form(body));
-            RUVIA_CHECK(response.status() == ruvia::http_status::ok);
-            RUVIA_CHECK_EQ(response.body(), std::string(R"({"name":"Al)").append(invalid) + R"("})");
+            EXPECT_TRUE(response.status() == ruvia::http_status::ok);
+            EXPECT_EQ(response.body(), std::string(R"({"name":"Al)").append(invalid) + R"("})");
         }
     }
     const auto valid = app.request(ruvia::test_request::post("/request-binding-form")
             .form("name=A%6C&unknown=%00%26%3D%FF"));
-    RUVIA_CHECK(valid.status() == ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(valid.body(), std::string_view(R"({"name":"Al"})"));
+    EXPECT_TRUE(valid.status() == ruvia::http_status::ok);
+    EXPECT_EQ(valid.body(), std::string_view(R"({"name":"Al"})"));
 }
 
-RUVIA_TEST(request_binding_validates_inputs_and_serializes_service_model) {
+TEST(Ruvia, request_binding_validates_inputs_and_serializes_service_model) {
     ruvia::test_app app;
     const auto ok = app.request(
         ruvia::test_request::put("/request-binding/u1").json(R"({"name":"Al"})"));
-    RUVIA_CHECK(ok.status() == ruvia::http_status::ok);
-    RUVIA_CHECK(ok.body().find("\"id\":\"u1\"") != std::string_view::npos);
-    RUVIA_CHECK(ok.body().find("\"name\":\"Al\"") != std::string_view::npos);
+    EXPECT_TRUE(ok.status() == ruvia::http_status::ok);
+    EXPECT_TRUE(ok.body().find("\"id\":\"u1\"") != std::string_view::npos);
+    EXPECT_TRUE(ok.body().find("\"name\":\"Al\"") != std::string_view::npos);
 
     const auto short_id = app.request(
         ruvia::test_request::put("/request-binding/x").json(R"({"name":"Al"})"));
-    RUVIA_CHECK(short_id.status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(short_id.status() == ruvia::http_status::bad_request);
 
     const auto short_name = app.request(
         ruvia::test_request::put("/request-binding/u1").json(R"({"name":"A"})"));
-    RUVIA_CHECK(short_name.status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(short_name.status() == ruvia::http_status::bad_request);
 }
 
-RUVIA_TEST(request_binding_dynamic_json_distinguishes_syntax_from_field_type_errors) {
+TEST(Ruvia, request_binding_dynamic_json_distinguishes_syntax_from_field_type_errors) {
     ruvia::test_app app;
     for (const auto body : {R"({"object":[1]})", R"({"object": [1]})", R"({"object":"x"})", R"({"object": "x"})"}) {
         const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
-        RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
-        RUVIA_CHECK(response.body().find("invalid_type") != std::string_view::npos);
+        EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
+        EXPECT_TRUE(response.body().find("invalid_type") != std::string_view::npos);
     }
     for (const auto body : {R"({"payload":})", R"({"payload": })", R"({"payload":[1,})", R"({"object":{"x":}})"}) {
         const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
-        RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
-        RUVIA_CHECK(response.body().find("invalid json body") != std::string_view::npos);
-        RUVIA_CHECK(response.body().find("validation_failed") == std::string_view::npos);
+        EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
+        EXPECT_TRUE(response.body().find("invalid json body") != std::string_view::npos);
+        EXPECT_TRUE(response.body().find("validation_failed") == std::string_view::npos);
     }
 }
 
-RUVIA_TEST(request_binding_large_wrong_type_arrays_report_field_validation) {
+TEST(Ruvia, request_binding_large_wrong_type_arrays_report_field_validation) {
     std::string elements;
     for (std::size_t index = 0; index < 40000; ++index) {
         if (index != 0) {
@@ -186,28 +186,28 @@ RUVIA_TEST(request_binding_large_wrong_type_arrays_report_field_validation) {
              "{\"object\":[" + elements + "]}",
              "{\"numbers\":[" + elements + ",\"wrong type\"]}"}) {
         const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
-        RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
-        RUVIA_CHECK(response.body().find("validation_failed") != std::string_view::npos);
-        RUVIA_CHECK(response.body().find("invalid_type") != std::string_view::npos);
-        RUVIA_CHECK(response.body().find("invalid json body") == std::string_view::npos);
+        EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
+        EXPECT_TRUE(response.body().find("validation_failed") != std::string_view::npos);
+        EXPECT_TRUE(response.body().find("invalid_type") != std::string_view::npos);
+        EXPECT_TRUE(response.body().find("invalid json body") == std::string_view::npos);
     }
 }
 
-RUVIA_TEST(request_binding_rejects_query_and_header_values_for_array_fields) {
+TEST(Ruvia, request_binding_rejects_query_and_header_values_for_array_fields) {
     ruvia::test_app app;
     for (const auto target : {"/request-binding-query-tags", "/request-binding-header-tags"}) {
         const auto absent = app.request(ruvia::test_request::get(target));
-        RUVIA_CHECK(absent.status() == ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(absent.body(), std::string_view("absent"));
+        EXPECT_TRUE(absent.status() == ruvia::http_status::ok);
+        EXPECT_EQ(absent.body(), std::string_view("absent"));
     }
     for (const auto& [target, code] : {
              std::pair{"/request-binding-query-tags?tags=a", "invalid_type"},
              std::pair{"/request-binding-query-tags?tags=a&tags=b", "duplicate"}}) {
         const auto response = app.request(ruvia::test_request::get(target));
-        RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
-        RUVIA_CHECK(response.body().find(code) != std::string_view::npos);
+        EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
+        EXPECT_TRUE(response.body().find(code) != std::string_view::npos);
     }
     const auto header = app.request(ruvia::test_request::get("/request-binding-header-tags").header("Tags", "a"));
-    RUVIA_CHECK(header.status() == ruvia::http_status::bad_request);
-    RUVIA_CHECK(header.body().find("invalid_type") != std::string_view::npos);
+    EXPECT_TRUE(header.status() == ruvia::http_status::bad_request);
+    EXPECT_TRUE(header.body().find("invalid_type") != std::string_view::npos);
 }

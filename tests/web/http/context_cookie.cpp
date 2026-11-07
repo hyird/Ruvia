@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <new>
 #include <optional>
@@ -9,7 +11,7 @@
 
 // Setting response cookies, including prefixes and signatures.
 
-RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
+TEST(Ruvia, context_set_cookie_serializes_all_attributes) {
     auto request = ruvia::test_request::get("/");
     (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const ruvia::cookie_options host{
@@ -24,7 +26,7 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
         };
         context_value.draft().set_cookie({.name_ = "id", .value_ = "abc", .attributes_ = host});
         const auto host_response = context_value.text("ok");
-        RUVIA_CHECK_EQ(host_response.header("Set-Cookie"),
+        EXPECT_EQ(host_response.header("Set-Cookie"),
             std::string_view("__Host-id=abc; Path=/; Max-Age=3600; HttpOnly; Secure; "
                              "SameSite=Strict; Priority=High; Partitioned"));
 
@@ -47,14 +49,14 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
     (void)context_request_test::with_context(secure_request, [&](ruvia::context& secure_context) -> ruvia::task<void> {
         secure_context.draft().set_cookie({.name_ = "sess", .value_ = "xyz", .attributes_ = secure});
         const auto secure_response = secure_context.text("ok");
-        RUVIA_CHECK_EQ(secure_response.header("Set-Cookie"),
+        EXPECT_EQ(secure_response.header("Set-Cookie"),
             std::string_view("__Secure-sess=xyz; Path=/app; Domain=example.com; "
                              "Expires=Fri, 13 Feb 2009 23:31:30 GMT; Secure; SameSite=None"));
         co_return;
     });
 }
 
-RUVIA_TEST(context_signed_cookie_handles_large_values_in_request_storage) {
+TEST(Ruvia, context_signed_cookie_handles_large_values_in_request_storage) {
     const std::string value(2048, 'v');
     std::string cookie;
     const auto request = ruvia::test_request::get("/");
@@ -68,7 +70,7 @@ RUVIA_TEST(context_signed_cookie_handles_large_values_in_request_storage) {
             signed_value = true;
         } catch (const std::bad_alloc&) {
         }
-        RUVIA_CHECK(signed_value);
+        EXPECT_TRUE(signed_value);
         if (signed_value) {
             const auto response = context.text("ok");
             const auto header = response.header("Set-Cookie").value_or("");
@@ -76,7 +78,7 @@ RUVIA_TEST(context_signed_cookie_handles_large_values_in_request_storage) {
         }
         co_return;
     });
-    RUVIA_CHECK(!cookie.empty());
+    EXPECT_TRUE(!cookie.empty());
     if (cookie.empty()) {
         return;
     }
@@ -90,15 +92,15 @@ RUVIA_TEST(context_signed_cookie_handles_large_values_in_request_storage) {
             verified = context.req().signed_cookie({.name_ = "session", .secret_ = "secret"});
         } catch (const std::bad_alloc&) {
         }
-        RUVIA_CHECK(verified.has_value());
+        EXPECT_TRUE(verified.has_value());
         if (verified) {
-            RUVIA_CHECK_EQ(*verified, std::string_view(value));
+            EXPECT_EQ(*verified, std::string_view(value));
         }
         co_return;
     });
 }
 
-RUVIA_TEST(context_set_cookie_preserves_same_name_different_path) {
+TEST(Ruvia, context_set_cookie_preserves_same_name_different_path) {
     auto request = ruvia::test_request::get("/");
     (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         ruvia::cookie_options root;
@@ -123,15 +125,15 @@ RUVIA_TEST(context_set_cookie_preserves_same_name_different_path) {
             has_root_new = has_root_new || header.value() == "session=root-new; Path=/";
             has_admin = has_admin || header.value() == "session=admin; Path=/admin";
         }
-        RUVIA_CHECK_EQ(count, std::size_t{2});
-        RUVIA_CHECK(!has_root_old);
-        RUVIA_CHECK(has_root_new);
-        RUVIA_CHECK(has_admin);
+        EXPECT_EQ(count, std::size_t{2});
+        EXPECT_TRUE(!has_root_old);
+        EXPECT_TRUE(has_root_new);
+        EXPECT_TRUE(has_admin);
         co_return;
     });
 }
 
-RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
+TEST(Ruvia, context_signed_cookie_with_prefix_verifies_round_trip) {
     std::string set_cookie;
     std::string bare;
     auto write_request = ruvia::test_request::get("/");
@@ -149,7 +151,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     });
     const std::string_view line(set_cookie);
     const auto pair = line.substr(0, line.find(';'));
-    RUVIA_CHECK(pair.starts_with("__Host-session="));
+    EXPECT_TRUE(pair.starts_with("__Host-session="));
 
     // Present the cookie exactly as a browser sends it back.
     const std::string cookie_field(pair);
@@ -158,8 +160,8 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     (void)context_request_test::with_context(read_request, [&](ruvia::context& read_context) -> ruvia::task<void> {
         const auto verified =
             read_context.req().signed_cookie({.name_ = "__Host-session", .secret_ = "secret"});
-        RUVIA_CHECK(verified.has_value());
-        RUVIA_CHECK_EQ(*verified, std::string_view("user-1"));
+        EXPECT_TRUE(verified.has_value());
+        EXPECT_EQ(*verified, std::string_view("user-1"));
 
         co_return;
     });
@@ -178,13 +180,13 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
 
     (void)context_request_test::with_context(bare_request, [&](ruvia::context& bare_context) -> ruvia::task<void> {
         const auto bare_verified = bare_context.req().signed_cookie({.name_ = "plain", .secret_ = "secret"});
-        RUVIA_CHECK(bare_verified.has_value());
-        RUVIA_CHECK_EQ(*bare_verified, std::string_view("user-2"));
+        EXPECT_TRUE(bare_verified.has_value());
+        EXPECT_EQ(*bare_verified, std::string_view("user-2"));
         co_return;
     });
 }
 
-RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
+TEST(Ruvia, context_delete_cookie_with_prefix_is_response_only) {
     auto request = ruvia::test_request::get("/").header("Cookie", "__Host-session=user-1");
 
     (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
@@ -194,15 +196,15 @@ RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
             .secure_ = ruvia::cookie_attribute_policy::emit,
         };
         const auto previous = context_value.req().cookie("__Host-session");
-        RUVIA_CHECK(previous.has_value());
-        RUVIA_CHECK_EQ(*previous, std::string_view("user-1"));
+        EXPECT_TRUE(previous.has_value());
+        EXPECT_EQ(*previous, std::string_view("user-1"));
         context_value.draft().delete_cookie({.name_ = "session", .attributes_ = options});
         const auto response = context_value.text("deleted");
         const auto set_cookie = response.header("Set-Cookie");
-        RUVIA_CHECK(set_cookie.has_value());
-        RUVIA_CHECK(set_cookie.value_or(std::string_view{}).starts_with("__Host-session=;"));
-        RUVIA_CHECK((set_cookie.value_or(std::string_view{}).find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos));
-        RUVIA_CHECK((set_cookie.value_or(std::string_view{}).find("Max-Age") == std::string_view::npos));
+        EXPECT_TRUE(set_cookie.has_value());
+        EXPECT_TRUE(set_cookie.value_or(std::string_view{}).starts_with("__Host-session=;"));
+        EXPECT_TRUE((set_cookie.value_or(std::string_view{}).find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos));
+        EXPECT_TRUE((set_cookie.value_or(std::string_view{}).find("Max-Age") == std::string_view::npos));
         co_return;
     });
 }

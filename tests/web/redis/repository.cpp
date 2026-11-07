@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -31,7 +33,6 @@
 
 #include "backend_client_fixture.h"
 #include "memory_resource_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
@@ -333,7 +334,7 @@ void exercise_with_server(redis_test_worker& worker, ruvia::redis_client& client
 
 }  // namespace
 
-RUVIA_TEST(redis_repository_owns_input_before_entity_is_destroyed) {
+TEST(Ruvia, redis_repository_owns_input_before_entity_is_destroyed) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::tracking_resource input_resource;
@@ -348,16 +349,16 @@ RUVIA_TEST(redis_repository_owns_input_before_entity_is_destroyed) {
         auto pending = repository.insert(*input);
         input.reset();
         input_resource.release();
-        RUVIA_CHECK(!input_resource.deallocated_after_release());
+        EXPECT_TRUE(!input_resource.deallocated_after_release());
         // The pending command owns its copied key/field/value arguments and can
         // be discarded after the caller-owned entity and allocator are gone.
         (void)pending;
-        RUVIA_CHECK(!input_resource.deallocated_after_release());
+        EXPECT_TRUE(!input_resource.deallocated_after_release());
         co_return;
     });
 }
 
-RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
+TEST(Ruvia, redis_repository_insert_owns_input_through_async_handoff) {
     redis_command_server server({":1\r\n"});
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
@@ -383,7 +384,7 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
             // The repository has synchronously copied every field into operation storage.
             affected_entities = (co_await std::move(pending)).affected_entities();
         });
-        RUVIA_CHECK_EQ(server.commands().size(), std::size_t{1});
+        EXPECT_EQ(server.commands().size(), std::size_t{1});
         bool contains_id = false;
         bool contains_name = false;
         for (const auto& command : server.commands()) {
@@ -392,14 +393,14 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
                 contains_name = contains_name || arg == input_name;
             }
         }
-        RUVIA_CHECK(contains_id);
-        RUVIA_CHECK(contains_name);
-        RUVIA_CHECK_EQ(affected_entities, std::uint64_t{1});
-        RUVIA_CHECK(!input_resource.deallocated_after_release());
+        EXPECT_TRUE(contains_id);
+        EXPECT_TRUE(contains_name);
+        EXPECT_EQ(affected_entities, std::uint64_t{1});
+        EXPECT_TRUE(!input_resource.deallocated_after_release());
     }
 }
 
-RUVIA_TEST(redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
+TEST(Ruvia, redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
     // A warm server answers EVALSHA directly; a server whose script cache
     // lacks the script replies NOSCRIPT, and the same operation reloads the
     // body through EVAL under the digest it first named.
@@ -420,33 +421,33 @@ RUVIA_TEST(redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
                 removed = (co_await repository.remove(user)).affected_entities();
             });
         }
-        RUVIA_CHECK_EQ(inserted, std::uint64_t{1});
-        RUVIA_CHECK_EQ(removed, std::uint64_t{1});
+        EXPECT_EQ(inserted, std::uint64_t{1});
+        EXPECT_EQ(removed, std::uint64_t{1});
         const auto& commands = server.commands();
         const std::size_t expected_commands = cached ? 2 : 4;
-        RUVIA_CHECK_EQ(commands.size(), expected_commands);
+        EXPECT_EQ(commands.size(), expected_commands);
         if (commands.size() != expected_commands) {
             continue;
         }
         const std::size_t stride = cached ? 1 : 2;
         for (std::size_t operation = 0; operation < 2; ++operation) {
             const auto& by_digest = commands[operation * stride];
-            RUVIA_CHECK(by_digest.size() >= 4 && by_digest[0] == "EVALSHA" && by_digest[1].size() == 40 &&
+            EXPECT_TRUE(by_digest.size() >= 4 && by_digest[0] == "EVALSHA" && by_digest[1].size() == 40 &&
                         by_digest[2] == "1" && by_digest[3].ends_with(":u-1"));
             if (!cached) {
                 const auto& reloaded = commands[operation * stride + 1];
-                RUVIA_CHECK(reloaded.size() == by_digest.size() && reloaded[0] == "EVAL" &&
+                EXPECT_TRUE(reloaded.size() == by_digest.size() && reloaded[0] == "EVAL" &&
                             reloaded[1].find("redis.call") != std::string::npos);
-                RUVIA_CHECK_EQ(sha1_hex(reloaded[1]), by_digest[1]);
-                RUVIA_CHECK(std::equal(reloaded.begin() + 2, reloaded.end(), by_digest.begin() + 2, by_digest.end()));
+                EXPECT_EQ(sha1_hex(reloaded[1]), by_digest[1]);
+                EXPECT_TRUE(std::equal(reloaded.begin() + 2, reloaded.end(), by_digest.begin() + 2, by_digest.end()));
             }
         }
         // Insert and delete are distinct scripts.
-        RUVIA_CHECK(commands[0][1] != commands[stride][1]);
+        EXPECT_TRUE(commands[0][1] != commands[stride][1]);
     }
 }
 
-RUVIA_TEST(redis_repository_script_reload_shares_the_operation_timeout) {
+TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
     using namespace ruvia;
     using namespace std::chrono_literals;
     // Each reply fits a fresh one-second budget, but their combined delay
@@ -481,17 +482,17 @@ RUVIA_TEST(redis_repository_script_reload_shares_the_operation_timeout) {
             server.finish();
             root.get();
         }
-        RUVIA_CHECK(timed_out);
+        EXPECT_TRUE(timed_out);
         const auto& commands = server.commands();
-        RUVIA_CHECK_EQ(commands.size(), std::size_t{2});
+        EXPECT_EQ(commands.size(), std::size_t{2});
         if (commands.size() == 2) {
-            RUVIA_CHECK(commands[0][0] == "EVALSHA");
-            RUVIA_CHECK(commands[1][0] == "EVAL");
+            EXPECT_TRUE(commands[0][0] == "EVALSHA");
+            EXPECT_TRUE(commands[1][0] == "EVAL");
         }
     }
 }
 
-RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
+TEST(Ruvia, redis_repository_find_without_take_rejects_a_truncated_page) {
     for (const bool paged : {false, true}) {
         // An FT.SEARCH page that reports more matches than it returns.
         redis_command_server server({"*1\r\n:150\r\n"});
@@ -517,18 +518,18 @@ RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
         }
         // 150 matches with one page of 100 must never read as a complete result;
         // an explicit page accepts the same reply.
-        RUVIA_CHECK(truncated != paged);
-        RUVIA_CHECK_EQ(returned_rows, std::size_t{paged ? 0U : 1U});
-        RUVIA_CHECK_EQ(server.commands().size(), std::size_t{1});
+        EXPECT_TRUE(truncated != paged);
+        EXPECT_EQ(returned_rows, std::size_t{paged ? 0U : 1U});
+        EXPECT_EQ(server.commands().size(), std::size_t{1});
         if (server.commands().size() == 1) {
             const auto& args = server.commands().front();
-            RUVIA_CHECK(args.size() >= 6U && args[0] == "FT.SEARCH" && args[3] == "LIMIT" && args[4] == "0" &&
+            EXPECT_TRUE(args.size() >= 6U && args[0] == "FT.SEARCH" && args[3] == "LIMIT" && args[4] == "0" &&
                         args[5] == "100");
         }
     }
 }
 
-RUVIA_TEST(redis_repository_search_consumes_expired_documents_without_truncation) {
+TEST(Ruvia, redis_repository_search_consumes_expired_documents_without_truncation) {
     const std::string reply = "*3\r\n:1\r\n$7\r\nusers:1\r\n$-1\r\n";
     redis_command_server server({reply, reply, reply});
     auto& io_context = ruvia::test::new_test_io_context();
@@ -541,18 +542,18 @@ RUVIA_TEST(redis_repository_search_consumes_expired_documents_without_truncation
             // A returned null document occupies the complete search page even
             // though the expired entity is omitted from the decoded rows.
             const auto rows = co_await repository.find();
-            RUVIA_CHECK(rows.empty());
+            EXPECT_TRUE(rows.empty());
             const auto first = co_await repository.find_one({});
-            RUVIA_CHECK(!first.has_value());
+            EXPECT_TRUE(!first.has_value());
             const auto [counted_rows, count] = co_await repository.find_and_count();
-            RUVIA_CHECK(counted_rows.empty());
-            RUVIA_CHECK_EQ(count, std::uint64_t{1});
+            EXPECT_TRUE(counted_rows.empty());
+            EXPECT_EQ(count, std::uint64_t{1});
         });
     }
-    RUVIA_CHECK_EQ(server.commands().size(), std::size_t{3});
+    EXPECT_EQ(server.commands().size(), std::size_t{3});
 }
 
-RUVIA_TEST(redis_repository_pre_cancelled_operations_report_cancellation) {
+TEST(Ruvia, redis_repository_pre_cancelled_operations_report_cancellation) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
@@ -572,7 +573,7 @@ RUVIA_TEST(redis_repository_pre_cancelled_operations_report_cancellation) {
                 } catch (const ruvia::redis_error& error) {
                     cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
                 }
-                RUVIA_CHECK(cancelled);
+                EXPECT_TRUE(cancelled);
             }
         };
 
@@ -580,7 +581,7 @@ RUVIA_TEST(redis_repository_pre_cancelled_operations_report_cancellation) {
     });
 }
 
-RUVIA_TEST(redis_repository_input_may_die_before_a_cancelled_await) {
+TEST(Ruvia, redis_repository_input_may_die_before_a_cancelled_await) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::tracking_resource input_resource;
@@ -607,14 +608,14 @@ RUVIA_TEST(redis_repository_input_may_die_before_a_cancelled_await) {
             } catch (const ruvia::redis_error& error) {
                 cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
             }
-            RUVIA_CHECK(cancelled);
+            EXPECT_TRUE(cancelled);
         };
         co_await exercise();
     });
-    RUVIA_CHECK(!input_resource.deallocated_after_release());
+    EXPECT_TRUE(!input_resource.deallocated_after_release());
 }
 
-RUVIA_TEST(redis_repository_inflight_operation_observes_cancellation) {
+TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
     redis_command_server server(redis_command_server::stalled_tag{});
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
@@ -651,7 +652,7 @@ RUVIA_TEST(redis_repository_inflight_operation_observes_cancellation) {
         runner.join();
         server.finish();
         root.get();
-        RUVIA_CHECK_EQ(observed_error,
+        EXPECT_EQ(observed_error,
             std::optional{ruvia::redis_error::code_type::cancelled});
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
@@ -659,7 +660,7 @@ RUVIA_TEST(redis_repository_inflight_operation_observes_cancellation) {
     }
 }
 
-RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
+TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
@@ -668,27 +669,27 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
         test_redis_user missing_id;
         missing_id.set<"name">("Alice");
         missing_id.set<"active">(true);
-        RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.insert(missing_id); }));
-        RUVIA_CHECK(throws_invalid_argument(
+        EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.insert(missing_id); }));
+        EXPECT_TRUE(throws_invalid_argument(
             [&] { (void)repository.insert(make_user(std::pmr::get_default_resource()),
                       {.ttl_ = std::chrono::milliseconds(0)}); }));
-        RUVIA_CHECK(throws_invalid_argument(
+        EXPECT_TRUE(throws_invalid_argument(
             [&] { (void)repository.insert(make_user(std::pmr::get_default_resource()),
                       {.ttl_ = std::chrono::milliseconds(10), .persist_ = true}); }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)repository.find_one({.where_ = test_redis_user::column<"id">() == ""});
         }));
         for (const auto invalid : {std::numeric_limits<std::int64_t>::min(),
                  std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
         }
         for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
                  (std::numeric_limits<std::uint64_t>::max)()}) {
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
         }
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)repository.exists({.order_ = ruvia::redis_find_order{.column_ = "missing_field"}});
         }));
 
@@ -700,16 +701,16 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
             },
         };
         const auto indexed_users = client.handle().repository<test_redis_user>(indexed_user_config);
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)indexed_users.find({.where_ = test_redis_user::column<"age">() == true});
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)indexed_users.find({.where_ = test_redis_user::column<"age">().in({true, false})});
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)indexed_users.find({.where_ = test_redis_user::column<"id">() == ""});
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)indexed_users.find({.where_ = test_redis_user::column<"id">().in({"u-1", ""})});
         }));
 
@@ -717,13 +718,13 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
             {.prefix_ = "upk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_unsigned_pk_user unsigned_changes;
         unsigned_changes.set<"name">("Alice");
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)unsigned_repo.find_one({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1});
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)unsigned_repo.find_one({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1.0});
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)unsigned_repo.update(test_redis_unsigned_pk_user::column<"id">() == -1, unsigned_changes);
         }));
 
@@ -731,11 +732,11 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
             {.prefix_ = "spk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_signed_pk_user signed_changes;
         signed_changes.set<"name">("Bob");
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)signed_repo.find_one({.where_ = test_redis_signed_pk_user::column<"id">() ==
                                                   std::numeric_limits<std::uint64_t>::max()});
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             (void)signed_repo.update(
                 test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max(),
                 signed_changes);

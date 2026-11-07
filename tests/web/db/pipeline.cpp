@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -17,7 +19,6 @@
 
 #include "backend_client_fixture.h"
 #include "pipeline_support.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -33,7 +34,7 @@ namespace pipeline_test {
 
 }  // namespace pipeline_test
 
-RUVIA_TEST(db_postgresql_exhausted_stream_preserves_buffered_results_and_connection) {
+TEST(Ruvia, db_postgresql_exhausted_stream_preserves_buffered_results_and_connection) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     for (const bool empty : {false, true}) {
@@ -58,21 +59,21 @@ RUVIA_TEST(db_postgresql_exhausted_stream_preserves_buffered_results_and_connect
                 while (auto row = co_await stream.read()) {
                     values.emplace_back((*row)["v"].as<std::string_view>().value_or(""));
                 }
-                RUVIA_CHECK((values == (empty ? std::vector<std::string>{} : std::vector<std::string>{"stream-a", "stream-b"})));
-                RUVIA_CHECK(!stream.active());
+                EXPECT_TRUE((values == (empty ? std::vector<std::string>{} : std::vector<std::string>{"stream-a", "stream-b"})));
+                EXPECT_TRUE(!stream.active());
                 const auto rows = co_await handle.query("SELECT v FROM buffered WHERE id > $1", iteration);
-                RUVIA_CHECK_EQ(rows.size(), std::size_t{2});
+                EXPECT_EQ(rows.size(), std::size_t{2});
                 if (rows.size() == 2) {
-                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "buffered-a");
-                    RUVIA_CHECK(rows[1]["v"].as<std::string_view>() == "buffered-b");
+                    EXPECT_TRUE(rows[0]["v"].as<std::string_view>() == "buffered-a");
+                    EXPECT_TRUE(rows[1]["v"].as<std::string_view>() == "buffered-b");
                 }
             }
         });
-        RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+        EXPECT_EQ(peer.startups(), std::size_t{1});
     }
 }
 
-RUVIA_TEST(db_postgresql_rejected_stream_transaction_does_not_reach_the_next_owner) {
+TEST(Ruvia, db_postgresql_rejected_stream_transaction_does_not_reach_the_next_owner) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT current_setting('transaction_read_only') AS v WHERE $1::integer > 0";
@@ -107,9 +108,9 @@ RUVIA_TEST(db_postgresql_rejected_stream_transaction_does_not_reach_the_next_own
             // Second use creates a named statement owned by this session.
             for (int iteration = 0; iteration < 2; ++iteration) {
                 const auto rows = co_await handle.query(cached_sql, 1);
-                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                EXPECT_EQ(rows.size(), std::size_t{1});
                 if (!rows.empty()) {
-                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "off");
+                    EXPECT_TRUE(rows[0]["v"].as<std::string_view>() == "off");
                 }
             }
             auto stream = co_await handle.query_stream("BEGIN READ ONLY");
@@ -119,30 +120,30 @@ RUVIA_TEST(db_postgresql_rejected_stream_transaction_does_not_reach_the_next_own
             } catch (const std::invalid_argument&) {
                 rejected = true;
             }
-            RUVIA_CHECK(rejected);
-            RUVIA_CHECK(!stream.active());
+            EXPECT_TRUE(rejected);
+            EXPECT_TRUE(!stream.active());
             if (next_is_transaction) {
                 auto transaction = co_await handle.begin_transaction();
                 const auto rows = co_await transaction.query(cached_sql, 1);
-                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                EXPECT_EQ(rows.size(), std::size_t{1});
                 if (!rows.empty()) {
-                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "off");
+                    EXPECT_TRUE(rows[0]["v"].as<std::string_view>() == "off");
                 }
                 co_await transaction.commit();
-                RUVIA_CHECK(!transaction.active());
+                EXPECT_TRUE(!transaction.active());
             } else {
                 const auto rows = co_await handle.query(cached_sql, 1);
-                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                EXPECT_EQ(rows.size(), std::size_t{1});
                 if (!rows.empty()) {
-                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "off");
+                    EXPECT_TRUE(rows[0]["v"].as<std::string_view>() == "off");
                 }
             }
         });
-        RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+        EXPECT_EQ(peer.startups(), std::size_t{2});
     }
 }
 
-RUVIA_TEST(db_postgresql_rejected_idle_stream_preserves_cached_results_and_connection) {
+TEST(Ruvia, db_postgresql_rejected_idle_stream_preserves_cached_results_and_connection) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id > $1";
@@ -159,7 +160,7 @@ RUVIA_TEST(db_postgresql_rejected_idle_stream_preserves_cached_results_and_conne
         const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
         for (int iteration = 0; iteration < 2; ++iteration) {
             const auto rows = co_await handle.query(cached_sql, iteration);
-            RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+            EXPECT_EQ(rows.size(), std::size_t{1});
         }
         auto stream = co_await handle.query_stream("UPDATE records SET v = 'changed'");
         bool rejected = false;
@@ -168,21 +169,21 @@ RUVIA_TEST(db_postgresql_rejected_idle_stream_preserves_cached_results_and_conne
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
-        RUVIA_CHECK(!stream.active());
+        EXPECT_TRUE(rejected);
+        EXPECT_TRUE(!stream.active());
         const auto rows = co_await handle.query(cached_sql, 0);
-        RUVIA_CHECK_EQ(rows.size(), std::size_t{2});
+        EXPECT_EQ(rows.size(), std::size_t{2});
         if (rows.size() == 2) {
-            RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "after-a");
-            RUVIA_CHECK(rows[1]["v"].as<std::string_view>() == "after-b");
+            EXPECT_TRUE(rows[0]["v"].as<std::string_view>() == "after-a");
+            EXPECT_TRUE(rows[1]["v"].as<std::string_view>() == "after-b");
         }
     });
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{std::string(cached_sql), std::string(cached_sql), "UPDATE records SET v = 'changed'"}));
 }
 
-RUVIA_TEST(db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
+TEST(Ruvia, db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -200,8 +201,8 @@ RUVIA_TEST(db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
         const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
         auto stream = co_await handle.query_stream("SELECT v FROM streamed");
         const auto row = co_await stream.read();
-        RUVIA_CHECK(row && (*row)["v"].as<std::string_view>() == "stream");
-        RUVIA_CHECK(!(co_await stream.read()));
+        EXPECT_TRUE(row && (*row)["v"].as<std::string_view>() == "stream");
+        EXPECT_TRUE(!(co_await stream.read()));
         task_scope statements(connected.worker());
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM first", outcomes[0]));
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM second", outcomes[1]));
@@ -209,18 +210,18 @@ RUVIA_TEST(db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
         co_await statements.join();
     });
     for (const auto& result : outcomes) {
-        RUVIA_CHECK(!result.error_.has_value());
+        EXPECT_TRUE(!result.error_.has_value());
     }
-    RUVIA_CHECK(outcomes[0].value_ == "first");
-    RUVIA_CHECK(outcomes[1].value_ == "second");
-    RUVIA_CHECK_EQ(outcomes[2].affected_rows_, std::uint64_t{2});
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(outcomes[0].value_ == "first");
+    EXPECT_TRUE(outcomes[1].value_ == "second");
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{2});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // Concurrent statements on a pool of one connection are all sent before the
 // first reply arrives -- the peer answers nothing until it has read all four
 // -- and each caller gets its own result.
-RUVIA_TEST(db_postgresql_concurrent_statements_are_pipelined_on_one_connection) {
+TEST(Ruvia, db_postgresql_concurrent_statements_are_pipelined_on_one_connection) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -241,20 +242,20 @@ RUVIA_TEST(db_postgresql_concurrent_statements_are_pipelined_on_one_connection) 
         co_await statements.join();
     });
     for (const auto& result : outcomes) {
-        RUVIA_CHECK(!result.error_.has_value());
+        EXPECT_TRUE(!result.error_.has_value());
     }
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK_EQ(outcomes[2].affected_rows_, std::uint64_t{3});
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{3});
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM b", "UPDATE c SET v = 1", "SELECT v FROM d"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // Each statement ends in its own Sync, so a statement the server rejects
 // fails alone; the others and the connection are unaffected.
-RUVIA_TEST(db_postgresql_failed_pipelined_statement_does_not_fail_the_others) {
+TEST(Ruvia, db_postgresql_failed_pipelined_statement_does_not_fail_the_others) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -273,12 +274,12 @@ RUVIA_TEST(db_postgresql_failed_pipelined_statement_does_not_fail_the_others) {
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[1].sql_state_ == "23505");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "23505");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A pending statement whose caller stops it, or whose timeout passes, leaves
@@ -286,7 +287,7 @@ RUVIA_TEST(db_postgresql_failed_pipelined_statement_does_not_fail_the_others) {
 // results (the first) or waiting for another statement to read them (the
 // second): the statements around it get their results, its own results are
 // discarded, and the connection is kept.
-RUVIA_TEST(db_postgresql_abandoned_pipelined_statement_does_not_affect_the_others) {
+TEST(Ruvia, db_postgresql_abandoned_pipelined_statement_does_not_affect_the_others) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::array<std::string_view, 3> sql{"SELECT v FROM a", "SELECT v FROM b", "SELECT v FROM c"};
@@ -323,22 +324,22 @@ RUVIA_TEST(db_postgresql_abandoned_pipelined_statement_does_not_affect_the_other
             });
             for (std::size_t index = 0; index < sql.size(); ++index) {
                 if (index == abandoned_index) {
-                    RUVIA_CHECK(outcomes[index].error_ ==
+                    EXPECT_TRUE(outcomes[index].error_ ==
                                 (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
-                    RUVIA_CHECK(outcomes[index].value_.empty());
+                    EXPECT_TRUE(outcomes[index].value_.empty());
                 } else {
-                    RUVIA_CHECK(outcomes[index].value_ == values[index]);
+                    EXPECT_TRUE(outcomes[index].value_ == values[index]);
                 }
             }
-            RUVIA_CHECK(outcomes[3].value_ == "d");
-            RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+            EXPECT_TRUE(outcomes[3].value_ == "d");
+            EXPECT_EQ(peer.startups(), std::size_t{1});
         }
     }
 }
 
 // Once every pending statement has been abandoned nobody reads their results,
 // so the connection is closed and the next statement connects again.
-RUVIA_TEST(db_postgresql_connection_is_closed_when_every_pipelined_statement_is_abandoned) {
+TEST(Ruvia, db_postgresql_connection_is_closed_when_every_pipelined_statement_is_abandoned) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
@@ -359,16 +360,16 @@ RUVIA_TEST(db_postgresql_connection_is_closed_when_every_pipelined_statement_is_
         peer.release_replies();
         co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
     });
-    RUVIA_CHECK(outcomes[0].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // While a transaction waits for the only connection, shared statements stop
 // joining its group, so the group drains to the transaction; statements that
 // arrive meanwhile follow it.
-RUVIA_TEST(db_postgresql_waiting_transaction_is_not_starved_by_pipelined_statements) {
+TEST(Ruvia, db_postgresql_waiting_transaction_is_not_starved_by_pipelined_statements) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -389,12 +390,12 @@ RUVIA_TEST(db_postgresql_waiting_transaction_is_not_starved_by_pipelined_stateme
         peer.release_replies();
         co_await work.join();
     });
-    RUVIA_CHECK(outcomes[4].value_ == "committed");
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_TRUE(outcomes[4].value_ == "committed");
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{
                      "SELECT v FROM a", "BEGIN", "COMMIT", "SELECT v FROM b", "SELECT v FROM c", "SELECT v FROM d"}));
 }
@@ -403,7 +404,7 @@ RUVIA_TEST(db_postgresql_waiting_transaction_is_not_starved_by_pipelined_stateme
 // arrived before a transaction run before it, sharing a connection with one
 // another, even when more transactions arrive while they wait. Arrival order:
 // a (founds a group), T1, b, c, T2, T3.
-RUVIA_TEST(db_postgresql_statements_keep_their_order_against_later_transactions) {
+TEST(Ruvia, db_postgresql_statements_keep_their_order_against_later_transactions) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     const peer_type::postgres_reply begin{.column_ = "", .command_ = "BEGIN", .status_ = 'T'};
@@ -427,23 +428,23 @@ RUVIA_TEST(db_postgresql_statements_keep_their_order_against_later_transactions)
         peer.release_replies();
         co_await work.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
     for (std::size_t index = 3; index < outcomes.size(); ++index) {
-        RUVIA_CHECK(outcomes[index].value_ == "committed");
+        EXPECT_TRUE(outcomes[index].value_ == "committed");
     }
     // The second transaction parses BEGIN and COMMIT as named statements; the
     // third only binds them.
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{
                      "SELECT v FROM a", "BEGIN", "COMMIT", "SELECT v FROM b", "SELECT v FROM c", "BEGIN", "COMMIT"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A lost connection fails every statement still in flight on it, whether or
 // not statements ahead of them already got their results.
-RUVIA_TEST(db_postgresql_lost_connection_fails_every_pipelined_statement) {
+TEST(Ruvia, db_postgresql_lost_connection_fails_every_pipelined_statement) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     for (const bool first_answered : {false, true}) {
@@ -466,19 +467,19 @@ RUVIA_TEST(db_postgresql_lost_connection_fails_every_pipelined_statement) {
             co_await statements.join();
         });
         if (first_answered) {
-            RUVIA_CHECK(outcomes[0].value_ == "a");
+            EXPECT_TRUE(outcomes[0].value_ == "a");
         } else {
-            RUVIA_CHECK(outcomes[0].error_ == db_error::code_type::io_error);
+            EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::io_error);
         }
-        RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::io_error);
-        RUVIA_CHECK(outcomes[2].error_ == db_error::code_type::io_error);
+        EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
+        EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::io_error);
     }
 }
 
 // A result the protocol cannot continue from (COPY) fails the statements from
 // there on; the one answered before it keeps its result, and the next
 // statement connects again.
-RUVIA_TEST(db_postgresql_protocol_failure_fails_the_pipelined_statements_after_it) {
+TEST(Ruvia, db_postgresql_protocol_failure_fails_the_pipelined_statements_after_it) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
@@ -497,16 +498,16 @@ RUVIA_TEST(db_postgresql_protocol_failure_fails_the_pipelined_statements_after_i
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::protocol_error);
-    RUVIA_CHECK(outcomes[2].error_ == db_error::code_type::protocol_error);
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::protocol_error);
+    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::protocol_error);
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // More statements than one connection keeps in flight wait for room in FIFO
 // order: none starves, and each is sent in the order its caller arrived.
-RUVIA_TEST(db_postgresql_statements_beyond_pipeline_depth_are_sent_in_arrival_order) {
+TEST(Ruvia, db_postgresql_statements_beyond_pipeline_depth_are_sent_in_arrival_order) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::size_t statement_count = 64;
@@ -530,16 +531,16 @@ RUVIA_TEST(db_postgresql_statements_beyond_pipeline_depth_are_sent_in_arrival_or
         co_await statements.join();
     });
     for (std::size_t index = 0; index < statement_count; ++index) {
-        RUVIA_CHECK(!outcomes[index].error_.has_value());
-        RUVIA_CHECK(outcomes[index].value_ == std::to_string(index));
+        EXPECT_TRUE(!outcomes[index].error_.has_value());
+        EXPECT_TRUE(outcomes[index].value_ == std::to_string(index));
     }
-    RUVIA_CHECK(pipeline_test::parsed_sql(peer) == sql);
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(pipeline_test::parsed_sql(peer) == sql);
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A statement waiting for room is bounded like an acquire: it times out after
 // the acquire timeout, while the statements already in flight complete.
-RUVIA_TEST(db_postgresql_statement_waiting_for_pipeline_room_times_out_like_an_acquire) {
+TEST(Ruvia, db_postgresql_statement_waiting_for_pipeline_room_times_out_like_an_acquire) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::size_t statement_count = 64;
@@ -570,20 +571,20 @@ RUVIA_TEST(db_postgresql_statement_waiting_for_pipeline_room_times_out_like_an_a
     });
     std::size_t completed = 0;
     while (completed < statement_count && !outcomes[completed].error_.has_value()) {
-        RUVIA_CHECK(outcomes[completed].value_ == std::to_string(completed));
+        EXPECT_TRUE(outcomes[completed].value_ == std::to_string(completed));
         ++completed;
     }
-    RUVIA_CHECK(completed > 0);
-    RUVIA_CHECK(completed < statement_count);
+    EXPECT_TRUE(completed > 0);
+    EXPECT_TRUE(completed < statement_count);
     for (std::size_t index = completed; index < statement_count; ++index) {
-        RUVIA_CHECK(outcomes[index].error_ == db_error::code_type::timeout);
+        EXPECT_TRUE(outcomes[index].error_ == db_error::code_type::timeout);
     }
-    RUVIA_CHECK_EQ(peer.postgres_parses().size(), completed);
+    EXPECT_EQ(peer.postgres_parses().size(), completed);
 }
 
 // A cached statement found stale while others are in flight behind it runs
 // once more, sent again behind them; the statement after it is unaffected.
-RUVIA_TEST(db_postgresql_stale_pipelined_statement_is_retried_behind_the_others) {
+TEST(Ruvia, db_postgresql_stale_pipelined_statement_is_retried_behind_the_others) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id = $1";
@@ -605,19 +606,19 @@ RUVIA_TEST(db_postgresql_stale_pipelined_statement_is_retried_behind_the_others)
         statements.spawn(pipeline_test::query_id(handle, cached_sql, 3, outcomes[3]));
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "e");
-    RUVIA_CHECK(outcomes[3].value_ == "d");
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "e");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
     // The retry runs unnamed: the stale statement is parsed again on its next use.
-    RUVIA_CHECK_EQ(peer.postgres_parses().size(), std::size_t{3});
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.postgres_parses().size(), std::size_t{3});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A Parse that fails leaves no server statement, so a statement sent behind it
 // that binds the same name finds none (26000): that one runs again, unnamed,
 // while the failed Parse reaches its own caller.
-RUVIA_TEST(db_postgresql_failed_parse_makes_later_binds_of_its_name_run_again) {
+TEST(Ruvia, db_postgresql_failed_parse_makes_later_binds_of_its_name_run_again) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id = $1";
@@ -638,19 +639,19 @@ RUVIA_TEST(db_postgresql_failed_parse_makes_later_binds_of_its_name_run_again) {
         statements.spawn(pipeline_test::query_id(handle, cached_sql, 3, outcomes[2]));
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[1].sql_state_ == "42P01");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "42P01");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
     // Unnamed, the failed named Parse, and the retry unnamed again.
-    RUVIA_CHECK_EQ(peer.postgres_parses().size(), std::size_t{3});
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.postgres_parses().size(), std::size_t{3});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // close() reaches statements in every phase -- reading the results, waiting
 // for the reader, and parked beyond the pipeline depth -- and the client
 // still shuts down cleanly.
-RUVIA_TEST(db_postgresql_close_ends_pipelined_statements_in_every_phase) {
+TEST(Ruvia, db_postgresql_close_ends_pipelined_statements_in_every_phase) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     constexpr std::size_t statement_count = 40;
@@ -670,13 +671,13 @@ RUVIA_TEST(db_postgresql_close_ends_pipelined_statements_in_every_phase) {
         co_await statements.join();
     });
     for (const auto& result : outcomes) {
-        RUVIA_CHECK(result.error_ == db_error::code_type::cancelled || result.error_ == db_error::code_type::closing);
+        EXPECT_TRUE(result.error_ == db_error::code_type::cancelled || result.error_ == db_error::code_type::closing);
     }
 }
 
 // A read timeout means the connection made no progress: every statement in
 // flight on it fails, and the next statement connects again.
-RUVIA_TEST(db_postgresql_read_timeout_fails_every_pipelined_statement) {
+TEST(Ruvia, db_postgresql_read_timeout_fails_every_pipelined_statement) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
@@ -699,15 +700,15 @@ RUVIA_TEST(db_postgresql_read_timeout_fails_every_pipelined_statement) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     for (std::size_t index = 0; index < 3; ++index) {
-        RUVIA_CHECK(outcomes[index].error_ == db_error::code_type::timeout);
+        EXPECT_TRUE(outcomes[index].error_ == db_error::code_type::timeout);
     }
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // A transaction that stops waiting no longer holds back the statements that
 // arrived after it: they join the group in flight at once.
-RUVIA_TEST(db_postgresql_cancelled_waiting_transaction_lets_later_statements_join) {
+TEST(Ruvia, db_postgresql_cancelled_waiting_transaction_lets_later_statements_join) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -728,17 +729,17 @@ RUVIA_TEST(db_postgresql_cancelled_waiting_transaction_lets_later_statements_joi
         peer.release_replies();
         co_await work.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM b", "SELECT v FROM c"}));
 }
 
 // A statement waiting behind a transaction that is cancelled leaves its place;
 // the statement behind it still follows the transaction.
-RUVIA_TEST(db_postgresql_cancelled_statement_waiting_behind_a_transaction_leaves_its_place) {
+TEST(Ruvia, db_postgresql_cancelled_statement_waiting_behind_a_transaction_leaves_its_place) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -760,11 +761,11 @@ RUVIA_TEST(db_postgresql_cancelled_statement_waiting_behind_a_transaction_leaves
         peer.release_replies();
         co_await work.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].value_ == "committed");
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "committed");
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{"SELECT v FROM a", "BEGIN", "COMMIT", "SELECT v FROM c"}));
 }
 
@@ -772,7 +773,7 @@ RUVIA_TEST(db_postgresql_cancelled_statement_waiting_behind_a_transaction_leaves
 // the first connection to free up; once it has, the statement that arrived
 // after it joins the group still busy on the other connection rather than
 // waiting for a connection of its own.
-RUVIA_TEST(db_postgresql_served_transaction_lets_a_later_statement_join_the_other_connection) {
+TEST(Ruvia, db_postgresql_served_transaction_lets_a_later_statement_join_the_other_connection) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     // Connections are scripted in accept order; whichever statement each one
@@ -799,17 +800,17 @@ RUVIA_TEST(db_postgresql_served_transaction_lets_a_later_statement_join_the_othe
         peer.release_hold(2);
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "first");
-    RUVIA_CHECK(outcomes[1].value_ == "first");
-    RUVIA_CHECK(outcomes[2].value_ == "on the second connection");
-    RUVIA_CHECK(outcomes[3].value_ == "committed");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(outcomes[0].value_ == "first");
+    EXPECT_TRUE(outcomes[1].value_ == "first");
+    EXPECT_TRUE(outcomes[2].value_ == "on the second connection");
+    EXPECT_TRUE(outcomes[3].value_ == "committed");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // A group whose oldest statement was abandoned is stalled behind it: a new
 // statement is not sent behind that one but waits for room elsewhere, here
 // until its own timeout.
-RUVIA_TEST(db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
+TEST(Ruvia, db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -833,20 +834,20 @@ RUVIA_TEST(db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
-    RUVIA_CHECK(outcomes[0].error_ == db_error::code_type::timeout);
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].error_ == db_error::code_type::timeout);
-    RUVIA_CHECK(outcomes[3].value_ == "d");
+    EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(outcomes[3].value_ == "d");
     // The statement that timed out waiting was never sent.
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM b", "SELECT v FROM d"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A statement that leaves its connection inside a transaction block (BEGIN
 // through execute()) must not hand that block to the next caller: the
 // connection is closed when its group dissolves.
-RUVIA_TEST(db_postgresql_connection_left_inside_a_transaction_block_is_closed) {
+TEST(Ruvia, db_postgresql_connection_left_inside_a_transaction_block_is_closed) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
@@ -860,16 +861,16 @@ RUVIA_TEST(db_postgresql_connection_left_inside_a_transaction_block_is_closed) {
         co_await pipeline_test::execute(handle, "BEGIN", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
     });
-    RUVIA_CHECK(!outcomes[0].error_.has_value());
-    RUVIA_CHECK(outcomes[1].value_ == "fresh");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(!outcomes[0].error_.has_value());
+    EXPECT_TRUE(outcomes[1].value_ == "fresh");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // A transaction stopped while it waits leaves the lease queue at once, though
 // its own resumption comes a turn later. A connection released in between
 // goes to the statement that waited behind it, not to a transaction that
 // arrives after that statement.
-RUVIA_TEST(db_postgresql_connection_released_after_a_waiting_transaction_stops_goes_to_the_parked_statement) {
+TEST(Ruvia, db_postgresql_connection_released_after_a_waiting_transaction_stops_goes_to_the_parked_statement) {
     using namespace ruvia;
     using pipeline_test::peer_type;
     // The held transaction's connection is closed when it is abandoned, so
@@ -895,11 +896,11 @@ RUVIA_TEST(db_postgresql_connection_released_after_a_waiting_transaction_stops_g
         work.spawn(pipeline_test::begin_and_commit(handle, outcomes[1]));
         co_await work.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "s");
-    RUVIA_CHECK(outcomes[1].value_ == "committed");
-    RUVIA_CHECK(outcomes[2].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+    EXPECT_TRUE(outcomes[0].value_ == "s");
+    EXPECT_TRUE(outcomes[1].value_ == "committed");
+    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>{"BEGIN", "SELECT v FROM s", "BEGIN", "COMMIT"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 #endif

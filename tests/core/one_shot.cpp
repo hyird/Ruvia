@@ -1,5 +1,7 @@
 #include "ruvia/core/one_shot.h"
 
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <concepts>
 #include <functional>
@@ -536,7 +538,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
 
 }  // namespace
 
-int main() {
+TEST(Ruvia, OneShotLifecycle) {
     bool success = false;
     bool cold_wait_operations_safe = false;
     bool payload_retirement_safe = false;
@@ -594,11 +596,28 @@ int main() {
         ruvia::test::run_worker_tasks(attachment, wait_for_value(receiver, 77, cross_thread_value));
         completer.join();
     }
-    const bool all_passed = success && cold_wait_operations_safe && payload_retirement_safe && worker_stopping && settled_outcomes_kept && cross_thread_value &&
-                            cross_thread_completed && cancellation_during_completion &&
-                            ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(false) &&
-                            ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(true) &&
-                            ruvia::test::one_shot_tests::test_concurrent_completion_reservation(false) &&
-                            ruvia::test::one_shot_tests::test_concurrent_completion_reservation(true);
-    return all_passed ? 0 : 1;
+    EXPECT_TRUE(success);
+    EXPECT_TRUE(cold_wait_operations_safe);
+    EXPECT_TRUE(payload_retirement_safe);
+    EXPECT_TRUE(worker_stopping);
+    EXPECT_TRUE(settled_outcomes_kept);
+    EXPECT_TRUE(cross_thread_value);
+    EXPECT_TRUE(cross_thread_completed);
+    EXPECT_TRUE(cancellation_during_completion);
+}
+
+TEST(Ruvia, OneShotCompletionMoveCanCloseReceiver) {
+    EXPECT_TRUE(ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(false));
+}
+
+TEST(Ruvia, OneShotCompletionMoveCanStopWorker) {
+    EXPECT_TRUE(ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(true));
+}
+
+TEST(Ruvia, OneShotConcurrentCompletionReservation) {
+    EXPECT_TRUE(ruvia::test::one_shot_tests::test_concurrent_completion_reservation(false));
+}
+
+TEST(Ruvia, OneShotConcurrentCompletionReservationAfterThrow) {
+    EXPECT_TRUE(ruvia::test::one_shot_tests::test_concurrent_completion_reservation(true));
 }

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <memory_resource>
 #include <new>
@@ -11,7 +13,7 @@
 #include "ruvia/http/websocket_deflate_codecs.h"
 
 #include "failing_memory_resource.h"
-#include "test_harness.h"
+#include "test_exceptions.h"
 
 namespace {
 using namespace ruvia;
@@ -48,15 +50,15 @@ private:
     return message;
 }
 
-[[nodiscard]] std::string deflate(ruvia::testing::test_context& ruvia_ctx, websocket_deflate_codecs& codecs, std::string_view payload, int level, int window) {
+[[nodiscard]] std::string deflate(websocket_deflate_codecs& codecs, std::string_view payload, int level, int window) {
     std::pmr::string out;
-    RUVIA_CHECK(codecs.deflate_message(payload, out, level, window));
+    EXPECT_TRUE(codecs.deflate_message(payload, out, level, window));
     return std::string(out);
 }
 
-[[nodiscard]] std::string inflate(ruvia::testing::test_context& ruvia_ctx, websocket_deflate_codecs& codecs, std::string_view payload) {
+[[nodiscard]] std::string inflate(websocket_deflate_codecs& codecs, std::string_view payload) {
     std::pmr::string out;
-    RUVIA_CHECK(codecs.inflate_message(payload, out, protocol_byte_limit::unlimited()) ==
+    EXPECT_TRUE(codecs.inflate_message(payload, out, protocol_byte_limit::unlimited()) ==
                 websocket_inflate_result::ok);
     return std::string(out);
 }
@@ -75,7 +77,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(websocket_deflate_codecs_match_per_connection_no_context_takeover_bytes) {
+TEST(Ruvia, websocket_deflate_codecs_match_per_connection_no_context_takeover_bytes) {
     for (int window = 8; window <= 15; ++window) {
         for (int level = 1; level <= 9; ++level) {
             websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
@@ -89,75 +91,75 @@ RUVIA_TEST(websocket_deflate_codecs_match_per_connection_no_context_takeover_byt
                 });
             for (unsigned message = 0; message < 3; ++message) {
                 const auto payload = sample_message(message == 1 ? 70'000 : 600, message + 1);
-                RUVIA_CHECK(connection.submit_frame(websocket_opcode::binary, payload) ==
+                EXPECT_TRUE(connection.submit_frame(websocket_opcode::binary, payload) ==
                             websocket_frame_submit_status::accepted);
                 const auto plan = connection.output_plan();
                 const auto expected = compressed_frame_payload(plan.bytes());
-                RUVIA_CHECK(!expected.empty());
-                RUVIA_CHECK(connection.consume_output(plan.size()) == websocket_output_consume_status::drained);
+                EXPECT_TRUE(!expected.empty());
+                EXPECT_TRUE(connection.consume_output(plan.size()) == websocket_output_consume_status::drained);
 
-                const auto actual = deflate(ruvia_ctx, codecs, payload, level, window);
-                RUVIA_CHECK(actual == expected);
-                RUVIA_CHECK(inflate(ruvia_ctx, codecs, actual) == payload);
+                const auto actual = deflate(codecs, payload, level, window);
+                EXPECT_TRUE(actual == expected);
+                EXPECT_TRUE(inflate(codecs, actual) == payload);
             }
         }
     }
 }
 
-RUVIA_TEST(websocket_deflate_codecs_round_trip_every_level_and_window) {
+TEST(Ruvia, websocket_deflate_codecs_round_trip_every_level_and_window) {
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
     for (int window = 8; window <= 15; ++window) {
         for (int level = 0; level <= 9; ++level) {
             for (const auto size : {std::size_t{0}, std::size_t{1}, std::size_t{5000}}) {
                 const auto payload = sample_message(size, static_cast<unsigned>(window * 10 + level));
-                const auto compressed = deflate(ruvia_ctx, codecs, payload, level, window);
-                RUVIA_CHECK(!compressed.empty());
-                RUVIA_CHECK(inflate(ruvia_ctx, codecs, compressed) == payload);
+                const auto compressed = deflate(codecs, payload, level, window);
+                EXPECT_TRUE(!compressed.empty());
+                EXPECT_TRUE(inflate(codecs, compressed) == payload);
             }
         }
     }
 }
 
-RUVIA_TEST(websocket_deflate_codecs_append_to_existing_output) {
+TEST(Ruvia, websocket_deflate_codecs_append_to_existing_output) {
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
     const auto payload = sample_message(2000, 3);
-    const auto compressed = deflate(ruvia_ctx, codecs, payload, 6, 15);
+    const auto compressed = deflate(codecs, payload, 6, 15);
 
     std::pmr::string out("prefix");
-    RUVIA_CHECK(codecs.deflate_message(payload, out, 6, 15));
-    RUVIA_CHECK(std::string_view(out) == "prefix" + compressed);
+    EXPECT_TRUE(codecs.deflate_message(payload, out, 6, 15));
+    EXPECT_TRUE(std::string_view(out) == "prefix" + compressed);
 
     std::pmr::string inflated("prefix");
-    RUVIA_CHECK(codecs.inflate_message(compressed, inflated, protocol_byte_limit::limited(payload.size())) ==
+    EXPECT_TRUE(codecs.inflate_message(compressed, inflated, protocol_byte_limit::limited(payload.size())) ==
                 websocket_inflate_result::ok);
-    RUVIA_CHECK(std::string_view(inflated) == "prefix" + payload);
+    EXPECT_TRUE(std::string_view(inflated) == "prefix" + payload);
 }
 
-RUVIA_TEST(websocket_deflate_codecs_accept_payload_aliasing_output) {
+TEST(Ruvia, websocket_deflate_codecs_accept_payload_aliasing_output) {
     // Appending output reallocates a full string while zlib still reads the
     // payload, so a payload viewing `out` must behave like an independent copy.
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
     const auto payload = sample_message(std::size_t{1} << 20U, 9);
-    const auto compressed = deflate(ruvia_ctx, codecs, payload, 6, 15);
+    const auto compressed = deflate(codecs, payload, 6, 15);
 
     std::pmr::string deflated(payload.data(), payload.size(), std::pmr::new_delete_resource());
     deflated.shrink_to_fit();
-    RUVIA_CHECK(codecs.deflate_message(deflated, deflated, 6, 15));
-    RUVIA_CHECK(std::string_view(deflated) == payload + compressed);
+    EXPECT_TRUE(codecs.deflate_message(deflated, deflated, 6, 15));
+    EXPECT_TRUE(std::string_view(deflated) == payload + compressed);
 
     std::pmr::string inflated(compressed.data(), compressed.size(), std::pmr::new_delete_resource());
     inflated.shrink_to_fit();
-    RUVIA_CHECK(codecs.inflate_message(inflated, inflated, protocol_byte_limit::unlimited()) ==
+    EXPECT_TRUE(codecs.inflate_message(inflated, inflated, protocol_byte_limit::unlimited()) ==
                 websocket_inflate_result::ok);
-    RUVIA_CHECK(std::string_view(inflated) == compressed + payload);
+    EXPECT_TRUE(std::string_view(inflated) == compressed + payload);
 }
 
-RUVIA_TEST(websocket_deflate_codecs_reset_after_failed_messages) {
+TEST(Ruvia, websocket_deflate_codecs_reset_after_failed_messages) {
     websocket_deflate_codecs reference(std::pmr::new_delete_resource());
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
     const auto large = sample_message(200'000, 5);
     const auto next = sample_message(3000, 6);
-    const auto expected = deflate(ruvia_ctx, reference, next, 6, 15);
+    const auto expected = deflate(reference, next, 6, 15);
 
     // An output allocation failure abandons the deflater mid-message.
     failing_memory_resource output_resource;
@@ -169,61 +171,61 @@ RUVIA_TEST(websocket_deflate_codecs_reset_after_failed_messages) {
     } catch (const std::bad_alloc&) {
         threw = true;
     }
-    RUVIA_CHECK(threw);
-    RUVIA_CHECK(deflate(ruvia_ctx, codecs, next, 6, 15) == expected);
+    EXPECT_TRUE(threw);
+    EXPECT_TRUE(deflate(codecs, next, 6, 15) == expected);
 
     // A truncated message leaves the inflater inside a block.
-    const auto compressed_large = deflate(ruvia_ctx, codecs, large, 6, 15);
+    const auto compressed_large = deflate(codecs, large, 6, 15);
     std::pmr::string out;
-    RUVIA_CHECK(codecs.inflate_message(std::string_view(compressed_large).substr(0, compressed_large.size() / 2),
+    EXPECT_TRUE(codecs.inflate_message(std::string_view(compressed_large).substr(0, compressed_large.size() / 2),
                     out, protocol_byte_limit::unlimited()) == websocket_inflate_result::error);
-    RUVIA_CHECK(inflate(ruvia_ctx, codecs, expected) == next);
+    EXPECT_TRUE(inflate(codecs, expected) == next);
 
     out.clear();
-    RUVIA_CHECK(codecs.inflate_message("\xff\xff\xff", out, protocol_byte_limit::unlimited()) ==
+    EXPECT_TRUE(codecs.inflate_message("\xff\xff\xff", out, protocol_byte_limit::unlimited()) ==
                 websocket_inflate_result::error);
-    RUVIA_CHECK(inflate(ruvia_ctx, codecs, expected) == next);
+    EXPECT_TRUE(inflate(codecs, expected) == next);
 
     out.clear();
-    RUVIA_CHECK(codecs.inflate_message(compressed_large, out, protocol_byte_limit::limited(large.size() - 1)) ==
+    EXPECT_TRUE(codecs.inflate_message(compressed_large, out, protocol_byte_limit::limited(large.size() - 1)) ==
                 websocket_inflate_result::too_large);
-    RUVIA_CHECK(inflate(ruvia_ctx, codecs, expected) == next);
+    EXPECT_TRUE(inflate(codecs, expected) == next);
 }
 
-RUVIA_TEST(websocket_deflate_codecs_inflate_messages_from_every_sender_window) {
+TEST(Ruvia, websocket_deflate_codecs_inflate_messages_from_every_sender_window) {
     websocket_deflate_codecs sender(std::pmr::new_delete_resource());
     websocket_deflate_codecs receiver(std::pmr::new_delete_resource());
     for (int window = 8; window <= 15; ++window) {
         const auto payload = sample_message(40'000, static_cast<unsigned>(window));
-        RUVIA_CHECK(inflate(ruvia_ctx, receiver, deflate(ruvia_ctx, sender, payload, 6, window)) == payload);
+        EXPECT_TRUE(inflate(receiver, deflate(sender, payload, 6, window)) == payload);
     }
 }
 
-RUVIA_TEST(websocket_deflate_codecs_allocate_once_per_codec_from_their_resource) {
+TEST(Ruvia, websocket_deflate_codecs_allocate_once_per_codec_from_their_resource) {
     counting_resource resource;
     {
         websocket_deflate_codecs codecs(&resource);
-        RUVIA_CHECK_EQ(resource.allocations_, 0U);
+        EXPECT_EQ(resource.allocations_, 0U);
         const auto payload = sample_message(10'000, 9);
 
-        const auto compressed = deflate(ruvia_ctx, codecs, payload, 6, 15);
-        RUVIA_CHECK(inflate(ruvia_ctx, codecs, compressed) == payload);
+        const auto compressed = deflate(codecs, payload, 6, 15);
+        EXPECT_TRUE(inflate(codecs, compressed) == payload);
         const auto warm_allocations = resource.allocations_;
-        RUVIA_CHECK(warm_allocations != 0);
+        EXPECT_TRUE(warm_allocations != 0);
         for (int message = 0; message < 4; ++message) {
-            RUVIA_CHECK(deflate(ruvia_ctx, codecs, payload, 6, 15) == compressed);
-            RUVIA_CHECK(inflate(ruvia_ctx, codecs, compressed) == payload);
+            EXPECT_TRUE(deflate(codecs, payload, 6, 15) == compressed);
+            EXPECT_TRUE(inflate(codecs, compressed) == payload);
         }
-        RUVIA_CHECK_EQ(resource.allocations_, warm_allocations);
+        EXPECT_EQ(resource.allocations_, warm_allocations);
 
         // Another level or window gets its own deflater; the inflater is shared.
-        RUVIA_CHECK(inflate(ruvia_ctx, codecs, deflate(ruvia_ctx, codecs, payload, 1, 10)) == payload);
-        RUVIA_CHECK(resource.allocations_ > warm_allocations);
+        EXPECT_TRUE(inflate(codecs, deflate(codecs, payload, 1, 10)) == payload);
+        EXPECT_TRUE(resource.allocations_ > warm_allocations);
     }
-    RUVIA_CHECK_EQ(resource.live_bytes_, 0U);
+    EXPECT_EQ(resource.live_bytes_, 0U);
 }
 
-RUVIA_TEST(websocket_deflate_codecs_recover_from_codec_allocation_failure) {
+TEST(Ruvia, websocket_deflate_codecs_recover_from_codec_allocation_failure) {
     failing_memory_resource resource;
     {
         websocket_deflate_codecs codecs(&resource);
@@ -231,35 +233,35 @@ RUVIA_TEST(websocket_deflate_codecs_recover_from_codec_allocation_failure) {
         resource.fail_after(0);
         bool threw = false;
         try {
-            static_cast<void>(deflate(ruvia_ctx, codecs, payload, 6, 15));
+            static_cast<void>(deflate(codecs, payload, 6, 15));
         } catch (const std::bad_alloc&) {
             threw = true;
         }
-        RUVIA_CHECK(threw);
-        RUVIA_CHECK_EQ(resource.live_allocations(), 0U);
-        RUVIA_CHECK(inflate(ruvia_ctx, codecs, deflate(ruvia_ctx, codecs, payload, 6, 15)) == payload);
+        EXPECT_TRUE(threw);
+        EXPECT_EQ(resource.live_allocations(), 0U);
+        EXPECT_TRUE(inflate(codecs, deflate(codecs, payload, 6, 15)) == payload);
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
 }
 
-RUVIA_TEST(websocket_deflate_codecs_reject_invalid_parameters) {
+TEST(Ruvia, websocket_deflate_codecs_reject_invalid_parameters) {
     websocket_deflate_codecs codecs(nullptr);
     std::pmr::string out;
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 7)); }));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 16)); }));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, -1, 15)); }));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 10, 15)); }));
-    RUVIA_CHECK(out.empty());
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 7)); }));
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 16)); }));
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, -1, 15)); }));
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 10, 15)); }));
+    EXPECT_TRUE(out.empty());
 }
 
-RUVIA_TEST(websocket_deflate_codecs_support_input_aliasing_output_across_reallocation) {
+TEST(Ruvia, websocket_deflate_codecs_support_input_aliasing_output_across_reallocation) {
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
     const std::string payload(16384, 'a');
     std::pmr::string buffer(std::pmr::new_delete_resource());
-    RUVIA_CHECK(codecs.deflate_message(payload, buffer, 6, 15));
+    EXPECT_TRUE(codecs.deflate_message(payload, buffer, 6, 15));
     const auto compressed_size = buffer.size();
-    RUVIA_CHECK(codecs.inflate_message(
+    EXPECT_TRUE(codecs.inflate_message(
                     std::string_view(buffer), buffer, protocol_byte_limit::unlimited()) ==
                 websocket_inflate_result::ok);
-    RUVIA_CHECK_EQ(std::string_view(buffer).substr(compressed_size), std::string_view(payload));
+    EXPECT_EQ(std::string_view(buffer).substr(compressed_size), std::string_view(payload));
 }

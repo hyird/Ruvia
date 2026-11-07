@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
@@ -8,7 +10,7 @@
 #include "ruvia/web/model.h"
 
 #include "memory_resource_fixture.h"
-#include "test_harness.h"
+#include "test_exceptions.h"
 
 namespace {
 
@@ -85,38 +87,38 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(model_initial_values_only_run_for_explicit_construction) {
+TEST(Ruvia, model_initial_values_only_run_for_explicit_construction) {
     evaluations = 0;
     initial_model model;
-    RUVIA_CHECK_EQ(evaluations, std::size_t{2});
-    RUVIA_CHECK_EQ(model.get<"number">()->value_, 7);
-    RUVIA_CHECK_EQ(model.get<"name">()->view(), std::string_view("seed"));
-    RUVIA_CHECK(!model.is_present<"number">());
-    RUVIA_CHECK(!model.is_present<"name">());
+    EXPECT_EQ(evaluations, std::size_t{2});
+    EXPECT_EQ(model.get<"number">()->value_, 7);
+    EXPECT_EQ(model.get<"name">()->view(), std::string_view("seed"));
+    EXPECT_TRUE(!model.is_present<"number">());
+    EXPECT_TRUE(!model.is_present<"name">());
 
     auto parsed_value = ruvia::from_json<initial_model>(R"({"required":1})");
-    RUVIA_CHECK(parsed_value.get<"number">()->value_ == 9);
-    RUVIA_CHECK(!parsed_value.get<"name">());
-    RUVIA_CHECK(!parsed_value.is_present<"number">());
-    RUVIA_CHECK(!parsed_value.is_null<"name">());
-    RUVIA_CHECK_EQ(evaluations, std::size_t{2});
+    EXPECT_TRUE(parsed_value.get<"number">()->value_ == 9);
+    EXPECT_TRUE(!parsed_value.get<"name">());
+    EXPECT_TRUE(!parsed_value.is_present<"number">());
+    EXPECT_TRUE(!parsed_value.is_null<"name">());
+    EXPECT_EQ(evaluations, std::size_t{2});
 }
 
-RUVIA_TEST(model_initial_values_do_not_recur_through_moves_or_rebind) {
+TEST(Ruvia, model_initial_values_do_not_recur_through_moves_or_rebind) {
     evaluations = 0;
     ruvia::test::counting_memory_resource source;
     ruvia::test::counting_memory_resource destination;
     initial_model retained({.resource_ = &destination});
-    RUVIA_CHECK_EQ(evaluations, std::size_t{2});
+    EXPECT_EQ(evaluations, std::size_t{2});
     auto parsed_value = ruvia::from_json<initial_model>(R"({"required":1,"number":3})",
         {.resource_ = &source});
-    RUVIA_CHECK_EQ(evaluations, std::size_t{2});
+    EXPECT_EQ(evaluations, std::size_t{2});
     retained = std::move(parsed_value);
-    RUVIA_CHECK_EQ(evaluations, std::size_t{2});
-    RUVIA_CHECK_EQ(retained.get<"number">()->value_, 3);
+    EXPECT_EQ(evaluations, std::size_t{2});
+    EXPECT_EQ(retained.get<"number">()->value_, 3);
 }
 
-RUVIA_TEST(model_initial_exception_releases_partial_values) {
+TEST(Ruvia, model_initial_exception_releases_partial_values) {
     evaluations = 0;
     ruvia::test::counting_memory_resource memory;
     bool failed = false;
@@ -125,73 +127,73 @@ RUVIA_TEST(model_initial_exception_releases_partial_values) {
     } catch (const std::runtime_error& error) {
         failed = std::string_view(error.what()) == "initial evaluation failed";
     }
-    RUVIA_CHECK(failed);
-    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
+    EXPECT_TRUE(failed);
+    EXPECT_EQ(memory.live_allocations(), std::size_t{0});
+    EXPECT_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
-RUVIA_TEST(model_null_initial_is_a_value_state_without_allocation) {
+TEST(Ruvia, model_null_initial_is_a_value_state_without_allocation) {
     ruvia::test::counting_memory_resource memory;
     null_initial_model model({.resource_ = &memory});
-    RUVIA_CHECK(model.is_null<"value">());
-    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
+    EXPECT_TRUE(model.is_null<"value">());
+    EXPECT_EQ(memory.live_allocations(), std::size_t{0});
+    EXPECT_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
-RUVIA_TEST(model_required_initial_is_not_used_by_parsing) {
+TEST(Ruvia, model_required_initial_is_not_used_by_parsing) {
     evaluations = 0;
-    RUVIA_CHECK_EQ(evaluations, std::size_t{0});
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<required_initial_model>("{}"); }));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<required_initial_model>(""); }));
-    RUVIA_CHECK_EQ(evaluations, std::size_t{0});
+    EXPECT_EQ(evaluations, std::size_t{0});
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<required_initial_model>("{}"); }));
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_form<required_initial_model>(""); }));
+    EXPECT_EQ(evaluations, std::size_t{0});
 }
 
-RUVIA_TEST(model_initial_is_only_for_explicit_nested_construction) {
+TEST(Ruvia, model_initial_is_only_for_explicit_nested_construction) {
     evaluations = 0;
     nested_initial_model model;
-    RUVIA_CHECK_EQ(evaluations, std::size_t{0});
+    EXPECT_EQ(evaluations, std::size_t{0});
     (void)model.ensure<"child">();
-    RUVIA_CHECK_EQ(evaluations, std::size_t{2});
+    EXPECT_EQ(evaluations, std::size_t{2});
 }
 
-RUVIA_TEST(model_initial_does_not_recur_in_nested_move_or_array_emplace) {
+TEST(Ruvia, model_initial_does_not_recur_in_nested_move_or_array_emplace) {
     evaluations = 0;
     ruvia::test::counting_memory_resource source_resource;
     ruvia::test::counting_memory_resource destination_resource;
     initial_model child_value({.resource_ = &source_resource});
     nested_initial_model parent_value({.resource_ = &destination_resource});
     parent_value.set<"child">(std::move(child_value));
-    RUVIA_CHECK_EQ(evaluations, std::size_t{2});
+    EXPECT_EQ(evaluations, std::size_t{2});
 
     initial_model array_child({.resource_ = &source_resource});
     parent_value.ensure<"children">().emplace_back(std::move(array_child));
-    RUVIA_CHECK_EQ(evaluations, std::size_t{4});
-    RUVIA_CHECK_EQ(parent_value.get<"children">()->size(), std::size_t{1});
+    EXPECT_EQ(evaluations, std::size_t{4});
+    EXPECT_EQ(parent_value.get<"children">()->size(), std::size_t{1});
 }
 
-RUVIA_TEST(model_initial_and_default_modes_are_evaluated_once_across_codecs_and_moves) {
+TEST(Ruvia, model_initial_and_default_modes_are_evaluated_once_across_codecs_and_moves) {
     evaluations = 0;
     default_evaluations = 0;
     ruvia::test::counting_memory_resource source;
     counted_lifecycle explicit_value({.resource_ = &source});
-    RUVIA_CHECK_EQ(evaluations, std::size_t{1});
-    RUVIA_CHECK_EQ(default_evaluations, std::size_t{0});
+    EXPECT_EQ(evaluations, std::size_t{1});
+    EXPECT_EQ(default_evaluations, std::size_t{0});
 
     auto json = ruvia::from_json<counted_lifecycle>("{}", {.resource_ = &source});
     auto form = ruvia::from_form<counted_lifecycle>("", {.resource_ = &source});
-    RUVIA_CHECK_EQ(evaluations, std::size_t{1});
-    RUVIA_CHECK_EQ(default_evaluations, std::size_t{2});
+    EXPECT_EQ(evaluations, std::size_t{1});
+    EXPECT_EQ(default_evaluations, std::size_t{2});
     counted_lifecycle moved(std::move(json));
-    RUVIA_CHECK(!json.get<"value">());
-    RUVIA_CHECK_EQ(moved.get<"value">()->value_, 11);
-    RUVIA_CHECK_EQ(form.get<"value">()->value_, 11);
-    RUVIA_CHECK(!moved.is_present<"value">());
-    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(moved)), std::string_view(R"({"value":11})"));
-    RUVIA_CHECK_EQ(evaluations, std::size_t{1});
-    RUVIA_CHECK_EQ(default_evaluations, std::size_t{2});
+    EXPECT_TRUE(!json.get<"value">());
+    EXPECT_EQ(moved.get<"value">()->value_, 11);
+    EXPECT_EQ(form.get<"value">()->value_, 11);
+    EXPECT_TRUE(!moved.is_present<"value">());
+    EXPECT_EQ(std::string_view(ruvia::to_json(moved)), std::string_view(R"({"value":11})"));
+    EXPECT_EQ(evaluations, std::size_t{1});
+    EXPECT_EQ(default_evaluations, std::size_t{2});
 }
 
-RUVIA_TEST(model_initial_fresh_container_elements_are_built_once_on_the_container_resource) {
+TEST(Ruvia, model_initial_fresh_container_elements_are_built_once_on_the_container_resource) {
     payload_counting_resource resource;
     {
         ruvia::array<payload_initial_model> dense({.resource_ = &resource});
@@ -202,16 +204,16 @@ RUVIA_TEST(model_initial_fresh_container_elements_are_built_once_on_the_containe
             (void)dense.emplace_back();
             (void)boxed.emplace_back();
         }
-        RUVIA_CHECK_EQ(resource.payload_allocations_, std::size_t{8});
+        EXPECT_EQ(resource.payload_allocations_, std::size_t{8});
         dense.resize(6);
         boxed.resize(6);
-        RUVIA_CHECK_EQ(resource.payload_allocations_, std::size_t{12});
+        EXPECT_EQ(resource.payload_allocations_, std::size_t{12});
         for (const auto& value : dense) {
-            RUVIA_CHECK_EQ(value.get<"payload">()->size(), initial_payload_size);
+            EXPECT_EQ(value.get<"payload">()->size(), initial_payload_size);
         }
         for (const auto& value : boxed) {
-            RUVIA_CHECK_EQ(value.get<"payload">()->size(), initial_payload_size);
+            EXPECT_EQ(value.get<"payload">()->size(), initial_payload_size);
         }
     }
-    RUVIA_CHECK_EQ(resource.allocations_.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.allocations_.live_allocations(), std::size_t{0});
 }

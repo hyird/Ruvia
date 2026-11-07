@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -18,7 +20,6 @@
 #include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 // A multi-worker application serves a document root that changes while it
@@ -158,23 +159,23 @@ template <typename fn_type>
 
 }  // namespace
 
-RUVIA_TEST(document_root_refresh_updates_multi_worker_application) {
+TEST(Ruvia, document_root_refresh_updates_multi_worker_application) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, multi_worker_config());
 
     // Every version has a distinct size, so a change is indexed even where the
     // filesystem's modification time is coarse.
-    RUVIA_CHECK(write_version("first version"));
-    RUVIA_CHECK(eventually_serves(io, server.endpoint(), "first version"));
+    EXPECT_TRUE(write_version("first version"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "first version"));
 
-    RUVIA_CHECK(write_version("second, longer version"));
-    RUVIA_CHECK(eventually_serves(io, server.endpoint(), "second, longer version"));
+    EXPECT_TRUE(write_version("second, longer version"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "second, longer version"));
     server.finish();
 }
 
 #ifndef _WIN32
-RUVIA_TEST(document_root_refresh_follows_a_retargeted_symlink_root) {
+TEST(Ruvia, document_root_refresh_follows_a_retargeted_symlink_root) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, multi_worker_config());
@@ -193,50 +194,50 @@ RUVIA_TEST(document_root_refresh_follows_a_retargeted_symlink_root) {
         fs::rename(staged_link, configured_root());
     };
     retarget(release);
-    RUVIA_CHECK(eventually_serves(io, server.endpoint(), "retargeted release"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "retargeted release"));
 
     retarget(document_root_dir());
-    RUVIA_CHECK(write_version("back on the original root"));
-    RUVIA_CHECK(eventually_serves(io, server.endpoint(), "back on the original root"));
+    EXPECT_TRUE(write_version("back on the original root"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "back on the original root"));
     fs::remove_all(release, ignored);
     server.finish();
 }
 #endif
 
-RUVIA_TEST(document_root_refresh_failures_count_once_per_application) {
+TEST(Ruvia, document_root_refresh_failures_count_once_per_application) {
     static_cast<void>(configure_application());
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, multi_worker_config());
 
-    RUVIA_CHECK(write_version("cached before removal"));
-    RUVIA_CHECK(eventually_serves(io, server.endpoint(), "cached before removal"));
+    EXPECT_TRUE(write_version("cached before removal"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "cached before removal"));
     const auto failures_before = refresh_failures();
     const auto removed_at = steady_clock::now();
-    RUVIA_CHECK(remove_document_root());
+    EXPECT_TRUE(remove_document_root());
 
     // Observe a window of several intervals with the root missing. The
     // application's one refresher sleeps a full interval before every pass, so
     // it can fail at most once per interval in that window plus one pass that
     // was already sleeping, however many workers serve the root.
     std::size_t failures = 0;
-    RUVIA_CHECK(retry_until_deadline([&] {
+    EXPECT_TRUE(retry_until_deadline([&] {
         failures = refresh_failures() - failures_before;
         return failures != 0 && steady_clock::now() - removed_at >= 10 * refresh_interval;
     }));
     const auto window_intervals =
         static_cast<std::size_t>((steady_clock::now() - removed_at) / refresh_interval);
-    RUVIA_CHECK(failures >= 1);
-    RUVIA_CHECK(failures <= window_intervals + 1);
+    EXPECT_TRUE(failures >= 1);
+    EXPECT_TRUE(failures <= window_intervals + 1);
     // Configuring static_options_ without resident limits still keeps the
     // application's small-file snapshots. Failed refreshes must not turn
     // the last complete snapshot into an unreadable file-backed response.
-    RUVIA_CHECK(eventually_serves(io, server.endpoint(), "cached before removal"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "cached before removal"));
 
     // The refresher keeps running after failures and recovers once the root
     // is back.
-    RUVIA_CHECK(write_version("restored"));
-    RUVIA_CHECK(eventually_serves(io, server.endpoint(), "restored"));
-    RUVIA_CHECK(retry_until_deadline([] {
+    EXPECT_TRUE(write_version("restored"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "restored"));
+    EXPECT_TRUE(retry_until_deadline([] {
         std::error_code ec;
         fs::remove_all(retired_root_dir(), ec);
         return !ec;

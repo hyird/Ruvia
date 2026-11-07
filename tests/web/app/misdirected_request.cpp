@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -25,7 +27,6 @@
 #include "ruvia/web/controller.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -180,7 +181,7 @@ std::vector<unsigned> h2_cleartext(
 
 using namespace misdirected_request_test;
 
-RUVIA_TEST(requests_the_connection_cannot_carry_are_answered_421) {
+TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,DNS:*.wild.test,IP:127.0.0.1");
     const auto private_key = identity.ca_file_.parent_path() / "key.pem";
     {
@@ -221,80 +222,80 @@ RUVIA_TEST(requests_the_connection_cannot_carry_are_answered_421) {
             }
         });
         const bool ready = started.try_acquire_for(10s);
-        RUVIA_CHECK(ready);
+        EXPECT_TRUE(ready);
         if (ready && !trusted) {
             // Names the certificate covers: case-insensitively, as an absolute
             // domain name, through a whole-label wildcard, or as an IP SAN.
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "localhost")), "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "LOCALHOST.")), "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "a.wild.test")), "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ip_host)), "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "%6Cocalhost")), "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("https://%6Cocalhost/origin", "localhost")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "localhost")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "LOCALHOST.")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "a.wild.test")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ip_host)), "HTTP/1.1 200 OK");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "%6Cocalhost")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("https://%6Cocalhost/origin", "localhost")),
                 "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "localhost%2E%2E")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "localhost%2E%2E")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ".wild.test")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ".wild.test")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "%2Ewild.test")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "%2Ewild.test")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "*.wild.test")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "*.wild.test")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "127.0.0.1.")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "127.0.0.1.")),
                 "HTTP/1.1 421 Misdirected Request");
             // Names it does not cover, whatever SNI was offered.
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "attacker.example", get("/origin", "attacker.example")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, "attacker.example", get("/origin", "attacker.example")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "attacker.example")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "attacker.example")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "a.b.wild.test")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "a.b.wild.test")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "wild.test")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "wild.test")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "[::1]")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "[::1]")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("https://attacker.example/origin", "localhost")),
+            EXPECT_EQ(https_exchange(io, https_endpoint, nullptr, get("https://attacker.example/origin", "localhost")),
                 "HTTP/1.1 421 Misdirected Request");
 #if defined(RUVIA_ENABLE_HTTP2)
             // HTTP/2 refuses only the misdirected stream; the connection
             // still serves the covered one.
             const auto h2 = h2_over_tls(io, https_endpoint,
                 {{"https", "attacker.example"}, {"https", "localhost"}, {"https", "x.wild.test:443"}});
-            RUVIA_CHECK_EQ(h2.size(), std::size_t{3});
+            EXPECT_EQ(h2.size(), std::size_t{3});
             if (h2.size() == 3) {
-                RUVIA_CHECK_EQ(h2[0], 421U);
-                RUVIA_CHECK_EQ(h2[1], 200U);
-                RUVIA_CHECK_EQ(h2[2], 200U);
+                EXPECT_EQ(h2[0], 421U);
+                EXPECT_EQ(h2[1], 200U);
+                EXPECT_EQ(h2[2], 200U);
             }
 #endif
 
             // A cleartext connection carries no "https" target.
-            RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")),
+            EXPECT_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("HTTPS://localhost:443/origin", "x")),
+            EXPECT_EQ(http_exchange(io, http_endpoint, get("HTTPS://localhost:443/origin", "x")),
                 "HTTP/1.1 421 Misdirected Request");
-            RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("http://a.example/origin", "x")), "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("/origin", "attacker.example")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(http_exchange(io, http_endpoint, get("http://a.example/origin", "x")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(http_exchange(io, http_endpoint, get("/origin", "attacker.example")), "HTTP/1.1 200 OK");
 #if defined(RUVIA_ENABLE_HTTP2)
             const auto h2c = h2_cleartext(io, http_endpoint, {{"https", "localhost"}, {"http", "localhost"}});
-            RUVIA_CHECK_EQ(h2c.size(), std::size_t{2});
+            EXPECT_EQ(h2c.size(), std::size_t{2});
             if (h2c.size() == 2) {
-                RUVIA_CHECK_EQ(h2c[0], 421U);
-                RUVIA_CHECK_EQ(h2c[1], 200U);
+                EXPECT_EQ(h2c[0], 421U);
+                EXPECT_EQ(h2c[1], 200U);
             }
 #endif
         }
         if (ready && trusted) {
             // A trusted gateway vouches for the target itself.
-            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")), "HTTP/1.1 200 OK");
-            RUVIA_CHECK_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")), "HTTP/1.1 200 OK");
+            EXPECT_EQ(http_exchange(io, http_endpoint, get("https://a.example/origin", "x")), "HTTP/1.1 200 OK");
 #if defined(RUVIA_ENABLE_HTTP2)
             const auto h2 = h2_over_tls(io, https_endpoint, {{"https", "attacker.example"}});
-            RUVIA_CHECK_EQ(h2.size(), std::size_t{1});
+            EXPECT_EQ(h2.size(), std::size_t{1});
             if (h2.size() == 1) {
-                RUVIA_CHECK_EQ(h2[0], 200U);
+                EXPECT_EQ(h2[0], 200U);
             }
 #endif
         }

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -31,7 +33,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -447,7 +448,7 @@ using namespace tls_paths_test;
 // offered (RFC 7301 §3.2), a fatal alert otherwise. TLS 1.2 is limited to
 // ECDHE+AEAD suites in the server's order (RFC 9325 §4.1-4.2.1), and a TLS 1.2
 // session resumes only under its own server_name (RFC 6066 §3).
-RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
+TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
     // The SNI identity reuses this certificate, so it must also name sni.test
     // (RFC 9110 §7.4: other hosts get 421).
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,DNS:sni.test");
@@ -493,8 +494,8 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
         };
     };
     // Credentials load at listen(): unreadable files and wrong passwords fail there.
-    RUVIA_CHECK(throws_system_error([&] { app.listen(listener("wrong password", certificate)); }));
-    RUVIA_CHECK(throws_system_error(
+    EXPECT_TRUE(throws_system_error([&] { app.listen(listener("wrong password", certificate)); }));
+    EXPECT_TRUE(throws_system_error(
         [&] { app.listen(listener(password, directory.file(u8"\u7f3a\u5931.pem"))); }));
 
     std::binary_semaphore started{0};
@@ -511,38 +512,38 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
             }
         });
         const bool ready = started.try_acquire_for(10s);
-        RUVIA_CHECK(ready);
+        EXPECT_TRUE(ready);
         if (ready) {
-            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
-            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
-            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
                                                "/tls-peer"),
                 "absent"));
-            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
                                                "/tls-peer", identity.context_.native_handle()),
                 "CN=localhost"));
-            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
+            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
                                                "/tls-peer", empty_client.native_handle()),
                 "present-empty"));
-            RUVIA_CHECK(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x04h2xx")));
-            RUVIA_CHECK_EQ(negotiate_alpn(io, endpoint, "\x02h2").selected_, std::string("h2"));
+            EXPECT_TRUE(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x04h2xx")));
+            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x02h2").selected_, std::string("h2"));
             const auto negotiated = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1");
-            RUVIA_CHECK(!negotiated.error_);
-            RUVIA_CHECK_EQ(negotiated.selected_, std::string("h2"));
-            RUVIA_CHECK(truncated_close_delimited_stream_lacks_close_notify(io, endpoint));
-            RUVIA_CHECK_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0").selected_, std::string("http/1.0"));
-            RUVIA_CHECK_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0\x08http/1.1").selected_, std::string("http/1.1"));
-            RUVIA_CHECK(tls12_selected_cipher(io, endpoint, "AES128-SHA").empty());
-            RUVIA_CHECK_EQ(tls12_selected_cipher(io, endpoint, "AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"),
+            EXPECT_TRUE(!negotiated.error_);
+            EXPECT_EQ(negotiated.selected_, std::string("h2"));
+            EXPECT_TRUE(truncated_close_delimited_stream_lacks_close_notify(io, endpoint));
+            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0").selected_, std::string("http/1.0"));
+            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0\x08http/1.1").selected_, std::string("http/1.1"));
+            EXPECT_TRUE(tls12_selected_cipher(io, endpoint, "AES128-SHA").empty());
+            EXPECT_EQ(tls12_selected_cipher(io, endpoint, "AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"),
                 std::string("ECDHE-RSA-AES128-GCM-SHA256"));
-            RUVIA_CHECK_EQ(tls12_selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"),
+            EXPECT_EQ(tls12_selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"),
                 std::string("ECDHE-RSA-AES128-GCM-SHA256"));
             for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
-                RUVIA_CHECK(bounded_tls_connection_ends(io, endpoint, version));
-                RUVIA_CHECK(resumes_tls_session_under(io, endpoint, version, "localhost", "localhost"));
-                RUVIA_CHECK(resumes_tls_session_under(io, endpoint, version, "sni.test", "SNI.test"));
-                RUVIA_CHECK(!resumes_tls_session_under(io, endpoint, version, "localhost", "sni.test"));
-                RUVIA_CHECK(!resumes_tls_session_under(io, endpoint, version, "localhost", "unknown.test"));
+                EXPECT_TRUE(bounded_tls_connection_ends(io, endpoint, version));
+                EXPECT_TRUE(resumes_tls_session_under(io, endpoint, version, "localhost", "localhost"));
+                EXPECT_TRUE(resumes_tls_session_under(io, endpoint, version, "sni.test", "SNI.test"));
+                EXPECT_TRUE(!resumes_tls_session_under(io, endpoint, version, "localhost", "sni.test"));
+                EXPECT_TRUE(!resumes_tls_session_under(io, endpoint, version, "localhost", "unknown.test"));
             }
         }
         app.stop();

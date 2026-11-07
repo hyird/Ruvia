@@ -1,5 +1,7 @@
 #include "ruvia/core/worker_timer.h"
 
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -798,23 +800,53 @@ bool timer_registration_rejects_reentrant_acquire() {
     return true;
 }
 
-int main() {
-    if (!timer_duration_conversions_preserve_integer_ticks_and_saturate() ||
-        !timer_immediate_shutdown_works() ||
-        !off_worker_cancellation_can_race_with_timer_shutdown() ||
-        !off_worker_cancellation_after_context_stop_does_not_expire_later() ||
-        !off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback() ||
-        !explicit_timer_cancellation_notifies_after_quiet_destruction() ||
-        !on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() ||
-        !stoppable_sleep_works() ||
-        !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
-        !timer_callback_failure_preserves_remaining_operations() ||
-        !timer_registration_survives_stop_during_callback_move() ||
-        !timer_registration_rejects_reentrant_acquire() ||
-        !self_rescheduling_due_timer_yields_to_other_handlers() ||
-        !self_rescheduling_due_timer_preserves_other_expirations()) {
-        return 1;
-    }
+TEST(Ruvia, TimerDurationConversionsPreserveIntegerTicksAndSaturate) {
+    EXPECT_TRUE(timer_duration_conversions_preserve_integer_ticks_and_saturate());
+}
+TEST(Ruvia, TimerImmediateShutdownWorks) {
+    EXPECT_TRUE(timer_immediate_shutdown_works());
+}
+TEST(Ruvia, TimerOffWorkerCancellationCanRaceWithShutdown) {
+    EXPECT_TRUE(off_worker_cancellation_can_race_with_timer_shutdown());
+}
+TEST(Ruvia, TimerOffWorkerCancellationAfterContextStopDoesNotExpireLater) {
+    EXPECT_TRUE(off_worker_cancellation_after_context_stop_does_not_expire_later());
+}
+TEST(Ruvia, TimerOffWorkerCancellationBeforeQueuedStopDoesNotInvokeCallback) {
+    EXPECT_TRUE(off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback());
+}
+TEST(Ruvia, TimerExplicitCancellationNotifiesAfterQuietDestruction) {
+    EXPECT_TRUE(explicit_timer_cancellation_notifies_after_quiet_destruction());
+}
+TEST(Ruvia, TimerOnWorkerTokenCancellationThenOwnerCancelWithdrawsCallback) {
+    EXPECT_TRUE(on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback());
+}
+TEST(Ruvia, TimerStoppableSleepWorks) {
+    EXPECT_TRUE(stoppable_sleep_works());
+}
+TEST(Ruvia, TimerTimedPrimitivesReportStop) {
+    EXPECT_TRUE(timed_primitives_report_timer_stop());
+}
+TEST(Ruvia, TimerExpiredRegistrationReschedulesOnAnotherWorker) {
+    EXPECT_TRUE(expired_registration_reschedules_on_another_worker());
+}
+TEST(Ruvia, TimerCallbackFailurePreservesRemainingOperations) {
+    EXPECT_TRUE(timer_callback_failure_preserves_remaining_operations());
+}
+TEST(Ruvia, TimerRegistrationSurvivesStopDuringCallbackMove) {
+    EXPECT_TRUE(timer_registration_survives_stop_during_callback_move());
+}
+TEST(Ruvia, TimerRegistrationRejectsReentrantAcquire) {
+    EXPECT_TRUE(timer_registration_rejects_reentrant_acquire());
+}
+TEST(Ruvia, TimerSelfReschedulingYieldsToOtherHandlers) {
+    EXPECT_TRUE(self_rescheduling_due_timer_yields_to_other_handlers());
+}
+TEST(Ruvia, TimerSelfReschedulingPreservesOtherExpirations) {
+    EXPECT_TRUE(self_rescheduling_due_timer_preserves_other_expirations());
+}
+
+TEST(Ruvia, WorkerTimerLifecycle) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
     const auto worker_value = attachment.loop().handle();
@@ -823,5 +855,5 @@ int main() {
         asio::detached);
     attachment.run();
     attachment.stop();
-    return success ? 0 : 1;
+    EXPECT_TRUE(success);
 }

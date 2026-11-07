@@ -1,5 +1,7 @@
 #include "ruvia/core/blocking_pool.h"
 
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -17,7 +19,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 
-#include "test_harness.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::blocking_pool_tests {
@@ -616,7 +617,7 @@ bool test_stop_drains_without_running_queued_tasks() {
 
 }  // namespace
 
-RUVIA_TEST(blocking_pool_results_and_worker_progress) {
+TEST(Ruvia, blocking_pool_results_and_worker_progress) {
     bool results = false;
     bool worker_stays_free = false;
     {
@@ -628,11 +629,11 @@ RUVIA_TEST(blocking_pool_results_and_worker_progress) {
             exercise_worker_stays_free(worker_value, worker_stays_free));
         pool.join();
     }
-    RUVIA_CHECK(results);
-    RUVIA_CHECK(worker_stays_free);
+    EXPECT_TRUE(results);
+    EXPECT_TRUE(worker_stays_free);
 }
 
-RUVIA_TEST(blocking_pool_cross_thread_completion_preserves_results) {
+TEST(Ruvia, blocking_pool_cross_thread_completion_preserves_results) {
     bool success = false;
     blocking_pool pool({.thread_count_ = 1});
     asio::io_context io_context;
@@ -640,10 +641,10 @@ RUVIA_TEST(blocking_pool_cross_thread_completion_preserves_results) {
     ruvia::test::run_worker_tasks(attachment,
         ruvia::test::blocking_pool_tests::exercise_completion_during_suspend(attachment.loop().handle(), success));
     pool.join();
-    RUVIA_CHECK(success);
+    EXPECT_TRUE(success);
 }
 
-RUVIA_TEST(blocking_pool_receiver_move_failure_is_reported) {
+TEST(Ruvia, blocking_pool_receiver_move_failure_is_reported) {
     bool success = false;
     blocking_pool pool({.thread_count_ = 1});
     asio::io_context io_context;
@@ -651,10 +652,10 @@ RUVIA_TEST(blocking_pool_receiver_move_failure_is_reported) {
     ruvia::test::run_worker_tasks(attachment,
         ruvia::test::blocking_pool_tests::exercise_receiver_move_failure(attachment.loop().handle(), success));
     pool.join();
-    RUVIA_CHECK(success);
+    EXPECT_TRUE(success);
 }
 
-RUVIA_TEST(blocking_pool_cancellation_releases_the_waiter) {
+TEST(Ruvia, blocking_pool_cancellation_releases_the_waiter) {
     bool cancelled = false;
     std::atomic_bool cancelled_callable_finished{false};
     std::weak_ptr<int> abandoned_resource;
@@ -674,12 +675,12 @@ RUVIA_TEST(blocking_pool_cancellation_releases_the_waiter) {
         canceller.join();
         pool.join();
     }
-    RUVIA_CHECK(cancelled);
-    RUVIA_CHECK(cancelled_callable_finished.load(std::memory_order_acquire));
-    RUVIA_CHECK(abandoned_resource.expired());
+    EXPECT_TRUE(cancelled);
+    EXPECT_TRUE(cancelled_callable_finished.load(std::memory_order_acquire));
+    EXPECT_TRUE(abandoned_resource.expired());
 }
 
-RUVIA_TEST(blocking_pool_timeout_releases_the_waiter) {
+TEST(Ruvia, blocking_pool_timeout_releases_the_waiter) {
     bool timeout = false;
     std::weak_ptr<int> abandoned_resource;
     {
@@ -692,11 +693,11 @@ RUVIA_TEST(blocking_pool_timeout_releases_the_waiter) {
             attachment, exercise_timeout(worker_value, gate, abandoned_resource, timeout));
         pool.join();
     }
-    RUVIA_CHECK(timeout);
-    RUVIA_CHECK(abandoned_resource.expired());
+    EXPECT_TRUE(timeout);
+    EXPECT_TRUE(abandoned_resource.expired());
 }
 
-RUVIA_TEST(blocking_pool_timeout_saturates) {
+TEST(Ruvia, blocking_pool_timeout_saturates) {
     bool saturating_timeout = false;
     {
         thread_gate gate;
@@ -709,10 +710,10 @@ RUVIA_TEST(blocking_pool_timeout_saturates) {
             exercise_saturating_timeout(pool, worker_value, gate, saturating_timeout));
         pool.join();
     }
-    RUVIA_CHECK(saturating_timeout);
+    EXPECT_TRUE(saturating_timeout);
 }
 
-RUVIA_TEST(blocking_pool_stop_releases_queued_waiters) {
+TEST(Ruvia, blocking_pool_stop_releases_queued_waiters) {
     bool stopped_pool = false;
     std::weak_ptr<int> discarded_resource;
     {
@@ -726,11 +727,11 @@ RUVIA_TEST(blocking_pool_stop_releases_queued_waiters) {
             exercise_stopped_pool(pool, worker_value, gate, discarded_resource, stopped_pool));
         pool.join();
     }
-    RUVIA_CHECK(stopped_pool);
-    RUVIA_CHECK(discarded_resource.expired());
+    EXPECT_TRUE(stopped_pool);
+    EXPECT_TRUE(discarded_resource.expired());
 }
 
-RUVIA_TEST(blocking_pool_full_queue_rejects_work) {
+TEST(Ruvia, blocking_pool_full_queue_rejects_work) {
     bool queue_full = false;
     {
         thread_gate gate;
@@ -742,10 +743,10 @@ RUVIA_TEST(blocking_pool_full_queue_rejects_work) {
         ruvia::test::run_worker_tasks(attachment, exercise_queue_full(pool, worker_value, gate, queue_full));
         pool.join();
     }
-    RUVIA_CHECK(queue_full);
+    EXPECT_TRUE(queue_full);
 }
 
-RUVIA_TEST(blocking_pool_worker_stop_releases_the_waiter) {
+TEST(Ruvia, blocking_pool_worker_stop_releases_the_waiter) {
     bool worker_stopping = false;
     {
         thread_gate gate;
@@ -758,10 +759,10 @@ RUVIA_TEST(blocking_pool_worker_stop_releases_the_waiter) {
         gate.release_.release();
         pool.join();
     }
-    RUVIA_CHECK(worker_stopping);
+    EXPECT_TRUE(worker_stopping);
 }
 
-RUVIA_TEST(blocking_pool_stopped_worker_rejects_work) {
+TEST(Ruvia, blocking_pool_stopped_worker_rejects_work) {
     bool stopped_worker = false;
     std::atomic_bool stopped_worker_task_ran{false};
     {
@@ -775,10 +776,10 @@ RUVIA_TEST(blocking_pool_stopped_worker_rejects_work) {
         stopped_worker =
             stopped_worker && !stopped_worker_task_ran.load() && pool.stats().completed_ == 0;
     }
-    RUVIA_CHECK(stopped_worker);
+    EXPECT_TRUE(stopped_worker);
 }
 
-RUVIA_TEST(blocking_pool_rejects_settled_operations_before_submission) {
+TEST(Ruvia, blocking_pool_rejects_settled_operations_before_submission) {
     bool settled_before_submit = false;
     std::atomic_bool settled_task_ran{false};
     {
@@ -798,21 +799,21 @@ RUVIA_TEST(blocking_pool_rejects_settled_operations_before_submission) {
         settled_before_submit =
             settled_before_submit && !settled_task_ran.load() && pool.stats().completed_ == 0;
     }
-    RUVIA_CHECK(settled_before_submit);
+    EXPECT_TRUE(settled_before_submit);
 }
 
-RUVIA_TEST(blocking_pool_worker_without_pool_reports_unavailable) {
+TEST(Ruvia, blocking_pool_worker_without_pool_reports_unavailable) {
     bool unavailable = false;
     std::atomic_bool ran{false};
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
     ruvia::test::run_worker_tasks(
         attachment, exercise_worker_without_pool(attachment.loop().handle(), ran, unavailable));
-    RUVIA_CHECK(unavailable);
-    RUVIA_CHECK(!ran.load());
+    EXPECT_TRUE(unavailable);
+    EXPECT_TRUE(!ran.load());
 }
 
-RUVIA_TEST(blocking_pool_rejects_empty_tasks) {
+TEST(Ruvia, blocking_pool_rejects_empty_tasks) {
     bool rejects_empty_task = false;
     {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
@@ -826,38 +827,38 @@ RUVIA_TEST(blocking_pool_rejects_empty_tasks) {
         rejects_empty_task =
             rejects_empty_task && pool.submit([] {}) == blocking_submit_status::pool_stopped;
     }
-    RUVIA_CHECK(rejects_empty_task);
+    EXPECT_TRUE(rejects_empty_task);
 }
 
-RUVIA_TEST(blocking_pool_default_sizing_is_bounded) {
-    RUVIA_CHECK(blocking_pool_defaults_are_bounded_by_cpu_policy());
+TEST(Ruvia, blocking_pool_default_sizing_is_bounded) {
+    EXPECT_TRUE(blocking_pool_defaults_are_bounded_by_cpu_policy());
 }
 
-RUVIA_TEST(blocking_pool_destruction_does_not_join_running_work) {
-    RUVIA_CHECK(test_destruction_does_not_join_running_callable());
+TEST(Ruvia, blocking_pool_destruction_does_not_join_running_work) {
+    EXPECT_TRUE(test_destruction_does_not_join_running_callable());
 }
 
-RUVIA_TEST(blocking_pool_join_waits_for_running_work) {
-    RUVIA_CHECK(test_join_stops_and_waits_for_running_callable());
+TEST(Ruvia, blocking_pool_join_waits_for_running_work) {
+    EXPECT_TRUE(test_join_stops_and_waits_for_running_callable());
 }
 
-RUVIA_TEST(blocking_pool_join_rejects_its_own_thread) {
-    RUVIA_CHECK(test_join_rejects_pool_thread_before_stopping());
+TEST(Ruvia, blocking_pool_join_rejects_its_own_thread) {
+    EXPECT_TRUE(test_join_rejects_pool_thread_before_stopping());
 }
 
-RUVIA_TEST(blocking_pool_stop_discards_queued_work_without_running_it) {
-    RUVIA_CHECK(test_stop_drains_without_running_queued_tasks());
+TEST(Ruvia, blocking_pool_stop_discards_queued_work_without_running_it) {
+    EXPECT_TRUE(test_stop_drains_without_running_queued_tasks());
 }
 
-RUVIA_TEST(blocking_pool_callable_moves_and_destruction_allow_reentry) {
-    RUVIA_CHECK(test_callable_moves_and_destruction_can_query_pool());
+TEST(Ruvia, blocking_pool_callable_moves_and_destruction_allow_reentry) {
+    EXPECT_TRUE(test_callable_moves_and_destruction_can_query_pool());
 }
 
-RUVIA_TEST(blocking_pool_callable_move_can_stop_before_publication) {
-    RUVIA_CHECK(test_callable_move_can_stop_pool_before_publication());
+TEST(Ruvia, blocking_pool_callable_move_can_stop_before_publication) {
+    EXPECT_TRUE(test_callable_move_can_stop_pool_before_publication());
 }
 
-RUVIA_TEST(blocking_pool_rejects_overflowing_capacity_options) {
+TEST(Ruvia, blocking_pool_rejects_overflowing_capacity_options) {
     constexpr std::size_t wrapped_threads =
         std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 6);
     for (const blocking_pool_options options : {
@@ -876,6 +877,6 @@ RUVIA_TEST(blocking_pool_rejects_overflowing_capacity_options) {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
     }
 }

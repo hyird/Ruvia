@@ -1,6 +1,6 @@
 #pragma once
 
-#include "test_harness.h"
+#include <gtest/gtest.h>
 
 namespace ruvia::test {
 
@@ -13,12 +13,10 @@ inline constexpr bool stl_moves_allocate_debug_metadata = true;
 inline constexpr bool stl_moves_allocate_debug_metadata = false;
 #endif
 
-[[nodiscard]] inline bool stl_allocation_failure_injection_enabled(
-    ruvia::testing::test_context& context) noexcept {
+[[nodiscard]] inline bool stl_allocation_failure_injection_enabled() {
     if constexpr (stl_moves_allocate_debug_metadata) {
-        context.partial_reason_ =
-            "STL allocation failure scan omitted: noexcept debug iterator metadata; "
-            "run the matching Release suite for complete coverage";
+        ::testing::Test::RecordProperty("stl_allocation_failure_scan",
+            "omitted: noexcept debug iterator metadata; run the matching Release suite for complete coverage");
         return false;
     } else {
         return true;

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -26,7 +28,6 @@
 #include "ruvia/web/static_files.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace http2_file_flow_control_test {
@@ -190,7 +191,7 @@ ruvia::task<received_frame> read_frame(asio::ip::tcp::socket& socket) {
     co_return frame;
 }
 
-void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connection) {
+void check_file_end(bool exhaust_connection) {
     const test_file file;
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -261,14 +262,14 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
                     if (decoded.has_value()) {
                         throw std::runtime_error("invalid HTTP/2 file response headers");
                     }
-                    RUVIA_CHECK((frame.header_.flags_ & 0x1) == 0);
+                    EXPECT_TRUE((frame.header_.flags_ & 0x1) == 0);
                 } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
-                    RUVIA_CHECK((frame.header_.flags_ & 0x8) == 0);
+                    EXPECT_TRUE((frame.header_.flags_ & 0x8) == 0);
                     body.append(frame.payload_);
                     ended = (frame.header_.flags_ & 0x1) != 0;
                     if (ended) {
-                        RUVIA_CHECK(frame.payload_.empty());
-                        RUVIA_CHECK(credited);
+                        EXPECT_TRUE(frame.payload_.empty());
+                        EXPECT_TRUE(credited);
                     }
                 }
                 // The file exhausted one send window. The empty END_STREAM DATA
@@ -299,11 +300,11 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
     auto root = attachment.loop().start(run());
     io.run();
     root.get();
-    RUVIA_CHECK_EQ(status, std::string("200"));
-    RUVIA_CHECK(file_backed);
-    RUVIA_CHECK_EQ(body, std::string(file_size, 'f'));
-    RUVIA_CHECK(ended);
-    RUVIA_CHECK(!expired);
+    EXPECT_EQ(status, std::string("200"));
+    EXPECT_TRUE(file_backed);
+    EXPECT_EQ(body, std::string(file_size, 'f'));
+    EXPECT_TRUE(ended);
+    EXPECT_TRUE(!expired);
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -311,19 +312,19 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
 
 }  // namespace http2_file_flow_control_test
 
-RUVIA_TEST(http2_file_response_end_waits_for_exhausted_connection_window) {
-    http2_file_flow_control_test::check_file_end(ruvia_ctx, true);
+TEST(Ruvia, http2_file_response_end_waits_for_exhausted_connection_window) {
+    http2_file_flow_control_test::check_file_end(true);
 }
 
-RUVIA_TEST(http2_file_response_end_waits_for_exhausted_stream_window) {
-    http2_file_flow_control_test::check_file_end(ruvia_ctx, false);
+TEST(Ruvia, http2_file_response_end_waits_for_exhausted_stream_window) {
+    http2_file_flow_control_test::check_file_end(false);
 }
 
 // A file body is validated before HEADERS but read only once the peer grants
 // send window: bytes the file held before the window opened are never sent.
 // Truncating the file between HEADERS and the first WINDOW_UPDATE therefore
 // fails the read and resets the stream without a single DATA byte.
-RUVIA_TEST(http2_file_body_is_read_only_after_send_window_is_granted) {
+TEST(Ruvia, http2_file_body_is_read_only_after_send_window_is_granted) {
     using namespace http2_file_flow_control_test;
     const test_file file;
     auto& io = ruvia::test::new_test_io_context();
@@ -415,16 +416,16 @@ RUVIA_TEST(http2_file_body_is_read_only_after_send_window_is_granted) {
     auto root = attachment.loop().start(run());
     io.run();
     root.get();
-    RUVIA_CHECK(!expired);
-    RUVIA_CHECK_EQ(status, std::string("200"));
-    RUVIA_CHECK(reset);
-    RUVIA_CHECK_EQ(data_bytes, std::size_t{0});
+    EXPECT_TRUE(!expired);
+    EXPECT_EQ(status, std::string("200"));
+    EXPECT_TRUE(reset);
+    EXPECT_EQ(data_bytes, std::size_t{0});
     if (failure) {
         std::rethrow_exception(failure);
     }
 }
 
-RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
+TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
     const http2_file_flow_control_test::test_file file;
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -545,16 +546,16 @@ RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
     auto root = attachment.loop().start(run());
     io.run();
     root.get();
-    RUVIA_CHECK(!expired);
-    RUVIA_CHECK_EQ(resets_seen, std::size_t{5});
-    RUVIA_CHECK_EQ(final_status, std::string("200"));
-    RUVIA_CHECK_EQ(final_body, std::string("alive"));
+    EXPECT_TRUE(!expired);
+    EXPECT_EQ(resets_seen, std::size_t{5});
+    EXPECT_EQ(final_status, std::string("200"));
+    EXPECT_EQ(final_body, std::string("alive"));
     if (failure) {
         std::rethrow_exception(failure);
     }
 }
 
-RUVIA_TEST(http2_empty_file_validation_precedes_end_stream_headers) {
+TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
     using namespace http2_file_flow_control_test;
     const auto directory = std::filesystem::current_path() / "ruvia_http2_empty_file";
     std::error_code ignored;
@@ -613,7 +614,7 @@ RUVIA_TEST(http2_empty_file_validation_precedes_end_stream_headers) {
                         std::ofstream output(path, std::ios::binary | std::ios::trunc);
                         output << "changed";
                     } else if (stream_id == 5) {
-                        RUVIA_CHECK(std::filesystem::remove(path));
+                        EXPECT_TRUE(std::filesystem::remove(path));
                     }
                 }
                 std::pmr::string block(&resource);
@@ -656,16 +657,16 @@ RUVIA_TEST(http2_empty_file_validation_precedes_end_stream_headers) {
                         }
                     }
                 }
-                RUVIA_CHECK(saw_head);
+                EXPECT_TRUE(saw_head);
                 if (invalid) {
-                    RUVIA_CHECK(ended);
-                    RUVIA_CHECK(!reset);
-                    RUVIA_CHECK_EQ(status, std::string("500"));
+                    EXPECT_TRUE(ended);
+                    EXPECT_TRUE(!reset);
+                    EXPECT_EQ(status, std::string("500"));
                 } else {
-                    RUVIA_CHECK(ended);
-                    RUVIA_CHECK(!reset);
-                    RUVIA_CHECK_EQ(status, std::string("200"));
-                    RUVIA_CHECK_EQ(body, stream_id == 9 ? std::string("alive") : std::string{});
+                    EXPECT_TRUE(ended);
+                    EXPECT_TRUE(!reset);
+                    EXPECT_EQ(status, std::string("200"));
+                    EXPECT_EQ(body, stream_id == 9 ? std::string("alive") : std::string{});
                 }
             }
         } catch (...) {
@@ -681,7 +682,7 @@ RUVIA_TEST(http2_empty_file_validation_precedes_end_stream_headers) {
     operation.get();
     empty_root.reset();
     std::filesystem::remove_all(directory, ignored);
-    RUVIA_CHECK(!expired);
+    EXPECT_TRUE(!expired);
     if (failure) {
         std::rethrow_exception(failure);
     }

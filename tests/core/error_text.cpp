@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -6,8 +8,6 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/failure_report.h"
-
-#include "test_harness.h"
 
 namespace {
 
@@ -42,27 +42,27 @@ namespace {
 
 }  // namespace
 
-RUVIA_TEST(error_code_text_keeps_portable_category_messages) {
+TEST(Ruvia, error_code_text_keeps_portable_category_messages) {
     const auto timed_out = std::make_error_code(std::errc::timed_out);
-    RUVIA_CHECK_EQ(ruvia::error_code_text(timed_out), timed_out.message());
+    EXPECT_EQ(ruvia::error_code_text(timed_out), timed_out.message());
 
     const std::system_error generic(timed_out, "upstream");
-    RUVIA_CHECK_EQ(ruvia::system_error_text(generic), std::string(generic.what()));
+    EXPECT_EQ(ruvia::system_error_text(generic), std::string(generic.what()));
 }
 
-RUVIA_TEST(error_code_text_describes_system_codes_in_utf8) {
+TEST(Ruvia, error_code_text_describes_system_codes_in_utf8) {
     for (const auto& error : {std::error_code(1, std::system_category()),
              std::error_code(0x7FFFFFF0, std::system_category()),
              std::error_code(asio::error::connection_reset), std::error_code(asio::error::host_not_found)}) {
         const auto text = ruvia::error_code_text(error);
-        RUVIA_CHECK(!text.empty());
-        RUVIA_CHECK(is_utf8(text));
+        EXPECT_TRUE(!text.empty());
+        EXPECT_TRUE(is_utf8(text));
     }
 
     // The context before the OS message is kept.
     const std::system_error bind(std::error_code(1, std::system_category()), "bind");
     const auto text = ruvia::system_error_text(bind);
-    RUVIA_CHECK(text.starts_with("bind: "));
-    RUVIA_CHECK(text.size() > std::string_view("bind: ").size());
-    RUVIA_CHECK(is_utf8(text));
+    EXPECT_TRUE(text.starts_with("bind: "));
+    EXPECT_TRUE(text.size() > std::string_view("bind: ").size());
+    EXPECT_TRUE(is_utf8(text));
 }

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <optional>
@@ -11,7 +13,6 @@
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
@@ -40,7 +41,7 @@ ruvia::task<void> run_statement(ruvia::db_handle& handle, statement_kind kind) {
 // `peer` answers "before" and then ends the session while the pool holds it
 // idle; it answers "after" on the next connection.
 void check_session_ended_while_idle(
-    ruvia::testing::test_context& ruvia_ctx, ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver) {
+    ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver) {
     using namespace ruvia;
     auto config = peer.config();
     config.driver_ = driver;
@@ -65,10 +66,10 @@ void check_session_ended_while_idle(
             code = error.code();
         }
     });
-    RUVIA_CHECK(before == "before");
-    RUVIA_CHECK(!code.has_value());
-    RUVIA_CHECK(after == "after");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(before == "before");
+    EXPECT_TRUE(!code.has_value());
+    EXPECT_TRUE(after == "after");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 }  // namespace
@@ -76,7 +77,7 @@ void check_session_ended_while_idle(
 // The peer drops the connection after the first row of a row set. Every
 // statement shape must report that as an I/O failure: neither as caller misuse
 // ("requires row-producing SQL"), nor -- for execute() -- as success.
-RUVIA_TEST(db_connection_lost_mid_result_is_an_io_error) {
+TEST(Ruvia, db_connection_lost_mid_result_is_an_io_error) {
     using namespace ruvia;
     const std::array drivers{
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -101,7 +102,7 @@ RUVIA_TEST(db_connection_lost_mid_result_is_an_io_error) {
                         code = error.code();
                     }
                 });
-            RUVIA_CHECK(code == db_error::code_type::io_error);
+            EXPECT_TRUE(code == db_error::code_type::io_error);
         }
     }
 }
@@ -110,20 +111,20 @@ RUVIA_TEST(db_connection_lost_mid_result_is_an_io_error) {
 // idle_session_timeout or pg_terminate_backend, MariaDB wait_timeout or KILL).
 // The next lease looks at the connection before sending anything, reconnects,
 // and the statement succeeds on the new session.
-RUVIA_TEST(db_session_ended_while_idle_reconnects_before_the_next_statement) {
+TEST(Ruvia, db_session_ended_while_idle_reconnects_before_the_next_statement) {
     using peer_type = ruvia::test::backend_startup_peer;
 #ifdef RUVIA_ENABLE_POSTGRESQL
     {
         peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
             {{.rows_ = {"before"}, .close_after_ = true}, {.rows_ = {"after"}}});
-        check_session_ended_while_idle(ruvia_ctx, peer, ruvia::db_driver::postgresql);
+        check_session_ended_while_idle(peer, ruvia::db_driver::postgresql);
     }
 #endif
 #ifdef RUVIA_ENABLE_MARIADB
     {
         peer_type peer(std::vector<peer_type::maria_reply>{{.rows_ = {"before"}, .close_after_ = true}, {.rows_ = {"after"}}},
             peer_type::after_startup::reaccept);
-        check_session_ended_while_idle(ruvia_ctx, peer, ruvia::db_driver::mariadb);
+        check_session_ended_while_idle(peer, ruvia::db_driver::mariadb);
     }
 #endif
 }
@@ -132,7 +133,7 @@ RUVIA_TEST(db_session_ended_while_idle_reconnects_before_the_next_statement) {
 // A statement the server rejected leaves the connection in sync. The peer
 // accepts one connection, so the next statement succeeding proves the pool
 // kept it rather than reconnecting.
-RUVIA_TEST(db_rejected_statement_keeps_the_pooled_connection) {
+TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -155,15 +156,15 @@ RUVIA_TEST(db_rejected_statement_keeps_the_pooled_connection) {
         const auto rows = co_await handle.query("SELECT v FROM records");
         kept = rows.front()["v"].as<std::string_view>().value_or("");
     });
-    RUVIA_CHECK(code == db_error::code_type::statement_failed);
-    RUVIA_CHECK(sql_state == "23505");
-    RUVIA_CHECK(kept == "kept");
-    RUVIA_CHECK_EQ(peer.postgres_parses().size(), std::size_t{2});
+    EXPECT_TRUE(code == db_error::code_type::statement_failed);
+    EXPECT_TRUE(sql_state == "23505");
+    EXPECT_TRUE(kept == "kept");
+    EXPECT_EQ(peer.postgres_parses().size(), std::size_t{2});
 }
 
 // A statement that fails inside a transaction fails the transaction, and the
 // pool rolls it back on the kept connection before the next caller gets it.
-RUVIA_TEST(db_rejected_transaction_statement_rolls_back_on_the_kept_connection) {
+TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -189,20 +190,20 @@ RUVIA_TEST(db_rejected_transaction_statement_rolls_back_on_the_kept_connection) 
         const auto rows = co_await handle.query("SELECT v FROM records");
         after = rows.front()["v"].as<std::string_view>().value_or("");
     });
-    RUVIA_CHECK(code == db_error::code_type::statement_failed);
-    RUVIA_CHECK(transaction_failed);
-    RUVIA_CHECK(after == "after");
+    EXPECT_TRUE(code == db_error::code_type::statement_failed);
+    EXPECT_TRUE(transaction_failed);
+    EXPECT_TRUE(after == "after");
     const auto statements = peer.postgres_parses();
-    RUVIA_CHECK_EQ(statements.size(), std::size_t{4});
+    EXPECT_EQ(statements.size(), std::size_t{4});
     if (statements.size() == 4) {
-        RUVIA_CHECK(statements[2].sql_ == "ROLLBACK");
+        EXPECT_TRUE(statements[2].sql_ == "ROLLBACK");
     }
 }
 
 // A COPY result leaves the connection in COPY state with no ReadyForQuery to
 // drain to, so the statement fails at once and the pool closes the slot: the
 // next statement runs on a fresh connection.
-RUVIA_TEST(db_copy_result_fails_the_statement_and_closes_the_connection) {
+TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
     using namespace ruvia;
     using direction = test::backend_startup_peer::postgres_copy_direction;
     for (const auto copy : {direction::input, direction::output}) {
@@ -229,10 +230,10 @@ RUVIA_TEST(db_copy_result_fails_the_statement_and_closes_the_connection) {
                 const auto rows = co_await handle.query("SELECT v FROM records");
                 fresh = rows.front()["v"].as<std::string_view>().value_or("");
             });
-            RUVIA_CHECK(code == db_error::code_type::protocol_error);
-            RUVIA_CHECK(fresh == "fresh");
-            RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
-            RUVIA_CHECK_EQ(peer.postgres_parses().size(), std::size_t{2});
+            EXPECT_TRUE(code == db_error::code_type::protocol_error);
+            EXPECT_TRUE(fresh == "fresh");
+            EXPECT_EQ(peer.startups(), std::size_t{2});
+            EXPECT_EQ(peer.postgres_parses().size(), std::size_t{2});
         }
     }
 }

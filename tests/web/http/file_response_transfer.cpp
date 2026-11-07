@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -26,7 +28,6 @@
 #include "ruvia/web/static_files.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 // File bodies are read on the blocking pool on every platform; Windows plain
@@ -185,7 +186,7 @@ struct parsed_response final {
 
 using namespace file_response_transfer_test;
 
-RUVIA_TEST(pipelined_file_responses_arrive_complete_and_in_order) {
+TEST(Ruvia, pipelined_file_responses_arrive_complete_and_in_order) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
     fs::create_directories(transfer_dir());
@@ -218,40 +219,40 @@ RUVIA_TEST(pipelined_file_responses_arrive_complete_and_in_order) {
     const auto responses =
         split_responses(stream, {false, false, false, false, false, false, false, true, false, false});
 
-    RUVIA_CHECK_EQ(responses.size(), std::size_t{10});
+    EXPECT_EQ(responses.size(), std::size_t{10});
     if (responses.size() == 10) {
-        RUVIA_CHECK_EQ(responses[0].status_, std::string("200"));
-        RUVIA_CHECK(responses[0].body_ == small_bytes);
-        RUVIA_CHECK_EQ(responses[1].status_, std::string("200"));
-        RUVIA_CHECK(responses[1].body_ == large_bytes);
-        RUVIA_CHECK_EQ(responses[2].body_, std::string("between"));
-        RUVIA_CHECK(responses[3].body_ == medium_bytes);
-        RUVIA_CHECK_EQ(responses[4].status_, std::string("206"));
-        RUVIA_CHECK(responses[4].body_ == large_bytes.substr(10, 10));
-        RUVIA_CHECK_EQ(responses[5].status_, std::string("206"));
-        RUVIA_CHECK(responses[5].body_ == large_bytes.substr(100000, 200000));
-        RUVIA_CHECK_EQ(responses[6].status_, std::string("206"));
-        RUVIA_CHECK(responses[6].head_.find("multipart/byteranges") != std::string::npos);
-        RUVIA_CHECK(responses[6].body_.find(medium_bytes.substr(0, 5)) != std::string::npos);
-        RUVIA_CHECK(responses[6].body_.find(medium_bytes.substr(10, 5)) != std::string::npos);
-        RUVIA_CHECK_EQ(responses[7].status_, std::string("200"));
-        RUVIA_CHECK_EQ(content_length(responses[7].head_), std::optional<std::size_t>(large_size));
-        RUVIA_CHECK(responses[8].body_ == small_bytes);
-        RUVIA_CHECK(responses[9].body_ == large_bytes);
+        EXPECT_EQ(responses[0].status_, std::string("200"));
+        EXPECT_TRUE(responses[0].body_ == small_bytes);
+        EXPECT_EQ(responses[1].status_, std::string("200"));
+        EXPECT_TRUE(responses[1].body_ == large_bytes);
+        EXPECT_EQ(responses[2].body_, std::string("between"));
+        EXPECT_TRUE(responses[3].body_ == medium_bytes);
+        EXPECT_EQ(responses[4].status_, std::string("206"));
+        EXPECT_TRUE(responses[4].body_ == large_bytes.substr(10, 10));
+        EXPECT_EQ(responses[5].status_, std::string("206"));
+        EXPECT_TRUE(responses[5].body_ == large_bytes.substr(100000, 200000));
+        EXPECT_EQ(responses[6].status_, std::string("206"));
+        EXPECT_TRUE(responses[6].head_.find("multipart/byteranges") != std::string::npos);
+        EXPECT_TRUE(responses[6].body_.find(medium_bytes.substr(0, 5)) != std::string::npos);
+        EXPECT_TRUE(responses[6].body_.find(medium_bytes.substr(10, 5)) != std::string::npos);
+        EXPECT_EQ(responses[7].status_, std::string("200"));
+        EXPECT_EQ(content_length(responses[7].head_), std::optional<std::size_t>(large_size));
+        EXPECT_TRUE(responses[8].body_ == small_bytes);
+        EXPECT_TRUE(responses[9].body_ == large_bytes);
     }
     // Nothing follows the last response: every body was exactly its length.
     std::size_t framed = 0;
     for (const auto& response : responses) {
         framed += response.head_.size() + 2 + response.body_.size();
     }
-    RUVIA_CHECK_EQ(framed, stream.size());
+    EXPECT_EQ(framed, stream.size());
 
     server.finish();
     indexed_root.reset();
     fs::remove_all(transfer_dir(), ignored);
 }
 
-RUVIA_TEST(empty_file_responses_preserve_pipeline_framing) {
+TEST(Ruvia, empty_file_responses_preserve_pipeline_framing) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
     fs::create_directories(transfer_dir());
@@ -270,28 +271,28 @@ RUVIA_TEST(empty_file_responses_preserve_pipeline_framing) {
     requests += get("/file-transfer/text", "Connection: close\r\n");
     const auto wire = exchange(io, server.endpoint(), requests);
     const auto responses = split_responses(wire, {false, false, true, true, false});
-    RUVIA_CHECK_EQ(responses.size(), std::size_t{5});
+    EXPECT_EQ(responses.size(), std::size_t{5});
     if (responses.size() == 5) {
         for (std::size_t index = 0; index != 4; ++index) {
-            RUVIA_CHECK_EQ(responses[index].status_, std::string("200"));
-            RUVIA_CHECK_EQ(content_length(responses[index].head_), std::optional<std::size_t>(0));
-            RUVIA_CHECK(responses[index].body_.empty());
+            EXPECT_EQ(responses[index].status_, std::string("200"));
+            EXPECT_EQ(content_length(responses[index].head_), std::optional<std::size_t>(0));
+            EXPECT_TRUE(responses[index].body_.empty());
         }
-        RUVIA_CHECK_EQ(responses.back().status_, std::string("200"));
-        RUVIA_CHECK_EQ(responses.back().body_, std::string("between"));
+        EXPECT_EQ(responses.back().status_, std::string("200"));
+        EXPECT_EQ(responses.back().body_, std::string("between"));
     }
     std::size_t framed = 0;
     for (const auto& response : responses) {
         framed += response.head_.size() + 2 + response.body_.size();
     }
-    RUVIA_CHECK_EQ(framed, wire.size());
+    EXPECT_EQ(framed, wire.size());
 
     server.finish();
     indexed_root.reset();
     fs::remove_all(transfer_dir(), ignored);
 }
 
-RUVIA_TEST(changed_or_deleted_indexed_empty_file_never_commits_success) {
+TEST(Ruvia, changed_or_deleted_indexed_empty_file_never_commits_success) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
     fs::create_directories(transfer_dir());
@@ -305,17 +306,17 @@ RUVIA_TEST(changed_or_deleted_indexed_empty_file_never_commits_success) {
                 .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
             });
         if (remove) {
-            RUVIA_CHECK(fs::remove(path));
+            EXPECT_TRUE(fs::remove(path));
         } else {
             // A size change is deterministic even on coarse timestamp clocks.
             write_file(path, "changed");
         }
         const auto get_wire = exchange(
             io, server.endpoint(), get("/file-transfer/indexed-small", "Connection: close\r\n"));
-        RUVIA_CHECK(get_wire.starts_with("HTTP/1.1 500 "));
+        EXPECT_TRUE(get_wire.starts_with("HTTP/1.1 500 "));
         const auto head_wire = exchange(io, server.endpoint(),
             "HEAD /file-transfer/indexed-small HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-        RUVIA_CHECK(head_wire.starts_with("HTTP/1.1 500 "));
+        EXPECT_TRUE(head_wire.starts_with("HTTP/1.1 500 "));
         server.finish();
         indexed_root.reset();
     }
@@ -323,7 +324,7 @@ RUVIA_TEST(changed_or_deleted_indexed_empty_file_never_commits_success) {
 }
 
 // c.file retains the empty file's segment until its first read on the pool.
-RUVIA_TEST(empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
+TEST(Ruvia, empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
     fs::create_directories(transfer_dir());
@@ -338,7 +339,7 @@ RUVIA_TEST(empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
                           get("/file-transfer/text", "Connection: close\r\n");
     asio::write(socket, asio::buffer(requests));
     const bool held = held_response_framed.try_acquire_for(std::chrono::seconds(5));
-    RUVIA_CHECK(held);
+    EXPECT_TRUE(held);
     write_file(path, "changed");
     rewritten = true;
     std::string wire;
@@ -347,16 +348,16 @@ RUVIA_TEST(empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
     // error response that closes the connection, so the pipelined request
     // behind it is not answered.
     const auto responses = split_responses(wire, {false});
-    RUVIA_CHECK_EQ(responses.size(), std::size_t{1});
+    EXPECT_EQ(responses.size(), std::size_t{1});
     if (responses.size() == 1) {
-        RUVIA_CHECK_EQ(responses.front().status_, std::string("500"));
+        EXPECT_EQ(responses.front().status_, std::string("500"));
     }
-    RUVIA_CHECK(wire.find("between") == std::string::npos);
+    EXPECT_TRUE(wire.find("between") == std::string::npos);
     server.finish();
     fs::remove_all(transfer_dir(), ignored);
 }
 
-RUVIA_TEST(changed_indexed_file_is_never_sent_under_a_stale_head) {
+TEST(Ruvia, changed_indexed_file_is_never_sent_under_a_stale_head) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
     fs::create_directories(transfer_dir());
@@ -376,7 +377,7 @@ RUVIA_TEST(changed_indexed_file_is_never_sent_under_a_stale_head) {
         const auto response = exchange(io, server.endpoint(), get(target, "Connection: close\r\n"));
         // The file is checked before the head is sent, so the connection
         // gets an error response instead of a 200 for bytes it cannot honour.
-        RUVIA_CHECK(response.starts_with("HTTP/1.1 500 "));
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 500 "));
     }
 
     server.finish();
@@ -384,7 +385,7 @@ RUVIA_TEST(changed_indexed_file_is_never_sent_under_a_stale_head) {
     fs::remove_all(transfer_dir(), ignored);
 }
 
-RUVIA_TEST(file_changed_in_place_after_framing_is_never_sent_under_its_head) {
+TEST(Ruvia, file_changed_in_place_after_framing_is_never_sent_under_its_head) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
     fs::create_directories(transfer_dir());
@@ -403,7 +404,7 @@ RUVIA_TEST(file_changed_in_place_after_framing_is_never_sent_under_its_head) {
         // The handler framed the response from the file's current size and
         // identity and still holds it.
         const bool held = held_response_framed.try_acquire_for(std::chrono::seconds(5));
-        RUVIA_CHECK(held);
+        EXPECT_TRUE(held);
         // Outlast coarse change-time clocks, then rewrite the bytes in place:
         // same size, same file, so only its change time tells them apart.
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -419,8 +420,8 @@ RUVIA_TEST(file_changed_in_place_after_framing_is_never_sent_under_its_head) {
         // Every platform reads (or, for a kernel transfer, re-checks) the
         // framing handle before the head: the rewritten bytes never leave and
         // the client gets an error response.
-        RUVIA_CHECK(response.find(replacement.substr(0, 64)) == std::string::npos);
-        RUVIA_CHECK(response.starts_with("HTTP/1.1 500 "));
+        EXPECT_TRUE(response.find(replacement.substr(0, 64)) == std::string::npos);
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 500 "));
     }
 
     server.finish();
@@ -430,7 +431,7 @@ RUVIA_TEST(file_changed_in_place_after_framing_is_never_sent_under_its_head) {
 #if !defined(_WIN32)
 // Renaming a directory that still contains the server's open handle succeeds on
 // POSIX and fails on Windows, so this identity check is POSIX-only.
-RUVIA_TEST(file_response_keeps_its_opened_file_after_path_replacement) {
+TEST(Ruvia, file_response_keeps_its_opened_file_after_path_replacement) {
     std::error_code ignored;
     const auto previous_dir = transfer_dir().parent_path() / "ruvia_file_response_previous";
     fs::remove_all(transfer_dir(), ignored);
@@ -448,7 +449,7 @@ RUVIA_TEST(file_response_keeps_its_opened_file_after_path_replacement) {
     const auto request = get("/file-transfer/held/owned.bin", "Connection: close\r\n");
     asio::write(socket, asio::buffer(request));
     const bool held = held_response_framed.try_acquire_for(std::chrono::seconds(5));
-    RUVIA_CHECK(held);
+    EXPECT_TRUE(held);
     // 移动父目录不改写文件本身的身份；原路径现在指向另一份内容。
     fs::rename(transfer_dir(), previous_dir);
     fs::create_directories(transfer_dir());
@@ -457,10 +458,10 @@ RUVIA_TEST(file_response_keeps_its_opened_file_after_path_replacement) {
     std::string wire;
     asio::read(socket, asio::dynamic_buffer(wire), ignored);
     const auto responses = split_responses(wire, {false});
-    RUVIA_CHECK_EQ(responses.size(), std::size_t{1});
+    EXPECT_EQ(responses.size(), std::size_t{1});
     if (responses.size() == 1) {
-        RUVIA_CHECK_EQ(responses.front().status_, std::string("200"));
-        RUVIA_CHECK(responses.front().body_ == original);
+        EXPECT_EQ(responses.front().status_, std::string("200"));
+        EXPECT_TRUE(responses.front().body_ == original);
     }
     server.finish();
     fs::remove_all(transfer_dir(), ignored);
@@ -468,7 +469,7 @@ RUVIA_TEST(file_response_keeps_its_opened_file_after_path_replacement) {
 }
 #endif
 
-RUVIA_TEST(abandoned_file_response_does_not_hold_the_worker) {
+TEST(Ruvia, abandoned_file_response_does_not_hold_the_worker) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);
     fs::create_directories(transfer_dir());
@@ -484,14 +485,14 @@ RUVIA_TEST(abandoned_file_response_does_not_hold_the_worker) {
     asio::write(socket, asio::buffer(request));
     std::array<char, 1024> prefix{};
     const auto received = socket.read_some(asio::buffer(prefix));
-    RUVIA_CHECK(received != 0);
+    EXPECT_TRUE(received != 0);
     socket.close();
 
     const auto wire = exchange(io, server.endpoint(), get("/file-transfer/text", "Connection: close\r\n"));
     const auto responses = split_responses(wire, {false});
-    RUVIA_CHECK_EQ(responses.size(), std::size_t{1});
+    EXPECT_EQ(responses.size(), std::size_t{1});
     if (responses.size() == 1) {
-        RUVIA_CHECK_EQ(responses.front().body_, std::string("between"));
+        EXPECT_EQ(responses.front().body_, std::string("between"));
     }
     server.finish();
     fs::remove_all(transfer_dir(), ignored);

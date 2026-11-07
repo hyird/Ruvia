@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -17,7 +19,6 @@
 #include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 // A document root shares paths with a guarded wildcard route. This executable
@@ -99,7 +100,7 @@ class document_root_routes final {
 
 }  // namespace
 
-RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
+TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
     const auto dir = make_document_root();
     ruvia::document_root_config config;
     config.root_ = dir;
@@ -112,15 +113,15 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
 
     // The document root still answers paths no route claims.
     const auto public_file = exchange(io, server.endpoint(), "/public.txt");
-    RUVIA_CHECK(has_status(public_file, "200"));
-    RUVIA_CHECK(public_file.ends_with("public"));
+    EXPECT_TRUE(has_status(public_file, "200"));
+    EXPECT_TRUE(public_file.ends_with("public"));
 
     // The guarded route owns its prefix, under every equivalent spelling
     // (RFC 3986 6.2.2.2): an encoded unreserved character reaches the same
     // route and its guard.
     for (const std::string_view target : {"/private/file.txt", "/private/file.txt/", "/admin/panel/secret.txt",
              "/%70rivate/file.txt", "/admin/%70anel/secret.txt"}) {
-        RUVIA_CHECK(has_status(exchange(io, server.endpoint(), target), "401"));
+        EXPECT_TRUE(has_status(exchange(io, server.endpoint(), target), "401"));
     }
 
     // Dot-segment and empty-segment ("//", trailing '/') spellings of guarded
@@ -129,59 +130,59 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
         {"/private/./file.txt", "/private/%2E/file.txt", "/private/%2e/file.txt", "/private/x/../file.txt",
             "//private/file.txt", "/admin//panel/secret.txt", "//public.txt", "/public.txt/"}) {
         const auto response = exchange(io, server.endpoint(), target);
-        RUVIA_CHECK(has_status(response, "404"));
-        RUVIA_CHECK(response.find("secret") == std::string::npos);
-        RUVIA_CHECK(response.find("public") == std::string::npos);
+        EXPECT_TRUE(has_status(response, "404"));
+        EXPECT_TRUE(response.find("secret") == std::string::npos);
+        EXPECT_TRUE(response.find("public") == std::string::npos);
     }
     // Another method on an encoded spelling answers for the route, never the file.
     const auto encoded_post = exchange(io, server.endpoint(), "/%70rivate/file.txt", "POST");
-    RUVIA_CHECK(has_status(encoded_post, "405"));
-    RUVIA_CHECK(encoded_post.find("secret") == std::string::npos);
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/%70rivate/file.txt", "OPTIONS"), "204"));
+    EXPECT_TRUE(has_status(encoded_post, "405"));
+    EXPECT_TRUE(encoded_post.find("secret") == std::string::npos);
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/%70rivate/file.txt", "OPTIONS"), "204"));
 
     // The request path is decoded exactly once into the file name, and no
     // escape may reveal a separator routing never split on.
     const auto spaced = exchange(io, server.endpoint(), "/my%20report.txt");
-    RUVIA_CHECK(has_status(spaced, "200"));
-    RUVIA_CHECK(spaced.ends_with("spaced"));
+    EXPECT_TRUE(has_status(spaced, "200"));
+    EXPECT_TRUE(spaced.ends_with("spaced"));
     for (const std::string_view target : {"/my%2520report.txt", "/private%2Ffile.txt", "/private%5Cfile.txt"}) {
         const auto response = exchange(io, server.endpoint(), target);
-        RUVIA_CHECK(has_status(response, "404"));
-        RUVIA_CHECK(response.find("secret") == std::string::npos);
+        EXPECT_TRUE(has_status(response, "404"));
+        EXPECT_TRUE(response.find("secret") == std::string::npos);
     }
 
     // RFC 9110 15.5.6 and 9.3.7: a document-root file exists for every method,
     // so OPTIONS describes it and other methods are 405 with Allow, while a
     // missing file stays 404 and an unregistered token stays 501.
     const auto options = exchange(io, server.endpoint(), "/public.txt", "OPTIONS");
-    RUVIA_CHECK(has_status(options, "204"));
-    RUVIA_CHECK(options.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(has_status(options, "204"));
+    EXPECT_TRUE(options.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
     const auto post = exchange(io, server.endpoint(), "/my%20report.txt", "POST");
-    RUVIA_CHECK(has_status(post, "405"));
-    RUVIA_CHECK(post.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/missing.txt", "POST"), "404"));
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/missing.txt", "OPTIONS"), "404"));
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/public.txt", "BREW"), "501"));
+    EXPECT_TRUE(has_status(post, "405"));
+    EXPECT_TRUE(post.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/missing.txt", "POST"), "404"));
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/missing.txt", "OPTIONS"), "404"));
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/public.txt", "BREW"), "501"));
     // A registered extension token is known here, so the file answers 405 too.
     const auto propfind = exchange(io, server.endpoint(), "/public.txt", "PROPFIND");
-    RUVIA_CHECK(has_status(propfind, "405"));
-    RUVIA_CHECK(propfind.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(has_status(propfind, "405"));
+    EXPECT_TRUE(propfind.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
 
     // Percent-encoded document-root paths alongside a sibling method route on the same path pattern.
     const auto encoded_readme = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "GET");
-    RUVIA_CHECK(has_status(encoded_readme, "200"));
-    RUVIA_CHECK(encoded_readme.ends_with("readme-from-disk"));
+    EXPECT_TRUE(has_status(encoded_readme, "200"));
+    EXPECT_TRUE(encoded_readme.ends_with("readme-from-disk"));
     const auto encoded_space = exchange(io, server.endpoint(), "/encoded/hello%20world.txt", "GET");
-    RUVIA_CHECK(has_status(encoded_space, "200"));
-    RUVIA_CHECK(encoded_space.ends_with("hello-world-from-disk"));
+    EXPECT_TRUE(has_status(encoded_space, "200"));
+    EXPECT_TRUE(encoded_space.ends_with("hello-world-from-disk"));
     const auto encoded_options = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "OPTIONS");
-    RUVIA_CHECK(has_status(encoded_options, "204"));
-    RUVIA_CHECK(encoded_options.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(has_status(encoded_options, "204"));
+    EXPECT_TRUE(encoded_options.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
     const auto delete_encoded = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "DELETE");
-    RUVIA_CHECK(has_status(delete_encoded, "405"));
-    RUVIA_CHECK(delete_encoded.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(has_status(delete_encoded, "405"));
+    EXPECT_TRUE(delete_encoded.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
     const auto literal_percent = exchange(io, server.endpoint(), "/a%2520b.txt", "GET");
-    RUVIA_CHECK(has_status(literal_percent, "200"));
-    RUVIA_CHECK(literal_percent.ends_with("literal-percent"));
+    EXPECT_TRUE(has_status(literal_percent, "200"));
+    EXPECT_TRUE(literal_percent.ends_with("literal-percent"));
     server.finish();
 }

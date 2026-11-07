@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -9,7 +11,7 @@
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "memory_resource_fixture.h"
-#include "test_harness.h"
+#include "test_exceptions.h"
 
 namespace {
 
@@ -30,7 +32,7 @@ RUVIA_REDIS_ENTITY(numeric_redis_entity, "numeric_input",
 
 }  // namespace
 
-RUVIA_TEST(redis_entity_rejects_numeric_overflow_without_changing_identity_or_field_state) {
+TEST(Ruvia, redis_entity_rejects_numeric_overflow_without_changing_identity_or_field_state) {
     numeric_redis_entity value;
     value.set<"id">(7);
     const auto above_signed = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) + 1;
@@ -40,11 +42,11 @@ RUVIA_TEST(redis_entity_rejects_numeric_overflow_without_changing_identity_or_fi
     } catch (const std::out_of_range&) {
         id_rejected = true;
     }
-    RUVIA_CHECK(id_rejected);
-    RUVIA_CHECK_EQ(value.get<"id">(), 7);
+    EXPECT_TRUE(id_rejected);
+    EXPECT_EQ(value.get<"id">(), 7);
     // 绑定层接受的有限 double，仍可能无法表示为实体的 float 字段。
     const auto oversized = ruvia::from_json<ruvia::double_value>("1.7976931348623157e308");
-    RUVIA_CHECK_EQ(oversized.value_, (std::numeric_limits<double>::max)());
+    EXPECT_EQ(oversized.value_, (std::numeric_limits<double>::max)());
     for (int state = 0; state != 3; ++state) {
         if (state == 1) {
             value.set_null<"score">();
@@ -57,50 +59,50 @@ RUVIA_TEST(redis_entity_rejects_numeric_overflow_without_changing_identity_or_fi
         } catch (const std::out_of_range&) {
             score_rejected = true;
         }
-        RUVIA_CHECK(score_rejected);
-        RUVIA_CHECK_EQ(value.is_set<"score">(), state != 0);
-        RUVIA_CHECK_EQ(value.is_null<"score">(), state == 1);
+        EXPECT_TRUE(score_rejected);
+        EXPECT_EQ(value.is_set<"score">(), state != 0);
+        EXPECT_EQ(value.is_null<"score">(), state == 1);
         if (state == 2) {
-            RUVIA_CHECK_EQ(value.get<"score">(), 1.5F);
+            EXPECT_EQ(value.get<"score">(), 1.5F);
         }
     }
     value.set<"id">(ruvia::int64{(std::numeric_limits<std::int32_t>::min)()});
-    RUVIA_CHECK_EQ(value.get<"id">(), (std::numeric_limits<std::int32_t>::min)());
+    EXPECT_EQ(value.get<"id">(), (std::numeric_limits<std::int32_t>::min)());
 }
 
-RUVIA_TEST(redis_entity_tracks_unset_value_and_null_states) {
+TEST(Ruvia, redis_entity_tracks_unset_value_and_null_states) {
     ruvia::test::counting_memory_resource resource;
     redis_user user_value(&resource);
 
-    RUVIA_CHECK_EQ(user_value.resource(), &resource);
-    RUVIA_CHECK_EQ(redis_user::prefix(), std::string_view("user"));
-    RUVIA_CHECK(!user_value.is_set<"id">());
-    RUVIA_CHECK(!user_value.is_null<"id">());
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)user_value.get<"id">(); }));
+    EXPECT_EQ(user_value.resource(), &resource);
+    EXPECT_EQ(redis_user::prefix(), std::string_view("user"));
+    EXPECT_TRUE(!user_value.is_set<"id">());
+    EXPECT_TRUE(!user_value.is_null<"id">());
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)user_value.get<"id">(); }));
 
     user_value.set<"id">("u-1");
     user_value.set<"name">("Alice");
     user_value.set<"active">(true);
     user_value.set<"age">(32);
     user_value.set<"score">(4.5);
-    RUVIA_CHECK(user_value.is_set<"id">());
-    RUVIA_CHECK_EQ(user_value.get<"id">().view(), std::string_view("u-1"));
-    RUVIA_CHECK_EQ(std::string_view(user_value.get<"name">()), std::string_view("Alice"));
-    RUVIA_CHECK(user_value.get<"active">());
-    RUVIA_CHECK_EQ(user_value.get<"age">(), 32);
-    RUVIA_CHECK_EQ(user_value.get<"score">(), 4.5);
+    EXPECT_TRUE(user_value.is_set<"id">());
+    EXPECT_EQ(user_value.get<"id">().view(), std::string_view("u-1"));
+    EXPECT_EQ(std::string_view(user_value.get<"name">()), std::string_view("Alice"));
+    EXPECT_TRUE(user_value.get<"active">());
+    EXPECT_EQ(user_value.get<"age">(), 32);
+    EXPECT_EQ(user_value.get<"score">(), 4.5);
 
     user_value.set_null<"age">();
-    RUVIA_CHECK(user_value.is_set<"age">());
-    RUVIA_CHECK(user_value.is_null<"age">());
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)user_value.get<"age">(); }));
+    EXPECT_TRUE(user_value.is_set<"age">());
+    EXPECT_TRUE(user_value.is_null<"age">());
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)user_value.get<"age">(); }));
 
     user_value.reset<"age">();
-    RUVIA_CHECK(!user_value.is_set<"age">());
-    RUVIA_CHECK(!user_value.is_null<"age">());
+    EXPECT_TRUE(!user_value.is_set<"age">());
+    EXPECT_TRUE(!user_value.is_null<"age">());
 }
 
-RUVIA_TEST(redis_entity_move_preserves_owned_values_and_resource) {
+TEST(Ruvia, redis_entity_move_preserves_owned_values_and_resource) {
     ruvia::test::counting_memory_resource resource;
     {
         redis_user source_value(&resource);
@@ -109,20 +111,20 @@ RUVIA_TEST(redis_entity_move_preserves_owned_values_and_resource) {
         source_value.set<"active">(true);
 
         redis_user moved(std::move(source_value));
-        RUVIA_CHECK_EQ(moved.resource(), &resource);
-        RUVIA_CHECK_EQ(moved.get<"id">().size(), std::size_t{120});
-        RUVIA_CHECK_EQ(std::string_view(moved.get<"name">()).size(), std::size_t{120});
-        RUVIA_CHECK(moved.get<"active">());
+        EXPECT_EQ(moved.resource(), &resource);
+        EXPECT_EQ(moved.get<"id">().size(), std::size_t{120});
+        EXPECT_EQ(std::string_view(moved.get<"name">()).size(), std::size_t{120});
+        EXPECT_TRUE(moved.get<"active">());
         source_value.set<"id">("reused");
         source_value.set<"name">("new name");
-        RUVIA_CHECK_EQ(moved.get<"id">().size(), std::size_t{120});
-        RUVIA_CHECK_EQ(std::string_view(moved.get<"name">()).size(), std::size_t{120});
-        RUVIA_CHECK(resource.live_allocations() > 0);
+        EXPECT_EQ(moved.get<"id">().size(), std::size_t{120});
+        EXPECT_EQ(std::string_view(moved.get<"name">()).size(), std::size_t{120});
+        EXPECT_TRUE(resource.live_allocations() > 0);
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(redis_entity_failed_owning_assignment_preserves_each_column_state) {
+TEST(Ruvia, redis_entity_failed_owning_assignment_preserves_each_column_state) {
     const std::string replacement(256, 'x');
     for (int state_value = 0; state_value < 3; ++state_value) {
         ruvia::test::rejecting_memory_resource resource;
@@ -134,16 +136,16 @@ RUVIA_TEST(redis_entity_failed_owning_assignment_preserves_each_column_state) {
             entity.set<"text">("retained");
         }
         resource.reject_allocations();
-        RUVIA_CHECK(ruvia::testing::throws_on([&] { entity.set<"text">(replacement); }));
+        EXPECT_TRUE(ruvia::testing::throws_on([&] { entity.set<"text">(replacement); }));
         resource.reject_allocations(false);
-        RUVIA_CHECK_EQ(entity.is_set<"text">(), state_value != 0);
-        RUVIA_CHECK_EQ(entity.is_null<"text">(), state_value == 1);
-        RUVIA_CHECK_EQ(entity.get<"id">(), 7);
+        EXPECT_EQ(entity.is_set<"text">(), state_value != 0);
+        EXPECT_EQ(entity.is_null<"text">(), state_value == 1);
+        EXPECT_EQ(entity.get<"id">(), 7);
         if (state_value == 2) {
-            RUVIA_CHECK_EQ(entity.get<"text">().view(), std::string_view("retained"));
-            RUVIA_CHECK(entity.get<"text">().resource() == &resource);
+            EXPECT_EQ(entity.get<"text">().view(), std::string_view("retained"));
+            EXPECT_TRUE(entity.get<"text">().resource() == &resource);
         } else {
-            RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)entity.get<"text">(); }));
+            EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)entity.get<"text">(); }));
         }
     }
 }
@@ -152,13 +154,13 @@ RUVIA_REDIS_ENTITY(redis_byte_numbers, "byte_numbers",
     RUVIA_REDIS_COLUMN(id, std::int8_t, ruvia::redis_column_options{.primary_key_ = true}),
     RUVIA_REDIS_COLUMN(flags, std::uint8_t));
 
-RUVIA_TEST(redis_entity_constructs_from_resource_owner_and_supports_8bit_integers) {
+TEST(Ruvia, redis_entity_constructs_from_resource_owner_and_supports_8bit_integers) {
     ruvia::test::counting_memory_resource resource;
     redis_user owner_user(&resource);
     redis_byte_numbers numbers(owner_user);
-    RUVIA_CHECK_EQ(numbers.resource(), &resource);
+    EXPECT_EQ(numbers.resource(), &resource);
     numbers.set<"id">(std::int8_t{-12});
     numbers.set<"flags">(std::uint8_t{250});
-    RUVIA_CHECK_EQ(numbers.get<"id">(), std::int8_t{-12});
-    RUVIA_CHECK_EQ(numbers.get<"flags">(), std::uint8_t{250});
+    EXPECT_EQ(numbers.get<"id">(), std::int8_t{-12});
+    EXPECT_EQ(numbers.get<"flags">(), std::uint8_t{250});
 }

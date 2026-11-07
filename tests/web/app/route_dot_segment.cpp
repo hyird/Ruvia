@@ -1,4 +1,4 @@
-#include "test_harness.h"
+#include <gtest/gtest.h>
 
 // A route pattern containing a dot segment can never be matched: resolve()
 // rejects every request carrying one before lookup (RFC 3986 6.2.2.2). Such a
@@ -30,7 +30,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(route_dot_segment_pattern_is_rejected_at_startup) {
+TEST(Ruvia, route_dot_segment_pattern_is_rejected_at_startup) {
     ruvia::test_app app;
     std::string message;
     try {
@@ -38,5 +38,5 @@ RUVIA_TEST(route_dot_segment_pattern_is_rejected_at_startup) {
     } catch (const std::invalid_argument& error) {
         message = error.what();
     }
-    RUVIA_CHECK(message.find("dot segment") != std::string::npos);
+    EXPECT_TRUE(message.find("dot segment") != std::string::npos);
 }

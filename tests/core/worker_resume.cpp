@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <coroutine>
 #include <cstddef>
@@ -10,7 +12,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 
-#include "test_harness.h"
 #include "worker_task_fixture.h"
 
 namespace worker_resume_test {
@@ -60,7 +61,7 @@ ruvia::task<void> resume_twice(const ruvia::worker_handle& worker, std::vector<i
 // request, whether it was asked on the worker or from another thread, and
 // requests from the worker's own thread resume in request order -- under the
 // default event loop and the single-owner one production workers use.
-RUVIA_TEST(worker_handle_defers_resumption_to_its_worker) {
+TEST(Ruvia, worker_handle_defers_resumption_to_its_worker) {
     using worker_resume_test::before;
     for (const int hint : {ASIO_CONCURRENCY_HINT_DEFAULT, ASIO_CONCURRENCY_HINT_UNSAFE_IO}) {
         asio::io_context context(hint);
@@ -71,12 +72,12 @@ RUVIA_TEST(worker_handle_defers_resumption_to_its_worker) {
         ruvia::test::run_worker_tasks(attachment,
             worker_resume_test::resume_twice(worker_value, order, 10, on_worker),
             worker_resume_test::resume_twice(worker_value, order, 20, on_worker));
-        RUVIA_CHECK(on_worker);
-        RUVIA_CHECK_EQ(order.size(), std::size_t{10});
+        EXPECT_TRUE(on_worker);
+        EXPECT_EQ(order.size(), std::size_t{10});
         for (const int first : {10, 20}) {
-            RUVIA_CHECK(before(order, -first, first + 1));
-            RUVIA_CHECK(before(order, -(first + 2), first + 3));
+            EXPECT_TRUE(before(order, -first, first + 1));
+            EXPECT_TRUE(before(order, -(first + 2), first + 3));
         }
-        RUVIA_CHECK(before(order, 11, 21));
+        EXPECT_TRUE(before(order, 11, 21));
     }
 }

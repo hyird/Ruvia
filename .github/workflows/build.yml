@@ -22,6 +22,7 @@ env:
 jobs:
   style:
     name: clang-format
+    needs: resolve_toolchain
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Ruvia
@@ -33,12 +34,25 @@ jobs:
         with:
           install: false
           cache: false
-      - name: Install latest clang-format with mise
+      - name: Restore LLVM toolchain cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ~/.local/share/mise/installs
+          key: mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ needs.resolve_toolchain.outputs.release }}-${{ needs.resolve_toolchain.outputs.sha256 }}
+          restore-keys: |
+            mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ needs.resolve_toolchain.outputs.release }}-
+            mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install resolved LLVM clang-format
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
+          TOOLCHAIN_RELEASE: ${{ needs.resolve_toolchain.outputs.release }}
+          TOOLCHAIN_SHA256: ${{ needs.resolve_toolchain.outputs.sha256 }}
         run: |
-          mise use --global uv@latest "pipx:clang-format@latest"
-          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
+          set -euo pipefail
+          [[ "$TOOLCHAIN_RELEASE" =~ ^[A-Za-z0-9._-]+$ ]]
+          [[ "$TOOLCHAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
+          mise use --global "github:cross-tools/clang-cross[asset_pattern=x86_64-unknown-linux-musl.tar.xz,strip_components=0,bin_path=x86_64-unknown-linux-musl/bin,checksum=sha256:$TOOLCHAIN_SHA256]@$TOOLCHAIN_RELEASE"
+          echo "$(mise where github:cross-tools/clang-cross)/x86_64-unknown-linux-musl/bin" >> "$GITHUB_PATH"
       - name: Check formatting
         run: |
           set -euo pipefail
@@ -106,6 +120,7 @@ jobs:
         run: |
           cmake -S . -B build/ci -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DRUVIA_ENABLE_MARIADB=ON \
@@ -204,6 +219,7 @@ jobs:
           cmake --version
           cmake -S . -B build/ci -A x64 `
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON `
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON `
             -DRUVIA_ENABLE_MARIADB=ON -DRUVIA_ENABLE_POSTGRESQL=ON `
             -DRUVIA_ENABLE_REDIS=ON -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON -DRUVIA_BUILD_TESTS=ON `
@@ -234,23 +250,29 @@ jobs:
       contents: read
     steps:
       - name: Keep the current verified build
-        uses: actions/github-script@v9.0.0
-        with:
-          script: |
-            const repo = { owner: context.repo.owner, repo: context.repo.repo };
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              ...repo, per_page: 100,
-            });
-            // All preceding jobs passed; keep this run and delete prior completed history.
-            // Remove successful history last so earlier cleanup errors preserve a good build.
-            const completed = runs.filter(run => run.status === 'completed' && run.id !== context.runId)
-              .sort((a, b) => Number(a.conclusion === 'success') - Number(b.conclusion === 'success')
-                || Date.parse(a.updated_at) - Date.parse(b.updated_at));
-            let removed = 0;
-            for (const run of completed) {
-              const { data: current } = await github.rest.actions.getWorkflowRun({ ...repo, run_id: run.id });
-              if (current.status !== 'completed' || current.run_attempt !== run.run_attempt) continue;
-              await github.rest.actions.deleteWorkflowRun({ ...repo, run_id: current.id });
-              removed++;
-            }
-            core.notice(`Retained verified Build ${context.runId}; deleted ${removed} completed runs. Active runs were untouched.`);
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api --paginate --slurp "repos/$GH_REPO/actions/runs?per_page=100")"
+          completed="$(jq -r --argjson current "$CURRENT_RUN_ID" '
+            [.[].workflow_runs[] | select(.status == "completed" and .id != $current)]
+            | sort_by([(.conclusion == "success"), .updated_at])
+            | map([(.id | tostring), (.run_attempt | tostring)] | @tsv)
+            | join("\n")
+          ' <<< "$runs")"
+          removed=0
+          while IFS=$'\t' read -r run_id attempt; do
+            [[ -n "$run_id" ]] || continue
+            [[ "$run_id" =~ ^[0-9]+$ && "$attempt" =~ ^[0-9]+$ ]]
+            current="$(gh api "repos/$GH_REPO/actions/runs/$run_id")"
+            if ! jq -e --argjson attempt "$attempt" \
+              '.status == "completed" and .run_attempt == $attempt' <<< "$current" > /dev/null; then
+              continue
+            fi
+            gh api --method DELETE "repos/$GH_REPO/actions/runs/$run_id"
+            ((removed += 1))
+          done <<< "$completed"
+          echo "::notice::Retained verified Build $CURRENT_RUN_ID; deleted $removed completed runs. Active runs were untouched."

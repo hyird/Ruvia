@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -25,7 +27,6 @@
 
 #include "backend_client_fixture.h"
 #include "memory_resource_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace redis_client_test {
@@ -40,7 +41,7 @@ bool throws_invalid_argument(fn_type&& fn) {
     }
 }
 
-RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_operation_cancellation) {
+TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_operation_cancellation) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::redis_config config;
@@ -65,8 +66,8 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
                 }
                 timed_out = true;
             }
-            RUVIA_CHECK(timed_out);
-            RUVIA_CHECK(std::chrono::steady_clock::now() - started >= timeout);
+            EXPECT_TRUE(timed_out);
+            EXPECT_TRUE(std::chrono::steady_clock::now() - started >= timeout);
         };
         co_await expect_timeout(bounded.blpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1))));
         co_await expect_timeout(bounded.xread_group("workers", "consumer", streams,
@@ -82,21 +83,21 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
             } catch (const std::invalid_argument&) {
                 rejected = true;
             }
-            RUVIA_CHECK(rejected);
+            EXPECT_TRUE(rejected);
         }
         for (auto word : {"WAIT", "wait", "WaItAoF"}) {
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)bounded.command(word, "1", "1000"); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)bounded.command(word, "1", "1000"); }));
             auto transaction = bounded.transaction();
-            RUVIA_CHECK(throws_invalid_argument([&] { transaction.command(word, "1", "1000"); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { transaction.command(word, "1", "1000"); }));
         }
         for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}, std::int64_t{0}}) {
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
         }
         for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
                  (std::numeric_limits<std::uint64_t>::max)()}) {
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
         }
 
         // Standalone clients always inherit an owner stop token, so indefinite
@@ -114,7 +115,7 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
                 }
                 rejected = true;
             }
-            RUVIA_CHECK(rejected);
+            EXPECT_TRUE(rejected);
         };
         co_await expect_cancelled(cancelled.xread_group(
             "workers", "consumer", streams, {.block_ = ruvia::redis_block_wait::indefinitely()}));
@@ -123,7 +124,7 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
     });
 }
 
-RUVIA_TEST(redis_stream_read_options_route_claim_as_blocking_and_reject_unknown_options) {
+TEST(Ruvia, redis_stream_read_options_route_claim_as_blocking_and_reject_unknown_options) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
@@ -131,10 +132,10 @@ RUVIA_TEST(redis_stream_read_options_route_claim_as_blocking_and_reject_unknown_
         auto pipeline = redis.pipeline();
         // CLAIM (Redis 8.4) takes a value; a BLOCK after it still blocks, so the
         // command cannot join a pipeline.
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             pipeline.command("XREADGROUP", "GROUP", "g", "c", "CLAIM", "1000", "BLOCK", "0", "STREAMS", "s", ">");
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
+        EXPECT_TRUE(throws_invalid_argument([&] {
             pipeline.command("xreadgroup", "GROUP", "g", "c", "COUNT", "1", "claim", "5", "NOACK", "block", "10",
                 "STREAMS", "s", ">");
         }));
@@ -146,14 +147,14 @@ RUVIA_TEST(redis_stream_read_options_route_claim_as_blocking_and_reject_unknown_
                  {"XREAD", "CLAIM", "1000", "BLOCK", "0", "STREAMS", "s", "0"},
                  {"XREAD", "NOACK", "STREAMS", "s", "0"}}) {
             const std::span<const std::string_view> command(args.begin(), args.size());
-            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.command(command); }));
-            RUVIA_CHECK(throws_invalid_argument([&] { pipeline.command(command); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.command(command); }));
+            EXPECT_TRUE(throws_invalid_argument([&] { pipeline.command(command); }));
         }
         co_return;
     });
 }
 
-RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
+TEST(Ruvia, redis_batch_builders_own_cold_payload_and_reject_reuse) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
@@ -170,20 +171,20 @@ RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
             auto pipeline = handle.pipeline();
             pipeline.set(std::string(128, 'k'), std::string(128, 'v'));
             std::optional moved(std::move(pipeline));
-            RUVIA_CHECK(throws_logic_error([&] { pipeline.get("moved"); }));
+            EXPECT_TRUE(throws_logic_error([&] { pipeline.get("moved"); }));
             auto cold = std::move(*moved).exec();
-            RUVIA_CHECK(throws_logic_error([&] { moved->incr_by("used", 1); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)std::move(*moved).exec(); }));
+            EXPECT_TRUE(throws_logic_error([&] { moved->incr_by("used", 1); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)std::move(*moved).exec(); }));
             moved.reset();
         }
         {
             auto transaction = handle.transaction();
             transaction.set(std::string(128, 'k'), std::string(128, 'v'));
             std::optional moved(std::move(transaction));
-            RUVIA_CHECK(throws_logic_error([&] { transaction.get("moved"); }));
+            EXPECT_TRUE(throws_logic_error([&] { transaction.get("moved"); }));
             auto cold = std::move(*moved).exec();
-            RUVIA_CHECK(throws_logic_error([&] { moved->incr_by("used", 1); }));
-            RUVIA_CHECK(throws_logic_error([&] { moved->zadd("used", 1, "member"); }));
+            EXPECT_TRUE(throws_logic_error([&] { moved->incr_by("used", 1); }));
+            EXPECT_TRUE(throws_logic_error([&] { moved->zadd("used", 1, "member"); }));
             moved.reset();
         }
         {
@@ -191,30 +192,30 @@ RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
             auto transaction = handle.transaction();
             for (auto word : {"WATCH", "UNWATCH", "MULTI", "EXEC", "SYNC", "PSYNC", "REPLCONF", "BLPOP",
                      "UNSUBSCRIBE", "PUNSUBSCRIBE", "SUNSUBSCRIBE"}) {
-                RUVIA_CHECK(throws_invalid_argument([&] { pipeline.command(word, "key"); }));
-                RUVIA_CHECK(throws_invalid_argument([&] { transaction.command(word, "key"); }));
+                EXPECT_TRUE(throws_invalid_argument([&] { pipeline.command(word, "key"); }));
+                EXPECT_TRUE(throws_invalid_argument([&] { transaction.command(word, "key"); }));
             }
             // Infinite scores have a Redis spelling; NaN does not.
             pipeline.zadd("key", std::numeric_limits<double>::infinity(), "member");
             transaction.zadd("key", -std::numeric_limits<double>::infinity(), "member");
-            RUVIA_CHECK(throws_invalid_argument(
+            EXPECT_TRUE(throws_invalid_argument(
                 [&] { pipeline.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member"); }));
-            RUVIA_CHECK(throws_invalid_argument(
+            EXPECT_TRUE(throws_invalid_argument(
                 [&] { transaction.zadd("key", std::numeric_limits<double>::quiet_NaN(), "member"); }));
         }
         co_return;
     });
 }
 
-RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
+TEST(Ruvia, redis_set_expiration_cannot_represent_conflicting_modes) {
     const auto expiring = ruvia::redis_set_expiration::expires_after(std::chrono::milliseconds(1500));
-    RUVIA_CHECK(expiring.duration() != nullptr);
-    RUVIA_CHECK_EQ(expiring.duration()->count(), std::chrono::milliseconds::rep{1500});
-    RUVIA_CHECK(!expiring.keeps_existing());
+    EXPECT_TRUE(expiring.duration() != nullptr);
+    EXPECT_EQ(expiring.duration()->count(), std::chrono::milliseconds::rep{1500});
+    EXPECT_TRUE(!expiring.keeps_existing());
 
     const auto keep = ruvia::redis_set_expiration::keep_existing();
-    RUVIA_CHECK(keep.duration() == nullptr);
-    RUVIA_CHECK(keep.keeps_existing());
+    EXPECT_TRUE(keep.duration() == nullptr);
+    EXPECT_TRUE(keep.keeps_existing());
 
     bool zero_rejected = false;
     try {
@@ -222,7 +223,7 @@ RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
     } catch (const std::invalid_argument&) {
         zero_rejected = true;
     }
-    RUVIA_CHECK(zero_rejected);
+    EXPECT_TRUE(zero_rejected);
 
     bool negative_rejected = false;
     try {
@@ -230,10 +231,10 @@ RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
     } catch (const std::invalid_argument&) {
         negative_rejected = true;
     }
-    RUVIA_CHECK(negative_rejected);
+    EXPECT_TRUE(negative_rejected);
 }
 
-RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
+TEST(Ruvia, redis_expire_rejects_non_positive_ttl_before_io) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
@@ -245,7 +246,7 @@ RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
         } catch (const std::invalid_argument&) {
             zero_rejected = true;
         }
-        RUVIA_CHECK(zero_rejected);
+        EXPECT_TRUE(zero_rejected);
 
         bool negative_rejected = false;
         try {
@@ -253,22 +254,22 @@ RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
         } catch (const std::invalid_argument&) {
             negative_rejected = true;
         }
-        RUVIA_CHECK(negative_rejected);
+        EXPECT_TRUE(negative_rejected);
         co_return;
     });
 }
 
-RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
+TEST(Ruvia, redis_multi_key_commands_reject_empty_key_spans_before_io) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
         auto redis = client.handle();
         const std::span<const std::string_view> no_keys;
 
-        RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.mget(no_keys); }));
-        RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.sinter(no_keys); }));
-        RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.sunion(no_keys); }));
-        RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.sdiff(no_keys); }));
+        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.mget(no_keys); }));
+        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.sinter(no_keys); }));
+        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.sunion(no_keys); }));
+        EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.sdiff(no_keys); }));
         co_return;
     });
 }
@@ -382,17 +383,17 @@ template <typename result_type>
 }
 
 template <typename result_type, typename check_type>
-void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx, const result_type& original,
+void check_redis_result_move_guarantees(const result_type& original,
     const result_type& seed, bool allocator_move, check_type check);
 
 template <typename result_type, typename check_type>
-void check_redis_result_rebinding(ruvia::testing::test_context& ruvia_ctx, const result_type& original,
+void check_redis_result_rebinding(const result_type& original,
     const result_type& seed, bool allocator_move, check_type check) {
     ruvia::test::counting_memory_resource upstream;
     {
         equivalent_tracking_resource source(upstream);
         equivalent_tracking_resource target(upstream);
-        RUVIA_CHECK(source.is_equal(target));
+        EXPECT_TRUE(source.is_equal(target));
         std::optional<result_type> destination;
         std::optional<result_type> input(copy_redis_result(original, source));
         if constexpr (requires { typename result_type::allocator_type; }) {
@@ -410,54 +411,54 @@ void check_redis_result_rebinding(ruvia::testing::test_context& ruvia_ctx, const
         source.retire();
         check(*destination);
         destination.reset();
-        RUVIA_CHECK_EQ(source.callbacks_after_retirement(), std::size_t{0});
+        EXPECT_EQ(source.callbacks_after_retirement(), std::size_t{0});
     }
-    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
-    check_redis_result_move_guarantees(ruvia_ctx, original, seed, allocator_move, check);
+    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
+    EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
+    check_redis_result_move_guarantees(original, seed, allocator_move, check);
 }
 
 template <typename result_type>
-void check_redis_result_seed(ruvia::testing::test_context& ruvia_ctx, const result_type& actual, const result_type& seed) {
+void check_redis_result_seed(const result_type& actual, const result_type& seed) {
     if constexpr (std::same_as<result_type, ruvia::redis_key_value>) {
-        RUVIA_CHECK_EQ(actual.key(), seed.key());
-        RUVIA_CHECK_EQ(actual.value(), seed.value());
+        EXPECT_EQ(actual.key(), seed.key());
+        EXPECT_EQ(actual.value(), seed.value());
     } else if constexpr (std::same_as<result_type, ruvia::redis_scored_value>) {
-        RUVIA_CHECK_EQ(actual.value(), seed.value());
-        RUVIA_CHECK_EQ(actual.score(), seed.score());
+        EXPECT_EQ(actual.value(), seed.value());
+        EXPECT_EQ(actual.score(), seed.score());
     } else if constexpr (std::same_as<result_type, ruvia::redis_value>) {
-        RUVIA_CHECK_EQ(actual.kind(), seed.kind());
+        EXPECT_EQ(actual.kind(), seed.kind());
         if (actual.kind() == ruvia::redis_value::kind_type::integer) {
-            RUVIA_CHECK_EQ(actual.integer(), seed.integer());
+            EXPECT_EQ(actual.integer(), seed.integer());
         }
     } else if constexpr (requires { actual.next_cursor(); }) {
-        RUVIA_CHECK_EQ(actual.next_cursor(), seed.next_cursor());
-        RUVIA_CHECK_EQ(actual.done(), seed.done());
+        EXPECT_EQ(actual.next_cursor(), seed.next_cursor());
+        EXPECT_EQ(actual.done(), seed.done());
     }
     if constexpr (requires { actual.values(); }) {
-        RUVIA_CHECK(actual.values().empty());
+        EXPECT_TRUE(actual.values().empty());
     }
     if constexpr (requires { actual.id(); }) {
-        RUVIA_CHECK_EQ(actual.id(), seed.id());
-        RUVIA_CHECK(actual.fields().empty());
+        EXPECT_EQ(actual.id(), seed.id());
+        EXPECT_TRUE(actual.fields().empty());
     }
     if constexpr (requires { actual.entries(); }) {
-        RUVIA_CHECK_EQ(actual.entries().size(), seed.entries().size());
+        EXPECT_EQ(actual.entries().size(), seed.entries().size());
     }
     if constexpr (requires { actual.stream(); }) {
-        RUVIA_CHECK_EQ(actual.stream(), seed.stream());
+        EXPECT_EQ(actual.stream(), seed.stream());
         if (actual.entries().size() == 1) {
-            RUVIA_CHECK_EQ(actual.entries()[0].id(), seed.entries()[0].id());
-            RUVIA_CHECK(actual.entries()[0].fields().empty());
+            EXPECT_EQ(actual.entries()[0].id(), seed.entries()[0].id());
+            EXPECT_TRUE(actual.entries()[0].fields().empty());
         }
     }
     if constexpr (requires { actual.streams(); }) {
-        RUVIA_CHECK(actual.streams().empty());
+        EXPECT_TRUE(actual.streams().empty());
     }
 }
 
 template <typename result_type, typename check_type>
-void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx, const result_type& original,
+void check_redis_result_move_guarantees(const result_type& original,
     const result_type& seed, bool allocator_move, check_type check) {
     ruvia::test::counting_memory_resource upstream;
     const std::size_t max_failing_allowance =
@@ -485,13 +486,13 @@ void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx,
                 rejected = true;
             }
             target.allow_allocations();
-            RUVIA_CHECK(rejected);
+            EXPECT_TRUE(rejected);
             if (rejected) {
                 check(input);
-                check_redis_result_seed(ruvia_ctx, destination, seed);
+                check_redis_result_seed(destination, seed);
             }
         }
-        RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+        EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
     }
     {
         equivalent_tracking_resource resource(upstream);
@@ -519,20 +520,20 @@ void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx,
             rejected = true;
         }
         resource.allow_allocations();
-        RUVIA_CHECK(!rejected);
+        EXPECT_TRUE(!rejected);
         if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+            EXPECT_EQ(resource.allocation_attempts(), attempts);
         }
     }
-    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
+    EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
 [[nodiscard]] std::string redis_bulk_reply(std::string_view value) {
     return "$" + std::to_string(value.size()) + "\r\n" + std::string(value) + "\r\n";
 }
 
-RUVIA_TEST(redis_typed_commands_preserve_arguments_across_direct_pipeline_and_transaction) {
+TEST(Ruvia, redis_typed_commands_preserve_arguments_across_direct_pipeline_and_transaction) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     const std::vector<std::string> command_replies{":1\r\n", ":2\r\n", "*1\r\n$5\r\nentry\r\n", ":1\r\n", "*1\r\n$6\r\nmember\r\n"};
@@ -554,13 +555,13 @@ RUVIA_TEST(redis_typed_commands_preserve_arguments_across_direct_pipeline_and_tr
     constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
         auto redis = connected.handle();
-        RUVIA_CHECK_EQ(co_await redis.incr_by(key, minimum), std::int64_t{1});
-        RUVIA_CHECK_EQ(co_await redis.decr_by(key, maximum), std::int64_t{2});
+        EXPECT_EQ(co_await redis.incr_by(key, minimum), std::int64_t{1});
+        EXPECT_EQ(co_await redis.decr_by(key, maximum), std::int64_t{2});
         const auto list = co_await redis.lrange(key, minimum, maximum);
-        RUVIA_CHECK_EQ(list.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(co_await redis.zadd(key, -std::numeric_limits<double>::infinity(), member), std::int64_t{1});
+        EXPECT_EQ(list.size(), std::size_t{1});
+        EXPECT_EQ(co_await redis.zadd(key, -std::numeric_limits<double>::infinity(), member), std::int64_t{1});
         const auto sorted = co_await redis.zrange(key, maximum, minimum);
-        RUVIA_CHECK_EQ(sorted.size(), std::size_t{1});
+        EXPECT_EQ(sorted.size(), std::size_t{1});
 
         const auto append = [&](auto& batch) {
             batch.incr_by(key, minimum).decr_by(key, maximum).lrange(key, minimum, maximum).zadd(key, -std::numeric_limits<double>::infinity(), member).zrange(key, maximum, minimum);
@@ -568,27 +569,27 @@ RUVIA_TEST(redis_typed_commands_preserve_arguments_across_direct_pipeline_and_tr
         auto pipeline = redis.pipeline();
         append(pipeline);
         const auto pipelined = co_await std::move(pipeline).exec();
-        RUVIA_CHECK_EQ(pipelined.size(), std::size_t{5});
+        EXPECT_EQ(pipelined.size(), std::size_t{5});
         auto transaction = redis.transaction();
         append(transaction);
         const auto transacted = co_await std::move(transaction).exec();
-        RUVIA_CHECK_EQ(transacted.size(), std::size_t{5});
+        EXPECT_EQ(transacted.size(), std::size_t{5});
         for (const auto* results : {&pipelined, &transacted}) {
             if (results->size() != 5) {
                 continue;
             }
-            RUVIA_CHECK_EQ((*results)[0].integer(), std::int64_t{1});
-            RUVIA_CHECK_EQ((*results)[1].integer(), std::int64_t{2});
+            EXPECT_EQ((*results)[0].integer(), std::int64_t{1});
+            EXPECT_EQ((*results)[1].integer(), std::int64_t{2});
             const auto entries = (*results)[2].array();
-            RUVIA_CHECK_EQ(entries.size(), std::size_t{1});
+            EXPECT_EQ(entries.size(), std::size_t{1});
             if (!entries.empty()) {
-                RUVIA_CHECK_EQ(entries[0].string(), std::string_view("entry"));
+                EXPECT_EQ(entries[0].string(), std::string_view("entry"));
             }
-            RUVIA_CHECK_EQ((*results)[3].integer(), std::int64_t{1});
+            EXPECT_EQ((*results)[3].integer(), std::int64_t{1});
             const auto members = (*results)[4].array();
-            RUVIA_CHECK_EQ(members.size(), std::size_t{1});
+            EXPECT_EQ(members.size(), std::size_t{1});
             if (!members.empty()) {
-                RUVIA_CHECK_EQ(members[0].string(), std::string_view("member"));
+                EXPECT_EQ(members[0].string(), std::string_view("member"));
             }
         }
     });
@@ -602,10 +603,10 @@ RUVIA_TEST(redis_typed_commands_preserve_arguments_across_direct_pipeline_and_tr
     all.push_back({"MULTI"});
     all.insert(all.end(), expected.begin(), expected.end());
     all.push_back({"EXEC"});
-    RUVIA_CHECK(peer.commands() == all);
+    EXPECT_TRUE(peer.commands() == all);
 }
 
-RUVIA_TEST(redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
+TEST(Ruvia, redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     scripted_redis_peer peer({
@@ -626,24 +627,24 @@ RUVIA_TEST(redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
         auto redis = connected.handle();
         constexpr auto infinity = std::numeric_limits<double>::infinity();
-        RUVIA_CHECK_EQ(co_await redis.zadd("scores", infinity, "b"), std::int64_t{1});
+        EXPECT_EQ(co_await redis.zadd("scores", infinity, "b"), std::int64_t{1});
 
         const auto positive = co_await redis.zscore("scores", "b");
-        RUVIA_CHECK(positive.has_value() && *positive == infinity);
+        EXPECT_TRUE(positive.has_value() && *positive == infinity);
         const auto negative = co_await redis.zscore("scores", "a");
-        RUVIA_CHECK(negative.has_value() && *negative == -infinity);
+        EXPECT_TRUE(negative.has_value() && *negative == -infinity);
 
         const auto ranked = co_await redis.zrange_with_scores("scores", 0, -1);
-        RUVIA_CHECK_EQ(ranked.size(), std::size_t{2});
+        EXPECT_EQ(ranked.size(), std::size_t{2});
         if (ranked.size() == 2) {
-            RUVIA_CHECK(ranked[0].score() == -infinity);
-            RUVIA_CHECK(ranked[1].score() == infinity);
+            EXPECT_TRUE(ranked[0].score() == -infinity);
+            EXPECT_TRUE(ranked[1].score() == infinity);
         }
 
-        RUVIA_CHECK_EQ(co_await redis.zcount("scores", -infinity, infinity), std::int64_t{2});
+        EXPECT_EQ(co_await redis.zcount("scores", -infinity, infinity), std::int64_t{2});
 
         const auto not_a_number = co_await redis.zscore("scores", "nan");
-        RUVIA_CHECK(not_a_number.has_value() && std::isnan(*not_a_number));
+        EXPECT_TRUE(not_a_number.has_value() && std::isnan(*not_a_number));
 
         // Only the exact Redis spellings are non-finite; overflowing
         // decimals remain protocol errors.
@@ -653,18 +654,18 @@ RUVIA_TEST(redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
         } catch (const ruvia::redis_error& error) {
             rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
     });
     peer.join();
     const auto& commands = peer.commands();
-    RUVIA_CHECK_EQ(commands.size(), std::size_t{7});
+    EXPECT_EQ(commands.size(), std::size_t{7});
     if (commands.size() == 7) {
-        RUVIA_CHECK(commands[0] == (std::vector<std::string>{"ZADD", "scores", "+inf", "b"}));
-        RUVIA_CHECK(commands[4] == (std::vector<std::string>{"ZCOUNT", "scores", "-inf", "+inf"}));
+        EXPECT_TRUE(commands[0] == (std::vector<std::string>{"ZADD", "scores", "+inf", "b"}));
+        EXPECT_TRUE(commands[4] == (std::vector<std::string>{"ZCOUNT", "scores", "-inf", "+inf"}));
     }
 }
 
-RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
+TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
     const std::string stream_name(120, 's');
     const std::string field_name(128, 'f');
     const std::string field_value(256, 'v');
@@ -708,58 +709,58 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
         auto hash_seed = co_await redis.hscan("hash");
         auto scored = co_await redis.zscan("scores");
         auto score_seed = co_await redis.zscan("scores");
-        RUVIA_CHECK(group_seed.has_value());
+        EXPECT_TRUE(group_seed.has_value());
         if (!grouped || !group_seed || grouped->streams().size() != 2 || grouped->streams()[0].entries().size() != 2) {
             co_return;
         }
 
         const auto check_fields = [&](std::span<const ruvia::redis_key_value> fields) {
-            RUVIA_CHECK_EQ(fields.size(), std::size_t{1});
+            EXPECT_EQ(fields.size(), std::size_t{1});
             if (fields.size() == 1) {
-                RUVIA_CHECK_EQ(fields[0].key(), std::string_view(field_name));
-                RUVIA_CHECK_EQ(fields[0].value(), std::string_view(field_value));
+                EXPECT_EQ(fields[0].key(), std::string_view(field_name));
+                EXPECT_EQ(fields[0].value(), std::string_view(field_value));
             }
         };
         const auto check_entry = [&](const ruvia::redis_stream_entry& entry) {
-            RUVIA_CHECK_EQ(entry.id(), std::string_view("1-0"));
+            EXPECT_EQ(entry.id(), std::string_view("1-0"));
             check_fields(entry.fields());
         };
         const auto check_stream = [&](const ruvia::redis_stream_read_result& stream) {
-            RUVIA_CHECK_EQ(stream.stream(), std::string_view(stream_name));
-            RUVIA_CHECK_EQ(stream.entries().size(), std::size_t{2});
+            EXPECT_EQ(stream.stream(), std::string_view(stream_name));
+            EXPECT_EQ(stream.entries().size(), std::size_t{2});
             if (stream.entries().size() == 2) {
                 check_entry(stream.entries()[0]);
-                RUVIA_CHECK_EQ(stream.entries()[1].id(), std::string_view("2-0"));
-                RUVIA_CHECK(stream.entries()[1].fields().empty());
+                EXPECT_EQ(stream.entries()[1].id(), std::string_view("2-0"));
+                EXPECT_TRUE(stream.entries()[1].fields().empty());
             }
         };
         for (const bool allocator_move : {true, false}) {
-            check_redis_result_rebinding(ruvia_ctx, value, value_seed, allocator_move, [&](const ruvia::redis_value& result) {
-                RUVIA_CHECK(result.kind() == ruvia::redis_value::kind_type::array);
-                RUVIA_CHECK_EQ(result.array().size(), std::size_t{2});
+            check_redis_result_rebinding(value, value_seed, allocator_move, [&](const ruvia::redis_value& result) {
+                EXPECT_TRUE(result.kind() == ruvia::redis_value::kind_type::array);
+                EXPECT_EQ(result.array().size(), std::size_t{2});
                 if (result.array().size() == 2) {
-                    RUVIA_CHECK_EQ(result.array()[0].array().size(), std::size_t{1});
+                    EXPECT_EQ(result.array()[0].array().size(), std::size_t{1});
                     if (result.array()[0].array().size() == 1) {
-                        RUVIA_CHECK_EQ(result.array()[0].array()[0].string(), std::string_view(field_value));
+                        EXPECT_EQ(result.array()[0].array()[0].string(), std::string_view(field_value));
                     }
-                    RUVIA_CHECK_EQ(result.array()[1].integer(), std::int64_t{42});
+                    EXPECT_EQ(result.array()[1].integer(), std::int64_t{42});
                 }
             });
             const auto& stream = grouped->streams()[0];
-            check_redis_result_rebinding(ruvia_ctx, stream.entries()[0], stream.entries()[1], allocator_move, check_entry);
-            check_redis_result_rebinding(ruvia_ctx, stream, grouped->streams()[1], allocator_move, check_stream);
+            check_redis_result_rebinding(stream.entries()[0], stream.entries()[1], allocator_move, check_entry);
+            check_redis_result_rebinding(stream, grouped->streams()[1], allocator_move, check_stream);
             if (hashed.entries().size() == 1 && hash_seed.entries().size() == 1) {
-                check_redis_result_rebinding(ruvia_ctx, hashed.entries()[0], hash_seed.entries()[0], allocator_move,
+                check_redis_result_rebinding(hashed.entries()[0], hash_seed.entries()[0], allocator_move,
                     [&](const ruvia::redis_key_value& kv) {
-                        RUVIA_CHECK_EQ(kv.key(), std::string_view(field_name));
-                        RUVIA_CHECK_EQ(kv.value(), std::string_view(field_value));
+                        EXPECT_EQ(kv.key(), std::string_view(field_name));
+                        EXPECT_EQ(kv.value(), std::string_view(field_value));
                     });
             }
             if (scored.entries().size() == 1 && score_seed.entries().size() == 1) {
-                check_redis_result_rebinding(ruvia_ctx, scored.entries()[0], score_seed.entries()[0], allocator_move,
+                check_redis_result_rebinding(scored.entries()[0], score_seed.entries()[0], allocator_move,
                     [&](const ruvia::redis_scored_value& sv) {
-                        RUVIA_CHECK_EQ(sv.value(), std::string_view(member_name));
-                        RUVIA_CHECK_EQ(sv.score(), 1.5);
+                        EXPECT_EQ(sv.value(), std::string_view(member_name));
+                        EXPECT_EQ(sv.score(), 1.5);
                     });
             }
         }
@@ -773,41 +774,41 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
         static_assert(!std::is_copy_assignable_v<ruvia::redis_z_scan_result>);
 
         *group_seed = std::move(*grouped);
-        RUVIA_CHECK_EQ(group_seed->streams().size(), std::size_t{2});
+        EXPECT_EQ(group_seed->streams().size(), std::size_t{2});
         if (group_seed->streams().size() == 2) {
             check_stream(group_seed->streams()[0]);
-            RUVIA_CHECK_EQ(group_seed->streams()[1].stream(), std::string_view("seed"));
-            RUVIA_CHECK_EQ(group_seed->streams()[1].entries().size(), std::size_t{1});
+            EXPECT_EQ(group_seed->streams()[1].stream(), std::string_view("seed"));
+            EXPECT_EQ(group_seed->streams()[1].entries().size(), std::size_t{1});
         }
         const auto expected_scan_cursor = scanned.next_cursor();
         scan_seed = std::move(scanned);
-        RUVIA_CHECK(!scan_seed.done());
-        RUVIA_CHECK_EQ(scan_seed.next_cursor(), expected_scan_cursor);
-        RUVIA_CHECK_EQ(scan_seed.values().size(), std::size_t{2});
+        EXPECT_TRUE(!scan_seed.done());
+        EXPECT_EQ(scan_seed.next_cursor(), expected_scan_cursor);
+        EXPECT_EQ(scan_seed.values().size(), std::size_t{2});
         if (scan_seed.values().size() == 2) {
-            RUVIA_CHECK_EQ(std::string_view(scan_seed.values()[0]), std::string_view(key_name));
-            RUVIA_CHECK_EQ(std::string_view(scan_seed.values()[1]), std::string_view("second"));
+            EXPECT_EQ(std::string_view(scan_seed.values()[0]), std::string_view(key_name));
+            EXPECT_EQ(std::string_view(scan_seed.values()[1]), std::string_view("second"));
         }
         const auto expected_hash_cursor = hashed.next_cursor();
         hash_seed = std::move(hashed);
-        RUVIA_CHECK(hash_seed.done());
-        RUVIA_CHECK_EQ(hash_seed.next_cursor(), expected_hash_cursor);
+        EXPECT_TRUE(hash_seed.done());
+        EXPECT_EQ(hash_seed.next_cursor(), expected_hash_cursor);
         check_fields(hash_seed.entries());
 
         const auto expected_score_cursor = scored.next_cursor();
         score_seed = std::move(scored);
-        RUVIA_CHECK(!score_seed.done());
-        RUVIA_CHECK_EQ(score_seed.next_cursor(), expected_score_cursor);
-        RUVIA_CHECK_EQ(score_seed.entries().size(), std::size_t{1});
+        EXPECT_TRUE(!score_seed.done());
+        EXPECT_EQ(score_seed.next_cursor(), expected_score_cursor);
+        EXPECT_EQ(score_seed.entries().size(), std::size_t{1});
         if (score_seed.entries().size() == 1) {
-            RUVIA_CHECK_EQ(score_seed.entries()[0].value(), std::string_view(member_name));
-            RUVIA_CHECK_EQ(score_seed.entries()[0].score(), 1.5);
+            EXPECT_EQ(score_seed.entries()[0].value(), std::string_view(member_name));
+            EXPECT_EQ(score_seed.entries()[0].score(), 1.5);
         }
     });
     peer.join();
 }
 
-RUVIA_TEST(redis_string_array_replies_reject_nil_elements) {
+TEST(Ruvia, redis_string_array_replies_reject_nil_elements) {
     // LRANGE positions and set members are never nil; dropping one would
     // silently shorten or shift the result.
     scripted_redis_peer peer({"*3\r\n$1\r\na\r\n$-1\r\n$1\r\nc\r\n", "*1\r\n$-1\r\n",
@@ -824,19 +825,19 @@ RUVIA_TEST(redis_string_array_replies_reject_nil_elements) {
             } catch (const ruvia::redis_error& error) {
                 rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
             }
-            RUVIA_CHECK(rejected);
+            EXPECT_TRUE(rejected);
         };
         co_await rejects_protocol(redis.lrange("list", 0, -1));
         co_await rejects_protocol(redis.smembers("set"));
         co_await rejects_protocol(redis.scan());
         // The complete reply was consumed, so the connection stays in step.
         const auto value = co_await redis.get("key");
-        RUVIA_CHECK(value && *value == "v");
+        EXPECT_TRUE(value && *value == "v");
     });
     peer.join();
 }
 
-RUVIA_TEST(redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_shapes) {
+TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_shapes) {
     std::string key(128, 'k');
     std::string payload(64 * 1024 + 1, 'v');
     key[17] = '\0';
@@ -890,59 +891,59 @@ RUVIA_TEST(redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_s
             } catch (const ruvia::redis_error& error) {
                 rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
             }
-            RUVIA_CHECK(rejected);
+            EXPECT_TRUE(rejected);
         };
         co_await rejects_protocol(redis.lrange(key, 0, -1));
         co_await rejects_protocol(redis.hscan(key));
         co_await rejects_protocol(redis.xread_group("group", "consumer", streams));
         const auto after_errors = co_await redis.get(key);
         co_await rejects_protocol(redis.get(key));
-        RUVIA_CHECK(!(co_await redis.get("missing")));
+        EXPECT_TRUE(!(co_await redis.get("missing")));
 
-        RUVIA_CHECK(scalar && *scalar == expected_payload);
-        RUVIA_CHECK_EQ(status, expected_payload);
-        RUVIA_CHECK(previous.applied() && previous.previous() && *previous.previous() == expected_payload);
-        RUVIA_CHECK_EQ(optional_values.size(), std::size_t{3});
+        EXPECT_TRUE(scalar && *scalar == expected_payload);
+        EXPECT_EQ(status, expected_payload);
+        EXPECT_TRUE(previous.applied() && previous.previous() && *previous.previous() == expected_payload);
+        EXPECT_EQ(optional_values.size(), std::size_t{3});
         if (optional_values.size() == 3) {
-            RUVIA_CHECK(optional_values[0] && *optional_values[0] == expected_payload);
-            RUVIA_CHECK(!optional_values[1]);
-            RUVIA_CHECK(optional_values[2] && optional_values[2]->empty());
+            EXPECT_TRUE(optional_values[0] && *optional_values[0] == expected_payload);
+            EXPECT_TRUE(!optional_values[1]);
+            EXPECT_TRUE(optional_values[2] && optional_values[2]->empty());
         }
-        RUVIA_CHECK_EQ(list.size(), std::size_t{2});
+        EXPECT_EQ(list.size(), std::size_t{2});
         if (list.size() == 2) {
-            RUVIA_CHECK(list[0] == expected_payload && list[1] == expected_key);
+            EXPECT_TRUE(list[0] == expected_payload && list[1] == expected_key);
         }
         const auto check_fields = [&](std::span<const ruvia::redis_key_value> values) {
-            RUVIA_CHECK_EQ(values.size(), std::size_t{1});
+            EXPECT_EQ(values.size(), std::size_t{1});
             if (values.size() == 1) {
-                RUVIA_CHECK(values[0].key() == expected_key && values[0].value() == expected_payload);
+                EXPECT_TRUE(values[0].key() == expected_key && values[0].value() == expected_payload);
             }
         };
         const auto check_scores = [&](std::span<const ruvia::redis_scored_value> values) {
-            RUVIA_CHECK_EQ(values.size(), std::size_t{1});
+            EXPECT_EQ(values.size(), std::size_t{1});
             if (values.size() == 1) {
-                RUVIA_CHECK(values[0].value() == expected_key && values[0].score() == 1.5);
+                EXPECT_TRUE(values[0].value() == expected_key && values[0].score() == 1.5);
             }
         };
         check_fields(hash);
         check_fields(hash_scan.entries());
         check_scores(sorted);
         check_scores(sorted_scan.entries());
-        RUVIA_CHECK(scanned.done() && hash_scan.done() && sorted_scan.done());
-        RUVIA_CHECK_EQ(scanned.values().size(), std::size_t{2});
+        EXPECT_TRUE(scanned.done() && hash_scan.done() && sorted_scan.done());
+        EXPECT_EQ(scanned.values().size(), std::size_t{2});
         if (scanned.values().size() == 2) {
-            RUVIA_CHECK(scanned.values()[0] == expected_key && scanned.values()[1] == expected_payload);
+            EXPECT_TRUE(scanned.values()[0] == expected_key && scanned.values()[1] == expected_payload);
         }
-        RUVIA_CHECK(grouped && grouped->streams().size() == 1);
+        EXPECT_TRUE(grouped && grouped->streams().size() == 1);
         if (grouped && grouped->streams().size() == 1) {
             const auto& result = grouped->streams()[0];
-            RUVIA_CHECK(result.stream() == expected_key && result.entries().size() == 1);
+            EXPECT_TRUE(result.stream() == expected_key && result.entries().size() == 1);
             if (result.entries().size() == 1) {
-                RUVIA_CHECK_EQ(result.entries()[0].id(), std::string_view("1-0"));
+                EXPECT_EQ(result.entries()[0].id(), std::string_view("1-0"));
                 check_fields(result.entries()[0].fields());
             }
         }
-        RUVIA_CHECK(after_errors && *after_errors == expected_payload);
+        EXPECT_TRUE(after_errors && *after_errors == expected_payload);
     });
     peer.join();
 }

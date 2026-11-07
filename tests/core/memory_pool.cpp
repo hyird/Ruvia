@@ -1,5 +1,7 @@
 #include "ruvia/core/memory/memory_pool.h"
 
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -22,7 +24,7 @@
 #include "ruvia/core/worker_runtime.h"
 
 #include "stl_allocation_fixture.h"
-#include "test_harness.h"
+#include "test_exceptions.h"
 
 namespace {
 class counting_resource final : public std::pmr::memory_resource {
@@ -96,7 +98,7 @@ struct alignas(4096) retained_process_value final {
 };
 }  // namespace
 
-RUVIA_TEST(worker_memory_returns_bulk_blocks_upstream) {
+TEST(Ruvia, worker_memory_returns_bulk_blocks_upstream) {
     for (const std::size_t bulk_bytes : {std::size_t{1} << 20, std::size_t{4} << 20}) {
         counting_resource upstream;
         // Without retention every freed bulk block goes straight back; a block
@@ -106,16 +108,16 @@ RUVIA_TEST(worker_memory_returns_bulk_blocks_upstream) {
         auto* const resource = worker_value.resource();
         const auto baseline = upstream.live_bytes_;
         auto* const block = resource->allocate(bulk_bytes);
-        RUVIA_CHECK(upstream.live_bytes_ - baseline >= bulk_bytes);
+        EXPECT_TRUE(upstream.live_bytes_ - baseline >= bulk_bytes);
         // A pooled bulk block would stay reserved, with spares, for the worker's
         // life; only the pool's own small bookkeeping may remain upstream.
-        RUVIA_CHECK(upstream.live_bytes_ - baseline < 2 * bulk_bytes);
+        EXPECT_TRUE(upstream.live_bytes_ - baseline < 2 * bulk_bytes);
         resource->deallocate(block, bulk_bytes);
-        RUVIA_CHECK(upstream.live_bytes_ - baseline < bulk_bytes / 16);
+        EXPECT_TRUE(upstream.live_bytes_ - baseline < bulk_bytes / 16);
     }
 }
 
-RUVIA_TEST(worker_memory_reuses_freed_large_blocks_by_exact_size_class) {
+TEST(Ruvia, worker_memory_reuses_freed_large_blocks_by_exact_size_class) {
     constexpr std::size_t first_bytes = 40000;
     // Rounds to the same 4 KiB class as first_bytes.
     constexpr std::size_t same_class_bytes = 38000;
@@ -128,27 +130,27 @@ RUVIA_TEST(worker_memory_reuses_freed_large_blocks_by_exact_size_class) {
         resource->deallocate(first, first_bytes);
         const auto allocations_after_free = upstream.allocations_;
         const auto live_after_free = upstream.live_bytes_;
-        RUVIA_CHECK(live_after_free >= first_bytes);
+        EXPECT_TRUE(live_after_free >= first_bytes);
 
         auto* const second = static_cast<std::byte*>(resource->allocate(same_class_bytes));
-        RUVIA_CHECK(second == first);
+        EXPECT_TRUE(second == first);
         std::fill_n(second, same_class_bytes, std::byte{0x22});
-        RUVIA_CHECK_EQ(upstream.allocations_, allocations_after_free);
-        RUVIA_CHECK_EQ(upstream.live_bytes_, live_after_free);
+        EXPECT_EQ(upstream.allocations_, allocations_after_free);
+        EXPECT_EQ(upstream.live_bytes_, live_after_free);
         resource->deallocate(second, same_class_bytes);
 
         // A different class misses the cache and takes a fresh block.
         auto* const other = static_cast<std::byte*>(resource->allocate(first_bytes * 2));
-        RUVIA_CHECK(other != first);
-        RUVIA_CHECK(upstream.live_bytes_ > live_after_free);
+        EXPECT_TRUE(other != first);
+        EXPECT_TRUE(upstream.live_bytes_ > live_after_free);
         resource->deallocate(other, first_bytes * 2);
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, upstream.returns_);
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
-RUVIA_TEST(worker_memory_releases_large_blocks_freed_beyond_the_retention_budget) {
+TEST(Ruvia, worker_memory_releases_large_blocks_freed_beyond_the_retention_budget) {
     constexpr std::size_t block_bytes = 30000;
     constexpr std::size_t class_bytes = 32 * 1024;
     counting_resource upstream;
@@ -164,22 +166,22 @@ RUVIA_TEST(worker_memory_releases_large_blocks_freed_beyond_the_retention_budget
             resource->deallocate(block, block_bytes);
         }
         // Two blocks fit the budget; the third goes back at once.
-        RUVIA_CHECK_EQ(upstream.live_bytes_, live_with_blocks - class_bytes);
+        EXPECT_EQ(upstream.live_bytes_, live_with_blocks - class_bytes);
         const auto allocations_before_reuse = upstream.allocations_;
         for (auto*& block : blocks) {
             block = resource->allocate(block_bytes);
         }
-        RUVIA_CHECK_EQ(upstream.allocations_, allocations_before_reuse + 1);
+        EXPECT_EQ(upstream.allocations_, allocations_before_reuse + 1);
         for (auto* block : blocks) {
             resource->deallocate(block, block_bytes);
         }
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, upstream.returns_);
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
-RUVIA_TEST(worker_memory_with_zero_retention_caches_nothing) {
+TEST(Ruvia, worker_memory_with_zero_retention_caches_nothing) {
     constexpr std::size_t block_bytes = 30000;
     counting_resource upstream;
     ruvia::worker_memory worker_value(upstream, {.retained_block_bytes_ = 0});
@@ -189,12 +191,12 @@ RUVIA_TEST(worker_memory_with_zero_retention_caches_nothing) {
     const auto live_after_free = upstream.live_bytes_;
     const auto allocations_after_free = upstream.allocations_;
     auto* const block = resource->allocate(block_bytes);
-    RUVIA_CHECK_EQ(upstream.allocations_, allocations_after_free + 1);
+    EXPECT_EQ(upstream.allocations_, allocations_after_free + 1);
     resource->deallocate(block, block_bytes);
-    RUVIA_CHECK_EQ(upstream.live_bytes_, live_after_free);
+    EXPECT_EQ(upstream.live_bytes_, live_after_free);
 }
 
-RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
+TEST(Ruvia, worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
     constexpr std::size_t block_bytes = 30000;
     constexpr std::size_t class_bytes = 32 * 1024;
     counting_resource upstream;
@@ -212,7 +214,7 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
         {std::size_t{20000}, std::size_t{65552}, std::size_t{1} << 20, std::size_t{3} << 20}) {
         auto* const bytes = static_cast<std::byte*>(default_memory.resource()->allocate(bytes_value));
         std::fill_n(bytes, bytes_value, std::byte{0x55});
-        RUVIA_CHECK(bytes[bytes_value - 1] == std::byte{0x55});
+        EXPECT_TRUE(bytes[bytes_value - 1] == std::byte{0x55});
         default_memory.resource()->deallocate(bytes, bytes_value);
     }
 
@@ -226,12 +228,12 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
     } catch (const std::logic_error&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { worker_value.trim(ruvia::worker_handle{}); }));
-    RUVIA_CHECK_EQ(upstream.live_bytes_, live_cached);
+    EXPECT_TRUE(rejected);
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { worker_value.trim(ruvia::worker_handle{}); }));
+    EXPECT_EQ(upstream.live_bytes_, live_cached);
 
     bool trimmed = false;
-    RUVIA_CHECK(owner
+    EXPECT_TRUE(owner
             .post([&] {
                 worker_value.trim(owner);
                 default_memory.trim(owner);
@@ -239,13 +241,13 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
             })
             .accepted());
     runtime.join();
-    RUVIA_CHECK(trimmed);
-    RUVIA_CHECK_EQ(upstream.live_bytes_, live_cached - class_bytes);
-    RUVIA_CHECK(live_block[0] == std::byte{0x44} && live_block[block_bytes - 1] == std::byte{0x44});
+    EXPECT_TRUE(trimmed);
+    EXPECT_EQ(upstream.live_bytes_, live_cached - class_bytes);
+    EXPECT_TRUE(live_block[0] == std::byte{0x44} && live_block[block_bytes - 1] == std::byte{0x44});
     resource->deallocate(live_block, block_bytes);
 }
 
-RUVIA_TEST(worker_memory_trim_allows_reentrant_upstream_release) {
+TEST(Ruvia, worker_memory_trim_allows_reentrant_upstream_release) {
     class reentrant_resource final : public std::pmr::memory_resource {
     public:
         ruvia::worker_memory* memory_{};
@@ -290,7 +292,7 @@ RUVIA_TEST(worker_memory_trim_allows_reentrant_upstream_release) {
     bool completed = false;
     bool budget_preserved = false;
     bool all_returned = false;
-    RUVIA_CHECK(owner.post([&] {
+    EXPECT_TRUE(owner.post([&] {
                          constexpr std::size_t bytes = 30000;
                          auto* resource = memory.resource();
                          void* block = resource->allocate(bytes);
@@ -311,13 +313,13 @@ RUVIA_TEST(worker_memory_trim_allows_reentrant_upstream_release) {
                      })
             .accepted());
     runtime.join();
-    RUVIA_CHECK(completed);
-    RUVIA_CHECK(!upstream.duplicated_);
-    RUVIA_CHECK(budget_preserved);
-    RUVIA_CHECK(all_returned);
+    EXPECT_TRUE(completed);
+    EXPECT_TRUE(!upstream.duplicated_);
+    EXPECT_TRUE(budget_preserved);
+    EXPECT_TRUE(all_returned);
 }
 
-RUVIA_TEST(worker_memory_trim_rejects_a_worker_other_than_its_bound_owner) {
+TEST(Ruvia, worker_memory_trim_rejects_a_worker_other_than_its_bound_owner) {
     ruvia::worker_memory memory;
     ruvia::worker_runtime first;
     ruvia::worker_runtime second;
@@ -326,14 +328,14 @@ RUVIA_TEST(worker_memory_trim_rejects_a_worker_other_than_its_bound_owner) {
     bool bound = false;
     bool rejected = false;
     bool rebound = false;
-    RUVIA_CHECK(first_owner.post([&] {
+    EXPECT_TRUE(first_owner.post([&] {
                                memory.trim(first_owner);
                                bound = true;
                            })
             .accepted());
     first.join();
-    RUVIA_CHECK(bound);
-    RUVIA_CHECK(second_owner
+    EXPECT_TRUE(bound);
+    EXPECT_TRUE(second_owner
             .post([&] {
                 // Running on a worker is not enough: it must be the bound one.
                 try {
@@ -349,11 +351,11 @@ RUVIA_TEST(worker_memory_trim_rejects_a_worker_other_than_its_bound_owner) {
             })
             .accepted());
     second.join();
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK(rebound);
+    EXPECT_TRUE(rejected);
+    EXPECT_TRUE(rebound);
 }
 
-RUVIA_TEST(worker_memory_passes_over_aligned_large_blocks_through) {
+TEST(Ruvia, worker_memory_passes_over_aligned_large_blocks_through) {
     constexpr std::size_t block_bytes = 30000;
     constexpr std::size_t alignment = 128;
     counting_resource upstream;
@@ -367,23 +369,23 @@ RUVIA_TEST(worker_memory_passes_over_aligned_large_blocks_through) {
             const auto live_before = upstream.live_bytes_;
             const auto allocations_before = upstream.allocations_;
             auto* const block = resource->allocate(block_bytes, alignment);
-            RUVIA_CHECK(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
+            EXPECT_TRUE(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
             // Not served from the cache: each allocation reaches upstream
             // (the pool may add its own header), and each free returns it.
-            RUVIA_CHECK(upstream.allocations_ > allocations_before);
-            RUVIA_CHECK(upstream.live_bytes_ >= live_before + block_bytes);
+            EXPECT_TRUE(upstream.allocations_ > allocations_before);
+            EXPECT_TRUE(upstream.live_bytes_ >= live_before + block_bytes);
             resource->deallocate(block, block_bytes, alignment);
-            RUVIA_CHECK_EQ(upstream.live_bytes_, live_before);
+            EXPECT_EQ(upstream.live_bytes_, live_before);
         }
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
 // Small pooled blocks honor every requested alignment, including the ones
 // libstdc++'s pool resources serve from a block size that is not a multiple
 // of the alignment (allocate(17, 16) from 24-byte blocks).
-RUVIA_TEST(worker_memory_and_process_resource_align_small_blocks) {
+TEST(Ruvia, worker_memory_and_process_resource_align_small_blocks) {
     counting_resource upstream;
     {
         ruvia::worker_memory worker_value(upstream);
@@ -393,7 +395,7 @@ RUVIA_TEST(worker_memory_and_process_resource_align_small_blocks) {
                 for (std::size_t bytes_value = 1; bytes_value <= 300; ++bytes_value) {
                     for (unsigned repeat = 0; repeat < 3; ++repeat) {
                         auto* const block = resource->allocate(bytes_value, alignment);
-                        RUVIA_CHECK(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
+                        EXPECT_TRUE(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
                         live.emplace_back(block, std::pair{bytes_value, alignment});
                     }
                 }
@@ -403,10 +405,10 @@ RUVIA_TEST(worker_memory_and_process_resource_align_small_blocks) {
             }
         }
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
 }
 
-RUVIA_TEST(process_resource_storage_survives_its_allocating_thread) {
+TEST(Ruvia, process_resource_storage_survives_its_allocating_thread) {
     constexpr std::size_t text_bytes = 2 * 1024 * 1024;
     std::optional<std::pmr::string> text;
     std::optional<std::pmr::vector<retained_process_value>> values;
@@ -420,13 +422,13 @@ RUVIA_TEST(process_resource_storage_survives_its_allocating_thread) {
 
     for (std::size_t index = 0; index < values->size(); ++index) {
         const auto& value = (*values)[index];
-        RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(&value) % alignof(retained_process_value), std::uintptr_t{0});
-        RUVIA_CHECK(std::ranges::all_of(value.bytes_, [index](std::byte byte) {
+        EXPECT_EQ(reinterpret_cast<std::uintptr_t>(&value) % alignof(retained_process_value), std::uintptr_t{0});
+        EXPECT_TRUE(std::ranges::all_of(value.bytes_, [index](std::byte byte) {
             return byte == static_cast<std::byte>(index + 1);
         }));
     }
-    RUVIA_CHECK_EQ(text->size(), text_bytes);
-    RUVIA_CHECK_EQ(text->find_first_not_of('s'), std::pmr::string::npos);
+    EXPECT_EQ(text->size(), text_bytes);
+    EXPECT_EQ(text->find_first_not_of('s'), std::pmr::string::npos);
 
     bool preserved_after_growth = false;
     std::thread([&] {
@@ -444,58 +446,58 @@ RUVIA_TEST(process_resource_storage_survives_its_allocating_thread) {
         text.reset();
         values.reset();
     }).join();
-    RUVIA_CHECK(preserved_after_growth);
+    EXPECT_TRUE(preserved_after_growth);
 }
 
-RUVIA_TEST(worker_memory_validates_retained_block_bytes) {
+TEST(Ruvia, worker_memory_validates_retained_block_bytes) {
     counting_resource upstream;
     const ruvia::memory_pool_config config{.retained_block_bytes_ = ruvia::max_retained_block_bytes + 1};
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { ruvia::validate_memory_pool_config(config); }));
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { ruvia::validate_memory_pool_config(config); }));
     bool rejected = false;
     try {
         ruvia::worker_memory worker_value(upstream, config);
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(upstream.allocations_, std::size_t{0});
+    EXPECT_TRUE(rejected);
+    EXPECT_EQ(upstream.allocations_, std::size_t{0});
     ruvia::validate_memory_pool_config({.retained_block_bytes_ = 0});
     ruvia::validate_memory_pool_config({.retained_block_bytes_ = ruvia::max_retained_block_bytes});
 }
 
-RUVIA_TEST(worker_memory_uses_bound_upstream_and_reclaims_request_arenas) {
+TEST(Ruvia, worker_memory_uses_bound_upstream_and_reclaims_request_arenas) {
     counting_resource upstream;
     auto* const previous_default = std::pmr::get_default_resource();
     {
         ruvia::worker_memory worker_value(upstream, {.request_initial_buffer_bytes_ = 128});
-        RUVIA_CHECK_EQ(worker_value.request_initial_buffer_bytes(), std::size_t{128});
+        EXPECT_EQ(worker_value.request_initial_buffer_bytes(), std::size_t{128});
         std::optional<std::size_t> cached;
         for (unsigned iteration = 0; iteration < 32; ++iteration) {
             {
                 ruvia::request_memory request(worker_value);
                 auto* bytes_value = static_cast<std::byte*>(request.resource()->allocate(65536));
                 std::fill_n(bytes_value, 65536, std::byte{0x5a});
-                RUVIA_CHECK(bytes_value[65535] == std::byte{0x5a});
+                EXPECT_TRUE(bytes_value[65535] == std::byte{0x5a});
             }
             // Live upstream blocks can include pool caches, but finished
             // request arenas must not accumulate new live blocks each cycle.
             if (cached) {
-                RUVIA_CHECK_EQ(upstream.live_, *cached);
+                EXPECT_EQ(upstream.live_, *cached);
             } else {
                 cached = upstream.live_;
             }
         }
-        RUVIA_CHECK(upstream.allocations_ > 0);
-        RUVIA_CHECK(std::pmr::get_default_resource() == previous_default);
+        EXPECT_TRUE(upstream.allocations_ > 0);
+        EXPECT_TRUE(std::pmr::get_default_resource() == previous_default);
     }
-    RUVIA_CHECK_EQ(upstream.live_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK(upstream.matched_returns_);
-    RUVIA_CHECK(std::pmr::get_default_resource() == previous_default);
+    EXPECT_EQ(upstream.live_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, upstream.returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_TRUE(upstream.matched_returns_);
+    EXPECT_TRUE(std::pmr::get_default_resource() == previous_default);
 }
 
-RUVIA_TEST(worker_memory_rejects_zero_request_initial_buffer) {
+TEST(Ruvia, worker_memory_rejects_zero_request_initial_buffer) {
     counting_resource upstream;
     const ruvia::memory_pool_config config{.request_initial_buffer_bytes_ = 0};
     for (const bool construct : {false, true}) {
@@ -509,28 +511,28 @@ RUVIA_TEST(worker_memory_rejects_zero_request_initial_buffer) {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
     }
-    RUVIA_CHECK_EQ(upstream.live_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, std::size_t{0});
+    EXPECT_EQ(upstream.live_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, std::size_t{0});
     ruvia::validate_memory_pool_config({.request_initial_buffer_bytes_ = 1});
 }
 
-RUVIA_TEST(worker_memory_resource_identity_preserves_live_arena_and_pool_storage) {
+TEST(Ruvia, worker_memory_resource_identity_preserves_live_arena_and_pool_storage) {
     counting_resource upstream;
     {
         ruvia::worker_memory worker_value(upstream, {.request_initial_buffer_bytes_ = 128});
         const auto& borrowed_worker = worker_value;
         auto allocator = worker_value.allocator<std::byte>();
-        RUVIA_CHECK(allocator.resource() == worker_value.resource());
-        RUVIA_CHECK(borrowed_worker.resource() == worker_value.resource());
-        RUVIA_CHECK(worker_value.resource() != &upstream);
+        EXPECT_TRUE(allocator.resource() == worker_value.resource());
+        EXPECT_TRUE(borrowed_worker.resource() == worker_value.resource());
+        EXPECT_TRUE(worker_value.resource() != &upstream);
         const auto allocations_before_request = upstream.allocations_;
         std::array<std::byte, 256> initial;
         ruvia::request_memory request(worker_value, initial);
         auto* handshake = static_cast<std::byte*>(request.resource()->allocate(128));
         std::fill_n(handshake, 128, std::byte{0x5a});
-        RUVIA_CHECK_EQ(upstream.allocations_, allocations_before_request);
+        EXPECT_EQ(upstream.allocations_, allocations_before_request);
         std::pmr::string retained(4096, 'r', worker_value.resource());
         const auto* retained_address = retained.data();
         std::optional<std::size_t> warmed_bytes;
@@ -538,50 +540,50 @@ RUVIA_TEST(worker_memory_resource_identity_preserves_live_arena_and_pool_storage
             auto* scratch = allocator.allocate(1024);
             std::fill_n(scratch, 1024, std::byte{0xaa});
             allocator.deallocate(scratch, 1024);
-            RUVIA_CHECK(handshake[0] == std::byte{0x5a} && handshake[127] == std::byte{0x5a});
-            RUVIA_CHECK(retained.data() == retained_address && retained.size() == 4096);
-            RUVIA_CHECK(retained.front() == 'r' && retained.back() == 'r');
+            EXPECT_TRUE(handshake[0] == std::byte{0x5a} && handshake[127] == std::byte{0x5a});
+            EXPECT_TRUE(retained.data() == retained_address && retained.size() == 4096);
+            EXPECT_TRUE(retained.front() == 'r' && retained.back() == 'r');
             if (warmed_bytes) {
-                RUVIA_CHECK_EQ(upstream.live_bytes_, *warmed_bytes);
+                EXPECT_EQ(upstream.live_bytes_, *warmed_bytes);
             } else {
                 warmed_bytes = upstream.live_bytes_;
             }
         }
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, upstream.returns_);
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
-RUVIA_TEST(const_request_memory_resource_allocates_with_initial_buffer_and_returns_overflow) {
+TEST(Ruvia, const_request_memory_resource_allocates_with_initial_buffer_and_returns_overflow) {
     counting_resource upstream;
     {
         ruvia::worker_memory worker(upstream);
         std::array<std::byte, 256> initial_value{};
         const ruvia::request_memory request(worker, initial_value);
         auto* const resource = request.resource();
-        RUVIA_CHECK(resource == request.resource());
-        RUVIA_CHECK(request.upstream_resource() == worker.resource());
+        EXPECT_TRUE(resource == request.resource());
+        EXPECT_TRUE(request.upstream_resource() == worker.resource());
 
         const auto allocations_before_initial = upstream.allocations_;
         auto* initial_bytes = static_cast<std::byte*>(resource->allocate(128));
         std::fill_n(initial_bytes, 128, std::byte{0x5a});
-        RUVIA_CHECK(initial_bytes[127] == std::byte{0x5a});
+        EXPECT_TRUE(initial_bytes[127] == std::byte{0x5a});
         resource->deallocate(initial_bytes, 128);
-        RUVIA_CHECK_EQ(upstream.allocations_, allocations_before_initial);
+        EXPECT_EQ(upstream.allocations_, allocations_before_initial);
 
         auto* overflow_bytes = static_cast<std::byte*>(resource->allocate(4096));
         std::fill_n(overflow_bytes, 4096, std::byte{0xa5});
-        RUVIA_CHECK(overflow_bytes[4095] == std::byte{0xa5});
+        EXPECT_TRUE(overflow_bytes[4095] == std::byte{0xa5});
         resource->deallocate(overflow_bytes, 4096);
-        RUVIA_CHECK(upstream.allocations_ > allocations_before_initial);
+        EXPECT_TRUE(upstream.allocations_ > allocations_before_initial);
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, upstream.returns_);
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
-RUVIA_TEST(worker_memory_default_owner_ignores_global_default_resource) {
+TEST(Ruvia, worker_memory_default_owner_ignores_global_default_resource) {
     counting_resource global_default;
     global_default.fail_at_ = 1;
     auto* previous = std::pmr::get_default_resource();
@@ -590,24 +592,24 @@ RUVIA_TEST(worker_memory_default_owner_ignores_global_default_resource) {
         const ruvia::worker_memory worker;
         auto* bytes_value = static_cast<std::byte*>(worker.resource()->allocate(65536));
         std::fill_n(bytes_value, 65536, std::byte{0x42});
-        RUVIA_CHECK(bytes_value[65535] == std::byte{0x42});
+        EXPECT_TRUE(bytes_value[65535] == std::byte{0x42});
         worker.resource()->deallocate(bytes_value, 65536);
-        RUVIA_CHECK_EQ(global_default.attempts_, std::size_t{0});
-        RUVIA_CHECK(std::pmr::get_default_resource() == &global_default);
+        EXPECT_EQ(global_default.attempts_, std::size_t{0});
+        EXPECT_TRUE(std::pmr::get_default_resource() == &global_default);
     }
-    RUVIA_CHECK(std::pmr::get_default_resource() == previous);
+    EXPECT_TRUE(std::pmr::get_default_resource() == previous);
 }
 
-RUVIA_TEST(worker_memory_construction_failure_reclaims_storage_and_allows_retry) {
+TEST(Ruvia, worker_memory_construction_failure_reclaims_storage_and_allows_retry) {
     counting_resource baseline;
     {
         const ruvia::worker_memory worker(baseline);
     }
     const auto construction_attempts = baseline.attempts_;
-    RUVIA_CHECK(construction_attempts != 0);
+    EXPECT_TRUE(construction_attempts != 0);
     // worker_memory construction builds pmr containers whose noexcept
     // constructors allocate debug iterator metadata under MSVC Debug STL.
-    if (!ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
         return;
     }
 
@@ -620,28 +622,28 @@ RUVIA_TEST(worker_memory_construction_failure_reclaims_storage_and_allows_retry)
         } catch (const std::bad_alloc&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
-        RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-        RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-        RUVIA_CHECK(upstream.matched_returns_);
+        EXPECT_TRUE(rejected);
+        EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+        EXPECT_EQ(upstream.allocations_, upstream.returns_);
+        EXPECT_TRUE(upstream.matched_returns_);
 
         upstream.fail_at_.reset();
         {
             const ruvia::worker_memory worker(upstream);
             auto* const storage = static_cast<std::byte*>(worker.resource()->allocate(64));
             std::fill_n(storage, 64, std::byte{0x5a});
-            RUVIA_CHECK(std::ranges::all_of(std::span(storage, 64), [](std::byte value) {
+            EXPECT_TRUE(std::ranges::all_of(std::span(storage, 64), [](std::byte value) {
                 return value == std::byte{0x5a};
             }));
             worker.resource()->deallocate(storage, 64);
         }
-        RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-        RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-        RUVIA_CHECK(upstream.matched_returns_);
+        EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+        EXPECT_EQ(upstream.allocations_, upstream.returns_);
+        EXPECT_TRUE(upstream.matched_returns_);
     }
 }
 
-RUVIA_TEST(worker_memory_pool_data_growth_failure_preserves_existing_storage) {
+TEST(Ruvia, worker_memory_pool_data_growth_failure_preserves_existing_storage) {
     constexpr std::size_t allocation_bytes = 1024;
     constexpr std::size_t max_growth_attempts = 4096;
     counting_resource upstream;
@@ -667,7 +669,7 @@ RUVIA_TEST(worker_memory_pool_data_growth_failure_preserves_existing_storage) {
             resource->deallocate(block, allocation_bytes);
         }
         transient_blocks.clear();
-        RUVIA_CHECK(warmed_pool_growth);
+        EXPECT_TRUE(warmed_pool_growth);
 
         const auto baseline_allocations = upstream.allocations_;
         const auto baseline_returns = upstream.returns_;
@@ -690,14 +692,14 @@ RUVIA_TEST(worker_memory_pool_data_growth_failure_preserves_existing_storage) {
         }
         transient_blocks.clear();
 
-        RUVIA_CHECK(growth_failed);
-        RUVIA_CHECK(retained[0] == std::byte{0x5a} &&
+        EXPECT_TRUE(growth_failed);
+        EXPECT_TRUE(retained[0] == std::byte{0x5a} &&
                     retained[allocation_bytes - 1] == std::byte{0x5a});
-        RUVIA_CHECK_EQ(upstream.allocations_, baseline_allocations);
-        RUVIA_CHECK_EQ(upstream.returns_, baseline_returns);
-        RUVIA_CHECK_EQ(upstream.live_, baseline_live);
-        RUVIA_CHECK_EQ(upstream.live_bytes_, baseline_live_bytes);
-        RUVIA_CHECK(upstream.matched_returns_);
+        EXPECT_EQ(upstream.allocations_, baseline_allocations);
+        EXPECT_EQ(upstream.returns_, baseline_returns);
+        EXPECT_EQ(upstream.live_, baseline_live);
+        EXPECT_EQ(upstream.live_bytes_, baseline_live_bytes);
+        EXPECT_TRUE(upstream.matched_returns_);
 
         const auto attempts_before_retry = upstream.attempts_;
         std::byte* grown_block = nullptr;
@@ -710,28 +712,28 @@ RUVIA_TEST(worker_memory_pool_data_growth_failure_preserves_existing_storage) {
                 break;
             }
         }
-        RUVIA_CHECK(grown_block != nullptr);
-        RUVIA_CHECK(upstream.attempts_ > attempts_before_retry);
-        RUVIA_CHECK(upstream.allocations_ > baseline_allocations);
+        EXPECT_TRUE(grown_block != nullptr);
+        EXPECT_TRUE(upstream.attempts_ > attempts_before_retry);
+        EXPECT_TRUE(upstream.allocations_ > baseline_allocations);
         if (grown_block != nullptr) {
             std::fill_n(grown_block, allocation_bytes, std::byte{0xa5});
-            RUVIA_CHECK(grown_block[0] == std::byte{0xa5} &&
+            EXPECT_TRUE(grown_block[0] == std::byte{0xa5} &&
                         grown_block[allocation_bytes - 1] == std::byte{0xa5});
         }
-        RUVIA_CHECK(retained[0] == std::byte{0x5a} &&
+        EXPECT_TRUE(retained[0] == std::byte{0x5a} &&
                     retained[allocation_bytes - 1] == std::byte{0x5a});
         for (auto* block : transient_blocks) {
             resource->deallocate(block, allocation_bytes);
         }
         resource->deallocate(retained, allocation_bytes);
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.live_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_EQ(upstream.live_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, upstream.returns_);
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
-RUVIA_TEST(request_memory_fork_survives_parent_and_keeps_its_own_allocations) {
+TEST(Ruvia, request_memory_fork_survives_parent_and_keeps_its_own_allocations) {
     counting_resource upstream;
     {
         ruvia::worker_memory worker(upstream);
@@ -740,22 +742,22 @@ RUVIA_TEST(request_memory_fork_survives_parent_and_keeps_its_own_allocations) {
             ruvia::request_memory parent(worker, initial);
             return parent.fork();
         }();
-        RUVIA_CHECK(child_value.upstream_resource() == worker.resource());
+        EXPECT_TRUE(child_value.upstream_resource() == worker.resource());
         auto* retained = static_cast<std::byte*>(child_value.resource()->allocate(8192));
         std::fill_n(retained, 8192, std::byte{0x3c});
         for (unsigned iteration = 0; iteration < 32; ++iteration) {
             ruvia::request_memory independent(worker);
             auto* scratch = static_cast<std::byte*>(independent.resource()->allocate(8192));
             std::fill_n(scratch, 8192, std::byte{0xaa});
-            RUVIA_CHECK(retained[0] == std::byte{0x3c} && retained[8191] == std::byte{0x3c});
+            EXPECT_TRUE(retained[0] == std::byte{0x3c} && retained[8191] == std::byte{0x3c});
         }
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_EQ(upstream.allocations_, upstream.returns_);
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
-RUVIA_TEST(request_memory_fork_uses_the_configured_initial_buffer_bytes) {
+TEST(Ruvia, request_memory_fork_uses_the_configured_initial_buffer_bytes) {
     constexpr std::size_t initial_bytes = 64 * 1024;
     counting_resource upstream;
     {
@@ -776,22 +778,22 @@ RUVIA_TEST(request_memory_fork_uses_the_configured_initial_buffer_bytes) {
         auto* second = static_cast<std::byte*>(child_value.resource()->allocate(20000));
         std::fill_n(first, 20000, std::byte{0x1a});
         std::fill_n(second, 20000, std::byte{0x2b});
-        RUVIA_CHECK(upstream.live_bytes_ - live_before >= initial_bytes);
-        RUVIA_CHECK(upstream.live_bytes_ - live_before < 2 * initial_bytes);
-        RUVIA_CHECK(first[19999] == std::byte{0x1a} && second[0] == std::byte{0x2b});
+        EXPECT_TRUE(upstream.live_bytes_ - live_before >= initial_bytes);
+        EXPECT_TRUE(upstream.live_bytes_ - live_before < 2 * initial_bytes);
+        EXPECT_TRUE(first[19999] == std::byte{0x1a} && second[0] == std::byte{0x2b});
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
-RUVIA_TEST(memory_pools_honor_alignment_for_zero_byte_allocations) {
+TEST(Ruvia, memory_pools_honor_alignment_for_zero_byte_allocations) {
     constexpr std::size_t alignment = alignof(std::max_align_t);
     for (const std::size_t process_alignment : {alignment, std::size_t{128}, std::size_t{4096}, std::size_t{65536}}) {
         std::array<void*, 8> process_blocks{};
         for (auto& block : process_blocks) {
             block = ruvia::process_resource()->allocate(0, process_alignment);
-            RUVIA_CHECK(block != nullptr);
-            RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(block) % process_alignment, std::uintptr_t{0});
+            EXPECT_TRUE(block != nullptr);
+            EXPECT_EQ(reinterpret_cast<std::uintptr_t>(block) % process_alignment, std::uintptr_t{0});
         }
         for (auto* block : process_blocks) {
             ruvia::process_resource()->deallocate(block, 0, process_alignment);
@@ -804,13 +806,13 @@ RUVIA_TEST(memory_pools_honor_alignment_for_zero_byte_allocations) {
         std::array<void*, 8> worker_blocks{};
         for (auto& block : worker_blocks) {
             block = worker.resource()->allocate(0, alignment);
-            RUVIA_CHECK(block != nullptr);
-            RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(block) % alignment, std::uintptr_t{0});
+            EXPECT_TRUE(block != nullptr);
+            EXPECT_EQ(reinterpret_cast<std::uintptr_t>(block) % alignment, std::uintptr_t{0});
         }
         for (auto* block : worker_blocks) {
             worker.resource()->deallocate(block, 0, alignment);
         }
     }
-    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
-    RUVIA_CHECK(upstream.matched_returns_);
+    EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+    EXPECT_TRUE(upstream.matched_returns_);
 }

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -35,7 +37,6 @@
 
 #include "http_server_fixture.h"
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 // Application-wide response policy (CORS, access log, session commit) on the
@@ -302,19 +303,19 @@ class response_policy_routes final {
 
 }  // namespace
 
-RUVIA_TEST(http1_response_stream_head_carries_the_application_cors_policy) {
+TEST(Ruvia, http1_response_stream_head_carries_the_application_cors_policy) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto response = exchange(server.endpoint(),
         "GET /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: https://client.test\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(response.has_value());
+    EXPECT_TRUE(response.has_value());
     const auto output = response.value_or("");
-    RUVIA_CHECK(output.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
-    RUVIA_CHECK(output.find("chunk") != std::string::npos);
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
+    EXPECT_TRUE(output.find("chunk") != std::string::npos);
 }
-RUVIA_TEST(http1_cors_reflection_preserves_many_requested_names_in_one_field) {
+TEST(Ruvia, http1_cors_reflection_preserves_many_requested_names_in_one_field) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     std::string names;
@@ -331,18 +332,18 @@ RUVIA_TEST(http1_cors_reflection_preserves_many_requested_names_in_one_field) {
             names +
             "\r\nAccess-Control-Request-Headers: x-final\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(response.has_value());
+    EXPECT_TRUE(response.has_value());
     const auto output = response.value_or("");
-    RUVIA_CHECK(output.starts_with("HTTP/1.1 204 "));
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 204 "));
     const auto head = lower_head(output);
     const auto expected = "\r\naccess-control-allow-headers: " + names + ", x-final\r\n";
-    RUVIA_CHECK(head.find(expected) != std::string::npos);
+    EXPECT_TRUE(head.find(expected) != std::string::npos);
     const auto first = head.find("\r\naccess-control-allow-headers:");
-    RUVIA_CHECK(first != std::string::npos &&
+    EXPECT_TRUE(first != std::string::npos &&
                 head.find("\r\naccess-control-allow-headers:", first + 1) == std::string::npos);
 }
 
-RUVIA_TEST(http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
+TEST(Ruvia, http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const auto& [origin, method, names] : {
@@ -352,41 +353,41 @@ RUVIA_TEST(http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
         std::string request = "OPTIONS /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: ";
         request.append(origin).append("\r\nAccess-Control-Request-Method: ").append(method).append("\r\nAccess-Control-Request-Headers: ").append(names).append("\r\nConnection: close\r\n\r\n");
         const auto response = ::exchange(server.endpoint(), request);
-        RUVIA_CHECK(response.has_value());
+        EXPECT_TRUE(response.has_value());
         const auto output = response.value_or("");
-        RUVIA_CHECK(output.starts_with("HTTP/1.1 204 "));
+        EXPECT_TRUE(output.starts_with("HTTP/1.1 204 "));
         const auto head = lower_head(output);
-        RUVIA_CHECK(head.find("\r\naccess-control-allow-origin:") == std::string::npos);
-        RUVIA_CHECK(head.find("\r\naccess-control-allow-methods:") == std::string::npos);
-        RUVIA_CHECK(head.find("\r\naccess-control-allow-headers:") == std::string::npos);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-origin:") == std::string::npos);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-methods:") == std::string::npos);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-headers:") == std::string::npos);
     }
     server.finish();
 }
 
 // Trailers are optional metadata: an HTTP/1.0 close-delimited stream drops the
 // Trailer field and the trailer section instead of failing with 500.
-RUVIA_TEST(http1_response_stream_discards_trailers_it_cannot_frame) {
+TEST(Ruvia, http1_response_stream_discards_trailers_it_cannot_frame) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto http10 = exchange(server.endpoint(), "GET /policy-trailer-stream HTTP/1.0\r\nHost: localhost\r\n\r\n");
     const auto http11 = exchange(server.endpoint(),
         "GET /policy-trailer-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(http10.has_value());
+    EXPECT_TRUE(http10.has_value());
     const auto http10_output = http10.value_or("");
-    RUVIA_CHECK(http10_output.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(lower_head(http10_output).find("\r\ntrailer:") == std::string::npos);
-    RUVIA_CHECK(http10_output.ends_with("\r\n\r\nbody"));
-    RUVIA_CHECK(http11.has_value());
+    EXPECT_TRUE(http10_output.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(lower_head(http10_output).find("\r\ntrailer:") == std::string::npos);
+    EXPECT_TRUE(http10_output.ends_with("\r\n\r\nbody"));
+    EXPECT_TRUE(http11.has_value());
     const auto http11_output = http11.value_or("");
-    RUVIA_CHECK(lower_head(http11_output).find("\r\ntrailer: x-complete") != std::string::npos);
-    RUVIA_CHECK(http11_output.ends_with("0\r\nX-Complete: yes\r\n\r\n"));
+    EXPECT_TRUE(lower_head(http11_output).find("\r\ntrailer: x-complete") != std::string::npos);
+    EXPECT_TRUE(http11_output.ends_with("0\r\nX-Complete: yes\r\n\r\n"));
 }
 
 // RFC 9110 9.3.2: HEAD on a response-stream GET route answers like GET
 // without content, and the connection stays framed for the next request. A
 // websocket GET route is an upgrade, not a representation, so HEAD stays 405.
-RUVIA_TEST(http1_head_falls_back_to_response_stream_get_routes) {
+TEST(Ruvia, http1_head_falls_back_to_response_stream_get_routes) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto pipelined = exchange(server.endpoint(),
@@ -397,26 +398,26 @@ RUVIA_TEST(http1_head_falls_back_to_response_stream_get_routes) {
         "HEAD /policy-websocket HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
 
-    RUVIA_CHECK(pipelined.has_value());
+    EXPECT_TRUE(pipelined.has_value());
     const auto output = pipelined.value_or("");
-    RUVIA_CHECK(output.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
-    RUVIA_CHECK(output.find("chunk") == std::string::npos);
-    RUVIA_CHECK(output.find("body") == std::string::npos);
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
+    EXPECT_TRUE(output.find("chunk") == std::string::npos);
+    EXPECT_TRUE(output.find("body") == std::string::npos);
     const auto second = output.find("HTTP/1.1 200 ", 1);
-    RUVIA_CHECK(second != std::string::npos);
+    EXPECT_TRUE(second != std::string::npos);
     const auto third = output.find("HTTP/1.1 200 ", second == std::string::npos ? output.size() : second + 1);
-    RUVIA_CHECK(third != std::string::npos);
-    RUVIA_CHECK(output.ends_with("\r\n\r\nplain"));
+    EXPECT_TRUE(third != std::string::npos);
+    EXPECT_TRUE(output.ends_with("\r\n\r\nplain"));
 
-    RUVIA_CHECK(websocket.has_value());
+    EXPECT_TRUE(websocket.has_value());
     const auto websocket_output = websocket.value_or("");
-    RUVIA_CHECK(websocket_output.starts_with("HTTP/1.1 405 "));
-    RUVIA_CHECK(lower_head(websocket_output).find("\r\nallow: get, options") != std::string::npos);
+    EXPECT_TRUE(websocket_output.starts_with("HTTP/1.1 405 "));
+    EXPECT_TRUE(lower_head(websocket_output).find("\r\nallow: get, options") != std::string::npos);
 }
 
 // 完成头后不生产正文；非法写/等待明确失败，正常完成仍不是 abort。
-RUVIA_TEST(http1_head_only_stream_completes_without_cancellation) {
+TEST(Ruvia, http1_head_only_stream_completes_without_cancellation) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),
@@ -424,34 +425,34 @@ RUVIA_TEST(http1_head_only_stream_completes_without_cancellation) {
         "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
 
-    RUVIA_CHECK(output.has_value());
+    EXPECT_TRUE(output.has_value());
     const auto text = output.value_or("");
-    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(text.find("tick") == std::string::npos);
-    RUVIA_CHECK(text.ends_with("\r\n\r\nplain"));
-    RUVIA_CHECK(text.find("late") == std::string::npos);
-    RUVIA_CHECK_EQ(head_loop_writes.load(), 0);
-    RUVIA_CHECK(!head_loop_aborted.load());
-    RUVIA_CHECK(!head_loop_token_stopped.load());
-    RUVIA_CHECK(head_loop_sleep_rejected.load());
-    RUVIA_CHECK(head_loop_completed.load());
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.find("tick") == std::string::npos);
+    EXPECT_TRUE(text.ends_with("\r\n\r\nplain"));
+    EXPECT_TRUE(text.find("late") == std::string::npos);
+    EXPECT_EQ(head_loop_writes.load(), 0);
+    EXPECT_TRUE(!head_loop_aborted.load());
+    EXPECT_TRUE(!head_loop_token_stopped.load());
+    EXPECT_TRUE(head_loop_sleep_rejected.load());
+    EXPECT_TRUE(head_loop_completed.load());
 }
 
-RUVIA_TEST(http1_not_modified_stream_commit_completes_without_abort) {
+TEST(Ruvia, http1_not_modified_stream_commit_completes_without_abort) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),
         "GET /policy-head-loop?not-modified HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(output.has_value());
-    RUVIA_CHECK(output.value_or("").starts_with("HTTP/1.1 304 "));
-    RUVIA_CHECK(output.value_or("").ends_with("\r\n\r\n"));
-    RUVIA_CHECK_EQ(head_loop_writes.load(), 0);
-    RUVIA_CHECK(!head_loop_aborted.load());
-    RUVIA_CHECK(!head_loop_token_stopped.load());
+    EXPECT_TRUE(output.has_value());
+    EXPECT_TRUE(output.value_or("").starts_with("HTTP/1.1 304 "));
+    EXPECT_TRUE(output.value_or("").ends_with("\r\n\r\n"));
+    EXPECT_EQ(head_loop_writes.load(), 0);
+    EXPECT_TRUE(!head_loop_aborted.load());
+    EXPECT_TRUE(!head_loop_token_stopped.load());
 }
 
-RUVIA_TEST(http1_security_policy_covers_stream_head_and_precommit_error) {
+TEST(Ruvia, http1_security_policy_covers_stream_head_and_precommit_error) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const auto request : {
@@ -459,15 +460,15 @@ RUVIA_TEST(http1_security_policy_covers_stream_head_and_precommit_error) {
              "HEAD /policy-secure-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
              "GET /policy-secure-stream?fail HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"}) {
         const auto output = exchange(server.endpoint(), request);
-        RUVIA_CHECK(output.has_value());
-        RUVIA_CHECK(output.value_or("").find("X-Frame-Options: DENY\r\n") != std::string::npos);
-        RUVIA_CHECK(output.value_or("").find("Content-Range:") == std::string::npos);
+        EXPECT_TRUE(output.has_value());
+        EXPECT_TRUE(output.value_or("").find("X-Frame-Options: DENY\r\n") != std::string::npos);
+        EXPECT_TRUE(output.value_or("").find("Content-Range:") == std::string::npos);
     }
     server.finish();
 }
 
 // HEAD 在提交时完成，不等待客户端断开，也不启动无限正文循环。
-RUVIA_TEST(http1_head_only_producer_finishes_at_commit) {
+TEST(Ruvia, http1_head_only_producer_finishes_at_commit) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const std::string_view request : {
@@ -482,15 +483,15 @@ RUVIA_TEST(http1_head_only_producer_finishes_at_commit) {
             asio::write(socket, asio::buffer(request));
             std::string head;
             asio::read_until(socket, asio::dynamic_buffer(head), "\r\n\r\n");
-            RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+            EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
             socket.close();
         }
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while (!naive_loop_finished.load() && std::chrono::steady_clock::now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-        RUVIA_CHECK(naive_loop_finished.load());
-        RUVIA_CHECK(!naive_loop_failed.load());
+        EXPECT_TRUE(naive_loop_finished.load());
+        EXPECT_TRUE(!naive_loop_failed.load());
     }
 
     read_after_write_failed.store(false);
@@ -507,7 +508,7 @@ RUVIA_TEST(http1_head_only_producer_finishes_at_commit) {
                 "HEAD /policy-head-read-after-write HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\n")));
         std::string head;
         asio::read_until(socket, asio::dynamic_buffer(head), "\r\n\r\n");
-        RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
         asio::write(socket, asio::buffer(std::string_view("hello")));
         socket.close();
     }
@@ -515,11 +516,11 @@ RUVIA_TEST(http1_head_only_producer_finishes_at_commit) {
     while (!read_after_write_finished.load() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    RUVIA_CHECK(read_after_write_finished.load());
-    RUVIA_CHECK(!read_after_write_failed.load());
+    EXPECT_TRUE(read_after_write_finished.load());
+    EXPECT_TRUE(!read_after_write_failed.load());
     {
         std::lock_guard lock(read_after_write_mutex);
-        RUVIA_CHECK_EQ(read_after_write_body, "hello");
+        EXPECT_EQ(read_after_write_body, "hello");
     }
     server.finish();
 }
@@ -527,7 +528,7 @@ RUVIA_TEST(http1_head_only_producer_finishes_at_commit) {
 // Head-only completion raises nothing: middleware converting every exception
 // into a 500 sees a normal success, so HEAD on a stream route completes and
 // the connection stays usable for the pipelined GET.
-RUVIA_TEST(http1_head_only_stream_is_a_success_for_error_converting_middleware) {
+TEST(Ruvia, http1_head_only_stream_is_a_success_for_error_converting_middleware) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),
@@ -535,66 +536,66 @@ RUVIA_TEST(http1_head_only_stream_is_a_success_for_error_converting_middleware) 
         "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
 
-    RUVIA_CHECK(output.has_value());
+    EXPECT_TRUE(output.has_value());
     const auto text = output.value_or("");
-    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(text.find("chunk") == std::string::npos);
-    RUVIA_CHECK(text.find("HTTP/1.1 500 ") == std::string::npos);
-    RUVIA_CHECK(text.ends_with("\r\n\r\nplain"));
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.find("chunk") == std::string::npos);
+    EXPECT_TRUE(text.find("HTTP/1.1 500 ") == std::string::npos);
+    EXPECT_TRUE(text.ends_with("\r\n\r\nplain"));
 }
 
-RUVIA_TEST(http1_stream_failure_after_commit_is_not_converted_to_buffered_response_by_middleware) {
+TEST(Ruvia, http1_stream_failure_after_commit_is_not_converted_to_buffered_response_by_middleware) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),
         "GET /policy-stream-fail-after-commit HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(output.has_value());
+    EXPECT_TRUE(output.has_value());
     const auto text = output.value_or("");
-    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(text.find("partial") != std::string::npos);
-    RUVIA_CHECK(text.find("0\r\n\r\n") == std::string::npos);
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.find("partial") != std::string::npos);
+    EXPECT_TRUE(text.find("0\r\n\r\n") == std::string::npos);
 }
 
 // A failed CONNECT closes the connection: bytes the client already sent for
 // the tunnel are never parsed as another request (RFC 9110 9.3.6).
-RUVIA_TEST(http1_failed_connect_closes_instead_of_parsing_tunnel_bytes) {
+TEST(Ruvia, http1_failed_connect_closes_instead_of_parsing_tunnel_bytes) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const std::string_view authority : {"unrouted-target.test:443", "denied-target.test:443"}) {
         const std::string request = std::string("CONNECT ") + std::string(authority) + " HTTP/1.1\r\nHost: " +
                                     std::string(authority) + "\r\n\r\nGET /policy-plain HTTP/1.1\r\nHost: smuggled\r\n\r\n";
         const auto output = ::exchange(server.endpoint(), request);
-        RUVIA_CHECK(output.has_value());
+        EXPECT_TRUE(output.has_value());
         const auto text = output.value_or("");
-        RUVIA_CHECK(!text.starts_with("HTTP/1.1 2"));
-        RUVIA_CHECK(lower_head(text).find("\r\nconnection: close") != std::string::npos);
-        RUVIA_CHECK(text.find("HTTP/1.1 ", 1) == std::string::npos);
+        EXPECT_TRUE(!text.starts_with("HTTP/1.1 2"));
+        EXPECT_TRUE(lower_head(text).find("\r\nconnection: close") != std::string::npos);
+        EXPECT_TRUE(text.find("HTTP/1.1 ", 1) == std::string::npos);
     }
     server.finish();
 }
 
 // TE without the TE connection option only fails to advertise trailers; the
 // request itself is served.
-RUVIA_TEST(http1_te_without_connection_option_is_ignored) {
+TEST(Ruvia, http1_te_without_connection_option_is_ignored) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),
         "GET /policy-plain HTTP/1.1\r\nTE: trailers\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(output.has_value());
-    RUVIA_CHECK(output.value_or("").starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(output.has_value());
+    EXPECT_TRUE(output.value_or("").starts_with("HTTP/1.1 200 "));
 }
 
-RUVIA_TEST(http1_successful_upgrades_are_access_logged_once_with_their_handshake_status) {
+TEST(Ruvia, http1_successful_upgrades_are_access_logged_once_with_their_handshake_status) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     static_cast<void>(take_access_entries());
 
     const auto tunnel = exchange(server.endpoint(),
         "CONNECT policy-target.test:443 HTTP/1.1\r\nHost: policy-target.test:443\r\n\r\n");
-    RUVIA_CHECK(tunnel.has_value());
-    RUVIA_CHECK(tunnel.value_or("").starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(tunnel.has_value());
+    EXPECT_TRUE(tunnel.value_or("").starts_with("HTTP/1.1 200 "));
 
     const auto websocket = exchange(server.endpoint(),
         "GET /policy-websocket HTTP/1.1\r\n"
@@ -603,25 +604,25 @@ RUVIA_TEST(http1_successful_upgrades_are_access_logged_once_with_their_handshake
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
-    RUVIA_CHECK(websocket.has_value());
-    RUVIA_CHECK(websocket.value_or("").starts_with("HTTP/1.1 101 "));
+    EXPECT_TRUE(websocket.has_value());
+    EXPECT_TRUE(websocket.value_or("").starts_with("HTTP/1.1 101 "));
     server.finish();
 
     const auto entries = take_access_entries();
-    RUVIA_CHECK_EQ(entries.size(), std::size_t{2});
+    EXPECT_EQ(entries.size(), std::size_t{2});
     if (entries.size() == 2) {
-        RUVIA_CHECK_EQ(entries[0].method_, std::string("CONNECT"));
-        RUVIA_CHECK(entries[0].status_ == ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(entries[1].method_, std::string("GET"));
-        RUVIA_CHECK_EQ(entries[1].path_, std::string("/policy-websocket"));
-        RUVIA_CHECK(entries[1].status_ == ruvia::http_status::switching_protocols);
+        EXPECT_EQ(entries[0].method_, std::string("CONNECT"));
+        EXPECT_TRUE(entries[0].status_ == ruvia::http_status::ok);
+        EXPECT_EQ(entries[1].method_, std::string("GET"));
+        EXPECT_EQ(entries[1].path_, std::string("/policy-websocket"));
+        EXPECT_TRUE(entries[1].status_ == ruvia::http_status::switching_protocols);
     }
 }
 
 // Pipelined responses may leave in one coalesced write, after the requests
 // that produced them were already replaced by later ones; each still gets
 // exactly one record, in request order, with its own method, path and status.
-RUVIA_TEST(http1_pipelined_responses_are_access_logged_in_order) {
+TEST(Ruvia, http1_pipelined_responses_are_access_logged_in_order) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     static_cast<void>(take_access_entries());
@@ -632,51 +633,51 @@ RUVIA_TEST(http1_pipelined_responses_are_access_logged_in_order) {
         "GET /policy-missing HTTP/1.1\r\nHost: localhost\r\n\r\n"
         "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(output.has_value());
+    EXPECT_TRUE(output.has_value());
     const auto text = output.value_or("");
-    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(text.ends_with("plain"));
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.ends_with("plain"));
 
     const auto entries = take_access_entries();
-    RUVIA_CHECK_EQ(entries.size(), std::size_t{4});
+    EXPECT_EQ(entries.size(), std::size_t{4});
     if (entries.size() == 4) {
-        RUVIA_CHECK_EQ(entries[0].method_, std::string("GET"));
-        RUVIA_CHECK_EQ(entries[0].path_, std::string("/policy-plain"));
-        RUVIA_CHECK(entries[0].status_ == ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(entries[1].method_, std::string("HEAD"));
-        RUVIA_CHECK_EQ(entries[1].path_, std::string("/policy-plain"));
-        RUVIA_CHECK(entries[1].status_ == ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(entries[2].method_, std::string("GET"));
-        RUVIA_CHECK_EQ(entries[2].path_, std::string("/policy-missing"));
-        RUVIA_CHECK(entries[2].status_ == ruvia::http_status::not_found);
-        RUVIA_CHECK_EQ(entries[3].path_, std::string("/policy-plain"));
-        RUVIA_CHECK(entries[3].status_ == ruvia::http_status::ok);
+        EXPECT_EQ(entries[0].method_, std::string("GET"));
+        EXPECT_EQ(entries[0].path_, std::string("/policy-plain"));
+        EXPECT_TRUE(entries[0].status_ == ruvia::http_status::ok);
+        EXPECT_EQ(entries[1].method_, std::string("HEAD"));
+        EXPECT_EQ(entries[1].path_, std::string("/policy-plain"));
+        EXPECT_TRUE(entries[1].status_ == ruvia::http_status::ok);
+        EXPECT_EQ(entries[2].method_, std::string("GET"));
+        EXPECT_EQ(entries[2].path_, std::string("/policy-missing"));
+        EXPECT_TRUE(entries[2].status_ == ruvia::http_status::not_found);
+        EXPECT_EQ(entries[3].path_, std::string("/policy-plain"));
+        EXPECT_TRUE(entries[3].status_ == ruvia::http_status::ok);
     }
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-RUVIA_TEST(http1_connect_handshake_carries_the_committed_session_cookie) {
+TEST(Ruvia, http1_connect_handshake_carries_the_committed_session_cookie) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto tunnel = exchange(server.endpoint(),
         "CONNECT session-target.test:443 HTTP/1.1\r\nHost: session-target.test:443\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(tunnel.has_value());
+    EXPECT_TRUE(tunnel.has_value());
     const auto output = tunnel.value_or("");
-    RUVIA_CHECK(output.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
     // The cleared session's expiring cookie is part of the tunnel's only head.
-    RUVIA_CHECK(lower_head(output).find("\r\nset-cookie: sid=;") != std::string::npos);
+    EXPECT_TRUE(lower_head(output).find("\r\nset-cookie: sid=;") != std::string::npos);
 }
 #endif
 
-RUVIA_TEST(http_server_fixture_reservations_stay_bound_without_accepting_clients) {
+TEST(Ruvia, http_server_fixture_reservations_stay_bound_without_accepting_clients) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     ruvia::test::tcp_port_reservation first(io);
     ruvia::test::tcp_port_reservation second(io);
-    RUVIA_CHECK(first.endpoint() != second.endpoint());
-    RUVIA_CHECK(first.endpoint() != server.endpoint());
-    RUVIA_CHECK(second.endpoint() != server.endpoint());
+    EXPECT_TRUE(first.endpoint() != second.endpoint());
+    EXPECT_TRUE(first.endpoint() != server.endpoint());
+    EXPECT_TRUE(second.endpoint() != server.endpoint());
 
     std::error_code error;
 #if !defined(_WIN32)
@@ -685,17 +686,17 @@ RUVIA_TEST(http_server_fixture_reservations_stay_bound_without_accepting_clients
     asio::ip::tcp::acceptor contender(io);
     contender.open(asio::ip::tcp::v4());
     contender.bind(first.endpoint(), error);
-    RUVIA_CHECK(error == asio::error::address_in_use);
+    EXPECT_TRUE(error == asio::error::address_in_use);
 #endif
 
     // It must not be a listener that can steal a client's connection.
     asio::ip::tcp::socket client(io);
     client.connect(first.endpoint(), error);
-    RUVIA_CHECK(error == asio::error::connection_refused);
+    EXPECT_TRUE(error == asio::error::connection_refused);
 
     const auto response = exchange(server.endpoint(),
         "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
-    RUVIA_CHECK(response.has_value());
-    RUVIA_CHECK(response.value_or("").ends_with("\r\n\r\nplain"));
+    EXPECT_TRUE(response.has_value());
+    EXPECT_TRUE(response.value_or("").ends_with("\r\n\r\nplain"));
 }

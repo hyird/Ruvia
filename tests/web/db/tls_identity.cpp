@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -13,7 +15,6 @@
 
 #include "ruvia/web/db/db.h"
 
-#include "test_harness.h"
 #include "test_tls_identity.h"
 
 namespace database_tls_tests {
@@ -142,28 +143,28 @@ bool sends_startup(ruvia::db_driver driver, const char* reference, const char* c
 }  // namespace database_tls_tests
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
-RUVIA_TEST(postgresql_tls_checks_san_identity_before_sending_startup) {
+TEST(Ruvia, postgresql_tls_checks_san_identity_before_sending_startup) {
     using namespace database_tls_tests;
     const auto driver = ruvia::db_driver::postgresql;
-    RUVIA_CHECK(!sends_startup(driver, "audit.test", "audit.test", ""));
-    RUVIA_CHECK(!sends_startup(driver, "127.0.0.1", "127.0.0.1", ""));
-    RUVIA_CHECK(!sends_startup(driver, "127.0.0.1", "other.test", "DNS:127.0.0.1"));
-    RUVIA_CHECK(!sends_startup(driver, "audit.test", "audit.test", "DNS:other.test"));
-    RUVIA_CHECK(sends_startup(driver, "audit.test", "other.test", "DNS:audit.test"));
-    RUVIA_CHECK(sends_startup(driver, "AUDIT.test.", "other.test", "DNS:audit.test"));
-    RUVIA_CHECK(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1"));
-    RUVIA_CHECK(!sends_startup(driver, "audit.test", "other.test", "DNS:audit.test", 1));
+    EXPECT_TRUE(!sends_startup(driver, "audit.test", "audit.test", ""));
+    EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "127.0.0.1", ""));
+    EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "other.test", "DNS:127.0.0.1"));
+    EXPECT_TRUE(!sends_startup(driver, "audit.test", "audit.test", "DNS:other.test"));
+    EXPECT_TRUE(sends_startup(driver, "audit.test", "other.test", "DNS:audit.test"));
+    EXPECT_TRUE(sends_startup(driver, "AUDIT.test.", "other.test", "DNS:audit.test"));
+    EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1"));
+    EXPECT_TRUE(!sends_startup(driver, "audit.test", "other.test", "DNS:audit.test", 1));
 }
 #endif
 
 #ifdef RUVIA_ENABLE_MARIADB
-RUVIA_TEST(mariadb_tls_checks_ip_san_even_on_loopback_before_authentication) {
+TEST(Ruvia, mariadb_tls_checks_ip_san_even_on_loopback_before_authentication) {
     using namespace database_tls_tests;
     const auto driver = ruvia::db_driver::mariadb;
-    RUVIA_CHECK(!sends_startup(driver, "127.0.0.1", "127.0.0.1", ""));
-    RUVIA_CHECK(!sends_startup(driver, "127.0.0.1", "other.test", "DNS:127.0.0.1"));
-    RUVIA_CHECK(!sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2"));
-    RUVIA_CHECK(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1"));
-    RUVIA_CHECK(!sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", 1));
+    EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "127.0.0.1", ""));
+    EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "other.test", "DNS:127.0.0.1"));
+    EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2"));
+    EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1"));
+    EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", 1));
 }
 #endif

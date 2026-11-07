@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -5,8 +7,6 @@
 
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
-
-#include "test_harness.h"
 
 namespace {
 
@@ -17,11 +17,11 @@ using ruvia::http_reason_phrase;
 
 }  // namespace
 
-RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
-    RUVIA_CHECK(ruvia::http_status_code::try_from_value(100) == ruvia::http_status::continue_value);
-    RUVIA_CHECK(ruvia::http_status_code::try_from_value(599) == ruvia::http_status_code::from_value(599));
-    RUVIA_CHECK(!ruvia::http_status_code::try_from_value(99).has_value());
-    RUVIA_CHECK(!ruvia::http_status_code::try_from_value(600).has_value());
+TEST(Ruvia, http_status_code_validates_the_wire_value_boundary) {
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(100) == ruvia::http_status::continue_value);
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(599) == ruvia::http_status_code::from_value(599));
+    EXPECT_TRUE(!ruvia::http_status_code::try_from_value(99).has_value());
+    EXPECT_TRUE(!ruvia::http_status_code::try_from_value(600).has_value());
 
     bool threw = false;
     try {
@@ -29,20 +29,20 @@ RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
     } catch (const std::invalid_argument&) {
         threw = true;
     }
-    RUVIA_CHECK(threw);
+    EXPECT_TRUE(threw);
 }
 
-RUVIA_TEST(http_status_code_rejects_original_integers_before_wire_narrowing) {
+TEST(Ruvia, http_status_code_rejects_original_integers_before_wire_narrowing) {
     const auto check_rejected = [&](auto input) {
-        RUVIA_CHECK(!ruvia::http_status_code::is_valid_value(input));
-        RUVIA_CHECK(!ruvia::http_status_code::try_from_value(input).has_value());
+        EXPECT_TRUE(!ruvia::http_status_code::is_valid_value(input));
+        EXPECT_TRUE(!ruvia::http_status_code::try_from_value(input).has_value());
         bool threw = false;
         try {
             (void)ruvia::http_status_code::from_value(input);
         } catch (const std::invalid_argument&) {
             threw = true;
         }
-        RUVIA_CHECK(threw);
+        EXPECT_TRUE(threw);
     };
     check_rejected(std::int64_t{65736});
     check_rejected(std::int64_t{-65336});
@@ -51,66 +51,53 @@ RUVIA_TEST(http_status_code_rejects_original_integers_before_wire_narrowing) {
     check_rejected(std::uint64_t{65736});
     check_rejected((std::numeric_limits<std::uint64_t>::max)());
 
-    RUVIA_CHECK(ruvia::http_status_code::try_from_value(std::int64_t{100}) ==
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(std::int64_t{100}) ==
                 ruvia::http_status::continue_value);
-    RUVIA_CHECK(ruvia::http_status_code::try_from_value(std::uint64_t{599}) ==
+    EXPECT_TRUE(ruvia::http_status_code::try_from_value(std::uint64_t{599}) ==
                 ruvia::http_status_code::from_value(599));
 }
 
-RUVIA_TEST(http_reason_phrase_is_conventional_http1_presentation) {
-    RUVIA_CHECK_EQ(http_reason_phrase(ruvia::http_status::ok), std::string_view("OK"));
-    RUVIA_CHECK_EQ(http_reason_phrase(ruvia::http_status::not_found), std::string_view("Not Found"));
-    RUVIA_CHECK_EQ(http_reason_phrase(ruvia::http_status::content_too_large),
-        std::string_view("Content Too Large"));
-    RUVIA_CHECK_EQ(http_reason_phrase(ruvia::http_status::internal_server_error),
-        std::string_view("Internal Server Error"));
-    RUVIA_CHECK_EQ(
-        http_reason_phrase(ruvia::http_status::reset_content), std::string_view("Reset Content"));
-    RUVIA_CHECK_EQ(
-        http_reason_phrase(ruvia::http_status::bad_gateway), std::string_view("Bad Gateway"));
-    RUVIA_CHECK_EQ(
-        http_reason_phrase(ruvia::http_status::gateway_timeout), std::string_view("Gateway Timeout"));
+TEST(Ruvia, http_reason_phrase_is_conventional_http1_presentation) {
+    EXPECT_EQ(http_reason_phrase(ruvia::http_status::ok), std::string_view("OK"));
+    EXPECT_EQ(http_reason_phrase(ruvia::http_status::not_found), std::string_view("Not Found"));
+    EXPECT_EQ(http_reason_phrase(ruvia::http_status::content_too_large), std::string_view("Content Too Large"));
+    EXPECT_EQ(http_reason_phrase(ruvia::http_status::internal_server_error), std::string_view("Internal Server Error"));
+    EXPECT_EQ(http_reason_phrase(ruvia::http_status::reset_content), std::string_view("Reset Content"));
+    EXPECT_EQ(http_reason_phrase(ruvia::http_status::bad_gateway), std::string_view("Bad Gateway"));
+    EXPECT_EQ(http_reason_phrase(ruvia::http_status::gateway_timeout), std::string_view("Gateway Timeout"));
 }
 
-RUVIA_TEST(http_reason_phrase_does_not_mislabel_extension_statuses) {
+TEST(Ruvia, http_reason_phrase_does_not_mislabel_extension_statuses) {
     // 104 is still a temporary draft registration, so its unstable name is not
     // promoted into the framework's stable public vocabulary.
-    RUVIA_CHECK(http_reason_phrase(ruvia::http_status_code::from_value(104)).empty());
-    RUVIA_CHECK(http_reason_phrase(ruvia::http_status_code::from_value(299)).empty());
-    RUVIA_CHECK(http_reason_phrase(ruvia::http_status_code::from_value(499)).empty());
-    RUVIA_CHECK(http_reason_phrase(ruvia::http_status_code::from_value(599)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(104)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(299)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(499)).empty());
+    EXPECT_TRUE(http_reason_phrase(ruvia::http_status_code::from_value(599)).empty());
 }
 
-RUVIA_TEST(http_protocol_error_owns_bounded_diagnostic_without_allocation) {
+TEST(Ruvia, http_protocol_error_owns_bounded_diagnostic_without_allocation) {
     std::string source_value(200, 'x');
     const http_protocol_error error(
         ruvia::http_status::content_too_large, "body_too_large", source_value);
     source_value.assign(200, 'y');
 
-    RUVIA_CHECK_EQ(error.status(), ruvia::http_status::content_too_large);
-    RUVIA_CHECK_EQ(error.code(), std::string_view("body_too_large"));
+    EXPECT_EQ(error.status(), ruvia::http_status::content_too_large);
+    EXPECT_EQ(error.code(), std::string_view("body_too_large"));
     const auto diagnostic = std::string_view(error.what());
-    RUVIA_CHECK_EQ(diagnostic.size(), std::size_t{127});
-    RUVIA_CHECK(diagnostic.find_first_not_of('x') == std::string_view::npos);
+    EXPECT_EQ(diagnostic.size(), std::size_t{127});
+    EXPECT_TRUE(diagnostic.find_first_not_of('x') == std::string_view::npos);
 }
 
-RUVIA_TEST(parse_error_status_mapping) {
+TEST(Ruvia, parse_error_status_mapping) {
     // Size limits map to their specific statuses.
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::header_too_large).status(),
-        ruvia::http_status::request_header_fields_too_large);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::uri_too_long).status(),
-        ruvia::http_status::uri_too_long);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::unsupported_transfer_encoding).status(),
-        ruvia::http_status::not_implemented);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::unsupported_http_version).status(),
-        ruvia::http_status::http_version_not_supported);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::header_too_large).status(), ruvia::http_status::request_header_fields_too_large);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::uri_too_long).status(), ruvia::http_status::uri_too_long);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::unsupported_transfer_encoding).status(), ruvia::http_status::not_implemented);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::unsupported_http_version).status(), ruvia::http_status::http_version_not_supported);
     // Everything else is a 400 Bad Request.
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::missing_host).status(),
-        ruvia::http_status::bad_request);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::invalid_connection).status(),
-        ruvia::http_status::bad_request);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::invalid_upgrade).status(),
-        ruvia::http_status::bad_request);
-    RUVIA_CHECK_EQ(http_parse_protocol_error(http_parse_error::conflicting_content_length).status(),
-        ruvia::http_status::bad_request);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::missing_host).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::invalid_connection).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::invalid_upgrade).status(), ruvia::http_status::bad_request);
+    EXPECT_EQ(http_parse_protocol_error(http_parse_error::conflicting_content_length).status(), ruvia::http_status::bad_request);
 }

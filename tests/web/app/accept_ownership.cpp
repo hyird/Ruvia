@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <charconv>
@@ -29,7 +31,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_tls_identity.h"
 
 namespace accept_ownership_test {
@@ -195,16 +196,16 @@ std::string exchange(stream_type& stream, std::string_view expected) {
 }
 
 template <typename stream_type>
-void check_connection(ruvia::testing::test_context& ruvia_ctx, stream_type& stream) {
+void check_connection(stream_type& stream) {
     const auto first = exchange(stream, "first split body");
     for (unsigned request = 0; request != 3; ++request) {
-        RUVIA_CHECK_EQ(exchange(stream, "next split body"), first);
+        EXPECT_EQ(exchange(stream, "next split body"), first);
     }
 }
 
 }  // namespace accept_ownership_test
 
-RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pending_accepts) {
+TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pending_accepts) {
     using namespace accept_ownership_test;
     auto observed = std::make_shared<observations>();
     auto& app = ruvia::app();
@@ -231,8 +232,8 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
     configure();
     app.stop();
     app.run();
-    RUVIA_CHECK(app.workers().empty());
-    RUVIA_CHECK_EQ(observed->live_.load(), 0U);
+    EXPECT_TRUE(app.workers().empty());
+    EXPECT_EQ(observed->live_.load(), 0U);
     const auto cold_destroyed = observed->destroyed_.load();
     for (unsigned cycle = 0; cycle != 3; ++cycle) {
         configure();
@@ -243,7 +244,7 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
             run.join();
             throw std::runtime_error("ownership test app did not start");
         }
-        RUVIA_CHECK_EQ(observed->live_.load(), 3U);
+        EXPECT_EQ(observed->live_.load(), 3U);
         std::vector<asio::ip::tcp::socket> idle;
         if (cycle != 0) {
             for (unsigned connection = 0; connection != 12; ++connection) {
@@ -260,7 +261,7 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
                 asio::ip::tcp::socket plain(io);
                 plain.connect(http);
                 plain.non_blocking(true);
-                check_connection(ruvia_ctx, plain);
+                check_connection(plain);
                 asio::ssl::context tls(asio::ssl::context::tls_client);
                 tls.load_verify_file(identity.ca_file_.string());
                 tls.set_verify_mode(asio::ssl::verify_peer);
@@ -272,20 +273,20 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
                 }
                 secure.handshake(asio::ssl::stream_base::client);
                 secure.next_layer().non_blocking(true);
-                check_connection(ruvia_ctx, secure);
+                check_connection(secure);
             }
         }
         app.stop();
         run.join();
-        RUVIA_CHECK_EQ(observed->live_.load(), 0U);
-        RUVIA_CHECK_EQ(observed->destroyed_.load(), cold_destroyed + (cycle + 1) * 3U);
-        RUVIA_CHECK_EQ(observed->wrong_owner_.load(), 0U);
-        RUVIA_CHECK(app.workers().empty());
+        EXPECT_EQ(observed->live_.load(), 0U);
+        EXPECT_EQ(observed->destroyed_.load(), cold_destroyed + (cycle + 1) * 3U);
+        EXPECT_EQ(observed->wrong_owner_.load(), 0U);
+        EXPECT_TRUE(app.workers().empty());
         for (const auto& endpoint : {http, https}) {
             asio::ip::tcp::socket closed(io);
             asio::error_code error;
             closed.connect(endpoint, error);
-            RUVIA_CHECK(error == asio::error::connection_refused);
+            EXPECT_TRUE(error == asio::error::connection_refused);
         }
     }
 }

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <string>
 #include <string_view>
 
@@ -6,8 +8,6 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_managed_fields.h"
-
-#include "test_harness.h"
 
 namespace {
 
@@ -26,43 +26,43 @@ using ruvia::known_http_method_token;
 
 // What bytes a field name or field value (including a reason phrase) may carry.
 
-RUVIA_TEST(http_header_name_validation) {
-    RUVIA_CHECK(is_valid_http_header_name("Content-Type"));
-    RUVIA_CHECK(is_valid_http_header_name("X-Custom-Header"));
-    RUVIA_CHECK(is_valid_http_header_name("a"));
-    RUVIA_CHECK(!is_valid_http_header_name(""));                           // empty name is invalid
-    RUVIA_CHECK(!is_valid_http_header_name("X Y"));                        // space is not a token char
-    RUVIA_CHECK(!is_valid_http_header_name("X:Y"));                        // ':' is a separator
-    RUVIA_CHECK(!is_valid_http_header_name("(comment)"));                  // '(' ')' are separators
-    RUVIA_CHECK(!is_valid_http_header_name("a@b"));                        // '@' is a separator
-    RUVIA_CHECK(!is_valid_http_header_name(std::string_view("a\rb", 3)));  // control char
+TEST(Ruvia, http_header_name_validation) {
+    EXPECT_TRUE(is_valid_http_header_name("Content-Type"));
+    EXPECT_TRUE(is_valid_http_header_name("X-Custom-Header"));
+    EXPECT_TRUE(is_valid_http_header_name("a"));
+    EXPECT_TRUE(!is_valid_http_header_name(""));                           // empty name is invalid
+    EXPECT_TRUE(!is_valid_http_header_name("X Y"));                        // space is not a token char
+    EXPECT_TRUE(!is_valid_http_header_name("X:Y"));                        // ':' is a separator
+    EXPECT_TRUE(!is_valid_http_header_name("(comment)"));                  // '(' ')' are separators
+    EXPECT_TRUE(!is_valid_http_header_name("a@b"));                        // '@' is a separator
+    EXPECT_TRUE(!is_valid_http_header_name(std::string_view("a\rb", 3)));  // control char
 }
 
-RUVIA_TEST(http_header_value_rejects_injection) {
-    RUVIA_CHECK(is_valid_http_header_value("text/html; charset=utf-8"));  // spaces allowed
-    RUVIA_CHECK(is_valid_http_header_value("a b"));                       // inner spaces allowed
-    RUVIA_CHECK(is_valid_http_header_value(""));                          // empty value is valid
-    RUVIA_CHECK(!is_valid_http_header_value(" leading"));
-    RUVIA_CHECK(!is_valid_http_header_value("trailing "));
-    RUVIA_CHECK(!is_valid_http_header_value("\ttab"));
-    RUVIA_CHECK(!is_valid_http_header_value("tab\t"));
+TEST(Ruvia, http_header_value_rejects_injection) {
+    EXPECT_TRUE(is_valid_http_header_value("text/html; charset=utf-8"));  // spaces allowed
+    EXPECT_TRUE(is_valid_http_header_value("a b"));                       // inner spaces allowed
+    EXPECT_TRUE(is_valid_http_header_value(""));                          // empty value is valid
+    EXPECT_TRUE(!is_valid_http_header_value(" leading"));
+    EXPECT_TRUE(!is_valid_http_header_value("trailing "));
+    EXPECT_TRUE(!is_valid_http_header_value("\ttab"));
+    EXPECT_TRUE(!is_valid_http_header_value("tab\t"));
     // CR, LF and NUL must be rejected -- these are response/header-injection bytes.
-    RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\rb", 3)));
-    RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\nb", 3)));
-    RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\r\nInjected: x", 14)));
-    RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\0b", 3)));
+    EXPECT_TRUE(!is_valid_http_header_value(std::string_view("a\rb", 3)));
+    EXPECT_TRUE(!is_valid_http_header_value(std::string_view("a\nb", 3)));
+    EXPECT_TRUE(!is_valid_http_header_value(std::string_view("a\r\nInjected: x", 14)));
+    EXPECT_TRUE(!is_valid_http_header_value(std::string_view("a\0b", 3)));
 }
 
-RUVIA_TEST(http_outbound_field_checks_normalized_syntax) {
+TEST(Ruvia, http_outbound_field_checks_normalized_syntax) {
     for (const std::string_view name : {"", "X Y", "X:Y", ":authority", "X-Name ", "\tX-Name"}) {
-        RUVIA_CHECK(!is_valid_http_request_application_field(name, "value"));
-        RUVIA_CHECK(!is_valid_http_response_field(name, "value"));
+        EXPECT_TRUE(!is_valid_http_request_application_field(name, "value"));
+        EXPECT_TRUE(!is_valid_http_response_field(name, "value"));
     }
-    RUVIA_CHECK(!is_valid_http_request_application_field(std::string_view("X\0Name", 6), "value"));
-    RUVIA_CHECK(!is_valid_http_response_field(std::string_view("X\0Name", 6), "value"));
+    EXPECT_TRUE(!is_valid_http_request_application_field(std::string_view("X\0Name", 6), "value"));
+    EXPECT_TRUE(!is_valid_http_response_field(std::string_view("X\0Name", 6), "value"));
     for (const std::string_view value : {" leading", "trailing ", "\tleading", "trailing\t", " ", "\t"}) {
-        RUVIA_CHECK(!is_valid_http_request_application_field("X-Extension", value));
-        RUVIA_CHECK(!is_valid_http_response_field("X-Extension", value));
+        EXPECT_TRUE(!is_valid_http_request_application_field("X-Extension", value));
+        EXPECT_TRUE(!is_valid_http_response_field("X-Extension", value));
     }
     // 同时覆盖短值与长值：内部 HTAB、SP、可打印 ASCII 和 obs-text 合法，
     // NUL、CR/LF、其余控制字节及 DEL 不得进入应用发送的字段值。
@@ -71,23 +71,23 @@ RUVIA_TEST(http_outbound_field_checks_normalized_syntax) {
         for (unsigned byte = 0; byte < 256; ++byte) {
             value[size / 2] = static_cast<char>(byte);
             const bool allowed = byte == '\t' || (byte >= 0x20 && byte != 0x7f);
-            RUVIA_CHECK_EQ(is_valid_http_request_application_field("X-Extension", value), allowed);
-            RUVIA_CHECK_EQ(is_valid_http_response_field("X-Extension", value), allowed);
+            EXPECT_EQ(is_valid_http_request_application_field("X-Extension", value), allowed);
+            EXPECT_EQ(is_valid_http_response_field("X-Extension", value), allowed);
         }
     }
-    RUVIA_CHECK(is_valid_http_request_application_field("X-Extension", ""));
-    RUVIA_CHECK(is_valid_http_response_field("X-Extension", ""));
-    RUVIA_CHECK(is_valid_http_request_application_field("X-!#$%&'*+-.^_`|~", "a b\tc"));
-    RUVIA_CHECK(is_valid_http_response_field("X-!#$%&'*+-.^_`|~", "a b\tc"));
+    EXPECT_TRUE(is_valid_http_request_application_field("X-Extension", ""));
+    EXPECT_TRUE(is_valid_http_response_field("X-Extension", ""));
+    EXPECT_TRUE(is_valid_http_request_application_field("X-!#$%&'*+-.^_`|~", "a b\tc"));
+    EXPECT_TRUE(is_valid_http_response_field("X-!#$%&'*+-.^_`|~", "a b\tc"));
 }
 
-RUVIA_TEST(http_request_application_field_rejects_protocol_owned_names) {
+TEST(Ruvia, http_request_application_field_rejects_protocol_owned_names) {
     for (const std::string_view name : {"Host", "hOsT", "Content-Length", "cOnTeNt-LeNgTh",
              "Transfer-Encoding", "tRaNsFeR-EnCoDiNg", "Trailer", "tRaIlEr",
              "Expect", "eXpEcT", "Connection", "cOnNeCtIoN", "Keep-Alive", "kEeP-aLiVe",
              "Proxy-Connection", "pRoXy-CoNnEcTiOn", "TE", "tE", "Upgrade", "uPgRaDe"}) {
-        RUVIA_CHECK(!is_valid_http_request_application_field(name, "value"));
-        RUVIA_CHECK(!is_valid_http_request_application_field(name, ""));
+        EXPECT_TRUE(!is_valid_http_request_application_field(name, "value"));
+        EXPECT_TRUE(!is_valid_http_request_application_field(name, ""));
     }
     // 即使协议字段值本身合法，也不能从应用首部入口注入。
     const ruvia::http_header_view managed[] = {
@@ -103,13 +103,13 @@ RUVIA_TEST(http_request_application_field_rejects_protocol_owned_names) {
         {"Upgrade", "websocket"},
     };
     for (const auto& field : managed) {
-        RUVIA_CHECK(!is_valid_http_request_application_field(field.name(), field.value()));
+        EXPECT_TRUE(!is_valid_http_request_application_field(field.name(), field.value()));
     }
-    RUVIA_CHECK(is_valid_http_request_application_field("X-Host", "example.test"));
-    RUVIA_CHECK(is_valid_http_request_application_field("Expect-Extension", "100-continue"));
+    EXPECT_TRUE(is_valid_http_request_application_field("X-Host", "example.test"));
+    EXPECT_TRUE(is_valid_http_request_application_field("Expect-Extension", "100-continue"));
 }
 
-RUVIA_TEST(http_request_application_field_uses_known_sender_semantics) {
+TEST(Ruvia, http_request_application_field_uses_known_sender_semantics) {
     const ruvia::http_header_view invalid[] = {
         {"Content-Type", ""},
         {"cOnTeNt-TyPe", "text plain"},
@@ -133,7 +133,7 @@ RUVIA_TEST(http_request_application_field_uses_known_sender_semantics) {
         {"Content-Encoding", "gzip,"},
     };
     for (const auto& field : invalid) {
-        RUVIA_CHECK(!is_valid_http_request_application_field(field.name(), field.value()));
+        EXPECT_TRUE(!is_valid_http_request_application_field(field.name(), field.value()));
     }
     const ruvia::http_header_view valid[] = {
         {"Content-Type", "text/plain; charset=\"utf-8\""},
@@ -148,11 +148,11 @@ RUVIA_TEST(http_request_application_field_uses_known_sender_semantics) {
         {"X-Extension", "not a media type"},
     };
     for (const auto& field : valid) {
-        RUVIA_CHECK(is_valid_http_request_application_field(field.name(), field.value()));
+        EXPECT_TRUE(is_valid_http_request_application_field(field.name(), field.value()));
     }
 }
 
-RUVIA_TEST(http_response_field_uses_known_sender_semantics) {
+TEST(Ruvia, http_response_field_uses_known_sender_semantics) {
     const ruvia::http_header_view invalid[] = {
         {"Content-Type", ""},
         {"cOnTeNt-TyPe", "text plain"},
@@ -168,7 +168,7 @@ RUVIA_TEST(http_response_field_uses_known_sender_semantics) {
         {"tRaIlEr", "bad name"},
     };
     for (const auto& field : invalid) {
-        RUVIA_CHECK(!is_valid_http_response_field(field.name(), field.value()));
+        EXPECT_TRUE(!is_valid_http_response_field(field.name(), field.value()));
     }
     const ruvia::http_header_view valid[] = {
         {"Content-Type", "text/plain; charset=\"utf-8\""},
@@ -180,11 +180,11 @@ RUVIA_TEST(http_response_field_uses_known_sender_semantics) {
         {"X-Extension", "not a media type"},
     };
     for (const auto& field : valid) {
-        RUVIA_CHECK(is_valid_http_response_field(field.name(), field.value()));
+        EXPECT_TRUE(is_valid_http_response_field(field.name(), field.value()));
     }
 }
 
-RUVIA_TEST(http_response_field_does_not_apply_request_admission_rules) {
+TEST(Ruvia, http_response_field_does_not_apply_request_admission_rules) {
     const ruvia::http_header_view fields[] = {
         {"Origin", "https://example.test/path"},
         {"Access-Control-Request-Method", "GET, POST"},
@@ -196,37 +196,33 @@ RUVIA_TEST(http_response_field_does_not_apply_request_admission_rules) {
         {"Upgrade", "websocket"},
     };
     for (const auto& field : fields) {
-        RUVIA_CHECK(is_valid_http_response_field(field.name(), field.value()));
-        RUVIA_CHECK(!is_valid_http_request_application_field(field.name(), field.value()));
+        EXPECT_TRUE(is_valid_http_response_field(field.name(), field.value()));
+        EXPECT_TRUE(!is_valid_http_request_application_field(field.name(), field.value()));
     }
 }
 
-RUVIA_TEST(http_parse_error_messages_and_codes) {
+TEST(Ruvia, http_parse_error_messages_and_codes) {
     const auto missing_host = http_parse_protocol_error(http_parse_error::missing_host);
     const auto header_too_large = http_parse_protocol_error(http_parse_error::header_too_large);
     const auto unsupported_version = http_parse_protocol_error(http_parse_error::unsupported_http_version);
-    RUVIA_CHECK_EQ(std::string_view(missing_host.what()), std::string_view("missing Host header"));
-    RUVIA_CHECK_EQ(missing_host.code(), std::string_view("missing_host"));
-    RUVIA_CHECK_EQ(
-        std::string_view(header_too_large.what()), std::string_view("request header is too large"));
-    RUVIA_CHECK_EQ(header_too_large.code(), std::string_view("header_too_large"));
-    RUVIA_CHECK_EQ(
-        std::string_view(unsupported_version.what()), std::string_view("unsupported HTTP version"));
-    RUVIA_CHECK_EQ(unsupported_version.code(), std::string_view("unsupported_http_version"));
+    EXPECT_EQ(std::string_view(missing_host.what()), std::string_view("missing Host header"));
+    EXPECT_EQ(missing_host.code(), std::string_view("missing_host"));
+    EXPECT_EQ(std::string_view(header_too_large.what()), std::string_view("request header is too large"));
+    EXPECT_EQ(header_too_large.code(), std::string_view("header_too_large"));
+    EXPECT_EQ(std::string_view(unsupported_version.what()), std::string_view("unsupported HTTP version"));
+    EXPECT_EQ(unsupported_version.code(), std::string_view("unsupported_http_version"));
     // The two Content-Length faults carry distinct machine codes.
     const auto invalid_length = http_parse_protocol_error(http_parse_error::invalid_content_length);
     const auto conflicting_length =
         http_parse_protocol_error(http_parse_error::conflicting_content_length);
-    RUVIA_CHECK_EQ(invalid_length.code(), std::string_view("invalid_content_length"));
-    RUVIA_CHECK_EQ(conflicting_length.code(), std::string_view("conflicting_content_length"));
-    RUVIA_CHECK(invalid_length.status() == conflicting_length.status());
+    EXPECT_EQ(invalid_length.code(), std::string_view("invalid_content_length"));
+    EXPECT_EQ(conflicting_length.code(), std::string_view("conflicting_content_length"));
+    EXPECT_TRUE(invalid_length.status() == conflicting_length.status());
     // Reachable errors all map to a non-empty message.
-    RUVIA_CHECK(
-        std::string_view(http_parse_protocol_error(http_parse_error::invalid_transfer_encoding).what())
-            .size() != 0);
-    RUVIA_CHECK(std::string_view(http_parse_protocol_error(http_parse_error::invalid_connection).what())
+    EXPECT_TRUE(std::string_view(http_parse_protocol_error(http_parse_error::invalid_transfer_encoding).what())
                     .size() != 0);
-    RUVIA_CHECK(
-        std::string_view(http_parse_protocol_error(http_parse_error::invalid_upgrade).what()).size() !=
-        0);
+    EXPECT_TRUE(std::string_view(http_parse_protocol_error(http_parse_error::invalid_connection).what())
+                    .size() != 0);
+    EXPECT_TRUE(std::string_view(http_parse_protocol_error(http_parse_error::invalid_upgrade).what()).size() !=
+                0);
 }

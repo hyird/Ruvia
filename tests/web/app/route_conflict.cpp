@@ -1,4 +1,4 @@
-#include "test_harness.h"
+#include <gtest/gtest.h>
 
 // Two dynamic routes of one method that differ only in parameter names occupy
 // the same lookup slot: neither can take precedence, so startup must fail
@@ -36,7 +36,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(route_conflict_rejects_equal_precedence_dynamic_routes_at_startup) {
+TEST(Ruvia, route_conflict_rejects_equal_precedence_dynamic_routes_at_startup) {
     ruvia::test_app app;
     std::string message;
     try {
@@ -44,6 +44,6 @@ RUVIA_TEST(route_conflict_rejects_equal_precedence_dynamic_routes_at_startup) {
     } catch (const std::invalid_argument& error) {
         message = error.what();
     }
-    RUVIA_CHECK(message.find("GET /conflict/:id/files") != std::string::npos);
-    RUVIA_CHECK(message.find("GET /conflict/:name/files") != std::string::npos);
+    EXPECT_TRUE(message.find("GET /conflict/:id/files") != std::string::npos);
+    EXPECT_TRUE(message.find("GET /conflict/:name/files") != std::string::npos);
 }

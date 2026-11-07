@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -25,7 +27,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -124,7 +125,7 @@ std::string exchange_tls(asio::io_context& io, const asio::ip::tcp::endpoint& en
 
 using namespace interim_phase_timeout_test;
 
-RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
+TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
     ruvia::test::tls_identity identity("localhost");
     const auto private_key = identity.ca_file_.parent_path() / "key.pem";
     {
@@ -164,7 +165,7 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
         }
     });
     const bool ready = started.try_acquire_for(10s);
-    RUVIA_CHECK(ready);
+    EXPECT_TRUE(ready);
     if (ready) {
         // The first response is held behind the second request, so the 103
         // has to flush it first.
@@ -173,40 +174,40 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
             "GET /interim-phase/hinted HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         const auto item = output.find("item");
         const auto interim = output.find("HTTP/1.1 103 ");
-        RUVIA_CHECK(item != std::string::npos && interim != std::string::npos && item < interim);
-        RUVIA_CHECK(output.ends_with("hinted"));
+        EXPECT_TRUE(item != std::string::npos && interim != std::string::npos && item < interim);
+        EXPECT_TRUE(output.ends_with("hinted"));
 
         const auto streamed = exchange_tls(io, endpoint,
             "GET /interim-phase/stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-        RUVIA_CHECK(streamed.find("first-chunk") != std::string::npos);
-        RUVIA_CHECK(streamed.find("second-chunk") != std::string::npos);
-        RUVIA_CHECK(streamed.ends_with("0\r\n\r\n"));
+        EXPECT_TRUE(streamed.find("first-chunk") != std::string::npos);
+        EXPECT_TRUE(streamed.find("second-chunk") != std::string::npos);
+        EXPECT_TRUE(streamed.ends_with("0\r\n\r\n"));
 
         // A steadily draining single write is not inactivity. Paced batches
         // keep each raw write below the timeout; the handler measurement proves
         // that the whole write still spans more than one inactivity budget.
         const auto bulk = exchange_tls(io, endpoint,
             "GET /interim-phase/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", 2ms);
-        RUVIA_CHECK(bulk.size() > bulk_bytes);
-        RUVIA_CHECK(bulk.ends_with("0\r\n\r\n"));
-        RUVIA_CHECK(bulk_write_duration_ms.load(std::memory_order_relaxed) > write_timeout.count());
+        EXPECT_TRUE(bulk.size() > bulk_bytes);
+        EXPECT_TRUE(bulk.ends_with("0\r\n\r\n"));
+        EXPECT_TRUE(bulk_write_duration_ms.load(std::memory_order_relaxed) > write_timeout.count());
 
         // The same response to a peer that accepts no data exhausts the send
         // queue and must time out, rather than treating a pending write as
         // progress. Only resume reading after several inactivity budgets.
         const auto stalled = exchange_tls(io, endpoint,
             "GET /interim-phase/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", 0ms, handler_pause);
-        RUVIA_CHECK(stalled.starts_with("HTTP/1.1 200 "));
-        RUVIA_CHECK(stalled.find("\r\n\r\n") != std::string::npos);
-        RUVIA_CHECK(stalled.size() < bulk_bytes);
-        RUVIA_CHECK(!stalled.ends_with("0\r\n\r\n"));
+        EXPECT_TRUE(stalled.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(stalled.find("\r\n\r\n") != std::string::npos);
+        EXPECT_TRUE(stalled.size() < bulk_bytes);
+        EXPECT_TRUE(!stalled.ends_with("0\r\n\r\n"));
 
         // No acceptable coding: the 406 recovery runs on_error after the route.
         const auto refused = exchange_tls(io, endpoint,
             "GET /interim-phase/item HTTP/1.1\r\nHost: localhost\r\n"
             "Accept-Encoding: identity;q=0, *;q=0\r\nConnection: close\r\n\r\n");
-        RUVIA_CHECK(refused.starts_with("HTTP/1.1 406 "));
-        RUVIA_CHECK(refused.ends_with("refused"));
+        EXPECT_TRUE(refused.starts_with("HTTP/1.1 406 "));
+        EXPECT_TRUE(refused.ends_with("refused"));
     }
     app.stop();
     runner.join();

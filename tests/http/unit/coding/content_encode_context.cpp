@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <cstddef>
 #include <memory_resource>
@@ -9,7 +11,6 @@
 #include "ruvia/http/http_content_codec.h"
 
 #include "failing_memory_resource.h"
-#include "test_harness.h"
 
 using ruvia::decode_http_content;
 using ruvia::encode_http_content;
@@ -79,13 +80,13 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
 
 }  // namespace
 
-RUVIA_TEST(http_content_encode_context_reuse_matches_one_shot_bytes) {
+TEST(Ruvia, http_content_encode_context_reuse_matches_one_shot_bytes) {
     constexpr std::array sizes{std::size_t{0}, std::size_t{1}, std::size_t{1000}, std::size_t{8192},
         std::size_t{70'000}, std::size_t{300'000}};
     for (const auto coding : compressing_codings) {
         counting_resource state_resource;
         http_content_encode_context context(coding, &state_resource);
-        RUVIA_CHECK(context.coding() == coding);
+        EXPECT_TRUE(context.coding() == coding);
         unsigned seed = 0;
         // Twice through, so every size also follows a larger representation.
         for (int round = 0; round < 2; ++round) {
@@ -93,57 +94,57 @@ RUVIA_TEST(http_content_encode_context_reuse_matches_one_shot_bytes) {
                 const auto input = sample_body(size, ++seed);
                 const auto expected = one_shot(coding, input, input.size() + 1024);
                 const auto actual = encode_with(context, input, input.size() + 1024);
-                RUVIA_CHECK(actual.has_value());
-                RUVIA_CHECK(actual.value_or(std::string()) == expected);
+                EXPECT_TRUE(actual.has_value());
+                EXPECT_TRUE(actual.value_or(std::string()) == expected);
                 const auto decoded = decode_http_content(
                     std::array{coding}, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
-                RUVIA_CHECK(std::holds_alternative<std::pmr::string>(decoded));
+                EXPECT_TRUE(std::holds_alternative<std::pmr::string>(decoded));
                 if (const auto* content = std::get_if<std::pmr::string>(&decoded)) {
-                    RUVIA_CHECK(std::string_view(*content) == input);
+                    EXPECT_TRUE(std::string_view(*content) == input);
                 }
             }
         }
     }
 }
 
-RUVIA_TEST(http_content_encode_context_keeps_state_apart_from_output) {
+TEST(Ruvia, http_content_encode_context_keeps_state_apart_from_output) {
     const auto input = sample_body(20'000, 7);
     for (const auto coding : compressing_codings) {
         counting_resource state_resource;
         counting_resource output_resource;
         {
             http_content_encode_context context(coding, &state_resource);
-            RUVIA_CHECK_EQ(state_resource.allocations(), 0U);
+            EXPECT_EQ(state_resource.allocations(), 0U);
 
             std::optional<std::string> first;
             {
                 auto result_value =
                     context.encode(input, {.max_encoded_bytes_ = input.size(), .resource_ = &output_resource});
-                RUVIA_CHECK(result_value.has_value());
-                RUVIA_CHECK(output_resource.live_bytes() != 0);
+                EXPECT_TRUE(result_value.has_value());
+                EXPECT_TRUE(output_resource.live_bytes() != 0);
                 if (result_value.has_value()) {
                     first.emplace(*result_value);
                 }
             }
-            RUVIA_CHECK_EQ(output_resource.live_bytes(), 0U);
-            RUVIA_CHECK(state_resource.allocations() != 0);
+            EXPECT_EQ(output_resource.live_bytes(), 0U);
+            EXPECT_TRUE(state_resource.allocations() != 0);
 
             const auto warm_allocations = state_resource.allocations();
-            RUVIA_CHECK(encode_with(context, input, input.size(), &output_resource) == first);
+            EXPECT_TRUE(encode_with(context, input, input.size(), &output_resource) == first);
             if (coding == http_content_coding::brotli) {
                 // Brotli cannot reset, so its state is per call and released.
-                RUVIA_CHECK_EQ(state_resource.live_bytes(), 0U);
+                EXPECT_EQ(state_resource.live_bytes(), 0U);
             } else {
                 // A reset stream allocates nothing for the next representation.
-                RUVIA_CHECK_EQ(state_resource.allocations(), warm_allocations);
-                RUVIA_CHECK(state_resource.live_bytes() != 0);
+                EXPECT_EQ(state_resource.allocations(), warm_allocations);
+                EXPECT_TRUE(state_resource.live_bytes() != 0);
             }
         }
-        RUVIA_CHECK_EQ(state_resource.live_bytes(), 0U);
+        EXPECT_EQ(state_resource.live_bytes(), 0U);
     }
 }
 
-RUVIA_TEST(http_content_encode_context_resets_after_a_failed_encode) {
+TEST(Ruvia, http_content_encode_context_resets_after_a_failed_encode) {
     const auto failed_input = sample_body(100'000, 11);
     const auto next_input = sample_body(5'000, 12);
     for (const auto coding : compressing_codings) {
@@ -152,8 +153,8 @@ RUVIA_TEST(http_content_encode_context_resets_after_a_failed_encode) {
 
         // Stop mid-stream on the output cap.
         const auto capped = context.encode(failed_input, {.max_encoded_bytes_ = 64});
-        RUVIA_CHECK(!capped.has_value());
-        RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
+        EXPECT_TRUE(!capped.has_value());
+        EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
 
         // Stop mid-stream on an output allocation failure.
         failing_memory_resource output_resource;
@@ -165,13 +166,13 @@ RUVIA_TEST(http_content_encode_context_resets_after_a_failed_encode) {
         } catch (const std::bad_alloc&) {
             threw = true;
         }
-        RUVIA_CHECK(threw);
-        RUVIA_CHECK_EQ(output_resource.live_allocations(), 0U);
-        RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
+        EXPECT_TRUE(threw);
+        EXPECT_EQ(output_resource.live_allocations(), 0U);
+        EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
     }
 }
 
-RUVIA_TEST(http_content_encode_context_discards_state_left_by_an_exception) {
+TEST(Ruvia, http_content_encode_context_discards_state_left_by_an_exception) {
     const auto failed_input = sample_body(100'000, 13);
     const auto next_input = sample_body(5'000, 14);
     for (const auto coding : compressing_codings) {
@@ -179,7 +180,7 @@ RUVIA_TEST(http_content_encode_context_discards_state_left_by_an_exception) {
         {
             http_content_encode_context context(coding, &state_resource);
             const auto expected = one_shot(coding, next_input, next_input.size());
-            RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
+            EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
 
             failing_memory_resource output_resource;
             output_resource.fail_after(0);
@@ -190,18 +191,18 @@ RUVIA_TEST(http_content_encode_context_discards_state_left_by_an_exception) {
             } catch (const std::bad_alloc&) {
                 threw = true;
             }
-            RUVIA_CHECK(threw);
+            EXPECT_TRUE(threw);
             // Native state that an exception interrupted is freed, not reset
             // and kept for the next representation.
-            RUVIA_CHECK_EQ(state_resource.live_bytes(), 0U);
+            EXPECT_EQ(state_resource.live_bytes(), 0U);
 
-            RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
+            EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
         }
-        RUVIA_CHECK_EQ(state_resource.live_bytes(), 0U);
+        EXPECT_EQ(state_resource.live_bytes(), 0U);
     }
 }
 
-RUVIA_TEST(http_content_encode_context_recovers_from_state_allocation_failure) {
+TEST(Ruvia, http_content_encode_context_recovers_from_state_allocation_failure) {
     const auto input = sample_body(3'000, 21);
     for (const auto coding : compressing_codings) {
         failing_memory_resource state_resource;
@@ -214,44 +215,44 @@ RUVIA_TEST(http_content_encode_context_recovers_from_state_allocation_failure) {
             } catch (const std::bad_alloc&) {
                 threw = true;
             }
-            RUVIA_CHECK(threw);
-            RUVIA_CHECK_EQ(state_resource.live_allocations(), 0U);
+            EXPECT_TRUE(threw);
+            EXPECT_EQ(state_resource.live_allocations(), 0U);
 
             state_resource.allow_allocations();
-            RUVIA_CHECK(encode_with(context, input, input.size()) == one_shot(coding, input, input.size()));
+            EXPECT_TRUE(encode_with(context, input, input.size()) == one_shot(coding, input, input.size()));
         }
-        RUVIA_CHECK_EQ(state_resource.live_allocations(), 0U);
+        EXPECT_EQ(state_resource.live_allocations(), 0U);
     }
 }
 
-RUVIA_TEST(http_content_encode_context_identity_follows_the_one_shot_contract) {
+TEST(Ruvia, http_content_encode_context_identity_follows_the_one_shot_contract) {
     counting_resource state_resource;
     http_content_encode_context context(http_content_coding::identity, &state_resource);
-    RUVIA_CHECK(encode_with(context, "plain", 5) == std::optional<std::string>("plain"));
+    EXPECT_TRUE(encode_with(context, "plain", 5) == std::optional<std::string>("plain"));
     const auto oversized = context.encode("plain", {.max_encoded_bytes_ = 4});
-    RUVIA_CHECK(!oversized.has_value());
-    RUVIA_CHECK_EQ(state_resource.allocations(), 0U);
+    EXPECT_TRUE(!oversized.has_value());
+    EXPECT_EQ(state_resource.allocations(), 0U);
 }
 
-RUVIA_TEST(http_content_encode_context_reuses_after_zero_and_exact_budgets) {
+TEST(Ruvia, http_content_encode_context_reuses_after_zero_and_exact_budgets) {
     const auto input = sample_body(8'000, 31);
     for (const auto coding : compressing_codings) {
         http_content_encode_context context(coding, std::pmr::new_delete_resource());
         const auto expected = encode_http_content(coding, input, {.max_encoded_bytes_ = input.size()});
-        RUVIA_CHECK(expected.has_value());
+        EXPECT_TRUE(expected.has_value());
         if (!expected.has_value()) {
             continue;
         }
-        RUVIA_CHECK(!context.encode({}, {.max_encoded_bytes_ = 0}).has_value());
-        RUVIA_CHECK(!context.encode(input, {.max_encoded_bytes_ = 0}).has_value());
+        EXPECT_TRUE(!context.encode({}, {.max_encoded_bytes_ = 0}).has_value());
+        EXPECT_TRUE(!context.encode(input, {.max_encoded_bytes_ = 0}).has_value());
         const auto exact = context.encode(input, {.max_encoded_bytes_ = expected->size()});
-        RUVIA_CHECK(exact.has_value() && *exact == *expected);
-        RUVIA_CHECK(!context.encode(input, {.max_encoded_bytes_ = expected->size() - 1}).has_value());
-        RUVIA_CHECK(encode_with(context, input, input.size()) == std::string(*expected));
+        EXPECT_TRUE(exact.has_value() && *exact == *expected);
+        EXPECT_TRUE(!context.encode(input, {.max_encoded_bytes_ = expected->size() - 1}).has_value());
+        EXPECT_TRUE(encode_with(context, input, input.size()) == std::string(*expected));
     }
 }
 
-RUVIA_TEST(http_content_encode_context_unknown_coding_throws_without_allocating_state) {
+TEST(Ruvia, http_content_encode_context_unknown_coding_throws_without_allocating_state) {
     counting_resource resource;
     http_content_encode_context context(static_cast<http_content_coding>(255), &resource);
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -261,7 +262,7 @@ RUVIA_TEST(http_content_encode_context_unknown_coding_throws_without_allocating_
         } catch (const ruvia::http_content_codec_error&) {
             threw = true;
         }
-        RUVIA_CHECK(threw);
+        EXPECT_TRUE(threw);
     }
-    RUVIA_CHECK_EQ(resource.allocations(), 0U);
+    EXPECT_EQ(resource.allocations(), 0U);
 }

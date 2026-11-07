@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <exception>
@@ -15,7 +17,6 @@
 #include "ruvia/web/controller.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace final_response_commit_test {
@@ -34,7 +35,7 @@ class invalid_final_response_routes final {
 
 }  // namespace final_response_commit_test
 
-RUVIA_TEST(server_answers_an_uncommittable_route_response_with_a_closing_error) {
+TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io);
@@ -86,6 +87,6 @@ RUVIA_TEST(server_answers_an_uncommittable_route_response_with_a_closing_error) 
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 500 "));
-    RUVIA_CHECK(response.find("\r\nConnection: close\r\n") != std::string::npos);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 500 "));
+    EXPECT_TRUE(response.find("\r\nConnection: close\r\n") != std::string::npos);
 }

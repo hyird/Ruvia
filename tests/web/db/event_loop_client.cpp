@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <barrier>
 #include <stdexcept>
 #include <thread>
@@ -9,7 +11,6 @@
 #include "ruvia/web/db/db_handle.h"
 
 #include "backend_client_fixture.h"
-#include "test_harness.h"
 
 namespace {
 
@@ -38,7 +39,7 @@ ruvia::task<bool> can_create_operation(ruvia::db_client& client) {
 
 }  // namespace
 
-RUVIA_TEST(db_client_rejects_duplicate_connect_without_interrupting_startup) {
+TEST(Ruvia, db_client_rejects_duplicate_connect_without_interrupting_startup) {
     ruvia::test::backend_startup_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
@@ -63,11 +64,11 @@ RUVIA_TEST(db_client_rejects_duplicate_connect_without_interrupting_startup) {
     } catch (const std::logic_error&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK(ready.get());
+    EXPECT_TRUE(rejected);
+    EXPECT_TRUE(ready.get());
 }
 
-RUVIA_TEST(db_client_rejects_duplicate_connect_without_closing_connected_client) {
+TEST(Ruvia, db_client_rejects_duplicate_connect_without_closing_connected_client) {
     ruvia::test::backend_startup_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
@@ -92,11 +93,11 @@ RUVIA_TEST(db_client_rejects_duplicate_connect_without_closing_connected_client)
     } catch (const std::logic_error&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK(ready.get());
+    EXPECT_TRUE(rejected);
+    EXPECT_TRUE(ready.get());
 }
 
-RUVIA_TEST(db_client_fresh_close_and_loop_stop_share_worker_completion) {
+TEST(Ruvia, db_client_fresh_close_and_loop_stop_share_worker_completion) {
     for (int iteration = 0; iteration < 64; ++iteration) {
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::db_client client(pool.loop(0), {.driver_ = ruvia::db_driver::postgresql});
@@ -110,11 +111,11 @@ RUVIA_TEST(db_client_fresh_close_and_loop_stop_share_worker_completion) {
         pool.stop();
         closer.join();
         pool.join();
-        RUVIA_CHECK(!client.worker().accepting());
+        EXPECT_TRUE(!client.worker().accepting());
     }
 }
 
-RUVIA_TEST(db_client_cold_connect_can_be_discarded_before_pool_start) {
+TEST(Ruvia, db_client_cold_connect_can_be_discarded_before_pool_start) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     {
         ruvia::db_client client(pool.loop(0), {.driver_ = ruvia::db_driver::postgresql});
@@ -122,10 +123,10 @@ RUVIA_TEST(db_client_cold_connect_can_be_discarded_before_pool_start) {
         (void)cold;
     }
     pool.join();
-    RUVIA_CHECK(!pool.loop(0).handle().accepting());
+    EXPECT_TRUE(!pool.loop(0).handle().accepting());
 }
 
-RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication) {
+TEST(Ruvia, db_client_event_loop_stop_awaits_retirement_of_pending_authentication) {
     for (const bool use_attachment_run : {false, true}) {
         ruvia::test::backend_startup_peer peer;
         asio::io_context io;
@@ -152,12 +153,12 @@ RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        RUVIA_CHECK(cancelled);
-        RUVIA_CHECK(!client.worker().accepting());
+        EXPECT_TRUE(cancelled);
+        EXPECT_TRUE(!client.worker().accepting());
     }
 }
 
-RUVIA_TEST(db_client_shutdown_waiters_join_pending_authentication) {
+TEST(Ruvia, db_client_shutdown_waiters_join_pending_authentication) {
     ruvia::test::backend_startup_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     auto loop = pool.loop(0);
@@ -187,6 +188,6 @@ RUVIA_TEST(db_client_shutdown_waiters_join_pending_authentication) {
     closing.get();
     also_closing.get();
     closed_again.get();
-    RUVIA_CHECK(cancelled);
-    RUVIA_CHECK(!ready.get());
+    EXPECT_TRUE(cancelled);
+    EXPECT_TRUE(!ready.get());
 }

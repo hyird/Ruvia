@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -16,7 +18,7 @@
 #include "ruvia/web/db/db_query.h"
 
 #include "memory_resource_fixture.h"
-#include "test_harness.h"
+#include "test_exceptions.h"
 
 namespace {
 
@@ -34,17 +36,17 @@ using ruvia::testing::throws_on;
 
 }  // namespace
 
-RUVIA_TEST(scoped_operation_scope_tracks_cold_owner_operations) {
+TEST(Ruvia, scoped_operation_scope_tracks_cold_owner_operations) {
     ruvia::operation_scope operation_scope;
     auto cold_task = []() -> ruvia::task<void> { co_return; }();
     {
         auto operation = ruvia::make_scoped_operation(operation_scope, std::move(cold_task));
-        RUVIA_CHECK(operation_scope.has_pending_operations());
+        EXPECT_TRUE(operation_scope.has_pending_operations());
     }
-    RUVIA_CHECK(!operation_scope.has_pending_operations());
+    EXPECT_TRUE(!operation_scope.has_pending_operations());
 }
 
-RUVIA_TEST(db_error_carries_category_and_native_diagnostics) {
+TEST(Ruvia, db_error_carries_category_and_native_diagnostics) {
     const ruvia::db_error timeout(ruvia::db_error::code_type::timeout,
         ruvia::db_driver::mariadb, "timeout", 1205, "HY000");
     const ruvia::db_error unique_violation(ruvia::db_error::code_type::statement_failed,
@@ -53,22 +55,22 @@ RUVIA_TEST(db_error_carries_category_and_native_diagnostics) {
         ruvia::db_driver::postgresql, "cancelled");
     const ruvia::db_error closing(ruvia::db_error::code_type::closing,
         ruvia::db_driver::mariadb, "closing");
-    RUVIA_CHECK(timeout.code() == ruvia::db_error::code_type::timeout);
-    RUVIA_CHECK(timeout.driver() == ruvia::db_driver::mariadb);
-    RUVIA_CHECK(timeout.native_code() == 1205);
-    RUVIA_CHECK(timeout.sql_state() == "HY000");
-    RUVIA_CHECK(unique_violation.driver() == ruvia::db_driver::postgresql);
-    RUVIA_CHECK(unique_violation.sql_state() == "23505");
-    RUVIA_CHECK(unique_violation.constraint_name() == "uq_jobs_key");
-    RUVIA_CHECK(!unique_violation.native_code());
-    RUVIA_CHECK(cancelled.code() == ruvia::db_error::code_type::cancelled);
-    RUVIA_CHECK(!cancelled.native_code());
-    RUVIA_CHECK(!cancelled.sql_state());
-    RUVIA_CHECK(!cancelled.constraint_name());
-    RUVIA_CHECK(closing.code() == ruvia::db_error::code_type::closing);
+    EXPECT_TRUE(timeout.code() == ruvia::db_error::code_type::timeout);
+    EXPECT_TRUE(timeout.driver() == ruvia::db_driver::mariadb);
+    EXPECT_TRUE(timeout.native_code() == 1205);
+    EXPECT_TRUE(timeout.sql_state() == "HY000");
+    EXPECT_TRUE(unique_violation.driver() == ruvia::db_driver::postgresql);
+    EXPECT_TRUE(unique_violation.sql_state() == "23505");
+    EXPECT_TRUE(unique_violation.constraint_name() == "uq_jobs_key");
+    EXPECT_TRUE(!unique_violation.native_code());
+    EXPECT_TRUE(cancelled.code() == ruvia::db_error::code_type::cancelled);
+    EXPECT_TRUE(!cancelled.native_code());
+    EXPECT_TRUE(!cancelled.sql_state());
+    EXPECT_TRUE(!cancelled.constraint_name());
+    EXPECT_TRUE(closing.code() == ruvia::db_error::code_type::closing);
 }
 
-RUVIA_TEST(db_migrator_validates_before_opening_connection) {
+TEST(Ruvia, db_migrator_validates_before_opening_connection) {
     const std::array<ruvia::db_migration, 2> migrations{{
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 1"}},
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 2"}},
@@ -81,11 +83,11 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
         rejected = std::string_view(error.what()) ==
                    "database migration ids must be unique, including case";
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }
 
 #ifdef RUVIA_ENABLE_MARIADB
-RUVIA_TEST(db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
+TEST(Ruvia, db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
     // Nothing listens on port 1, so validation is the only step that can
     // reject the list with std::invalid_argument; a connect failure is not one.
     const auto validation_error = [](std::string_view sql) {
@@ -102,14 +104,14 @@ RUVIA_TEST(db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
         }
         return std::string();
     };
-    RUVIA_CHECK_EQ(validation_error("CREATE TABLE t (a INT);--"), std::string());
-    RUVIA_CHECK_EQ(validation_error("--"), std::string("database migration SQL must not be empty"));
-    RUVIA_CHECK_EQ(validation_error("SELECT 1;--x"), std::string("database migration must contain exactly one SQL statement"));
+    EXPECT_EQ(validation_error("CREATE TABLE t (a INT);--"), std::string());
+    EXPECT_EQ(validation_error("--"), std::string("database migration SQL must not be empty"));
+    EXPECT_EQ(validation_error("SELECT 1;--x"), std::string("database migration must contain exactly one SQL statement"));
 }
 #endif
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
-RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
+TEST(Ruvia, db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
     auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
     ruvia::db_migrator_options options;
     options.lock_timeout_ = std::chrono::seconds::max();
@@ -122,11 +124,11 @@ RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_co
             std::string_view(error.what()) ==
             "database migration lock timeout cannot be represented as PostgreSQL milliseconds";
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }
 #endif
 
-RUVIA_TEST(db_migrator_copies_public_configuration) {
+TEST(Ruvia, db_migrator_copies_public_configuration) {
     tracking_resource target_resource;
     std::optional<ruvia::db_migrator> migrator;
     {
@@ -146,11 +148,11 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
     }
     // Opaque owner + four long DB strings + the long migration table all use
     // the caller's resource rather than their public std::string allocators.
-    RUVIA_CHECK(target_resource.allocation_count() >= 6);
+    EXPECT_TRUE(target_resource.allocation_count() >= 6);
     migrator.reset();
 }
 
-RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
+TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
     {
         auto config = test_db_config();
         config.host_ = std::string(40, 'h') + "." + std::string(40, 'h');
@@ -163,8 +165,8 @@ RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
             .resource_ = &resource,
         };
 
-        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
-        RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
+        EXPECT_EQ(resource.allocation_count(), std::size_t{0});
     }
     {
         auto config = test_db_config();
@@ -176,32 +178,32 @@ RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
             .resource_ = &resource,
         };
 
-        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
-        RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
+        EXPECT_EQ(resource.allocation_count(), std::size_t{0});
     }
 }
 
-RUVIA_TEST(db_migrator_rejects_nul_bytes_in_credentials) {
+TEST(Ruvia, db_migrator_rejects_nul_bytes_in_credentials) {
     using namespace std::string_literals;
     for (const auto field : {&ruvia::db_config::username_, &ruvia::db_config::password_, &ruvia::db_config::database_}) {
         auto config = test_db_config();
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.*field = "app\0suffix"s;
-        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
     }
 }
 
-RUVIA_TEST(database_config_rejects_non_host_dns_inputs) {
+TEST(Ruvia, database_config_rejects_non_host_dns_inputs) {
     for (const std::string_view host : {std::string_view("bad_name"), std::string_view("1.2.3.999"),
              std::string_view("host..example"), std::string_view("-host.example")}) {
         auto config = test_db_config();
         config.host_ = host;
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
-        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
     }
 }
 
-RUVIA_TEST(db_migrator_validates_migration_list_before_allocating_runtime) {
+TEST(Ruvia, db_migrator_validates_migration_list_before_allocating_runtime) {
     const std::array<ruvia::db_migration, 2> migrations{{
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 1"}},
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 2"}},
@@ -216,11 +218,11 @@ RUVIA_TEST(db_migrator_validates_migration_list_before_allocating_runtime) {
         .resource_ = &resource,
     };
 
-    RUVIA_CHECK(throws_on([&] {
+    EXPECT_TRUE(throws_on([&] {
         (void)ruvia::db_migrator::migrate(
             config, std::span<const ruvia::db_migration>(migrations), options);
     }));
-    RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
+    EXPECT_EQ(resource.allocation_count(), std::size_t{0});
 }
 
 namespace {
@@ -234,13 +236,13 @@ struct default_resource_guard final {
 };
 }  // namespace
 
-RUVIA_TEST(db_expression_values_use_explicit_resource_for_owned_parameters) {
+TEST(Ruvia, db_expression_values_use_explicit_resource_for_owned_parameters) {
     ruvia::test::counting_memory_resource source_resource;
     const std::string value(128, 'v');
     ruvia::db_query source_value(&source_resource);
     source_value.select(source_value.value(value));
     const auto statement = source_value.compile(ruvia::db_driver::postgresql, &source_resource);
-    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+    EXPECT_EQ(statement.params().size(), std::size_t{1});
     if (statement.params().size() != 1) {
         return;
     }
@@ -260,10 +262,10 @@ RUVIA_TEST(db_expression_values_use_explicit_resource_for_owned_parameters) {
         } catch (const std::bad_alloc&) {
             unexpected_allocation = true;
         }
-        RUVIA_CHECK(!unexpected_allocation);
+        EXPECT_TRUE(!unexpected_allocation);
         if (!unexpected_allocation) {
             const auto compiled = destination.compile(ruvia::db_driver::postgresql, &destination_resource);
-            RUVIA_CHECK_EQ(compiled.params().size(), std::size_t{1});
+            EXPECT_EQ(compiled.params().size(), std::size_t{1});
         }
     }
 }

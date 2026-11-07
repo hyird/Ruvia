@@ -3,6 +3,8 @@
 // GOAWAY advertises 2^31-1 (RFC 9113 section 6.8), so that head is served like
 // any accepted stream even when it is a CONNECT tunnel or an RFC 8441 WebSocket
 // handshake.
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -28,7 +30,6 @@
 #include "ruvia/web/websocket.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 
 namespace http2_request_limit_test {
 using namespace std::chrono_literals;
@@ -163,7 +164,7 @@ stream_outcome open_upgrade(const asio::ip::tcp::endpoint& endpoint, upgrade_kin
 }
 }  // namespace http2_request_limit_test
 
-RUVIA_TEST(http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_served) {
+TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_served) {
     using namespace http2_request_limit_test;
     using namespace std::chrono_literals;
     auto& app = ruvia::app();
@@ -205,10 +206,10 @@ RUVIA_TEST(http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_ser
     }
     // The limit was reached by this very request: the drain's first GOAWAY
     // (2^31-1) precedes its response, and the upgrade still completes on it.
-    RUVIA_CHECK_EQ(tunnel->answer_, std::string("200"));
-    RUVIA_CHECK(tunnel->goaway_last_stream_id_.has_value());
-    RUVIA_CHECK_EQ(tunnel->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
-    RUVIA_CHECK_EQ(websocket->answer_, std::string("200"));
-    RUVIA_CHECK(websocket->goaway_last_stream_id_.has_value());
-    RUVIA_CHECK_EQ(websocket->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
+    EXPECT_EQ(tunnel->answer_, std::string("200"));
+    EXPECT_TRUE(tunnel->goaway_last_stream_id_.has_value());
+    EXPECT_EQ(tunnel->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
+    EXPECT_EQ(websocket->answer_, std::string("200"));
+    EXPECT_TRUE(websocket->goaway_last_stream_id_.has_value());
+    EXPECT_EQ(websocket->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
 }

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -2356,104 +2358,162 @@ bool test_draining_post_can_schedule_defer_cleanup_during_stop() {
 
 }  // namespace
 
-int main() {
-    const auto run = [](const char* name, bool (*test)()) {
-        std::printf("[ RUN ] %s\n", name);
-        std::fflush(stdout);
-        const bool passed = test();
-        std::printf("[%s] %s\n", passed ? " ok " : "FAIL", name);
-        std::fflush(stdout);
-        return passed;
-    };
-    return run("event_loop_post_borrow_and_rejected_callable_ownership",
-               test_event_loop_post_borrow_and_rejected_callable_ownership) &&
-                   run("event_loop_post_protects_reentrant_inline_move",
-                       test_event_loop_post_protects_reentrant_inline_move) &&
-                   run("event_loop_post_protects_reentrant_heap_copy",
-                       test_event_loop_post_protects_reentrant_heap_copy) &&
-                   run("worker_handle_callable_lifetime", test_worker_handle_callable_lifetime) &&
-                   run("post_factory_keeps_endpoint_through_owner_retirement",
-                       test_post_factory_keeps_endpoint_through_owner_retirement) &&
-                   run("post_factory_exception_releases_admission",
-                       test_post_factory_exception_releases_admission) &&
-                   run("post_factory_close_drains_admitted_callback",
-                       test_post_factory_close_drains_admitted_callback) &&
-                   run("post_outcome_invariants_and_empty_callbacks",
-                       test_post_outcome_invariants_and_empty_callbacks) &&
-                   run("worker_runtime_context_owns_stable_detached_endpoint",
-                       test_worker_runtime_context_owns_stable_detached_endpoint) &&
-                   run("queue_callable_destruction_can_inspect_worker",
-                       test_queue_callable_destruction_can_inspect_worker) &&
-                   run("worker_signal_is_worker_affine", test_worker_signal_is_worker_affine) &&
-                   run("worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake",
-                       test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake) &&
-                   run("completed_signal_wait_releases_owner", test_completed_signal_wait_releases_owner) &&
-                   run("worker_signal_has_no_waiter_limit",
-                       test_worker_signal_has_no_arbitrary_waiter_limit) &&
-                   run("worker_signal_rechecks_cold_wait_affinity",
-                       test_worker_signal_rechecks_affinity_when_cold_wait_starts) &&
-                   run("dispatch_and_affinity", test_dispatch_and_affinity) &&
-                   run("bounded_queue", test_bounded_queue) &&
-                   run("cancellation_with_full_queue", [] { return test_cancellation_reaches_worker_with_saturated_or_closed_queue(false); }) &&
-                   run("cancellation_with_closed_queue", [] { return test_cancellation_reaches_worker_with_saturated_or_closed_queue(true); }) &&
-                   run("queued_cancellation_after_owner_retirement", test_queued_cancellation_releases_queue_after_owner_retirement) &&
-                   run("cancellation_after_endpoint_detach", test_cancellation_after_endpoint_detach_does_not_touch_retired_owner) &&
-                   run("external_event_loop_attachment", test_external_event_loop_attachment) &&
-                   run("attachment_run_failure_retires_through_async_cleanup",
-                       test_attachment_run_failure_retires_through_async_cleanup) &&
-                   run("abandoned_attachment_root_failure_retires_native_run",
-                       [] { return test_abandoned_attachment_root_failure_retires(false); }) &&
-                   run("abandoned_attachment_root_failure_retires_attachment_run",
-                       [] { return test_abandoned_attachment_root_failure_retires(true); }) &&
-                   run("pool_reported_failure_stops_every_loop_and_join_rethrows",
-                       test_pool_reported_failure_stops_every_loop_and_join_rethrows) &&
-                   run("pool_failure_handoff_during_destructor_report",
-                       test_pool_failure_handoff_during_destructor_report) &&
-                   run("pool_reports_distinct_failure_from_another_loop",
-                       test_pool_reports_distinct_failure_from_another_loop) &&
-                   run("worker_run_reports_failure_after_delivered_one",
-                       test_worker_run_reports_failure_after_delivered_one) &&
-                   run("pool_failure_report_works_after_queue_closure",
-                       test_pool_failure_report_works_after_queue_closure) &&
-                   run("attachment_report_failure_preserves_native_run_ownership",
-                       test_attachment_report_failure_keeps_native_run_ownership) &&
-                   run("external_attachment_retains_state_until_cleanup",
-                       test_external_attachment_retains_state_until_context_cleanup) &&
-                   run("external_attachment_handles_context_destruction",
-                       test_external_attachment_handles_context_destruction) &&
-                   run("stopped_attachment_with_queued_post_handles_context_destruction",
-                       test_stopped_attachment_with_queued_post_handles_context_destruction) &&
-                   run("join_stops_running_pool", test_join_stops_running_pool) &&
-                   run("failure_propagation", test_failure_propagation) &&
-                   run("join_before_start_drains_on_owners", test_join_before_start_drains_on_owners) &&
-                   run("stop_before_start_propagates_failure",
-                       test_stop_before_start_propagates_failure) &&
-                   run("join_rejects_pool_worker", test_join_rejects_pool_worker) &&
-                   run("executor_failure_drains_shutdown_on_owners",
-                       test_executor_failure_drains_shutdown_on_owners) &&
-                   run("expired_handle", test_expired_handle) &&
-                   run("escaped_worker_handle_detaches",
-                       test_escaped_worker_handle_becomes_detached_endpoint) &&
-                   run("abandoned_root_task_completes_when_queue_drain_fails",
-                       test_abandoned_root_task_completes_when_queue_drain_fails) &&
-                   run("stop_callback_failure_reaches_join", test_stop_callback_failure_reaches_join) &&
-                   run("stop_callback_factory_failure_keeps_other_callbacks_running",
-                       test_stop_callback_factory_failure_does_not_skip_other_callbacks) &&
-                   run("async_stop_callbacks_start_together_and_keep_captures_alive",
-                       test_async_stop_callbacks_start_together_and_keep_captures_alive) &&
-                   run("reset_stop_registration_cancels_deferred_unstarted_callback",
-                       test_reset_stop_registration_cancels_deferred_unstarted_callback) &&
-                   run("stop_registration_move_can_stop_attachment", test_stop_registration_move_can_stop_attachment) &&
-                   run("root_tasks_join_nested_scopes_during_stop",
-                       test_root_tasks_join_nested_scopes_during_stop) &&
-                   run("root_result_moves_are_reentrant_and_preserve_owner",
-                       test_root_task_result_moves_outside_lock_and_preserves_reentrant_owner) &&
-                   run("root_result_owns_pmr_storage_past_pool_retirement",
-                       test_root_task_result_owns_pmr_storage_past_pool_retirement) &&
-                   run("root_task_delivers_const_result",
-                       test_root_task_delivers_const_result) &&
-                   run("draining_post_can_schedule_defer_cleanup_during_stop",
-                       test_draining_post_can_schedule_defer_cleanup_during_stop)
-               ? 0
-               : 1;
+TEST(Ruvia, WorkerPostBorrowAndRejectedCallableOwnership) {
+    EXPECT_TRUE(test_event_loop_post_borrow_and_rejected_callable_ownership());
+}
+TEST(Ruvia, WorkerPostProtectsReentrantInlineMove) {
+    EXPECT_TRUE(test_event_loop_post_protects_reentrant_inline_move());
+}
+TEST(Ruvia, WorkerPostProtectsReentrantHeapCopy) {
+    EXPECT_TRUE(test_event_loop_post_protects_reentrant_heap_copy());
+}
+TEST(Ruvia, WorkerHandleCallableLifetime) {
+    EXPECT_TRUE(test_worker_handle_callable_lifetime());
+}
+TEST(Ruvia, WorkerPostFactoryKeepsEndpointThroughOwnerRetirement) {
+    EXPECT_TRUE(test_post_factory_keeps_endpoint_through_owner_retirement());
+}
+TEST(Ruvia, WorkerPostFactoryExceptionReleasesAdmission) {
+    EXPECT_TRUE(test_post_factory_exception_releases_admission());
+}
+TEST(Ruvia, WorkerPostFactoryCloseDrainsAdmittedCallback) {
+    EXPECT_TRUE(test_post_factory_close_drains_admitted_callback());
+}
+TEST(Ruvia, WorkerPostOutcomeInvariantsAndEmptyCallbacks) {
+    EXPECT_TRUE(test_post_outcome_invariants_and_empty_callbacks());
+}
+TEST(Ruvia, WorkerRuntimeContextOwnsStableDetachedEndpoint) {
+    EXPECT_TRUE(test_worker_runtime_context_owns_stable_detached_endpoint());
+}
+TEST(Ruvia, WorkerQueueCallableDestructionCanInspectWorker) {
+    EXPECT_TRUE(test_queue_callable_destruction_can_inspect_worker());
+}
+TEST(Ruvia, WorkerSignalIsWorkerAffine) {
+    EXPECT_TRUE(test_worker_signal_is_worker_affine());
+}
+TEST(Ruvia, WorkerSignalPendingLatchSurvivesDiscardAndWake) {
+    EXPECT_TRUE(test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake());
+}
+TEST(Ruvia, WorkerCompletedSignalWaitReleasesOwner) {
+    EXPECT_TRUE(test_completed_signal_wait_releases_owner());
+}
+TEST(Ruvia, WorkerSignalHasNoWaiterLimit) {
+    EXPECT_TRUE(test_worker_signal_has_no_arbitrary_waiter_limit());
+}
+TEST(Ruvia, WorkerSignalRechecksColdWaitAffinity) {
+    EXPECT_TRUE(test_worker_signal_rechecks_affinity_when_cold_wait_starts());
+}
+TEST(Ruvia, WorkerDispatchAndAffinity) {
+    EXPECT_TRUE(test_dispatch_and_affinity());
+}
+TEST(Ruvia, WorkerBoundedQueue) {
+    EXPECT_TRUE(test_bounded_queue());
+}
+TEST(Ruvia, WorkerCancellationWithFullQueue) {
+    EXPECT_TRUE(test_cancellation_reaches_worker_with_saturated_or_closed_queue(false));
+}
+TEST(Ruvia, WorkerCancellationWithClosedQueue) {
+    EXPECT_TRUE(test_cancellation_reaches_worker_with_saturated_or_closed_queue(true));
+}
+TEST(Ruvia, WorkerQueuedCancellationAfterOwnerRetirement) {
+    EXPECT_TRUE(test_queued_cancellation_releases_queue_after_owner_retirement());
+}
+TEST(Ruvia, WorkerCancellationAfterEndpointDetach) {
+    EXPECT_TRUE(test_cancellation_after_endpoint_detach_does_not_touch_retired_owner());
+}
+TEST(Ruvia, WorkerExternalEventLoopAttachment) {
+    EXPECT_TRUE(test_external_event_loop_attachment());
+}
+TEST(Ruvia, WorkerAttachmentRunFailureRetiresThroughAsyncCleanup) {
+    EXPECT_TRUE(test_attachment_run_failure_retires_through_async_cleanup());
+}
+TEST(Ruvia, WorkerAbandonedAttachmentFailureRetiresNativeRun) {
+    EXPECT_TRUE(test_abandoned_attachment_root_failure_retires(false));
+}
+TEST(Ruvia, WorkerAbandonedAttachmentFailureRetiresAttachmentRun) {
+    EXPECT_TRUE(test_abandoned_attachment_root_failure_retires(true));
+}
+TEST(Ruvia, WorkerPoolReportedFailureStopsEveryLoopAndJoinRethrows) {
+    EXPECT_TRUE(test_pool_reported_failure_stops_every_loop_and_join_rethrows());
+}
+TEST(Ruvia, WorkerPoolFailureHandoffDuringDestructorReport) {
+    EXPECT_TRUE(test_pool_failure_handoff_during_destructor_report());
+}
+TEST(Ruvia, WorkerPoolReportsDistinctFailureFromAnotherLoop) {
+    EXPECT_TRUE(test_pool_reports_distinct_failure_from_another_loop());
+}
+TEST(Ruvia, WorkerRunReportsFailureAfterDeliveredOne) {
+    EXPECT_TRUE(test_worker_run_reports_failure_after_delivered_one());
+}
+TEST(Ruvia, WorkerPoolFailureReportWorksAfterQueueClosure) {
+    EXPECT_TRUE(test_pool_failure_report_works_after_queue_closure());
+}
+TEST(Ruvia, WorkerAttachmentReportFailurePreservesNativeRunOwnership) {
+    EXPECT_TRUE(test_attachment_report_failure_keeps_native_run_ownership());
+}
+TEST(Ruvia, WorkerExternalAttachmentRetainsStateUntilCleanup) {
+    EXPECT_TRUE(test_external_attachment_retains_state_until_context_cleanup());
+}
+TEST(Ruvia, WorkerExternalAttachmentHandlesContextDestruction) {
+    EXPECT_TRUE(test_external_attachment_handles_context_destruction());
+}
+TEST(Ruvia, WorkerStoppedAttachmentQueuedPostHandlesContextDestruction) {
+    EXPECT_TRUE(test_stopped_attachment_with_queued_post_handles_context_destruction());
+}
+TEST(Ruvia, WorkerJoinStopsRunningPool) {
+    EXPECT_TRUE(test_join_stops_running_pool());
+}
+TEST(Ruvia, WorkerFailurePropagation) {
+    EXPECT_TRUE(test_failure_propagation());
+}
+TEST(Ruvia, WorkerJoinBeforeStartDrainsOnOwners) {
+    EXPECT_TRUE(test_join_before_start_drains_on_owners());
+}
+TEST(Ruvia, WorkerStopBeforeStartPropagatesFailure) {
+    EXPECT_TRUE(test_stop_before_start_propagates_failure());
+}
+TEST(Ruvia, WorkerJoinRejectsPoolWorker) {
+    EXPECT_TRUE(test_join_rejects_pool_worker());
+}
+TEST(Ruvia, WorkerExecutorFailureDrainsShutdownOnOwners) {
+    EXPECT_TRUE(test_executor_failure_drains_shutdown_on_owners());
+}
+TEST(Ruvia, WorkerExpiredHandle) {
+    EXPECT_TRUE(test_expired_handle());
+}
+TEST(Ruvia, WorkerEscapedHandleDetaches) {
+    EXPECT_TRUE(test_escaped_worker_handle_becomes_detached_endpoint());
+}
+TEST(Ruvia, WorkerAbandonedRootTaskCompletesWhenQueueDrainFails) {
+    EXPECT_TRUE(test_abandoned_root_task_completes_when_queue_drain_fails());
+}
+TEST(Ruvia, WorkerStopCallbackFailureReachesJoin) {
+    EXPECT_TRUE(test_stop_callback_failure_reaches_join());
+}
+TEST(Ruvia, WorkerStopCallbackFactoryFailureKeepsOtherCallbacksRunning) {
+    EXPECT_TRUE(test_stop_callback_factory_failure_does_not_skip_other_callbacks());
+}
+TEST(Ruvia, WorkerAsyncStopCallbacksStartTogetherAndKeepCapturesAlive) {
+    EXPECT_TRUE(test_async_stop_callbacks_start_together_and_keep_captures_alive());
+}
+TEST(Ruvia, WorkerResetStopRegistrationCancelsDeferredUnstartedCallback) {
+    EXPECT_TRUE(test_reset_stop_registration_cancels_deferred_unstarted_callback());
+}
+TEST(Ruvia, WorkerStopRegistrationMoveCanStopAttachment) {
+    EXPECT_TRUE(test_stop_registration_move_can_stop_attachment());
+}
+TEST(Ruvia, WorkerRootTasksJoinNestedScopesDuringStop) {
+    EXPECT_TRUE(test_root_tasks_join_nested_scopes_during_stop());
+}
+TEST(Ruvia, WorkerRootResultMovesAreReentrantAndPreserveOwner) {
+    EXPECT_TRUE(test_root_task_result_moves_outside_lock_and_preserves_reentrant_owner());
+}
+TEST(Ruvia, WorkerRootResultOwnsPmrStoragePastPoolRetirement) {
+    EXPECT_TRUE(test_root_task_result_owns_pmr_storage_past_pool_retirement());
+}
+TEST(Ruvia, WorkerRootTaskDeliversConstResult) {
+    EXPECT_TRUE(test_root_task_delivers_const_result());
+}
+TEST(Ruvia, WorkerDrainingPostCanScheduleDeferCleanupDuringStop) {
+    EXPECT_TRUE(test_draining_post_can_schedule_defer_cleanup_during_stop());
 }

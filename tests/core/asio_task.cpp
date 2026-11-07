@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <concepts>
 #include <cstddef>
@@ -58,17 +60,21 @@ ruvia::task<void> fail() {
 
 }  // namespace ruvia::test::asio_task_tests
 
-int main() {
+TEST(Ruvia, AsioTaskLifecycle) {
     {
         auto ok_void = ruvia::asio_completion<void>::completed({});
         auto err_void = ruvia::asio_completion<void>::completed(std::make_error_code(std::errc::invalid_argument));
         auto ok_val = ruvia::asio_completion<int>::completed({}, 17);
         const auto& const_val = ok_val;
-        if (!ok_void.succeeded() || ok_void.failed() || err_void.succeeded() || !err_void.failed() ||
-            !ok_val.succeeded() || ok_val.failed() || const_val.result() != 17 || ok_val.result() != 17 ||
-            std::move(ok_val).take_result() != 17) {
-            return 1;
-        }
+        EXPECT_TRUE(ok_void.succeeded());
+        EXPECT_FALSE(ok_void.failed());
+        EXPECT_FALSE(err_void.succeeded());
+        EXPECT_TRUE(err_void.failed());
+        EXPECT_TRUE(ok_val.succeeded());
+        EXPECT_FALSE(ok_val.failed());
+        EXPECT_EQ(const_val.result(), 17);
+        EXPECT_EQ(ok_val.result(), 17);
+        EXPECT_EQ(std::move(ok_val).take_result(), 17);
     }
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
@@ -89,9 +95,7 @@ int main() {
             same_loop_get_rejected.set_value(value.valid());
         }
     });
-    if (!probe_posted.accepted()) {
-        return 1;
-    }
+    ASSERT_TRUE(probe_posted.accepted());
 
     loops.start();
     bool valid = false;
@@ -114,10 +118,10 @@ int main() {
     loops.join();
     valid = valid && result_value && result_value->addresses_aligned_ &&
             result_value->value_ != nullptr && *result_value->value_ == 42;
-    if (!valid) {
-        return 1;
-    }
+    EXPECT_TRUE(valid);
+}
 
+TEST(Ruvia, AsioTaskAbandonedFailureReachesJoin) {
     ruvia::event_loop_pool abandoned_pool({.loop_count_ = 1});
     {
         auto unobserved = abandoned_pool.loop(0).start(ruvia::test::asio_task_tests::fail());
@@ -127,7 +131,8 @@ int main() {
     try {
         abandoned_pool.join();
     } catch (const std::runtime_error& error) {
-        return std::string_view(error.what()) == "root task failure" ? 0 : 2;
+        EXPECT_EQ(std::string_view(error.what()), "root task failure");
+        return;
     }
-    return 3;
+    ADD_FAILURE() << "Expected abandoned root task failure";
 }

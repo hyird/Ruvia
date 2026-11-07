@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gtest/gtest.h>
+
 #include <concepts>
 #include <memory_resource>
 #include <optional>
@@ -10,8 +12,6 @@
 
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/model.h"
-
-#include "test_harness.h"
 
 namespace model_field_test {
 

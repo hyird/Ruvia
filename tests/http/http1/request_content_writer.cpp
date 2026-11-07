@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -14,7 +16,7 @@
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http_limits.h"
 
-#include "test_harness.h"
+#include "test_exceptions.h"
 
 namespace {
 
@@ -31,91 +33,90 @@ ruvia::http1_request_content_writer chunked_request_writer() {
 
 }  // namespace
 
-RUVIA_TEST(http1_streaming_request_chunked_upload_and_trailers) {
+TEST(Ruvia, http1_streaming_request_chunked_upload_and_trailers) {
     ruvia::http1_client_request_writer head_writer;
     std::array<char, 4096> head{};
     auto prepared = head_writer.prepare_streaming(ruvia::http_origin_view::https({.host_ = "example.com"}), {.method_ = "POST"}, head);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
-    RUVIA_CHECK(prepared_req != nullptr);
+    EXPECT_TRUE(prepared_req != nullptr);
     auto* plan = prepared_req->content_plan().streaming();
-    RUVIA_CHECK(plan != nullptr);
-    RUVIA_CHECK_EQ(prepared_req->head(),
-        std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"));
+    EXPECT_TRUE(plan != nullptr);
+    EXPECT_EQ(prepared_req->head(), std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"));
     ruvia::http1_request_content_writer writer(*plan);
     const std::string payload_value = "hello";
     auto chunk = writer.plan_chunk(payload_value);
-    RUVIA_CHECK((chunk.index() == 0));
-    RUVIA_CHECK_EQ(std::get<0>(chunk).prefix(), std::string_view("5\r\n"));
-    RUVIA_CHECK_EQ(std::get<0>(chunk).suffix(), std::string_view("\r\n"));
+    EXPECT_TRUE((chunk.index() == 0));
+    EXPECT_EQ(std::get<0>(chunk).prefix(), std::string_view("5\r\n"));
+    EXPECT_EQ(std::get<0>(chunk).suffix(), std::string_view("\r\n"));
     writer.commit_chunk();
     std::array<char, 128> finish_value{};
     const std::array trailers{ruvia::http_header_view{"Digest", "value"}};
     auto final = writer.plan_finish(finish_value, trailers);
-    RUVIA_CHECK((final.index() == 0));
-    RUVIA_CHECK_EQ(std::get<0>(final), std::string_view("0\r\nDigest: value\r\n\r\n"));
-    RUVIA_CHECK(!(writer.plan_chunk(payload_value).index() == 0));
+    EXPECT_TRUE((final.index() == 0));
+    EXPECT_EQ(std::get<0>(final), std::string_view("0\r\nDigest: value\r\n\r\n"));
+    EXPECT_TRUE(!(writer.plan_chunk(payload_value).index() == 0));
     writer.commit_finish();
-    RUVIA_CHECK(writer.finished());
+    EXPECT_TRUE(writer.finished());
 }
 
 // RFC 9110 section 6.6.2: a sender that will generate trailer fields SHOULD
 // declare them in a Trailer field; only chunked content carries trailers.
-RUVIA_TEST(http1_streaming_request_declares_trailer_only_for_chunked_content) {
+TEST(Ruvia, http1_streaming_request_declares_trailer_only_for_chunked_content) {
     const std::array declared{ruvia::http_header_view{"Trailer", "Digest"}};
     std::array<char, 1024> head{};
     auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(
         ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared}, head);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
-    RUVIA_CHECK(prepared_req != nullptr);
+    EXPECT_TRUE(prepared_req != nullptr);
     if (prepared_req != nullptr) {
-        RUVIA_CHECK_EQ(prepared_req->head(), std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTrailer: Digest\r\n"
-                                                              "Transfer-Encoding: chunked\r\n\r\n"));
+        EXPECT_EQ(prepared_req->head(), std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTrailer: Digest\r\n"
+                                                         "Transfer-Encoding: chunked\r\n\r\n"));
         ruvia::http1_request_content_writer writer(*prepared_req->content_plan().streaming());
         std::array<char, 128> finish_value{};
         const std::array trailers{ruvia::http_header_view{"Digest", "value"}};
         auto final = writer.plan_finish(finish_value, trailers);
-        RUVIA_CHECK((final.index() == 0));
+        EXPECT_TRUE((final.index() == 0));
     }
 
     auto known_length = ruvia::http1_client_request_writer{}.prepare_streaming(
         ruvia::http_origin_view::http({.host_ = "example.com"}),
         {.method_ = "POST", .headers_ = declared, .content_length_ = 3}, head);
     const auto* failure = std::get_if<ruvia::http1_client_request_prepare_error>(&known_length);
-    RUVIA_CHECK(failure != nullptr && *failure == ruvia::http1_client_request_prepare_error::trailer_requires_chunked_content);
+    EXPECT_TRUE(failure != nullptr && *failure == ruvia::http1_client_request_prepare_error::trailer_requires_chunked_content);
 
     const std::array forbidden{ruvia::http_header_view{"Trailer", "Content-Length"}};
     auto rejected = ruvia::http1_client_request_writer{}.prepare_streaming(
         ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = forbidden}, head);
     const auto* invalid = std::get_if<ruvia::http1_client_request_prepare_error>(&rejected);
-    RUVIA_CHECK(invalid != nullptr && *invalid == ruvia::http1_client_request_prepare_error::invalid_header);
+    EXPECT_TRUE(invalid != nullptr && *invalid == ruvia::http1_client_request_prepare_error::invalid_header);
 }
-RUVIA_TEST(http1_streaming_request_known_length_and_continue_gate) {
+TEST(Ruvia, http1_streaming_request_known_length_and_continue_gate) {
     ruvia::http1_client_request_writer head_writer;
     std::array<char, 4096> head{};
     auto prepared = head_writer.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}),
         {.method_ = "PUT", .content_length_ = 3}, head, {.expectation_ = ruvia::http_client_request_expectation::continue_value});
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
-    RUVIA_CHECK(prepared_req != nullptr);
-    RUVIA_CHECK((prepared_req->head().find("Content-Length: 3\r\n") != std::string_view::npos));
+    EXPECT_TRUE(prepared_req != nullptr);
+    EXPECT_TRUE((prepared_req->head().find("Content-Length: 3\r\n") != std::string_view::npos));
     ruvia::http1_request_content_writer writer(*prepared_req->content_plan().streaming());
     const std::string payload_value = "abc";
-    RUVIA_CHECK(!(writer.plan_chunk(payload_value).index() == 0));
+    EXPECT_TRUE(!(writer.plan_chunk(payload_value).index() == 0));
     writer.release_content();
-    RUVIA_CHECK(!(writer.plan_finish({}).index() == 0));
+    EXPECT_TRUE(!(writer.plan_finish({}).index() == 0));
     auto chunk = writer.plan_chunk(payload_value);
-    RUVIA_CHECK((chunk.index() == 0));
-    RUVIA_CHECK(std::get<0>(chunk).prefix().empty());
-    RUVIA_CHECK(std::get<0>(chunk).suffix().empty());
+    EXPECT_TRUE((chunk.index() == 0));
+    EXPECT_TRUE(std::get<0>(chunk).prefix().empty());
+    EXPECT_TRUE(std::get<0>(chunk).suffix().empty());
     writer.commit_chunk();
-    RUVIA_CHECK(!(writer.plan_chunk(payload_value).index() == 0));
+    EXPECT_TRUE(!(writer.plan_chunk(payload_value).index() == 0));
     auto finish_value = writer.plan_finish({});
-    RUVIA_CHECK((finish_value.index() == 0));
-    RUVIA_CHECK(std::get<0>(finish_value).empty());
+    EXPECT_TRUE((finish_value.index() == 0));
+    EXPECT_TRUE(std::get<0>(finish_value).empty());
     writer.commit_finish();
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { writer.commit_chunk(); }));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { writer.commit_finish(); }));
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { writer.commit_chunk(); }));
+    EXPECT_TRUE(ruvia::testing::throws_on([&] { writer.commit_finish(); }));
 }
-RUVIA_TEST(http1_streaming_request_rejects_forbidden_trailer_without_mutating_buffer) {
+TEST(Ruvia, http1_streaming_request_rejects_forbidden_trailer_without_mutating_buffer) {
     std::array<char, 1024> head{};
     auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST"}, head);
     ruvia::http1_request_content_writer writer(*std::get<0>(prepared).content_plan().streaming());
@@ -123,12 +124,12 @@ RUVIA_TEST(http1_streaming_request_rejects_forbidden_trailer_without_mutating_bu
     finish_value.fill('X');
     const std::array trailers{ruvia::http_header_view{"Content-Length", "0"}};
     auto rejected = writer.plan_finish(finish_value, trailers);
-    RUVIA_CHECK(!(rejected.index() == 0));
-    RUVIA_CHECK_EQ(finish_value.front(), 'X');
-    RUVIA_CHECK((writer.plan_finish(finish_value).index() == 0));
+    EXPECT_TRUE(!(rejected.index() == 0));
+    EXPECT_EQ(finish_value.front(), 'X');
+    EXPECT_TRUE((writer.plan_finish(finish_value).index() == 0));
 }
 
-RUVIA_TEST(http1_streaming_request_finish_accepts_trailers_borrowed_from_output) {
+TEST(Ruvia, http1_streaming_request_finish_accepts_trailers_borrowed_from_output) {
     enum class alias_kind { name,
         value,
         disjoint,
@@ -172,52 +173,51 @@ RUVIA_TEST(http1_streaming_request_finish_accepts_trailers_borrowed_from_output)
         const auto trailers = std::span(fields).first(count);
         const auto original = buffer;
         const auto too_small = writer.plan_finish(std::span(buffer).first(expected.size() - 1), trailers);
-        RUVIA_CHECK(too_small.index() == 1);
+        EXPECT_TRUE(too_small.index() == 1);
         if (too_small.index() == 1) {
-            RUVIA_CHECK(std::get<1>(too_small) == ruvia::http1_request_content_write_error::output_too_small);
+            EXPECT_TRUE(std::get<1>(too_small) == ruvia::http1_request_content_write_error::output_too_small);
         }
-        RUVIA_CHECK(buffer == original);
-        RUVIA_CHECK(!writer.finished());
+        EXPECT_TRUE(buffer == original);
+        EXPECT_TRUE(!writer.finished());
 
         const auto planned = writer.plan_finish(buffer, trailers);
-        RUVIA_CHECK(planned.index() == 0);
+        EXPECT_TRUE(planned.index() == 0);
         if (planned.index() == 0) {
-            RUVIA_CHECK_EQ(std::get<0>(planned), std::string_view(expected));
+            EXPECT_EQ(std::get<0>(planned), std::string_view(expected));
         }
-        RUVIA_CHECK_EQ(std::string_view(buffer.data() + expected.size(), buffer.size() - expected.size()),
-            std::string_view(original.data() + expected.size(), original.size() - expected.size()));
+        EXPECT_EQ(std::string_view(buffer.data() + expected.size(), buffer.size() - expected.size()), std::string_view(original.data() + expected.size(), original.size() - expected.size()));
         const auto repeated = writer.plan_finish(buffer, trailers);
-        RUVIA_CHECK(repeated.index() == 1);
+        EXPECT_TRUE(repeated.index() == 1);
         if (repeated.index() == 1) {
-            RUVIA_CHECK(std::get<1>(repeated) == ruvia::http1_request_content_write_error::write_pending);
+            EXPECT_TRUE(std::get<1>(repeated) == ruvia::http1_request_content_write_error::write_pending);
         }
         writer.commit_finish();
-        RUVIA_CHECK(writer.finished());
+        EXPECT_TRUE(writer.finished());
         const auto finished = writer.plan_finish(buffer);
-        RUVIA_CHECK(finished.index() == 1);
+        EXPECT_TRUE(finished.index() == 1);
         if (finished.index() == 1) {
-            RUVIA_CHECK(std::get<1>(finished) == ruvia::http1_request_content_write_error::stopped);
+            EXPECT_TRUE(std::get<1>(finished) == ruvia::http1_request_content_write_error::stopped);
         }
     }
 }
 
-RUVIA_TEST(http1_streaming_request_finish_accepts_output_alias_at_header_byte_limit) {
+TEST(Ruvia, http1_streaming_request_finish_accepts_output_alias_at_header_byte_limit) {
     auto writer = chunked_request_writer();
     constexpr std::size_t framing_bytes = std::string_view("0\r\nDigest: \r\n\r\n").size();
     const std::string value(ruvia::max_http_header_bytes - framing_bytes, 'v');
     std::string buffer(ruvia::max_http_header_bytes, 'v');
     const std::array trailers{ruvia::http_header_view{"Digest", std::string_view(buffer).substr(0, value.size())}};
     const auto planned = writer.plan_finish(std::span(buffer.data(), buffer.size()), trailers);
-    RUVIA_CHECK(planned.index() == 0);
+    EXPECT_TRUE(planned.index() == 0);
     if (planned.index() == 0) {
         const std::string expected = "0\r\nDigest: " + value + "\r\n\r\n";
-        RUVIA_CHECK_EQ(std::get<0>(planned), std::string_view(expected));
+        EXPECT_EQ(std::get<0>(planned), std::string_view(expected));
     }
     writer.commit_finish();
-    RUVIA_CHECK(writer.finished());
+    EXPECT_TRUE(writer.finished());
 }
 
-RUVIA_TEST(http1_streaming_request_finish_accepts_trailer_descriptors_stored_in_output) {
+TEST(Ruvia, http1_streaming_request_finish_accepts_trailer_descriptors_stored_in_output) {
     auto writer = chunked_request_writer();
     // The descriptor array itself lives where the trailer section is written, so
     // every descriptor must be consumed before the first output byte lands.
@@ -226,33 +226,33 @@ RUVIA_TEST(http1_streaming_request_finish_accepts_trailer_descriptors_stored_in_
         ruvia::http_header_view[2]{{"X-One", "first"}, {"X-Two", "second"}};
     const std::span<const ruvia::http_header_view> trailers(descriptors, 2);
     const auto planned = writer.plan_finish(std::span(buffer.data(), buffer.size()), trailers);
-    RUVIA_CHECK(planned.index() == 0);
+    EXPECT_TRUE(planned.index() == 0);
     if (planned.index() == 0) {
-        RUVIA_CHECK_EQ(std::get<0>(planned), std::string_view("0\r\nX-One: first\r\nX-Two: second\r\n\r\n"));
+        EXPECT_EQ(std::get<0>(planned), std::string_view("0\r\nX-One: first\r\nX-Two: second\r\n\r\n"));
     }
     writer.commit_finish();
 }
 
-RUVIA_TEST(http_content_length_rejects_negative_sources_without_mutating_existing_options) {
+TEST(Ruvia, http_content_length_rejects_negative_sources_without_mutating_existing_options) {
     ruvia::http1_client_request_head_view request{.method_ = "POST", .target_ = "/upload", .content_length_ = 3};
     for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
-        RUVIA_CHECK(!ruvia::http_content_length::try_from_value(invalid).has_value());
-        RUVIA_CHECK(ruvia::testing::throws_on([&] { request.content_length_ = invalid; }));
-        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::known_length(invalid); }));
-        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::streaming(invalid); }));
+        EXPECT_TRUE(!ruvia::http_content_length::try_from_value(invalid).has_value());
+        EXPECT_TRUE(ruvia::testing::throws_on([&] { request.content_length_ = invalid; }));
+        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::known_length(invalid); }));
+        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::streaming(invalid); }));
     }
     std::array<char, 256> head{};
     const auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(
         ruvia::http_origin_view::http({.host_ = "example.com"}), request, head);
     const auto* retained = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
-    RUVIA_CHECK(retained != nullptr && retained->content_plan().streaming() != nullptr);
+    EXPECT_TRUE(retained != nullptr && retained->content_plan().streaming() != nullptr);
     if (retained && retained->content_plan().streaming()) {
-        RUVIA_CHECK(retained->content_plan().streaming()->content_length() == 3);
-        RUVIA_CHECK(retained->head().find("Content-Length: 3\r\n") != std::string_view::npos);
+        EXPECT_TRUE(retained->content_plan().streaming()->content_length() == 3);
+        EXPECT_TRUE(retained->head().find("Content-Length: 3\r\n") != std::string_view::npos);
     }
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     const auto h2_known = ruvia::http2_request_content::known_length(maximum);
     const auto h2_streaming = ruvia::http2_request_content::streaming(maximum);
-    RUVIA_CHECK(h2_known.known_length_content() && h2_known.known_length_content()->length() == maximum);
-    RUVIA_CHECK(h2_streaming.streaming_content() && h2_streaming.streaming_content()->expected_length() == maximum);
+    EXPECT_TRUE(h2_known.known_length_content() && h2_known.known_length_content()->length() == maximum);
+    EXPECT_TRUE(h2_streaming.streaming_content() && h2_streaming.streaming_content()->expected_length() == maximum);
 }

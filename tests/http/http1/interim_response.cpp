@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <concepts>
@@ -11,8 +13,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_limits.h"
-
-#include "test_harness.h"
 
 namespace {
 
@@ -43,16 +43,15 @@ using ruvia::prepared_http1_interim_response;
 
 }  // namespace
 
-RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
+TEST(Ruvia, http1_interim_response_writer_emits_exact_typed_head) {
     std::array<char, 64> buffer{};
     const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::continue_value), buffer);
     const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
-    RUVIA_CHECK(prepared != nullptr);
+    EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
-        RUVIA_CHECK_EQ(prepared->head(), std::string_view("HTTP/1.1 100 Continue\r\n\r\n"));
-        RUVIA_CHECK_EQ(
-            prepared->connection_disposition(), http1_interim_connection_disposition::unchanged);
+        EXPECT_EQ(prepared->head(), std::string_view("HTTP/1.1 100 Continue\r\n\r\n"));
+        EXPECT_EQ(prepared->connection_disposition(), http1_interim_connection_disposition::unchanged);
     }
 
     const http_header_view hints[] = {
@@ -64,32 +63,31 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
     const auto hints_result = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::early_hints, hints), hints_buffer);
     const auto* const prepared_hints = std::get_if<prepared_http1_interim_response>(&hints_result);
-    RUVIA_CHECK(prepared_hints != nullptr);
+    EXPECT_TRUE(prepared_hints != nullptr);
     if (prepared_hints != nullptr) {
-        RUVIA_CHECK_EQ(
-            prepared_hints->head(), std::string_view("HTTP/1.1 103 Early Hints\r\n"
-                                                     "Link: </style.css>; rel=preload\r\n"
-                                                     "Content-Type: text/html; charset=utf-8\r\n"
-                                                     "X-Hint: warm\r\n\r\n"));
-        RUVIA_CHECK(!(prepared_hints->head().find("Server:") != std::string_view::npos));
-        RUVIA_CHECK(!(prepared_hints->head().find("Date:") != std::string_view::npos));
+        EXPECT_EQ(prepared_hints->head(), std::string_view("HTTP/1.1 103 Early Hints\r\n"
+                                                           "Link: </style.css>; rel=preload\r\n"
+                                                           "Content-Type: text/html; charset=utf-8\r\n"
+                                                           "X-Hint: warm\r\n\r\n"));
+        EXPECT_TRUE(!(prepared_hints->head().find("Server:") != std::string_view::npos));
+        EXPECT_TRUE(!(prepared_hints->head().find("Date:") != std::string_view::npos));
     }
 }
 
-RUVIA_TEST(http1_interim_response_writer_preserves_required_status_line_space) {
+TEST(Ruvia, http1_interim_response_writer_preserves_required_status_line_space) {
     std::array<char, 32> buffer{};
     const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status_code::from_value(199)), buffer);
     const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
-    RUVIA_CHECK(prepared != nullptr);
+    EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
         // RFC 9112 section 4 requires the SP after status-code even when the
         // optional reason phrase is absent.
-        RUVIA_CHECK_EQ(prepared->head(), std::string_view("HTTP/1.1 199 \r\n\r\n"));
+        EXPECT_EQ(prepared->head(), std::string_view("HTTP/1.1 199 \r\n\r\n"));
     }
 }
 
-RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
+TEST(Ruvia, http1_interim_response_writer_closes_after_containing_response) {
     const http_header_view fields_value[] = {
         {"Connection", "close, Upgrade"},
         {"Upgrade", "example/1"},
@@ -98,28 +96,27 @@ RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
     const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
     const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
-    RUVIA_CHECK(prepared != nullptr);
+    EXPECT_TRUE(prepared != nullptr);
     if (prepared != nullptr) {
-        RUVIA_CHECK_EQ(prepared->connection_disposition(),
-            http1_interim_connection_disposition::close_after_interim_response);
-        RUVIA_CHECK((prepared->head().find("Upgrade: example/1\r\n") != std::string_view::npos));
+        EXPECT_EQ(prepared->connection_disposition(), http1_interim_connection_disposition::close_after_interim_response);
+        EXPECT_TRUE((prepared->head().find("Upgrade: example/1\r\n") != std::string_view::npos));
     }
 }
 
-RUVIA_TEST(http1_interim_response_writer_buffer_too_small_is_transactional) {
+TEST(Ruvia, http1_interim_response_writer_buffer_too_small_is_transactional) {
     std::array<char, 8> buffer;
     buffer.fill('#');
     const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::continue_value), buffer);
     const auto* const too_small = std::get_if<http1_interim_response_buffer_too_small>(&result_value);
-    RUVIA_CHECK(too_small != nullptr);
+    EXPECT_TRUE(too_small != nullptr);
     if (too_small != nullptr) {
-        RUVIA_CHECK_EQ(too_small->required_head_bytes(), std::size_t{25});
+        EXPECT_EQ(too_small->required_head_bytes(), std::size_t{25});
     }
-    RUVIA_CHECK(std::ranges::all_of(buffer, [](char value) { return value == '#'; }));
+    EXPECT_TRUE(std::ranges::all_of(buffer, [](char value) { return value == '#'; }));
 }
 
-RUVIA_TEST(http1_interim_response_writer_preserves_fields_borrowed_from_output) {
+TEST(Ruvia, http1_interim_response_writer_preserves_fields_borrowed_from_output) {
     constexpr std::string_view expected = "HTTP/1.1 103 Early Hints\r\nX-Hint: warm\r\nX-Next: ready\r\n\r\n";
     for (const std::size_t offset : {std::size_t{0}, std::size_t{24}, std::size_t{32}}) {
         std::array<char, 128> buffer;
@@ -134,16 +131,16 @@ RUVIA_TEST(http1_interim_response_writer_preserves_fields_borrowed_from_output) 
         const auto result_value = prepare_http1_interim_response_head(
             http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
         const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
-        RUVIA_CHECK(prepared != nullptr);
+        EXPECT_TRUE(prepared != nullptr);
         if (prepared != nullptr) {
-            RUVIA_CHECK_EQ(prepared->head(), expected);
-            RUVIA_CHECK_EQ(prepared->head().data(), buffer.data());
-            RUVIA_CHECK_EQ(buffer[expected.size()], '#');
+            EXPECT_EQ(prepared->head(), expected);
+            EXPECT_EQ(prepared->head().data(), buffer.data());
+            EXPECT_EQ(buffer[expected.size()], '#');
         }
     }
 }
 
-RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally) {
+TEST(Ruvia, http1_interim_response_writer_rejects_invalid_fields_transactionally) {
     const http_header_view malformed_name[] = {{"Bad Name", "value"}};
     const http_header_view malformed_value[] = {{"X-Test", "a\r\nb"}};
     const http_header_view malformed_content_encoding[] = {{"Content-Encoding", "gzip;level=9"}};
@@ -179,21 +176,21 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
             std::span<const http_header_view>(invalid_connection),
             std::span<const http_header_view>(managed_connection),
             std::span<const http_header_view>(invalid_upgrade), std::span<const http_header_view>(unlisted_upgrade)}) {
-        RUVIA_CHECK(rejects_without_writing(fields_value, '@'));
+        EXPECT_TRUE(rejects_without_writing(fields_value, '@'));
     }
 }
 
-RUVIA_TEST(http1_interim_response_writer_enforces_size_limit) {
+TEST(Ruvia, http1_interim_response_writer_enforces_size_limit) {
     std::vector<http_header_view> many(80, http_header_view("X-Hint", "value"));
     std::array<char, 2048> many_buffer{};
     const auto many_result = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::early_hints, many),
         many_buffer);
-    RUVIA_CHECK(std::holds_alternative<prepared_http1_interim_response>(many_result));
+    EXPECT_TRUE(std::holds_alternative<prepared_http1_interim_response>(many_result));
 
     const std::string oversized_value(ruvia::max_http_header_bytes, 'x');
     const http_header_view oversized[] = {{"X-Hint", oversized_value}};
-    RUVIA_CHECK(rejects_without_writing(oversized, '!'));
+    EXPECT_TRUE(rejects_without_writing(oversized, '!'));
 }
 
 static_assert(std::is_constructible_v<ruvia::borrowed_http_headers, std::vector<http_header_view>&>);

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <stdexcept>
 
 #include "ruvia/web/session.h"
@@ -13,7 +15,7 @@
 #endif
 
 #if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
-RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
+TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
     const auto response = context_request_test::with_context(
         ruvia::test_request::get("/capabilities"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
@@ -24,7 +26,7 @@ RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
             } catch (const ruvia::db_error& error) {
                 database_rejected = error.code() == ruvia::db_error::code_type::not_configured;
             }
-            RUVIA_CHECK(database_rejected);
+            EXPECT_TRUE(database_rejected);
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -34,7 +36,7 @@ RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
             } catch (const ruvia::redis_error& error) {
                 redis_rejected = error.code() == ruvia::redis_error::code_type::not_configured;
             }
-            RUVIA_CHECK(redis_rejected);
+            EXPECT_TRUE(redis_rejected);
 #endif
             co_return;
         });
@@ -42,7 +44,7 @@ RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
 }
 #endif
 
-RUVIA_TEST(context_session_capability_requires_explicit_middleware_binding) {
+TEST(Ruvia, context_session_capability_requires_explicit_middleware_binding) {
     const auto response = context_request_test::with_context(
         ruvia::test_request::get("/capabilities"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
@@ -52,7 +54,7 @@ RUVIA_TEST(context_session_capability_requires_explicit_middleware_binding) {
             } catch (const std::logic_error&) {
                 rejected = true;
             }
-            RUVIA_CHECK(rejected);
+            EXPECT_TRUE(rejected);
 
             co_return;
         });

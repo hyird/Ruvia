@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
 #include <exception>
@@ -12,8 +14,6 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/http_client.h"
-
-#include "test_harness.h"
 
 namespace resolve_cancellation_tests {
 
@@ -109,7 +109,7 @@ ruvia::task<void> exercise(ruvia::event_loop loop, const ruvia::blocking_pool& l
 
 }  // namespace resolve_cancellation_tests
 
-RUVIA_TEST(clients_need_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
+TEST(Ruvia, clients_need_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
     using namespace resolve_cancellation_tests;
     bool http_rejected = false;
     {
@@ -121,7 +121,7 @@ RUVIA_TEST(clients_need_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
         }
         loops.join();
     }
-    RUVIA_CHECK(http_rejected);
+    EXPECT_TRUE(http_rejected);
 
     // The unified HTTP/WebSocket origin is accepted once the loop borrows a pool.
     ruvia::blocking_pool lookups({.thread_count_ = 1});
@@ -133,7 +133,7 @@ RUVIA_TEST(clients_need_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
     lookups.join();
 }
 
-RUVIA_TEST(host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_finishes) {
+TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_finishes) {
     using namespace resolve_cancellation_tests;
     for (const auto kind : {stop_kind::timeout, stop_kind::cancellation, stop_kind::client_close, stop_kind::worker_stop}) {
         auto held = std::make_shared<held_queries>();
@@ -149,10 +149,10 @@ RUVIA_TEST(host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fin
         pool.start();
         if (kind == stop_kind::worker_stop) {
             const bool started = ready_result.wait_for(2s) == std::future_status::ready;
-            RUVIA_CHECK(started);
+            EXPECT_TRUE(started);
             pool.stop();
             const bool ended = retired_result.wait_for(2s) == std::future_status::ready;
-            RUVIA_CHECK(ended);
+            EXPECT_TRUE(ended);
             if (!started || !ended) {
                 held->release();
             }
@@ -160,7 +160,7 @@ RUVIA_TEST(host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fin
             held->release();
         } else {
             const bool ended = retired_result.wait_for(2s) == std::future_status::ready;
-            RUVIA_CHECK(ended);
+            EXPECT_TRUE(ended);
             if (!ended) {
                 held->release();
             }
@@ -169,10 +169,10 @@ RUVIA_TEST(host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fin
         }
         lookups.join();
         root.get();
-        RUVIA_CHECK(observed.retired_before_release_);
+        EXPECT_TRUE(observed.retired_before_release_);
         const auto expected = kind == stop_kind::timeout        ? ruvia::http_client_error::code_type::timeout
                               : kind == stop_kind::cancellation ? ruvia::http_client_error::code_type::cancelled
                                                                 : ruvia::http_client_error::code_type::closing;
-        RUVIA_CHECK(observed.code_ == expected);
+        EXPECT_TRUE(observed.code_ == expected);
     }
 }

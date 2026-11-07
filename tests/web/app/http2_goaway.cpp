@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -30,7 +32,6 @@
 #include "ruvia/web/controller.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 
 namespace http2_goaway_test {
 using namespace std::chrono_literals;
@@ -246,7 +247,7 @@ frame next_of_type(peer& client, ruvia::http2_frame_type type) {
 // application::stop() disconnects directly (no drain): an HTTP/2 connection
 // with a request in flight is closed at once, without GOAWAY or a response,
 // and the request's handler observes its stop token.
-void check_stop_closes_connection(ruvia::testing::test_context& ruvia_ctx) {
+void check_stop_closes_connection() {
     auto& state = observed();
     state.entered_ = false;
     state.cancelled_ = false;
@@ -283,12 +284,12 @@ void check_stop_closes_connection(ruvia::testing::test_context& ruvia_ctx) {
         } catch (const std::system_error&) {
             break;
         }
-        RUVIA_CHECK(received.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
-        RUVIA_CHECK(received.header_.stream_id_ != 1);
+        EXPECT_TRUE(received.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
+        EXPECT_TRUE(received.header_.stream_id_ != 1);
     }
     run.join();
-    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 3s);
-    RUVIA_CHECK(state.cancelled_.load());
+    EXPECT_TRUE(std::chrono::steady_clock::now() - stop_started < 3s);
+    EXPECT_TRUE(state.cancelled_.load());
 }
 
 // Serves `config` and opens an HTTP/2 connection (preface, SETTINGS carrying
@@ -342,23 +343,23 @@ private:
 };
 
 // The GOAWAY(2^31-1) and PING a connection's drain starts with.
-void expect_round_trip_start(ruvia::testing::test_context& ruvia_ctx, peer& client) {
+void expect_round_trip_start(peer& client) {
     const auto first = next_of_type(client, ruvia::http2_frame_type::goaway);
-    RUVIA_CHECK_EQ(uint32(first.payload_) & 0x7fffffffU, 0x7fffffffU);
+    EXPECT_EQ(uint32(first.payload_) & 0x7fffffffU, 0x7fffffffU);
     (void)next_of_type(client, ruvia::http2_frame_type::ping);
 }
 
 // The final GOAWAY(NO_ERROR) with `last_stream_id`, then the server's end of
 // the connection.
 void expect_final_goaway_and_end(
-    ruvia::testing::test_context& ruvia_ctx, peer& client, std::uint32_t last_stream_id) {
+    peer& client, std::uint32_t last_stream_id) {
     const auto last = next_of_type(client, ruvia::http2_frame_type::goaway);
-    RUVIA_CHECK_EQ(uint32(last.payload_) & 0x7fffffffU, last_stream_id);
-    RUVIA_CHECK_EQ(uint32(std::string_view(last.payload_).substr(4)), 0U);
+    EXPECT_EQ(uint32(last.payload_) & 0x7fffffffU, last_stream_id);
+    EXPECT_EQ(uint32(std::string_view(last.payload_).substr(4)), 0U);
     await_observation([&client] { return client.ended(); });
 }
 
-void check_idle_timeout_drain(ruvia::testing::test_context& ruvia_ctx, bool stalled_stream) {
+void check_idle_timeout_drain(bool stalled_stream) {
     auto& state = observed();
     state.entered_ = false;
     state.cancelled_ = false;
@@ -366,11 +367,11 @@ void check_idle_timeout_drain(ruvia::testing::test_context& ruvia_ctx, bool stal
         {.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms},
         stalled_stream ? request(1, "/stalled") : std::string());
     peer client(run.socket());
-    expect_round_trip_start(ruvia_ctx, client);
+    expect_round_trip_start(client);
     // Without the ACK the drain still ends within its round-trip bound
     // (1 s): a stalled stream is cancelled, and the final GOAWAY precedes the
     // close.
-    expect_final_goaway_and_end(ruvia_ctx, client, stalled_stream ? 1U : 0U);
+    expect_final_goaway_and_end(client, stalled_stream ? 1U : 0U);
     // Ends the server's lingering close at once.
     run.socket().close();
     if (stalled_stream) {
@@ -430,11 +431,11 @@ std::vector<frame> keep_busy_until(peer& client, asio::ip::tcp::socket& socket, 
 }
 
 // Reads until stream `stream_id` ends; a GOAWAY on the way fails the check.
-void expect_stream_end(ruvia::testing::test_context& ruvia_ctx, peer& client, std::uint32_t stream_id) {
+void expect_stream_end(peer& client, std::uint32_t stream_id) {
     for (;;) {
         const auto value = client.next();
-        RUVIA_CHECK(!is_frame(value, ruvia::http2_frame_type::goaway, 0));
-        RUVIA_CHECK(!is_frame(value, ruvia::http2_frame_type::rst_stream, stream_id));
+        EXPECT_TRUE(!is_frame(value, ruvia::http2_frame_type::goaway, 0));
+        EXPECT_TRUE(!is_frame(value, ruvia::http2_frame_type::rst_stream, stream_id));
         const bool ending = is_frame(value, ruvia::http2_frame_type::headers, stream_id) ||
                             is_frame(value, ruvia::http2_frame_type::data, stream_id);
         if (ending && (value.header_.flags_ & 0x1) != 0) {
@@ -445,11 +446,11 @@ void expect_stream_end(ruvia::testing::test_context& ruvia_ctx, peer& client, st
 
 // The RST_STREAM error code the server sent for `stream_id`; also checks
 // that no GOAWAY ended the connection meanwhile.
-std::uint32_t reset_code(ruvia::testing::test_context& ruvia_ctx, const std::vector<frame>& frames,
+std::uint32_t reset_code(const std::vector<frame>& frames,
     std::uint32_t stream_id) {
     std::uint32_t code = 0xffffffffU;
     for (const auto& value : frames) {
-        RUVIA_CHECK(!is_frame(value, ruvia::http2_frame_type::goaway, 0));
+        EXPECT_TRUE(!is_frame(value, ruvia::http2_frame_type::goaway, 0));
         if (is_frame(value, ruvia::http2_frame_type::rst_stream, stream_id)) {
             code = uint32(value.payload_);
         }
@@ -458,30 +459,30 @@ std::uint32_t reset_code(ruvia::testing::test_context& ruvia_ctx, const std::vec
 }
 }  // namespace http2_goaway_test
 
-RUVIA_TEST(http2_app_stop_closes_connection_without_goaway) {
-    http2_goaway_test::check_stop_closes_connection(ruvia_ctx);
+TEST(Ruvia, http2_app_stop_closes_connection_without_goaway) {
+    http2_goaway_test::check_stop_closes_connection();
 }
 
 // A connection timeout drains the connection (RFC 9113 §6.8) instead of
 // cutting it: the final GOAWAY and an orderly end follow within the
 // round-trip bound, not a second idle timeout that closes the socket without
 // them.
-RUVIA_TEST(http2_idle_timeout_drain_ends_with_final_goaway) {
-    http2_goaway_test::check_idle_timeout_drain(ruvia_ctx, false);
+TEST(Ruvia, http2_idle_timeout_drain_ends_with_final_goaway) {
+    http2_goaway_test::check_idle_timeout_drain(false);
 }
-RUVIA_TEST(http2_idle_timeout_drain_cancels_stalled_stream_after_final_goaway) {
-    http2_goaway_test::check_idle_timeout_drain(ruvia_ctx, true);
+TEST(Ruvia, http2_idle_timeout_drain_cancels_stalled_stream_after_final_goaway) {
+    http2_goaway_test::check_idle_timeout_drain(true);
 }
 
 // RFC 9113 section 6.8: "Endpoints SHOULD always send a GOAWAY frame before
 // closing a connection" -- also when the peer's end of input ends the session.
-RUVIA_TEST(http2_peer_end_of_input_gets_final_goaway_before_close) {
+TEST(Ruvia, http2_peer_end_of_input_gets_final_goaway_before_close) {
     using namespace http2_goaway_test;
     silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms}, {});
     peer client(run.socket());
     (void)next_of_type(client, ruvia::http2_frame_type::settings);
     run.socket().shutdown(asio::ip::tcp::socket::shutdown_send);
-    expect_final_goaway_and_end(ruvia_ctx, client, 0);
+    expect_final_goaway_and_end(client, 0);
     run.socket().close();
     run.app().stop();
     run.join();
@@ -490,17 +491,17 @@ RUVIA_TEST(http2_peer_end_of_input_gets_final_goaway_before_close) {
 // Pingora's h2_idle_timeout: idleness runs from the end of the last stream,
 // and PINGs (with the server's ACK writes) open no stream, so they do not
 // renew it.
-RUVIA_TEST(http2_idle_timeout_runs_from_last_stream_end_despite_pings) {
+TEST(Ruvia, http2_idle_timeout_runs_from_last_stream_end_despite_pings) {
     using namespace http2_goaway_test;
     silent_peer_run run(
         {.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms}, request(1, "/brief"));
     peer client(run.socket());
-    expect_stream_end(ruvia_ctx, client, 1);
+    expect_stream_end(client, 1);
     const auto frames = keep_busy_until(client, run.socket(), {}, [](const frame& value) {
         return is_frame(value, ruvia::http2_frame_type::goaway, 0);
     });
-    RUVIA_CHECK_EQ(uint32(frames.back().payload_) & 0x7fffffffU, 0x7fffffffU);
-    expect_final_goaway_and_end(ruvia_ctx, client, 1);
+    EXPECT_EQ(uint32(frames.back().payload_) & 0x7fffffffU, 0x7fffffffU);
+    expect_final_goaway_and_end(client, 1);
     run.socket().close();
     run.app().stop();
     run.join();
@@ -509,7 +510,7 @@ RUVIA_TEST(http2_idle_timeout_runs_from_last_stream_end_despite_pings) {
 // request_body_timeout_ times each stream's body: a stalled body is reset
 // even while another stream's DATA keeps the connection busy, and only that
 // stream ends.
-RUVIA_TEST(http2_request_body_timeout_resets_only_the_stalled_stream) {
+TEST(Ruvia, http2_request_body_timeout_resets_only_the_stalled_stream) {
     using namespace http2_goaway_test;
     observed().uploads_ = 0;
     observed().uploaded_bytes_ = 0;
@@ -521,13 +522,13 @@ RUVIA_TEST(http2_request_body_timeout_resets_only_the_stalled_stream) {
         return is_frame(value, ruvia::http2_frame_type::rst_stream, 1);
     });
     // RFC 9113 section 7: CANCEL.
-    RUVIA_CHECK_EQ(reset_code(ruvia_ctx, frames, 1), 8U);
-    RUVIA_CHECK_EQ(reset_code(ruvia_ctx, frames, 3), 0xffffffffU);
+    EXPECT_EQ(reset_code(frames, 1), 8U);
+    EXPECT_EQ(reset_code(frames, 3), 0xffffffffU);
     const auto finish = data_frame(3, {}, true);
     asio::write(run.socket(), asio::buffer(finish));
-    expect_stream_end(ruvia_ctx, client, 3);
-    RUVIA_CHECK_EQ(observed().uploads_.load(), 1);
-    RUVIA_CHECK(observed().uploaded_bytes_.load() != 0);
+    expect_stream_end(client, 3);
+    EXPECT_EQ(observed().uploads_.load(), 1);
+    EXPECT_TRUE(observed().uploaded_bytes_.load() != 0);
     run.socket().close();
     run.app().stop();
     run.join();
@@ -536,7 +537,7 @@ RUVIA_TEST(http2_request_body_timeout_resets_only_the_stalled_stream) {
 // write_timeout_ bounds a stream's wait for peer flow-control window, as
 // Pingora's h2 write timeout does: a peer that never opens the window gets
 // that stream reset, while the connection keeps serving.
-RUVIA_TEST(http2_send_window_wait_is_bounded_by_write_timeout) {
+TEST(Ruvia, http2_send_window_wait_is_bounded_by_write_timeout) {
     using namespace http2_goaway_test;
     // SETTINGS_INITIAL_WINDOW_SIZE = 0.
     silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = 300ms},
@@ -545,12 +546,12 @@ RUVIA_TEST(http2_send_window_wait_is_bounded_by_write_timeout) {
     const auto frames = keep_busy_until(client, run.socket(), {}, [](const frame& value) {
         return is_frame(value, ruvia::http2_frame_type::rst_stream, 1);
     });
-    RUVIA_CHECK_EQ(reset_code(ruvia_ctx, frames, 1), 8U);
+    EXPECT_EQ(reset_code(frames, 1), 8U);
     std::string reopened;
     append_frame(reopened, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x04\x00\x00\xff\xff", 6));
     reopened.append(request(3, "/brief"));
     asio::write(run.socket(), asio::buffer(reopened));
-    expect_stream_end(ruvia_ctx, client, 3);
+    expect_stream_end(client, 3);
     run.socket().close();
     run.app().stop();
     run.join();
@@ -558,13 +559,13 @@ RUVIA_TEST(http2_send_window_wait_is_bounded_by_write_timeout) {
 
 // Until the client preface and its SETTINGS arrive the connection is not
 // ready: the request-header deadlines bound it, not idle_timeout_.
-RUVIA_TEST(http2_readiness_is_bounded_by_header_completion_timeout) {
+TEST(Ruvia, http2_readiness_is_bounded_by_header_completion_timeout) {
     using namespace http2_goaway_test;
     silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .header_completion_timeout_ = 300ms},
         {}, std::nullopt);
     peer client(run.socket());
-    expect_round_trip_start(ruvia_ctx, client);
-    expect_final_goaway_and_end(ruvia_ctx, client, 0);
+    expect_round_trip_start(client);
+    expect_final_goaway_and_end(client, 0);
     run.socket().close();
     run.app().stop();
     run.join();

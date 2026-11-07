@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -30,7 +32,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
+#include "test_exceptions.h"
 #include "test_io_context.h"
 #include "test_tls_identity.h"
 
@@ -48,7 +50,7 @@ template <typename callback_type>
 
 }  // namespace
 
-RUVIA_TEST(http_client_handle_origin_and_expired_send_reject_after_shutdown) {
+TEST(Ruvia, http_client_handle_origin_and_expired_send_reject_after_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     std::exception_ptr failure;
@@ -57,33 +59,33 @@ RUVIA_TEST(http_client_handle_origin_and_expired_send_reject_after_shutdown) {
             {.base_url_ = "http://127.0.0.1:8089"});
         auto handle = client.client();
         try {
-            RUVIA_CHECK(handle.scheme() == ruvia::http_scheme::http);
-            RUVIA_CHECK_EQ(handle.host(), std::string_view("127.0.0.1"));
-            RUVIA_CHECK_EQ(handle.port(), std::uint16_t{8089});
+            EXPECT_TRUE(handle.scheme() == ruvia::http_scheme::http);
+            EXPECT_EQ(handle.host(), std::string_view("127.0.0.1"));
+            EXPECT_EQ(handle.port(), std::uint16_t{8089});
             const auto origin = handle.origin();
-            RUVIA_CHECK(origin.scheme() == ruvia::http_scheme::http);
-            RUVIA_CHECK_EQ(origin.host(), std::string_view("127.0.0.1"));
-            RUVIA_CHECK_EQ(origin.port(), std::uint16_t{8089});
+            EXPECT_TRUE(origin.scheme() == ruvia::http_scheme::http);
+            EXPECT_EQ(origin.host(), std::string_view("127.0.0.1"));
+            EXPECT_EQ(origin.port(), std::uint16_t{8089});
         } catch (...) {
             failure = std::current_exception();
         }
         co_await client.shutdown();
         if (!failure) {
             try {
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.get("/").send(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.get("/").upload({}); }));
-                RUVIA_CHECK(
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.get("/").send(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.get("/").upload({}); }));
+                EXPECT_TRUE(
                     throws_logic_error([&] { (void)handle.connect("127.0.0.1:8089").open(); }));
-                RUVIA_CHECK(
+                EXPECT_TRUE(
                     throws_logic_error([&] { (void)handle.udp("/udp").open(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.with_options({}); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.stats(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.next_push(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.next_advertisement(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.host(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.port(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.scheme(); }));
-                RUVIA_CHECK(throws_logic_error([&] { (void)handle.origin(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.with_options({}); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.stats(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.next_push(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.next_advertisement(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.host(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.port(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.scheme(); }));
+                EXPECT_TRUE(throws_logic_error([&] { (void)handle.origin(); }));
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -98,7 +100,7 @@ RUVIA_TEST(http_client_handle_origin_and_expired_send_reject_after_shutdown) {
     }
 }
 
-RUVIA_TEST(http_client_response_and_body_moved_from_throw_logic_error) {
+TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
@@ -124,24 +126,24 @@ RUVIA_TEST(http_client_response_and_body_moved_from_throw_logic_error) {
             auto original = co_await client.client().get("/moved").send();
             auto active = std::move(original);
 
-            RUVIA_CHECK(original.stream().complete());
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.status(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.received_status(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.protocol_version(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.headers(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.trailers(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.header("x-test"); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.trailer("x-test"); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.informational_responses(); }));
-            RUVIA_CHECK(throws_logic_error([&] { original.reprioritize({}); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.stream().read(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.stream().text(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)original.stream().read_all(); }));
+            EXPECT_TRUE(original.stream().complete());
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.status(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.received_status(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.protocol_version(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.headers(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.trailers(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.header("x-test"); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.trailer("x-test"); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.informational_responses(); }));
+            EXPECT_TRUE(throws_logic_error([&] { original.reprioritize({}); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.stream().read(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.stream().text(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)original.stream().read_all(); }));
 
-            RUVIA_CHECK(active.status() == ruvia::http_status::ok);
-            RUVIA_CHECK_EQ(active.header("x-test"), std::optional<std::string_view>("ok"));
+            EXPECT_TRUE(active.status() == ruvia::http_status::ok);
+            EXPECT_EQ(active.header("x-test"), std::optional<std::string_view>("ok"));
             auto body = co_await active.stream().read_all();
-            RUVIA_CHECK_EQ(body.text(), std::string_view("hi"));
+            EXPECT_EQ(body.text(), std::string_view("hi"));
         } catch (...) {
             failure = std::current_exception();
         }
@@ -375,7 +377,7 @@ private:
 
 }  // namespace fluent_client_tests
 
-RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
+TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) {
     fluent_client_tests::server server;
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -407,23 +409,23 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                 return request.send();
             }();
             auto response = co_await std::move(cold);
-            RUVIA_CHECK(response.ok());
+            EXPECT_TRUE(response.ok());
             auto observed = co_await response.json<fluent_client_observation>();
-            RUVIA_CHECK_EQ(observed.get<"method">().view(), "POST");
-            RUVIA_CHECK_EQ(observed.get<"body">().view(), "owned-payload");
-            RUVIA_CHECK_EQ(observed.get<"query">().view(), "a &b=+/%?#\xc3\xa9");
-            RUVIA_CHECK_EQ(observed.get<"single_header">().view(), "owned-value");
-            RUVIA_CHECK_EQ(observed.get<"span_header">().view(), "span-value");
-            RUVIA_CHECK((co_await response.bytes()).empty());
-            RUVIA_CHECK(!(co_await response.read()));
+            EXPECT_EQ(observed.get<"method">().view(), "POST");
+            EXPECT_EQ(observed.get<"body">().view(), "owned-payload");
+            EXPECT_EQ(observed.get<"query">().view(), "a &b=+/%?#\xc3\xa9");
+            EXPECT_EQ(observed.get<"single_header">().view(), "owned-value");
+            EXPECT_EQ(observed.get<"span_header">().view(), "span-value");
+            EXPECT_TRUE((co_await response.bytes()).empty());
+            EXPECT_TRUE(!(co_await response.read()));
             bool replay_rejected = false;
             try {
                 (void)co_await response.json<fluent_client_observation>();
             } catch (const std::exception&) {
                 replay_rejected = true;
             }
-            RUVIA_CHECK(replay_rejected);
-            RUVIA_CHECK(ruvia::testing::throws_on([&] {
+            EXPECT_TRUE(replay_rejected);
+            EXPECT_TRUE(ruvia::testing::throws_on([&] {
                 auto consumed = origin.get("/fluent/inspect");
                 auto first = consumed.send();
                 (void)consumed.send();
@@ -434,24 +436,24 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                                  .send();
             auto temporary_response = co_await std::move(temporary);
             auto temporary_observed = co_await temporary_response.json<fluent_client_observation>();
-            RUVIA_CHECK_EQ(temporary_observed.get<"body">().view(), "temporary-body");
+            EXPECT_EQ(temporary_observed.get<"body">().view(), "temporary-body");
             {
                 auto piped = co_await origin.get("/fluent/pipe").send();
-                RUVIA_CHECK(piped.status() == ruvia::http_status::created);
-                RUVIA_CHECK(piped.header("x-stream-source") == "retained");
-                RUVIA_CHECK(piped.header("content-type") == "application/octet-stream");
-                RUVIA_CHECK(piped.header("date") == "Thu, 01 Jan 1970 00:00:00 GMT");
+                EXPECT_TRUE(piped.status() == ruvia::http_status::created);
+                EXPECT_TRUE(piped.header("x-stream-source") == "retained");
+                EXPECT_TRUE(piped.header("content-type") == "application/octet-stream");
+                EXPECT_TRUE(piped.header("date") == "Thu, 01 Jan 1970 00:00:00 GMT");
                 std::size_t links = 0;
                 for (const auto& field : piped.headers()) {
                     if (ruvia::http_ascii_equals_ignore_case(field.name(), "link")) {
-                        RUVIA_CHECK_EQ(field.value(), links == 0 ? "</first>; rel=preload" : "</second>; rel=preload");
+                        EXPECT_EQ(field.value(), links == 0 ? "</first>; rel=preload" : "</second>; rel=preload");
                         ++links;
                     }
                 }
-                RUVIA_CHECK_EQ(links, std::size_t{2});
+                EXPECT_EQ(links, std::size_t{2});
                 const auto contents = co_await piped.text();
-                RUVIA_CHECK_EQ(contents.text(), "firstsecond");
-                RUVIA_CHECK(piped.trailer("x-finished") == "yes");
+                EXPECT_EQ(contents.text(), "firstsecond");
+                EXPECT_TRUE(piped.trailer("x-finished") == "yes");
             }
 
             auto json_request = [&] {
@@ -461,9 +463,9 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
             }();
             auto json_response = co_await std::move(json_request);
             auto json_observed = co_await json_response.json<fluent_client_observation>();
-            RUVIA_CHECK_EQ(json_observed.get<"content_type">().view(), "application/json");
+            EXPECT_EQ(json_observed.get<"content_type">().view(), "application/json");
             auto echoed_model = ruvia::from_json<fluent_client_observation>(json_observed.get<"body">().view());
-            RUVIA_CHECK_EQ(echoed_model.get<"body">().view(), "owned-payload");
+            EXPECT_EQ(echoed_model.get<"body">().view(), "owned-payload");
 
             using method_factory = ruvia::http_client_request (ruvia::http_client_handle::*)(std::string_view) const;
             const std::array<std::pair<std::string_view, method_factory>, 7> methods{{
@@ -477,14 +479,14 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
             }};
             for (const auto& [method, make] : methods) {
                 auto result = co_await (origin.*make)("/fluent/inspect").send();
-                RUVIA_CHECK(result.ok());
-                RUVIA_CHECK(result.header("x-observed-method") == method);
+                EXPECT_TRUE(result.ok());
+                EXPECT_TRUE(result.header("x-observed-method") == method);
                 auto body = co_await result.text();
                 if (method == "HEAD") {
-                    RUVIA_CHECK(body.empty());
+                    EXPECT_TRUE(body.empty());
                 } else {
                     auto report = ruvia::from_json<fluent_client_observation>(body.text());
-                    RUVIA_CHECK_EQ(report.get<"method">().view(), method);
+                    EXPECT_EQ(report.get<"method">().view(), method);
                 }
             }
 
@@ -506,45 +508,45 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                                   .header("content-type", "text/plain")
                                   .body("redirect-body")
                                   .send();
-                RUVIA_CHECK(result.ok());
+                EXPECT_TRUE(result.ok());
                 auto report = co_await result.json<fluent_client_observation>();
-                RUVIA_CHECK_EQ(report.get<"method">().view(), test.expected_method_);
-                RUVIA_CHECK_EQ(report.get<"body">().view(), test.keep_body_ ? "redirect-body" : "");
-                RUVIA_CHECK_EQ(report.get<"content_type">().view(), test.keep_body_ ? "text/plain" : "");
-                RUVIA_CHECK_EQ(report.get<"authorization">().view(), "Bearer same-origin");
+                EXPECT_EQ(report.get<"method">().view(), test.expected_method_);
+                EXPECT_EQ(report.get<"body">().view(), test.keep_body_ ? "redirect-body" : "");
+                EXPECT_EQ(report.get<"content_type">().view(), test.keep_body_ ? "text/plain" : "");
+                EXPECT_EQ(report.get<"authorization">().view(), "Bearer same-origin");
             }
             {
                 auto result = co_await origin.head("/fluent/redirect").query("status", "303").send();
-                RUVIA_CHECK(result.ok());
-                RUVIA_CHECK(result.header("x-observed-method") == "HEAD");
-                RUVIA_CHECK((co_await result.bytes()).empty());
+                EXPECT_TRUE(result.ok());
+                EXPECT_TRUE(result.header("x-observed-method") == "HEAD");
+                EXPECT_TRUE((co_await result.bytes()).empty());
             }
             {
                 auto result = co_await origin.get("/fluent/redirect").redirects(0).send();
-                RUVIA_CHECK(!result.ok());
-                RUVIA_CHECK(result.status() == ruvia::http_status::found);
+                EXPECT_TRUE(!result.ok());
+                EXPECT_TRUE(result.status() == ruvia::http_status::found);
                 auto text = co_await result.text();
-                RUVIA_CHECK_EQ(text.text(), "redirect");
+                EXPECT_EQ(text.text(), "redirect");
             }
             {
                 auto result = co_await origin.get("/fluent/registered").send();
-                RUVIA_CHECK(result.ok());
+                EXPECT_TRUE(result.ok());
                 auto report = co_await result.json<fluent_client_observation>();
-                RUVIA_CHECK_EQ(report.get<"method">().view(), "GET");
-                RUVIA_CHECK(report.get<"body">().view().empty());
-                RUVIA_CHECK(report.get<"authorization">().view().empty());
-                RUVIA_CHECK(report.get<"proxy_authorization">().view().empty());
-                RUVIA_CHECK(report.get<"cookie">().view().empty());
-                RUVIA_CHECK(report.get<"content_type">().view().empty());
-                RUVIA_CHECK_EQ(report.get<"authority">().view(),
+                EXPECT_EQ(report.get<"method">().view(), "GET");
+                EXPECT_TRUE(report.get<"body">().view().empty());
+                EXPECT_TRUE(report.get<"authorization">().view().empty());
+                EXPECT_TRUE(report.get<"proxy_authorization">().view().empty());
+                EXPECT_TRUE(report.get<"cookie">().view().empty());
+                EXPECT_TRUE(report.get<"content_type">().view().empty());
+                EXPECT_EQ(report.get<"authority">().view(),
                     std::string_view(server.targets().destination_).substr(std::string_view("http://").size()));
             }
             for (const auto mode : {"unregistered", "downgrade"}) {
                 auto result = co_await origin.get("/fluent/registered").query("mode", mode).redirects(0).send();
-                RUVIA_CHECK(!result.ok());
-                RUVIA_CHECK(result.status() == ruvia::http_status::found);
+                EXPECT_TRUE(!result.ok());
+                EXPECT_TRUE(result.status() == ruvia::http_status::found);
                 auto text = co_await result.text();
-                RUVIA_CHECK_EQ(text.text(), "redirect");
+                EXPECT_EQ(text.text(), "redirect");
             }
             for (const auto protocol : {
                      ruvia::http_client_protocol::http1_only,
@@ -567,16 +569,16 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                     }();
                     auto connected = co_await std::move(connecting);
                     auto session = std::move(connected);
-                    RUVIA_CHECK_EQ(session.subprotocol(), "echo.v1");
-                    RUVIA_CHECK(session.protocol_version() ==
+                    EXPECT_EQ(session.subprotocol(), "echo.v1");
+                    EXPECT_TRUE(session.protocol_version() ==
                                 (protocol == ruvia::http_client_protocol::http1_only
                                         ? ruvia::http_protocol_version::http11
                                         : ruvia::http_protocol_version::http2));
                     // Accepted WebSockets are not ordinary finite HTTP responses.
                     // The HTTP exchange deadline must not become their lifetime.
-                    RUVIA_CHECK(co_await ruvia::sleep_for(session.worker(), std::chrono::milliseconds(1250)) ==
+                    EXPECT_TRUE(co_await ruvia::sleep_for(session.worker(), std::chrono::milliseconds(1250)) ==
                                 ruvia::timer_sleep_result::elapsed);
-                    RUVIA_CHECK(session.connected());
+                    EXPECT_TRUE(session.connected());
                     const std::string payload(32768, 'w');
                     for (const bool compress : {false, true}) {
                         auto writing = [&] {
@@ -586,15 +588,15 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                         }();
                         co_await std::move(writing);
                         const auto message = co_await session.receive();
-                        RUVIA_CHECK(message.has_value());
+                        EXPECT_TRUE(message.has_value());
                         if (message) {
-                            RUVIA_CHECK_EQ(message->payload(), payload);
-                            RUVIA_CHECK(message->binary() == compress);
-                            RUVIA_CHECK(message->text() != compress);
+                            EXPECT_EQ(message->payload(), payload);
+                            EXPECT_TRUE(message->binary() == compress);
+                            EXPECT_TRUE(message->text() != compress);
                         }
                     }
                     co_await session.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "pooled"});
-                    RUVIA_CHECK(!(co_await session.receive()));
+                    EXPECT_TRUE(!(co_await session.receive()));
                     {
                         auto timed = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
                         bool timed_out = false;
@@ -603,8 +605,8 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                         } catch (const ruvia::http_client_error& error) {
                             timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
                         }
-                        RUVIA_CHECK(timed_out);
-                        RUVIA_CHECK(!timed.connected());
+                        EXPECT_TRUE(timed_out);
+                        EXPECT_TRUE(!timed.connected());
                     }
                     {
                         auto limited = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
@@ -614,8 +616,8 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                         } catch (const ruvia::http_client_error& error) {
                             rejected = error.code() == ruvia::http_client_error::code_type::message_too_large;
                         }
-                        RUVIA_CHECK(rejected);
-                        RUVIA_CHECK(!limited.connected());
+                        EXPECT_TRUE(rejected);
+                        EXPECT_TRUE(!limited.connected());
                         limited.abort();
                     }
                     {
@@ -626,7 +628,7 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                         } catch (const ruvia::http_client_error& error) {
                             rejected = error.code() == ruvia::http_client_error::code_type::protocol_error;
                         }
-                        RUVIA_CHECK(rejected);
+                        EXPECT_TRUE(rejected);
                         limited.abort();
                     }
                     auto active = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
@@ -644,11 +646,11 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
                     readers.spawn(receive());
                     co_await websocket_client.shutdown();
                     co_await readers.join();
-                    RUVIA_CHECK(cancelled);
-                    RUVIA_CHECK(!active.connected());
-                    RUVIA_CHECK(!session.connected());
-                    RUVIA_CHECK(session.peer_close_code() == std::uint16_t{1000});
-                    RUVIA_CHECK_EQ(session.peer_close_reason(), "pooled");
+                    EXPECT_TRUE(cancelled);
+                    EXPECT_TRUE(!active.connected());
+                    EXPECT_TRUE(!session.connected());
+                    EXPECT_TRUE(session.peer_close_code() == std::uint16_t{1000});
+                    EXPECT_EQ(session.peer_close_reason(), "pooled");
                 } catch (...) {
                     websocket_failure = std::current_exception();
                 }
@@ -672,7 +674,7 @@ RUVIA_TEST(http_client_fluent_ownership_helpers_json_and_registered_redirects) {
     }
 }
 
-RUVIA_TEST(http_client_unconsumed_builders_outlive_shutdown_and_client_storage) {
+TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     std::exception_ptr failure;
@@ -698,9 +700,9 @@ RUVIA_TEST(http_client_unconsumed_builders_outlive_shutdown_and_client_storage) 
             co_await client.shutdown();
         }
         try {
-            RUVIA_CHECK(throws_logic_error([&] { (void)request->send(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)connect->open(); }));
-            RUVIA_CHECK(throws_logic_error([&] { (void)websocket->connect(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)request->send(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)connect->open(); }));
+            EXPECT_TRUE(throws_logic_error([&] { (void)websocket->connect(); }));
             request.reset();
             connect.reset();
             websocket.reset();

@@ -1,5 +1,7 @@
 #if defined(RUVIA_ENABLE_POSTGRESQL) && defined(RUVIA_ENABLE_REDIS)
 
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -44,7 +46,6 @@
 #include "ruvia/web/redis/redis_types.h"
 
 #include "backend_client_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 // Removing a query-result cache id must drop every result a repository builder
@@ -394,7 +395,7 @@ void run_with_query_cache(redis_store_peer& redis_peer, const ruvia::db_config& 
 
 }  // namespace query_cache_test
 
-RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
+TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
     redis_store_peer redis_peer;
     // The database answers the statements the cache lets through, in order. A
     // read served from the cache consumes no reply, so a stale entry shows up
@@ -431,52 +432,52 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 const auto handle = database.handle();
                 // First reads come from the database and fill the cache.
                 const std::vector<std::string> many{"one", "two", "three"};
-                RUVIA_CHECK(co_await read_many(handle) == many);
-                RUVIA_CHECK_EQ(co_await read_one(handle), std::string("alpha"));
-                RUVIA_CHECK(co_await read_exists(handle));
-                RUVIA_CHECK_EQ(co_await read_count(handle), std::uint64_t{3});
-                RUVIA_CHECK(redis_peer.key_count() != 0);
+                EXPECT_TRUE(co_await read_many(handle) == many);
+                EXPECT_EQ(co_await read_one(handle), std::string("alpha"));
+                EXPECT_TRUE(co_await read_exists(handle));
+                EXPECT_EQ(co_await read_count(handle), std::uint64_t{3});
+                EXPECT_TRUE(redis_peer.key_count() != 0);
                 // Repeated reads are served from the cache; every decoded row
                 // resolves its column through the result's shared names.
-                RUVIA_CHECK(co_await read_many(handle) == many);
-                RUVIA_CHECK_EQ(co_await read_one(handle), std::string("alpha"));
-                RUVIA_CHECK(co_await read_exists(handle));
-                RUVIA_CHECK_EQ(co_await read_count(handle), std::uint64_t{3});
+                EXPECT_TRUE(co_await read_many(handle) == many);
+                EXPECT_EQ(co_await read_one(handle), std::string("alpha"));
+                EXPECT_TRUE(co_await read_exists(handle));
+                EXPECT_EQ(co_await read_count(handle), std::uint64_t{3});
                 auto raw_query = handle.repository<record>().query_builder();
                 raw_query.cache(cache_id, cache_lifetime);
                 auto cached_rows = co_await raw_query.get_raw_many();
                 auto moved_rows = std::move(cached_rows);
                 // Subsequent Redis reads must not invalidate an earlier result.
-                RUVIA_CHECK(co_await read_many(handle) == many);
-                RUVIA_CHECK_EQ(moved_rows.size(), many.size());
+                EXPECT_TRUE(co_await read_many(handle) == many);
+                EXPECT_EQ(moved_rows.size(), many.size());
                 for (std::size_t index = 0; index < many.size(); ++index) {
-                    RUVIA_CHECK(moved_rows[index]["v"].value() == many[index]);
+                    EXPECT_TRUE(moved_rows[index]["v"].value() == many[index]);
                 }
                 // A user id that spells another id plus a shape name is its own
                 // entry: it reads the database instead of the "one" result.
                 constexpr std::string_view suffixed_id = "item-one";
                 const std::vector<std::string> gamma{"gamma"};
-                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == gamma);
+                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == gamma);
                 // Removing the caller's id drops every result shape cached under
                 // it and leaves the independent id's entry alone.
                 co_await handle.query_result_cache().remove(cache_id);
-                RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{1});
-                RUVIA_CHECK_EQ(co_await read_one(handle), std::string("beta"));
-                RUVIA_CHECK(!(co_await read_exists(handle)));
-                RUVIA_CHECK_EQ(co_await read_count(handle), std::uint64_t{5});
-                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == gamma);
+                EXPECT_EQ(redis_peer.key_count(), std::size_t{1});
+                EXPECT_EQ(co_await read_one(handle), std::string("beta"));
+                EXPECT_TRUE(!(co_await read_exists(handle)));
+                EXPECT_EQ(co_await read_count(handle), std::uint64_t{5});
+                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == gamma);
                 // A multi-id removal drops every shape for each id.
                 co_await handle.query_result_cache().remove(cache_id, suffixed_id);
-                RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{0});
-                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"delta"});
+                EXPECT_EQ(redis_peer.key_count(), std::size_t{0});
+                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"delta"});
                 // Clear uses the same cached namespace prefix without touching
                 // an unrelated Redis key.
                 (void)co_await store.set("outside-cache", "keep");
                 co_await handle.query_result_cache().clear();
-                RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{1});
+                EXPECT_EQ(redis_peer.key_count(), std::size_t{1});
                 const auto outside = co_await store.get("outside-cache");
-                RUVIA_CHECK(outside.has_value() && *outside == "keep");
-                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"epsilon"});
+                EXPECT_TRUE(outside.has_value() && *outside == "keep");
+                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"epsilon"});
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -500,7 +501,7 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
     ruvia::test::retire_backend_attachment(attachment);
 }
 
-RUVIA_TEST(db_query_result_cache_distinguishes_sql_parameter_values) {
+TEST(Ruvia, db_query_result_cache_distinguishes_sql_parameter_values) {
     redis_store_peer redis_peer;
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
         ruvia::test::backend_startup_peer::after_startup::idle, {{.rows_ = {"first"}}, {.rows_ = {"second"}}});
@@ -522,10 +523,10 @@ RUVIA_TEST(db_query_result_cache_distinguishes_sql_parameter_values) {
                 const std::string large_parameter(8192, 'x');
                 std::string different_parameter = large_parameter;
                 different_parameter.back() = 'y';
-                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
-                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
-                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, different_parameter), std::string("second"));
-                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
+                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
+                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
+                EXPECT_EQ(co_await read_sql_cached(handle, different_parameter), std::string("second"));
+                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -549,7 +550,7 @@ RUVIA_TEST(db_query_result_cache_distinguishes_sql_parameter_values) {
     ruvia::test::retire_backend_attachment(attachment);
 }
 
-RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
+TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
     redis_store_peer redis_peer;
     // The entry magic, then little-endian 64-bit row and column counts.
     std::string empty(cache_entry_magic);
@@ -576,7 +577,7 @@ RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
                 auto query = database.handle().repository<record>().query_builder();
                 query.cache(cache_id, cache_lifetime);
                 auto empty_rows = co_await query.get_raw_many();
-                RUVIA_CHECK(empty_rows.empty());
+                EXPECT_TRUE(empty_rows.empty());
                 auto empty_with_schema = empty;
                 empty_with_schema[column_count_offset] = 1;
                 empty_with_schema.push_back('\1');
@@ -584,17 +585,17 @@ RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
                 empty_with_schema.push_back('v');
                 redis_peer.poison_reads(std::move(empty_with_schema));
                 auto named_empty_rows = co_await query.get_raw_many();
-                RUVIA_CHECK(named_empty_rows.empty());
+                EXPECT_TRUE(named_empty_rows.empty());
                 auto zero_columns = empty;
                 zero_columns[row_count_offset] = 2;
                 zero_columns.append(2, '\2');
                 redis_peer.poison_reads(std::move(zero_columns));
                 auto rows = co_await query.get_raw_many();
-                RUVIA_CHECK_EQ(rows.size(), 2u);
-                RUVIA_CHECK(rows[0].empty());
-                RUVIA_CHECK(rows[1].empty());
-                RUVIA_CHECK(empty_rows.empty());
-                RUVIA_CHECK(named_empty_rows.empty());
+                EXPECT_EQ(rows.size(), 2u);
+                EXPECT_TRUE(rows[0].empty());
+                EXPECT_TRUE(rows[1].empty());
+                EXPECT_TRUE(empty_rows.empty());
+                EXPECT_TRUE(named_empty_rows.empty());
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -621,7 +622,7 @@ RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
 // A corrupt entry claiming an enormous count of zero-column rows is an invalid
 // cache entry: it is rejected before any row storage is reserved, so a cache
 // that ignores errors reads the database instead.
-RUVIA_TEST(db_query_result_cache_rejects_corrupt_zero_column_entries) {
+TEST(Ruvia, db_query_result_cache_rejects_corrupt_zero_column_entries) {
     redis_store_peer redis_peer;
     std::string corrupt(cache_entry_magic);
     corrupt.append(8, '\xff');
@@ -646,7 +647,7 @@ RUVIA_TEST(db_query_result_cache_rejects_corrupt_zero_column_entries) {
             try {
                 co_await database.connect();
                 const std::vector<std::string> fresh{"fresh"};
-                RUVIA_CHECK(co_await read_many(database.handle()) == fresh);
+                EXPECT_TRUE(co_await read_many(database.handle()) == fresh);
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -670,7 +671,7 @@ RUVIA_TEST(db_query_result_cache_rejects_corrupt_zero_column_entries) {
     ruvia::test::retire_backend_attachment(attachment);
 }
 
-RUVIA_TEST(db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_redis) {
+TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_redis) {
     redis_store_peer redis_peer;
     ruvia::test::backend_startup_peer database_peer(
         ruvia::test::backend_startup_peer::protocol::postgresql, false,
@@ -697,12 +698,12 @@ RUVIA_TEST(db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_re
                     cancelled = error.code() == ruvia::redis_error::code_type::cancelled ||
                                 error.code() == ruvia::redis_error::code_type::closing;
                 }
-                RUVIA_CHECK(cancelled);
+                EXPECT_TRUE(cancelled);
             } catch (...) {
                 failure = std::current_exception();
             }
             co_await database.shutdown();
-            RUVIA_CHECK(!(co_await redis.handle().get("still-open")));
+            EXPECT_TRUE(!(co_await redis.handle().get("still-open")));
         } catch (...) {
             if (!failure) {
                 failure = std::current_exception();
@@ -726,7 +727,7 @@ RUVIA_TEST(db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_re
 // written: the result is returned uncached, and the next read of that key goes
 // to the database instead of failing on an oversized reply. Smaller entries
 // are still cached.
-RUVIA_TEST(db_query_result_cache_skips_entries_beyond_the_redis_reply_limit) {
+TEST(Ruvia, db_query_result_cache_skips_entries_beyond_the_redis_reply_limit) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     const std::string large(512, 'x');
@@ -735,19 +736,19 @@ RUVIA_TEST(db_query_result_cache_skips_entries_beyond_the_redis_reply_limit) {
         {{.rows_ = {large}}, {.rows_ = {larger}}, {.rows_ = {"small"}}});
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle&) -> ruvia::task<void> {
         const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
-        RUVIA_CHECK_EQ(co_await read_sql_cached(handle, "large"), large);
-        RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{0});
-        RUVIA_CHECK_EQ(co_await read_sql_cached(handle, "large"), larger);
-        RUVIA_CHECK_EQ(co_await read_sql_cached(handle, "small"), std::string("small"));
-        RUVIA_CHECK_EQ(co_await read_sql_cached(handle, "small"), std::string("small"));
-        RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{1});
+        EXPECT_EQ(co_await read_sql_cached(handle, "large"), large);
+        EXPECT_EQ(redis_peer.key_count(), std::size_t{0});
+        EXPECT_EQ(co_await read_sql_cached(handle, "large"), larger);
+        EXPECT_EQ(co_await read_sql_cached(handle, "small"), std::string("small"));
+        EXPECT_EQ(co_await read_sql_cached(handle, "small"), std::string("small"));
+        EXPECT_EQ(redis_peer.key_count(), std::size_t{1});
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario, std::size_t{256});
 }
 
 // Concurrent misses of one key on one worker run the statement once: the
 // first reader queries the database and the others take its result.
-RUVIA_TEST(db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
+TEST(Ruvia, db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -769,17 +770,17 @@ RUVIA_TEST(db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario);
     for (const auto& outcome : outcomes) {
-        RUVIA_CHECK(!outcome.error_.has_value());
-        RUVIA_CHECK(outcome.value_ == "first");
+        EXPECT_TRUE(!outcome.error_.has_value());
+        EXPECT_TRUE(outcome.value_ == "first");
     }
-    RUVIA_CHECK_EQ(database_peer.postgres_parses().size(), std::size_t{1});
-    RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{1});
+    EXPECT_EQ(database_peer.postgres_parses().size(), std::size_t{1});
+    EXPECT_EQ(redis_peer.key_count(), std::size_t{1});
 }
 
 // A cancelled leader ends its fill without a result: the reader waiting for it
 // reads the cache again and runs the statement itself. The leader's abandoned
 // statement takes its connection with it, so the takeover connects anew.
-RUVIA_TEST(db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
+TEST(Ruvia, db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
@@ -802,16 +803,16 @@ RUVIA_TEST(db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
         co_await readers.join();
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario);
-    RUVIA_CHECK(leader.error_ == ruvia::db_error::code_type::cancelled);
-    RUVIA_CHECK(!waiter.error_.has_value());
-    RUVIA_CHECK(waiter.value_ == "taken over");
-    RUVIA_CHECK_EQ(database_peer.postgres_parses().size(), std::size_t{2});
-    RUVIA_CHECK_EQ(database_peer.startups(), std::size_t{2});
+    EXPECT_TRUE(leader.error_ == ruvia::db_error::code_type::cancelled);
+    EXPECT_TRUE(!waiter.error_.has_value());
+    EXPECT_TRUE(waiter.value_ == "taken over");
+    EXPECT_EQ(database_peer.postgres_parses().size(), std::size_t{2});
+    EXPECT_EQ(database_peer.startups(), std::size_t{2});
 }
 
 // Waiting for another reader's fill is bounded by the waiter's own timeout,
 // whatever the leader's.
-RUVIA_TEST(db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
+TEST(Ruvia, db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -831,17 +832,17 @@ RUVIA_TEST(db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
         co_await readers.join();
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario);
-    RUVIA_CHECK(waiter_finished_first);
-    RUVIA_CHECK(waiter.error_ == ruvia::db_error::code_type::timeout);
-    RUVIA_CHECK(!leader.error_.has_value());
-    RUVIA_CHECK(leader.value_ == "first");
-    RUVIA_CHECK_EQ(database_peer.postgres_parses().size(), std::size_t{1});
+    EXPECT_TRUE(waiter_finished_first);
+    EXPECT_TRUE(waiter.error_ == ruvia::db_error::code_type::timeout);
+    EXPECT_TRUE(!leader.error_.has_value());
+    EXPECT_TRUE(leader.value_ == "first");
+    EXPECT_EQ(database_peer.postgres_parses().size(), std::size_t{1});
 }
 
 // remove() detaches the fills of its keys on this worker: a reader arriving
 // after it runs its own statement instead of taking the result of a fill that
 // started before the removal.
-RUVIA_TEST(db_query_result_cache_remove_detaches_inflight_fills) {
+TEST(Ruvia, db_query_result_cache_remove_detaches_inflight_fills) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -861,10 +862,10 @@ RUVIA_TEST(db_query_result_cache_remove_detaches_inflight_fills) {
         co_await readers.join();
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario);
-    RUVIA_CHECK(!before.error_.has_value());
-    RUVIA_CHECK(before.value_ == "stale");
-    RUVIA_CHECK(!after.error_.has_value());
-    RUVIA_CHECK(after.value_ == "fresh");
+    EXPECT_TRUE(!before.error_.has_value());
+    EXPECT_TRUE(before.value_ == "stale");
+    EXPECT_TRUE(!after.error_.has_value());
+    EXPECT_TRUE(after.value_ == "fresh");
 }
 
 #endif

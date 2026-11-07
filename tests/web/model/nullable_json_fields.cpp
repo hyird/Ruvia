@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -5,7 +7,7 @@
 
 #include "ruvia/web/model.h"
 
-#include "test_harness.h"
+#include "test_exceptions.h"
 
 namespace {
 
@@ -31,49 +33,49 @@ RUVIA_MODEL(emission_options,
 
 }  // namespace
 
-RUVIA_TEST(nullable_optional_string_accepts_json_null) {
+TEST(Ruvia, nullable_optional_string_accepts_json_null) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value =
         ruvia::from_json<remark_request>(R"({"remark":null})", {.resource_ = &resource});
-    RUVIA_CHECK(!parsed_value.get<"remark">().has_value());
-    RUVIA_CHECK(parsed_value.is_present<"remark">());
-    RUVIA_CHECK(parsed_value.is_null<"remark">());
+    EXPECT_TRUE(!parsed_value.get<"remark">().has_value());
+    EXPECT_TRUE(parsed_value.is_present<"remark">());
+    EXPECT_TRUE(parsed_value.is_null<"remark">());
 }
 
-RUVIA_TEST(nullable_optional_string_still_accepts_text) {
+TEST(Ruvia, nullable_optional_string_still_accepts_text) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value =
         ruvia::from_json<remark_request>(R"({"remark":"note"})", {.resource_ = &resource});
     if (!parsed_value.get<"remark">()) {
         return;
     }
-    RUVIA_CHECK_EQ(parsed_value.get<"remark">()->view(), std::string_view("note"));
+    EXPECT_EQ(parsed_value.get<"remark">()->view(), std::string_view("note"));
 }
 
-RUVIA_TEST(nullable_null_does_not_apply_default) {
+TEST(Ruvia, nullable_null_does_not_apply_default) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value = ruvia::from_json<remark_with_default_request>(
         R"({"remark":null})", {.resource_ = &resource});
-    RUVIA_CHECK(!parsed_value.get<"remark">().has_value());
-    RUVIA_CHECK(parsed_value.is_present<"remark">());
-    RUVIA_CHECK(parsed_value.is_null<"remark">());
+    EXPECT_TRUE(!parsed_value.get<"remark">().has_value());
+    EXPECT_TRUE(parsed_value.is_present<"remark">());
+    EXPECT_TRUE(parsed_value.is_null<"remark">());
 
     const auto missing =
         ruvia::from_json<remark_with_default_request>("{}", {.resource_ = &resource});
     if (!missing.get<"remark">()) {
         return;
     }
-    RUVIA_CHECK_EQ(missing.get<"remark">()->view(), std::string_view("fallback"));
+    EXPECT_EQ(missing.get<"remark">()->view(), std::string_view("fallback"));
 }
 
-RUVIA_TEST(required_string_rejects_json_null) {
+TEST(Ruvia, required_string_rejects_json_null) {
     std::pmr::monotonic_buffer_resource resource;
-    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::testing::throws_on([&] {
         (void)ruvia::from_json<required_remark_request>(R"({"remark":null})", {.resource_ = &resource});
     }));
 }
 
-RUVIA_TEST(json_value_model_fields_accept_any_json_token) {
+TEST(Ruvia, json_value_model_fields_accept_any_json_token) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value = ruvia::from_json<json_bag_request>(
         R"({"payload":[1,{"k":null}],"object":{"a":true},"items":[null,"x",{"z":2}]})",
@@ -82,40 +84,40 @@ RUVIA_TEST(json_value_model_fields_accept_any_json_token) {
         !parsed_value.get<"items">()) {
         return;
     }
-    RUVIA_CHECK(parsed_value.get<"payload">()->is_array());
-    RUVIA_CHECK_EQ(parsed_value.get<"payload">()->view(), std::string_view(R"([1,{"k":null}])"));
-    RUVIA_CHECK_EQ(parsed_value.get<"object">()->view(), std::string_view(R"({"a":true})"));
+    EXPECT_TRUE(parsed_value.get<"payload">()->is_array());
+    EXPECT_EQ(parsed_value.get<"payload">()->view(), std::string_view(R"([1,{"k":null}])"));
+    EXPECT_EQ(parsed_value.get<"object">()->view(), std::string_view(R"({"a":true})"));
     const auto& items = *parsed_value.get<"items">();
-    RUVIA_CHECK_EQ(items.size(), std::size_t{3});
-    RUVIA_CHECK(items[0].is_null());
-    RUVIA_CHECK(items[1].is_string());
+    EXPECT_EQ(items.size(), std::size_t{3});
+    EXPECT_TRUE(items[0].is_null());
+    EXPECT_TRUE(items[1].is_string());
 }
 
-RUVIA_TEST(json_object_model_field_rejects_non_objects) {
+TEST(Ruvia, json_object_model_field_rejects_non_objects) {
     std::pmr::monotonic_buffer_resource resource;
-    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::testing::throws_on([&] {
         (void)ruvia::from_json<json_bag_request>(R"({"object":[1]})", {.resource_ = &resource});
     }));
 
     const auto null_object =
         ruvia::from_json<json_bag_request>(R"({"object":null})", {.resource_ = &resource});
-    RUVIA_CHECK(!null_object.get<"object">().has_value());
-    RUVIA_CHECK(null_object.is_present<"object">());
-    RUVIA_CHECK(null_object.is_null<"object">());
+    EXPECT_TRUE(!null_object.get<"object">().has_value());
+    EXPECT_TRUE(null_object.is_present<"object">());
+    EXPECT_TRUE(null_object.is_null<"object">());
 }
 
-RUVIA_TEST(json_value_model_fields_own_tokens_for_from_json) {
+TEST(Ruvia, json_value_model_fields_own_tokens_for_from_json) {
     std::pmr::monotonic_buffer_resource resource;
     auto parsed_value = ruvia::from_json<json_bag_request>(
         std::string(R"({"payload":{"keep":true}})"), {.resource_ = &resource});
     if (!parsed_value.get<"payload">()) {
         return;
     }
-    RUVIA_CHECK(parsed_value.get<"payload">()->is_object());
-    RUVIA_CHECK_EQ(parsed_value.get<"payload">()->view(), std::string_view(R"({"keep":true})"));
+    EXPECT_TRUE(parsed_value.get<"payload">()->is_object());
+    EXPECT_EQ(parsed_value.get<"payload">()->view(), std::string_view(R"({"keep":true})"));
 }
 
-RUVIA_TEST(json_value_response_fields_write_raw_tokens) {
+TEST(Ruvia, json_value_response_fields_write_raw_tokens) {
     std::pmr::monotonic_buffer_resource resource;
     auto parsed_value = ruvia::from_json<json_bag_request>(
         R"({"payload":[1,2],"object":{"a":1}})", {.resource_ = &resource});
@@ -126,11 +128,11 @@ RUVIA_TEST(json_value_response_fields_write_raw_tokens) {
     json_bag_response response({.resource_ = &resource});
     response.set<"payload">(*parsed_value.get<"payload">());
     response.set<"object">(std::move(parsed_value.ensure<"object">()));
-    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(response, {.resource_ = &resource})),
+    EXPECT_EQ(std::string_view(ruvia::to_json(response, {.resource_ = &resource})),
         std::string_view(R"({"payload":[1,2],"object":{"a":1}})"));
 }
 
-RUVIA_TEST(model_json_emission_options_write_expected_output_for_all_states) {
+TEST(Ruvia, model_json_emission_options_write_expected_output_for_all_states) {
     // Each pair of bits selects missing, explicit null, empty, or text. The
     // Cartesian product also covers every comma position after omitted fields.
     constexpr std::string_view names[] = {R"("p\"lain")", R"("omitted")", R"("emitted")", R"("both")"};
@@ -166,6 +168,6 @@ RUVIA_TEST(model_json_emission_options_write_expected_output_for_all_states) {
         }
         expected.push_back('}');
         const auto output = ruvia::to_json(value);
-        RUVIA_CHECK_EQ(std::string_view(output), std::string_view(expected));
+        EXPECT_EQ(std::string_view(output), std::string_view(expected));
     }
 }

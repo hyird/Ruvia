@@ -1,13 +1,13 @@
 #pragma once
 
+#include <gtest/gtest.h>
+
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/testing.h"
-
-#include "test_harness.h"
 
 namespace context_request_test {
 

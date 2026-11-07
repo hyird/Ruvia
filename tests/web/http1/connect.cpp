@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -23,7 +25,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
@@ -72,7 +73,7 @@ class http1_tunnel_routes final {
     }
 };
 
-void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first) {
+void exercise_connect(bool finish_first) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     {
@@ -109,9 +110,9 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
                 }
                 head.push_back(byte);
             }
-            RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
-            RUVIA_CHECK(head.find("Content-Length:") == std::string::npos);
-            RUVIA_CHECK(head.find("Transfer-Encoding:") == std::string::npos);
+            EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+            EXPECT_TRUE(head.find("Content-Length:") == std::string::npos);
+            EXPECT_TRUE(head.find("Transfer-Encoding:") == std::string::npos);
             std::array<char, 4096> input{};
             std::string echoed;
             if (!finish_first) {
@@ -128,7 +129,7 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
                 }
                 echoed.append(input.data(), read.result());
             }
-            RUVIA_CHECK(echoed == (finish_first ? std::string{} : initial_value + additional));
+            EXPECT_TRUE(echoed == (finish_first ? std::string{} : initial_value + additional));
             if (finish_first) {
                 co_await send(additional);
                 client.shutdown(asio::ip::tcp::socket::shutdown_send);
@@ -148,10 +149,10 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK(observed->ended_ && observed->retained_stable_);
+    EXPECT_TRUE(observed->ended_ && observed->retained_stable_);
     {
         std::lock_guard lock(observed->mutex_);
-        RUVIA_CHECK(observed->bytes_ == initial_value + additional);
+        EXPECT_TRUE(observed->bytes_ == initial_value + additional);
     }
 }
 
@@ -255,32 +256,32 @@ std::string exchange_closing_request(std::string_view request) {
 }
 }  // namespace
 
-RUVIA_TEST(http1_connect_routes_transfer_buffered_bytes_and_keep_receive_direction_after_send_fin) {
-    exercise_connect(ruvia_ctx, false);
-    exercise_connect(ruvia_ctx, true);
+TEST(Ruvia, http1_connect_routes_transfer_buffered_bytes_and_keep_receive_direction_after_send_fin) {
+    exercise_connect(false);
+    exercise_connect(true);
 }
 
-RUVIA_TEST(http1_interim_responses_reach_http11_clients_but_never_http10_clients) {
+TEST(Ruvia, http1_interim_responses_reach_http11_clients_but_never_http10_clients) {
     const auto http11 = exchange_closing_request("GET /http1-early-hints HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    RUVIA_CHECK(http11.starts_with("HTTP/1.1 103 "));
-    RUVIA_CHECK(http11.find("link: </asset>; rel=preload\r\n") != std::string::npos);
-    RUVIA_CHECK(http11.find("\r\n\r\nHTTP/1.1 102 ") != std::string::npos);
-    RUVIA_CHECK(http11.find("\r\n\r\nHTTP/1.1 200 ") != std::string::npos);
-    RUVIA_CHECK(http11.ends_with("final"));
+    EXPECT_TRUE(http11.starts_with("HTTP/1.1 103 "));
+    EXPECT_TRUE(http11.find("link: </asset>; rel=preload\r\n") != std::string::npos);
+    EXPECT_TRUE(http11.find("\r\n\r\nHTTP/1.1 102 ") != std::string::npos);
+    EXPECT_TRUE(http11.find("\r\n\r\nHTTP/1.1 200 ") != std::string::npos);
+    EXPECT_TRUE(http11.ends_with("final"));
 
     // RFC 9110 15.2: an HTTP/1.0 client would take the 1xx head as the final
     // response, so the server omits it and sends only the final response.
     const auto http10 = exchange_closing_request("GET /http1-early-hints HTTP/1.0\r\nHost: localhost\r\n\r\n");
-    RUVIA_CHECK(http10.find(" 103 ") == std::string::npos);
-    RUVIA_CHECK(http10.find(" 102 ") == std::string::npos);
-    RUVIA_CHECK(http10.substr(0, http10.find("\r\n")).find(" 200 ") != std::string::npos);
-    RUVIA_CHECK(http10.ends_with("final"));
+    EXPECT_TRUE(http10.find(" 103 ") == std::string::npos);
+    EXPECT_TRUE(http10.find(" 102 ") == std::string::npos);
+    EXPECT_TRUE(http10.substr(0, http10.find("\r\n")).find(" 200 ") != std::string::npos);
+    EXPECT_TRUE(http10.ends_with("final"));
 }
 
-RUVIA_TEST(http1_unstarted_interim_responses_do_not_block_the_final_response) {
+TEST(Ruvia, http1_unstarted_interim_responses_do_not_block_the_final_response) {
     const auto response = exchange_closing_request("GET /http1-cold-hints HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(response.find(" 103 ") == std::string::npos);
-    RUVIA_CHECK(response.find(" 102 ") == std::string::npos);
-    RUVIA_CHECK(response.find("cold-final") != std::string::npos);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.find(" 103 ") == std::string::npos);
+    EXPECT_TRUE(response.find(" 102 ") == std::string::npos);
+    EXPECT_TRUE(response.find("cold-final") != std::string::npos);
 }

@@ -1,4 +1,4 @@
-#include "test_harness.h"
+#include <gtest/gtest.h>
 
 // Two spellings of one path ("/dup/admin" and "/dup/%61dmin") name one route:
 // the router matches requests in that canonical form, so registering both
@@ -34,7 +34,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(route_encoded_duplicate_rejects_equivalent_spellings_at_startup) {
+TEST(Ruvia, route_encoded_duplicate_rejects_equivalent_spellings_at_startup) {
     ruvia::test_app app;
     bool rejected = false;
     try {
@@ -42,5 +42,5 @@ RUVIA_TEST(route_encoded_duplicate_rejects_equivalent_spellings_at_startup) {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }

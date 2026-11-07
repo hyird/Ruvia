@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -11,7 +13,6 @@
 #include "ruvia/http/http_response.h"
 
 #include "failing_memory_resource.h"
-#include "test_harness.h"
 
 namespace {
 
@@ -30,28 +31,28 @@ http_response make_response() {
 
 // Response fields Ruvia formats itself: Content-Range and Allow.
 
-RUVIA_TEST(allow_header_lists_methods_in_canonical_order) {
+TEST(Ruvia, allow_header_lists_methods_in_canonical_order) {
     // The Allow header (405/OPTIONS) lists the mask's methods in method-enum
     // order, comma-separated.
     auto many = make_response();
     many.allow_methods(method_bit(http_known_method::get) |
                        method_bit(http_known_method::post) |
                        method_bit(http_known_method::head));
-    RUVIA_CHECK_EQ(many.header("Allow").value_or(""), std::string_view("GET, POST, HEAD"));
+    EXPECT_EQ(many.header("Allow").value_or(""), std::string_view("GET, POST, HEAD"));
 
     // A single method has no separator.
     auto one = make_response();
     one.allow_methods(method_bit(http_known_method::delete_value));
-    RUVIA_CHECK_EQ(one.header("Allow").value_or(""), std::string_view("DELETE"));
+    EXPECT_EQ(one.header("Allow").value_or(""), std::string_view("DELETE"));
 
     std::string extension = "PROPFIND";
     const std::string_view extension_methods[]{extension};
     one.allow_methods(method_bit(http_known_method::get), extension_methods);
     extension.assign("CHANGED!");
-    RUVIA_CHECK_EQ(one.header("Allow").value_or(""), std::string_view("GET, PROPFIND"));
+    EXPECT_EQ(one.header("Allow").value_or(""), std::string_view("GET, PROPFIND"));
 }
 
-RUVIA_TEST(allow_header_rejects_invalid_extension_methods_without_mutation) {
+TEST(Ruvia, allow_header_rejects_invalid_extension_methods_without_mutation) {
     const std::array invalid_methods{std::string_view{}, std::string_view("BAD METHOD"),
         std::string_view("GET, POST"), std::string_view("BAD\r\nX-Injected: yes"),
         std::string_view("BAD\0METHOD", 10), std::string_view("BAD\xff", 4)};
@@ -66,44 +67,42 @@ RUVIA_TEST(allow_header_rejects_invalid_extension_methods_without_mutation) {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
-        RUVIA_CHECK_EQ(response.header("Allow").value_or(""), std::string_view("GET"));
-        RUVIA_CHECK_EQ(response.header("X-Keep").value_or(""), std::string_view("unchanged"));
+        EXPECT_TRUE(rejected);
+        EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET"));
+        EXPECT_EQ(response.header("X-Keep").value_or(""), std::string_view("unchanged"));
     }
 }
 
-RUVIA_TEST(allow_header_reorders_methods_borrowed_from_current_field) {
+TEST(Ruvia, allow_header_reorders_methods_borrowed_from_current_field) {
     auto response = make_response();
     response.header("Allow", "FOO, BAR");
     const auto current = response.header("Allow").value();
     const std::array extension_methods{current.substr(5), current.substr(0, 3)};
     response.allow_methods(0, extension_methods);
-    RUVIA_CHECK_EQ(response.header("Allow").value_or(""), std::string_view("BAR, FOO"));
+    EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("BAR, FOO"));
 }
 
-RUVIA_TEST(allow_header_lists_connect_with_other_supported_methods) {
+TEST(Ruvia, allow_header_lists_connect_with_other_supported_methods) {
     auto response = make_response();
     response.allow_methods(method_bit(http_known_method::connect));
-    RUVIA_CHECK_EQ(response.header("Allow").value_or(""), std::string_view("CONNECT"));
+    EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("CONNECT"));
     const std::array extension_methods{std::string_view("PROPFIND")};
     response.allow_methods(method_bit(http_known_method::get) | method_bit(http_known_method::options) |
                                method_bit(http_known_method::connect),
         extension_methods);
-    RUVIA_CHECK_EQ(response.header("Allow").value_or(""),
-        std::string_view("GET, OPTIONS, CONNECT, PROPFIND"));
+    EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET, OPTIONS, CONNECT, PROPFIND"));
 }
 
-RUVIA_TEST(allow_header_accepts_extension_tokens_and_empty_method_set) {
+TEST(Ruvia, allow_header_accepts_extension_tokens_and_empty_method_set) {
     auto response = make_response();
     const std::array extension_methods{std::string_view("custom"), std::string_view("!#$%&'*+-.^_`|~")};
     response.allow_methods(method_bit(http_known_method::get), extension_methods);
-    RUVIA_CHECK_EQ(response.header("Allow").value_or(""),
-        std::string_view("GET, custom, !#$%&'*+-.^_`|~"));
+    EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET, custom, !#$%&'*+-.^_`|~"));
     response.allow_methods(0);
-    RUVIA_CHECK_EQ(response.header("Allow"), std::optional(std::string_view{}));
+    EXPECT_EQ(response.header("Allow"), std::optional(std::string_view{}));
 }
 
-RUVIA_TEST(allow_header_preserves_borrowed_methods_when_replacement_allocation_fails) {
+TEST(Ruvia, allow_header_preserves_borrowed_methods_when_replacement_allocation_fails) {
     failing_memory_resource resource;
     {
         http_response response(&resource);
@@ -118,18 +117,18 @@ RUVIA_TEST(allow_header_preserves_borrowed_methods_when_replacement_allocation_f
         } catch (const std::bad_alloc&) {
             failed = true;
         }
-        RUVIA_CHECK(failed);
-        RUVIA_CHECK_EQ(response.header("Allow").value_or(""), std::string_view("FOO, BAR"));
-        RUVIA_CHECK_EQ(current, std::string_view("FOO, BAR"));
-        RUVIA_CHECK_EQ(resource.live_allocations(), live_allocations);
+        EXPECT_TRUE(failed);
+        EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("FOO, BAR"));
+        EXPECT_EQ(current, std::string_view("FOO, BAR"));
+        EXPECT_EQ(resource.live_allocations(), live_allocations);
         response.allow_methods(method_bit(http_known_method::get), extension_methods);
-        RUVIA_CHECK_EQ(response.header("Allow").value_or(""), std::string_view("GET, BAR, FOO"));
+        EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET, BAR, FOO"));
 
         const std::array external_methods{std::string_view("FOO"), std::string_view("BAR")};
         resource.fail_after(0);
         response.allow_methods(method_bit(http_known_method::get), external_methods);
         resource.allow_allocations();
-        RUVIA_CHECK_EQ(response.header("Allow").value_or(""), std::string_view("GET, FOO, BAR"));
+        EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET, FOO, BAR"));
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }

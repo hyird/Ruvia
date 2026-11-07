@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -21,7 +23,6 @@
 #include "ruvia/web/error.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -65,7 +66,7 @@ std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoi
 
 using namespace auto_https_redirect_test;
 
-RUVIA_TEST(auto_https_redirect_points_cleartext_requests_at_the_https_service) {
+TEST(Ruvia, auto_https_redirect_points_cleartext_requests_at_the_https_service) {
     ruvia::test::tls_identity identity("localhost");
     const auto private_key = identity.ca_file_.parent_path() / "key.pem";
     {
@@ -103,29 +104,29 @@ RUVIA_TEST(auto_https_redirect_points_cleartext_requests_at_the_https_service) {
         }
     });
     const bool ready = started.try_acquire_for(10s);
-    RUVIA_CHECK(ready);
+    EXPECT_TRUE(ready);
     if (ready) {
         const auto https_port = std::to_string(https_endpoint.port());
 
         const auto redirected = exchange(io, http_endpoint,
             "GET /docs/page?lang=en HTTP/1.1\r\nHost: example.test:8080\r\n\r\n");
-        RUVIA_CHECK(redirected.starts_with("HTTP/1.1 308 "));
-        RUVIA_CHECK(redirected.find("\r\nLocation: https://example.test:" + https_port + "/docs/page?lang=en\r\n") !=
+        EXPECT_TRUE(redirected.starts_with("HTTP/1.1 308 "));
+        EXPECT_TRUE(redirected.find("\r\nLocation: https://example.test:" + https_port + "/docs/page?lang=en\r\n") !=
                     std::string::npos);
 
         // RFC 9112 §3.2.2: an absolute-form target names the host, so an
         // HTTP/1.0 request needs no Host field to be redirected.
         const auto absolute = exchange(io, http_endpoint, "GET http://example.com/x?y HTTP/1.0\r\n\r\n");
-        RUVIA_CHECK(absolute.starts_with("HTTP/1.1 308 "));
-        RUVIA_CHECK(absolute.find("\r\nLocation: https://example.com:" + https_port + "/x?y\r\n") != std::string::npos);
+        EXPECT_TRUE(absolute.starts_with("HTTP/1.1 308 "));
+        EXPECT_TRUE(absolute.find("\r\nLocation: https://example.com:" + https_port + "/x?y\r\n") != std::string::npos);
 
         error_handler_calls = 0;
         const auto refused = exchange(io, http_endpoint,
             "GET /docs/page HTTP/1.1\r\nHost: example.test\r\nAccept-Encoding: identity;q=0, *;q=0\r\n\r\n");
-        RUVIA_CHECK(refused.starts_with("HTTP/1.1 406 "));
-        RUVIA_CHECK(refused.find("Location:") == std::string::npos);
-        RUVIA_CHECK(refused.ends_with("rejected"));
-        RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
+        EXPECT_TRUE(refused.starts_with("HTTP/1.1 406 "));
+        EXPECT_TRUE(refused.find("Location:") == std::string::npos);
+        EXPECT_TRUE(refused.ends_with("rejected"));
+        EXPECT_EQ(error_handler_calls.load(), 1);
     }
     app.stop();
     runner.join();

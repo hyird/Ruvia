@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -19,7 +21,6 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/http_client.h"
 
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace http2_client_upload_test {
@@ -424,7 +425,7 @@ private:
     bool finished_{false};
 };
 
-void exercise_abandon_during_drain(ruvia::testing::test_context& ruvia_ctx) {
+void exercise_abandon_during_drain() {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const auto worker = attachment.loop().handle();
@@ -439,13 +440,13 @@ void exercise_abandon_during_drain(ruvia::testing::test_context& ruvia_ctx) {
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         try {
             auto held = co_await client.client().get("/hold").send();
-            RUVIA_CHECK(held.status() == ruvia::http_status::ok);
+            EXPECT_TRUE(held.status() == ruvia::http_status::ok);
             {
                 auto exchange = co_await client.client().post("/abandon").upload({.content_length_ = 7});
                 for (unsigned i = 0; i != 100 && client.client().stats().in_flight_requests_ != 2; ++i) {
                     (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(10));
                 }
-                RUVIA_CHECK_EQ(client.client().stats().in_flight_requests_, 2U);
+                EXPECT_EQ(client.client().stats().in_flight_requests_, 2U);
                 peer.drain();
                 co_await peer.wait_ready();
                 (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(50));
@@ -453,8 +454,8 @@ void exercise_abandon_during_drain(ruvia::testing::test_context& ruvia_ctx) {
             for (unsigned i = 0; i != 100 && client.client().stats().in_flight_requests_ != 1; ++i) {
                 (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(10));
             }
-            RUVIA_CHECK_EQ(client.client().stats().in_flight_requests_, 1U);
-            RUVIA_CHECK(!held.stream().complete());
+            EXPECT_EQ(client.client().stats().in_flight_requests_, 1U);
+            EXPECT_TRUE(!held.stream().complete());
         } catch (...) {
             failure = std::current_exception();
         }
@@ -477,7 +478,7 @@ void exercise_abandon_during_drain(ruvia::testing::test_context& ruvia_ctx) {
     }
 }
 
-void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
+void exercise(response_mode mode) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     // The peer's signal borrows this handle through completion and join.
@@ -501,18 +502,18 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                 auto response = co_await exchange.response();
                 const auto bytes = co_await response.stream().read_all();
                 const auto body = bytes.bytes();
-                RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "ok");
+                EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "ok");
                 co_await peer.join();
-                RUVIA_CHECK_EQ(peer.requests_, 1U);
-                RUVIA_CHECK_EQ(peer.received_, "payload");
-                RUVIA_CHECK(peer.request_ended_);
+                EXPECT_EQ(peer.requests_, 1U);
+                EXPECT_EQ(peer.received_, "payload");
+                EXPECT_TRUE(peer.request_ended_);
             } else if (mode == response_mode::abandoned_pending) {
                 std::optional<ruvia::http_client_response> retained;
                 {
                     auto exchange = co_await client.client().post("/upload").upload({.content_length_ = 7});
                     retained.emplace(co_await exchange.response());
-                    RUVIA_CHECK(retained->status() == ruvia::http_status::ok);
-                    RUVIA_CHECK(!retained->stream().complete());
+                    EXPECT_TRUE(retained->status() == ruvia::http_status::ok);
+                    EXPECT_TRUE(!retained->stream().complete());
                 }
                 bool cancelled = false;
                 try {
@@ -520,42 +521,42 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                 } catch (const ruvia::http_client_error& error) {
                     cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
                 }
-                RUVIA_CHECK(cancelled);
+                EXPECT_TRUE(cancelled);
                 bool completion_cancelled = false;
                 try {
                     (void)retained->stream().complete();
                 } catch (const ruvia::http_client_error& error) {
                     completion_cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
                 }
-                RUVIA_CHECK(completion_cancelled);
+                EXPECT_TRUE(completion_cancelled);
             } else if (mode == response_mode::buffered) {
                 const std::string payload(65536, 'b');
                 auto response = co_await client.client().post("/upload").body(payload).send();
-                RUVIA_CHECK(response.status() == ruvia::http_status::no_content);
+                EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
                 const auto bytes = co_await response.stream().read_all();
-                RUVIA_CHECK(bytes.bytes().empty());
-                RUVIA_CHECK(response.stream().complete());
+                EXPECT_TRUE(bytes.bytes().empty());
+                EXPECT_TRUE(response.stream().complete());
             } else if (mode == response_mode::streaming) {
                 const std::string payload(streaming_payload_bytes, 's');
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = payload.size(), .max_chunk_bytes_ = payload.size()});
                 auto response = co_await exchange.response();
-                RUVIA_CHECK(response.status() == ruvia::http_status::no_content);
+                EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
                 const auto bytes = co_await response.stream().read_all();
-                RUVIA_CHECK(bytes.bytes().empty());
-                RUVIA_CHECK(response.stream().complete());
+                EXPECT_TRUE(bytes.bytes().empty());
+                EXPECT_TRUE(response.stream().complete());
                 co_await exchange.body().write(payload);
                 co_await exchange.body().end();
-                RUVIA_CHECK(exchange.body().complete());
+                EXPECT_TRUE(exchange.body().complete());
             } else {
                 const bool expect = mode == response_mode::continued || mode == response_mode::rejected;
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = 7, .expectation_ = expect ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none});
                 auto response = co_await exchange.response();
-                RUVIA_CHECK_EQ(response.status().value(), mode == response_mode::rejected ? 413 : 200);
+                EXPECT_EQ(response.status().value(), mode == response_mode::rejected ? 413 : 200);
                 const auto bytes = co_await response.stream().read_all();
                 const auto body = bytes.bytes();
-                RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()),
+                EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()),
                     mode == response_mode::rejected ? "no" : "ok");
-                RUVIA_CHECK(response.stream().complete());
+                EXPECT_TRUE(response.stream().complete());
                 if (mode == response_mode::disconnected) {
                     // Start a write with no stream credit, then close the peer.
                     // The write must report its I/O error without replacing a
@@ -576,14 +577,14 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                     co_await std::move(waiting);
                     peer.stop();
                     co_await writers.join();
-                    RUVIA_CHECK(write_error == ruvia::http_client_error::code_type::io_error);
+                    EXPECT_TRUE(write_error == ruvia::http_client_error::code_type::io_error);
                     co_await client.shutdown();
-                    RUVIA_CHECK(!(co_await response.stream().text()).has_value());
-                    RUVIA_CHECK(response.stream().complete());
+                    EXPECT_TRUE(!(co_await response.stream().text()).has_value());
+                    EXPECT_TRUE(response.stream().complete());
                 } else if (mode == response_mode::ordinary || mode == response_mode::continued) {
                     co_await exchange.body().write("payload");
                     co_await exchange.body().end();
-                    RUVIA_CHECK(exchange.body().complete());
+                    EXPECT_TRUE(exchange.body().complete());
                 } else if (mode != response_mode::abandoned) {
                     bool cancelled = false;
                     try {
@@ -591,7 +592,7 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                     } catch (const ruvia::http_client_error& error) {
                         cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
                     }
-                    RUVIA_CHECK(cancelled);
+                    EXPECT_TRUE(cancelled);
                 }
             }
             if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload &&
@@ -599,9 +600,9 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                 auto next = co_await client.client().get("/next").send();
                 const auto bytes = co_await next.stream().read_all();
                 const auto body = bytes.bytes();
-                RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "next");
+                EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "next");
                 co_await peer.join();
-                RUVIA_CHECK_EQ(peer.requests_, mode == response_mode::connection_lost ? 1U : 2U);
+                EXPECT_EQ(peer.requests_, mode == response_mode::connection_lost ? 1U : 2U);
                 if (mode == response_mode::ordinary || mode == response_mode::continued ||
                     mode == response_mode::buffered || mode == response_mode::streaming) {
                     const auto expected = mode == response_mode::buffered
@@ -609,14 +610,14 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                                           : mode == response_mode::streaming
                                               ? std::string(streaming_payload_bytes, 's')
                                               : std::string("payload");
-                    RUVIA_CHECK_EQ(peer.received_, expected);
-                    RUVIA_CHECK(peer.request_ended_);
+                    EXPECT_EQ(peer.received_, expected);
+                    EXPECT_TRUE(peer.request_ended_);
                 } else if (mode == response_mode::refused || mode == response_mode::connection_lost) {
-                    RUVIA_CHECK(peer.received_.empty());
-                    RUVIA_CHECK(!peer.request_reset_);
+                    EXPECT_TRUE(peer.received_.empty());
+                    EXPECT_TRUE(!peer.request_reset_);
                 } else {
-                    RUVIA_CHECK(peer.received_.empty());
-                    RUVIA_CHECK(mode == response_mode::reset || peer.request_reset_);
+                    EXPECT_TRUE(peer.received_.empty());
+                    EXPECT_TRUE(mode == response_mode::reset || peer.request_reset_);
                 }
             }
         } catch (...) {
@@ -643,53 +644,53 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
 
 }  // namespace http2_client_upload_test
 
-RUVIA_TEST(http2_client_early_final_keeps_ordinary_upload_open) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::ordinary);
+TEST(Ruvia, http2_client_early_final_keeps_ordinary_upload_open) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::ordinary);
 }
-RUVIA_TEST(http2_client_early_final_after_continue_keeps_upload_open) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::continued);
+TEST(Ruvia, http2_client_early_final_after_continue_keeps_upload_open) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::continued);
 }
-RUVIA_TEST(http2_client_early_final_before_continue_retires_stream) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::rejected);
+TEST(Ruvia, http2_client_early_final_before_continue_retires_stream) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::rejected);
 }
-RUVIA_TEST(http2_client_early_final_no_error_reset_preserves_response) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::reset);
+TEST(Ruvia, http2_client_early_final_no_error_reset_preserves_response) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::reset);
 }
-RUVIA_TEST(http2_client_early_final_abandoned_upload_retires_stream) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::abandoned);
+TEST(Ruvia, http2_client_early_final_abandoned_upload_retires_stream) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::abandoned);
 }
-RUVIA_TEST(http2_client_abandoned_upload_cancels_its_retained_incomplete_response) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::abandoned_pending);
-}
-
-RUVIA_TEST(http2_client_early_final_drains_window_blocked_buffered_upload_before_reuse) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::buffered);
+TEST(Ruvia, http2_client_abandoned_upload_cancels_its_retained_incomplete_response) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::abandoned_pending);
 }
 
-RUVIA_TEST(http2_client_streaming_upload_drains_one_large_chunk_across_flow_control_windows) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::streaming);
+TEST(Ruvia, http2_client_early_final_drains_window_blocked_buffered_upload_before_reuse) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::buffered);
 }
 
-RUVIA_TEST(http2_client_upload_transport_failure_preserves_completed_response) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::disconnected);
+TEST(Ruvia, http2_client_streaming_upload_drains_one_large_chunk_across_flow_control_windows) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::streaming);
 }
 
-RUVIA_TEST(http2_client_retries_request_refused_with_refused_stream) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::refused);
+TEST(Ruvia, http2_client_upload_transport_failure_preserves_completed_response) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::disconnected);
 }
 
-RUVIA_TEST(http2_client_retries_unsubmitted_request_after_connection_loss) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::connection_lost);
+TEST(Ruvia, http2_client_retries_request_refused_with_refused_stream) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::refused);
 }
 
-RUVIA_TEST(http2_client_retries_unsubmitted_streaming_upload_after_connection_loss) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::connection_lost_upload);
+TEST(Ruvia, http2_client_retries_unsubmitted_request_after_connection_loss) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::connection_lost);
 }
 
-RUVIA_TEST(http2_client_retries_unsubmitted_streaming_upload_after_goaway) {
-    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::goaway_upload);
+TEST(Ruvia, http2_client_retries_unsubmitted_streaming_upload_after_connection_loss) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::connection_lost_upload);
 }
 
-RUVIA_TEST(http2_abandoned_unsubmitted_upload_retires_while_older_stream_drains) {
-    http2_client_upload_test::exercise_abandon_during_drain(ruvia_ctx);
+TEST(Ruvia, http2_client_retries_unsubmitted_streaming_upload_after_goaway) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::goaway_upload);
+}
+
+TEST(Ruvia, http2_abandoned_unsubmitted_upload_retires_while_older_stream_drains) {
+    http2_client_upload_test::exercise_abandon_during_drain();
 }

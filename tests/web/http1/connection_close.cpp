@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -26,7 +28,6 @@
 #include "ruvia/web/websocket.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -101,7 +102,7 @@ std::unique_ptr<tls_stream> connect_tls(asio::io_context& io, asio::ssl::context
 // response is still in the server's send queue when the server closes: an
 // immediate close would reset the connection and discard it.
 void final_response_survives_unread_request_content(
-    ruvia::testing::test_context& ruvia_ctx, asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ip::tcp::socket socket(io);
     socket.open(endpoint.protocol());
     socket.set_option(asio::socket_base::receive_buffer_size(64 * 1024));
@@ -113,17 +114,17 @@ void final_response_survives_unread_request_content(
     std::string response;
     const auto end = read_to_end(socket, response);
     const auto head_end = response.find("\r\n\r\n");
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(head_end != std::string::npos);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(head_end != std::string::npos);
     if (head_end != std::string::npos) {
-        RUVIA_CHECK_EQ(response.size() - head_end - 4, large_response_bytes);
+        EXPECT_EQ(response.size() - head_end - 4, large_response_bytes);
     }
-    RUVIA_CHECK(end == asio::error::eof);
+    EXPECT_TRUE(end == asio::error::eof);
 }
 
 // A keep-alive connection that idles past idle_timeout ends with close_notify.
 void idle_tls_connection_ends_with_close_notify(
-    ruvia::testing::test_context& ruvia_ctx, asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     const auto stream = connect_tls(io, client, endpoint);
@@ -132,10 +133,10 @@ void idle_tls_connection_ends_with_close_notify(
     asio::write(*stream, asio::buffer(std::string_view("GET /close/item HTTP/1.1\r\nHost: localhost\r\n\r\n")));
     std::string response;
     const auto end = read_to_end(*stream, response);
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(response.ends_with("item"));
-    RUVIA_CHECK(std::chrono::steady_clock::now() - started >= idle_timeout);
-    RUVIA_CHECK(end == asio::error::eof);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.ends_with("item"));
+    EXPECT_TRUE(std::chrono::steady_clock::now() - started >= idle_timeout);
+    EXPECT_TRUE(end == asio::error::eof);
 }
 
 #if defined(RUVIA_ENABLE_HTTP2)
@@ -143,11 +144,11 @@ void idle_tls_connection_ends_with_close_notify(
 // close_notify (RFC 9113 §9.1). The peer acknowledges SETTINGS and PING so a
 // graceful drain can complete.
 void idle_http2_connection_sends_goaway_then_close_notify(
-    ruvia::testing::test_context& ruvia_ctx, asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     static constexpr unsigned char alpn[] = {2, 'h', '2'};
-    RUVIA_CHECK_EQ(SSL_CTX_set_alpn_protos(client.native_handle(), alpn, sizeof(alpn)), 0);
+    EXPECT_EQ(SSL_CTX_set_alpn_protos(client.native_handle(), alpn, sizeof(alpn)), 0);
     const auto stream = connect_tls(io, client, endpoint);
     constexpr std::string_view preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
     constexpr std::array<char, 9> settings{0, 0, 0, 4, 0, 0, 0, 0, 0};
@@ -185,8 +186,8 @@ void idle_http2_connection_sends_goaway_then_close_notify(
             parsed += 9 + length;
         }
     }
-    RUVIA_CHECK(goaway);
-    RUVIA_CHECK(end == asio::error::eof);
+    EXPECT_TRUE(goaway);
+    EXPECT_TRUE(end == asio::error::eof);
 }
 #endif
 
@@ -202,7 +203,7 @@ std::unique_ptr<tls_stream> open_unused_tls_connection(
 // RFC 9846 §6.1 / RFC 6455 §7.1.1: after a clean WebSocket close handshake
 // over TLS (wss://), the server sends close_notify before closing TCP.
 void wss_clean_close_handshake_sends_close_notify(
-    ruvia::testing::test_context& ruvia_ctx, asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     const auto stream = connect_tls(io, client, endpoint);
@@ -222,23 +223,23 @@ void wss_clean_close_handshake_sends_close_notify(
         const auto count = stream->read_some(asio::buffer(buffer), error);
         received.append(buffer.data(), count);
     }
-    RUVIA_CHECK(!error);
+    EXPECT_TRUE(!error);
     // Reply with a masked client Close frame (code 1000, zero mask).
     constexpr std::array<unsigned char, 8> client_close{0x88, 0x82, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8};
     asio::write(*stream, asio::buffer(client_close), error);
-    RUVIA_CHECK(!error);
+    EXPECT_TRUE(!error);
     while (!error) {
         const auto count = stream->read_some(asio::buffer(buffer), error);
         received.append(buffer.data(), count);
     }
-    RUVIA_CHECK(error == asio::error::eof);
+    EXPECT_TRUE(error == asio::error::eof);
 }
 
 // RFC 9846 §6.1 / RFC 6455 §7.1.7: when a wss:// peer truncates TLS / drops TCP
 // mid-frame without sending a WebSocket Close frame or close_notify, the server
 // aborts the connection without sending a clean TLS close_notify.
 void wss_truncated_peer_eof_omits_close_notify(
-    ruvia::testing::test_context& ruvia_ctx, asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     const auto stream = connect_tls(io, client, endpoint);
@@ -258,26 +259,26 @@ void wss_truncated_peer_eof_omits_close_notify(
         const auto count = stream->read_some(asio::buffer(buffer), error);
         head.append(buffer.data(), count);
     }
-    RUVIA_CHECK(!error);
+    EXPECT_TRUE(!error);
     constexpr std::array<char, 1> partial_ws_frame{'\x81'};
     asio::write(*stream, asio::buffer(partial_ws_frame), error);
-    RUVIA_CHECK(!error);
+    EXPECT_TRUE(!error);
     stream->next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, error);
-    RUVIA_CHECK(!error);
+    EXPECT_TRUE(!error);
 
     std::string rest;
     while (!error) {
         const auto count = stream->read_some(asio::buffer(buffer), error);
         rest.append(buffer.data(), count);
     }
-    RUVIA_CHECK(rest.empty());
-    RUVIA_CHECK(error == asio::ssl::error::stream_truncated);
+    EXPECT_TRUE(rest.empty());
+    EXPECT_TRUE(error == asio::ssl::error::stream_truncated);
 }
 }  // namespace connection_close_test
 
 using namespace connection_close_test;
 
-RUVIA_TEST(server_closes_connections_gracefully) {
+TEST(Ruvia, server_closes_connections_gracefully) {
     ruvia::test::tls_identity identity("localhost");
     const auto private_key = identity.ca_file_.parent_path() / "key.pem";
     {
@@ -313,15 +314,15 @@ RUVIA_TEST(server_closes_connections_gracefully) {
         }
     });
     const bool ready = started.try_acquire_for(10s);
-    RUVIA_CHECK(ready);
+    EXPECT_TRUE(ready);
     if (ready) {
-        final_response_survives_unread_request_content(ruvia_ctx, io, plain_endpoint);
-        idle_tls_connection_ends_with_close_notify(ruvia_ctx, io, tls_endpoint);
+        final_response_survives_unread_request_content(io, plain_endpoint);
+        idle_tls_connection_ends_with_close_notify(io, tls_endpoint);
 #if defined(RUVIA_ENABLE_HTTP2)
-        idle_http2_connection_sends_goaway_then_close_notify(ruvia_ctx, io, tls_endpoint);
+        idle_http2_connection_sends_goaway_then_close_notify(io, tls_endpoint);
 #endif
-        wss_clean_close_handshake_sends_close_notify(ruvia_ctx, io, tls_endpoint);
-        wss_truncated_peer_eof_omits_close_notify(ruvia_ctx, io, tls_endpoint);
+        wss_clean_close_handshake_sends_close_notify(io, tls_endpoint);
+        wss_truncated_peer_eof_omits_close_notify(io, tls_endpoint);
 
         // A stop disconnects directly: an unused TLS connection is closed
         // without close_notify, so the peer sees a truncated stream.
@@ -332,8 +333,8 @@ RUVIA_TEST(server_closes_connections_gracefully) {
         std::string received;
         const auto end = read_to_end(*unused, received);
         stopper.join();
-        RUVIA_CHECK(received.empty());
-        RUVIA_CHECK(end == asio::ssl::error::stream_truncated || end == asio::error::connection_reset);
+        EXPECT_TRUE(received.empty());
+        EXPECT_TRUE(end == asio::ssl::error::stream_truncated || end == asio::error::connection_reset);
     } else {
         app.stop();
     }

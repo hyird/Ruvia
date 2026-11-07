@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -24,10 +26,10 @@
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
-#include "test_harness.h"
+#include "test_exceptions.h"
 #include "test_io_context.h"
 
-RUVIA_TEST(db_transaction_options_support_cold_cancellation_and_reject_invalid_values) {
+TEST(Ruvia, db_transaction_options_support_cold_cancellation_and_reject_invalid_values) {
     using namespace ruvia;
     const std::array drivers{
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -59,7 +61,7 @@ RUVIA_TEST(db_transaction_options_support_cold_cancellation_and_reject_invalid_v
                     options.isolation_ = static_cast<db_transaction_isolation>(255);
                     try {
                         auto transaction = co_await std::move(operation);
-                        RUVIA_CHECK(false);
+                        EXPECT_TRUE(false);
                     } catch (const db_error& error) {
                         observed_cancellation = error.code() == db_error::code_type::cancelled;
                     }
@@ -67,12 +69,12 @@ RUVIA_TEST(db_transaction_options_support_cold_cancellation_and_reject_invalid_v
                     options = {};
                     try {
                         auto transaction = co_await std::move(invalid);
-                        RUVIA_CHECK(false);
+                        EXPECT_TRUE(false);
                     } catch (const std::invalid_argument&) {
                         observed_invalid = true;
                     }
-                    RUVIA_CHECK(observed_cancellation);
-                    RUVIA_CHECK(observed_invalid);
+                    EXPECT_TRUE(observed_cancellation);
+                    EXPECT_TRUE(observed_invalid);
                 }
             };
             co_await exercise();
@@ -118,7 +120,7 @@ struct queued_stream_operations final {
     ruvia::task<std::optional<ruvia::db_row>> read_;
 };
 
-RUVIA_TEST(db_transaction_can_prepare_cold_operations_while_a_statement_is_running) {
+TEST(Ruvia, db_transaction_can_prepare_cold_operations_while_a_statement_is_running) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -174,44 +176,44 @@ RUVIA_TEST(db_transaction_can_prepare_cold_operations_while_a_statement_is_runni
         if (failure) {
             std::rethrow_exception(failure);
         }
-        RUVIA_CHECK(first_completed);
-        RUVIA_CHECK(transaction.active());
-        RUVIA_CHECK(queued != nullptr);
-        RUVIA_CHECK(concurrent_created && concurrent_rejected);
+        EXPECT_TRUE(first_completed);
+        EXPECT_TRUE(transaction.active());
+        EXPECT_TRUE(queued != nullptr);
+        EXPECT_TRUE(concurrent_created && concurrent_rejected);
         if (!queued) {
             co_return;
         }
         const auto raw = co_await std::move(queued->query_);
-        RUVIA_CHECK_EQ(raw.size(), std::size_t{1});
+        EXPECT_EQ(raw.size(), std::size_t{1});
         if (!raw.empty()) {
-            RUVIA_CHECK(raw.front()["v"].as<std::string_view>() == "raw");
+            EXPECT_TRUE(raw.front()["v"].as<std::string_view>() == "raw");
         }
         const auto executed = co_await std::move(queued->execute_);
-        RUVIA_CHECK_EQ(executed.affected_rows(), std::uint64_t{2});
+        EXPECT_EQ(executed.affected_rows(), std::uint64_t{2});
         const auto compiled = co_await std::move(queued->compiled_query_);
-        RUVIA_CHECK_EQ(compiled.size(), std::size_t{1});
+        EXPECT_EQ(compiled.size(), std::size_t{1});
         if (!compiled.empty()) {
-            RUVIA_CHECK(compiled.front()["v"].as<std::string_view>() == "compiled");
+            EXPECT_TRUE(compiled.front()["v"].as<std::string_view>() == "compiled");
         }
         const auto changed = co_await std::move(queued->compiled_execute_);
-        RUVIA_CHECK_EQ(changed.affected_rows(), std::uint64_t{4});
+        EXPECT_EQ(changed.affected_rows(), std::uint64_t{4});
         const auto mapped = co_await std::move(queued->mapped_);
-        RUVIA_CHECK_EQ(mapped.size(), std::size_t{1});
+        EXPECT_EQ(mapped.size(), std::size_t{1});
         if (!mapped.empty()) {
-            RUVIA_CHECK_EQ(mapped[0].get<"v">(), std::string_view("mapped"));
+            EXPECT_EQ(mapped[0].get<"v">(), std::string_view("mapped"));
         }
         const auto page = co_await std::move(queued->page_);
-        RUVIA_CHECK_EQ(page.first.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(page.second, std::uint64_t{1});
+        EXPECT_EQ(page.first.size(), std::size_t{1});
+        EXPECT_EQ(page.second, std::uint64_t{1});
         if (!page.first.empty()) {
-            RUVIA_CHECK_EQ(page.first[0].get<"v">(), std::string_view("counted"));
+            EXPECT_EQ(page.first[0].get<"v">(), std::string_view("counted"));
         }
         co_await std::move(queued->commit_);
-        RUVIA_CHECK(!transaction.active());
+        EXPECT_TRUE(!transaction.active());
     });
 }
 
-RUVIA_TEST(db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) {
+TEST(Ruvia, db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -248,19 +250,19 @@ RUVIA_TEST(db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) {
         if (failure) {
             std::rethrow_exception(failure);
         }
-        RUVIA_CHECK(rejected);
-        RUVIA_CHECK(first_completed);
+        EXPECT_TRUE(rejected);
+        EXPECT_TRUE(first_completed);
         const auto row = co_await std::move(queued->read_);
-        RUVIA_CHECK(row.has_value());
+        EXPECT_TRUE(row.has_value());
         if (row) {
-            RUVIA_CHECK((*row)["v"].as<std::string_view>() == "second");
+            EXPECT_TRUE((*row)["v"].as<std::string_view>() == "second");
         }
-        RUVIA_CHECK(!(co_await stream.read()));
-        RUVIA_CHECK(!stream.active());
+        EXPECT_TRUE(!(co_await stream.read()));
+        EXPECT_TRUE(!stream.active());
     });
 }
 
-RUVIA_TEST(db_stream_close_after_exhaustion_is_idempotent) {
+TEST(Ruvia, db_stream_close_after_exhaustion_is_idempotent) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -272,13 +274,13 @@ RUVIA_TEST(db_stream_close_after_exhaustion_is_idempotent) {
         auto stream = co_await connected.handle().query_stream("SELECT v FROM records");
         while (co_await stream.read()) {
         }
-        RUVIA_CHECK(!stream.active());
+        EXPECT_TRUE(!stream.active());
         co_await stream.close();
-        RUVIA_CHECK(!stream.active());
+        EXPECT_TRUE(!stream.active());
     });
 }
 
-RUVIA_TEST(db_transaction_savepoint_commands_quote_identifiers_and_keep_transaction_active) {
+TEST(Ruvia, db_transaction_savepoint_commands_quote_identifiers_and_keep_transaction_active) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -292,26 +294,26 @@ RUVIA_TEST(db_transaction_savepoint_commands_quote_identifiers_and_keep_transact
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto transaction = co_await connected.handle().begin_transaction();
-        RUVIA_CHECK(testing::throws_on([&] { (void)transaction.savepoint(""); }));
+        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)transaction.savepoint(""); }));
         co_await transaction.savepoint("stage_1");
-        RUVIA_CHECK(transaction.active());
+        EXPECT_TRUE(transaction.active());
         co_await transaction.rollback_to_savepoint("stage_1");
-        RUVIA_CHECK(transaction.active());
+        EXPECT_TRUE(transaction.active());
         co_await transaction.release_savepoint("stage_1");
-        RUVIA_CHECK(transaction.active());
+        EXPECT_TRUE(transaction.active());
         co_await transaction.commit();
-        RUVIA_CHECK(!transaction.active());
+        EXPECT_TRUE(!transaction.active());
     });
     const auto statements = peer.postgres_parses();
-    RUVIA_CHECK_EQ(statements.size(), std::size_t{5});
+    EXPECT_EQ(statements.size(), std::size_t{5});
     if (statements.size() == 5) {
-        RUVIA_CHECK_EQ(statements[1].sql_, "SAVEPOINT \"stage_1\"");
-        RUVIA_CHECK_EQ(statements[2].sql_, "ROLLBACK TO SAVEPOINT \"stage_1\"");
-        RUVIA_CHECK_EQ(statements[3].sql_, "RELEASE SAVEPOINT \"stage_1\"");
+        EXPECT_EQ(statements[1].sql_, "SAVEPOINT \"stage_1\"");
+        EXPECT_EQ(statements[2].sql_, "ROLLBACK TO SAVEPOINT \"stage_1\"");
+        EXPECT_EQ(statements[3].sql_, "RELEASE SAVEPOINT \"stage_1\"");
     }
 }
 
-RUVIA_TEST(db_transaction_advisory_locks_notify_and_cursors_execute_in_order) {
+TEST(Ruvia, db_transaction_advisory_locks_notify_and_cursors_execute_in_order) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -333,30 +335,30 @@ RUVIA_TEST(db_transaction_advisory_locks_notify_and_cursors_execute_in_order) {
         co_await transaction.advisory_lock(7001);
         co_await transaction.advisory_lock(17, 1);
         co_await transaction.advisory_lock("resource-key", 99);
-        RUVIA_CHECK(co_await transaction.try_advisory_lock(7001));
+        EXPECT_TRUE(co_await transaction.try_advisory_lock(7001));
         co_await transaction.notify("iot_outbox_pending", "ready");
 
         co_await transaction.declare_cursor("chunk_cursor", "SELECT \"v\" FROM \"records\"");
         const auto fetched = co_await transaction.fetch_cursor("chunk_cursor", 8);
-        RUVIA_CHECK_EQ(fetched.size(), std::size_t{2});
+        EXPECT_EQ(fetched.size(), std::size_t{2});
         co_await transaction.close_cursor("chunk_cursor");
         co_await transaction.commit();
     });
     const auto statements = peer.postgres_parses();
-    RUVIA_CHECK_EQ(statements.size(), std::size_t{10});
+    EXPECT_EQ(statements.size(), std::size_t{10});
     if (statements.size() == 10) {
-        RUVIA_CHECK_EQ(statements[1].sql_, "SELECT \"pg_advisory_xact_lock\"($1::bigint)");
-        RUVIA_CHECK_EQ(statements[2].sql_, "SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)");
-        RUVIA_CHECK_EQ(statements[3].sql_, "SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))");
-        RUVIA_CHECK_EQ(statements[4].sql_, "SELECT \"pg_try_advisory_xact_lock\"($1::bigint)");
-        RUVIA_CHECK_EQ(statements[5].sql_, "SELECT \"pg_notify\"($1::text, $2::text)");
-        RUVIA_CHECK_EQ(statements[6].sql_, "DECLARE \"chunk_cursor\" NO SCROLL CURSOR FOR SELECT \"v\" FROM \"records\"");
-        RUVIA_CHECK_EQ(statements[7].sql_, "FETCH FORWARD 8 FROM \"chunk_cursor\"");
-        RUVIA_CHECK_EQ(statements[8].sql_, "CLOSE \"chunk_cursor\"");
+        EXPECT_EQ(statements[1].sql_, "SELECT \"pg_advisory_xact_lock\"($1::bigint)");
+        EXPECT_EQ(statements[2].sql_, "SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)");
+        EXPECT_EQ(statements[3].sql_, "SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))");
+        EXPECT_EQ(statements[4].sql_, "SELECT \"pg_try_advisory_xact_lock\"($1::bigint)");
+        EXPECT_EQ(statements[5].sql_, "SELECT \"pg_notify\"($1::text, $2::text)");
+        EXPECT_EQ(statements[6].sql_, "DECLARE \"chunk_cursor\" NO SCROLL CURSOR FOR SELECT \"v\" FROM \"records\"");
+        EXPECT_EQ(statements[7].sql_, "FETCH FORWARD 8 FROM \"chunk_cursor\"");
+        EXPECT_EQ(statements[8].sql_, "CLOSE \"chunk_cursor\"");
     }
 }
 
-RUVIA_TEST(db_transaction_scalar_decode_failure_releases_slot_for_next_transaction) {
+TEST(Ruvia, db_transaction_scalar_decode_failure_releases_slot_for_next_transaction) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::reaccept,
@@ -379,11 +381,11 @@ RUVIA_TEST(db_transaction_scalar_decode_failure_releases_slot_for_next_transacti
             } catch (const db_conversion_error&) {
                 failed = true;
             }
-            RUVIA_CHECK(failed);
-            RUVIA_CHECK(!transaction.active());
+            EXPECT_TRUE(failed);
+            EXPECT_TRUE(!transaction.active());
         }
         auto next = co_await connected.handle().begin_transaction();
-        RUVIA_CHECK(co_await next.try_advisory_lock(7001));
+        EXPECT_TRUE(co_await next.try_advisory_lock(7001));
         co_await next.commit();
     });
 }
@@ -501,9 +503,9 @@ void drive_client(peer_type& peer, ruvia::db_driver driver,
     waits.join();
 }
 
-RUVIA_TEST(db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non_positive_values) {
+TEST(Ruvia, db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non_positive_values) {
     using namespace ruvia;
-    RUVIA_CHECK(db_config{}.transaction_timeout_ == std::chrono::milliseconds(60000));
+    EXPECT_TRUE(db_config{}.transaction_timeout_ == std::chrono::milliseconds(60000));
     event_loop_pool pool({.loop_count_ = 1});
     for (const auto driver : drivers) {
         for (const auto value : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
@@ -520,8 +522,8 @@ RUVIA_TEST(db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non_
             } catch (const std::invalid_argument&) {
                 migrator_rejected = true;
             }
-            RUVIA_CHECK(client_rejected);
-            RUVIA_CHECK(migrator_rejected);
+            EXPECT_TRUE(client_rejected);
+            EXPECT_TRUE(migrator_rejected);
         }
     }
     pool.join();
@@ -531,7 +533,7 @@ RUVIA_TEST(db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non_
 // remote call. The lease timer closes the session at the deadline, so the
 // server rolls back and releases the locks without waiting for the holder;
 // commit then reports the timeout and sends nothing.
-RUVIA_TEST(db_transaction_held_idle_past_its_deadline_closes_the_session_and_fails_commit) {
+TEST(Ruvia, db_transaction_held_idle_past_its_deadline_closes_the_session_and_fails_commit) {
     using namespace ruvia;
     for (const auto driver : drivers) {
         auto peer = make_peer(driver, {step::begin});
@@ -549,9 +551,9 @@ RUVIA_TEST(db_transaction_held_idle_past_its_deadline_closes_the_session_and_fai
             }
             ended = !transaction.active();
         });
-        RUVIA_CHECK(code == db_error::code_type::timeout);
-        RUVIA_CHECK(ended);
-        RUVIA_CHECK(!sent_statement(*peer, driver, "COMMIT"));
+        EXPECT_TRUE(code == db_error::code_type::timeout);
+        EXPECT_TRUE(ended);
+        EXPECT_TRUE(!sent_statement(*peer, driver, "COMMIT"));
     }
 }
 
@@ -559,7 +561,7 @@ RUVIA_TEST(db_transaction_held_idle_past_its_deadline_closes_the_session_and_fai
 // that never comes. query_timeout_ (30 s) alone would let it wait on: it gets
 // only what is left of the transaction, fails with timeout, ends the
 // transaction and closes the connection instead of returning it to the pool.
-RUVIA_TEST(db_transaction_statement_is_bounded_by_the_remaining_transaction_time) {
+TEST(Ruvia, db_transaction_statement_is_bounded_by_the_remaining_transaction_time) {
     using namespace ruvia;
     constexpr auto lease = std::chrono::milliseconds(600);
     for (const auto driver : drivers) {
@@ -582,16 +584,16 @@ RUVIA_TEST(db_transaction_statement_is_bounded_by_the_remaining_transaction_time
             // Throws unless the timed-out connection was closed.
             co_await await_disconnects(connected.worker(), *peer);
         });
-        RUVIA_CHECK(code == db_error::code_type::timeout);
-        RUVIA_CHECK(statement_time < lease);
-        RUVIA_CHECK(ended);
+        EXPECT_TRUE(code == db_error::code_type::timeout);
+        EXPECT_TRUE(statement_time < lease);
+        EXPECT_TRUE(ended);
     }
 }
 
 // Without a transaction deadline, idle time between operations ends nothing:
 // the same idle period that expires a 100 ms transaction above leaves this one
 // committing on its original session.
-RUVIA_TEST(db_transaction_without_a_deadline_keeps_its_session_while_idle) {
+TEST(Ruvia, db_transaction_without_a_deadline_keeps_its_session_while_idle) {
     using namespace ruvia;
     for (const auto driver : drivers) {
         auto peer = make_peer(driver, {step::begin, step::row, step::commit});
@@ -607,16 +609,16 @@ RUVIA_TEST(db_transaction_without_a_deadline_keeps_its_session_while_idle) {
             co_await transaction.commit();
             committed = !transaction.active();
         });
-        RUVIA_CHECK(value == "kept");
-        RUVIA_CHECK(committed);
-        RUVIA_CHECK(sent_statement(*peer, driver, "COMMIT"));
-        RUVIA_CHECK_EQ(peer->startups(), std::size_t{1});
+        EXPECT_TRUE(value == "kept");
+        EXPECT_TRUE(committed);
+        EXPECT_TRUE(sent_statement(*peer, driver, "COMMIT"));
+        EXPECT_EQ(peer->startups(), std::size_t{1});
     }
 }
 
 // A stream held between reads past its deadline loses its session the same
 // way; either terminal operation reports timeout, even with unread rows buffered.
-RUVIA_TEST(db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_read_or_close) {
+TEST(Ruvia, db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_read_or_close) {
     using namespace ruvia;
     for (const auto driver : drivers) {
         for (const bool close : {false, true}) {
@@ -644,9 +646,9 @@ RUVIA_TEST(db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_re
                 ended = !stream.active();
                 co_await stream.close();
             });
-            RUVIA_CHECK(first == "first");
-            RUVIA_CHECK(code == db_error::code_type::timeout);
-            RUVIA_CHECK(ended);
+            EXPECT_TRUE(first == "first");
+            EXPECT_TRUE(code == db_error::code_type::timeout);
+            EXPECT_TRUE(ended);
         }
     }
 }

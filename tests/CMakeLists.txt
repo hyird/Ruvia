@@ -1,5 +1,4 @@
-# Test code keeps a compact warning set: useful diagnostics without the noise
-# produced by partially initialized fixtures and macro-based registration.
+# Keep useful diagnostics without the noise from partially initialized fixtures.
 function(ruvia_apply_test_warnings name)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4 /permissive- /bigobj /FS)
@@ -32,8 +31,8 @@ function(ruvia_add_test name lib)
     if(NOT test_SOURCES)
         message(FATAL_ERROR "test executable ${name} requires SOURCES")
     endif()
-    add_executable(${name} ${test_SOURCES})
-    target_link_libraries(${name} PRIVATE ${lib})
+    add_executable(${name} ${test_SOURCES} support/test_main.cpp)
+    target_link_libraries(${name} PRIVATE ${lib} GTest::gtest)
     ruvia_apply_test_support_includes(${name} ${lib})
     ruvia_apply_test_warnings(${name})
     add_test(NAME ${name} COMMAND ${name})
@@ -68,7 +67,7 @@ endfunction()
 # Web suites that need their own process-wide application or peer build into
 # separate executables; their sources are excluded from ruvia_web_unit_tests.
 function(ruvia_add_web_standalone_test name timeout)
-    ruvia_add_web_test(${name} ${timeout} ${ARGN} support/test_main.cpp)
+    ruvia_add_web_test(${name} ${timeout} ${ARGN})
     set(_ruvia_web_standalone_sources ${_ruvia_web_standalone_sources} ${ARGN}
         PARENT_SCOPE)
 endfunction()
@@ -86,8 +85,7 @@ if(RUVIA_BUILD_CORE)
         core/worker_notification.cpp
         core/worker_queue.cpp
         core/worker_resume.cpp
-        core/worker_runtime.cpp
-        support/test_main.cpp)
+        core/worker_runtime.cpp)
     # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。
     set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
         "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fno-elide-constructors>")
@@ -99,7 +97,7 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_task_scope ruvia::core SOURCES core/task_scope.cpp)
     ruvia_add_test(ruvia_task_completion ruvia::core SOURCES core/task_completion.cpp)
     ruvia_add_test(ruvia_blocking_pool ruvia::core TIMEOUT 30 SOURCES
-        core/blocking_pool.cpp support/test_main.cpp)
+        core/blocking_pool.cpp)
     ruvia_add_test(ruvia_channel ruvia::core SOURCES core/channel.cpp)
     ruvia_add_test(ruvia_one_shot ruvia::core SOURCES core/one_shot.cpp)
     ruvia_add_test(ruvia_worker_timer ruvia::core SOURCES core/worker_timer.cpp)
@@ -124,7 +122,6 @@ if(RUVIA_BUILD_HTTP)
         list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX
             "^http/websocket/client_negotiation\\.cpp$")
     endif()
-    list(APPEND _ruvia_http_unit_sources support/test_main.cpp)
     list(SORT _ruvia_http_unit_sources)
 
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
@@ -217,7 +214,7 @@ if(RUVIA_BUILD_WEB)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
         ruvia_add_test(ruvia_http3_quic_tests ruvia::web TIMEOUT 60 SOURCES
-            web/http3/quic.cpp support/test_main.cpp)
+            web/http3/quic.cpp)
         target_include_directories(ruvia_http3_quic_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
         target_link_libraries(ruvia_http3_quic_tests PRIVATE
@@ -261,7 +258,6 @@ if(RUVIA_BUILD_WEB)
         endif()
         list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
     endif()
-    list(APPEND _ruvia_web_unit_sources support/test_main.cpp)
     list(SORT _ruvia_web_unit_sources)
 
     ruvia_add_web_test(ruvia_web_unit_tests 360 ${_ruvia_web_unit_sources})

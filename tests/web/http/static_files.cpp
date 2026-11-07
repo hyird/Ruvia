@@ -1,5 +1,7 @@
 #include "ruvia/web/static_files.h"
 
+#include <gtest/gtest.h>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -7,7 +9,6 @@
 #include <utility>
 
 #include "context_request_fixture.h"
-#include "test_harness.h"
 
 namespace static_files_test {
 
@@ -94,7 +95,7 @@ using static_files_test::serve_body;
 using static_files_test::served;
 namespace fs = std::filesystem;
 
-RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
+TEST(Ruvia, static_root_hides_dotfiles_even_under_all_policy) {
     const auto dir = make_dotfile_root();
     ruvia::static_root_options options;
     // The hidden-path default-deny must still keep secrets out of responses.
@@ -102,17 +103,17 @@ RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
         ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     ruvia::static_root root(dir, std::move(options));
 
-    RUVIA_CHECK(served(root, "app.js"));
-    RUVIA_CHECK(!served(root, ".env"));
-    RUVIA_CHECK(!served(root, ".htpasswd"));
-    RUVIA_CHECK(!served(root, ".backup.json"));
-    RUVIA_CHECK(!served(root, ".git/config"));
+    EXPECT_TRUE(served(root, "app.js"));
+    EXPECT_TRUE(!served(root, ".env"));
+    EXPECT_TRUE(!served(root, ".htpasswd"));
+    EXPECT_TRUE(!served(root, ".backup.json"));
+    EXPECT_TRUE(!served(root, ".git/config"));
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);
 }
 
-RUVIA_TEST(static_root_serves_dotfiles_when_opted_in) {
+TEST(Ruvia, static_root_serves_dotfiles_when_opted_in) {
     const auto dir = make_dotfile_root();
     ruvia::static_root_options options;
     options.file_types_ =
@@ -120,21 +121,21 @@ RUVIA_TEST(static_root_serves_dotfiles_when_opted_in) {
     options.dotfiles_ = ruvia::static_dotfile_policy::serve;
     ruvia::static_root root(dir, std::move(options));
 
-    RUVIA_CHECK(served(root, ".env"));
-    RUVIA_CHECK(served(root, ".git/config"));
-    RUVIA_CHECK(served(root, "app.js"));
+    EXPECT_TRUE(served(root, ".env"));
+    EXPECT_TRUE(served(root, ".git/config"));
+    EXPECT_TRUE(served(root, "app.js"));
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);
 }
 
-RUVIA_TEST(static_root_without_resident_opt_in_stays_file_backed_and_fails_closed) {
+TEST(Ruvia, static_root_without_resident_opt_in_stays_file_backed_and_fails_closed) {
     const auto dir = make_resident_root();
     ruvia::static_root root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
 
     const auto before = serve_body(root, "nested/page.txt");
-    RUVIA_CHECK_EQ(before.status_, ruvia::http_status::ok);
-    RUVIA_CHECK(before.file_backed_);
+    EXPECT_EQ(before.status_, ruvia::http_status::ok);
+    EXPECT_TRUE(before.file_backed_);
 
     std::ofstream(dir / "nested" / "page.txt", std::ios::binary | std::ios::trunc) << "nested-v2-longer";
     // A HEAD has no body for the transport to check, so the identity check
@@ -150,13 +151,13 @@ RUVIA_TEST(static_root_without_resident_opt_in_stays_file_backed_and_fails_close
             ctx.respond(ctx.text("ok"));
             co_return;
         }));
-    RUVIA_CHECK(head_failed);
+    EXPECT_TRUE(head_failed);
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);
 }
 
-RUVIA_TEST(static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
+TEST(Ruvia, static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
     const auto dir = make_resident_root();
     ruvia::static_root root(dir,
         {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
@@ -169,24 +170,24 @@ RUVIA_TEST(static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
     fs::remove(dir / "nested" / "page.txt");
 
     const auto small = serve_body(root, "small.txt");
-    RUVIA_CHECK_EQ(small.status_, ruvia::http_status::ok);
-    RUVIA_CHECK(!small.file_backed_);
-    RUVIA_CHECK_EQ(small.bytes_, std::string("small-v1"));
+    EXPECT_EQ(small.status_, ruvia::http_status::ok);
+    EXPECT_TRUE(!small.file_backed_);
+    EXPECT_EQ(small.bytes_, std::string("small-v1"));
 
     const auto nested = serve_body(root, "nested/page.txt");
-    RUVIA_CHECK_EQ(nested.status_, ruvia::http_status::ok);
-    RUVIA_CHECK(!nested.file_backed_);
-    RUVIA_CHECK_EQ(nested.bytes_, std::string("nested-v1"));
+    EXPECT_EQ(nested.status_, ruvia::http_status::ok);
+    EXPECT_TRUE(!nested.file_backed_);
+    EXPECT_EQ(nested.bytes_, std::string("nested-v1"));
 
     const auto large = serve_body(root, "large.txt");
-    RUVIA_CHECK_EQ(large.status_, ruvia::http_status::ok);
-    RUVIA_CHECK(large.file_backed_);
+    EXPECT_EQ(large.status_, ruvia::http_status::ok);
+    EXPECT_TRUE(large.file_backed_);
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);
 }
 
-RUVIA_TEST(static_root_resident_budget_bounds_the_kept_bytes) {
+TEST(Ruvia, static_root_resident_budget_bounds_the_kept_bytes) {
     const auto dir = make_resident_root();
     // Index order is large.txt, nested/page.txt, small.txt; only the first
     // eligible files that fit the budget stay resident.
@@ -194,8 +195,8 @@ RUVIA_TEST(static_root_resident_budget_bounds_the_kept_bytes) {
         {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
             .resident_max_bytes_ = 32,
             .resident_budget_bytes_ = 9});
-    RUVIA_CHECK(!serve_body(root, "nested/page.txt").file_backed_);
-    RUVIA_CHECK(serve_body(root, "small.txt").file_backed_);
+    EXPECT_TRUE(!serve_body(root, "nested/page.txt").file_backed_);
+    EXPECT_TRUE(serve_body(root, "small.txt").file_backed_);
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -11,9 +13,7 @@
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_set_cookie.h"
 
-#include "test_harness.h"
-
-RUVIA_TEST(set_cookie_parser_handles_deterministic_arbitrary_bytes) {
+TEST(Ruvia, set_cookie_parser_handles_deterministic_arbitrary_bytes) {
     std::uint64_t state_value = 0x5345'5443'4F4F'4B49ULL;
     const auto next_value = [&state_value]() {
         state_value ^= state_value << 7U;
@@ -25,12 +25,12 @@ RUVIA_TEST(set_cookie_parser_handles_deterministic_arbitrary_bytes) {
         const auto is_borrowed_input_text = [input](std::string_view value) {
             return value.empty() || input.find(value) != std::string_view::npos;
         };
-        RUVIA_CHECK(is_borrowed_input_text(parsed_value.name()));
-        RUVIA_CHECK(is_borrowed_input_text(parsed_value.value()));
-        RUVIA_CHECK(is_borrowed_input_text(parsed_value.path()));
-        RUVIA_CHECK(is_borrowed_input_text(parsed_value.domain()));
-        RUVIA_CHECK(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(0)));
-        RUVIA_CHECK(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(
+        EXPECT_TRUE(is_borrowed_input_text(parsed_value.name()));
+        EXPECT_TRUE(is_borrowed_input_text(parsed_value.value()));
+        EXPECT_TRUE(is_borrowed_input_text(parsed_value.path()));
+        EXPECT_TRUE(is_borrowed_input_text(parsed_value.domain()));
+        EXPECT_TRUE(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(0)));
+        EXPECT_TRUE(!parsed_value.has(static_cast<ruvia::http_set_cookie_attribute>(
             static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::secure) |
             static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::partitioned))));
     };
@@ -54,177 +54,177 @@ RUVIA_TEST(set_cookie_parser_handles_deterministic_arbitrary_bytes) {
         }
         accepted_input.append("; Path=/api; Domain=.example.test; Secure; SameSite=None");
         const auto accepted = ruvia::parse_set_cookie(accepted_input);
-        RUVIA_CHECK(accepted.has_value());
+        EXPECT_TRUE(accepted.has_value());
         if (accepted.has_value()) {
             verify_borrowed_fields(accepted_input, *accepted);
         }
     }
 }
 
-RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
+TEST(Ruvia, set_cookie_parser_exposes_client_storage_fields) {
     const auto parsed_value = ruvia::parse_set_cookie(
         "sid=abc; Path=/api; Domain=.example.com; Max-Age=60; Secure; HttpOnly");
-    RUVIA_CHECK(parsed_value.has_value());
-    RUVIA_CHECK(parsed_value->name() == "sid");
-    RUVIA_CHECK(parsed_value->value() == "abc");
-    RUVIA_CHECK(parsed_value->path() == "/api");
-    RUVIA_CHECK(parsed_value->domain() == "example.com");
-    RUVIA_CHECK(parsed_value->max_age_seconds() == 60);
-    RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::secure));
-    RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::http_only));
-    RUVIA_CHECK(parsed_value->http_only());
-    RUVIA_CHECK(!parsed_value->same_site().has_value());
-    RUVIA_CHECK(!parsed_value->same_site_none());
-    RUVIA_CHECK(!parsed_value->has(static_cast<ruvia::http_set_cookie_attribute>(
+    EXPECT_TRUE(parsed_value.has_value());
+    EXPECT_TRUE(parsed_value->name() == "sid");
+    EXPECT_TRUE(parsed_value->value() == "abc");
+    EXPECT_TRUE(parsed_value->path() == "/api");
+    EXPECT_TRUE(parsed_value->domain() == "example.com");
+    EXPECT_TRUE(parsed_value->max_age_seconds() == 60);
+    EXPECT_TRUE(parsed_value->has(ruvia::http_set_cookie_attribute::secure));
+    EXPECT_TRUE(parsed_value->has(ruvia::http_set_cookie_attribute::http_only));
+    EXPECT_TRUE(parsed_value->http_only());
+    EXPECT_TRUE(!parsed_value->same_site().has_value());
+    EXPECT_TRUE(!parsed_value->same_site_none());
+    EXPECT_TRUE(!parsed_value->has(static_cast<ruvia::http_set_cookie_attribute>(
         static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::secure) |
         static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::partitioned))));
 }
 
-RUVIA_TEST(set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
+TEST(Ruvia, set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
     const auto spaced_name = ruvia::parse_set_cookie("bad name=value");
-    RUVIA_CHECK(spaced_name.has_value());
+    EXPECT_TRUE(spaced_name.has_value());
     if (!spaced_name) {
         return;
     }
-    RUVIA_CHECK(spaced_name->name() == "bad name");
+    EXPECT_TRUE(spaced_name->name() == "bad name");
 
     const auto spaced_value = ruvia::parse_set_cookie("name=bad value");
-    RUVIA_CHECK(spaced_value.has_value());
+    EXPECT_TRUE(spaced_value.has_value());
     if (!spaced_value) {
         return;
     }
-    RUVIA_CHECK(spaced_value->value() == "bad value");
+    EXPECT_TRUE(spaced_value->value() == "bad value");
 }
 
-RUVIA_TEST(set_cookie_parser_ignores_nameless_cookies) {
+TEST(Ruvia, set_cookie_parser_ignores_nameless_cookies) {
     // RFC 6265 section 5.2 steps 2 and 5.
-    RUVIA_CHECK(!ruvia::parse_set_cookie("sid; Path=/").has_value());
-    RUVIA_CHECK(!ruvia::parse_set_cookie("=value").has_value());
-    RUVIA_CHECK(!ruvia::parse_set_cookie(" =value").has_value());
+    EXPECT_TRUE(!ruvia::parse_set_cookie("sid; Path=/").has_value());
+    EXPECT_TRUE(!ruvia::parse_set_cookie("=value").has_value());
+    EXPECT_TRUE(!ruvia::parse_set_cookie(" =value").has_value());
 }
 
-RUVIA_TEST(set_cookie_parser_rejects_invalid_received_cookie) {
-    RUVIA_CHECK(!ruvia::parse_set_cookie("=").has_value());
-    RUVIA_CHECK(!ruvia::parse_set_cookie("name=bad\x01value").has_value());
+TEST(Ruvia, set_cookie_parser_rejects_invalid_received_cookie) {
+    EXPECT_TRUE(!ruvia::parse_set_cookie("=").has_value());
+    EXPECT_TRUE(!ruvia::parse_set_cookie("name=bad\x01value").has_value());
 
     std::string oversized(4097, 'v');
-    RUVIA_CHECK(!ruvia::parse_set_cookie(oversized).has_value());
+    EXPECT_TRUE(!ruvia::parse_set_cookie(oversized).has_value());
 }
 
-RUVIA_TEST(set_cookie_parser_follows_user_agent_domain_and_path_algorithm) {
+TEST(Ruvia, set_cookie_parser_follows_user_agent_domain_and_path_algorithm) {
     // RFC 6265 section 5.2.3: "Domain=." leaves an empty cookie-domain (host-only);
     // an empty Domain value is ignored rather than overriding an earlier one.
     const auto dot = ruvia::parse_set_cookie("a=b; Domain=.");
-    RUVIA_CHECK(dot.has_value() && dot->domain().empty());
+    EXPECT_TRUE(dot.has_value() && dot->domain().empty());
     const auto later_empty = ruvia::parse_set_cookie("a=b; Domain=example.com; Domain=");
-    RUVIA_CHECK(later_empty.has_value() && later_empty->domain() == "example.com");
+    EXPECT_TRUE(later_empty.has_value() && later_empty->domain() == "example.com");
     const auto later_dot = ruvia::parse_set_cookie("a=b; Domain=example.com; Domain=.");
-    RUVIA_CHECK(later_dot.has_value() && later_dot->domain().empty());
+    EXPECT_TRUE(later_dot.has_value() && later_dot->domain().empty());
     const auto underscore = ruvia::parse_set_cookie("a=b; Domain=my_host.example");
-    RUVIA_CHECK(underscore.has_value() && underscore->domain() == "my_host.example");
+    EXPECT_TRUE(underscore.has_value() && underscore->domain() == "my_host.example");
 
     // Section 5.2.4: Path never rejects the cookie.
     const auto tab = ruvia::parse_set_cookie("a=b; Path=/a\tb");
-    RUVIA_CHECK(tab.has_value() && tab->path() == "/a\tb");
+    EXPECT_TRUE(tab.has_value() && tab->path() == "/a\tb");
     const auto utf8 = ruvia::parse_set_cookie("a=b; Path=/caf\xc3\xa9");
-    RUVIA_CHECK(utf8.has_value() && utf8->path() == "/caf\xc3\xa9");
+    EXPECT_TRUE(utf8.has_value() && utf8->path() == "/caf\xc3\xa9");
     const auto relative = ruvia::parse_set_cookie("a=b; Path=/api; Path=relative");
-    RUVIA_CHECK(relative.has_value() && relative->path().empty());
+    EXPECT_TRUE(relative.has_value() && relative->path().empty());
 }
 
-RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
+TEST(Ruvia, set_cookie_parser_ignores_oversized_attribute_value) {
     std::string value = "sid=abc; Path=";
     value.append(1025, 'p');
     const auto parsed_value = ruvia::parse_set_cookie(value);
-    RUVIA_CHECK(parsed_value.has_value());
+    EXPECT_TRUE(parsed_value.has_value());
     if (!parsed_value) {
         return;
     }
-    RUVIA_CHECK(parsed_value->path().empty());
+    EXPECT_TRUE(parsed_value->path().empty());
 }
 
-RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
+TEST(Ruvia, set_cookie_parser_tracks_storage_security_attributes) {
     const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Path=/rel; SameSite=None");
-    RUVIA_CHECK(parsed_value.has_value());
+    EXPECT_TRUE(parsed_value.has_value());
     if (!parsed_value) {
         return;
     }
-    RUVIA_CHECK(parsed_value->path() == "/rel");
-    RUVIA_CHECK(parsed_value->same_site_none());
+    EXPECT_TRUE(parsed_value->path() == "/rel");
+    EXPECT_TRUE(parsed_value->same_site_none());
 
     const auto overridden = ruvia::parse_set_cookie("sid=abc; SameSite=None; SameSite=Lax");
-    RUVIA_CHECK(overridden.has_value());
+    EXPECT_TRUE(overridden.has_value());
     if (!overridden) {
         return;
     }
-    RUVIA_CHECK(parsed_value->same_site_none());
-    RUVIA_CHECK(parsed_value->same_site() == ruvia::cookie_same_site::none);
-    RUVIA_CHECK(!overridden->same_site_none());
-    RUVIA_CHECK(overridden->same_site() == ruvia::cookie_same_site::lax);
+    EXPECT_TRUE(parsed_value->same_site_none());
+    EXPECT_TRUE(parsed_value->same_site() == ruvia::cookie_same_site::none);
+    EXPECT_TRUE(!overridden->same_site_none());
+    EXPECT_TRUE(overridden->same_site() == ruvia::cookie_same_site::lax);
     const auto strict = ruvia::parse_set_cookie("sid=abc; samesite=STRICT");
-    RUVIA_CHECK(strict.has_value() && strict->same_site() == ruvia::cookie_same_site::strict);
+    EXPECT_TRUE(strict.has_value() && strict->same_site() == ruvia::cookie_same_site::strict);
     const auto unknown_same_site =
         ruvia::parse_set_cookie("sid=abc; SameSite=Strict; SameSite=Unknown");
-    RUVIA_CHECK(unknown_same_site.has_value() && !unknown_same_site->same_site().has_value() &&
+    EXPECT_TRUE(unknown_same_site.has_value() && !unknown_same_site->same_site().has_value() &&
                 !unknown_same_site->same_site_none());
 }
 
-RUVIA_TEST(set_cookie_parser_preserves_quoted_cookie_value) {
+TEST(Ruvia, set_cookie_parser_preserves_quoted_cookie_value) {
     const auto parsed_value = ruvia::parse_set_cookie("name=\"value\"; Path=/");
-    RUVIA_CHECK(parsed_value.has_value());
-    RUVIA_CHECK(parsed_value->value() == "\"value\"");
+    EXPECT_TRUE(parsed_value.has_value());
+    EXPECT_TRUE(parsed_value->value() == "\"value\"");
 }
 
-RUVIA_TEST(set_cookie_parser_treats_empty_domain_as_host_only) {
+TEST(Ruvia, set_cookie_parser_treats_empty_domain_as_host_only) {
     const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Domain=; Path=/api");
-    RUVIA_CHECK(parsed_value.has_value());
-    RUVIA_CHECK(parsed_value->name() == "sid");
-    RUVIA_CHECK(parsed_value->domain().empty());
-    RUVIA_CHECK(parsed_value->path() == "/api");
+    EXPECT_TRUE(parsed_value.has_value());
+    EXPECT_TRUE(parsed_value->name() == "sid");
+    EXPECT_TRUE(parsed_value->domain().empty());
+    EXPECT_TRUE(parsed_value->path() == "/api");
 
     const std::string overlong_with_nul =
         std::string("sid=abc; Custom=") + std::string(1100, 'a') + std::string("\0b", 2);
-    RUVIA_CHECK(!ruvia::parse_set_cookie(overlong_with_nul).has_value());
+    EXPECT_TRUE(!ruvia::parse_set_cookie(overlong_with_nul).has_value());
 }
 
-RUVIA_TEST(set_cookie_parser_saturates_max_age_overflow) {
+TEST(Ruvia, set_cookie_parser_saturates_max_age_overflow) {
     const auto positive =
         ruvia::parse_set_cookie("sid=abc; Max-Age=999999999999999999999999999999999999");
-    RUVIA_CHECK(positive.has_value());
-    RUVIA_CHECK(positive->max_age_seconds() ==
+    EXPECT_TRUE(positive.has_value());
+    EXPECT_TRUE(positive->max_age_seconds() ==
                 std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(400)).count());
 
     const auto negative =
         ruvia::parse_set_cookie("sid=abc; Max-Age=-999999999999999999999999999999999999");
-    RUVIA_CHECK(negative.has_value());
-    RUVIA_CHECK(negative->max_age_seconds() == std::numeric_limits<std::int64_t>::min());
+    EXPECT_TRUE(negative.has_value());
+    EXPECT_TRUE(negative->max_age_seconds() == std::numeric_limits<std::int64_t>::min());
 }
 
-RUVIA_TEST(set_cookie_parser_ignores_invalid_later_expires_attribute) {
+TEST(Ruvia, set_cookie_parser_ignores_invalid_later_expires_attribute) {
     const auto parsed_value =
         ruvia::parse_set_cookie("sid=abc; Expires=Sun, 06 Nov 1994 08:49:37 GMT; Expires=not-a-date");
-    RUVIA_CHECK(parsed_value.has_value());
-    RUVIA_CHECK(parsed_value->expires().has_value());
+    EXPECT_TRUE(parsed_value.has_value());
+    EXPECT_TRUE(parsed_value->expires().has_value());
 }
 
-RUVIA_TEST(set_cookie_parser_uses_cookie_date_token_grammar) {
+TEST(Ruvia, set_cookie_parser_uses_cookie_date_token_grammar) {
     const auto hyphenated = ruvia::parse_set_cookie("sid=abc; Expires=Wed, 09-Jun-2021 10:18:14 GMT");
-    RUVIA_CHECK(hyphenated.has_value());
+    EXPECT_TRUE(hyphenated.has_value());
     if (!hyphenated) {
         return;
     }
-    RUVIA_CHECK(hyphenated->expires() == ruvia::parse_http_date("Wed, 09 Jun 2021 10:18:14 GMT"));
+    EXPECT_TRUE(hyphenated->expires() == ruvia::parse_http_date("Wed, 09 Jun 2021 10:18:14 GMT"));
 
     const auto short_year =
         ruvia::parse_set_cookie("sid=abc; Expires=Thursday, 01-Jan-70 00:00:00 GMT");
-    RUVIA_CHECK(short_year.has_value());
+    EXPECT_TRUE(short_year.has_value());
     if (!short_year) {
         return;
     }
-    RUVIA_CHECK(short_year->expires() == ruvia::parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"));
+    EXPECT_TRUE(short_year->expires() == ruvia::parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"));
 }
 
-RUVIA_TEST(set_cookie_parser_accepts_date_token_suffixes) {
+TEST(Ruvia, set_cookie_parser_accepts_date_token_suffixes) {
     const auto expected = std::chrono::system_clock::to_time_t(
         std::chrono::sys_days{std::chrono::year{2021} / 6 / 9} +
         std::chrono::hours{10} + std::chrono::minutes{18} + std::chrono::seconds{14});
@@ -240,9 +240,9 @@ RUVIA_TEST(set_cookie_parser_accepts_date_token_suffixes) {
     for (const auto date : dates) {
         const auto input = std::string("sid=abc; Expires=") + std::string(date);
         const auto parsed_value = ruvia::parse_set_cookie(input);
-        RUVIA_CHECK(parsed_value.has_value());
+        EXPECT_TRUE(parsed_value.has_value());
         if (parsed_value) {
-            RUVIA_CHECK(parsed_value->expires() == expected);
+            EXPECT_TRUE(parsed_value->expires() == expected);
         }
     }
 
@@ -255,18 +255,18 @@ RUVIA_TEST(set_cookie_parser_accepts_date_token_suffixes) {
     for (const auto& entry : years) {
         const auto input = std::string("sid=abc; Expires=01 January ") + std::string(entry.value_) + " 0:0:0clock";
         const auto parsed_value = ruvia::parse_set_cookie(input);
-        RUVIA_CHECK(parsed_value.has_value());
+        EXPECT_TRUE(parsed_value.has_value());
         if (parsed_value) {
             const auto year_start = std::chrono::system_clock::to_time_t(
                 std::chrono::sys_days{std::chrono::year{entry.year_} / 1 / 1});
-            RUVIA_CHECK(parsed_value->expires() == year_start);
+            EXPECT_TRUE(parsed_value->expires() == year_start);
         }
     }
 
-    RUVIA_CHECK(!ruvia::parse_http_date("Wed, 09th June 2021year 10:18:14clock GMT"));
+    EXPECT_TRUE(!ruvia::parse_http_date("Wed, 09th June 2021year 10:18:14clock GMT"));
 }
 
-RUVIA_TEST(set_cookie_parser_preserves_date_token_widths_and_calendar_bounds) {
+TEST(Ruvia, set_cookie_parser_preserves_date_token_widths_and_calendar_bounds) {
     constexpr std::string_view dates[]{
         "Wed, 009th Jun 2021 10:18:14clock",
         "Wed, 09 Jun 02021year 10:18:14clock",
@@ -288,9 +288,9 @@ RUVIA_TEST(set_cookie_parser_preserves_date_token_widths_and_calendar_bounds) {
     for (const auto date : dates) {
         const auto input = std::string("sid=abc; Expires=") + std::string(date);
         const auto parsed_value = ruvia::parse_set_cookie(input);
-        RUVIA_CHECK(parsed_value.has_value());
+        EXPECT_TRUE(parsed_value.has_value());
         if (parsed_value) {
-            RUVIA_CHECK(!parsed_value->expires());
+            EXPECT_TRUE(!parsed_value->expires());
         }
     }
 }

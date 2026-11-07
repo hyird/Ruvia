@@ -1,11 +1,11 @@
 #pragma once
 
+#include <gtest/gtest.h>
+
 #include <stdexcept>
 #include <utility>
 
 #include "ruvia/core/scoped_operation.h"
-
-#include "test_harness.h"
 
 namespace streaming_test {
 

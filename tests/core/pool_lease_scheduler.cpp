@@ -1,5 +1,7 @@
 #include "ruvia/core/pool_lease_scheduler.h"
 
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -405,7 +407,7 @@ task<void> exercise_close_defers_resumption(const worker_handle& worker, bool& s
 
 }  // namespace ruvia::test::lease_handoff
 
-int main() {
+TEST(Ruvia, PoolLeaseSchedulerLifecycle) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
     const auto worker_value = attachment.loop().handle();
@@ -435,12 +437,22 @@ int main() {
         exercise_timeout_between_cancel_and_release(worker_value, mixed_waiters_success),
         exercise_acquire_cancellation(cancellation_scheduler, io_context, worker_value, cancellation_success),
         exercise_pmr_test(io_context, worker_value, pmr_lifecycle_success));
-    return lease_success && worker_timeout_success && nonpositive_timeout_success &&
-                   saturated_timeout_success &&
-                   cancellation_success && pmr_lifecycle_success && mixed_waiters_success &&
-                   handoff_chain_success && committed_handoff_success && close_deferred_success &&
-                   test_scheduler_owns_timeout_for_lazy_acquires() &&
-                   test_scheduler_retains_worker_binding_for_lazy_acquires()
-               ? 0
-               : 1;
+    EXPECT_TRUE(lease_success);
+    EXPECT_TRUE(worker_timeout_success);
+    EXPECT_TRUE(nonpositive_timeout_success);
+    EXPECT_TRUE(saturated_timeout_success);
+    EXPECT_TRUE(cancellation_success);
+    EXPECT_TRUE(pmr_lifecycle_success);
+    EXPECT_TRUE(mixed_waiters_success);
+    EXPECT_TRUE(handoff_chain_success);
+    EXPECT_TRUE(committed_handoff_success);
+    EXPECT_TRUE(close_deferred_success);
+}
+
+TEST(Ruvia, SchedulerOwnsTimeoutForLazyAcquires) {
+    EXPECT_TRUE(test_scheduler_owns_timeout_for_lazy_acquires());
+}
+
+TEST(Ruvia, SchedulerRetainsWorkerBindingForLazyAcquires) {
+    EXPECT_TRUE(test_scheduler_retains_worker_binding_for_lazy_acquires());
 }

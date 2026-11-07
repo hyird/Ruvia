@@ -1,5 +1,7 @@
 #include "ruvia/web/session.h"
 
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -30,14 +32,13 @@
 #include "ruvia/web/testing.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 #ifdef RUVIA_ENABLE_REDIS
 
 #include "ruvia/web/redis/redis_handle.h"
 
-RUVIA_TEST(session_middleware_rejects_invalid_config_before_use) {
+TEST(Ruvia, session_middleware_rejects_invalid_config_before_use) {
     const auto rejected = [](const ruvia::session_config& config) {
         try {
             const ruvia::session_middleware middleware(config);
@@ -49,26 +50,26 @@ RUVIA_TEST(session_middleware_rejects_invalid_config_before_use) {
 
     auto config = ruvia::session_config{};
     config.redis_alias_ = "";
-    RUVIA_CHECK(rejected(config));
+    EXPECT_TRUE(rejected(config));
 
     config = ruvia::session_config{};
     config.cookie_name_ = "bad cookie";
-    RUVIA_CHECK(rejected(config));
+    EXPECT_TRUE(rejected(config));
 
     config = ruvia::session_config{};
     config.key_prefix_ = "";
-    RUVIA_CHECK(rejected(config));
+    EXPECT_TRUE(rejected(config));
 
     config = ruvia::session_config{};
     config.ttl_ = std::chrono::seconds::zero();
-    RUVIA_CHECK(rejected(config));
+    EXPECT_TRUE(rejected(config));
 
     // A new session is written with a millisecond expiry.
     constexpr auto max_ttl = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds::max());
     config.ttl_ = max_ttl + std::chrono::seconds(1);
-    RUVIA_CHECK(rejected(config));
+    EXPECT_TRUE(rejected(config));
     config.ttl_ = std::chrono::seconds::max();
-    RUVIA_CHECK(rejected(config));
+    EXPECT_TRUE(rejected(config));
 }
 
 namespace session_test {
@@ -338,7 +339,7 @@ struct session_response final {
 
 }  // namespace session_test
 
-RUVIA_TEST(session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
+TEST(Ruvia, session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
     ruvia::test_app app;
     {
         ruvia::session_config config;
@@ -347,7 +348,7 @@ RUVIA_TEST(session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
     }
 
     const auto response = app.request(ruvia::test_request::get("/session-test/same-name-cookie"));
-    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
     std::size_t session_cookies = 0;
     bool expired = false;
     for (const auto& header : response.headers()) {
@@ -359,11 +360,11 @@ RUVIA_TEST(session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
                                  header.value().find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos &&
                                  header.value().find("Max-Age") == std::string_view::npos);
     }
-    RUVIA_CHECK_EQ(session_cookies, std::size_t{1});
-    RUVIA_CHECK(expired);
+    EXPECT_EQ(session_cookies, std::size_t{1});
+    EXPECT_TRUE(expired);
 }
 
-RUVIA_TEST(session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
+TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     // Construct before the shared HTTP runtime so the server retires its Redis
     // client before this peer is destroyed at process exit.
     static session_test::session_store_peer peer;
@@ -380,8 +381,8 @@ RUVIA_TEST(session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     };
     const auto expect = [&](std::string_view path, std::string_view cookie, std::string_view body) {
         const auto response = request(path, cookie);
-        RUVIA_CHECK_EQ(response.status_, 200U);
-        RUVIA_CHECK_EQ(response.body_, body);
+        EXPECT_EQ(response.status_, 200U);
+        EXPECT_EQ(response.body_, body);
         return response;
     };
 
@@ -394,7 +395,7 @@ RUVIA_TEST(session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
         expect("/session-ids/a/read", cookie, "empty");
         expect("/session-ids/a/clear", cookie, "clear");
         const auto rotated = expect("/session-ids/a/rotate", cookie, "rotate");
-        RUVIA_CHECK(rotated.cookie_.empty());
+        EXPECT_TRUE(rotated.cookie_.empty());
         expect("/session-store?id=" + id, {}, "existing");
     }
 
@@ -402,13 +403,13 @@ RUVIA_TEST(session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     // shorter prefix, even though raw prefix + presented ID names the same key.
     for (const auto action : {"read", "clear", "rotate"}) {
         const auto created = expect("/session-ids/b/set", {}, "set");
-        RUVIA_CHECK(created.cookie_.starts_with("sid_b="));
-        RUVIA_CHECK_EQ(created.cookie_.size(), std::size_t{6 + 48});
+        EXPECT_TRUE(created.cookie_.starts_with("sid_b="));
+        EXPECT_EQ(created.cookie_.size(), std::size_t{6 + 48});
         const auto alias = "sid_a=a" + created.cookie_.substr(6);
         const auto response = expect(std::string("/session-ids/a/") + action, alias,
             std::string_view(action) == "read" ? "empty" : action);
         if (std::string_view(action) != "clear") {
-            RUVIA_CHECK(response.cookie_.empty());
+            EXPECT_TRUE(response.cookie_.empty());
         }
         expect("/session-ids/b/read", created.cookie_, "private");
         expect("/session-ids/b/clear", created.cookie_, "clear");
@@ -418,10 +419,10 @@ RUVIA_TEST(session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     // An already-stored 48-character ID retains the same raw key format.
     const auto existing = "sid_a=" + std::string(48, 'b');
     const auto loaded = expect("/session-ids/a/read", existing, "existing");
-    RUVIA_CHECK(loaded.cookie_.empty());
+    EXPECT_TRUE(loaded.cookie_.empty());
     const auto rotated = expect("/session-ids/a/rotate", existing, "rotate");
-    RUVIA_CHECK_EQ(rotated.cookie_.size(), std::size_t{6 + 48});
-    RUVIA_CHECK(rotated.cookie_ != existing);
+    EXPECT_EQ(rotated.cookie_.size(), std::size_t{6 + 48});
+    EXPECT_TRUE(rotated.cookie_ != existing);
     expect("/session-ids/a/read", existing, "empty");
     expect("/session-ids/a/read", rotated.cookie_, "existing");
     expect("/session-ids/a/clear", rotated.cookie_, "clear");
@@ -429,8 +430,8 @@ RUVIA_TEST(session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
 
     const auto created = expect("/session-ids/b/set", {}, "set");
     const auto stale = request("/session-ids/b/stale", created.cookie_);
-    RUVIA_CHECK_EQ(stale.status_, 409U);
-    RUVIA_CHECK(stale.cookie_.empty());
+    EXPECT_EQ(stale.status_, 409U);
+    EXPECT_TRUE(stale.cookie_.empty());
     expect("/session-ids/b/read", created.cookie_, "empty");
     server.finish();
 }

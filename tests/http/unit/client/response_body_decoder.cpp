@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <memory_resource>
 #include <new>
@@ -45,52 +47,52 @@ private:
 };
 }  // namespace
 
-RUVIA_TEST(http1_response_body_decoder_fixed_length_preserves_tail_and_eof) {
+TEST(Ruvia, http1_response_body_decoder_fixed_length_preserves_tail_and_eof) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 8> scratch{};
     auto first = decoder.decode("ab", scratch);
-    RUVIA_CHECK(first.output() != nullptr);
-    RUVIA_CHECK_EQ(first.consumed_bytes(), std::size_t{2});
-    RUVIA_CHECK_EQ(first.output()->bytes(), "ab");
+    EXPECT_TRUE(first.output() != nullptr);
+    EXPECT_EQ(first.consumed_bytes(), std::size_t{2});
+    EXPECT_EQ(first.output()->bytes(), "ab");
     auto second = decoder.finish_input("cNEXT", scratch);
-    RUVIA_CHECK(second.output() != nullptr);
-    RUVIA_CHECK_EQ(second.consumed_bytes(), std::size_t{1});
+    EXPECT_TRUE(second.output() != nullptr);
+    EXPECT_EQ(second.consumed_bytes(), std::size_t{1});
     auto complete_value = decoder.finish_input("NEXT", scratch);
-    RUVIA_CHECK(complete_value.complete() != nullptr);
-    RUVIA_CHECK_EQ(complete_value.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(complete_value.complete() != nullptr);
+    EXPECT_EQ(complete_value.consumed_bytes(), std::size_t{0});
 }
 
-RUVIA_TEST(http1_response_body_decoder_head_and_no_content_complete_without_consuming_tail) {
+TEST(Ruvia, http1_response_body_decoder_head_and_no_content_complete_without_consuming_tail) {
     for (const auto& [method, status] : {std::pair{"HEAD", "200 OK"},
              std::pair{"GET", "204 No Content"}, std::pair{"GET", "304 Not Modified"}}) {
         const auto head = parse_head(method, std::string("HTTP/1.1 ") + status);
         ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
         std::array<char, 4> scratch{};
         const auto result_value = decoder.decode("TAIL", scratch);
-        RUVIA_CHECK(result_value.complete() != nullptr);
-        RUVIA_CHECK_EQ(result_value.consumed_bytes(), std::size_t{0});
+        EXPECT_TRUE(result_value.complete() != nullptr);
+        EXPECT_EQ(result_value.consumed_bytes(), std::size_t{0});
     }
 }
 
-RUVIA_TEST(http1_response_body_decoder_head_205_keeps_metadata_and_following_response) {
+TEST(Ruvia, http1_response_body_decoder_head_205_keeps_metadata_and_following_response) {
     const auto head = parse_head("HEAD", "HTTP/1.1 205 Reset Content\r\nContent-Length: 7");
-    RUVIA_CHECK(head.plan().without_content() != nullptr);
+    EXPECT_TRUE(head.plan().without_content() != nullptr);
     const auto headers = head.head().headers();
-    RUVIA_CHECK(!headers.empty());
+    EXPECT_TRUE(!headers.empty());
     if (!headers.empty()) {
-        RUVIA_CHECK_EQ(headers.front().value(), "7");
+        EXPECT_EQ(headers.front().value(), "7");
     }
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 4> scratch{};
     constexpr std::string_view following = "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nxNEXT";
     const auto complete = decoder.decode(following, scratch);
-    RUVIA_CHECK(complete.complete() != nullptr);
-    RUVIA_CHECK_EQ(complete.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(complete.complete() != nullptr);
+    EXPECT_EQ(complete.consumed_bytes(), std::size_t{0});
 
     auto remaining = following.substr(complete.consumed_bytes());
     const auto next = http_client_response_test::parse_wire("GET", remaining);
-    RUVIA_CHECK(next.parsed() != nullptr);
+    EXPECT_TRUE(next.parsed() != nullptr);
     if (next.parsed() == nullptr) {
         return;
     }
@@ -98,37 +100,37 @@ RUVIA_TEST(http1_response_body_decoder_head_205_keeps_metadata_and_following_res
     ruvia::http1_client_response_body_decoder next_decoder(
         next.parsed()->plan(), std::pmr::get_default_resource());
     const auto body = next_decoder.decode(remaining, scratch);
-    RUVIA_CHECK(body.output() != nullptr);
+    EXPECT_TRUE(body.output() != nullptr);
     if (const auto* output = body.output()) {
-        RUVIA_CHECK_EQ(output->bytes(), "x");
+        EXPECT_EQ(output->bytes(), "x");
     }
     remaining.remove_prefix(body.consumed_bytes());
     const auto next_complete = next_decoder.decode(remaining, scratch);
-    RUVIA_CHECK(next_complete.complete() != nullptr);
-    RUVIA_CHECK_EQ(next_complete.consumed_bytes(), std::size_t{0});
-    RUVIA_CHECK_EQ(remaining, "NEXT");
+    EXPECT_TRUE(next_complete.complete() != nullptr);
+    EXPECT_EQ(next_complete.consumed_bytes(), std::size_t{0});
+    EXPECT_EQ(remaining, "NEXT");
 }
 
-RUVIA_TEST(http1_response_body_decoder_chunked_trailers_and_tail) {
+TEST(Ruvia, http1_response_body_decoder_chunked_trailers_and_tail) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 8> scratch{};
     auto body = decoder.decode("3\r\nabc\r\n0\r\nX-Test: yes\r\n\r\nTAIL", scratch);
-    RUVIA_CHECK(body.output() != nullptr);
-    RUVIA_CHECK_EQ(body.output()->bytes(), "abc");
+    EXPECT_TRUE(body.output() != nullptr);
+    EXPECT_EQ(body.output()->bytes(), "abc");
     auto trailer = decoder.decode("0\r\nX-Test: yes\r\n\r\nTAIL", scratch);
-    RUVIA_CHECK(trailer.trailers() != nullptr);
-    RUVIA_CHECK_EQ(trailer.trailers()->bytes(), "X-Test: yes");
-    RUVIA_CHECK_EQ(trailer.consumed_bytes(), std::size_t{18});
+    EXPECT_TRUE(trailer.trailers() != nullptr);
+    EXPECT_EQ(trailer.trailers()->bytes(), "X-Test: yes");
+    EXPECT_EQ(trailer.consumed_bytes(), std::size_t{18});
     auto complete_value = decoder.decode("TAIL", scratch);
-    RUVIA_CHECK(complete_value.complete() != nullptr);
-    RUVIA_CHECK_EQ(complete_value.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(complete_value.complete() != nullptr);
+    EXPECT_EQ(complete_value.consumed_bytes(), std::size_t{0});
 }
 
 // RFC 9112 section 5.2: a user agent replaces each obs-fold received in a
 // response with SP before interpreting the value; a folded trailer is not
 // broken framing.
-RUVIA_TEST(http1_response_body_decoder_unfolds_obs_fold_in_trailers) {
+TEST(Ruvia, http1_response_body_decoder_unfolds_obs_fold_in_trailers) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
     allocation_counter resource;
     {
@@ -138,40 +140,40 @@ RUVIA_TEST(http1_response_body_decoder_unfolds_obs_fold_in_trailers) {
         std::array<char, 8> scratch{};
         constexpr std::string_view wire = "0\r\nX-T: a\r\n \t b\r\nX-U: c\r\n\r\nTAIL";
         const auto trailer = decoder.decode(wire, scratch);
-        RUVIA_CHECK(trailer.trailers() != nullptr);
+        EXPECT_TRUE(trailer.trailers() != nullptr);
         if (const auto* trailers = trailer.trailers()) {
-            RUVIA_CHECK_EQ(trailers->bytes(), "X-T: a b\r\nX-U: c");
-            RUVIA_CHECK_EQ(trailers->consumed_bytes(), wire.size() - 4);
+            EXPECT_EQ(trailers->bytes(), "X-T: a b\r\nX-U: c");
+            EXPECT_EQ(trailers->consumed_bytes(), wire.size() - 4);
             std::string visited;
-            RUVIA_CHECK(ruvia::visit_http_response_trailers(trailers->bytes(), [&](std::string_view name, std::string_view value) {
+            EXPECT_TRUE(ruvia::visit_http_response_trailers(trailers->bytes(), [&](std::string_view name, std::string_view value) {
                 visited.append(name).append("=").append(value).append(";");
                 return true;
             }));
-            RUVIA_CHECK_EQ(visited, "X-T=a b;X-U=c;");
+            EXPECT_EQ(visited, "X-T=a b;X-U=c;");
         }
         const auto complete_value = decoder.decode("TAIL", scratch);
-        RUVIA_CHECK(complete_value.complete() != nullptr);
-        RUVIA_CHECK_EQ(resource.allocations(), allocations_before + 1);
+        EXPECT_TRUE(complete_value.complete() != nullptr);
+        EXPECT_EQ(resource.allocations(), allocations_before + 1);
     }
-    RUVIA_CHECK_EQ(resource.outstanding(), std::size_t{0});
+    EXPECT_EQ(resource.outstanding(), std::size_t{0});
 }
 
-RUVIA_TEST(http1_response_body_decoder_close_delimited_completes_only_at_eof) {
+TEST(Ruvia, http1_response_body_decoder_close_delimited_completes_only_at_eof) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 3> scratch{};
     auto body = decoder.decode("abcdef", scratch);
-    RUVIA_CHECK(body.output() != nullptr);
-    RUVIA_CHECK_EQ(body.consumed_bytes(), std::size_t{3});
-    RUVIA_CHECK_EQ(body.output()->bytes(), "abc");
+    EXPECT_TRUE(body.output() != nullptr);
+    EXPECT_EQ(body.consumed_bytes(), std::size_t{3});
+    EXPECT_EQ(body.output()->bytes(), "abc");
     auto rest = decoder.finish_input("def", scratch);
-    RUVIA_CHECK(rest.output() != nullptr);
-    RUVIA_CHECK_EQ(rest.consumed_bytes(), std::size_t{3});
+    EXPECT_TRUE(rest.output() != nullptr);
+    EXPECT_EQ(rest.consumed_bytes(), std::size_t{3});
     auto complete_value = decoder.finish_input({}, scratch);
-    RUVIA_CHECK(complete_value.complete() != nullptr);
+    EXPECT_TRUE(complete_value.complete() != nullptr);
 }
 
-RUVIA_TEST(http1_response_body_decoder_transfer_gzip_and_deflate_stream_with_tiny_scratch) {
+TEST(Ruvia, http1_response_body_decoder_transfer_gzip_and_deflate_stream_with_tiny_scratch) {
     constexpr std::string_view gzip_hello{
         "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xcb\x48\xcd\xc9"
         "\xc9\x07\x00\x86\xa6\x10\x36\x05\x00\x00\x00",
@@ -198,12 +200,12 @@ RUVIA_TEST(http1_response_body_decoder_transfer_gzip_and_deflate_stream_with_tin
         if (result_value.output()) {
             output.append(result_value.output()->bytes());
         }
-        RUVIA_CHECK_EQ(output, "hello");
-        RUVIA_CHECK(result_value.complete() != nullptr);
+        EXPECT_EQ(output, "hello");
+        EXPECT_TRUE(result_value.complete() != nullptr);
     }
 }
 
-RUVIA_TEST(http1_response_body_decoder_transfer_allocations_are_released_on_repeated_operations) {
+TEST(Ruvia, http1_response_body_decoder_transfer_allocations_are_released_on_repeated_operations) {
     constexpr std::string_view gzip_hello{
         "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xcb\x48\xcd\xc9"
         "\xc9\x07\x00\x86\xa6\x10\x36\x05\x00\x00\x00",
@@ -215,16 +217,16 @@ RUVIA_TEST(http1_response_body_decoder_transfer_allocations_are_released_on_repe
         {
             ruvia::http1_client_response_body_decoder decoder(head.plan(), &resource);
             auto result_value = decoder.finish_input(gzip_hello, scratch);
-            RUVIA_CHECK(result_value.output() != nullptr);
+            EXPECT_TRUE(result_value.output() != nullptr);
             result_value = decoder.finish_input({}, scratch);
-            RUVIA_CHECK(result_value.complete() != nullptr);
+            EXPECT_TRUE(result_value.complete() != nullptr);
         }
-        RUVIA_CHECK_EQ(resource.outstanding(), std::size_t{0});
+        EXPECT_EQ(resource.outstanding(), std::size_t{0});
     }
-    RUVIA_CHECK(resource.allocations() > 0);
+    EXPECT_TRUE(resource.allocations() > 0);
 }
 
-RUVIA_TEST(http1_response_body_decoder_gzip_concatenation_and_chunked_transfer) {
+TEST(Ruvia, http1_response_body_decoder_gzip_concatenation_and_chunked_transfer) {
     constexpr std::string_view gzip_hello{
         "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xcb\x48\xcd\xc9"
         "\xc9\x07\x00\x86\xa6\x10\x36\x05\x00\x00\x00",
@@ -249,8 +251,8 @@ RUVIA_TEST(http1_response_body_decoder_gzip_concatenation_and_chunked_transfer) 
     if (result_value.output()) {
         decoded.append(result_value.output()->bytes());
     }
-    RUVIA_CHECK_EQ(decoded, "hellohello");
-    RUVIA_CHECK(result_value.complete() != nullptr);
+    EXPECT_EQ(decoded, "hellohello");
+    EXPECT_TRUE(result_value.complete() != nullptr);
 
     const auto chunked_head =
         parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
@@ -274,30 +276,30 @@ RUVIA_TEST(http1_response_body_decoder_gzip_concatenation_and_chunked_transfer) 
         } else if (result_value.complete() != nullptr) {
             break;
         } else {
-            RUVIA_CHECK(result_value.need_input() != nullptr);
+            EXPECT_TRUE(result_value.need_input() != nullptr);
         }
     }
-    RUVIA_CHECK_EQ(decoded, "hello");
-    RUVIA_CHECK(trailers_seen);
-    RUVIA_CHECK_EQ(wire, "TAIL");
+    EXPECT_EQ(decoded, "hello");
+    EXPECT_TRUE(trailers_seen);
+    EXPECT_EQ(wire, "TAIL");
 }
 
-RUVIA_TEST(http1_response_body_decoder_transfer_completion_waits_for_http_framing_and_rejects_tail) {
+TEST(Ruvia, http1_response_body_decoder_transfer_completion_waits_for_http_framing_and_rejects_tail) {
     constexpr std::string_view deflate_hello{
         "\x78\x9c\xcb\x48\xcd\xc9\xc9\x07\x00\x06\x2c\x02\x15", 13};
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: deflate");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 16> scratch{};
     const auto output = decoder.decode(deflate_hello, scratch);
-    RUVIA_CHECK(output.output() != nullptr);
-    RUVIA_CHECK_EQ(output.output()->bytes(), "hello");
+    EXPECT_TRUE(output.output() != nullptr);
+    EXPECT_EQ(output.output()->bytes(), "hello");
     const auto still_waiting = decoder.decode({}, scratch);
-    RUVIA_CHECK(still_waiting.need_input() != nullptr);
+    EXPECT_TRUE(still_waiting.need_input() != nullptr);
     const auto illegal_tail = decoder.decode("X", scratch);
-    RUVIA_CHECK(illegal_tail.protocol_failure() != nullptr);
-    RUVIA_CHECK(illegal_tail.protocol_failure()->error() ==
+    EXPECT_TRUE(illegal_tail.protocol_failure() != nullptr);
+    EXPECT_TRUE(illegal_tail.protocol_failure()->error() ==
                 ruvia::http1_client_response_body_error::invalid_transfer_coding);
-    RUVIA_CHECK_EQ(illegal_tail.consumed_bytes(), std::size_t{0});
+    EXPECT_EQ(illegal_tail.consumed_bytes(), std::size_t{0});
 
     const auto eof_head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: deflate");
     ruvia::http1_client_response_body_decoder eof_decoder(
@@ -306,10 +308,10 @@ RUVIA_TEST(http1_response_body_decoder_transfer_completion_waits_for_http_framin
     while (eof_result.output() || eof_result.need_input()) {
         eof_result = eof_decoder.finish_input({}, scratch);
     }
-    RUVIA_CHECK(eof_result.complete() != nullptr);
+    EXPECT_TRUE(eof_result.complete() != nullptr);
 }
 
-RUVIA_TEST(http1_response_body_decoder_chunked_deflate_waits_for_valid_trailers) {
+TEST(Ruvia, http1_response_body_decoder_chunked_deflate_waits_for_valid_trailers) {
     constexpr std::string_view deflate_hello{
         "\x78\x9c\xcb\x48\xcd\xc9\xc9\x07\x00\x06\x2c\x02\x15", 13};
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: deflate, chunked");
@@ -332,42 +334,42 @@ RUVIA_TEST(http1_response_body_decoder_chunked_deflate_waits_for_valid_trailers)
     if (result_value.output()) {
         body.append(result_value.output()->bytes());
     }
-    RUVIA_CHECK(result_value.complete() != nullptr);
-    RUVIA_CHECK_EQ(body, "hello");
-    RUVIA_CHECK(saw_trailers);
-    RUVIA_CHECK_EQ(input, "TAIL");
+    EXPECT_TRUE(result_value.complete() != nullptr);
+    EXPECT_EQ(body, "hello");
+    EXPECT_TRUE(saw_trailers);
+    EXPECT_EQ(input, "TAIL");
 }
 
-RUVIA_TEST(http1_response_body_decoder_terminal_result_is_stable_and_replayed) {
+TEST(Ruvia, http1_response_body_decoder_terminal_result_is_stable_and_replayed) {
     const auto head = parse_head(
         "GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 4> scratch{};
     const auto failed = decoder.decode("1\r\nxXY0\r\n\r\nTAIL", scratch);
-    RUVIA_CHECK(failed.protocol_failure() != nullptr);
-    RUVIA_CHECK(failed.protocol_failure()->error() == ruvia::http1_client_response_body_error::invalid_framing);
+    EXPECT_TRUE(failed.protocol_failure() != nullptr);
+    EXPECT_TRUE(failed.protocol_failure()->error() == ruvia::http1_client_response_body_error::invalid_framing);
     const auto replayed = decoder.decode("ignored", scratch);
-    RUVIA_CHECK(replayed.protocol_failure() != nullptr);
-    RUVIA_CHECK(replayed.protocol_failure()->error() == failed.protocol_failure()->error());
-    RUVIA_CHECK_EQ(replayed.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(replayed.protocol_failure() != nullptr);
+    EXPECT_TRUE(replayed.protocol_failure()->error() == failed.protocol_failure()->error());
+    EXPECT_EQ(replayed.consumed_bytes(), std::size_t{0});
     const auto eof_replay = decoder.finish_input({}, scratch);
-    RUVIA_CHECK(eof_replay.protocol_failure() != nullptr);
-    RUVIA_CHECK(eof_replay.protocol_failure()->error() == failed.protocol_failure()->error());
+    EXPECT_TRUE(eof_replay.protocol_failure() != nullptr);
+    EXPECT_TRUE(eof_replay.protocol_failure()->error() == failed.protocol_failure()->error());
 
     const auto no_body = parse_head("GET", "HTTP/1.1 204 No Content");
     ruvia::http1_client_response_body_decoder complete_decoder(
         no_body.plan(), std::pmr::get_default_resource());
     const auto first_complete = complete_decoder.decode("TAIL", scratch);
-    RUVIA_CHECK(first_complete.complete() != nullptr);
+    EXPECT_TRUE(first_complete.complete() != nullptr);
     const auto complete_replay = complete_decoder.decode("ignored", scratch);
-    RUVIA_CHECK(complete_replay.complete() != nullptr);
-    RUVIA_CHECK_EQ(complete_replay.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(complete_replay.complete() != nullptr);
+    EXPECT_EQ(complete_replay.consumed_bytes(), std::size_t{0});
     const auto complete_eof_replay = complete_decoder.finish_input({}, scratch);
-    RUVIA_CHECK(complete_eof_replay.complete() != nullptr);
-    RUVIA_CHECK_EQ(complete_eof_replay.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(complete_eof_replay.complete() != nullptr);
+    EXPECT_EQ(complete_eof_replay.consumed_bytes(), std::size_t{0});
 }
 
-RUVIA_TEST(http1_response_body_decoder_205_gzip_chunked_eof_drains_buffered_terminator) {
+TEST(Ruvia, http1_response_body_decoder_205_gzip_chunked_eof_drains_buffered_terminator) {
     constexpr std::string_view gzip_empty{
         "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x03"
         "\x00\x00\x00\x00\x00\x00\x00\x00\x00",
@@ -388,12 +390,12 @@ RUVIA_TEST(http1_response_body_decoder_205_gzip_chunked_eof_drains_buffered_term
         trailers_seen = trailers_seen || result_value.trailers() != nullptr;
         result_value = decoder.finish_input(input, scratch);
     }
-    RUVIA_CHECK(result_value.complete() != nullptr);
-    RUVIA_CHECK(trailers_seen);
-    RUVIA_CHECK_EQ(input, "TAIL");
+    EXPECT_TRUE(result_value.complete() != nullptr);
+    EXPECT_TRUE(trailers_seen);
+    EXPECT_EQ(input, "TAIL");
 }
 
-RUVIA_TEST(http1_response_body_decoder_205_accepts_empty_gzip_and_rejects_decoded_content) {
+TEST(Ruvia, http1_response_body_decoder_205_accepts_empty_gzip_and_rejects_decoded_content) {
     constexpr std::string_view gzip_empty{
         "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x03"
         "\x00\x00\x00\x00\x00\x00\x00\x00\x00",
@@ -406,9 +408,9 @@ RUVIA_TEST(http1_response_body_decoder_205_accepts_empty_gzip_and_rejects_decode
     while (accepted.need_input() != nullptr) {
         accepted = empty.finish_input({}, scratch);
     }
-    RUVIA_CHECK(accepted.protocol_failure() == nullptr);
-    RUVIA_CHECK(accepted.decoder_failure() == nullptr);
-    RUVIA_CHECK(accepted.complete() != nullptr);
+    EXPECT_TRUE(accepted.protocol_failure() == nullptr);
+    EXPECT_TRUE(accepted.decoder_failure() == nullptr);
+    EXPECT_TRUE(accepted.complete() != nullptr);
 
     const auto nonempty_head = parse_head(
         "GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: gzip");
@@ -421,36 +423,36 @@ RUVIA_TEST(http1_response_body_decoder_205_accepts_empty_gzip_and_rejects_decode
     // RFC 9110 section 15.3.6 forbids only generating 205 content: it is
     // consumed and discarded, never emitted.
     const auto discarded = nonempty.finish_input(gzip_hello, scratch);
-    RUVIA_CHECK(discarded.output() == nullptr);
-    RUVIA_CHECK(discarded.complete() != nullptr);
-    RUVIA_CHECK_EQ(discarded.consumed_bytes(), gzip_hello.size());
+    EXPECT_TRUE(discarded.output() == nullptr);
+    EXPECT_TRUE(discarded.complete() != nullptr);
+    EXPECT_EQ(discarded.consumed_bytes(), gzip_hello.size());
 
     const auto fixed_head = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 2");
-    RUVIA_CHECK(fixed_head.plan().discards_content());
+    EXPECT_TRUE(fixed_head.plan().discards_content());
     ruvia::http1_client_response_body_decoder fixed(fixed_head.plan(), std::pmr::get_default_resource());
     const auto fixed_result = fixed.decode("okNEXT", scratch);
-    RUVIA_CHECK(fixed_result.complete() != nullptr);
-    RUVIA_CHECK_EQ(fixed_result.consumed_bytes(), std::size_t{2});
+    EXPECT_TRUE(fixed_result.complete() != nullptr);
+    EXPECT_EQ(fixed_result.consumed_bytes(), std::size_t{2});
     if (const auto* complete = fixed_result.complete()) {
-        RUVIA_CHECK(complete->persistence() == ruvia::http1_close_policy::allow_reuse);
+        EXPECT_TRUE(complete->persistence() == ruvia::http1_close_policy::allow_reuse);
     }
 }
 
-RUVIA_TEST(http1_response_body_decoder_chunk_output_is_limited_to_scratch_and_keeps_tail) {
+TEST(Ruvia, http1_response_body_decoder_chunk_output_is_limited_to_scratch_and_keeps_tail) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
     allocation_counter resource;
     {
         ruvia::http1_client_response_body_decoder decoder(head.plan(), &resource);
         const auto allocations_before = resource.allocations();
         if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            RUVIA_CHECK_EQ(allocations_before, std::size_t{0});
+            EXPECT_EQ(allocations_before, std::size_t{0});
         }
         std::array<char, 3> scratch{};
         std::string wire = "a\r\n0123456789\r\n0\r\n\r\nTAIL";
         std::string body;
         for (;;) {
             const auto result_value = decoder.decode(wire, scratch);
-            RUVIA_CHECK(result_value.protocol_failure() == nullptr);
+            EXPECT_TRUE(result_value.protocol_failure() == nullptr);
             if (result_value.output()) {
                 body.append(result_value.output()->bytes());
             }
@@ -458,37 +460,37 @@ RUVIA_TEST(http1_response_body_decoder_chunk_output_is_limited_to_scratch_and_ke
             if (result_value.trailers() != nullptr) {
                 break;
             }
-            RUVIA_CHECK(result_value.output() != nullptr);
+            EXPECT_TRUE(result_value.output() != nullptr);
         }
-        RUVIA_CHECK_EQ(body, "0123456789");
-        RUVIA_CHECK_EQ(wire, "TAIL");
-        RUVIA_CHECK_EQ(resource.allocations(), allocations_before);
+        EXPECT_EQ(body, "0123456789");
+        EXPECT_EQ(wire, "TAIL");
+        EXPECT_EQ(resource.allocations(), allocations_before);
     }
-    RUVIA_CHECK_EQ(resource.outstanding(), std::size_t{0});
+    EXPECT_EQ(resource.outstanding(), std::size_t{0});
 }
 
-RUVIA_TEST(http1_response_body_decoder_no_transfer_coding_does_not_allocate) {
+TEST(Ruvia, http1_response_body_decoder_no_transfer_coding_does_not_allocate) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 4");
     allocation_counter resource;
     {
         ruvia::http1_client_response_body_decoder decoder(head.plan(), &resource);
         const auto allocations_before = resource.allocations();
         if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            RUVIA_CHECK_EQ(allocations_before, std::size_t{0});
+            EXPECT_EQ(allocations_before, std::size_t{0});
         }
         std::array<char, 2> scratch{};
         auto first = decoder.decode("data", scratch);
-        RUVIA_CHECK_EQ(first.output()->bytes(), "da");
+        EXPECT_EQ(first.output()->bytes(), "da");
         auto second = decoder.decode("ta", scratch);
-        RUVIA_CHECK_EQ(second.output()->bytes(), "ta");
+        EXPECT_EQ(second.output()->bytes(), "ta");
         const auto complete_value = decoder.decode({}, scratch);
-        RUVIA_CHECK(complete_value.complete() != nullptr);
-        RUVIA_CHECK_EQ(resource.allocations(), allocations_before);
+        EXPECT_TRUE(complete_value.complete() != nullptr);
+        EXPECT_EQ(resource.allocations(), allocations_before);
     }
-    RUVIA_CHECK_EQ(resource.outstanding(), std::size_t{0});
+    EXPECT_EQ(resource.outstanding(), std::size_t{0});
 }
 
-RUVIA_TEST(http1_response_body_decoder_propagates_constructor_allocation_failure) {
+TEST(Ruvia, http1_response_body_decoder_propagates_constructor_allocation_failure) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
     failing_memory_resource resource;
     resource.fail_after(0);
@@ -498,11 +500,11 @@ RUVIA_TEST(http1_response_body_decoder_propagates_constructor_allocation_failure
     } catch (const std::bad_alloc&) {
         failed = true;
     }
-    RUVIA_CHECK(failed);
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_TRUE(failed);
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(http1_response_body_decoder_rejects_truncated_transfer_coding) {
+TEST(Ruvia, http1_response_body_decoder_rejects_truncated_transfer_coding) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     constexpr std::string_view truncated_gzip{"\x1f\x8b\x08", 3};
@@ -512,11 +514,11 @@ RUVIA_TEST(http1_response_body_decoder_rejects_truncated_transfer_coding) {
            result_value.need_input() != nullptr) {
         result_value = decoder.finish_input({}, scratch);
     }
-    RUVIA_CHECK(result_value.protocol_failure() != nullptr);
-    RUVIA_CHECK(result_value.protocol_failure()->error() == ruvia::http1_client_response_body_error::incomplete_body);
+    EXPECT_TRUE(result_value.protocol_failure() != nullptr);
+    EXPECT_TRUE(result_value.protocol_failure()->error() == ruvia::http1_client_response_body_error::incomplete_body);
 }
 
-RUVIA_TEST(http1_response_body_decoder_accepts_empty_transfer_coded_body) {
+TEST(Ruvia, http1_response_body_decoder_accepts_empty_transfer_coded_body) {
     std::array<char, 8> scratch{};
     const auto chunked_head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
     ruvia::http1_client_response_body_decoder chunked(
@@ -531,10 +533,10 @@ RUVIA_TEST(http1_response_body_decoder_accepts_empty_transfer_coded_body) {
         }
         result_value = chunked.decode(input, scratch);
     }
-    RUVIA_CHECK(result_value.complete() != nullptr);
+    EXPECT_TRUE(result_value.complete() != nullptr);
     input.erase(0, result_value.consumed_bytes());
-    RUVIA_CHECK(body.empty());
-    RUVIA_CHECK_EQ(input, "TAIL");
+    EXPECT_TRUE(body.empty());
+    EXPECT_EQ(input, "TAIL");
 
     const auto close_head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
     ruvia::http1_client_response_body_decoder close_delimited(
@@ -543,10 +545,10 @@ RUVIA_TEST(http1_response_body_decoder_accepts_empty_transfer_coded_body) {
     for (int step = 0; step < 8 && eof_result.need_input() != nullptr; ++step) {
         eof_result = close_delimited.finish_input({}, scratch);
     }
-    RUVIA_CHECK(eof_result.complete() != nullptr);
+    EXPECT_TRUE(eof_result.complete() != nullptr);
 }
 
-RUVIA_TEST(http1_response_body_decoder_accepts_many_small_chunks) {
+TEST(Ruvia, http1_response_body_decoder_accepts_many_small_chunks) {
     constexpr std::size_t chunk_count = 20000;
     std::string wire;
     wire.reserve(chunk_count * 6 + 9);
@@ -563,7 +565,7 @@ RUVIA_TEST(http1_response_body_decoder_accepts_many_small_chunks) {
     bool complete_value = false;
     for (std::size_t step = 0; step <= chunk_count * 2 + 8; ++step) {
         const auto result_value = decoder.decode(remaining, scratch);
-        RUVIA_CHECK(result_value.protocol_failure() == nullptr);
+        EXPECT_TRUE(result_value.protocol_failure() == nullptr);
         if (result_value.protocol_failure() != nullptr) {
             break;
         }
@@ -576,12 +578,12 @@ RUVIA_TEST(http1_response_body_decoder_accepts_many_small_chunks) {
             break;
         }
     }
-    RUVIA_CHECK(complete_value);
-    RUVIA_CHECK_EQ(body_bytes, chunk_count);
-    RUVIA_CHECK_EQ(remaining, "TAIL");
+    EXPECT_TRUE(complete_value);
+    EXPECT_EQ(body_bytes, chunk_count);
+    EXPECT_EQ(remaining, "TAIL");
 }
 
-RUVIA_TEST(http1_response_body_decoder_handles_chunk_extension_and_trailer_over_8k) {
+TEST(Ruvia, http1_response_body_decoder_handles_chunk_extension_and_trailer_over_8k) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::string wire = "1;";
@@ -594,7 +596,7 @@ RUVIA_TEST(http1_response_body_decoder_handles_chunk_extension_and_trailer_over_
     bool saw_trailers = false;
     for (int step = 0; step < 8; ++step) {
         const auto result_value = decoder.decode(wire, scratch);
-        RUVIA_CHECK(result_value.protocol_failure() == nullptr);
+        EXPECT_TRUE(result_value.protocol_failure() == nullptr);
         if (result_value.output()) {
             saw_body = result_value.output()->bytes() == "z";
         }
@@ -605,53 +607,53 @@ RUVIA_TEST(http1_response_body_decoder_handles_chunk_extension_and_trailer_over_
         if (saw_trailers) {
             break;
         }
-        RUVIA_CHECK(result_value.output() != nullptr || result_value.need_input() != nullptr);
+        EXPECT_TRUE(result_value.output() != nullptr || result_value.need_input() != nullptr);
     }
-    RUVIA_CHECK(saw_body);
-    RUVIA_CHECK(saw_trailers);
-    RUVIA_CHECK_EQ(wire, "TAIL");
+    EXPECT_TRUE(saw_body);
+    EXPECT_TRUE(saw_trailers);
+    EXPECT_EQ(wire, "TAIL");
 }
 
-RUVIA_TEST(http1_response_body_decoder_fragmented_chunk_and_205_empty_chunk_complete) {
+TEST(Ruvia, http1_response_body_decoder_fragmented_chunk_and_205_empty_chunk_complete) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 4> scratch{};
     auto first = decoder.decode("3\r\nab", scratch);
-    RUVIA_CHECK(first.output() != nullptr);
-    RUVIA_CHECK_EQ(first.output()->bytes(), "ab");
-    RUVIA_CHECK_EQ(first.consumed_bytes(), std::size_t{5});
+    EXPECT_TRUE(first.output() != nullptr);
+    EXPECT_EQ(first.output()->bytes(), "ab");
+    EXPECT_EQ(first.consumed_bytes(), std::size_t{5});
     auto second = decoder.decode("c\r\n0\r\n\r\nTAIL", scratch);
-    RUVIA_CHECK(second.output() != nullptr);
-    RUVIA_CHECK_EQ(second.output()->bytes(), "c");
+    EXPECT_TRUE(second.output() != nullptr);
+    EXPECT_EQ(second.output()->bytes(), "c");
     auto trailers = decoder.decode("0\r\n\r\nTAIL", scratch);
-    RUVIA_CHECK(trailers.trailers() != nullptr);
-    RUVIA_CHECK_EQ(trailers.consumed_bytes(), std::size_t{5});
-    RUVIA_CHECK_EQ(trailers.trailers()->bytes(), "");
+    EXPECT_TRUE(trailers.trailers() != nullptr);
+    EXPECT_EQ(trailers.consumed_bytes(), std::size_t{5});
+    EXPECT_EQ(trailers.trailers()->bytes(), "");
     const auto complete_value = decoder.decode("TAIL", scratch);
-    RUVIA_CHECK(complete_value.complete() != nullptr);
+    EXPECT_TRUE(complete_value.complete() != nullptr);
 
     const auto reset_head = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder reset(
         reset_head.plan(), std::pmr::get_default_resource());
     auto empty_chunk = reset.decode("0\r\n\r\nTAIL", scratch);
-    RUVIA_CHECK(empty_chunk.trailers() != nullptr);
-    RUVIA_CHECK(empty_chunk.trailers()->bytes().empty());
+    EXPECT_TRUE(empty_chunk.trailers() != nullptr);
+    EXPECT_TRUE(empty_chunk.trailers()->bytes().empty());
     const auto reset_complete = reset.decode("TAIL", scratch);
-    RUVIA_CHECK(reset_complete.complete() != nullptr);
+    EXPECT_TRUE(reset_complete.complete() != nullptr);
 }
 
-RUVIA_TEST(http1_response_body_decoder_fixed_length_eof_is_incomplete) {
+TEST(Ruvia, http1_response_body_decoder_fixed_length_eof_is_incomplete) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 4> scratch{};
     const auto body = decoder.finish_input("ab", scratch);
-    RUVIA_CHECK(body.output() != nullptr);
+    EXPECT_TRUE(body.output() != nullptr);
     const auto failure = decoder.finish_input({}, scratch);
-    RUVIA_CHECK(failure.protocol_failure() != nullptr);
-    RUVIA_CHECK(failure.protocol_failure()->error() == ruvia::http1_client_response_body_error::incomplete_body);
+    EXPECT_TRUE(failure.protocol_failure() != nullptr);
+    EXPECT_TRUE(failure.protocol_failure()->error() == ruvia::http1_client_response_body_error::incomplete_body);
 }
 
-RUVIA_TEST(http1_response_body_decoder_decodes_transfer_coding_stack_in_reverse_order) {
+TEST(Ruvia, http1_response_body_decoder_decodes_transfer_coding_stack_in_reverse_order) {
     constexpr std::string_view plain = "HTTP/1 transfer coding stack";
     const auto wire = zlib_deflate_compress(gzip_compress(plain));
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate");
@@ -667,17 +669,17 @@ RUVIA_TEST(http1_response_body_decoder_decodes_transfer_coding_stack_in_reverse_
             output.append(decoded->bytes());
         }
         if (result_value.protocol_failure() != nullptr || result_value.decoder_failure() != nullptr) {
-            RUVIA_CHECK(false);
+            EXPECT_TRUE(false);
             return;
         }
         complete_value = result_value.complete() != nullptr;
     }
-    RUVIA_CHECK(complete_value);
-    RUVIA_CHECK(input.empty());
-    RUVIA_CHECK_EQ(output, std::string(plain));
+    EXPECT_TRUE(complete_value);
+    EXPECT_TRUE(input.empty());
+    EXPECT_EQ(output, std::string(plain));
 }
 
-RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wire_input) {
+TEST(Ruvia, http1_response_body_decoder_drains_pending_transfer_output_without_wire_input) {
     constexpr std::string_view deflate_aaaa{"\x78\x9c\x73\x04\x02\x00\x02\x8e\x01\x05", 10};
     for (const bool chunked : {false, true}) {
         const auto head = parse_head("GET", chunked
@@ -691,16 +693,16 @@ RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wi
         }
         std::string content;
         const auto first = decoder.decode(input, scratch);
-        RUVIA_CHECK(first.output() != nullptr);
+        EXPECT_TRUE(first.output() != nullptr);
         if (first.output()) {
             content.append(first.output()->bytes());
         }
         input.erase(0, first.consumed_bytes());
-        RUVIA_CHECK(input.empty());
+        EXPECT_TRUE(input.empty());
         for (int count = 0; count < 3; ++count) {
             const auto pending = decoder.decode(input, scratch);
-            RUVIA_CHECK(pending.output() != nullptr);
-            RUVIA_CHECK_EQ(pending.consumed_bytes(), std::size_t{0});
+            EXPECT_TRUE(pending.output() != nullptr);
+            EXPECT_EQ(pending.consumed_bytes(), std::size_t{0});
             if (!pending.output()) {
                 break;
             }
@@ -708,9 +710,9 @@ RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wi
         }
         // All four bytes must be observable before the peer supplies the rest
         // of the encoding or any subsequent chunk framing.
-        RUVIA_CHECK_EQ(content, "AAAA");
+        EXPECT_EQ(content, "AAAA");
         const auto needs_input = decoder.decode(input, scratch);
-        RUVIA_CHECK(needs_input.need_input() != nullptr);
+        EXPECT_TRUE(needs_input.need_input() != nullptr);
 
         input.assign(deflate_aaaa.substr(5));
         if (chunked) {
@@ -719,9 +721,9 @@ RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wi
         bool complete_value = false;
         for (int count = 0; count < 16 && !complete_value; ++count) {
             const auto result_value = decoder.finish_input(input, scratch);
-            RUVIA_CHECK(result_value.protocol_failure() == nullptr);
-            RUVIA_CHECK(result_value.decoder_failure() == nullptr);
-            RUVIA_CHECK(result_value.need_input() == nullptr);
+            EXPECT_TRUE(result_value.protocol_failure() == nullptr);
+            EXPECT_TRUE(result_value.decoder_failure() == nullptr);
+            EXPECT_TRUE(result_value.need_input() == nullptr);
             if (result_value.output()) {
                 content.append(result_value.output()->bytes());
             }
@@ -731,13 +733,13 @@ RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wi
                 break;
             }
         }
-        RUVIA_CHECK(complete_value);
-        RUVIA_CHECK_EQ(content, "AAAA");
-        RUVIA_CHECK_EQ(input, chunked ? "TAIL" : "");
+        EXPECT_TRUE(complete_value);
+        EXPECT_EQ(content, "AAAA");
+        EXPECT_EQ(input, chunked ? "TAIL" : "");
     }
 }
 
-RUVIA_TEST(http1_response_role_chunk_decoder_preserves_typed_views_and_wire_prefix) {
+TEST(Ruvia, http1_response_role_chunk_decoder_preserves_typed_views_and_wire_prefix) {
     constexpr std::string_view wire = "1\r\nx\r\n0\r\nAccept-Ranges: bytes\r\n\r\nNEXT";
     ruvia::http1_chunked_body_decoder decoder;
     bool zero_budget_rejected = false;
@@ -746,41 +748,41 @@ RUVIA_TEST(http1_response_role_chunk_decoder_preserves_typed_views_and_wire_pref
     } catch (const std::invalid_argument&) {
         zero_budget_rejected = true;
     }
-    RUVIA_CHECK(zero_budget_rejected);
+    EXPECT_TRUE(zero_budget_rejected);
     const auto body = decoder.decode(wire, 1);
-    RUVIA_CHECK(body.body_chunk() != nullptr);
-    RUVIA_CHECK_EQ(body.consumed_bytes(), std::size_t{6});
+    EXPECT_TRUE(body.body_chunk() != nullptr);
+    EXPECT_EQ(body.consumed_bytes(), std::size_t{6});
     if (const auto* chunk = body.body_chunk()) {
-        RUVIA_CHECK_EQ(chunk->bytes(), "x");
-        RUVIA_CHECK(chunk->bytes().data() == wire.data() + 3);
+        EXPECT_EQ(chunk->bytes(), "x");
+        EXPECT_TRUE(chunk->bytes().data() == wire.data() + 3);
     }
     auto pending = wire.substr(body.consumed_bytes());
     const auto terminal = decoder.decode(pending, 1);
-    RUVIA_CHECK(terminal.complete() != nullptr);
+    EXPECT_TRUE(terminal.complete() != nullptr);
     if (const auto* complete = terminal.complete()) {
-        RUVIA_CHECK_EQ(complete->trailers(), "Accept-Ranges: bytes");
+        EXPECT_EQ(complete->trailers(), "Accept-Ranges: bytes");
     }
     pending.remove_prefix(terminal.consumed_bytes());
-    RUVIA_CHECK_EQ(pending, "NEXT");
+    EXPECT_EQ(pending, "NEXT");
     const auto replay = decoder.decode(pending);
-    RUVIA_CHECK(replay.complete() != nullptr);
-    RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(replay.complete() != nullptr);
+    EXPECT_EQ(replay.consumed_bytes(), std::size_t{0});
 
     ruvia::http1_chunked_body_decoder invalid;
     const auto failure = invalid.decode("1\r\nxXX");
-    RUVIA_CHECK(failure.failure() != nullptr);
+    EXPECT_TRUE(failure.failure() != nullptr);
     if (const auto* error = failure.failure()) {
-        RUVIA_CHECK(error->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+        EXPECT_TRUE(error->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     }
     const auto repeated_failure = invalid.decode("NEXT", 1);
-    RUVIA_CHECK(repeated_failure.failure() != nullptr);
-    RUVIA_CHECK_EQ(repeated_failure.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(repeated_failure.failure() != nullptr);
+    EXPECT_EQ(repeated_failure.consumed_bytes(), std::size_t{0});
     if (const auto* error = repeated_failure.failure()) {
-        RUVIA_CHECK(error->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+        EXPECT_TRUE(error->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     }
 }
 
-RUVIA_TEST(http1_response_body_decoder_requires_nonempty_scratch) {
+TEST(Ruvia, http1_response_body_decoder_requires_nonempty_scratch) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     bool rejected = false;
@@ -789,10 +791,10 @@ RUVIA_TEST(http1_response_body_decoder_requires_nonempty_scratch) {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }
 
-RUVIA_TEST(response_body_decode_continues_draining_after_framing_eof) {
+TEST(Ruvia, response_body_decode_continues_draining_after_framing_eof) {
     const std::string plain(128, 'a');
     for (const std::string_view framing : {std::string_view("fixed"), std::string_view("chunked"),
              std::string_view("gzip"), std::string_view("deflate"),
@@ -818,9 +820,9 @@ RUVIA_TEST(response_body_decode_continues_draining_after_framing_eof) {
         auto result = decoder.finish_input(pending, scratch);
         bool complete = false;
         for (std::size_t step = 0; step < plain.size() * 2 + 16; ++step) {
-            RUVIA_CHECK(result.need_input() == nullptr);
-            RUVIA_CHECK(result.protocol_failure() == nullptr);
-            RUVIA_CHECK(result.decoder_failure() == nullptr);
+            EXPECT_TRUE(result.need_input() == nullptr);
+            EXPECT_TRUE(result.protocol_failure() == nullptr);
+            EXPECT_TRUE(result.decoder_failure() == nullptr);
             if (const auto* output = result.output()) {
                 decoded.append(output->bytes());
             }
@@ -834,31 +836,31 @@ RUVIA_TEST(response_body_decode_continues_draining_after_framing_eof) {
             }
             result = decoder.decode(pending, scratch);
         }
-        RUVIA_CHECK(complete);
-        RUVIA_CHECK_EQ(decoded, plain);
-        RUVIA_CHECK_EQ(pending, fixed || chunk_framed ? "NEXT" : "");
+        EXPECT_TRUE(complete);
+        EXPECT_EQ(decoded, plain);
+        EXPECT_EQ(pending, fixed || chunk_framed ? "NEXT" : "");
         if (complete) {
             const auto replay = decoder.decode("NEXT", scratch);
-            RUVIA_CHECK(replay.complete() != nullptr);
-            RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
+            EXPECT_TRUE(replay.complete() != nullptr);
+            EXPECT_EQ(replay.consumed_bytes(), std::size_t{0});
         }
     }
 }
 
-RUVIA_TEST(response_body_decode_preserves_incomplete_eof_after_output) {
+TEST(Ruvia, response_body_decode_preserves_incomplete_eof_after_output) {
     const auto head = http_client_response_test::parse_head(
         "GET", "HTTP/1.1 200 OK\r\nContent-Length: 2");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 1> scratch{};
     const auto output = decoder.finish_input("a", scratch);
-    RUVIA_CHECK(output.output() != nullptr);
-    RUVIA_CHECK_EQ(output.consumed_bytes(), std::size_t{1});
+    EXPECT_TRUE(output.output() != nullptr);
+    EXPECT_EQ(output.consumed_bytes(), std::size_t{1});
     const auto failure = decoder.decode({}, scratch);
-    RUVIA_CHECK(failure.protocol_failure() != nullptr);
+    EXPECT_TRUE(failure.protocol_failure() != nullptr);
     if (const auto* error = failure.protocol_failure()) {
-        RUVIA_CHECK(error->error() == ruvia::http1_client_response_body_error::incomplete_body);
+        EXPECT_TRUE(error->error() == ruvia::http1_client_response_body_error::incomplete_body);
     }
     const auto replay = decoder.finish_input("NEXT", scratch);
-    RUVIA_CHECK(replay.protocol_failure() != nullptr);
-    RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
+    EXPECT_TRUE(replay.protocol_failure() != nullptr);
+    EXPECT_EQ(replay.consumed_bytes(), std::size_t{0});
 }

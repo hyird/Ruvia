@@ -1,10 +1,10 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <memory_resource>
 #include <string>
 
 #include "ruvia/http/http_pmr_string.h"
-
-#include "test_harness.h"
 
 namespace {
 
@@ -31,23 +31,23 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(pmr_string_clear_returns_large_storage_and_retains_small_storage) {
+TEST(Ruvia, pmr_string_clear_returns_large_storage_and_retains_small_storage) {
     counting_resource resource;
     {
         std::pmr::string buffer(&resource);
         const auto empty_bytes = resource.live_bytes_;
         buffer.resize(8192);
-        RUVIA_CHECK_EQ(buffer.size(), std::size_t{8192});
-        RUVIA_CHECK(resource.live_bytes_ > empty_bytes);
+        EXPECT_EQ(buffer.size(), std::size_t{8192});
+        EXPECT_TRUE(resource.live_bytes_ > empty_bytes);
         ruvia::http_clear_pmr_string_retaining_small(buffer);
-        RUVIA_CHECK(buffer.empty());
-        RUVIA_CHECK_EQ(resource.live_bytes_, empty_bytes);
+        EXPECT_TRUE(buffer.empty());
+        EXPECT_EQ(resource.live_bytes_, empty_bytes);
 
         buffer.resize(32);
         const auto retained = resource.live_bytes_;
-        RUVIA_CHECK(retained > empty_bytes);
+        EXPECT_TRUE(retained > empty_bytes);
         ruvia::http_clear_pmr_string_retaining_small(buffer);
-        RUVIA_CHECK_EQ(resource.live_bytes_, retained);
+        EXPECT_EQ(resource.live_bytes_, retained);
     }
-    RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
 }

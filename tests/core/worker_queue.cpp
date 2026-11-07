@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -9,9 +11,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_cancellation.h"
 
-#include "test_harness.h"
-
-RUVIA_TEST(worker_queue_yields_to_io_context_between_batches) {
+TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
     struct reposting_task final {
         const ruvia::worker_handle* worker_;
         ruvia::event_loop_attachment* attachment_;
@@ -31,15 +31,15 @@ RUVIA_TEST(worker_queue_yields_to_io_context_between_batches) {
     const auto worker_value = attachment.loop().handle();
     bool foreign_ran{};
     unsigned runs{};
-    RUVIA_CHECK(worker_value.post(reposting_task{&worker_value, &attachment, &foreign_ran, &runs}).accepted());
+    EXPECT_TRUE(worker_value.post(reposting_task{&worker_value, &attachment, &foreign_ran, &runs}).accepted());
     asio::post(context, [&foreign_ran] { foreign_ran = true; });
     attachment.run();
     // The repost lands behind the plain handler queued after the first batch.
-    RUVIA_CHECK(foreign_ran);
-    RUVIA_CHECK_EQ(runs, 2u);
+    EXPECT_TRUE(foreign_ran);
+    EXPECT_EQ(runs, 2u);
 }
 
-RUVIA_TEST(worker_cancellation_registration_retires_before_slot_reuse) {
+TEST(Ruvia, worker_cancellation_registration_retires_before_slot_reuse) {
     struct owner final {
         std::uint64_t identity_{};
         unsigned accepted_{};
@@ -62,7 +62,7 @@ RUVIA_TEST(worker_cancellation_registration_retires_before_slot_reuse) {
     ruvia::stop_source new_stop;
     std::uint64_t old_id{};
     bool identity_cleared{};
-    RUVIA_CHECK(worker_value.post([&] {
+    EXPECT_TRUE(worker_value.post([&] {
                                 current.emplace(target, state.identity_);
                                 old_id = current->id();
                                 current->arm(old_stop.token());
@@ -78,11 +78,11 @@ RUVIA_TEST(worker_cancellation_registration_retires_before_slot_reuse) {
     // Drain the ready handlers, including the queued foreign cancellation,
     // while the loop stays attached for the second turn.
     context.poll();
-    RUVIA_CHECK(identity_cleared);
-    RUVIA_CHECK(state.identity_ != 0 && state.identity_ != old_id);
-    RUVIA_CHECK_EQ(state.accepted_, 0u);
-    RUVIA_CHECK_EQ(state.stale_, 1u);
-    RUVIA_CHECK(worker_value.post([&] {
+    EXPECT_TRUE(identity_cleared);
+    EXPECT_TRUE(state.identity_ != 0 && state.identity_ != old_id);
+    EXPECT_EQ(state.accepted_, 0u);
+    EXPECT_EQ(state.stale_, 1u);
+    EXPECT_TRUE(worker_value.post([&] {
                                 new_stop.request_stop();
                                 current.reset();
                                 target->detach(state);
@@ -90,11 +90,11 @@ RUVIA_TEST(worker_cancellation_registration_retires_before_slot_reuse) {
                             })
             .accepted());
     attachment.run();
-    RUVIA_CHECK_EQ(state.accepted_, 1u);
-    RUVIA_CHECK_EQ(state.identity_, std::uint64_t{0});
+    EXPECT_EQ(state.accepted_, 1u);
+    EXPECT_EQ(state.identity_, std::uint64_t{0});
 }
 
-RUVIA_TEST(worker_cancellation_registration_handles_precancel_and_exception_unwind) {
+TEST(Ruvia, worker_cancellation_registration_handles_precancel_and_exception_unwind) {
     struct owner final {
         std::uint64_t identity_{};
         unsigned cancelled_{};
@@ -111,7 +111,7 @@ RUVIA_TEST(worker_cancellation_registration_handles_precancel_and_exception_unwi
     ruvia::stop_source source;
     source.request_stop();
     bool unwound = false;
-    RUVIA_CHECK(worker_value.post([&] {
+    EXPECT_TRUE(worker_value.post([&] {
                                 try {
                                     ruvia::worker_cancellation_registration registration(target, state.identity_);
                                     registration.arm(source.token());
@@ -124,6 +124,6 @@ RUVIA_TEST(worker_cancellation_registration_handles_precancel_and_exception_unwi
                             })
             .accepted());
     attachment.run();
-    RUVIA_CHECK(unwound);
-    RUVIA_CHECK_EQ(state.cancelled_, 1u);
+    EXPECT_TRUE(unwound);
+    EXPECT_EQ(state.cancelled_, 1u);
 }

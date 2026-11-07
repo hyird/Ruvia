@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -25,7 +27,6 @@
 #include "ruvia/web/websocket.h"
 
 #include "tcp_port_reservation.h"
-#include "test_harness.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -378,7 +379,7 @@ bool tls_websocket_truncation_ends_read(
 
 using namespace startup_test;
 
-RUVIA_TEST(app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
+TEST(Ruvia, app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
     auto& app = ruvia::app();
     for (const auto cidr : {"127.0.0.0/8", "::ffff:127.0.0.0/104", "::ffff:127.0.0.1/128", "::ffff:127.0.0.0/96", "::ffff:127.0.0.0/0", "2001:db8::/32"}) {
         bool accepted = true;
@@ -387,7 +388,7 @@ RUVIA_TEST(app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
         } catch (const std::invalid_argument&) {
             accepted = false;
         }
-        RUVIA_CHECK(accepted);
+        EXPECT_TRUE(accepted);
     }
     for (const auto cidr : {"127.0.0.0/33", "::ffff:127.0.0.0/129", "::ffff:127.0.0.0/", "::ffff:127.0.0.0/-1"}) {
         bool rejected = false;
@@ -396,7 +397,7 @@ RUVIA_TEST(app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
     }
     app.trusted_proxies(nullptr);
 }
@@ -404,7 +405,7 @@ RUVIA_TEST(app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
 // A CIDR without '/' is exactly one IP literal, so trusted proxy configuration
 // exposes the strict literal parser: complete IPv4/IPv6 text only, no ports,
 // brackets, padding, partial IPv4 or invalid IPv6 zones.
-RUVIA_TEST(app_trusted_proxy_config_accepts_only_strict_ip_literals) {
+TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
     auto& app = ruvia::app();
     for (const std::string_view literal : {"192.0.2.1", "0.0.0.0", "255.255.255.255",
              "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1%12", "::ffff:192.0.2.1"}) {
@@ -414,7 +415,7 @@ RUVIA_TEST(app_trusted_proxy_config_accepts_only_strict_ip_literals) {
         } catch (const std::invalid_argument&) {
             accepted = false;
         }
-        RUVIA_CHECK(accepted);
+        EXPECT_TRUE(accepted);
     }
     for (const std::string_view literal : {std::string_view{}, std::string_view("not an address"),
              std::string_view("192.0.2.1\0suffix", 16), std::string_view("192.0.2.1suffix"),
@@ -434,14 +435,14 @@ RUVIA_TEST(app_trusted_proxy_config_accepts_only_strict_ip_literals) {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
     }
     app.trusted_proxies(nullptr);
 }
 
 // application is a process singleton with sealed controller registration. This functional
 // test runs in its own executable and exercises retries against the same config.
-RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
+TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
     ruvia::test::tls_identity identity("localhost");
     const auto private_key = identity.ca_file_.parent_path() / "key.pem";
     {
@@ -473,7 +474,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     } catch (const std::invalid_argument&) {
         duplicate_rejected = true;
     }
-    RUVIA_CHECK(duplicate_rejected);
+    EXPECT_TRUE(duplicate_rejected);
 
     for (const bool occupy_http : {true, false}) {
         asio::io_context io;
@@ -506,21 +507,21 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             }
         });
         const bool returned = failed_run.wait_for(3s) == std::future_status::ready;
-        RUVIA_CHECK(returned);
+        EXPECT_TRUE(returned);
         if (!returned) {
             app.stop();
         }
-        RUVIA_CHECK(failed_run.get() != nullptr);
-        RUVIA_CHECK(app.workers().empty());
-        RUVIA_CHECK_EQ(state_value->live_workers_.load(), 0U);
-        RUVIA_CHECK_EQ(state_value->requests_.load(), 0U);
-        RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_TRUE(failed_run.get() != nullptr);
+        EXPECT_TRUE(app.workers().empty());
+        EXPECT_EQ(state_value->live_workers_.load(), 0U);
+        EXPECT_EQ(state_value->requests_.load(), 0U);
+        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
         // Failure of either service must also retire the other service's
         // listeners, including ones prepared by a different worker.
         asio::ip::tcp::socket socket(io);
         asio::error_code error;
         socket.connect(available_endpoint, error);
-        RUVIA_CHECK(error == asio::error::connection_refused);
+        EXPECT_TRUE(error == asio::error::connection_refused);
     }
 
     app.on_start([state_value, &app] {
@@ -599,7 +600,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         app_run run(app, *state_value);
         const auto owner_thread = run.id();
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
-        RUVIA_CHECK(entered);
+        EXPECT_TRUE(entered);
         if (!entered) {
             // Join before inspecting an exception produced by the startup thread.
             run.stop_and_join();
@@ -613,19 +614,19 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             // failure: run() returns normally and leaves no partial service.
             std::this_thread::sleep_for(25ms);
             // No worker handle escapes before every worker is ready.
-            RUVIA_CHECK(app.workers().empty());
+            EXPECT_TRUE(app.workers().empty());
             app.stop();
             state_value->release_hook_.release();
             run.join();
-            RUVIA_CHECK(run.failure_ == nullptr);
-            RUVIA_CHECK_EQ(state_value->stop_hooks_, stop_hooks + 1);
-            RUVIA_CHECK_EQ(state_value->live_workers_.load(), 0U);
-            RUVIA_CHECK_EQ(state_value->destroyed_workers_.load(), destroyed_workers + 2);
-            RUVIA_CHECK_EQ(state_value->second_hooks_, second_hooks);
-            RUVIA_CHECK_EQ(state_value->requests_.load(), 0U);
+            EXPECT_TRUE(run.failure_ == nullptr);
+            EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 1);
+            EXPECT_EQ(state_value->live_workers_.load(), 0U);
+            EXPECT_EQ(state_value->destroyed_workers_.load(), destroyed_workers + 2);
+            EXPECT_EQ(state_value->second_hooks_, second_hooks);
+            EXPECT_EQ(state_value->requests_.load(), 0U);
             continue;
         }
-        RUVIA_CHECK(state_value->start_thread_ == owner_thread);
+        EXPECT_TRUE(state_value->start_thread_ == owner_thread);
 
         // A completed TCP handshake can queue in the kernel backlog, but neither
         // an accept nor a request dispatch is allowed before hooks finish.
@@ -637,10 +638,10 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         std::this_thread::sleep_for(25ms);
         std::array<char, 256> premature;
         asio::error_code error;
-        RUVIA_CHECK_EQ(socket.read_some(asio::buffer(premature), error), std::size_t{0});
-        RUVIA_CHECK(error == asio::error::would_block || error == asio::error::try_again);
-        RUVIA_CHECK_EQ(state_value->requests_.load(), 0U);
-        RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(socket.read_some(asio::buffer(premature), error), std::size_t{0});
+        EXPECT_TRUE(error == asio::error::would_block || error == asio::error::try_again);
+        EXPECT_EQ(state_value->requests_.load(), 0U);
+        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
         auto escaped_worker = app.workers().front();
         if (outcome == startup_outcome::stop_from_caller) {
             app.stop();
@@ -648,7 +649,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             state_value->release_hook_.release();
         }
         if (outcome == startup_outcome::serve) {
-            RUVIA_CHECK(read_response(socket).find("initialized") != std::string::npos);
+            EXPECT_TRUE(read_response(socket).find("initialized") != std::string::npos);
             // A final response lingers only until the peer ends its input
             // (RFC 9112 §9.6); the peer's close then releases server capacity.
             socket.close();
@@ -657,61 +658,61 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
                    std::chrono::steady_clock::now() < close_deadline) {
                 std::this_thread::sleep_for(1ms);
             }
-            RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint, "", "127.0.0.1:direct:http"));
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+            EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "", "127.0.0.1:direct:http"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "X-Forwarded-For: 198.51.100.7, 127.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
                 "198.51.100.7:proxy:https"));
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "X-Forwarded-For: 192.0.2.1, 128.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
                 "128.3.4.5:proxy:http"));
             // RFC 7239: the rightmost untrusted element is the client hop even
             // when it names no address; a client-written `for` left of it is
             // never believed, and the trusted hop's proto still applies.
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "Forwarded: for=203.0.113.9\r\nForwarded: proto=https\r\n", "127.0.0.1:proxy:https"));
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "Forwarded: for=203.0.113.9, for=unknown;proto=https\r\n", "127.0.0.1:proxy:https"));
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "Forwarded: for=203.0.113.9;proto=http, for=_hidden;proto=https, for=127.0.0.2\r\n",
                 "127.0.0.2:proxy:https"));
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "Forwarded: for=192.0.2.1;proto=https, for=\"[2001:db8::1]:4711\";proto=http, for=127.0.0.2\r\n",
                 "2001:db8::1:proxy:http"));
-            RUVIA_CHECK(forwarded_connection_matches(io, endpoint,
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "X-Forwarded-For: 198.51.100.7, unknown, 127.3.4.5\r\nX-Forwarded-Proto: http, https, http\r\n",
                 "127.3.4.5:proxy:https"));
             // Optional client-certificate verification must not turn session
             // resumption into a fatal handshake error, and every resumption
             // succeeds whichever of the two workers accepts it.
-            RUVIA_CHECK(resume_tls_session(io, tls_endpoint));
-            RUVIA_CHECK(tls_close_sends_close_notify(io, tls_endpoint));
-            RUVIA_CHECK(tls_keep_alive_serves_decrypted_and_later_requests(io, tls_endpoint));
-            RUVIA_CHECK(rejected_expect_upload_closes_without_body(io, endpoint));
-            RUVIA_CHECK(tls_websocket_truncation_ends_read(io, tls_endpoint, *state_value));
+            EXPECT_TRUE(resume_tls_session(io, tls_endpoint));
+            EXPECT_TRUE(tls_close_sends_close_notify(io, tls_endpoint));
+            EXPECT_TRUE(tls_keep_alive_serves_decrypted_and_later_requests(io, tls_endpoint));
+            EXPECT_TRUE(rejected_expect_upload_closes_without_body(io, endpoint));
+            EXPECT_TRUE(tls_websocket_truncation_ends_read(io, tls_endpoint, *state_value));
             app.stop();
         }
         run.join();
-        RUVIA_CHECK(state_value->stop_thread_ == owner_thread);
-        RUVIA_CHECK_EQ(state_value->stop_hooks_, stop_hooks + 1);
-        RUVIA_CHECK_EQ(state_value->live_workers_.load(), 0U);
-        RUVIA_CHECK_EQ(state_value->destroyed_workers_.load(), destroyed_workers + 2);
-        RUVIA_CHECK(!escaped_worker.valid());
-        RUVIA_CHECK(!escaped_worker.accepting());
-        RUVIA_CHECK_EQ(state_value->second_hooks_, second_hooks + (outcome == startup_outcome::serve ? 1 : 0));
-        RUVIA_CHECK_EQ(state_value->requests_.load(), outcome == startup_outcome::serve ? 1U : 0U);
-        RUVIA_CHECK_EQ(state_value->startup_job_cancelled_.load(), outcome == startup_outcome::stop_from_caller);
+        EXPECT_TRUE(state_value->stop_thread_ == owner_thread);
+        EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 1);
+        EXPECT_EQ(state_value->live_workers_.load(), 0U);
+        EXPECT_EQ(state_value->destroyed_workers_.load(), destroyed_workers + 2);
+        EXPECT_TRUE(!escaped_worker.valid());
+        EXPECT_TRUE(!escaped_worker.accepting());
+        EXPECT_EQ(state_value->second_hooks_, second_hooks + (outcome == startup_outcome::serve ? 1 : 0));
+        EXPECT_EQ(state_value->requests_.load(), outcome == startup_outcome::serve ? 1U : 0U);
+        EXPECT_EQ(state_value->startup_job_cancelled_.load(), outcome == startup_outcome::stop_from_caller);
         if (outcome == startup_outcome::fail) {
-            RUVIA_CHECK(run.failure_ != nullptr);
+            EXPECT_TRUE(run.failure_ != nullptr);
             if (run.failure_) {
                 try {
                     std::rethrow_exception(run.failure_);
                 } catch (const std::runtime_error& failure) {
-                    RUVIA_CHECK_EQ(std::string(failure.what()), std::string("startup hook failed"));
+                    EXPECT_EQ(std::string(failure.what()), std::string("startup hook failed"));
                 }
             }
         } else {
-            RUVIA_CHECK(run.failure_ == nullptr);
+            EXPECT_TRUE(run.failure_ == nullptr);
         }
     }
 
@@ -728,19 +729,19 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         app.stop();
         auto latched = std::async(std::launch::async, [&app] { app.run(); });
         const bool returned = latched.wait_for(3s) == std::future_status::ready;
-        RUVIA_CHECK(returned);
+        EXPECT_TRUE(returned);
         if (!returned) {
             app.stop();
             state_value->release_hook_.release();
         }
         latched.get();
-        RUVIA_CHECK_EQ(state_value->second_hooks_, second_hooks);
-        RUVIA_CHECK_EQ(state_value->stop_hooks_, stop_hooks + 1);
-        RUVIA_CHECK_EQ(state_value->live_workers_.load(), 0U);
+        EXPECT_EQ(state_value->second_hooks_, second_hooks);
+        EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 1);
+        EXPECT_EQ(state_value->live_workers_.load(), 0U);
 
         app_run run(app, *state_value);
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
-        RUVIA_CHECK(entered);
+        EXPECT_TRUE(entered);
         if (!entered) {
             run.stop_and_join();
             if (run.failure_) {
@@ -751,9 +752,9 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         app.stop();
         state_value->release_hook_.release();
         run.join();
-        RUVIA_CHECK(run.failure_ == nullptr);
-        RUVIA_CHECK_EQ(state_value->second_hooks_, second_hooks);
-        RUVIA_CHECK_EQ(state_value->stop_hooks_, stop_hooks + 2);
+        EXPECT_TRUE(run.failure_ == nullptr);
+        EXPECT_EQ(state_value->second_hooks_, second_hooks);
+        EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 2);
     }
     app.trusted_proxies(nullptr);
 }

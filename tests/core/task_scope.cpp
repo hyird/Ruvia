@@ -18,6 +18,8 @@
 #include <unistd.h>
 #endif
 
+#include <gtest/gtest.h>
+
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/event_loop.h"
@@ -530,16 +532,14 @@ bool verify_additional_child_failures_are_reported() {
 
 }  // namespace ruvia::test::task_scope_tests
 
-int main() {
+TEST(Ruvia, TaskScopeLifecycle) {
     ruvia::stop_token retained_token;
     {
         ruvia::stop_source source;
         retained_token = source.token();
         source.request_stop();
     }
-    if (!retained_token.stop_requested()) {
-        return 1;
-    }
+    EXPECT_TRUE(retained_token.stop_requested());
 
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
@@ -560,8 +560,10 @@ int main() {
 #ifndef _WIN32
     additional_failures_reported = ruvia::test::task_scope_tests::verify_additional_child_failures_are_reported();
 #endif
-    return success && reentrant_spawn_safe && reentrant_stop_join_safe &&
-                   reentrant_failed_spawn_safe && reentrant_deallocation_safe && additional_failures_reported
-               ? 0
-               : 1;
+    EXPECT_TRUE(success);
+    EXPECT_TRUE(reentrant_spawn_safe);
+    EXPECT_TRUE(reentrant_stop_join_safe);
+    EXPECT_TRUE(reentrant_failed_spawn_safe);
+    EXPECT_TRUE(reentrant_deallocation_safe);
+    EXPECT_TRUE(additional_failures_reported);
 }

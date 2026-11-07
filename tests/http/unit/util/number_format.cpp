@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -7,23 +9,20 @@
 
 #include "ruvia/http/http_number_format.h"
 
-#include "test_harness.h"
-
-RUVIA_TEST(number_format_decimal_width_and_pmr_output) {
-    RUVIA_CHECK_EQ(ruvia::http_unsigned_decimal_size(0), std::size_t{1});
-    RUVIA_CHECK_EQ(ruvia::http_unsigned_decimal_size(999), std::size_t{3});
-    RUVIA_CHECK_EQ(ruvia::http_unsigned_decimal_size((std::numeric_limits<std::uint64_t>::max)()),
-        std::size_t{20});
+TEST(Ruvia, number_format_decimal_width_and_pmr_output) {
+    EXPECT_EQ(ruvia::http_unsigned_decimal_size(0), std::size_t{1});
+    EXPECT_EQ(ruvia::http_unsigned_decimal_size(999), std::size_t{3});
+    EXPECT_EQ(ruvia::http_unsigned_decimal_size((std::numeric_limits<std::uint64_t>::max)()), std::size_t{20});
 
     std::pmr::string output;
     ruvia::http_append_formatted_number(output, std::int64_t{-42}, "format failure");
     ruvia::http_append_formatted_number(output, std::uint64_t{123}, "format failure");
-    RUVIA_CHECK_EQ(output, "-42123");
+    EXPECT_EQ(output, "-42123");
     ruvia::http_append_formatted_finite_number(output, 1.5, "nonfinite", "format failure");
-    RUVIA_CHECK_EQ(output, "-421231.5");
+    EXPECT_EQ(output, "-421231.5");
 }
 
-RUVIA_TEST(number_format_rejects_nonfinite_without_modifying_output) {
+TEST(Ruvia, number_format_rejects_nonfinite_without_modifying_output) {
     std::pmr::string output("prefix");
     bool rejected = false;
     try {
@@ -32,15 +31,15 @@ RUVIA_TEST(number_format_rejects_nonfinite_without_modifying_output) {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(output, "prefix");
+    EXPECT_TRUE(rejected);
+    EXPECT_EQ(output, "prefix");
 }
 
-RUVIA_TEST(number_format_signed_extremes) {
+TEST(Ruvia, number_format_signed_extremes) {
     std::pmr::string output;
     ruvia::http_append_signed(output, (std::numeric_limits<std::int64_t>::min)());
-    RUVIA_CHECK_EQ(output, "-9223372036854775808");
+    EXPECT_EQ(output, "-9223372036854775808");
     output.clear();
     ruvia::http_append_signed(output, (std::numeric_limits<std::int64_t>::max)());
-    RUVIA_CHECK_EQ(output, "9223372036854775807");
+    EXPECT_EQ(output, "9223372036854775807");
 }

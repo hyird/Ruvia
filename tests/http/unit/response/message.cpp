@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <cstddef>
 #include <initializer_list>
@@ -14,7 +16,6 @@
 #include "ruvia/http/http_response.h"
 
 #include "failing_memory_resource.h"
-#include "test_harness.h"
 
 namespace {
 
@@ -37,48 +38,48 @@ bool throws_invalid(fn_type&& fn) {
 
 }  // namespace
 
-RUVIA_TEST(response_header_append_preserves_multiplicity_across_table_spill) {
+TEST(Ruvia, response_header_append_preserves_multiplicity_across_table_spill) {
     http_response response;
     response.header("X-Repeated", "first");
     for (int i = 0; i < 7; ++i) {
         response.header("X-Filler-" + std::to_string(i), "value");
     }
     response.header("x-repeated", "second", {.mode_ = ruvia::http_response_header_mode::append});
-    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{9});
+    EXPECT_EQ(response.headers().size(), std::size_t{9});
     std::size_t marked = 0;
     for (const auto& header : response.headers()) {
         if (ruvia::http_ascii_equals_ignore_case(header.name(), "X-Repeated")) {
             ++marked;
         }
     }
-    RUVIA_CHECK_EQ(marked, std::size_t{2});
+    EXPECT_EQ(marked, std::size_t{2});
     response.header("X-Repeated", "replacement");
-    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{8});
-    RUVIA_CHECK_EQ(response.header("X-Repeated"), std::string_view("replacement"));
+    EXPECT_EQ(response.headers().size(), std::size_t{8});
+    EXPECT_EQ(response.header("X-Repeated"), std::string_view("replacement"));
 }
 
-RUVIA_TEST(response_status_is_version_neutral_code_only) {
+TEST(Ruvia, response_status_is_version_neutral_code_only) {
     auto response = make_response();
-    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
     response.status(ruvia::http_status::not_found);
-    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::not_found);
+    EXPECT_EQ(response.status(), ruvia::http_status::not_found);
     response.status(ruvia::http_status_code::from_value(599));
-    RUVIA_CHECK_EQ(response.status(), ruvia::http_status_code::from_value(599));
+    EXPECT_EQ(response.status(), ruvia::http_status_code::from_value(599));
     response.status(ruvia::http_status_code::from_value(299));
-    RUVIA_CHECK_EQ(response.status(), ruvia::http_status_code::from_value(299));
+    EXPECT_EQ(response.status(), ruvia::http_status_code::from_value(299));
 }
 
-RUVIA_TEST(response_header_distinguishes_missing_from_present_empty) {
+TEST(Ruvia, response_header_distinguishes_missing_from_present_empty) {
     auto response = make_response();
-    RUVIA_CHECK(!response.header("X-Empty").has_value());
+    EXPECT_TRUE(!response.header("X-Empty").has_value());
 
     response.header("X-Empty", "");
     const auto present_empty = response.header("x-empty");
-    RUVIA_CHECK(present_empty.has_value());
-    RUVIA_CHECK(present_empty.value_or("missing").empty());
+    EXPECT_TRUE(present_empty.has_value());
+    EXPECT_TRUE(present_empty.value_or("missing").empty());
 }
 
-RUVIA_TEST(response_move_assignment_transfers_body) {
+TEST(Ruvia, response_move_assignment_transfers_body) {
     std::pmr::monotonic_buffer_resource source_resource;
     std::pmr::monotonic_buffer_resource target_resource;
     http_response source_value(&source_resource);
@@ -89,47 +90,46 @@ RUVIA_TEST(response_move_assignment_transfers_body) {
 
     target = std::move(source_value);
 
-    RUVIA_CHECK_EQ(target.body_bytes(), std::string(4096, 's'));
+    EXPECT_EQ(target.body_bytes(), std::string(4096, 's'));
 }
 
-RUVIA_TEST(response_status_code_range_validated) {
+TEST(Ruvia, response_status_code_range_validated) {
     auto response = make_response();
-    RUVIA_CHECK(throws_invalid([&] { response.status(ruvia::http_status::continue_value); }));
-    RUVIA_CHECK(throws_invalid([&] { response.status(ruvia::http_status_code::from_value(199)); }));
-    RUVIA_CHECK(
-        !throws_invalid([&] { response.status(ruvia::http_status::ok); }));  // lower boundary
-    RUVIA_CHECK(!throws_invalid(
+    EXPECT_TRUE(throws_invalid([&] { response.status(ruvia::http_status::continue_value); }));
+    EXPECT_TRUE(throws_invalid([&] { response.status(ruvia::http_status_code::from_value(199)); }));
+    EXPECT_TRUE(!throws_invalid([&] { response.status(ruvia::http_status::ok); }));  // lower boundary
+    EXPECT_TRUE(!throws_invalid(
         [&] { response.status(ruvia::http_status_code::from_value(599)); }));  // upper boundary
 }
 
-RUVIA_TEST(response_switching_protocols_requires_a_dedicated_driver) {
+TEST(Ruvia, response_switching_protocols_requires_a_dedicated_driver) {
     auto response = make_response();
-    RUVIA_CHECK(throws_invalid([&] { response.status(ruvia::http_status::switching_protocols); }));
-    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
+    EXPECT_TRUE(throws_invalid([&] { response.status(ruvia::http_status::switching_protocols); }));
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
 }
 
-RUVIA_TEST(interim_response_head_owns_the_non_switching_1xx_status_space) {
+TEST(Ruvia, interim_response_head_owns_the_non_switching_1xx_status_space) {
     const ruvia::http_header_view headers[] = {
         {"Link", "</style.css>; rel=preload"},
     };
     const ruvia::http_interim_response_head early_hints(ruvia::http_status::early_hints, headers);
-    RUVIA_CHECK_EQ(early_hints.status(), ruvia::http_status::early_hints);
-    RUVIA_CHECK_EQ(early_hints.headers().size(), std::size_t{1});
-    RUVIA_CHECK_EQ(early_hints.headers()[0].name(), std::string_view("Link"));
+    EXPECT_EQ(early_hints.status(), ruvia::http_status::early_hints);
+    EXPECT_EQ(early_hints.headers().size(), std::size_t{1});
+    EXPECT_EQ(early_hints.headers()[0].name(), std::string_view("Link"));
 
     for (const ruvia::http_status_code status : {ruvia::http_status::switching_protocols,
              ruvia::http_status::ok, ruvia::http_status_code::from_value(599)}) {
-        RUVIA_CHECK(throws_invalid([&] { (void)ruvia::http_interim_response_head(status); }));
+        EXPECT_TRUE(throws_invalid([&] { (void)ruvia::http_interim_response_head(status); }));
     }
 }
 
-RUVIA_TEST(response_header_replace_append_and_remove) {
+TEST(Ruvia, response_header_replace_append_and_remove) {
     auto response = make_response();
 
     // A plain set replaces: the latest value wins as a single header.
     response.header("X-Test", "first");
     response.header("X-Test", "second");
-    RUVIA_CHECK_EQ(response.header("X-Test"), std::string_view("second"));
+    EXPECT_EQ(response.header("X-Test"), std::string_view("second"));
 
     // append emits an additional header line (needed for multi-valued fields
     // like Set-Cookie).
@@ -142,23 +142,23 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
             ++set_cookie_count;
         }
     }
-    RUVIA_CHECK_EQ(set_cookie_count, std::size_t{2});
+    EXPECT_EQ(set_cookie_count, std::size_t{2});
 
     // Passing nullopt removes the header entirely.
     response.remove_header("X-Test");
-    RUVIA_CHECK(!response.header("X-Test").has_value());
+    EXPECT_TRUE(!response.header("X-Test").has_value());
 }
 
-RUVIA_TEST(response_header_rejects_invalid_write_mode) {
+TEST(Ruvia, response_header_rejects_invalid_write_mode) {
     auto response = make_response();
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("X-Test", "value",
             http_response_header_options{.mode_ = static_cast<ruvia::http_response_header_mode>(255)});
     }));
-    RUVIA_CHECK(response.headers().empty());
+    EXPECT_TRUE(response.headers().empty());
 }
 
-RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
+TEST(Ruvia, response_set_cookie_append_replaces_same_wire_name) {
     auto response = make_response();
     response.header("Set-Cookie", "session=old; Path=/");
     response.header("Set-Cookie", "theme=dark; Path=/",
@@ -183,14 +183,14 @@ RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
         has_theme = has_theme || header.value() == "theme=dark; Path=/";
         has_upper = has_upper || header.value() == "Session=upper; Path=/";
     }
-    RUVIA_CHECK_EQ(count, std::size_t{3});
-    RUVIA_CHECK(!has_old);
-    RUVIA_CHECK(has_new);
-    RUVIA_CHECK(has_theme);
-    RUVIA_CHECK(has_upper);  // cookie-name is case-sensitive
+    EXPECT_EQ(count, std::size_t{3});
+    EXPECT_TRUE(!has_old);
+    EXPECT_TRUE(has_new);
+    EXPECT_TRUE(has_theme);
+    EXPECT_TRUE(has_upper);  // cookie-name is case-sensitive
 }
 
-RUVIA_TEST(response_set_cookie_append_preserves_same_name_different_scope) {
+TEST(Ruvia, response_set_cookie_append_preserves_same_name_different_scope) {
     auto response = make_response();
     response.header("Set-Cookie", "session=root-old; Path=/");
     response.header("Set-Cookie", "session=admin; Path=/admin",
@@ -221,15 +221,15 @@ RUVIA_TEST(response_set_cookie_append_preserves_same_name_different_scope) {
         has_domain_new =
             has_domain_new || header.value() == "session=domain-new; Domain=example.com; Path=/";
     }
-    RUVIA_CHECK_EQ(count, std::size_t{3});
-    RUVIA_CHECK(!has_root_old);
-    RUVIA_CHECK(has_root_new);
-    RUVIA_CHECK(has_admin);
-    RUVIA_CHECK(!has_domain_old);
-    RUVIA_CHECK(has_domain_new);
+    EXPECT_EQ(count, std::size_t{3});
+    EXPECT_TRUE(!has_root_old);
+    EXPECT_TRUE(has_root_new);
+    EXPECT_TRUE(has_admin);
+    EXPECT_TRUE(!has_domain_old);
+    EXPECT_TRUE(has_domain_new);
 }
 
-RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
+TEST(Ruvia, response_plain_set_collapses_prior_appended_fields) {
     auto response = make_response();
     response.header("Link", "</a>",
         http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
@@ -241,10 +241,10 @@ RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
     for (const auto& header : response.headers()) {
         if (ruvia::http_ascii_equals_ignore_case(header.name(), "Link")) {
             ++link_count;
-            RUVIA_CHECK_EQ(header.value(), std::string_view("</final>"));
+            EXPECT_EQ(header.value(), std::string_view("</final>"));
         }
     }
-    RUVIA_CHECK_EQ(link_count, std::size_t{1});
+    EXPECT_EQ(link_count, std::size_t{1});
 
     response.header("Set-Cookie", "a=1");
     response.header("Set-Cookie", "b=2",
@@ -254,13 +254,13 @@ RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
     for (const auto& header : response.headers()) {
         if (header.name() == std::string_view("Set-Cookie")) {
             ++cookie_count;
-            RUVIA_CHECK_EQ(header.value(), std::string_view("c=3"));
+            EXPECT_EQ(header.value(), std::string_view("c=3"));
         }
     }
-    RUVIA_CHECK_EQ(cookie_count, std::size_t{1});
+    EXPECT_EQ(cookie_count, std::size_t{1});
 }
 
-RUVIA_TEST(response_header_append_failure_preserves_existing_header_for_retry) {
+TEST(Ruvia, response_header_append_failure_preserves_existing_header_for_retry) {
     failing_memory_resource resource;
     http_response response(&resource);
     response.header("Link", "</a>; rel=preload");
@@ -274,14 +274,14 @@ RUVIA_TEST(response_header_append_failure_preserves_existing_header_for_retry) {
         failed = true;
     }
 
-    RUVIA_CHECK(failed);
-    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+    EXPECT_TRUE(failed);
+    EXPECT_EQ(response.headers().size(), std::size_t{1});
     response.header("Link", "</b>; rel=preload",
         http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
-    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
+    EXPECT_EQ(response.headers().size(), std::size_t{2});
 }
 
-RUVIA_TEST(response_header_removal_preserves_unrelated_fields) {
+TEST(Ruvia, response_header_removal_preserves_unrelated_fields) {
     for (const int filler_count : {0, 8}) {
         http_response response;
         response.header("Content-Type", "text/plain");
@@ -297,206 +297,203 @@ RUVIA_TEST(response_header_removal_preserves_unrelated_fields) {
         response.remove_header("content-length");
         response.remove_header("Set-Cookie");
         response.remove_header("X-Missing");
-        RUVIA_CHECK_EQ(response.headers().size(), fields.size());
+        EXPECT_EQ(response.headers().size(), fields.size());
         std::size_t index = 0;
         for (const auto& header : response.headers()) {
-            RUVIA_CHECK_EQ(header.name(), fields[index].first);
-            RUVIA_CHECK_EQ(header.value(), fields[index].second);
+            EXPECT_EQ(header.name(), fields[index].first);
+            EXPECT_EQ(header.value(), fields[index].second);
             ++index;
         }
-        RUVIA_CHECK_EQ(response.header("content-type"), std::string_view("text/plain"));
-        RUVIA_CHECK_EQ(response.header("vary"), std::string_view("Accept-Encoding"));
-        RUVIA_CHECK(!response.header("Content-Length").has_value());
+        EXPECT_EQ(response.header("content-type"), std::string_view("text/plain"));
+        EXPECT_EQ(response.header("vary"), std::string_view("Accept-Encoding"));
+        EXPECT_TRUE(!response.header("Content-Length").has_value());
 
         // Removing an appended field removes every occurrence.
         response.header("Content-Length", "");
-        RUVIA_CHECK(response.header("Content-Length").has_value());
+        EXPECT_TRUE(response.header("Content-Length").has_value());
         response.remove_header("CONTENT-LENGTH");
-        RUVIA_CHECK(!response.header("Content-Length").has_value());
+        EXPECT_TRUE(!response.header("Content-Length").has_value());
         response.remove_header("vary");
-        RUVIA_CHECK(!response.header("Vary").has_value());
-        RUVIA_CHECK_EQ(response.headers().size(), fields.size() - 2);
-        RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
+        EXPECT_TRUE(!response.header("Vary").has_value());
+        EXPECT_EQ(response.headers().size(), fields.size() - 2);
+        EXPECT_EQ(response.header("Content-Type"), std::string_view("text/plain"));
         response.remove_header("Vary");
-        RUVIA_CHECK_EQ(response.headers().size(), fields.size() - 2);
+        EXPECT_EQ(response.headers().size(), fields.size() - 2);
     }
 }
 
-RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {
+TEST(Ruvia, response_header_remove_known_header_rebuilds_index) {
     auto response = make_response();
     // Content-Type is a KNOWN header tracked by a bit in the response's header index
     // (unlike the custom X-Test above, which is unindexed). Removing it must rebuild
     // that index, or the indexed lookup fast path could still resolve to the removed
     // slot -- returning a stale value.
     response.header("Content-Type", "text/plain");
-    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
+    EXPECT_EQ(response.header("Content-Type"), std::string_view("text/plain"));
 
     response.remove_header("Content-Type");
-    RUVIA_CHECK(!response.header("Content-Type").has_value());  // gone, not a stale index hit
+    EXPECT_TRUE(!response.header("Content-Type").has_value());  // gone, not a stale index hit
 
     // Re-adding after removal replaces cleanly and leaves exactly one header line --
     // no duplicate resurrected from a stale index entry.
     response.header("Content-Type", "application/json");
-    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
+    EXPECT_EQ(response.header("Content-Type"), std::string_view("application/json"));
     std::size_t count = 0;
     for (const auto& header : response.headers()) {
         if (header.name() == std::string_view("Content-Type")) {
             ++count;
         }
     }
-    RUVIA_CHECK_EQ(count, std::size_t{1});
+    EXPECT_EQ(count, std::size_t{1});
 }
 
-RUVIA_TEST(response_header_append_rejects_body_framing_headers) {
+TEST(Ruvia, response_header_append_rejects_body_framing_headers) {
     auto response = make_response();
 
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("Content-Length", "5",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("Transfer-Encoding", "chunked",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("Location", "/next",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
-    RUVIA_CHECK(!throws_invalid([&] { response.header("Content-Length", "5"); }));
-    RUVIA_CHECK(!throws_invalid([&] {
+    EXPECT_TRUE(!throws_invalid([&] { response.header("Content-Length", "5"); }));
+    EXPECT_TRUE(!throws_invalid([&] {
         response.header("Set-Cookie", "a=1",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 }
 
-RUVIA_TEST(response_header_append_rejects_single_value_headers) {
+TEST(Ruvia, response_header_append_rejects_single_value_headers) {
     auto response = make_response();
 
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("Content-Type", "text/plain",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("ETag", "\"abc\"",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("Access-Control-Allow-Origin", "https://example.com",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("Server", "ruvia",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
-    RUVIA_CHECK(!throws_invalid([&] {
+    EXPECT_TRUE(!throws_invalid([&] {
         response.header("Vary", "Origin",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
-    RUVIA_CHECK(!throws_invalid([&] {
+    EXPECT_TRUE(!throws_invalid([&] {
         response.header("Cache-Control", "no-store",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
-    RUVIA_CHECK(!throws_invalid([&] {
+    EXPECT_TRUE(!throws_invalid([&] {
         response.header("Set-Cookie", "a=1",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 }
 
-RUVIA_TEST(response_header_rejects_invalid_content_type_syntax) {
+TEST(Ruvia, response_header_rejects_invalid_content_type_syntax) {
     auto response = make_response();
 
     for (const std::string_view invalid :
         {"not a media type", "text/", "*/plain", "text/plain; charset"}) {
-        RUVIA_CHECK(throws_invalid([&] { response.header("Content-Type", invalid); }));
+        EXPECT_TRUE(throws_invalid([&] { response.header("Content-Type", invalid); }));
     }
 
-    RUVIA_CHECK(!throws_invalid(
+    EXPECT_TRUE(!throws_invalid(
         [&] { response.header("Content-Type", "application/json; charset=utf-8"); }));
-    RUVIA_CHECK_EQ(response.header("Content-Type").value_or(std::string_view{}),
-        std::string_view("application/json; charset=utf-8"));
+    EXPECT_EQ(response.header("Content-Type").value_or(std::string_view{}), std::string_view("application/json; charset=utf-8"));
 }
 
-RUVIA_TEST(response_header_rejects_invalid_content_encoding_syntax) {
+TEST(Ruvia, response_header_rejects_invalid_content_encoding_syntax) {
     auto response = make_response();
 
     for (const std::string_view invalid :
         {"gzip;level=9", "bad coding", "gzip/deflate", "", ",gzip", "gzip,", "gzip,,br"}) {
-        RUVIA_CHECK(throws_invalid([&] { response.header("Content-Encoding", invalid); }));
+        EXPECT_TRUE(throws_invalid([&] { response.header("Content-Encoding", invalid); }));
     }
 
     for (const std::string_view valid : {"deflate", "gzip, br"}) {
-        RUVIA_CHECK(!throws_invalid([&] { response.header("Content-Encoding", valid); }));
+        EXPECT_TRUE(!throws_invalid([&] { response.header("Content-Encoding", valid); }));
     }
 }
 
-RUVIA_TEST(response_header_rejects_invalid_trailer_field_names) {
+TEST(Ruvia, response_header_rejects_invalid_trailer_field_names) {
     auto response = make_response();
 
     for (const std::string_view invalid : {"Content-Length", "X-Checksum, bad field", ","}) {
-        RUVIA_CHECK(throws_invalid([&] { response.header("Trailer", invalid); }));
-        RUVIA_CHECK(throws_invalid([&] {
+        EXPECT_TRUE(throws_invalid([&] { response.header("Trailer", invalid); }));
+        EXPECT_TRUE(throws_invalid([&] {
             response.header("Trailer", invalid,
                 http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
         }));
     }
 
-    RUVIA_CHECK(!throws_invalid([&] { response.header("Trailer", "ETag, X-Checksum"); }));
-    RUVIA_CHECK_EQ(response.header("Trailer"), std::string_view("ETag, X-Checksum"));
+    EXPECT_TRUE(!throws_invalid([&] { response.header("Trailer", "ETag, X-Checksum"); }));
+    EXPECT_EQ(response.header("Trailer"), std::string_view("ETag, X-Checksum"));
 
-    RUVIA_CHECK(!throws_invalid([&] {
+    EXPECT_TRUE(!throws_invalid([&] {
         response.header("Trailer", "Server-Timing",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 }
 
-RUVIA_TEST(response_header_rejects_name_and_value_injection) {
+TEST(Ruvia, response_header_rejects_name_and_value_injection) {
     auto response = make_response();
     // The developer-facing header setter is the header-injection chokepoint: a CR or
     // LF in the value (the classic response-splitting vector) is rejected rather than
     // written into the response head.
-    RUVIA_CHECK(
-        throws_invalid([&] { response.header("X-Foo", std::string_view("a\r\nInjected: x", 14)); }));
-    RUVIA_CHECK(throws_invalid([&] { response.header("X-Foo", std::string_view("a\nb", 3)); }));
-    RUVIA_CHECK(throws_invalid([&] { response.header("X-Foo", std::string_view("a\rb", 3)); }));
-    RUVIA_CHECK(
-        throws_invalid([&] { response.header("X-Foo", std::string_view("a\0b", 3)); }));  // NUL
+    EXPECT_TRUE(throws_invalid([&] { response.header("X-Foo", std::string_view("a\r\nInjected: x", 14)); }));
+    EXPECT_TRUE(throws_invalid([&] { response.header("X-Foo", std::string_view("a\nb", 3)); }));
+    EXPECT_TRUE(throws_invalid([&] { response.header("X-Foo", std::string_view("a\rb", 3)); }));
+    EXPECT_TRUE(throws_invalid([&] { response.header("X-Foo", std::string_view("a\0b", 3)); }));  // NUL
 
     // The name is validated too: a CR/LF or a non-token byte (space) is rejected.
-    RUVIA_CHECK(throws_invalid([&] { response.header(std::string_view("Bad\r\nName", 9), "v"); }));
-    RUVIA_CHECK(throws_invalid([&] { response.header("Bad Name", "v"); }));
+    EXPECT_TRUE(throws_invalid([&] { response.header(std::string_view("Bad\r\nName", 9), "v"); }));
+    EXPECT_TRUE(throws_invalid([&] { response.header("Bad Name", "v"); }));
 
     // The append path funnels through the same validation, not just replace.
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("X-Foo", std::string_view("a\r\nb", 4),
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
     // A clean header is accepted.
-    RUVIA_CHECK(!throws_invalid([&] { response.header("X-Clean", "ok"); }));
-    RUVIA_CHECK_EQ(response.header("X-Clean"), std::string_view("ok"));
+    EXPECT_TRUE(!throws_invalid([&] { response.header("X-Clean", "ok"); }));
+    EXPECT_EQ(response.header("X-Clean"), std::string_view("ok"));
 }
 
-RUVIA_TEST(response_header_rejects_invalid_connection_control_lists) {
+TEST(Ruvia, response_header_rejects_invalid_connection_control_lists) {
     auto response = make_response();
     for (const auto value : {"close,", ", Upgrade", "close;invalid", ""}) {
-        RUVIA_CHECK(throws_invalid([&] { response.header("Connection", value); }));
+        EXPECT_TRUE(throws_invalid([&] { response.header("Connection", value); }));
     }
     for (const auto value : {"Content-Length", "Date", "Trailer", "Authorization", "Cookie", "Range", "Forwarded",
              "X-Forwarded-For", "X-Forwarded-Proto", "close, X-Forwarded-Host"}) {
-        RUVIA_CHECK(throws_invalid([&] { response.header("Connection", value); }));
+        EXPECT_TRUE(throws_invalid([&] { response.header("Connection", value); }));
     }
     for (const auto value : {"websocket/", ", websocket", ""}) {
-        RUVIA_CHECK(throws_invalid([&] { response.header("Upgrade", value); }));
+        EXPECT_TRUE(throws_invalid([&] { response.header("Upgrade", value); }));
     }
-    RUVIA_CHECK(throws_invalid([&] { response.header("TE", "trailers"); }));
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] { response.header("TE", "trailers"); }));
+    EXPECT_TRUE(throws_invalid([&] {
         response.header("TE", "trailers",
             http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
     }));
 
-    RUVIA_CHECK(!throws_invalid([&] {
+    EXPECT_TRUE(!throws_invalid([&] {
         response.header("Connection", "keep-alive, Upgrade");
         response.header("Upgrade", "custom/1, websocket");
     }));

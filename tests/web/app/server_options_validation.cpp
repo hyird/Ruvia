@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -11,8 +13,6 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-
-#include "test_harness.h"
 
 namespace {
 
@@ -120,74 +120,74 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(application_callback_replacement_retires_targets_outside_configuration_lock) {
+TEST(Ruvia, application_callback_replacement_retires_targets_outside_configuration_lock) {
     int access_destroyed = 0;
     int failure_destroyed = 0;
     auto& app = ruvia::app();
     app.on_access(querying_callback_target(access_destroyed));
     app.on_access(querying_callback_target(access_destroyed));
-    RUVIA_CHECK_EQ(access_destroyed, 1);
+    EXPECT_EQ(access_destroyed, 1);
     app.on_access(nullptr);
-    RUVIA_CHECK_EQ(access_destroyed, 2);
+    EXPECT_EQ(access_destroyed, 2);
 
     app.on_connection_failure(querying_callback_target(failure_destroyed));
     app.on_connection_failure(querying_callback_target(failure_destroyed));
-    RUVIA_CHECK_EQ(failure_destroyed, 1);
+    EXPECT_EQ(failure_destroyed, 1);
     app.on_connection_failure(nullptr);
-    RUVIA_CHECK_EQ(failure_destroyed, 2);
+    EXPECT_EQ(failure_destroyed, 2);
 }
 
-RUVIA_TEST(clearing_hooks_and_fallbacks_retires_targets_outside_configuration_lock) {
+TEST(Ruvia, clearing_hooks_and_fallbacks_retires_targets_outside_configuration_lock) {
     int destroyed = 0;
     auto& app = ruvia::app();
     app.on_start(reentrant_hook_target(destroyed)).on_start(reentrant_hook_target(destroyed));
     app.on_start(nullptr);
-    RUVIA_CHECK_EQ(destroyed, 2);
+    EXPECT_EQ(destroyed, 2);
 
     app.on_stop(reentrant_hook_target(destroyed));
     app.on_stop(nullptr);
-    RUVIA_CHECK_EQ(destroyed, 3);
+    EXPECT_EQ(destroyed, 3);
 
     app.on_error(ruvia::http_error_handler(reentrant_hook_target(destroyed)));
     app.on_error(nullptr);
-    RUVIA_CHECK_EQ(destroyed, 4);
+    EXPECT_EQ(destroyed, 4);
 
     app.on_not_found(ruvia::http_not_found_handler(reentrant_hook_target(destroyed)));
     app.on_not_found(nullptr);
-    RUVIA_CHECK_EQ(destroyed, 5);
+    EXPECT_EQ(destroyed, 5);
 }
 
-RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_construction) {
-    RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({}); }));
-    RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({.address_ = {}, .http_ = 8080}); }));
-    RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({.address_ = "localhost", .http_ = 8080}); }));
-    RUVIA_CHECK(throws_invalid([] {
+TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construction) {
+    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({}); }));
+    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = {}, .http_ = 8080}); }));
+    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = "localhost", .http_ = 8080}); }));
+    EXPECT_TRUE(throws_invalid([] {
         const std::string bad_address("127.0.0.1\0bad", 13);
         ruvia::app().listen({.address_ = bad_address, .http_ = 8080});
     }));
-    RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 0}); }));
-    RUVIA_CHECK(throws_invalid(
+    EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 0}); }));
+    EXPECT_TRUE(throws_invalid(
         [] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .https_ = 8080}); }));
-    RUVIA_CHECK(throws_invalid([] {
+    EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .auto_https_redirect_ = true});
     }));
-    RUVIA_CHECK(
+    EXPECT_TRUE(
         throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .https_ = 8443}); }));
-    RUVIA_CHECK(throws_invalid([] {
+    EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
             .tls_ = {.identity_ = {.certificate_chain_file_ = "cert.pem"}},
         });
     }));
-    RUVIA_CHECK(throws_invalid([] {
+    EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .http_ = 8080,
             .tls_ = {.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"}},
         });
     }));
-    RUVIA_CHECK(throws_invalid([] {
+    EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
@@ -201,7 +201,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
                 },
         });
     }));
-    RUVIA_CHECK(throws_invalid([] {
+    EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
@@ -212,7 +212,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
                 },
         });
     }));
-    RUVIA_CHECK(throws_invalid([] {
+    EXPECT_TRUE(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
@@ -223,13 +223,13 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
                 },
         });
     }));
-    RUVIA_CHECK(throws_invalid([] {
+    EXPECT_TRUE(throws_invalid([] {
         ruvia::app().server(
             {.process_signal_handlers_ = static_cast<ruvia::process_signal_handler_policy>(0xFF)});
     }));
 }
 
-RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
+TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
     const auto rejects = [](std::vector<ruvia::tls_sni_config> sni) {
         return throws_invalid([&] {
             ruvia::app().listen({
@@ -244,17 +244,17 @@ RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
         });
     };
     const ruvia::tls_identity_config other{.certificate_chain_file_ = "other.pem", .private_key_file_ = "other.key"};
-    RUVIA_CHECK(rejects({{.host_ = {}, .identity_ = other}}));
-    RUVIA_CHECK(rejects({{.host_ = "example.com:443", .identity_ = other}}));
-    RUVIA_CHECK(rejects({{.host_ = "127.0.0.1", .identity_ = other}}));
-    RUVIA_CHECK(rejects({
+    EXPECT_TRUE(rejects({{.host_ = {}, .identity_ = other}}));
+    EXPECT_TRUE(rejects({{.host_ = "example.com:443", .identity_ = other}}));
+    EXPECT_TRUE(rejects({{.host_ = "127.0.0.1", .identity_ = other}}));
+    EXPECT_TRUE(rejects({
         {.host_ = "Example.com", .identity_ = other},
         {.host_ = "example.COM",
             .identity_ = {.certificate_chain_file_ = "third.pem", .private_key_file_ = "third.key"}},
     }));
 }
 
-RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
+TEST(Ruvia, tls_identity_owns_password_independently_of_caller_resource) {
     releasable_memory_resource caller_resource;
     const std::string expected(80, 's');
     std::optional<ruvia::tls_config> identity;
@@ -264,12 +264,12 @@ RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
             tls_config("cert.pem", "key.pem", std::string(password.data(), password.size())));
     }
     caller_resource.release();
-    RUVIA_CHECK_EQ(identity->identity_.private_key_password_, std::string_view(expected));
+    EXPECT_EQ(identity->identity_.private_key_password_, std::string_view(expected));
     identity.reset();
-    RUVIA_CHECK(!caller_resource.deallocated_after_release());
+    EXPECT_TRUE(!caller_resource.deallocated_after_release());
 }
 
-RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
+TEST(Ruvia, self_contained_app_callbacks_release_owned_state) {
     std::weak_ptr<int> access_state;
     {
         auto state_value = std::make_shared<int>(1);
@@ -286,9 +286,9 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
             moved.emplace(std::move(callback_value));
         }
         state_value.reset();
-        RUVIA_CHECK(!access_state.expired());
+        EXPECT_TRUE(!access_state.expired());
         moved.reset();
-        RUVIA_CHECK(access_state.expired());
+        EXPECT_TRUE(access_state.expired());
     }
 
     std::weak_ptr<int> failure_state;
@@ -298,9 +298,9 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
         ruvia::connection_failure_callback callback_value(
             [state_value](const ruvia::connection_failure_record&) noexcept { (void)state_value; });
         state_value.reset();
-        RUVIA_CHECK(!failure_state.expired());
+        EXPECT_TRUE(!failure_state.expired());
     }
-    RUVIA_CHECK(failure_state.expired());
+    EXPECT_TRUE(failure_state.expired());
 
     std::weak_ptr<int> error_state;
     {
@@ -312,9 +312,9 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
                 co_return ruvia::http_response{};
             });
         state_value.reset();
-        RUVIA_CHECK(!error_state.expired());
+        EXPECT_TRUE(!error_state.expired());
     }
-    RUVIA_CHECK(error_state.expired());
+    EXPECT_TRUE(error_state.expired());
 
     std::weak_ptr<int> not_found_state;
     {
@@ -326,33 +326,33 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
                 co_return ruvia::http_response{};
             });
         state_value.reset();
-        RUVIA_CHECK(!not_found_state.expired());
+        EXPECT_TRUE(!not_found_state.expired());
     }
-    RUVIA_CHECK(not_found_state.expired());
+    EXPECT_TRUE(not_found_state.expired());
 }
 
-RUVIA_TEST(app_callbacks_treat_null_function_targets_as_empty) {
+TEST(Ruvia, app_callbacks_treat_null_function_targets_as_empty) {
     void (*hook_target)() = nullptr;
     ruvia::app_hook hook(hook_target);
-    RUVIA_CHECK(!hook);
+    EXPECT_TRUE(!hook);
     bool empty_call_rejected = false;
     try {
         hook();
     } catch (const std::logic_error&) {
         empty_call_rejected = true;
     }
-    RUVIA_CHECK(empty_call_rejected);
+    EXPECT_TRUE(empty_call_rejected);
 
     void (*access_target)(const ruvia::access_log_record&) noexcept = nullptr;
     ruvia::access_log_callback access(std::move(access_target));
-    RUVIA_CHECK(!access);
+    EXPECT_TRUE(!access);
 
     ruvia::task<ruvia::http_response> (*error_target)(ruvia::context&, ruvia::http_error_info) = nullptr;
     ruvia::http_error_handler error(error_target);
-    RUVIA_CHECK(!error);
+    EXPECT_TRUE(!error);
 }
 
-RUVIA_TEST(app_hook_retires_owner_before_target_destruction) {
+TEST(Ruvia, app_hook_retires_owner_before_target_destruction) {
     for (int retirement = 0; retirement != 3; ++retirement) {
         int destroyed = 0;
         int replacement_calls = 0;
@@ -371,19 +371,19 @@ RUVIA_TEST(app_hook_retires_owner_before_target_destruction) {
             hook = [guard = std::unique_ptr<int, decltype(release)>(new int{0}, release)] {};
             if (retirement == 0) {
                 hook = static_cast<void (*)()>(nullptr);
-                RUVIA_CHECK(!hook);
+                EXPECT_TRUE(!hook);
             } else if (retirement == 1) {
                 hook = [&] { ++replacement_calls; };
                 hook();
             }
         }
-        RUVIA_CHECK(owner_was_empty);
-        RUVIA_CHECK_EQ(destroyed, 1);
-        RUVIA_CHECK_EQ(replacement_calls, retirement == 1 ? 1 : 0);
+        EXPECT_TRUE(owner_was_empty);
+        EXPECT_EQ(destroyed, 1);
+        EXPECT_EQ(replacement_calls, retirement == 1 ? 1 : 0);
     }
 }
 
-RUVIA_TEST(noexcept_app_callback_retires_owner_before_target_destruction) {
+TEST(Ruvia, noexcept_app_callback_retires_owner_before_target_destruction) {
     int destroyed = 0;
     bool owner_was_empty = false;
     ruvia::access_log_callback callback;
@@ -398,17 +398,17 @@ RUVIA_TEST(noexcept_app_callback_retires_owner_before_target_destruction) {
     callback = [guard = std::unique_ptr<int, decltype(release)>(new int{0}, release)](
                    const ruvia::access_log_record&) noexcept {};
     callback = nullptr;
-    RUVIA_CHECK(!callback);
-    RUVIA_CHECK(owner_was_empty);
-    RUVIA_CHECK_EQ(destroyed, 1);
+    EXPECT_TRUE(!callback);
+    EXPECT_TRUE(owner_was_empty);
+    EXPECT_EQ(destroyed, 1);
 }
 
-RUVIA_TEST(application_multi_listen_and_null_handler_validation) {
+TEST(Ruvia, application_multi_listen_and_null_handler_validation) {
     auto& app = ruvia::app();
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         app.listen(std::initializer_list<ruvia::listen_config>{});
     }));
-    RUVIA_CHECK(throws_invalid([&] {
+    EXPECT_TRUE(throws_invalid([&] {
         app.listen({
             {.address_ = "127.0.0.1", .http_ = 8080},
             {.address_ = "127.0.0.1", .http_ = 8080},
@@ -419,13 +419,13 @@ RUVIA_TEST(application_multi_listen_and_null_handler_validation) {
         {.address_ = "127.0.0.1", .http_ = 8081},
     });
 
-    RUVIA_CHECK(throws_invalid([&] { app.on_start(ruvia::app_hook{}); }));
-    RUVIA_CHECK(throws_invalid([&] { app.on_stop(ruvia::app_hook{}); }));
+    EXPECT_TRUE(throws_invalid([&] { app.on_start(ruvia::app_hook{}); }));
+    EXPECT_TRUE(throws_invalid([&] { app.on_stop(ruvia::app_hook{}); }));
     app.on_start([] {}).on_start(nullptr);
     app.on_stop([] {}).on_stop(nullptr);
 
-    RUVIA_CHECK(throws_invalid([&] { app.on_error(ruvia::http_error_handler{nullptr}); }));
-    RUVIA_CHECK(throws_invalid([&] { app.on_not_found(ruvia::http_not_found_handler{nullptr}); }));
+    EXPECT_TRUE(throws_invalid([&] { app.on_error(ruvia::http_error_handler{nullptr}); }));
+    EXPECT_TRUE(throws_invalid([&] { app.on_not_found(ruvia::http_not_found_handler{nullptr}); }));
     app.on_error([](ruvia::context& c, ruvia::http_error_info info) -> ruvia::task<ruvia::http_response> {
         co_return c.error(info);
     });

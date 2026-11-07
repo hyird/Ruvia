@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -18,7 +20,6 @@
 
 #include "backend_client_fixture.h"
 #include "pipeline_support.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -75,7 +76,7 @@ inline ruvia::task<void> finish_stream(ruvia::db_stream_result& stream, bool clo
 // Concurrent statements on a pool of one connection are all sent before the
 // first reply arrives -- the peer answers nothing until it has read all four
 // commands -- and each caller gets its own result.
-RUVIA_TEST(db_mariadb_concurrent_statements_are_pipelined_on_one_connection) {
+TEST(Ruvia, db_mariadb_concurrent_statements_are_pipelined_on_one_connection) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"a"}, .batch_ = 4}, {.rows_ = {"b"}}, {.column_ = "", .affected_rows_ = 3},
@@ -94,19 +95,19 @@ RUVIA_TEST(db_mariadb_concurrent_statements_are_pipelined_on_one_connection) {
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]));
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK_EQ(outcomes[2].affected_rows_, std::uint64_t{3});
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK((peer.maria_queries() ==
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{3});
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((peer.maria_queries() ==
                  std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM b", "UPDATE c SET v = 1", "SELECT v FROM d"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // The server runs each command on its own, so a statement it rejects fails
 // alone with its own error; the statements around it and the connection are
 // unaffected.
-RUVIA_TEST(db_mariadb_failed_pipelined_statement_does_not_fail_the_others) {
+TEST(Ruvia, db_mariadb_failed_pipelined_statement_does_not_fail_the_others) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"a"}, .batch_ = 3},
@@ -126,17 +127,17 @@ RUVIA_TEST(db_mariadb_failed_pipelined_statement_does_not_fail_the_others) {
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[1].sql_state_ == "42S02");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "42S02");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // Affected rows and insert ids are read from each statement's own response,
 // in send order.
-RUVIA_TEST(db_mariadb_pipelined_executes_report_their_own_affected_rows_and_insert_ids) {
+TEST(Ruvia, db_mariadb_pipelined_executes_report_their_own_affected_rows_and_insert_ids) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.column_ = "", .affected_rows_ = 1, .insert_id_ = 7, .batch_ = 3},
@@ -154,17 +155,17 @@ RUVIA_TEST(db_mariadb_pipelined_executes_report_their_own_affected_rows_and_inse
         statements.spawn(pipeline_test::execute(handle, "INSERT INTO c (v) SELECT v FROM d", outcomes[2]));
         co_await statements.join();
     });
-    RUVIA_CHECK_EQ(outcomes[0].affected_rows_, std::uint64_t{1});
-    RUVIA_CHECK(outcomes[0].insert_id_ == std::uint64_t{7});
-    RUVIA_CHECK_EQ(outcomes[1].affected_rows_, std::uint64_t{2});
-    RUVIA_CHECK(!outcomes[1].insert_id_.has_value());
-    RUVIA_CHECK_EQ(outcomes[2].affected_rows_, std::uint64_t{300});
-    RUVIA_CHECK(outcomes[2].insert_id_ == std::uint64_t{9});
+    EXPECT_EQ(outcomes[0].affected_rows_, std::uint64_t{1});
+    EXPECT_TRUE(outcomes[0].insert_id_ == std::uint64_t{7});
+    EXPECT_EQ(outcomes[1].affected_rows_, std::uint64_t{2});
+    EXPECT_TRUE(!outcomes[1].insert_id_.has_value());
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{300});
+    EXPECT_TRUE(outcomes[2].insert_id_ == std::uint64_t{9});
 }
 
 // A procedure call ends with a status result after its row set; it is read
 // before the next statement's response, which follows unaffected.
-RUVIA_TEST(db_mariadb_procedure_results_are_drained_before_the_next_statement) {
+TEST(Ruvia, db_mariadb_procedure_results_are_drained_before_the_next_statement) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"p"}, .procedure_ = true, .batch_ = 2}, {.rows_ = {"after"}}},
@@ -180,15 +181,15 @@ RUVIA_TEST(db_mariadb_procedure_results_are_drained_before_the_next_statement) {
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]));
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "p");
-    RUVIA_CHECK(outcomes[1].value_ == "after");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(outcomes[0].value_ == "p");
+    EXPECT_TRUE(outcomes[1].value_ == "after");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // Both EOF and an explicit close consume the procedure's trailing status
 // before buffered queries share the same connection again. Retained rows
 // must not borrow either the streamed row storage or a later result.
-RUVIA_TEST(db_mariadb_stream_completion_preserves_result_boundaries_and_pipeline_reuse) {
+TEST(Ruvia, db_mariadb_stream_completion_preserves_result_boundaries_and_pipeline_reuse) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     for (const bool close_early : {false, true}) {
@@ -213,22 +214,22 @@ RUVIA_TEST(db_mariadb_stream_completion_preserves_result_boundaries_and_pipeline
                     while (auto row = co_await stream.read()) {
                         values.emplace_back((*row)["v"].as<std::string_view>().value_or(""));
                     }
-                    RUVIA_CHECK((values == (empty ? std::vector<std::string>{}
+                    EXPECT_TRUE((values == (empty ? std::vector<std::string>{}
                                                   : std::vector<std::string>{"first", "second"})));
                 }
-                RUVIA_CHECK(!stream.active());
+                EXPECT_TRUE(!stream.active());
                 co_await stream.close();
                 task_scope statements(connected.worker());
                 statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_a", outcomes[0]));
                 statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_b", outcomes[1]));
                 co_await statements.join();
-                RUVIA_CHECK_EQ(kept.size(), std::size_t{2});
-                RUVIA_CHECK(kept[0]["v"].as<std::string_view>() == "kept");
-                RUVIA_CHECK(kept[1]["v"].as<std::string_view>() == "also kept");
+                EXPECT_EQ(kept.size(), std::size_t{2});
+                EXPECT_TRUE(kept[0]["v"].as<std::string_view>() == "kept");
+                EXPECT_TRUE(kept[1]["v"].as<std::string_view>() == "also kept");
             });
-            RUVIA_CHECK(outcomes[0].value_ == "after a");
-            RUVIA_CHECK(outcomes[1].value_ == "after b");
-            RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+            EXPECT_TRUE(outcomes[0].value_ == "after a");
+            EXPECT_TRUE(outcomes[1].value_ == "after b");
+            EXPECT_EQ(peer.startups(), std::size_t{1});
         }
     }
 }
@@ -236,7 +237,7 @@ RUVIA_TEST(db_mariadb_stream_completion_preserves_result_boundaries_and_pipeline
 // Fetching the row-set EOF and draining a CALL's final status belong to the
 // same read(). The peer sends legal packets on each side of that boundary:
 // resetting the deadline at EOF would let the final OK turn a timeout into EOF.
-RUVIA_TEST(db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) {
+TEST(Ruvia, db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"first"}, .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
@@ -256,9 +257,9 @@ RUVIA_TEST(db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) {
         auto stream = co_await handle.with_options({.timeout_ = std::chrono::milliseconds(200)})
                           .query_stream("CALL delayed_status()");
         const auto first = co_await stream.read();
-        RUVIA_CHECK(first.has_value());
+        EXPECT_TRUE(first.has_value());
         if (first) {
-            RUVIA_CHECK((*first)["v"].as<std::string_view>() == "first");
+            EXPECT_TRUE((*first)["v"].as<std::string_view>() == "first");
         }
         task_scope reading(connected.worker());
         reading.spawn(mariadb_pipeline_test::finish_stream(stream, false, result, completed));
@@ -268,22 +269,22 @@ RUVIA_TEST(db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) {
         completed_before_status = completed;
         peer.release_hold(2);
         co_await reading.join();
-        RUVIA_CHECK(!stream.active());
+        EXPECT_TRUE(!stream.active());
         co_await stream.close();
         co_await pipeline_test::query(handle, "SELECT v FROM after_stream_timeout", next);
     });
-    RUVIA_CHECK(completed_before_status);
-    RUVIA_CHECK(result.error_ == db_error::code_type::timeout);
-    RUVIA_CHECK(result.value_.empty());
-    RUVIA_CHECK(next.value_ == "clean");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
-    RUVIA_CHECK((peer.maria_queries() ==
+    EXPECT_TRUE(completed_before_status);
+    EXPECT_TRUE(result.error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(result.value_.empty());
+    EXPECT_TRUE(next.value_ == "clean");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE((peer.maria_queries() ==
                  std::vector<std::string>{"CALL delayed_status()", "SELECT v FROM after_stream_timeout"}));
 }
 
 // A separate close() gets a fresh operation budget, even after the stream has
 // been idle longer than that budget. It still drains both result boundaries.
-RUVIA_TEST(db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
+TEST(Ruvia, db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"first"}, .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
@@ -303,12 +304,12 @@ RUVIA_TEST(db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
         auto stream = co_await handle.with_options({.timeout_ = std::chrono::milliseconds(200)})
                           .query_stream("CALL close_after_idle()");
         const auto first = co_await stream.read();
-        RUVIA_CHECK(first.has_value());
+        EXPECT_TRUE(first.has_value());
         if (first) {
-            RUVIA_CHECK((*first)["v"].as<std::string_view>() == "first");
+            EXPECT_TRUE((*first)["v"].as<std::string_view>() == "first");
         }
         (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(250));
-        RUVIA_CHECK(stream.active());
+        EXPECT_TRUE(stream.active());
         task_scope closing(connected.worker());
         closing.spawn(mariadb_pipeline_test::finish_stream(stream, true, result, completed));
         peer.release_hold(1);
@@ -316,23 +317,23 @@ RUVIA_TEST(db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
         completed_before_status = completed;
         peer.release_hold(2);
         co_await closing.join();
-        RUVIA_CHECK(!stream.active());
+        EXPECT_TRUE(!stream.active());
         co_await stream.close();
         co_await pipeline_test::query(handle, "SELECT v FROM after_explicit_close", next);
     });
-    RUVIA_CHECK(!completed_before_status);
-    RUVIA_CHECK(!result.error_.has_value());
-    RUVIA_CHECK(result.value_ == "closed");
-    RUVIA_CHECK(next.value_ == "clean");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
-    RUVIA_CHECK((peer.maria_queries() ==
+    EXPECT_TRUE(!completed_before_status);
+    EXPECT_TRUE(!result.error_.has_value());
+    EXPECT_TRUE(result.value_ == "closed");
+    EXPECT_TRUE(next.value_ == "clean");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE((peer.maria_queries() ==
                  std::vector<std::string>{"CALL close_after_idle()", "SELECT v FROM after_explicit_close"}));
 }
 
 // A rejected result shape still ran its SQL. BEGIN and disabled autocommit
 // cannot leak through that error to the next borrower, while an ordinary
 // completed write leaves its connection reusable.
-RUVIA_TEST(db_mariadb_rowless_stream_checks_session_state_before_releasing_its_connection) {
+TEST(Ruvia, db_mariadb_rowless_stream_checks_session_state_before_releasing_its_connection) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     for (const std::uint16_t status : {std::uint16_t{2}, std::uint16_t{3}, std::uint16_t{0}}) {
@@ -355,15 +356,15 @@ RUVIA_TEST(db_mariadb_rowless_stream_checks_session_state_before_releasing_its_c
             }
             co_await pipeline_test::query(handle, "SELECT v FROM next_borrower", next);
         });
-        RUVIA_CHECK(refused);
-        RUVIA_CHECK(next.value_ == "next");
-        RUVIA_CHECK_EQ(peer.startups(), status == 2 ? std::size_t{1} : std::size_t{2});
+        EXPECT_TRUE(refused);
+        EXPECT_TRUE(next.value_ == "next");
+        EXPECT_EQ(peer.startups(), status == 2 ? std::size_t{1} : std::size_t{2});
     }
 }
 
 // Procedures can return rows and leave a transaction open or autocommit
 // disabled. Draining every result is necessary but not sufficient for reuse.
-RUVIA_TEST(db_mariadb_stream_completion_retires_transactional_connections) {
+TEST(Ruvia, db_mariadb_stream_completion_retires_transactional_connections) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     for (const std::uint16_t status : {std::uint16_t{3}, std::uint16_t{0}}) {
@@ -380,19 +381,19 @@ RUVIA_TEST(db_mariadb_stream_completion_retires_transactional_connections) {
                 auto stream = co_await handle.query_stream(
                     status == 3 ? "CALL begin_and_select()" : "CALL disable_autocommit_and_select()");
                 auto first = co_await stream.read();
-                RUVIA_CHECK(first && (*first)["v"].as<std::string_view>() == "first");
+                EXPECT_TRUE(first && (*first)["v"].as<std::string_view>() == "first");
                 if (close_early) {
                     co_await stream.close();
                 } else {
                     auto second = co_await stream.read();
-                    RUVIA_CHECK(second && (*second)["v"].as<std::string_view>() == "second");
-                    RUVIA_CHECK(!(co_await stream.read()));
+                    EXPECT_TRUE(second && (*second)["v"].as<std::string_view>() == "second");
+                    EXPECT_TRUE(!(co_await stream.read()));
                 }
-                RUVIA_CHECK(!stream.active());
+                EXPECT_TRUE(!stream.active());
                 co_await pipeline_test::query(handle, "SELECT v FROM next_borrower", next);
             });
-            RUVIA_CHECK(next.value_ == "next");
-            RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+            EXPECT_TRUE(next.value_ == "next");
+            EXPECT_EQ(peer.startups(), std::size_t{2});
         }
     }
 }
@@ -400,7 +401,7 @@ RUVIA_TEST(db_mariadb_stream_completion_retires_transactional_connections) {
 // A row set execute() did not ask for, or a missing one query() needs,
 // refuses that statement once its response was read; the next statement on
 // the connection is unaffected.
-RUVIA_TEST(db_mariadb_pipelined_statement_of_the_wrong_shape_is_refused_alone) {
+TEST(Ruvia, db_mariadb_pipelined_statement_of_the_wrong_shape_is_refused_alone) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"x"}, .batch_ = 3}, {.column_ = "", .affected_rows_ = 1}, {.rows_ = {"z"}}},
@@ -417,10 +418,10 @@ RUVIA_TEST(db_mariadb_pipelined_statement_of_the_wrong_shape_is_refused_alone) {
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM z", outcomes[2]));
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].refused_);
-    RUVIA_CHECK(outcomes[1].refused_);
-    RUVIA_CHECK(outcomes[2].value_ == "z");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(outcomes[0].refused_);
+    EXPECT_TRUE(outcomes[1].refused_);
+    EXPECT_TRUE(outcomes[2].value_ == "z");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A pending statement whose caller stops it, or whose timeout passes, leaves
@@ -428,7 +429,7 @@ RUVIA_TEST(db_mariadb_pipelined_statement_of_the_wrong_shape_is_refused_alone) {
 // responses (the first) or waiting for another statement to read them (the
 // second). One stopped before its command went out is never sent; one already
 // sent has its response read and discarded. The connection is kept.
-RUVIA_TEST(db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others) {
+TEST(Ruvia, db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     constexpr std::array<std::string_view, 3> sql{"SELECT v FROM a", "SELECT v FROM b", "SELECT v FROM c"};
@@ -473,17 +474,17 @@ RUVIA_TEST(db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others) 
             });
             for (std::size_t index = 0; index < sql.size(); ++index) {
                 if (index == abandoned_index) {
-                    RUVIA_CHECK(outcomes[index].error_ ==
+                    EXPECT_TRUE(outcomes[index].error_ ==
                                 (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
-                    RUVIA_CHECK(outcomes[index].value_.empty());
+                    EXPECT_TRUE(outcomes[index].value_.empty());
                 } else {
-                    RUVIA_CHECK(outcomes[index].value_ == values[index]);
+                    EXPECT_TRUE(outcomes[index].value_ == values[index]);
                 }
             }
-            RUVIA_CHECK(outcomes[3].value_ == "d");
+            EXPECT_TRUE(outcomes[3].value_ == "d");
             const auto queries = peer.maria_queries();
-            RUVIA_CHECK_EQ(queries.size(), unsent ? std::size_t{3} : std::size_t{4});
-            RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+            EXPECT_EQ(queries.size(), unsent ? std::size_t{3} : std::size_t{4});
+            EXPECT_EQ(peer.startups(), std::size_t{1});
         }
     }
 }
@@ -491,7 +492,7 @@ RUVIA_TEST(db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others) 
 // Once every pending statement has been abandoned nobody reads their
 // responses, so the connection is closed and the next statement connects
 // again.
-RUVIA_TEST(db_mariadb_connection_is_closed_when_every_pipelined_statement_is_abandoned) {
+TEST(Ruvia, db_mariadb_connection_is_closed_when_every_pipelined_statement_is_abandoned) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"a"}, .deferred_ = true}, {.rows_ = {"c"}}}, peer_type::after_startup::reaccept);
@@ -511,18 +512,18 @@ RUVIA_TEST(db_mariadb_connection_is_closed_when_every_pipelined_statement_is_aba
         peer.release_replies();
         co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
     });
-    RUVIA_CHECK(outcomes[0].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[2].value_ == "c");
     // The second statement was stopped before its command went out.
-    RUVIA_CHECK((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM c"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM c"}));
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // While a transaction waits for the only connection, shared statements stop
 // joining its group, so the group drains to the transaction; statements that
 // arrive meanwhile follow it.
-RUVIA_TEST(db_mariadb_waiting_transaction_is_not_starved_by_pipelined_statements) {
+TEST(Ruvia, db_mariadb_waiting_transaction_is_not_starved_by_pipelined_statements) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"a"}, .deferred_ = true}, {.column_ = "", .status_ = 3}, {.column_ = ""},
@@ -543,19 +544,19 @@ RUVIA_TEST(db_mariadb_waiting_transaction_is_not_starved_by_pipelined_statements
         peer.release_replies();
         co_await work.join();
     });
-    RUVIA_CHECK(outcomes[4].value_ == "committed");
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM a", "START TRANSACTION", "COMMIT",
+    EXPECT_TRUE(outcomes[4].value_ == "committed");
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM a", "START TRANSACTION", "COMMIT",
                                              "SELECT v FROM b", "SELECT v FROM c", "SELECT v FROM d"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A lost connection fails every statement still in flight on it, whether or
 // not statements ahead of them already got their results.
-RUVIA_TEST(db_mariadb_lost_connection_fails_every_pipelined_statement) {
+TEST(Ruvia, db_mariadb_lost_connection_fails_every_pipelined_statement) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     for (const bool first_answered : {false, true}) {
@@ -578,19 +579,19 @@ RUVIA_TEST(db_mariadb_lost_connection_fails_every_pipelined_statement) {
             co_await statements.join();
         });
         if (first_answered) {
-            RUVIA_CHECK(outcomes[0].value_ == "a");
+            EXPECT_TRUE(outcomes[0].value_ == "a");
         } else {
-            RUVIA_CHECK(outcomes[0].error_ == db_error::code_type::io_error);
+            EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::io_error);
         }
-        RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::io_error);
-        RUVIA_CHECK(outcomes[2].error_ == db_error::code_type::io_error);
+        EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
+        EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::io_error);
     }
 }
 
 // close() reaches statements in every phase -- reading the responses, waiting
 // for the reader, and parked beyond the pipeline depth -- and the client
 // still shuts down cleanly.
-RUVIA_TEST(db_mariadb_close_ends_pipelined_statements_in_every_phase) {
+TEST(Ruvia, db_mariadb_close_ends_pipelined_statements_in_every_phase) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     constexpr std::size_t statement_count = 40;
@@ -609,13 +610,13 @@ RUVIA_TEST(db_mariadb_close_ends_pipelined_statements_in_every_phase) {
         co_await statements.join();
     });
     for (const auto& result : outcomes) {
-        RUVIA_CHECK(result.error_ == db_error::code_type::cancelled || result.error_ == db_error::code_type::closing);
+        EXPECT_TRUE(result.error_ == db_error::code_type::cancelled || result.error_ == db_error::code_type::closing);
     }
 }
 
 // A read timeout means the connection made no progress: every statement in
 // flight on it fails, and the next statement connects again.
-RUVIA_TEST(db_mariadb_read_timeout_fails_every_pipelined_statement) {
+TEST(Ruvia, db_mariadb_read_timeout_fails_every_pipelined_statement) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"a"}, .deferred_ = true, .batch_ = 3}, {.rows_ = {"b"}}, {.rows_ = {"c"}},
@@ -639,16 +640,16 @@ RUVIA_TEST(db_mariadb_read_timeout_fails_every_pipelined_statement) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     for (std::size_t index = 0; index < 3; ++index) {
-        RUVIA_CHECK(outcomes[index].error_ == db_error::code_type::timeout);
+        EXPECT_TRUE(outcomes[index].error_ == db_error::code_type::timeout);
     }
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // The transaction's exclusive lane must honor the millisecond socket-wait
 // limit, not libmariadb's whole-second native timer or the five-second query
 // budget. A late valid reply cannot revive its retired transaction/lease.
-RUVIA_TEST(db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retires_its_lease) {
+TEST(Ruvia, db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retires_its_lease) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.column_ = "", .status_ = 3},
@@ -666,24 +667,24 @@ RUVIA_TEST(db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retire
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
         auto transaction = co_await handle.begin_transaction();
-        RUVIA_CHECK(transaction.active());
+        EXPECT_TRUE(transaction.active());
         task_scope querying(connected.worker());
         querying.spawn(mariadb_pipeline_test::transaction_query(transaction, result, completed));
         (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(350));
         completed_before_reply = completed;
         peer.release_hold(1);
         co_await querying.join();
-        RUVIA_CHECK(!transaction.active());
+        EXPECT_TRUE(!transaction.active());
         if (!transaction.active()) {
             co_await pipeline_test::query(handle, "SELECT v FROM after_transaction_timeout", next);
         }
     });
-    RUVIA_CHECK(completed_before_reply);
-    RUVIA_CHECK(result.error_ == db_error::code_type::timeout);
-    RUVIA_CHECK(result.value_.empty());
-    RUVIA_CHECK(next.value_ == "clean");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
-    RUVIA_CHECK((peer.maria_queries() ==
+    EXPECT_TRUE(completed_before_reply);
+    EXPECT_TRUE(result.error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(result.value_.empty());
+    EXPECT_TRUE(next.value_ == "clean");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE((peer.maria_queries() ==
                  std::vector<std::string>{"START TRANSACTION", "SELECT v FROM delayed_transaction",
                      "SELECT v FROM after_transaction_timeout"}));
 }
@@ -691,7 +692,7 @@ RUVIA_TEST(db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retire
 // A statement that leaves its connection inside a transaction (BEGIN through
 // execute()) must not hand it to the next caller: the connection is closed
 // when its group dissolves.
-RUVIA_TEST(db_mariadb_connection_left_inside_a_transaction_is_closed) {
+TEST(Ruvia, db_mariadb_connection_left_inside_a_transaction_is_closed) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.column_ = "", .status_ = 3}, {.rows_ = {"fresh"}}}, peer_type::after_startup::reaccept);
@@ -704,14 +705,14 @@ RUVIA_TEST(db_mariadb_connection_left_inside_a_transaction_is_closed) {
         co_await pipeline_test::execute(handle, "BEGIN", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
     });
-    RUVIA_CHECK(!outcomes[0].error_.has_value());
-    RUVIA_CHECK(outcomes[1].value_ == "fresh");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(!outcomes[0].error_.has_value());
+    EXPECT_TRUE(outcomes[1].value_ == "fresh");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // Parameters are interpolated with the escaping of the connection the
 // statement is sent on.
-RUVIA_TEST(db_mariadb_pipelined_parameters_are_interpolated) {
+TEST(Ruvia, db_mariadb_pipelined_parameters_are_interpolated) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"x"}}}, peer_type::after_startup::idle);
@@ -723,14 +724,14 @@ RUVIA_TEST(db_mariadb_pipelined_parameters_are_interpolated) {
         const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query_id(handle, "SELECT v FROM t WHERE id = ?", 42, result);
     });
-    RUVIA_CHECK(result.value_ == "x");
-    RUVIA_CHECK((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM t WHERE id = 42"}));
+    EXPECT_TRUE(result.value_ == "x");
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM t WHERE id = 42"}));
 }
 
 // MariaDB numbers server errors above the client library's range as well
 // (4025, a violated CHECK constraint): the statement fails alone with its
 // own error, and the connection is kept.
-RUVIA_TEST(db_mariadb_pipelined_server_error_above_the_client_range_fails_alone) {
+TEST(Ruvia, db_mariadb_pipelined_server_error_above_the_client_range_fails_alone) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"a"}, .batch_ = 3},
@@ -750,18 +751,18 @@ RUVIA_TEST(db_mariadb_pipelined_server_error_above_the_client_range_fails_alone)
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[1].sql_state_ == "23000");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "23000");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A server error after which the server ends the session (1927, the
 // connection was killed) leaves nothing to read the next response from: it
 // fails as an I/O error, and the connection is not used again.
-RUVIA_TEST(db_mariadb_server_error_ending_the_session_closes_the_connection) {
+TEST(Ruvia, db_mariadb_server_error_ending_the_session_closes_the_connection) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.rows_ = {"a"}, .batch_ = 2},
@@ -780,10 +781,10 @@ RUVIA_TEST(db_mariadb_server_error_ending_the_session_closes_the_connection) {
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::io_error);
-    RUVIA_CHECK(outcomes[2].value_ == "fresh");
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
+    EXPECT_TRUE(outcomes[2].value_ == "fresh");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
 // A statement pipelined behind a change of sql_mode is read in the new mode.
@@ -791,7 +792,7 @@ RUVIA_TEST(db_mariadb_server_error_ending_the_session_closes_the_connection) {
 // with the SET -- the peer answers nothing before it has read both -- while
 // one with a backslash waits for the SET's response and is escaped for
 // NO_BACKSLASH_ESCAPES, which that response reports.
-RUVIA_TEST(db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_new_mode) {
+TEST(Ruvia, db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_new_mode) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     constexpr std::uint16_t no_backslash_escapes = 512;
@@ -811,10 +812,10 @@ RUVIA_TEST(db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_new
         statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", "y\\' , 2 AS w -- ", outcomes[2]));
         co_await statements.join();
     });
-    RUVIA_CHECK(!outcomes[0].error_.has_value());
-    RUVIA_CHECK(outcomes[1].value_ == "x");
-    RUVIA_CHECK(outcomes[2].value_ == "y");
-    RUVIA_CHECK((peer.maria_queries() ==
+    EXPECT_TRUE(!outcomes[0].error_.has_value());
+    EXPECT_TRUE(outcomes[1].value_ == "x");
+    EXPECT_TRUE(outcomes[2].value_ == "y");
+    EXPECT_TRUE((peer.maria_queries() ==
                  std::vector<std::string>{"SET sql_mode = 'NO_BACKSLASH_ESCAPES'", "SELECT 'x'' , 1 AS w -- ' AS v",
                      "SELECT 'y\\'' , 2 AS w -- ' AS v"}));
 }
@@ -824,7 +825,7 @@ RUVIA_TEST(db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_new
 // responses before it have been read, and nothing follows it until its own
 // response is in. The peer reads a command sent behind it as file content,
 // as the server does.
-RUVIA_TEST(db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
+TEST(Ruvia, db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     const auto path = (std::filesystem::temp_directory_path() / "ruvia_mariadb_load_data_local.txt").generic_string();
@@ -850,14 +851,14 @@ RUVIA_TEST(db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
     std::filesystem::remove(path);
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(!outcomes[1].error_.has_value());
-    RUVIA_CHECK_EQ(outcomes[1].affected_rows_, std::uint64_t{2});
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK(outcomes[3].value_ == "d");
-    RUVIA_CHECK((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM a", "query:" + load,
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(!outcomes[1].error_.has_value());
+    EXPECT_EQ(outcomes[1].affected_rows_, std::uint64_t{2});
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM a", "query:" + load,
                                               "infile:row1\nrow2\n", "query:SELECT v FROM c", "query:SELECT v FROM d"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // libmariadb sends a file for LOAD DATA LOCAL INFILE only when the command
@@ -865,7 +866,7 @@ RUVIA_TEST(db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
 // empty file and fails the statement (CR_UNKNOWN_ERROR). Its response was
 // read, so only that statement fails: the one behind it, still unsent, runs
 // on the same connection.
-RUVIA_TEST(db_mariadb_refused_load_data_local_infile_fails_alone) {
+TEST(Ruvia, db_mariadb_refused_load_data_local_infile_fails_alone) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     const auto load = std::string("  LOAD DATA LOCAL INFILE '/nonexistent/ruvia' INTO TABLE t");
@@ -883,12 +884,12 @@ RUVIA_TEST(db_mariadb_refused_load_data_local_infile_fails_alone) {
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM a", "query:" + load,
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM a", "query:" + load,
                                               "infile:", "query:SELECT v FROM c"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A backslash escape that follows a byte above 0x7F depends on the session's
@@ -897,7 +898,7 @@ RUVIA_TEST(db_mariadb_refused_load_data_local_infile_fails_alone) {
 // quote. Such a statement reads the character set from the server first,
 // even with session tracking off, and is escaped by it; a backslash after an
 // ASCII byte needs no character set.
-RUVIA_TEST(db_mariadb_backslash_escape_reads_the_sessions_character_set) {
+TEST(Ruvia, db_mariadb_backslash_escape_reads_the_sessions_character_set) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     peer_type peer({{.column_ = ""}, {.rows_ = {"gbk"}}, {.rows_ = {"x"}}, {.rows_ = {"y"}}},
@@ -914,10 +915,10 @@ RUVIA_TEST(db_mariadb_backslash_escape_reads_the_sessions_character_set) {
         statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", "a\\b", outcomes[2]));
         co_await statements.join();
     });
-    RUVIA_CHECK(!outcomes[0].error_.has_value());
-    RUVIA_CHECK(outcomes[1].value_ == "x");
-    RUVIA_CHECK(outcomes[2].value_ == "y");
-    RUVIA_CHECK((peer.maria_queries() == std::vector<std::string>{"SET NAMES gbk", "SELECT @@character_set_client",
+    EXPECT_TRUE(!outcomes[0].error_.has_value());
+    EXPECT_TRUE(outcomes[1].value_ == "x");
+    EXPECT_TRUE(outcomes[2].value_ == "y");
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SET NAMES gbk", "SELECT @@character_set_client",
                                              "SELECT '\xbf\\'' , 1 -- ' AS v", "SELECT 'a\\\\b' AS v"}));
 }
 
@@ -926,7 +927,7 @@ RUVIA_TEST(db_mariadb_backslash_escape_reads_the_sessions_character_set) {
 // character set is still utf8mb4, such a parameter is escaped without asking
 // the server; once a report names another one, or a CALL may have turned
 // tracking off unreported, the character set is read first again.
-RUVIA_TEST(db_mariadb_tracked_utf8mb4_session_escapes_without_reading_its_character_set) {
+TEST(Ruvia, db_mariadb_tracked_utf8mb4_session_escapes_without_reading_its_character_set) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     const std::vector<std::pair<std::string, std::string>> gbk{
@@ -953,10 +954,10 @@ RUVIA_TEST(db_mariadb_tracked_utf8mb4_session_escapes_without_reading_its_charac
         statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS w", jose, outcomes[5]));
         co_await statements.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "x");
-    RUVIA_CHECK(outcomes[2].value_ == "y");
-    RUVIA_CHECK(outcomes[5].value_ == "z");
-    RUVIA_CHECK((peer.maria_queries() ==
+    EXPECT_TRUE(outcomes[0].value_ == "x");
+    EXPECT_TRUE(outcomes[2].value_ == "y");
+    EXPECT_TRUE(outcomes[5].value_ == "z");
+    EXPECT_TRUE((peer.maria_queries() ==
                  std::vector<std::string>{"SELECT 'Jos\xc3\xa9\\\\x' AS v", "SET NAMES gbk", "SELECT @@character_set_client",
                      "SELECT '\xbf\\'' , 1 -- ' AS v", "SET NAMES utf8mb4", "CALL p()", "SELECT @@character_set_client",
                      "SELECT 'Jos\xc3\xa9\\\\x' AS w"}));

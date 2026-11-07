@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <cstddef>
 #include <memory_resource>
@@ -11,14 +13,12 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 
-#include "test_harness.h"
-
-RUVIA_TEST(response_content_encoding_folds_header_lines_in_application_order) {
+TEST(Ruvia, response_content_encoding_folds_header_lines_in_application_order) {
     ruvia::http_response response;
     const auto missing = ruvia::parse_http_content_coding_headers(response.headers());
-    RUVIA_CHECK(missing.codings().empty());
-    RUVIA_CHECK(missing.invalid() == nullptr);
-    RUVIA_CHECK(missing.unsupported() == nullptr);
+    EXPECT_TRUE(missing.codings().empty());
+    EXPECT_TRUE(missing.invalid() == nullptr);
+    EXPECT_TRUE(missing.unsupported() == nullptr);
 
     response.header("Content-Encoding", "gzip");
     response.header("Content-Encoding", "deflate",
@@ -28,20 +28,20 @@ RUVIA_TEST(response_content_encoding_folds_header_lines_in_application_order) {
     const auto stacked = ruvia::parse_http_content_coding_headers(response.headers());
     constexpr std::array expected{ruvia::http_content_coding::gzip,
         ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli};
-    RUVIA_CHECK(stacked.invalid() == nullptr);
-    RUVIA_CHECK(stacked.unsupported() == nullptr);
-    RUVIA_CHECK_EQ(stacked.codings().size(), expected.size());
+    EXPECT_TRUE(stacked.invalid() == nullptr);
+    EXPECT_TRUE(stacked.unsupported() == nullptr);
+    EXPECT_EQ(stacked.codings().size(), expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {
-        RUVIA_CHECK(stacked.codings()[i] == expected[i]);
+        EXPECT_TRUE(stacked.codings()[i] == expected[i]);
     }
 }
 
-RUVIA_TEST(content_encoding_field_lines_fold_in_order_ignoring_other_fields) {
+TEST(Ruvia, content_encoding_field_lines_fold_in_order_ignoring_other_fields) {
     const std::array unrelated{ruvia::http_header("Content-Type", "text/plain")};
     const auto missing = ruvia::parse_http_content_coding_headers(unrelated);
-    RUVIA_CHECK(missing.codings().empty());
-    RUVIA_CHECK(missing.invalid() == nullptr);
-    RUVIA_CHECK(missing.unsupported() == nullptr);
+    EXPECT_TRUE(missing.codings().empty());
+    EXPECT_TRUE(missing.invalid() == nullptr);
+    EXPECT_TRUE(missing.unsupported() == nullptr);
 
     const std::array lines{ruvia::http_header("Content-Encoding", "gzip"),
         ruvia::http_header("Content-Type", "text/plain"), ruvia::http_header("content-encoding", "deflate"),
@@ -49,15 +49,15 @@ RUVIA_TEST(content_encoding_field_lines_fold_in_order_ignoring_other_fields) {
     const auto stacked = ruvia::parse_http_content_coding_headers(lines);
     constexpr std::array expected{ruvia::http_content_coding::gzip,
         ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli};
-    RUVIA_CHECK(stacked.invalid() == nullptr);
-    RUVIA_CHECK(stacked.unsupported() == nullptr);
-    RUVIA_CHECK_EQ(stacked.codings().size(), expected.size());
+    EXPECT_TRUE(stacked.invalid() == nullptr);
+    EXPECT_TRUE(stacked.unsupported() == nullptr);
+    EXPECT_EQ(stacked.codings().size(), expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {
-        RUVIA_CHECK(stacked.codings()[i] == expected[i]);
+        EXPECT_TRUE(stacked.codings()[i] == expected[i]);
     }
 }
 
-RUVIA_TEST(response_content_encoding_rewrites_validators_and_range_support) {
+TEST(Ruvia, response_content_encoding_rewrites_validators_and_range_support) {
     const struct {
         std::string_view etag_;
         std::optional<std::string_view> expected_;
@@ -80,9 +80,9 @@ RUVIA_TEST(response_content_encoding_rewrites_validators_and_range_support) {
             } else {
                 response.apply_content_encoding("gzip");
             }
-            RUVIA_CHECK(response.header("Content-Encoding") == std::optional<std::string_view>("gzip"));
-            RUVIA_CHECK(response.header("ETag") == test.expected_);
-            RUVIA_CHECK(!response.header("Accept-Ranges").has_value());
+            EXPECT_TRUE(response.header("Content-Encoding") == std::optional<std::string_view>("gzip"));
+            EXPECT_TRUE(response.header("ETag") == test.expected_);
+            EXPECT_TRUE(!response.header("Accept-Ranges").has_value());
         }
     }
 }

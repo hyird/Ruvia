@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -29,7 +31,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 // Inline buffered-response compression on one worker, whose encoders are
@@ -292,7 +293,7 @@ class response_compression_routes final {
 
 }  // namespace
 
-RUVIA_TEST(http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {
+TEST(Ruvia, http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::gzip,
@@ -307,17 +308,17 @@ RUVIA_TEST(http1_inline_compression_reuses_worker_encoders_with_identical_bytes)
                 const auto output = fetch_response(server.endpoint(),
                     "GET " + std::string(path) + " HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: " +
                         std::string(token) + "\r\nConnection: close\r\n\r\n");
-                RUVIA_CHECK(output.has_value());
+                EXPECT_TRUE(output.has_value());
                 const auto text = output.value_or("");
-                RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
-                RUVIA_CHECK(lower_head(text).find("\r\ncontent-encoding: " + std::string(token) + "\r\n") !=
+                EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+                EXPECT_TRUE(lower_head(text).find("\r\ncontent-encoding: " + std::string(token) + "\r\n") !=
                             std::string::npos);
                 const auto separator = text.find("\r\n\r\n");
-                RUVIA_CHECK(separator != std::string::npos);
+                EXPECT_TRUE(separator != std::string::npos);
                 if (separator != std::string::npos) {
                     const auto expected = expected_encoding(coding, body);
-                    RUVIA_CHECK(!expected.empty());
-                    RUVIA_CHECK(std::string_view(text).substr(separator + 4) == expected);
+                    EXPECT_TRUE(!expected.empty());
+                    EXPECT_TRUE(std::string_view(text).substr(separator + 4) == expected);
                 }
             }
         }
@@ -328,7 +329,7 @@ RUVIA_TEST(http1_inline_compression_reuses_worker_encoders_with_identical_bytes)
 // context::file and static_file serve fixed file representations: a small
 // file's bytes travel in memory on GET but still are not runtime-compressed,
 // so GET and HEAD carry the same identity fields (RFC 9110 9.3.2).
-RUVIA_TEST(http1_file_representations_are_not_runtime_compressed) {
+TEST(Ruvia, http1_file_representations_are_not_runtime_compressed) {
     namespace fs = std::filesystem;
     std::error_code ignored;
     fs::remove_all(file_dir(), ignored);
@@ -354,20 +355,20 @@ RUVIA_TEST(http1_file_representations_are_not_runtime_compressed) {
         };
         const auto get = fetch("GET");
         const auto head = fetch("HEAD");
-        RUVIA_CHECK(get.starts_with("HTTP/1.1 200 "));
-        RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(get.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
         const auto get_fields = head_fields(get);
-        RUVIA_CHECK(get_fields == head_fields(head));
-        RUVIA_CHECK(!has_field(get_fields, "content-encoding:"));
-        RUVIA_CHECK(has_field(get_fields, "content-length: " + std::to_string(small_body.size())));
-        RUVIA_CHECK(has_field(get_fields, "etag: \""));
+        EXPECT_TRUE(get_fields == head_fields(head));
+        EXPECT_TRUE(!has_field(get_fields, "content-encoding:"));
+        EXPECT_TRUE(has_field(get_fields, "content-length: " + std::to_string(small_body.size())));
+        EXPECT_TRUE(has_field(get_fields, "etag: \""));
         // static_file negotiates indexed precompressed variants; context::file
         // has no coding dimension at all.
-        RUVIA_CHECK_EQ(has_field(get_fields, "vary: accept-encoding"), path == "/compression-static");
+        EXPECT_EQ(has_field(get_fields, "vary: accept-encoding"), path == "/compression-static");
         const auto separator = get.find("\r\n\r\n");
-        RUVIA_CHECK(separator != std::string::npos);
+        EXPECT_TRUE(separator != std::string::npos);
         if (separator != std::string::npos) {
-            RUVIA_CHECK(std::string_view(get).substr(separator + 4) == small_body);
+            EXPECT_TRUE(std::string_view(get).substr(separator + 4) == small_body);
         }
     }
     server.finish();
@@ -378,49 +379,49 @@ RUVIA_TEST(http1_file_representations_are_not_runtime_compressed) {
 // RFC 9530 §2/§3: Content-Digest and Repr-Digest are computed over the content
 // as sent, including its content coding, so the framework must not encode a
 // body whose integrity fields the application already computed.
-RUVIA_TEST(http1_compression_keeps_responses_with_integrity_fields_identity) {
+TEST(Ruvia, http1_compression_keeps_responses_with_integrity_fields_identity) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const std::string_view field : {"Content-Digest", "Repr-Digest", "Content-MD5"}) {
         const auto text = fetch_response(server.endpoint(),
             get_request("/compression-digest?field=" + std::string(field), "Accept-Encoding: gzip\r\n"))
                               .value_or("");
-        RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
         const auto fields = head_fields(text);
-        RUVIA_CHECK(!has_field(fields, "content-encoding:"));
-        RUVIA_CHECK(has_field(fields, "content-length: " + std::to_string(small_body.size())));
-        RUVIA_CHECK(response_body(text) == small_body);
+        EXPECT_TRUE(!has_field(fields, "content-encoding:"));
+        EXPECT_TRUE(has_field(fields, "content-length: " + std::to_string(small_body.size())));
+        EXPECT_TRUE(response_body(text) == small_body);
     }
     server.finish();
 }
 
 // RFC 9110 §12.5.3: a client that refuses identity accepts a listed coding, so a
 // body below min_bytes_ is encoded instead of answered with 406.
-RUVIA_TEST(http1_compression_encodes_small_bodies_when_identity_is_refused) {
+TEST(Ruvia, http1_compression_encodes_small_bodies_when_identity_is_refused) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto refused = fetch_response(server.endpoint(),
         get_request("/compression-tiny", "Accept-Encoding: gzip, identity;q=0\r\n"))
                              .value_or("");
-    RUVIA_CHECK(refused.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(has_field(head_fields(refused), "content-encoding: gzip"));
+    EXPECT_TRUE(refused.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(refused), "content-encoding: gzip"));
     const auto decoded = ruvia::decode_http_content(std::array{ruvia::http_content_coding::gzip}, response_body(refused),
         {.max_decoded_bytes_ = 64, .resource_ = std::pmr::get_default_resource()});
     const auto* plain = std::get_if<std::pmr::string>(&decoded);
-    RUVIA_CHECK(plain != nullptr && std::string_view(*plain) == "hello");
+    EXPECT_TRUE(plain != nullptr && std::string_view(*plain) == "hello");
 
     // With identity acceptable, the size threshold still keeps it identity.
     const auto accepted =
         fetch_response(server.endpoint(), get_request("/compression-tiny", "Accept-Encoding: gzip\r\n")).value_or("");
-    RUVIA_CHECK(accepted.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(!has_field(head_fields(accepted), "content-encoding:"));
-    RUVIA_CHECK(response_body(accepted) == "hello");
+    EXPECT_TRUE(accepted.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(!has_field(head_fields(accepted), "content-encoding:"));
+    EXPECT_TRUE(response_body(accepted) == "hello");
     server.finish();
 }
 
 // RFC 9110 §8.8.3 / §14.3: a coded representation weakens a strong ETag, drops
 // a value that is not an entity-tag, and stops advertising identity ranges.
-RUVIA_TEST(http1_compression_rewrites_validators_and_range_support) {
+TEST(Ruvia, http1_compression_rewrites_validators_and_range_support) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const struct {
@@ -436,14 +437,14 @@ RUVIA_TEST(http1_compression_rewrites_validators_and_range_support) {
         const auto text = fetch_response(server.endpoint(),
             get_request("/compression-validators?etag=" + std::string(test.query_), "Accept-Encoding: gzip\r\n"))
                               .value_or("");
-        RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
         const auto fields = head_fields(text);
-        RUVIA_CHECK(has_field(fields, "content-encoding: gzip"));
-        RUVIA_CHECK(!has_field(fields, "accept-ranges:"));
+        EXPECT_TRUE(has_field(fields, "content-encoding: gzip"));
+        EXPECT_TRUE(!has_field(fields, "accept-ranges:"));
         if (test.expected_.has_value()) {
-            RUVIA_CHECK(has_field(fields, *test.expected_));
+            EXPECT_TRUE(has_field(fields, *test.expected_));
         } else {
-            RUVIA_CHECK(!has_field(fields, "etag:"));
+            EXPECT_TRUE(!has_field(fields, "etag:"));
         }
     }
 
@@ -451,14 +452,14 @@ RUVIA_TEST(http1_compression_rewrites_validators_and_range_support) {
     const auto identity = fetch_response(server.endpoint(),
         get_request("/compression-validators?etag=%22v1%22", "Accept-Encoding: identity\r\n"))
                               .value_or("");
-    RUVIA_CHECK(has_field(head_fields(identity), "etag: \"v1\""));
-    RUVIA_CHECK(has_field(head_fields(identity), "accept-ranges: bytes"));
+    EXPECT_TRUE(has_field(head_fields(identity), "etag: \"v1\""));
+    EXPECT_TRUE(has_field(head_fields(identity), "accept-ranges: bytes"));
     server.finish();
 }
 
 // One allowlist decides compressibility: already-compressed and unknown media
 // types, and a response without Content-Type, stay identity.
-RUVIA_TEST(http1_compression_encodes_only_compressible_media_types) {
+TEST(Ruvia, http1_compression_encodes_only_compressible_media_types) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const struct {
@@ -478,10 +479,10 @@ RUVIA_TEST(http1_compression_encodes_only_compressible_media_types) {
         const auto text = fetch_response(server.endpoint(),
             get_request("/compression-media?type=" + std::string(test.query_), "Accept-Encoding: gzip\r\n"))
                               .value_or("");
-        RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
-        RUVIA_CHECK_EQ(has_field(head_fields(text), "content-encoding: gzip"), test.encoded_);
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+        EXPECT_EQ(has_field(head_fields(text), "content-encoding: gzip"), test.encoded_);
         if (!test.encoded_) {
-            RUVIA_CHECK(response_body(text) == small_body);
+            EXPECT_TRUE(response_body(text) == small_body);
         }
     }
     server.finish();
@@ -489,17 +490,17 @@ RUVIA_TEST(http1_compression_encodes_only_compressible_media_types) {
 
 // RFC 9110 §12.5.5: an application-encoded body is sent or refused (406)
 // depending on Accept-Encoding, so the 200 varies on it like a framework coding.
-RUVIA_TEST(http1_application_encoded_responses_vary_on_accept_encoding) {
+TEST(Ruvia, http1_application_encoded_responses_vary_on_accept_encoding) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const std::string_view path :
         {std::string_view("/compression-custom-coding"), std::string_view("/compression-stream-custom")}) {
         const auto text = fetch_response(server.endpoint(), get_request(path, "Accept-Encoding: x-custom\r\n"))
                               .value_or("");
-        RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
         const auto fields = head_fields(text);
-        RUVIA_CHECK(has_field(fields, "content-encoding: x-custom"));
-        RUVIA_CHECK(has_field(fields, "vary: accept-encoding"));
+        EXPECT_TRUE(has_field(fields, "content-encoding: x-custom"));
+        EXPECT_TRUE(has_field(fields, "vary: accept-encoding"));
     }
     server.finish();
 }
@@ -507,7 +508,7 @@ RUVIA_TEST(http1_application_encoded_responses_vary_on_accept_encoding) {
 // RFC 9110 §8.4 / §14.6: a multipart/byteranges body cannot carry the coding of
 // the representation it slices, so several ranges of a precompressed variant
 // are answered with the full coded representation; one range stays a 206.
-RUVIA_TEST(http1_precompressed_variant_answers_multiple_ranges_in_full) {
+TEST(Ruvia, http1_precompressed_variant_answers_multiple_ranges_in_full) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "ruvia_response_compression_coded";
     std::error_code ignored;
@@ -527,20 +528,20 @@ RUVIA_TEST(http1_precompressed_variant_answers_multiple_ranges_in_full) {
     const auto multi = fetch_response(server.endpoint(),
         get_request("/compression-coded-static", "Accept-Encoding: gzip\r\nRange: bytes=0-1,4-5\r\n"))
                            .value_or("");
-    RUVIA_CHECK(multi.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(multi.starts_with("HTTP/1.1 200 "));
     const auto multi_fields = head_fields(multi);
-    RUVIA_CHECK(has_field(multi_fields, "content-encoding: gzip"));
-    RUVIA_CHECK(!has_field(multi_fields, "content-type: multipart/byteranges"));
-    RUVIA_CHECK(response_body(multi) == sidecar);
+    EXPECT_TRUE(has_field(multi_fields, "content-encoding: gzip"));
+    EXPECT_TRUE(!has_field(multi_fields, "content-type: multipart/byteranges"));
+    EXPECT_TRUE(response_body(multi) == sidecar);
 
     const auto single = fetch_response(server.endpoint(),
         get_request("/compression-coded-static", "Accept-Encoding: gzip\r\nRange: bytes=0-1\r\n"))
                             .value_or("");
-    RUVIA_CHECK(single.starts_with("HTTP/1.1 206 "));
+    EXPECT_TRUE(single.starts_with("HTTP/1.1 206 "));
     const auto single_fields = head_fields(single);
-    RUVIA_CHECK(has_field(single_fields, "content-encoding: gzip"));
-    RUVIA_CHECK(has_field(single_fields, "content-range: bytes 0-1/" + std::to_string(sidecar.size())));
-    RUVIA_CHECK(response_body(single) == "gz");
+    EXPECT_TRUE(has_field(single_fields, "content-encoding: gzip"));
+    EXPECT_TRUE(has_field(single_fields, "content-range: bytes 0-1/" + std::to_string(sidecar.size())));
+    EXPECT_TRUE(response_body(single) == "gz");
 
     // RFC 9110 §15.5.17: the empty 416 does not describe coded or typed content.
     for (const std::string_view coding : {"gzip", "gzip, identity;q=0"}) {
@@ -548,23 +549,23 @@ RUVIA_TEST(http1_precompressed_variant_answers_multiple_ranges_in_full) {
             get_request("/compression-coded-static",
                 "Accept-Encoding: " + std::string(coding) + "\r\nRange: bytes=100-200\r\n"))
                                      .value_or("");
-        RUVIA_CHECK(unsatisfied.starts_with("HTTP/1.1 416 "));
+        EXPECT_TRUE(unsatisfied.starts_with("HTTP/1.1 416 "));
         const auto unsatisfied_fields = head_fields(unsatisfied);
-        RUVIA_CHECK(!has_field(unsatisfied_fields, "content-encoding:"));
-        RUVIA_CHECK(!has_field(unsatisfied_fields, "content-type:"));
-        RUVIA_CHECK(has_field(unsatisfied_fields, "content-range: bytes */" + std::to_string(sidecar.size())));
-        RUVIA_CHECK(has_field(unsatisfied_fields, "accept-ranges: bytes"));
-        RUVIA_CHECK(has_field(unsatisfied_fields, "etag:"));
-        RUVIA_CHECK(has_field(unsatisfied_fields, "vary: accept-encoding"));
+        EXPECT_TRUE(!has_field(unsatisfied_fields, "content-encoding:"));
+        EXPECT_TRUE(!has_field(unsatisfied_fields, "content-type:"));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "content-range: bytes */" + std::to_string(sidecar.size())));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "accept-ranges: bytes"));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "etag:"));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "vary: accept-encoding"));
     }
 
     // The identity representation still answers several ranges with multipart.
     const auto identity = fetch_response(server.endpoint(),
         get_request("/compression-coded-static", "Accept-Encoding: identity\r\nRange: bytes=0-1,4-5\r\n"))
                               .value_or("");
-    RUVIA_CHECK(identity.starts_with("HTTP/1.1 206 "));
-    RUVIA_CHECK(has_field(head_fields(identity), "content-type: multipart/byteranges"));
-    RUVIA_CHECK(identity.find("\r\nContent-Encoding:") == std::string::npos);
+    EXPECT_TRUE(identity.starts_with("HTTP/1.1 206 "));
+    EXPECT_TRUE(has_field(head_fields(identity), "content-type: multipart/byteranges"));
+    EXPECT_TRUE(identity.find("\r\nContent-Encoding:") == std::string::npos);
     server.finish();
     coded_root.reset();
     fs::remove_all(dir, ignored);
@@ -573,41 +574,41 @@ RUVIA_TEST(http1_precompressed_variant_answers_multiple_ranges_in_full) {
 // RFC 9110 §8.6: a HEAD response's Content-Length equals the GET content length
 // or is absent. An explicit HEAD route that only declares the GET length must
 // get GET's coding without the encoded length of its own empty body.
-RUVIA_TEST(http1_explicit_head_route_matches_get_coding_without_false_length) {
+TEST(Ruvia, http1_explicit_head_route_matches_get_coding_without_false_length) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const std::string_view fields : {"Accept-Encoding: gzip\r\n", "Accept-Encoding: gzip, identity;q=0\r\n"}) {
         const auto get = fetch_response(server.endpoint(), get_request("/compression-head", fields)).value_or("");
-        RUVIA_CHECK(has_field(head_fields(get), "content-encoding: gzip"));
+        EXPECT_TRUE(has_field(head_fields(get), "content-encoding: gzip"));
         const auto head = fetch_response(server.endpoint(), head_request("/compression-head", fields)).value_or("");
-        RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
         const auto head_line_fields = head_fields(head);
-        RUVIA_CHECK(has_field(head_line_fields, "content-encoding: gzip"));
-        RUVIA_CHECK(!has_field(head_line_fields, "content-length:"));
-        RUVIA_CHECK(response_body(head).empty());
+        EXPECT_TRUE(has_field(head_line_fields, "content-encoding: gzip"));
+        EXPECT_TRUE(!has_field(head_line_fields, "content-length:"));
+        EXPECT_TRUE(response_body(head).empty());
     }
     // Without a declared length, identity stays and no length is claimed.
     const auto bare =
         fetch_response(server.endpoint(), head_request("/compression-head-bare", "Accept-Encoding: gzip\r\n"))
             .value_or("");
-    RUVIA_CHECK(bare.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(!has_field(head_fields(bare), "content-encoding:"));
-    RUVIA_CHECK(!has_field(head_fields(bare), "content-length:"));
+    EXPECT_TRUE(bare.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(!has_field(head_fields(bare), "content-encoding:"));
+    EXPECT_TRUE(!has_field(head_fields(bare), "content-length:"));
     const auto refused = fetch_response(server.endpoint(),
         head_request("/compression-head-bare", "Accept-Encoding: gzip, identity;q=0\r\n"))
                              .value_or("");
-    RUVIA_CHECK(refused.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(has_field(head_fields(refused), "content-encoding: gzip"));
-    RUVIA_CHECK(!has_field(head_fields(refused), "content-length:"));
+    EXPECT_TRUE(refused.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(refused), "content-encoding: gzip"));
+    EXPECT_TRUE(!has_field(head_fields(refused), "content-length:"));
     // Identity accepted with an identity GET keeps the declared length.
     const auto identity =
         fetch_response(server.endpoint(), head_request("/compression-head", "Accept-Encoding: identity\r\n"))
             .value_or("");
-    RUVIA_CHECK(has_field(head_fields(identity), "content-length: " + std::to_string(small_body.size())));
+    EXPECT_TRUE(has_field(head_fields(identity), "content-length: " + std::to_string(small_body.size())));
     server.finish();
 }
 
-RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_headers) {
+TEST(Ruvia, http1_head_fallback_on_empty_get_files_and_redirects_matches_get_headers) {
     namespace fs = std::filesystem;
     std::error_code ignored;
     fs::remove_all(file_dir(), ignored);
@@ -632,10 +633,10 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
             std::string_view("Accept-Encoding: gzip, identity;q=0\r\n")}) {
         const auto get = fetch_response(server.endpoint(), get_request("/compression-empty-get", fields)).value_or("");
         const auto head = fetch_response(server.endpoint(), head_request("/compression-empty-get", fields)).value_or("");
-        RUVIA_CHECK(get.starts_with("HTTP/1.1 200 "));
-        RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
-        RUVIA_CHECK(head_fields(get) == head_fields(head));
-        RUVIA_CHECK(response_body(head).empty());
+        EXPECT_TRUE(get.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head_fields(get) == head_fields(head));
+        EXPECT_TRUE(response_body(head).empty());
     }
 
     // 2. 0-byte file, 0-byte static_file, and redirect emit Content-Length: 0 on both GET and HEAD.
@@ -644,18 +645,18 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
             std::string_view("/compression-redirect")}) {
         const auto get = fetch_response(server.endpoint(), get_request(path, "")).value_or("");
         const auto head = fetch_response(server.endpoint(), head_request(path, "")).value_or("");
-        RUVIA_CHECK(head_fields(get) == head_fields(head));
-        RUVIA_CHECK(has_field(head_fields(head), "content-length: 0"));
-        RUVIA_CHECK(response_body(head).empty());
+        EXPECT_TRUE(head_fields(get) == head_fields(head));
+        EXPECT_TRUE(has_field(head_fields(head), "content-length: 0"));
+        EXPECT_TRUE(response_body(head).empty());
     }
 
     // 3. Explicit HEAD route with comma-separated identical Content-Length ("3000, 3000").
     const auto comma_head = fetch_response(
         server.endpoint(), head_request("/compression-head-comma", "Accept-Encoding: gzip\r\n"))
                                 .value_or("");
-    RUVIA_CHECK(comma_head.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(has_field(head_fields(comma_head), "content-encoding: gzip"));
-    RUVIA_CHECK(!has_field(head_fields(comma_head), "content-length:"));
+    EXPECT_TRUE(comma_head.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(comma_head), "content-encoding: gzip"));
+    EXPECT_TRUE(!has_field(head_fields(comma_head), "content-length:"));
 
     // 4. Explicit HEAD route with Content-Length: 0 keeps Content-Length: 0 when identity is accepted.
     const auto zero_declared_get = fetch_response(
@@ -664,8 +665,8 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
     const auto zero_declared_head = fetch_response(
         server.endpoint(), head_request("/compression-head-zero", "Accept-Encoding: gzip\r\n"))
                                         .value_or("");
-    RUVIA_CHECK(head_fields(zero_declared_get) == head_fields(zero_declared_head));
-    RUVIA_CHECK(has_field(head_fields(zero_declared_head), "content-length: 0"));
+    EXPECT_TRUE(head_fields(zero_declared_get) == head_fields(zero_declared_head));
+    EXPECT_TRUE(has_field(head_fields(zero_declared_head), "content-length: 0"));
     for (const std::string_view path :
         {std::string_view("/compression-head-zero"), std::string_view("/compression-zero-declared")}) {
         const auto refused_zero_get = fetch_response(
@@ -674,53 +675,53 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
         const auto refused_zero_head = fetch_response(
             server.endpoint(), head_request(path, "Accept-Encoding: gzip, identity;q=0\r\n"))
                                            .value_or("");
-        RUVIA_CHECK(head_fields(refused_zero_get) == head_fields(refused_zero_head));
-        RUVIA_CHECK(has_field(head_fields(refused_zero_head), "content-encoding: gzip"));
-        RUVIA_CHECK(has_field(head_fields(refused_zero_head), "content-length: 20"));
+        EXPECT_TRUE(head_fields(refused_zero_get) == head_fields(refused_zero_head));
+        EXPECT_TRUE(has_field(head_fields(refused_zero_head), "content-encoding: gzip"));
+        EXPECT_TRUE(has_field(head_fields(refused_zero_head), "content-length: 20"));
     }
 
     // 5. Custom Content-Encoding negotiation and mixed rejected coding stacks.
     const auto custom_ok = fetch_response(server.endpoint(),
         get_request("/compression-custom-coding", "Accept-Encoding: x-custom, identity;q=0\r\n"))
                                .value_or("");
-    RUVIA_CHECK(custom_ok.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(has_field(head_fields(custom_ok), "content-encoding: x-custom"));
+    EXPECT_TRUE(custom_ok.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(custom_ok), "content-encoding: x-custom"));
 
     const auto mixed_rejected = fetch_response(
         server.endpoint(), get_request("/compression-mixed-rejected", "Accept-Encoding: br;q=0\r\n"))
                                     .value_or("");
-    RUVIA_CHECK(mixed_rejected.starts_with("HTTP/1.1 406 "));
+    EXPECT_TRUE(mixed_rejected.starts_with("HTTP/1.1 406 "));
     const auto stream_custom_ok = fetch_response(server.endpoint(),
         get_request("/compression-stream-custom", "Accept-Encoding: x-custom, identity;q=0\r\n"))
                                       .value_or("");
-    RUVIA_CHECK(stream_custom_ok.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(has_field(head_fields(stream_custom_ok), "content-encoding: x-custom"));
+    EXPECT_TRUE(stream_custom_ok.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(stream_custom_ok), "content-encoding: x-custom"));
 
     const auto stream_custom_rejected = fetch_response(server.endpoint(),
         get_request("/compression-stream-custom", "Accept-Encoding: gzip\r\n"))
                                             .value_or("");
-    RUVIA_CHECK(stream_custom_rejected.starts_with("HTTP/1.1 406 "));
+    EXPECT_TRUE(stream_custom_rejected.starts_with("HTTP/1.1 406 "));
 
     const auto stream_mixed_rejected = fetch_response(server.endpoint(),
         get_request("/compression-stream-mixed", "Accept-Encoding: br, x-custom;q=0\r\n"))
                                            .value_or("");
-    RUVIA_CHECK(stream_mixed_rejected.starts_with("HTTP/1.1 406 "));
+    EXPECT_TRUE(stream_mixed_rejected.starts_with("HTTP/1.1 406 "));
 
     const auto stream_204 = fetch_response(server.endpoint(),
         get_request("/compression-stream-204", "Accept-Encoding: *;q=0\r\n"))
                                 .value_or("");
-    RUVIA_CHECK(stream_204.starts_with("HTTP/1.1 204 "));
+    EXPECT_TRUE(stream_204.starts_with("HTTP/1.1 204 "));
 
     const auto stream_304 = fetch_response(server.endpoint(),
         get_request("/compression-stream-304", "Accept-Encoding: *;q=0\r\n"))
                                 .value_or("");
-    RUVIA_CHECK(stream_304.starts_with("HTTP/1.1 304 "));
+    EXPECT_TRUE(stream_304.starts_with("HTTP/1.1 304 "));
 
     const auto range_416_custom = fetch_response(server.endpoint(),
         get_request("/compression-file",
             "Range: bytes=10000-20000\r\nAccept-Encoding: x-custom, identity;q=0\r\n"))
                                       .value_or("");
-    RUVIA_CHECK(range_416_custom.starts_with("HTTP/1.1 416 "));
+    EXPECT_TRUE(range_416_custom.starts_with("HTTP/1.1 416 "));
 
     // 6. Request Content-Encoding with >8 identity tokens does not fail with 415.
     const auto id9 = fetch_response(server.endpoint(),
@@ -728,8 +729,8 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
         "Content-Encoding: identity, identity, identity, identity, identity, identity, identity, identity, identity\r\n"
         "Content-Length: 5\r\nConnection: close\r\n\r\nhello")
                          .value_or("");
-    RUVIA_CHECK(id9.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(response_body(id9) == "hello");
+    EXPECT_TRUE(id9.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response_body(id9) == "hello");
 
     const auto gz_hello = *ruvia::encode_http_content(
         ruvia::http_content_coding::gzip, "hello", {.max_encoded_bytes_ = 1024});
@@ -739,8 +740,8 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
         "Content-Length: " +
             std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello))
                             .value_or("");
-    RUVIA_CHECK(id8_gz.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(response_body(id8_gz) == "hello");
+    EXPECT_TRUE(id8_gz.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response_body(id8_gz) == "hello");
 
     server.finish();
     resident_root.reset();

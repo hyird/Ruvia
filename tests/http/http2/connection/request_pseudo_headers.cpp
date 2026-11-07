@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -18,7 +20,6 @@
 
 #include "failing_memory_resource.h"
 #include "output_drain.h"
-#include "test_harness.h"
 
 namespace {
 
@@ -79,7 +80,7 @@ std::optional<ruvia::http2_request_head_event> take_request_head(ruvia::http2_co
 
 }  // namespace
 
-RUVIA_TEST(http2_request_pseudo_headers_preserve_every_regular_order) {
+TEST(Ruvia, http2_request_pseudo_headers_preserve_every_regular_order) {
     std::array order{pseudo_header::method, pseudo_header::scheme, pseudo_header::authority, pseudo_header::path};
     do {
         auto server = ruvia::http2_connection::server();
@@ -89,18 +90,18 @@ RUVIA_TEST(http2_request_pseudo_headers_preserve_every_regular_order) {
         }
         auto wire = opening_wire();
         append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
-        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
         auto head = take_request_head(server);
-        RUVIA_CHECK(head.has_value());
+        EXPECT_TRUE(head.has_value());
         if (head) {
             const auto view = head->request_view();
-            RUVIA_CHECK(same_order(view.pseudo_header_order_, order));
-            RUVIA_CHECK(view.method_ == "GET" && view.scheme_ == "https" && view.path_ == "/" && view.authority_ == "example.test");
+            EXPECT_TRUE(same_order(view.pseudo_header_order_, order));
+            EXPECT_TRUE(view.method_ == "GET" && view.scheme_ == "https" && view.path_ == "/" && view.authority_ == "example.test");
         }
     } while (std::next_permutation(order.begin(), order.end()));
 }
 
-RUVIA_TEST(http2_request_pseudo_headers_do_not_synthesize_authority_from_host) {
+TEST(Ruvia, http2_request_pseudo_headers_do_not_synthesize_authority_from_host) {
     auto server = ruvia::http2_connection::server();
     constexpr std::array order{pseudo_header::path, pseudo_header::method, pseudo_header::scheme};
     std::pmr::string block;
@@ -110,16 +111,16 @@ RUVIA_TEST(http2_request_pseudo_headers_do_not_synthesize_authority_from_host) {
     ruvia::hpack_encoder::encode_header(block, "host", "example.test");
     auto wire = opening_wire();
     append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
-    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
     auto head = take_request_head(server);
-    RUVIA_CHECK(head.has_value());
+    EXPECT_TRUE(head.has_value());
     if (head) {
-        RUVIA_CHECK(head->request_view().authority_ == "example.test");
-        RUVIA_CHECK(same_order(head->request_view().pseudo_header_order_, order));
+        EXPECT_TRUE(head->request_view().authority_ == "example.test");
+        EXPECT_TRUE(same_order(head->request_view().pseudo_header_order_, order));
     }
 }
 
-RUVIA_TEST(http2_request_pseudo_headers_huffman_dynamic_index_and_continuation) {
+TEST(Ruvia, http2_request_pseudo_headers_huffman_dynamic_index_and_continuation) {
     // RFC 7541 C.4.1: Huffman authority inserted at dynamic index 62.
     const std::string block("\x82\x86\x84\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", 17);
     for (std::size_t split = 0; split <= block.size(); ++split) {
@@ -127,32 +128,32 @@ RUVIA_TEST(http2_request_pseudo_headers_huffman_dynamic_index_and_continuation) 
         auto first = opening_wire();
         append_frame(first, ruvia::http2_frame_type::headers, 0x1, 1, std::string_view(block).substr(0, split));
         (void)server.feed(first);
-        RUVIA_CHECK(!server.next_event());
+        EXPECT_TRUE(!server.next_event());
         std::string final;
         append_frame(final, ruvia::http2_frame_type::continuation, 0x4, 1, std::string_view(block).substr(split));
-        RUVIA_CHECK(server.feed(final) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(server.feed(final) == ruvia::http2_feed_result::accepted);
         auto head = take_request_head(server);
         constexpr std::array expected{pseudo_header::method, pseudo_header::scheme, pseudo_header::path, pseudo_header::authority};
-        RUVIA_CHECK(head.has_value());
+        EXPECT_TRUE(head.has_value());
         if (head) {
-            RUVIA_CHECK(head->request_view().authority_ == "www.example.com");
-            RUVIA_CHECK(same_order(head->request_view().pseudo_header_order_, expected));
+            EXPECT_TRUE(head->request_view().authority_ == "www.example.com");
+            EXPECT_TRUE(same_order(head->request_view().pseudo_header_order_, expected));
         }
         std::string next;
         append_frame(next, ruvia::http2_frame_type::headers, 0x5, 3, "\xbe\x84\x87\x82");
-        RUVIA_CHECK(server.feed(next) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(server.feed(next) == ruvia::http2_feed_result::accepted);
         auto indexed = take_request_head(server);
         constexpr std::array indexed_order{pseudo_header::authority, pseudo_header::path, pseudo_header::scheme, pseudo_header::method};
-        RUVIA_CHECK(indexed.has_value());
+        EXPECT_TRUE(indexed.has_value());
         if (indexed) {
-            RUVIA_CHECK(indexed->request_view().authority_ == "www.example.com");
-            RUVIA_CHECK(same_order(indexed->request_view().pseudo_header_order_, indexed_order));
+            EXPECT_TRUE(indexed->request_view().authority_ == "www.example.com");
+            EXPECT_TRUE(same_order(indexed->request_view().pseudo_header_order_, indexed_order));
         }
-        RUVIA_CHECK(!server.connection_error());
+        EXPECT_TRUE(!server.connection_error());
     }
 }
 
-RUVIA_TEST(http2_request_pseudo_headers_preserve_both_connect_forms) {
+TEST(Ruvia, http2_request_pseudo_headers_preserve_both_connect_forms) {
     for (const bool extended : {false, true}) {
         auto server = ruvia::http2_connection::server();
         (void)ruvia::testing::drain_output(server);
@@ -169,45 +170,45 @@ RUVIA_TEST(http2_request_pseudo_headers_preserve_both_connect_forms) {
         }
         auto wire = opening_wire();
         append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
-        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
         auto head = take_request_head(server);
         constexpr std::array extended_order{pseudo_header::protocol, pseudo_header::path, pseudo_header::scheme, pseudo_header::authority, pseudo_header::method};
         const auto expected = std::span(extended_order).subspan(extended ? 0 : 3);
-        RUVIA_CHECK(head.has_value());
+        EXPECT_TRUE(head.has_value());
         if (head) {
-            RUVIA_CHECK(head->snapshot().connect_pending_);
-            RUVIA_CHECK(same_order(head->request_view().pseudo_header_order_, expected));
+            EXPECT_TRUE(head->snapshot().connect_pending_);
+            EXPECT_TRUE(same_order(head->request_view().pseudo_header_order_, expected));
         }
     }
 }
 
-RUVIA_TEST(http2_invalid_pseudo_headers_do_not_publish_but_keep_dynamic_table_sync) {
+TEST(Ruvia, http2_invalid_pseudo_headers_do_not_publish_but_keep_dynamic_table_sync) {
     auto server = ruvia::http2_connection::server();
     auto wire = opening_wire();
     // A duplicate :method fails request semantics, but the later incremental
     // :path literal must still become dynamic index 62 (RFC 7541 section 2.3.2).
     const std::string malformed("\x82\x82\x44\x07/synced", 11);
     append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, malformed);
-    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-    RUVIA_CHECK(!take_request_head(server));
-    RUVIA_CHECK(server.stream_aborted(1));
+    EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(!take_request_head(server));
+    EXPECT_TRUE(server.stream_aborted(1));
     std::pmr::string indexed("\xbe\x87\x82", 3);
     encode_pseudo_header(indexed, pseudo_header::authority);
     std::string next;
     append_frame(next, ruvia::http2_frame_type::headers, 0x5, 3, indexed);
-    RUVIA_CHECK(server.feed(next) == ruvia::http2_feed_result::accepted);
+    EXPECT_TRUE(server.feed(next) == ruvia::http2_feed_result::accepted);
     auto head = take_request_head(server);
     constexpr std::array expected{pseudo_header::path, pseudo_header::scheme, pseudo_header::method, pseudo_header::authority};
-    RUVIA_CHECK(head.has_value());
+    EXPECT_TRUE(head.has_value());
     if (head) {
-        RUVIA_CHECK_EQ(head->stream_id(), std::uint32_t{3});
-        RUVIA_CHECK(head->request_view().path_ == "/synced");
-        RUVIA_CHECK(same_order(head->request_view().pseudo_header_order_, expected));
+        EXPECT_EQ(head->stream_id(), std::uint32_t{3});
+        EXPECT_TRUE(head->request_view().path_ == "/synced");
+        EXPECT_TRUE(same_order(head->request_view().pseudo_header_order_, expected));
     }
-    RUVIA_CHECK(!server.connection_error());
+    EXPECT_TRUE(!server.connection_error());
 }
 
-RUVIA_TEST(http2_request_pseudo_header_lease_survives_reset_move_and_later_input) {
+TEST(Ruvia, http2_request_pseudo_header_lease_survives_reset_move_and_later_input) {
     failing_memory_resource resource;
     {
         std::optional<ruvia::http2_request_head_event> lease;
@@ -222,48 +223,48 @@ RUVIA_TEST(http2_request_pseudo_header_lease_survives_reset_move_and_later_input
             auto wire = opening_wire();
             append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
             append_frame(wire, ruvia::http2_frame_type::rst_stream, 0, 1, std::string_view("\0\0\0\x08", 4));
-            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
             auto received = take_request_head(server);
-            RUVIA_CHECK(received.has_value());
+            EXPECT_TRUE(received.has_value());
             if (!received) {
                 return;
             }
             lease.emplace(std::move(*received));
             saved = lease->request_view();
-            RUVIA_CHECK(same_order(saved.pseudo_header_order_, expected));
+            EXPECT_TRUE(same_order(saved.pseudo_header_order_, expected));
             auto moved = std::move(server);
             std::string next;
             append_frame(next, ruvia::http2_frame_type::headers, 0x5, 3, block);
-            RUVIA_CHECK(moved.feed(next) == ruvia::http2_feed_result::accepted);
+            EXPECT_TRUE(moved.feed(next) == ruvia::http2_feed_result::accepted);
             auto following = take_request_head(moved);
-            RUVIA_CHECK(following.has_value());
-            RUVIA_CHECK(same_order(saved.pseudo_header_order_, expected));
-            RUVIA_CHECK(same_order(lease->request_view().pseudo_header_order_, expected));
+            EXPECT_TRUE(following.has_value());
+            EXPECT_TRUE(same_order(saved.pseudo_header_order_, expected));
+            EXPECT_TRUE(same_order(lease->request_view().pseudo_header_order_, expected));
             moved = ruvia::http2_connection::server({.resource_ = &resource});
         }
-        RUVIA_CHECK(saved.authority_ == "example.test");
-        RUVIA_CHECK(same_order(saved.pseudo_header_order_, expected));
-        RUVIA_CHECK(same_order(lease->request_view().pseudo_header_order_, expected));
+        EXPECT_TRUE(saved.authority_ == "example.test");
+        EXPECT_TRUE(same_order(saved.pseudo_header_order_, expected));
+        EXPECT_TRUE(same_order(lease->request_view().pseudo_header_order_, expected));
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(http2_locally_synthesized_push_has_no_received_pseudo_header_order) {
+TEST(Ruvia, http2_locally_synthesized_push_has_no_received_pseudo_header_order) {
     ruvia::testing::output_relay relay;
     auto client = ruvia::http2_connection::client({.enable_push_ = true});
     auto server = ruvia::http2_connection::server();
     relay.transfer(client, server);
     relay.transfer(server, client);
     relay.transfer(client, server);
-    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(client.submit_request_head(
+    EXPECT_TRUE(std::holds_alternative<std::uint32_t>(client.submit_request_head(
         ruvia::http2_regular_request_head_view{.authority_ = "example.test"})));
     relay.transfer(client, server);
     auto parent = take_request_head(server);
-    RUVIA_CHECK(parent.has_value());
+    EXPECT_TRUE(parent.has_value());
     auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/asset"});
-    RUVIA_CHECK(pushed.index() == 0);
+    EXPECT_TRUE(pushed.index() == 0);
     if (pushed.index() == 0) {
-        RUVIA_CHECK(std::get<0>(pushed).request_view().pseudo_header_order_.empty());
-        RUVIA_CHECK(std::get<0>(pushed).request_view().path_ == "/asset");
+        EXPECT_TRUE(std::get<0>(pushed).request_view().pseudo_header_order_.empty());
+        EXPECT_TRUE(std::get<0>(pushed).request_view().path_ == "/asset");
     }
 }

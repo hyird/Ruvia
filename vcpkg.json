@@ -68,6 +68,12 @@
         "openssl"
       ]
     },
+    "tests": {
+      "description": "Build the GoogleTest suites.",
+      "dependencies": [
+        "gtest"
+      ]
+    },
     "mariadb": {
       "description": "Build MariaDB-compatible database APIs.",
       "dependencies": [

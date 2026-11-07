@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -18,7 +20,6 @@
 
 #include "backend_client_fixture.h"
 #include "pipeline_support.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -170,7 +171,7 @@ inline ruvia::task<void> execute_with(
 
 // A statement is prepared on its second use and executed in the binary
 // protocol from then on, while it runs alone on its connection.
-RUVIA_TEST(db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
+TEST(Ruvia, db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     peer_type peer({{.rows_ = {"a"}}, {.rows_ = {"b"}}, {.rows_ = {"c"}}}, peer_type::after_startup::idle);
@@ -184,10 +185,10 @@ RUVIA_TEST(db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
             co_await pipeline_test::query_id(handle, "SELECT v FROM t WHERE id = ?", 7, result);
         }
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT v FROM t WHERE id = 7", "prepare:SELECT v FROM t WHERE id = ?",
                      "execute:1:i:7", "execute:1:i:7"}));
 }
@@ -195,7 +196,7 @@ RUVIA_TEST(db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
 // Parameters travel in the binary protocol with the types their literals
 // read as: an unsigned integer within INT64_MAX is a signed BIGINT, as its
 // literal is.
-RUVIA_TEST(db_mariadb_prepared_parameters_keep_their_types) {
+TEST(Ruvia, db_mariadb_prepared_parameters_keep_their_types) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     peer_type peer({{.rows_ = {"a"}}, {.rows_ = {"b"}}}, peer_type::after_startup::idle);
@@ -213,20 +214,20 @@ RUVIA_TEST(db_mariadb_prepared_parameters_keep_their_types) {
             result = std::string(rows.front()["v"].value().value_or(""));
         }
     });
-    RUVIA_CHECK(results[0] == "a");
-    RUVIA_CHECK(results[1] == "b");
+    EXPECT_TRUE(results[0] == "a");
+    EXPECT_TRUE(results[1] == "b");
     const auto commands = peer.maria_commands();
-    RUVIA_CHECK_EQ(commands.size(), std::size_t{3});
-    RUVIA_CHECK(commands.front() ==
+    EXPECT_EQ(commands.size(), std::size_t{3});
+    EXPECT_TRUE(commands.front() ==
                 "query:SELECT v FROM t WHERE a = 42 AND b = 'it''s' AND c = 1.5e0 AND d <=> NULL "
                 "AND e = 1 AND f = 7");
-    RUVIA_CHECK(commands.back() == "execute:1:i:42,s:it's,d:1.5,null,t:1,i:7");
+    EXPECT_TRUE(commands.back() == "execute:1:i:42,s:it's,d:1.5,null,t:1,i:7");
 }
 
 // Values read in the binary protocol become the text the text protocol sends
 // for them. Each expected text below was read from MariaDB 11.8's text
 // protocol for the same stored value.
-RUVIA_TEST(db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
+TEST(Ruvia, db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<std::pair<double, std::string>> doubles{{0.1, "0.1"}, {1e20, "1e20"}, {1e15, "1e15"},
@@ -263,11 +264,11 @@ RUVIA_TEST(db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
         co_await twice(connected.handle({.timeout_ = std::chrono::seconds(5)}), "SELECT d, f FROM reals",
             text_rows, prepared_rows);
     });
-    RUVIA_CHECK(prepared_rows.has_value());
-    RUVIA_CHECK((values(*prepared_rows) == expected));
+    EXPECT_TRUE(prepared_rows.has_value());
+    EXPECT_TRUE((values(*prepared_rows) == expected));
 }
 
-RUVIA_TEST(db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
+TEST(Ruvia, db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<column> columns{{.name_ = "dd", .type_ = type_double, .decimals_ = 6, .length_ = 20},
@@ -309,13 +310,13 @@ RUVIA_TEST(db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
         co_await twice(
             connected.handle({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM typed", text_rows, prepared_rows);
     });
-    RUVIA_CHECK(prepared_rows.has_value());
-    RUVIA_CHECK((values(*prepared_rows) == expected));
-    RUVIA_CHECK((prepared_rows->front()["dt3"].value() == std::optional<std::string_view>("2001-02-03 04:05:06.789")));
+    EXPECT_TRUE(prepared_rows.has_value());
+    EXPECT_TRUE((values(*prepared_rows) == expected));
+    EXPECT_TRUE((prepared_rows->front()["dt3"].value() == std::optional<std::string_view>("2001-02-03 04:05:06.789")));
 }
 
 // A statement the server will not prepare runs as text from then on.
-RUVIA_TEST(db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
+TEST(Ruvia, db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     peer_type peer({{.rows_ = {"a"}},
@@ -335,16 +336,16 @@ RUVIA_TEST(db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
             co_await pipeline_test::query(handle, "SHOW v", result);
         }
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SHOW v", "prepare:SHOW v", "query:SHOW v", "query:SHOW v"}));
 }
 
 // A statement the server no longer holds is prepared and run once more; the
 // handle it dropped is closed on the server.
-RUVIA_TEST(db_mariadb_stale_prepared_statement_is_prepared_again_once) {
+TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     const peer_type::maria_reply unknown{
@@ -361,12 +362,12 @@ RUVIA_TEST(db_mariadb_stale_prepared_statement_is_prepared_again_once) {
             co_await pipeline_test::query(handle, "SELECT v FROM t", result);
         }
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
     // Stale again on its retry: the error reaches the caller.
-    RUVIA_CHECK(outcomes[3].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[3].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t", "execute:1:",
                      "execute:1:", "close:1", "prepare:SELECT v FROM t", "execute:2:", "execute:2:", "close:2",
                      "prepare:SELECT v FROM t", "execute:3:"}));
@@ -377,7 +378,7 @@ RUVIA_TEST(db_mariadb_stale_prepared_statement_is_prepared_again_once) {
 // pipelined text, since the binary protocol cannot share the connection. The
 // peer holds the prepared execution's response until the others have
 // arrived, so the first is still running when they do.
-RUVIA_TEST(db_mariadb_cached_statements_arriving_together_run_as_pipelined_text) {
+TEST(Ruvia, db_mariadb_cached_statements_arriving_together_run_as_pipelined_text) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     peer_type peer({{.rows_ = {"a"}}, {.rows_ = {"b"}}, {.rows_ = {"c"}, .hold_ = 1}, {.rows_ = {"d"}, .batch_ = 2},
@@ -399,15 +400,15 @@ RUVIA_TEST(db_mariadb_cached_statements_arriving_together_run_as_pipelined_text)
         co_await together.join();
     });
     for (std::size_t index = 0; index < outcomes.size(); ++index) {
-        RUVIA_CHECK(outcomes[index].value_ == std::string(1, static_cast<char>('a' + index)));
+        EXPECT_TRUE(outcomes[index].value_ == std::string(1, static_cast<char>('a' + index)));
     }
-    RUVIA_CHECK((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t",
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t",
                                               "execute:1:", "execute:1:", "query:SELECT v FROM t",
                                               "query:SELECT v FROM t"}));
 }
 
 // Inside a transaction a statement is prepared on its second use as well.
-RUVIA_TEST(db_mariadb_transaction_statement_runs_prepared_from_its_second_use) {
+TEST(Ruvia, db_mariadb_transaction_statement_runs_prepared_from_its_second_use) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     peer_type peer({{.column_ = "", .status_ = 3}, {.rows_ = {"a"}, .status_ = 3}, {.rows_ = {"b"}, .status_ = 3},
@@ -425,16 +426,16 @@ RUVIA_TEST(db_mariadb_transaction_statement_runs_prepared_from_its_second_use) {
         }
         co_await transaction.commit();
     });
-    RUVIA_CHECK(results[0] == "a");
-    RUVIA_CHECK(results[1] == "b");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(results[0] == "a");
+    EXPECT_TRUE(results[1] == "b");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:START TRANSACTION", "query:SELECT v FROM t WHERE id = 3",
                      "prepare:SELECT v FROM t WHERE id = ?", "execute:1:i:3", "query:COMMIT"}));
 }
 
 // The least recently used statement is closed on the server when a new one
 // needs its room.
-RUVIA_TEST(db_mariadb_least_recently_used_prepared_statement_is_closed_for_a_new_one) {
+TEST(Ruvia, db_mariadb_least_recently_used_prepared_statement_is_closed_for_a_new_one) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     constexpr std::size_t statements = 129;
@@ -455,18 +456,18 @@ RUVIA_TEST(db_mariadb_least_recently_used_prepared_statement_is_closed_for_a_new
             }
         }
     });
-    RUVIA_CHECK_EQ(failures, std::size_t{0});
+    EXPECT_EQ(failures, std::size_t{0});
     const auto commands = peer.maria_commands();
-    RUVIA_CHECK_EQ(commands.size(), statements * 3 + 1);
+    EXPECT_EQ(commands.size(), statements * 3 + 1);
     // The first statement's handle goes before the last one is prepared.
-    RUVIA_CHECK(commands[commands.size() - 3] == "close:1");
-    RUVIA_CHECK(commands[commands.size() - 2] == "prepare:SELECT v FROM t128");
+    EXPECT_TRUE(commands[commands.size() - 3] == "close:1");
+    EXPECT_TRUE(commands[commands.size() - 2] == "prepare:SELECT v FROM t128");
 }
 
 // A server error numbered above the client library's range (4025, a violated
 // CHECK constraint) is the prepared statement's own failure, as it is for the
 // statement run as text; the connection is kept.
-RUVIA_TEST(db_mariadb_prepared_server_error_above_the_client_range_is_the_statements_own) {
+TEST(Ruvia, db_mariadb_prepared_server_error_above_the_client_range_is_the_statements_own) {
     using namespace ruvia;
     using mariadb_statement_test::peer_type;
     peer_type peer({{.column_ = "", .affected_rows_ = 1},
@@ -486,14 +487,14 @@ RUVIA_TEST(db_mariadb_prepared_server_error_above_the_client_range_is_the_statem
             co_await pipeline_test::execute(handle, "INSERT INTO t (v) VALUES (1)", result);
         }
     });
-    RUVIA_CHECK_EQ(outcomes[0].affected_rows_, std::uint64_t{1});
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[1].sql_state_ == "23000");
-    RUVIA_CHECK_EQ(outcomes[2].affected_rows_, std::uint64_t{1});
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_EQ(outcomes[0].affected_rows_, std::uint64_t{1});
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "23000");
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{1});
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:INSERT INTO t (v) VALUES (1)",
                      "prepare:INSERT INTO t (v) VALUES (1)", "execute:1:", "execute:1:"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A call runs prepared only with parameters the server reads as it reads
@@ -504,7 +505,7 @@ RUVIA_TEST(db_mariadb_prepared_server_error_above_the_client_range_is_the_statem
 // unsigned value above INT64_MAX makes arithmetic unsigned only as a
 // parameter (3 - ? with 5 is -2 as text, an error prepared). Those calls run
 // as text, while the statement stays prepared for the others.
-RUVIA_TEST(db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text) {
+TEST(Ruvia, db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     constexpr std::string_view sql = "SELECT v FROM t WHERE a = ?";
@@ -527,9 +528,9 @@ RUVIA_TEST(db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text)
         co_await query_with(handle, sql, outcomes[9], -0.0);
     });
     for (const auto& result : outcomes) {
-        RUVIA_CHECK(result.value_ == "v");
+        EXPECT_TRUE(result.value_ == "v");
     }
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT v FROM t WHERE a = 5", "prepare:SELECT v FROM t WHERE a = ?",
                      "execute:1:i:6", "query:SELECT v FROM t WHERE a = -1",
                      "query:SELECT v FROM t WHERE a = -9223372036854775808",
@@ -542,7 +543,7 @@ RUVIA_TEST(db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text)
 // FETCH counts), it refuses a string, a real, NULL or a negative number with
 // a syntax error, while a parameter there would take them: such a call runs
 // as text. Parameters elsewhere in the statement are not restricted.
-RUVIA_TEST(db_mariadb_integer_only_placeholders_run_prepared_only_with_integers) {
+TEST(Ruvia, db_mariadb_integer_only_placeholders_run_prepared_only_with_integers) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     constexpr std::string_view limit = "SELECT v FROM t LIMIT ?";
@@ -579,7 +580,7 @@ RUVIA_TEST(db_mariadb_integer_only_placeholders_run_prepared_only_with_integers)
         }
     });
     for (const auto& result : outcomes) {
-        RUVIA_CHECK(result.value_ == "v");
+        EXPECT_TRUE(result.value_ == "v");
     }
     const std::vector<std::string> expected{"query:SELECT v FROM t LIMIT 2", "prepare:SELECT v FROM t LIMIT ?",
         "execute:1:i:3", "query:SELECT v FROM t LIMIT '4'", "query:SELECT v FROM t LIMIT 1.5e0",
@@ -592,7 +593,7 @@ RUVIA_TEST(db_mariadb_integer_only_placeholders_run_prepared_only_with_integers)
         "prepare:SELECT v FROM t ORDER BY v OFFSET ? ROWS FETCH FIRST ? ROWS ONLY", "execute:3:i:1,i:2",
         "query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY",
         "query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY"};
-    RUVIA_CHECK((peer.maria_commands() == expected));
+    EXPECT_TRUE((peer.maria_commands() == expected));
 }
 
 // Statements the binary protocol cannot run as the text protocol does are
@@ -601,7 +602,7 @@ RUVIA_TEST(db_mariadb_integer_only_placeholders_run_prepared_only_with_integers)
 // statement with RETURNING (a re-run after its result changed shape would
 // repeat its writes), one led by an executable comment, whose content the
 // server runs, and a LOAD. A statement in parentheses is prepared as usual.
-RUVIA_TEST(db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_prepared) {
+TEST(Ruvia, db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_prepared) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     constexpr std::array<std::string_view, 4> text_only{"/* note */ CALL p()",
@@ -628,7 +629,7 @@ RUVIA_TEST(db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_pr
         }
     });
     for (const auto& result : outcomes) {
-        RUVIA_CHECK(result.value_ == "v");
+        EXPECT_TRUE(result.value_ == "v");
     }
     std::vector<std::string> expected;
     for (const auto sql : text_only) {
@@ -636,14 +637,14 @@ RUVIA_TEST(db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_pr
     }
     expected.insert(expected.end(), {"query:(SELECT v FROM t)", "query:SELECT @@session_track_system_variables",
                                         "prepare:(SELECT v FROM t)", "execute:1:", "execute:1:"});
-    RUVIA_CHECK((peer.maria_commands() == expected));
+    EXPECT_TRUE((peer.maria_commands() == expected));
 }
 
 // Values of a column without a fixed scale read as the text protocol sends
 // them: a DATETIME or TIME of AUTO_SEC_PART_DIGITS shows six fractional
 // digits when the value has a fraction and none otherwise; a non-finite
 // DOUBLE, also of a fixed scale, is written as 0.
-RUVIA_TEST(db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_protocol_sends_them) {
+TEST(Ruvia, db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_protocol_sends_them) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     constexpr std::uint8_t auto_digits = 39;
@@ -668,8 +669,8 @@ RUVIA_TEST(db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_pro
         co_await twice(
             connected.handle({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM auto", text_rows, prepared_rows);
     });
-    RUVIA_CHECK(prepared_rows.has_value());
-    RUVIA_CHECK((values(*prepared_rows) == expected));
+    EXPECT_TRUE(prepared_rows.has_value());
+    EXPECT_TRUE((values(*prepared_rows) == expected));
 }
 
 // The text protocol pads a YEAR column's value to four digits when it comes
@@ -678,7 +679,7 @@ RUVIA_TEST(db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_pro
 // of the execution: a UNION of YEAR columns is prepared with ZEROFILL and
 // runs without it. A statement whose prepared result holds a YEAR runs as
 // text.
-RUVIA_TEST(db_mariadb_statement_with_a_year_column_runs_as_text) {
+TEST(Ruvia, db_mariadb_statement_with_a_year_column_runs_as_text) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<column> padded{
@@ -702,12 +703,12 @@ RUVIA_TEST(db_mariadb_statement_with_a_year_column_runs_as_text) {
         }
     });
     for (const std::size_t index : {0, 1, 2}) {
-        RUVIA_CHECK(outcomes[index].value_ == "0000");
+        EXPECT_TRUE(outcomes[index].value_ == "0000");
     }
     for (const std::size_t index : {3, 4, 5}) {
-        RUVIA_CHECK(outcomes[index].value_ == "0");
+        EXPECT_TRUE(outcomes[index].value_ == "0");
     }
-    RUVIA_CHECK((peer.maria_commands() == std::vector<std::string>{"query:SELECT y FROM t UNION ALL SELECT y FROM u",
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>{"query:SELECT y FROM t UNION ALL SELECT y FROM u",
                                               "prepare:SELECT y FROM t UNION ALL SELECT y FROM u",
                                               "query:SELECT y FROM t UNION ALL SELECT y FROM u",
                                               "query:SELECT y FROM t UNION ALL SELECT y FROM u",
@@ -721,7 +722,7 @@ RUVIA_TEST(db_mariadb_statement_with_a_year_column_runs_as_text) {
 // with ZEROFILL reads padded, as the text protocol sends it; one without it
 // cannot be told from its binary value, and the server has run the statement
 // already, so it fails once and runs as text from its next use.
-RUVIA_TEST(db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_once) {
+TEST(Ruvia, db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_once) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<column> number{{.name_ = "y", .type_ = type_long, .length_ = 11}};
@@ -749,12 +750,12 @@ RUVIA_TEST(db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_o
         co_await query_with(handle, "SELECT y FROM u", outcomes[1]);
         co_await query_with(handle, "SELECT y FROM u", outcomes[2]);
     });
-    RUVIA_CHECK(padded_rows.has_value());
-    RUVIA_CHECK((values(*padded_rows) == std::vector<std::optional<std::string>>{"0000", "2155"}));
-    RUVIA_CHECK(outcomes[0].value_ == "y");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[2].value_ == "0");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(padded_rows.has_value());
+    EXPECT_TRUE((values(*padded_rows) == std::vector<std::optional<std::string>>{"0000", "2155"}));
+    EXPECT_TRUE(outcomes[0].value_ == "y");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].value_ == "0");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT y FROM t", "prepare:SELECT y FROM t", "execute:1:",
                      "query:SELECT y FROM u", "prepare:SELECT y FROM u", "execute:2:", "query:SELECT y FROM u"}));
 }
@@ -765,7 +766,7 @@ RUVIA_TEST(db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_o
 // again would repeat what it did (NEXTVAL() in a SELECT): the statement fails
 // once, as a statement, with its result read past, and is prepared anew on
 // its next use.
-RUVIA_TEST(db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_prepared_anew) {
+TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_prepared_anew) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<column> one{{.name_ = "v"}};
@@ -784,21 +785,21 @@ RUVIA_TEST(db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_pre
             co_await query_with(handle, "SELECT NEXTVAL(s), t.* FROM t", result);
         }
     });
-    RUVIA_CHECK(outcomes[0].value_ == "1");
-    RUVIA_CHECK(outcomes[1].value_ == "1");
-    RUVIA_CHECK(outcomes[2].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[2].value_.empty());
-    RUVIA_CHECK(outcomes[3].value_ == "3|2");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[0].value_ == "1");
+    EXPECT_TRUE(outcomes[1].value_ == "1");
+    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].value_.empty());
+    EXPECT_TRUE(outcomes[3].value_ == "3|2");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT NEXTVAL(s), t.* FROM t", "prepare:SELECT NEXTVAL(s), t.* FROM t",
                      "execute:1:", "execute:1:", "close:1", "prepare:SELECT NEXTVAL(s), t.* FROM t", "execute:2:"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // Inside a transaction the statement whose result changed shape fails as a
 // statement, not as a lost connection: the transaction rolls back on the
 // same connection, and the statement is prepared anew on its next use.
-RUVIA_TEST(db_mariadb_statement_whose_result_changed_shape_fails_inside_a_transaction) {
+TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_transaction) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<column> one{{.name_ = "v"}};
@@ -827,14 +828,14 @@ RUVIA_TEST(db_mariadb_statement_whose_result_changed_shape_fails_inside_a_transa
         }
         co_await pipeline_test::query(handle, "SELECT * FROM t", after);
     });
-    RUVIA_CHECK((results == std::vector<std::string>{"1", "1"}));
-    RUVIA_CHECK(failure == db_error::code_type::statement_failed);
-    RUVIA_CHECK(after.value_ == "after");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE((results == std::vector<std::string>{"1", "1"}));
+    EXPECT_TRUE(failure == db_error::code_type::statement_failed);
+    EXPECT_TRUE(after.value_ == "after");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:START TRANSACTION", "query:SELECT * FROM t", "prepare:SELECT * FROM t",
                      "execute:1:", "execute:1:", "query:ROLLBACK", "close:1", "prepare:SELECT * FROM t",
                      "execute:2:"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A prepare whose command is still being written when its statement is
@@ -842,7 +843,7 @@ RUVIA_TEST(db_mariadb_statement_whose_result_changed_shape_fails_inside_a_transa
 // statement text the connection's cache owns: the stopped caller's text is
 // gone by then. The peer reads nothing until the caller has left, so the
 // write is suspended when it does.
-RUVIA_TEST(db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_text) {
+TEST(Ruvia, db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_text) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     std::string sql = "SELECT v FROM t /* ";
@@ -870,25 +871,25 @@ RUVIA_TEST(db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_te
         co_await second.join();
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[3]);
     });
-    RUVIA_CHECK(outcomes[0].value_ == "text");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::cancelled);
-    RUVIA_CHECK(outcomes[2].value_ == "second");
-    RUVIA_CHECK(outcomes[3].value_ == "third");
+    EXPECT_TRUE(outcomes[0].value_ == "text");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[2].value_ == "second");
+    EXPECT_TRUE(outcomes[3].value_ == "third");
     const auto commands = peer.maria_commands();
-    RUVIA_CHECK_EQ(commands.size(), std::size_t{5});
+    EXPECT_EQ(commands.size(), std::size_t{5});
     if (commands.size() == 5) {
-        RUVIA_CHECK(commands[1] == "prepare:" + sql);
-        RUVIA_CHECK((std::vector<std::string>(commands.begin() + 2, commands.end()) ==
+        EXPECT_TRUE(commands[1] == "prepare:" + sql);
+        EXPECT_TRUE((std::vector<std::string>(commands.begin() + 2, commands.end()) ==
                      std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t", "execute:2:"}));
     }
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A prepared statement whose rows end in an error (a DOUBLE out of range)
 // fails alone and leaves nothing pending: it is reset to its prepared state,
 // and another statement found stale afterwards is still closed on the server
 // and prepared anew.
-RUVIA_TEST(db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_usable) {
+TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_usable) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const reply unknown{.error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
@@ -912,24 +913,24 @@ RUVIA_TEST(db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_u
             co_await pipeline_test::query(handle, "SELECT v FROM u", outcomes[index]);
         }
     });
-    RUVIA_CHECK(outcomes[0].value_ == "1");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[1].sql_state_ == "22003");
-    RUVIA_CHECK(outcomes[2].value_ == "b");
-    RUVIA_CHECK(outcomes[3].value_ == "b");
-    RUVIA_CHECK(outcomes[4].value_ == "b");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[0].value_ == "1");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "22003");
+    EXPECT_TRUE(outcomes[2].value_ == "b");
+    EXPECT_TRUE(outcomes[3].value_ == "b");
+    EXPECT_TRUE(outcomes[4].value_ == "b");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT v * 3 FROM t", "prepare:SELECT v * 3 FROM t", "execute:1:",
                      "reset:1", "query:SELECT v FROM u", "prepare:SELECT v FROM u", "execute:2:", "execute:2:",
                      "close:2", "prepare:SELECT v FROM u", "execute:3:"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // The same prepared statement runs again after its rows failed (1242, a
 // subquery returning more than one row): its next execution goes out and
 // reads its own response, and the statements behind it get theirs, on the
 // same connection.
-RUVIA_TEST(db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
+TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     peer_type peer({{.rows_ = {"1"}},
@@ -954,23 +955,23 @@ RUVIA_TEST(db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
         together.spawn(pipeline_test::query(handle, "SELECT v FROM f2", outcomes[4]));
         co_await together.join();
     });
-    RUVIA_CHECK(outcomes[0].value_ == "1");
-    RUVIA_CHECK(outcomes[1].error_ == db_error::code_type::statement_failed);
-    RUVIA_CHECK(outcomes[1].sql_state_ == "21000");
-    RUVIA_CHECK(outcomes[2].value_ == "3");
-    RUVIA_CHECK(outcomes[3].value_ == "f1");
-    RUVIA_CHECK(outcomes[4].value_ == "f2");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[0].value_ == "1");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "21000");
+    EXPECT_TRUE(outcomes[2].value_ == "3");
+    EXPECT_TRUE(outcomes[3].value_ == "f1");
+    EXPECT_TRUE(outcomes[4].value_ == "f2");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT (SELECT v FROM t)", "prepare:SELECT (SELECT v FROM t)",
                      "execute:1:", "reset:1", "execute:1:", "query:SELECT v FROM f1", "query:SELECT v FROM f2"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // A cached statement keeps the session state it was prepared in, so a change
 // the session reports (here sql_mode: PIPES_AS_CONCAT, ANSI_QUOTES) drops
 // every cached statement: it is closed on the server, runs as text, and is
 // prepared anew under the new state on its second use after the change.
-RUVIA_TEST(db_mariadb_session_change_drops_the_cached_statements) {
+TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     peer_type peer(
@@ -991,22 +992,22 @@ RUVIA_TEST(db_mariadb_session_change_drops_the_cached_statements) {
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[3]);
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[4]);
     });
-    RUVIA_CHECK(outcomes[0].value_ == "a");
-    RUVIA_CHECK(outcomes[1].value_ == "b");
-    RUVIA_CHECK(!outcomes[2].error_.has_value());
-    RUVIA_CHECK(outcomes[3].value_ == "c");
-    RUVIA_CHECK(outcomes[4].value_ == "d");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(!outcomes[2].error_.has_value());
+    EXPECT_TRUE(outcomes[3].value_ == "c");
+    EXPECT_TRUE(outcomes[4].value_ == "d");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT 'a' || 'b' AS v", "prepare:SELECT 'a' || 'b' AS v",
                      "execute:1:", "query:SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')",
                      "query:SELECT 'a' || 'b' AS v", "close:1", "prepare:SELECT 'a' || 'b' AS v", "execute:2:"}));
-    RUVIA_CHECK_EQ(peer.maria_session_setups(), std::size_t{1});
+    EXPECT_EQ(peer.maria_session_setups(), std::size_t{1});
 }
 
 // A rowless stream still executed SET before its shape was refused. A
 // non-transactional session flag must not retire the connection, and its
 // tracked sql_mode change must invalidate statements prepared in the old mode.
-RUVIA_TEST(db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_prepared_statements) {
+TEST(Ruvia, db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_prepared_statements) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     peer_type peer(
@@ -1031,23 +1032,23 @@ RUVIA_TEST(db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_p
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[2]);
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[3]);
     });
-    RUVIA_CHECK(refused);
-    RUVIA_CHECK(outcomes[0].value_ == "0");
-    RUVIA_CHECK(outcomes[1].value_ == "0");
-    RUVIA_CHECK(outcomes[2].value_ == "ab");
-    RUVIA_CHECK(outcomes[3].value_ == "ab");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(refused);
+    EXPECT_TRUE(outcomes[0].value_ == "0");
+    EXPECT_TRUE(outcomes[1].value_ == "0");
+    EXPECT_TRUE(outcomes[2].value_ == "ab");
+    EXPECT_TRUE(outcomes[3].value_ == "ab");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT 'a' || 'b' AS v", "prepare:SELECT 'a' || 'b' AS v",
                      "execute:1:", "query:SET SESSION sql_mode = 'PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES'",
                      "query:SELECT 'a' || 'b' AS v", "close:1", "prepare:SELECT 'a' || 'b' AS v", "execute:2:"}));
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // While the session's client character set is not the utf8mb4 the
 // connection opened with, nothing runs prepared: the binary protocol converts
 // parameters otherwise than the text protocol does literals. Back on utf8mb4,
 // statements are prepared again.
-RUVIA_TEST(db_mariadb_statements_run_as_text_while_the_client_character_set_differs) {
+TEST(Ruvia, db_mariadb_statements_run_as_text_while_the_client_character_set_differs) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::vector<std::pair<std::string, std::string>> gbk{
@@ -1075,9 +1076,9 @@ RUVIA_TEST(db_mariadb_statements_run_as_text_while_the_client_character_set_diff
         }
     });
     for (const std::size_t index : {1, 2, 3, 5, 6}) {
-        RUVIA_CHECK(outcomes[index].value_ == "v");
+        EXPECT_TRUE(outcomes[index].value_ == "v");
     }
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SET NAMES gbk", "query:SELECT v FROM t", "query:SELECT v FROM t",
                      "query:SELECT v FROM t", "query:SET NAMES utf8mb4", "query:SELECT v FROM t",
                      "prepare:SELECT v FROM t", "execute:1:"}));
@@ -1086,7 +1087,7 @@ RUVIA_TEST(db_mariadb_statements_run_as_text_while_the_client_character_set_diff
 // SET and USE change the session every cached statement was prepared in, so
 // they run as text however often they are used; the change a SET reports
 // drops the cached statements as any other does.
-RUVIA_TEST(db_mariadb_set_and_use_run_as_text) {
+TEST(Ruvia, db_mariadb_set_and_use_run_as_text) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     peer_type peer({{.rows_ = {"a"}}, {.rows_ = {"b"}}, {.column_ = ""}, {.column_ = ""}, {.column_ = ""},
@@ -1109,11 +1110,11 @@ RUVIA_TEST(db_mariadb_set_and_use_run_as_text) {
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[7]);
     });
     for (std::size_t index = 2; index < 6; ++index) {
-        RUVIA_CHECK(!outcomes[index].error_.has_value());
+        EXPECT_TRUE(!outcomes[index].error_.has_value());
     }
-    RUVIA_CHECK(outcomes[6].value_ == "c");
-    RUVIA_CHECK(outcomes[7].value_ == "d");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[6].value_ == "c");
+    EXPECT_TRUE(outcomes[7].value_ == "d");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t", "execute:1:",
                      "query:USE other", "query:USE other", "query:SET SESSION sql_mode = 'STRICT_TRANS_TABLES'",
                      "query:SET SESSION sql_mode = 'PIPES_AS_CONCAT'", "query:SELECT v FROM t", "close:1",
@@ -1123,7 +1124,7 @@ RUVIA_TEST(db_mariadb_set_and_use_run_as_text) {
 // Either of character_set_client and character_set_connection alone off
 // utf8mb4 keeps every statement on text: the binary protocol converts a
 // parameter's invalid bytes otherwise than the text protocol does a literal's.
-RUVIA_TEST(db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as_text) {
+TEST(Ruvia, db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as_text) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     const std::string invalid(
@@ -1154,14 +1155,14 @@ RUVIA_TEST(db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as_
             }
         });
         for (std::size_t index = 0; index < 3; ++index) {
-            RUVIA_CHECK(outcomes[index].value_ == "x");
+            EXPECT_TRUE(outcomes[index].value_ == "x");
         }
-        RUVIA_CHECK(outcomes[3].value_ == "y");
-        RUVIA_CHECK(outcomes[4].value_ == "y");
+        EXPECT_TRUE(outcomes[3].value_ == "y");
+        EXPECT_TRUE(outcomes[4].value_ == "y");
         const auto text =
             "query:SELECT 'a\xff"
             "b' AS v";
-        RUVIA_CHECK((peer.maria_commands() ==
+        EXPECT_TRUE((peer.maria_commands() ==
                      std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t", "execute:1:",
                          "query:SET SESSION " + variable + " = gbk", text, text, text,
                          "query:SET SESSION " + variable + " = utf8mb4", text, "close:1", "prepare:SELECT ? AS v",
@@ -1173,7 +1174,7 @@ RUVIA_TEST(db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as_
 // A server that does not track its session, or a session whose tracking a
 // statement turned off (the server does not report that change), runs nothing
 // prepared: a later change of its state could not be heard.
-RUVIA_TEST(db_mariadb_untracked_session_runs_nothing_prepared) {
+TEST(Ruvia, db_mariadb_untracked_session_runs_nothing_prepared) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     {
@@ -1189,10 +1190,10 @@ RUVIA_TEST(db_mariadb_untracked_session_runs_nothing_prepared) {
             }
         });
         for (const auto& result : outcomes) {
-            RUVIA_CHECK(result.value_ == "v");
+            EXPECT_TRUE(result.value_ == "v");
         }
-        RUVIA_CHECK(peer.maria_session_setups() == 0);
-        RUVIA_CHECK((peer.maria_commands() == std::vector<std::string>(3, "query:SELECT v FROM t")));
+        EXPECT_TRUE(peer.maria_session_setups() == 0);
+        EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>(3, "query:SELECT v FROM t")));
     }
     {
         std::vector<reply> replies{{.rows_ = {"v"}}, {.rows_ = {"v"}}, {.column_ = ""}};
@@ -1210,10 +1211,10 @@ RUVIA_TEST(db_mariadb_untracked_session_runs_nothing_prepared) {
             co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[3]);
             co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[4]);
         });
-        RUVIA_CHECK(!outcomes[2].error_.has_value());
-        RUVIA_CHECK(outcomes[3].value_ == "v");
-        RUVIA_CHECK(outcomes[4].value_ == "v");
-        RUVIA_CHECK((peer.maria_commands() ==
+        EXPECT_TRUE(!outcomes[2].error_.has_value());
+        EXPECT_TRUE(outcomes[3].value_ == "v");
+        EXPECT_TRUE(outcomes[4].value_ == "v");
+        EXPECT_TRUE((peer.maria_commands() ==
                      std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t", "execute:1:",
                          "query:SET SESSION session_track_system_variables = ''", "query:SELECT v FROM t",
                          "query:SELECT v FROM t"}));
@@ -1225,7 +1226,7 @@ RUVIA_TEST(db_mariadb_untracked_session_runs_nothing_prepared) {
 // prepared statements outlives any number of CALLs, none evicted or closed.
 // The first prepared execution after them reads the tracked variables back,
 // since a procedure may have changed them unreported.
-RUVIA_TEST(db_mariadb_statements_that_run_as_text_take_no_cache_places) {
+TEST(Ruvia, db_mariadb_statements_that_run_as_text_take_no_cache_places) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     constexpr std::size_t cached = 128;
@@ -1257,23 +1258,23 @@ RUVIA_TEST(db_mariadb_statements_that_run_as_text_take_no_cache_places) {
             co_await run(select(index));
         }
     });
-    RUVIA_CHECK_EQ(failures, std::size_t{0});
+    EXPECT_EQ(failures, std::size_t{0});
     const auto commands = peer.maria_commands();
-    RUVIA_CHECK_EQ(commands.size(), std::size_t{cached * 3 + calls * 2 + 1 + cached});
-    RUVIA_CHECK(std::ranges::none_of(commands, [](const std::string& command) { return command.starts_with("close:"); }));
-    RUVIA_CHECK(commands[cached * 3 + calls * 2] == "query:SELECT @@session_track_system_variables");
+    EXPECT_EQ(commands.size(), std::size_t{cached * 3 + calls * 2 + 1 + cached});
+    EXPECT_TRUE(std::ranges::none_of(commands, [](const std::string& command) { return command.starts_with("close:"); }));
+    EXPECT_TRUE(commands[cached * 3 + calls * 2] == "query:SELECT @@session_track_system_variables");
     std::size_t unexpected = 0;
     for (std::size_t index = 0; index < cached; ++index) {
         unexpected += commands[cached * 3 + calls * 2 + 1 + index] == "execute:" + std::to_string(index + 1) + ":" ? 0 : 1;
     }
-    RUVIA_CHECK_EQ(unexpected, std::size_t{0});
+    EXPECT_EQ(unexpected, std::size_t{0});
 }
 
 // Reports of variables no statement depends on leave the cache alone: with
 // binary logging on, the server reports last_gtid after every committed
 // write, and a cache dropped on each would close and prepare its statements
 // anew all the time.
-RUVIA_TEST(db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
+TEST(Ruvia, db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     peer_type peer({{.rows_ = {"a"}}, {.rows_ = {"b"}},
@@ -1292,9 +1293,9 @@ RUVIA_TEST(db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
         co_await pipeline_test::execute(handle, "SET autocommit = 0", outcomes[3]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[4]);
     });
-    RUVIA_CHECK(outcomes[2].affected_rows_ == 1);
-    RUVIA_CHECK(outcomes[4].value_ == "c");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[2].affected_rows_ == 1);
+    EXPECT_TRUE(outcomes[4].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t", "execute:1:",
                      "query:INSERT INTO t (v) VALUES ('w')", "query:SET autocommit = 0", "execute:1:"}));
 }
@@ -1303,7 +1304,7 @@ RUVIA_TEST(db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
 // first prepared execution after a CALL reads the tracked variables back:
 // still tracked, the cached statement runs; no longer, every statement runs
 // as text on that connection.
-RUVIA_TEST(db_mariadb_call_has_the_tracked_variables_read_back) {
+TEST(Ruvia, db_mariadb_call_has_the_tracked_variables_read_back) {
     using namespace ruvia;
     using namespace mariadb_statement_test;
     peer_type peer({{.rows_ = {"a"}}, {.rows_ = {"b"}}, {.column_ = ""}, {.rows_ = {std::string(server_tracked_list)}},
@@ -1323,10 +1324,10 @@ RUVIA_TEST(db_mariadb_call_has_the_tracked_variables_read_back) {
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[5]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[6]);
     });
-    RUVIA_CHECK(outcomes[3].value_ == "c");
-    RUVIA_CHECK(outcomes[5].value_ == "d");
-    RUVIA_CHECK(outcomes[6].value_ == "e");
-    RUVIA_CHECK((peer.maria_commands() ==
+    EXPECT_TRUE(outcomes[3].value_ == "c");
+    EXPECT_TRUE(outcomes[5].value_ == "d");
+    EXPECT_TRUE(outcomes[6].value_ == "e");
+    EXPECT_TRUE((peer.maria_commands() ==
                  std::vector<std::string>{"query:SELECT v FROM t", "prepare:SELECT v FROM t", "execute:1:",
                      "query:CALL p()", "query:SELECT @@session_track_system_variables", "execute:1:", "query:CALL p()",
                      "query:SELECT @@session_track_system_variables", "query:SELECT v FROM t",

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -8,7 +10,6 @@
 #include "ruvia/web/model.h"
 
 #include "memory_resource_fixture.h"
-#include "test_harness.h"
 
 namespace {
 
@@ -55,7 +56,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(model_resource_assignment_recursively_outlives_source_owner) {
+TEST(Ruvia, model_resource_assignment_recursively_outlives_source_owner) {
     ruvia::test::counting_memory_resource target_resource;
     const std::string text(160, 'a');
     {
@@ -75,20 +76,20 @@ RUVIA_TEST(model_resource_assignment_recursively_outlives_source_owner) {
             target.ensure<"children">().emplace_back(borrowed);
             target.ensure<"boxed">().emplace_back(std::move(other));
         }
-        RUVIA_CHECK_EQ(target.get<"title">().view(), std::string_view(text));
+        EXPECT_EQ(target.get<"title">().view(), std::string_view(text));
         const auto verify = [&](const resource_child& child_value) {
-            RUVIA_CHECK_EQ(child_value.get<"name">().view(), std::string_view(text));
-            RUVIA_CHECK_EQ(child_value.get<"tags">()->front().view(), std::string_view(text));
+            EXPECT_EQ(child_value.get<"name">().view(), std::string_view(text));
+            EXPECT_EQ(child_value.get<"tags">()->front().view(), std::string_view(text));
         };
         verify(*target.get<"child">());
         verify(target.get<"children">()->front());
         verify(target.get<"boxed">()->front());
     }
-    RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(target_resource.allocation_count(), target_resource.deallocation_count());
+    EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(target_resource.allocation_count(), target_resource.deallocation_count());
 }
 
-RUVIA_TEST(model_resource_array_construction_and_mutable_assignment_keep_owner) {
+TEST(Ruvia, model_resource_array_construction_and_mutable_assignment_keep_owner) {
     ruvia::test::counting_memory_resource target_resource;
     const std::string text(160, 'b');
     {
@@ -108,15 +109,15 @@ RUVIA_TEST(model_resource_array_construction_and_mutable_assignment_keep_owner) 
             boxed.front() = ruvia::string(text, {.resource_ = &temporary});
         }
         for (const auto& value : strings) {
-            RUVIA_CHECK_EQ(value.view(), std::string_view(text));
+            EXPECT_EQ(value.view(), std::string_view(text));
         }
-        RUVIA_CHECK_EQ(children.front().get<"name">().view(), std::string_view(text));
-        RUVIA_CHECK_EQ(boxed.front().view(), std::string_view(text));
+        EXPECT_EQ(children.front().get<"name">().view(), std::string_view(text));
+        EXPECT_EQ(boxed.front().view(), std::string_view(text));
     }
-    RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(model_resource_array_resize_accepts_its_own_fill_element) {
+TEST(Ruvia, model_resource_array_resize_accepts_its_own_fill_element) {
     ruvia::test::counting_memory_resource resource;
     const std::string text(160, 'd');
     {
@@ -124,15 +125,15 @@ RUVIA_TEST(model_resource_array_resize_accepts_its_own_fill_element) {
         values.emplace_back(text);
         const auto count = values.capacity() + 8;
         values.resize(count, values.front());
-        RUVIA_CHECK_EQ(values.size(), count);
+        EXPECT_EQ(values.size(), count);
         for (const auto& value : values) {
-            RUVIA_CHECK_EQ(value.view(), std::string_view(text));
+            EXPECT_EQ(value.view(), std::string_view(text));
         }
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(model_resource_recursive_assignment_can_promote_an_owned_child) {
+TEST(Ruvia, model_resource_recursive_assignment_can_promote_an_owned_child) {
     ruvia::test::counting_memory_resource resource;
     const std::string text(160, 'e');
     {
@@ -142,26 +143,26 @@ RUVIA_TEST(model_resource_recursive_assignment_can_promote_an_owned_child) {
         child_value.set<"name">(text);
         child_value.ensure<"children">().emplace_back().set<"name">("grandchild");
         root = std::move(child_value);
-        RUVIA_CHECK_EQ(root.get<"name">().view(), std::string_view(text));
-        RUVIA_CHECK_EQ(root.get<"children">()->front().get<"name">().view(), std::string_view("grandchild"));
+        EXPECT_EQ(root.get<"name">().view(), std::string_view(text));
+        EXPECT_EQ(root.get<"children">()->front().get<"name">().view(), std::string_view("grandchild"));
 
         auto& children = root.ensure<"children">();
         children.front().ensure<"children">().emplace_back().set<"name">(text);
         children = std::move(children.front().ensure<"children">());
-        RUVIA_CHECK_EQ(children.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(children.front().get<"name">().view(), std::string_view(text));
+        EXPECT_EQ(children.size(), std::size_t{1});
+        EXPECT_EQ(children.front().get<"name">().view(), std::string_view(text));
 
         resource_dense_node dense({.resource_ = &resource});
         auto& dense_children = dense.ensure<"children">();
         dense_children.emplace_back().ensure<"children">().emplace_back().set<"name">(text);
         dense_children = std::move(dense_children.front().ensure<"children">());
-        RUVIA_CHECK_EQ(dense_children.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(dense_children.front().get<"name">().view(), std::string_view(text));
+        EXPECT_EQ(dense_children.size(), std::size_t{1});
+        EXPECT_EQ(dense_children.front().get<"name">().view(), std::string_view(text));
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_temporaries) {
+TEST(Ruvia, model_resource_failed_rebind_preserves_destination_and_reclaims_temporaries) {
     reject_after_resource target_resource;
     ruvia::test::counting_memory_resource source_resource;
     const std::string old_text(160, 'o');
@@ -174,7 +175,7 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
         resource_pair source_value({.resource_ = &source_resource});
         source_value.set<"first">(new_text);
         source_value.set<"second">(new_text);
-        if (ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx)) {
+        if (ruvia::test::stl_allocation_failure_injection_enabled()) {
             target_resource.remaining_ = 1;
             bool failed = false;
             try {
@@ -183,28 +184,28 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
                 failed = true;
             }
             target_resource.remaining_.reset();
-            RUVIA_CHECK(failed);
-            RUVIA_CHECK_EQ(target.get<"first">().view(), std::string_view(old_text));
-            RUVIA_CHECK_EQ(target.get<"second">().view(), std::string_view(old_text));
-            RUVIA_CHECK_EQ(source_value.get<"first">().view(), std::string_view(new_text));
-            RUVIA_CHECK_EQ(source_value.get<"second">().view(), std::string_view(new_text));
-            RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), retained);
+            EXPECT_TRUE(failed);
+            EXPECT_EQ(target.get<"first">().view(), std::string_view(old_text));
+            EXPECT_EQ(target.get<"second">().view(), std::string_view(old_text));
+            EXPECT_EQ(source_value.get<"first">().view(), std::string_view(new_text));
+            EXPECT_EQ(source_value.get<"second">().view(), std::string_view(new_text));
+            EXPECT_EQ(target_resource.allocations_.live_allocations(), retained);
         }
         for (int iteration = 0; iteration != 32; ++iteration) {
             source_value.set<"first">(new_text);
             source_value.set<"second">(new_text);
             target = std::move(source_value);
-            RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), retained);
-            RUVIA_CHECK_EQ(target.get<"first">().view(), std::string_view(new_text));
+            EXPECT_EQ(target_resource.allocations_.live_allocations(), retained);
+            EXPECT_EQ(target.get<"first">().view(), std::string_view(new_text));
         }
     }
-    RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(target_resource.allocations_.live_allocations(), std::size_t{0});
+    EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(model_dynamic_token_failed_move_keeps_source_destination_and_resources) {
+TEST(Ruvia, model_dynamic_token_failed_move_keeps_source_destination_and_resources) {
     const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
-    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
+    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled();
     const auto check = [&]<typename token_type>(std::string_view empty) {
         reject_after_resource target_resource;
         ruvia::test::counting_memory_resource source_resource;
@@ -220,23 +221,23 @@ RUVIA_TEST(model_dynamic_token_failed_move_keeps_source_destination_and_resource
                 } catch (const std::bad_alloc&) {
                     failed = true;
                 }
-                RUVIA_CHECK(failed);
-                RUVIA_CHECK_EQ(source.view(), std::string_view(input));
-                RUVIA_CHECK_EQ(target.view(), empty);
+                EXPECT_TRUE(failed);
+                EXPECT_EQ(source.view(), std::string_view(input));
+                EXPECT_EQ(target.view(), empty);
                 target_resource.remaining_.reset();
             }
             target = std::move(source);
-            RUVIA_CHECK_EQ(source.view(), empty);
-            RUVIA_CHECK_EQ(target.view(), std::string_view(input));
+            EXPECT_EQ(source.view(), empty);
+            EXPECT_EQ(target.view(), std::string_view(input));
         }
-        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
-        RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), std::size_t{0});
+        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+        EXPECT_EQ(target_resource.allocations_.live_allocations(), std::size_t{0});
     };
     check.template operator()<ruvia::json_value>("null");
     check.template operator()<ruvia::json_object>("{}");
 }
 
-RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
+TEST(Ruvia, model_resource_moves_reject_a_source_that_owns_the_destination) {
     ruvia::test::counting_memory_resource resource;
     const std::string text(160, 'f');
     const auto rejects = [](auto&& operation) {
@@ -255,22 +256,22 @@ RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
         auto& grandchildren = child_value.ensure<"children">();
         grandchildren.emplace_back().set<"name">("grandchild");
 
-        RUVIA_CHECK(rejects([&] { child_value = std::move(root); }));
-        RUVIA_CHECK(rejects([&] { grandchildren = std::move(root.ensure<"children">()); }));
-        RUVIA_CHECK(rejects([&] { grandchildren.push_back(std::move(root)); }));
-        RUVIA_CHECK(rejects([&] { root.ensure<"children">().emplace_back(std::move(root)); }));
-        RUVIA_CHECK(rejects([&] { child_value.set<"children">(std::move(root.ensure<"children">())); }));
+        EXPECT_TRUE(rejects([&] { child_value = std::move(root); }));
+        EXPECT_TRUE(rejects([&] { grandchildren = std::move(root.ensure<"children">()); }));
+        EXPECT_TRUE(rejects([&] { grandchildren.push_back(std::move(root)); }));
+        EXPECT_TRUE(rejects([&] { root.ensure<"children">().emplace_back(std::move(root)); }));
+        EXPECT_TRUE(rejects([&] { child_value.set<"children">(std::move(root.ensure<"children">())); }));
 
-        RUVIA_CHECK_EQ(root.get<"name">().view(), std::string_view(text));
-        RUVIA_CHECK_EQ(root.get<"children">()->size(), std::size_t{1});
-        RUVIA_CHECK(&root.get<"children">()->front() == &child_value);
-        RUVIA_CHECK_EQ(child_value.get<"name">().view(), std::string_view("child"));
-        RUVIA_CHECK_EQ(grandchildren.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(grandchildren.front().get<"name">().view(), std::string_view("grandchild"));
+        EXPECT_EQ(root.get<"name">().view(), std::string_view(text));
+        EXPECT_EQ(root.get<"children">()->size(), std::size_t{1});
+        EXPECT_TRUE(&root.get<"children">()->front() == &child_value);
+        EXPECT_EQ(child_value.get<"name">().view(), std::string_view("child"));
+        EXPECT_EQ(grandchildren.size(), std::size_t{1});
+        EXPECT_EQ(grandchildren.front().get<"name">().view(), std::string_view("grandchild"));
 
         // A field reassigned from its own value does not own its destination.
         root.set<"children">(std::move(root.ensure<"children">()));
-        RUVIA_CHECK_EQ(root.get<"children">()->front().get<"name">().view(), std::string_view("child"));
+        EXPECT_EQ(root.get<"children">()->front().get<"name">().view(), std::string_view("child"));
 
         resource_dense_node dense({.resource_ = &resource});
         dense.set<"name">(text);
@@ -279,22 +280,22 @@ RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
         dense_child.set<"name">("child");
         auto& dense_grandchildren = dense_child.ensure<"children">();
 
-        RUVIA_CHECK(rejects([&] { dense_child = std::move(dense); }));
-        RUVIA_CHECK(rejects([&] { dense_grandchildren = std::move(dense_children); }));
-        RUVIA_CHECK(rejects([&] { dense_grandchildren.emplace_back(std::move(dense)); }));
-        RUVIA_CHECK(rejects([&] { dense_children.emplace_back(std::move(dense)); }));
+        EXPECT_TRUE(rejects([&] { dense_child = std::move(dense); }));
+        EXPECT_TRUE(rejects([&] { dense_grandchildren = std::move(dense_children); }));
+        EXPECT_TRUE(rejects([&] { dense_grandchildren.emplace_back(std::move(dense)); }));
+        EXPECT_TRUE(rejects([&] { dense_children.emplace_back(std::move(dense)); }));
 
-        RUVIA_CHECK_EQ(dense.get<"name">().view(), std::string_view(text));
-        RUVIA_CHECK_EQ(dense_children.size(), std::size_t{1});
-        RUVIA_CHECK_EQ(dense_child.get<"name">().view(), std::string_view("child"));
-        RUVIA_CHECK(dense_grandchildren.empty());
+        EXPECT_EQ(dense.get<"name">().view(), std::string_view(text));
+        EXPECT_EQ(dense_children.size(), std::size_t{1});
+        EXPECT_EQ(dense_child.get<"name">().view(), std::string_view("child"));
+        EXPECT_TRUE(dense_grandchildren.empty());
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
-RUVIA_TEST(model_resource_scalar_array_moves_transfer_same_resource_storage) {
-    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled(ruvia_ctx);
-    const auto check = [&ruvia_ctx, inject]<typename sequence_type>() {
+TEST(Ruvia, model_resource_scalar_array_moves_transfer_same_resource_storage) {
+    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled();
+    const auto check = [inject]<typename sequence_type>() {
         reject_after_resource resource;
         {
             sequence_type source({.resource_ = &resource});
@@ -308,13 +309,13 @@ RUVIA_TEST(model_resource_scalar_array_moves_transfer_same_resource_storage) {
             }
             target = std::move(source);
             resource.remaining_.reset();
-            RUVIA_CHECK(source.empty());
-            RUVIA_CHECK_EQ(target.size(), std::size_t{64});
+            EXPECT_TRUE(source.empty());
+            EXPECT_EQ(target.size(), std::size_t{64});
             for (std::size_t index = 0; index < target.size(); ++index) {
-                RUVIA_CHECK_EQ(target[index].value_, static_cast<int>(index));
+                EXPECT_EQ(target[index].value_, static_cast<int>(index));
             }
         }
-        RUVIA_CHECK_EQ(resource.allocations_.live_allocations(), std::size_t{0});
+        EXPECT_EQ(resource.allocations_.live_allocations(), std::size_t{0});
     };
     check.template operator()<ruvia::array<ruvia::int32>>();
     check.template operator()<ruvia::boxed_array<ruvia::int32>>();

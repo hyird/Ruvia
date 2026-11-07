@@ -1,3 +1,4 @@
+#include <gtest/gtest.h>
 #include <zlib.h>
 
 #include <array>
@@ -31,7 +32,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace response_stream_test {
@@ -230,7 +230,7 @@ class stream_lane_routes final {
 using response_stream_test::stream_lane_observed;
 
 // Public stream response planning rejects a head that disagrees with its status.
-RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
+TEST(Ruvia, response_stream_head_rejects_a_mismatched_status_plan) {
     ruvia::http_response response(std::pmr::get_default_resource());
     response.status(ruvia::http_status::created);
     auto plan = ruvia::plan_http_response_stream_commit(
@@ -242,10 +242,10 @@ RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }
 
-RUVIA_TEST(response_stream_cold_outputs_share_a_lane_only_when_started) {
+TEST(Ruvia, response_stream_cold_outputs_share_a_lane_only_when_started) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     stream_lane_observed->write_overlap_rejected_ = false;
@@ -266,21 +266,21 @@ RUVIA_TEST(response_stream_cold_outputs_share_a_lane_only_when_started) {
         }
     }
     server.finish();
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     const auto first = response.find("first");
-    RUVIA_CHECK(first != std::string::npos);
-    RUVIA_CHECK(response.find("second\n", first) != std::string::npos);
-    RUVIA_CHECK(stream_lane_observed->write_overlap_rejected_);
-    RUVIA_CHECK(stream_lane_observed->end_overlap_rejected_);
-    RUVIA_CHECK(stream_lane_observed->completed_);
-    RUVIA_CHECK(stream_lane_observed->uncommitted_write_rejected_);
-    RUVIA_CHECK(stream_lane_observed->repeated_commit_rejected_);
-    RUVIA_CHECK_EQ(stream_lane_observed->committed_metadata_rejected_.load(), 3);
+    EXPECT_TRUE(first != std::string::npos);
+    EXPECT_TRUE(response.find("second\n", first) != std::string::npos);
+    EXPECT_TRUE(stream_lane_observed->write_overlap_rejected_);
+    EXPECT_TRUE(stream_lane_observed->end_overlap_rejected_);
+    EXPECT_TRUE(stream_lane_observed->completed_);
+    EXPECT_TRUE(stream_lane_observed->uncommitted_write_rejected_);
+    EXPECT_TRUE(stream_lane_observed->repeated_commit_rejected_);
+    EXPECT_EQ(stream_lane_observed->committed_metadata_rejected_.load(), 3);
 }
 
 // A peer that resets a streaming response (a closed SSE tab) ends the
 // connection normally: it is neither reported nor counted as a failure.
-RUVIA_TEST(response_stream_peer_reset_is_not_a_connection_failure) {
+TEST(Ruvia, response_stream_peer_reset_is_not_a_connection_failure) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     stream_lane_observed->endless_write_failed_ = false;
@@ -292,7 +292,7 @@ RUVIA_TEST(response_stream_peer_reset_is_not_a_connection_failure) {
         asio::write(client, asio::buffer(request));
         std::array<char, 10> head{};
         asio::read(client, asio::buffer(head));
-        RUVIA_CHECK_EQ(std::string_view(head.data(), head.size()), std::string_view("HTTP/1.1 2"));
+        EXPECT_EQ(std::string_view(head.data(), head.size()), std::string_view("HTTP/1.1 2"));
         // SO_LINGER 0 turns close() into a reset.
         client.set_option(asio::socket_base::linger(true, 0));
         client.close();
@@ -302,14 +302,14 @@ RUVIA_TEST(response_stream_peer_reset_is_not_a_connection_failure) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     server.finish();
-    RUVIA_CHECK(stream_lane_observed->endless_write_failed_);
-    RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+    EXPECT_TRUE(stream_lane_observed->endless_write_failed_);
+    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
 }
 
 // A handler failure after commit is reported even when it carries a code an
 // ending inbound connection also produces: an upstream timeout says nothing
 // about the peer, so the truncated response is a real fault.
-RUVIA_TEST(response_stream_handler_failure_with_a_transport_code_is_a_connection_failure) {
+TEST(Ruvia, response_stream_handler_failure_with_a_transport_code_is_a_connection_failure) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto failures_before = ruvia::app().http_stats().connection_failures_;
@@ -326,16 +326,16 @@ RUVIA_TEST(response_stream_handler_failure_with_a_transport_code_is_a_connection
             const auto read = client.read_some(asio::buffer(input), ec);
             response.append(input.data(), read);
         }
-        RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     }
     server.finish();
-    RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
+    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
 }
 
 // RFC 9110 §15.2: no 1xx may follow the start of the final response. A stream
 // that committed before its handler read the body already answered the
 // expectation, so the body read writes no 100 Continue into the stream.
-RUVIA_TEST(response_stream_body_read_after_commit_sends_no_continue) {
+TEST(Ruvia, response_stream_body_read_after_commit_sends_no_continue) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     std::string response;
@@ -361,12 +361,12 @@ RUVIA_TEST(response_stream_body_read_after_commit_sends_no_continue) {
         }
     }
     server.finish();
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(response.find("100 Continue") == std::string::npos);
-    RUVIA_CHECK(response.ends_with("\r\n\r\n1\r\nx\r\n4\r\nabcd\r\n0\r\n\r\n"));
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.find("100 Continue") == std::string::npos);
+    EXPECT_TRUE(response.ends_with("\r\n\r\n1\r\nx\r\n4\r\nabcd\r\n0\r\n\r\n"));
 }
 
-RUVIA_TEST(response_stream_completed_head_preserves_transfer_coded_request_consumption) {
+TEST(Ruvia, response_stream_completed_head_preserves_transfer_coded_request_consumption) {
     const auto gzip_member = [](std::string_view input, int level) {
         z_stream zs{};
         if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
@@ -422,7 +422,7 @@ RUVIA_TEST(response_stream_completed_head_preserves_transfer_coded_request_consu
 
     std::string resp_head;
     asio::read_until(sock, asio::dynamic_buffer(resp_head), "\r\n\r\n");
-    RUVIA_CHECK(resp_head.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(resp_head.starts_with("HTTP/1.1 200 "));
 
     while (stream_lane_observed->uaf_phase_.load() < 1) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -445,11 +445,11 @@ RUVIA_TEST(response_stream_completed_head_preserves_transfer_coded_request_consu
     sock.close();
     server.finish();
 
-    RUVIA_CHECK(!stream_lane_observed->uaf_failed_.load());
-    RUVIA_CHECK_EQ(stream_lane_observed->uaf_decoded_bytes_.load(), std::size_t{4 * 8000 + 100000});
+    EXPECT_TRUE(!stream_lane_observed->uaf_failed_.load());
+    EXPECT_EQ(stream_lane_observed->uaf_decoded_bytes_.load(), std::size_t{4 * 8000 + 100000});
 }
 
-RUVIA_TEST(response_stream_middleware_short_circuit_after_body_read_preserves_pipelined_request) {
+TEST(Ruvia, response_stream_middleware_short_circuit_after_body_read_preserves_pipelined_request) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
@@ -464,6 +464,6 @@ RUVIA_TEST(response_stream_middleware_short_circuit_after_body_read_preserves_pi
     client.close();
     server.finish();
 
-    RUVIA_CHECK(response.find("early:hello") != std::string::npos);
-    RUVIA_CHECK(response.find("plain-ok") != std::string::npos);
+    EXPECT_TRUE(response.find("early:hello") != std::string::npos);
+    EXPECT_TRUE(response.find("plain-ok") != std::string::npos);
 }

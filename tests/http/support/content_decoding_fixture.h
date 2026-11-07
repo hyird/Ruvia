@@ -1,6 +1,7 @@
 #pragma once
 
 #include <brotli/encode.h>
+#include <gtest/gtest.h>
 #include <zlib.h>
 #include <zstd.h>
 
@@ -27,8 +28,6 @@
 #include "ruvia/http/http_transfer_coding.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
-
-#include "test_harness.h"
 
 namespace content_decoding_test {
 

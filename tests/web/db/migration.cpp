@@ -1,5 +1,7 @@
 // Public migration descriptors and options are shared by both SQL backends.
 
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <optional>
@@ -14,12 +16,11 @@
 
 #include "backend_client_fixture.h"
 #include "failing_memory_resource.h"
-#include "test_harness.h"
 
 #if defined(RUVIA_ENABLE_POSTGRESQL) || defined(RUVIA_ENABLE_MARIADB)
 namespace {
 
-void check_unverifiable_history(ruvia::testing::test_context& ruvia_ctx,
+void check_unverifiable_history(
     ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver,
     std::span<const ruvia::db_migration> migrations) {
     auto config = peer.config();
@@ -36,14 +37,14 @@ void check_unverifiable_history(ruvia::testing::test_context& ruvia_ctx,
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_TRUE(rejected);
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 }  // namespace
 #endif
 
-RUVIA_TEST(db_migrator_rejects_sql_with_embedded_nul) {
+TEST(Ruvia, db_migrator_rejects_sql_with_embedded_nul) {
     bool nul_sql_rejected = false;
     try {
         const std::array<ruvia::db_migration, 1> bad_migrations{{
@@ -54,11 +55,11 @@ RUVIA_TEST(db_migrator_rejects_sql_with_embedded_nul) {
     } catch (const std::invalid_argument&) {
         nul_sql_rejected = true;
     }
-    RUVIA_CHECK(nul_sql_rejected);
+    EXPECT_TRUE(nul_sql_rejected);
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
-RUVIA_TEST(db_migrator_rejects_unverifiable_postgresql_history) {
+TEST(Ruvia, db_migrator_rejects_unverifiable_postgresql_history) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     for (const bool null : {false, true}) {
@@ -71,11 +72,11 @@ RUVIA_TEST(db_migrator_rejects_unverifiable_postgresql_history) {
                 {.column_ = "checksum", .rows_ = {""}, .null_rows_ = {null}},
                 {.column_ = "", .command_ = "UPDATE 1"},
                 {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}});
-        check_unverifiable_history(ruvia_ctx, peer, ruvia::db_driver::postgresql, migrations);
+        check_unverifiable_history(peer, ruvia::db_driver::postgresql, migrations);
     }
 }
 
-RUVIA_TEST(db_migrator_rejects_postgresql_history_without_a_digest_column) {
+TEST(Ruvia, db_migrator_rejects_postgresql_history_without_a_digest_column) {
     using peer_type = ruvia::test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
         {{.column_ = "", .command_ = "SET"},
@@ -85,14 +86,14 @@ RUVIA_TEST(db_migrator_rejects_postgresql_history_without_a_digest_column) {
             {.column_ = "?column?", .type_ = 23},
             {.column_ = "", .command_ = "ALTER TABLE"},
             {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}});
-    check_unverifiable_history(ruvia_ctx, peer, ruvia::db_driver::postgresql, {});
+    check_unverifiable_history(peer, ruvia::db_driver::postgresql, {});
 }
 
 // The migration lock belongs to the session that took it. A migration that
 // leaves that session unfit for sharing -- here an unwrapped BEGIN leaving a
 // transaction open -- ends it, and the history row must then fail rather than
 // be written on a new session that never held the lock.
-RUVIA_TEST(db_migrator_fails_once_its_locked_session_is_lost) {
+TEST(Ruvia, db_migrator_fails_once_its_locked_session_is_lost) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration(
         {.id_ = "001", .sql_ = "BEGIN", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
@@ -116,14 +117,14 @@ RUVIA_TEST(db_migrator_fails_once_its_locked_session_is_lost) {
     } catch (const ruvia::db_error& error) {
         failure = error.code();
     }
-    RUVIA_CHECK(failure == ruvia::db_error::code_type::io_error);
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE(failure == ruvia::db_error::code_type::io_error);
+    EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
 // The migrator drives its own event loop, so it also brings the pool that loop
 // looks a DNS host up on: a name that cannot resolve (RFC 6761 §6.4) fails the
 // lookup, not the configuration.
-RUVIA_TEST(db_migrator_looks_up_a_dns_host_on_its_own_pool) {
+TEST(Ruvia, db_migrator_looks_up_a_dns_host_on_its_own_pool) {
     ruvia::db_config config{.driver_ = ruvia::db_driver::postgresql,
         .host_ = "ruvia-migrator.invalid",
         .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
@@ -134,12 +135,12 @@ RUVIA_TEST(db_migrator_looks_up_a_dns_host_on_its_own_pool) {
     } catch (const ruvia::db_error&) {
         lookup_failed = true;
     }
-    RUVIA_CHECK(lookup_failed);
+    EXPECT_TRUE(lookup_failed);
 }
 #endif
 
 #ifdef RUVIA_ENABLE_MARIADB
-RUVIA_TEST(db_migrator_rejects_unverifiable_mariadb_history) {
+TEST(Ruvia, db_migrator_rejects_unverifiable_mariadb_history) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     for (const bool null : {false, true}) {
@@ -151,11 +152,11 @@ RUVIA_TEST(db_migrator_rejects_unverifiable_mariadb_history) {
                            {.column_ = "", .affected_rows_ = 1},
                            {.column_ = ""}},
             peer_type::after_startup::idle);
-        check_unverifiable_history(ruvia_ctx, peer, ruvia::db_driver::mariadb, migrations);
+        check_unverifiable_history(peer, ruvia::db_driver::mariadb, migrations);
     }
 }
 
-RUVIA_TEST(db_migrator_rejects_mariadb_history_without_a_digest_column) {
+TEST(Ruvia, db_migrator_rejects_mariadb_history_without_a_digest_column) {
     using peer_type = ruvia::test::backend_startup_peer;
     peer_type peer(std::vector<peer_type::maria_reply>{
                        {.rows_ = {"1"}},
@@ -164,6 +165,6 @@ RUVIA_TEST(db_migrator_rejects_mariadb_history_without_a_digest_column) {
                        {.column_ = ""},
                        {.column_ = ""}},
         peer_type::after_startup::idle);
-    check_unverifiable_history(ruvia_ctx, peer, ruvia::db_driver::mariadb, {});
+    check_unverifiable_history(peer, ruvia::db_driver::mariadb, {});
 }
 #endif

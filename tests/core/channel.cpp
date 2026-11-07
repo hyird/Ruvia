@@ -1,5 +1,7 @@
 #include "ruvia/core/channel.h"
 
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -705,7 +707,7 @@ bool test_send_reservation_does_not_block_other_producers() {
 
 }  // namespace ruvia::test::channel_tests
 
-int main() {
+TEST(Ruvia, ChannelLifecycle) {
     using namespace ruvia::test::channel_tests;
     bool success = false;
     bool cold_receive_operations_safe = false;
@@ -742,17 +744,14 @@ int main() {
         const auto worker_value = attachment.loop().handle();
         auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
         ruvia::channel_sender<int> empty_sender;
-        if (empty_sender.valid() || !sender.valid() || !receiver.valid()) {
-            return 1;
-        }
+        ASSERT_FALSE(empty_sender.valid());
+        ASSERT_TRUE(sender.valid());
+        ASSERT_TRUE(receiver.valid());
         auto [cap_sender, cap_receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 2});
-        if (!cap_sender.valid() || !cap_receiver.valid()) {
-            return 1;
-        }
+        ASSERT_TRUE(cap_sender.valid());
+        ASSERT_TRUE(cap_receiver.valid());
         cap_receiver.close();
-        if (!sender.send(9).accepted()) {
-            return 1;
-        }
+        ASSERT_TRUE(sender.send(9).accepted());
         ruvia::test::run_worker_tasks(attachment, receive_queued_then_stopping(attachment, receiver, worker_stopping));
         sender.close();
         const auto stopping_result = sender.send(10);
@@ -791,21 +790,41 @@ int main() {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
         auto [sender, receiver] = ruvia::make_channel<throwing_move>(attachment.loop().handle(), {.capacity_ = 2});
-        if (!sender.send(throwing_move(1)).accepted() || !sender.send(throwing_move(2)).accepted()) {
-            return 1;
-        }
+        ASSERT_TRUE(sender.send(throwing_move(1)).accepted());
+        ASSERT_TRUE(sender.send(throwing_move(2)).accepted());
         ruvia::test::run_worker_tasks(
             attachment, receive_after_move_failure(std::move(sender), receiver, failed_receive_move_releases_slot));
     }
 
-    const bool all_passed = success && cold_receive_operations_safe && buffered_cold_receive_operations_safe &&
-                            channel_side_closure && retired_receiver_stopping &&
-                            worker_stopping && stopping_send &&
-                            move_failed && recovered_value && recovered_send && failed_receive_move_releases_slot &&
-                            test_rejected_payload_moves_can_close_the_channel() &&
-                            test_retired_receiver_storage_is_released() &&
-                            test_retired_payload_destructors_can_tear_down_the_channel() &&
-                            test_reentrant_payload_moves_and_destruction() &&
-                            test_send_reservation_does_not_block_other_producers();
-    return all_passed ? 0 : 1;
+    EXPECT_TRUE(success);
+    EXPECT_TRUE(cold_receive_operations_safe);
+    EXPECT_TRUE(buffered_cold_receive_operations_safe);
+    EXPECT_TRUE(channel_side_closure);
+    EXPECT_TRUE(retired_receiver_stopping);
+    EXPECT_TRUE(worker_stopping);
+    EXPECT_TRUE(stopping_send);
+    EXPECT_TRUE(move_failed);
+    EXPECT_TRUE(recovered_value);
+    EXPECT_TRUE(recovered_send);
+    EXPECT_TRUE(failed_receive_move_releases_slot);
+}
+
+TEST(Ruvia, ChannelRejectedPayloadMovesCanCloseChannel) {
+    EXPECT_TRUE(ruvia::test::channel_tests::test_rejected_payload_moves_can_close_the_channel());
+}
+
+TEST(Ruvia, ChannelRetiredReceiverStorageIsReleased) {
+    EXPECT_TRUE(ruvia::test::channel_tests::test_retired_receiver_storage_is_released());
+}
+
+TEST(Ruvia, ChannelRetiredPayloadDestructorsCanTearDownChannel) {
+    EXPECT_TRUE(ruvia::test::channel_tests::test_retired_payload_destructors_can_tear_down_the_channel());
+}
+
+TEST(Ruvia, ChannelReentrantPayloadMovesAndDestruction) {
+    EXPECT_TRUE(ruvia::test::channel_tests::test_reentrant_payload_moves_and_destruction());
+}
+
+TEST(Ruvia, ChannelSendReservationDoesNotBlockOtherProducers) {
+    EXPECT_TRUE(ruvia::test::channel_tests::test_send_reservation_does_not_block_other_producers());
 }

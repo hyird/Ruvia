@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -15,8 +17,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/testing.h"
-
-#include "test_harness.h"
 
 namespace {
 
@@ -113,7 +113,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(testing_facade_reclaims_worker_owned_response_memory) {
+TEST(Ruvia, testing_facade_reclaims_worker_owned_response_memory) {
     memory_counters counters;
     std::optional<ruvia::dispatch_response> retained;
     {
@@ -121,41 +121,41 @@ RUVIA_TEST(testing_facade_reclaims_worker_owned_response_memory) {
         app.use_worker_state<memory_state>([&counters] { return memory_state(&counters); });
 
         retained.emplace(app.request(ruvia::test_request::get("/testing-memory/owned")));
-        RUVIA_CHECK_EQ(retained->body().size(), std::size_t(256 * 1024));
-        RUVIA_CHECK(retained->body().front() == 'm');
-        RUVIA_CHECK_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        RUVIA_CHECK(counters.allocations_.load() > 0);
-        RUVIA_CHECK_EQ(counters.allocations_.load(), counters.deallocations_.load());
+        EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
+        EXPECT_TRUE(retained->body().front() == 'm');
+        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
+        EXPECT_TRUE(counters.allocations_.load() > 0);
+        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
 
         const auto cancelled = app.request(ruvia::test_request::get("/testing-memory/cancel"));
-        RUVIA_CHECK_EQ(cancelled.body(), std::string(256 * 1024, 'c'));
-        RUVIA_CHECK_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        RUVIA_CHECK_EQ(counters.allocations_.load(), counters.deallocations_.load());
+        EXPECT_EQ(cancelled.body(), std::string(256 * 1024, 'c'));
+        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
+        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
 
         const auto repeated = app.request(ruvia::test_request::get("/testing-memory/owned"));
-        RUVIA_CHECK_EQ(repeated.body().size(), std::size_t(256 * 1024));
-        RUVIA_CHECK(retained->body().front() == 'm');
-        RUVIA_CHECK_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        RUVIA_CHECK_EQ(counters.allocations_.load(), counters.deallocations_.load());
+        EXPECT_EQ(repeated.body().size(), std::size_t(256 * 1024));
+        EXPECT_TRUE(retained->body().front() == 'm');
+        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
+        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
 
         const auto failed = app.request(ruvia::test_request::get("/testing-memory/throw"));
-        RUVIA_CHECK(failed.status() == ruvia::http_status::internal_server_error);
-        RUVIA_CHECK_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        RUVIA_CHECK_EQ(counters.allocations_.load(), counters.deallocations_.load());
+        EXPECT_TRUE(failed.status() == ruvia::http_status::internal_server_error);
+        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
+        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
     }
-    RUVIA_CHECK_EQ(retained->body().size(), std::size_t(256 * 1024));
-    RUVIA_CHECK(retained->body().front() == 'm');
-    RUVIA_CHECK_EQ(counters.live_.load(), std::size_t(0));
-    RUVIA_CHECK_EQ(counters.allocations_.load(), counters.deallocations_.load());
-    RUVIA_CHECK_EQ(counters.foreign_deallocations_.load(), std::size_t(0));
+    EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
+    EXPECT_TRUE(retained->body().front() == 'm');
+    EXPECT_EQ(counters.live_.load(), std::size_t(0));
+    EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
+    EXPECT_EQ(counters.foreign_deallocations_.load(), std::size_t(0));
 }
 
-RUVIA_TEST(testing_facade_unused_worker_allocates_no_response_storage) {
+TEST(Ruvia, testing_facade_unused_worker_allocates_no_response_storage) {
     memory_counters counters;
     {
         ruvia::test_app app;
         app.use_worker_state<memory_state>([&counters] { return memory_state(&counters); });
     }
-    RUVIA_CHECK_EQ(counters.allocations_.load(), std::size_t(0));
-    RUVIA_CHECK_EQ(counters.deallocations_.load(), std::size_t(0));
+    EXPECT_EQ(counters.allocations_.load(), std::size_t(0));
+    EXPECT_EQ(counters.deallocations_.load(), std::size_t(0));
 }

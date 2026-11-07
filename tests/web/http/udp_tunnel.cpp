@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -22,7 +24,6 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace udp_tunnel_test {
@@ -366,7 +367,7 @@ struct server_frame {
 
 using udp_tunnel_test::udp_observation;
 
-RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) {
+TEST(Ruvia, http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) {
     using namespace udp_tunnel_test;
     auto& io = ruvia::test::new_test_io_context();
     const auto& observation = udp_observation;
@@ -378,32 +379,32 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
     ruvia::test::http_server_fixture server(io);
     {
         auto tunnel = open_udp_tunnel(io, server.endpoint(), "/.well-known/masque/udp/target.test/53/");
-        RUVIA_CHECK(tunnel.head_.starts_with("HTTP/1.1 101 "));
-        RUVIA_CHECK(tunnel.head_.find("\r\ncapsule-protocol: ?1\r\n") != std::string::npos ||
+        EXPECT_TRUE(tunnel.head_.starts_with("HTTP/1.1 101 "));
+        EXPECT_TRUE(tunnel.head_.find("\r\ncapsule-protocol: ?1\r\n") != std::string::npos ||
                     tunnel.head_.find("\r\nCapsule-Protocol: ?1\r\n") != std::string::npos);
         for (const auto expected : {std::string_view("ready"), std::string_view("second-ready")}) {
             const auto ready = read_datagram(tunnel);
-            RUVIA_CHECK(ready.has_value() && *ready == expected);
+            EXPECT_TRUE(ready.has_value() && *ready == expected);
         }
         std::string query;
         append_capsule(query, 0, "dns-query");
         asio::write(tunnel.socket_, asio::buffer(query));
-        RUVIA_CHECK(get_response(io, server.endpoint(), "/udp-tunnel-sibling").ends_with("\r\n\r\nsibling"));
+        EXPECT_TRUE(get_response(io, server.endpoint(), "/udp-tunnel-sibling").ends_with("\r\n\r\nsibling"));
         tunnel.socket_.shutdown(asio::ip::tcp::socket::shutdown_send);
         const auto echoed = read_datagram(tunnel);
-        RUVIA_CHECK(echoed.has_value() && *echoed == "dns-query");
-        RUVIA_CHECK(!read_datagram(tunnel));
+        EXPECT_TRUE(echoed.has_value() && *echoed == "dns-query");
+        EXPECT_TRUE(!read_datagram(tunnel));
     }
-    RUVIA_CHECK(eventually(observation->eof_));
-    RUVIA_CHECK(observation->capsule_bound_rejected_);
-    RUVIA_CHECK(observation->read_overlap_rejected_);
-    RUVIA_CHECK(observation->write_overlap_rejected_);
-    RUVIA_CHECK(!observation->failed_);
-    RUVIA_CHECK(get_response(io, server.endpoint(), "/udp-tunnel-sibling").ends_with("\r\n\r\nsibling"));
+    EXPECT_TRUE(eventually(observation->eof_));
+    EXPECT_TRUE(observation->capsule_bound_rejected_);
+    EXPECT_TRUE(observation->read_overlap_rejected_);
+    EXPECT_TRUE(observation->write_overlap_rejected_);
+    EXPECT_TRUE(!observation->failed_);
+    EXPECT_TRUE(get_response(io, server.endpoint(), "/udp-tunnel-sibling").ends_with("\r\n\r\nsibling"));
     {
         auto delayed = open_udp_tunnel(io, server.endpoint(), "/.well-known/masque/udp/cancel.test/53/");
-        RUVIA_CHECK(delayed.head_.starts_with("HTTP/1.1 101 "));
-        RUVIA_CHECK(!read_datagram(delayed));
+        EXPECT_TRUE(delayed.head_.starts_with("HTTP/1.1 101 "));
+        EXPECT_TRUE(!read_datagram(delayed));
     }
     server.finish();
 }
@@ -411,7 +412,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
 // A connect-udp upgrade target is an origin path like any other: dot segments
 // are refused before any tunnel route can capture them, and a path with no
 // connect-udp route serves its GET route with the Upgrade ignored (RFC 9110 §7.8).
-RUVIA_TEST(http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
+TEST(Ruvia, http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     udp_observation->dynamic_invoked_ = false;
@@ -431,14 +432,14 @@ RUVIA_TEST(http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
         }
         return response;
     };
-    RUVIA_CHECK(exchange("/udp-tunnel/../53").starts_with("HTTP/1.1 404 "));
-    RUVIA_CHECK(exchange("/udp-tunnel/%2E%2E/53").starts_with("HTTP/1.1 404 "));
-    RUVIA_CHECK(!udp_observation->dynamic_invoked_);
+    EXPECT_TRUE(exchange("/udp-tunnel/../53").starts_with("HTTP/1.1 404 "));
+    EXPECT_TRUE(exchange("/udp-tunnel/%2E%2E/53").starts_with("HTTP/1.1 404 "));
+    EXPECT_TRUE(!udp_observation->dynamic_invoked_);
     const auto sibling = exchange("/udp-tunnel-sibling");
-    RUVIA_CHECK(sibling.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(sibling.ends_with("\r\n\r\nsibling"));
-    RUVIA_CHECK(exchange("/udp-tunnel/target.test/53").starts_with("HTTP/1.1 101 "));
-    RUVIA_CHECK(udp_observation->dynamic_invoked_);
+    EXPECT_TRUE(sibling.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(sibling.ends_with("\r\n\r\nsibling"));
+    EXPECT_TRUE(exchange("/udp-tunnel/target.test/53").starts_with("HTTP/1.1 101 "));
+    EXPECT_TRUE(udp_observation->dynamic_invoked_);
     {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
@@ -453,7 +454,7 @@ RUVIA_TEST(http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
             const auto read = client.read_some(asio::buffer(input), ec);
             response.append(input.data(), read);
         }
-        RUVIA_CHECK(response.starts_with("HTTP/1.1 404 "));
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 404 "));
     }
     server.finish();
 }
@@ -461,7 +462,7 @@ RUVIA_TEST(http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
 // RFC 9110 section 7.8: Upgrade together with Expect: 100-continue gets a
 // 100 (Continue) before the 101 (Switching Protocols), for a CONNECT-UDP
 // upgrade exactly as for a WebSocket one, even though no content follows.
-RUVIA_TEST(http1_udp_tunnel_upgrade_with_continue_expectation_sends_100_before_101) {
+TEST(Ruvia, http1_udp_tunnel_upgrade_with_continue_expectation_sends_100_before_101) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
@@ -477,12 +478,12 @@ RUVIA_TEST(http1_udp_tunnel_upgrade_with_continue_expectation_sends_100_before_1
         const auto read = client.read_some(asio::buffer(input), ec);
         response.append(input.data(), read);
     }
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 101 "));
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 101 "));
     client.close();
     server.finish();
 }
 
-RUVIA_TEST(server_capsule_and_udp_results_outlive_unread_input_and_connections) {
+TEST(Ruvia, server_capsule_and_udp_results_outlive_unread_input_and_connections) {
     using namespace udp_tunnel_test;
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
@@ -491,7 +492,7 @@ RUVIA_TEST(server_capsule_and_udp_results_outlive_unread_input_and_connections) 
             auto tunnel = open_udp_tunnel(io, server.endpoint(),
                 capsule ? "/.well-known/masque/udp/retained-capsule.test/53/"
                         : "/.well-known/masque/udp/retained-datagram.test/53/");
-            RUVIA_CHECK(tunnel.head_.starts_with("HTTP/1.1 101 "));
+            EXPECT_TRUE(tunnel.head_.starts_with("HTTP/1.1 101 "));
             // One transport write includes a second complete capsule. The
             // handler reads only the first, never advancing to EOF.
             std::string batch;
@@ -500,19 +501,19 @@ RUVIA_TEST(server_capsule_and_udp_results_outlive_unread_input_and_connections) 
             }
             asio::write(tunnel.socket_, asio::buffer(batch));
             tunnel.socket_.shutdown(asio::ip::tcp::socket::shutdown_send);
-            RUVIA_CHECK(!read_datagram(tunnel));
+            EXPECT_TRUE(!read_datagram(tunnel));
         }
         // Wait for actual connection retirement, not just the peer FIN.
         // Worker state must keep the result alive through this barrier.
         server.finish();
         for (const auto& expected : {std::string(1024, 'r'), std::string("empty")}) {
-            RUVIA_CHECK(get_response(io, server.endpoint(), "/udp-tunnel-retained").ends_with("\r\n\r\n" + expected));
+            EXPECT_TRUE(get_response(io, server.endpoint(), "/udp-tunnel-retained").ends_with("\r\n\r\n" + expected));
         }
         server.finish();
     }
 }
 
-RUVIA_TEST(server_websocket_exposes_negotiated_subprotocol_and_peer_close) {
+TEST(Ruvia, server_websocket_exposes_negotiated_subprotocol_and_peer_close) {
     using namespace udp_tunnel_test;
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
@@ -522,21 +523,21 @@ RUVIA_TEST(server_websocket_exposes_negotiated_subprotocol_and_peer_close) {
         auto ws = open_upgrade(io, server.endpoint(), "/udp-tunnel-ws",
             "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: chat.v1, chat.v2\r\n");
-        RUVIA_CHECK(ws.head_.starts_with("HTTP/1.1 101 "));
-        RUVIA_CHECK(ws.head_.find(": chat.v2\r\n") != std::string::npos);
+        EXPECT_TRUE(ws.head_.starts_with("HTTP/1.1 101 "));
+        EXPECT_TRUE(ws.head_.find(": chat.v2\r\n") != std::string::npos);
         const auto text = client_frame(0x1, "ping-echo");
         asio::write(ws.socket_, asio::buffer(text));
         auto frame = read_frame(ws);
         if (frame.opcode_ == 0xA) {
             frame = read_frame(ws);
         }
-        RUVIA_CHECK(frame.opcode_ == 0x1 && frame.payload_ == "ping-echo");
+        EXPECT_TRUE(frame.opcode_ == 0x1 && frame.payload_ == "ping-echo");
         const auto close_frame = client_frame(0x8, std::string("\x0f\xa1", 2) + "client-done");
         asio::write(ws.socket_, asio::buffer(close_frame));
         const auto close_reply = read_frame(ws);
-        RUVIA_CHECK(close_reply.opcode_ == 0x8);
+        EXPECT_TRUE(close_reply.opcode_ == 0x8);
     }
-    RUVIA_CHECK(eventually(udp_observation->ws_subprotocol_matched_));
-    RUVIA_CHECK(eventually(udp_observation->ws_peer_close_matched_));
+    EXPECT_TRUE(eventually(udp_observation->ws_subprotocol_matched_));
+    EXPECT_TRUE(eventually(udp_observation->ws_peer_close_matched_));
     server.finish();
 }

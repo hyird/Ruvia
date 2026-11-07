@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <memory_resource>
 #include <string>
@@ -7,18 +9,17 @@
 #include "ruvia/http/multipart_parser.h"
 
 #include "multipart_boundary_fixture.h"
-#include "test_harness.h"
 
 // Quoted names and boundaries in a multipart body, and the delimiter terminator each form requires.
 
-RUVIA_TEST(multipart_boundary_quoted_with_mime_special) {
+TEST(Ruvia, multipart_boundary_quoted_with_mime_special) {
     const std::string_view content_type_value = R"(multipart/form-data; boundary="a:b")";
     const auto result_value = ruvia::parse_multipart_boundary(content_type_value);
-    RUVIA_CHECK(result_value.boundary() != nullptr);
-    RUVIA_CHECK_EQ(result_value.boundary()->value(), std::string_view("a:b"));
+    EXPECT_TRUE(result_value.boundary() != nullptr);
+    EXPECT_EQ(result_value.boundary()->value(), std::string_view("a:b"));
 }
 
-RUVIA_TEST(multipart_part_fields_unfold_mime_continuations) {
+TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
     std::string wire =
         "--abc\r\n"
         "Content-Disposition: form-data;\r\n name=\"first\";\r\n\tfilename=\"first \r\n\tfile.txt\"\r\n"
@@ -38,15 +39,15 @@ RUVIA_TEST(multipart_part_fields_unfold_mime_continuations) {
     const std::array<std::string_view, 3> bodies{"one", "two", "three"};
 
     auto parsed = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
-    RUVIA_CHECK_EQ(parsed.size(), names.size());
+    EXPECT_EQ(parsed.size(), names.size());
     for (std::size_t index = 0; index < parsed.size() && index < names.size(); ++index) {
         const auto& part = parsed[index];
-        RUVIA_CHECK_EQ(part.name(), names[index]);
-        RUVIA_CHECK_EQ(part.content_type(), types[index]);
-        RUVIA_CHECK_EQ(part.body(), bodies[index]);
+        EXPECT_EQ(part.name(), names[index]);
+        EXPECT_EQ(part.content_type(), types[index]);
+        EXPECT_EQ(part.body(), bodies[index]);
     }
     if (!parsed.empty()) {
-        RUVIA_CHECK_EQ(parsed[0].filename(), std::string_view("first \tfile.txt"));
+        EXPECT_EQ(parsed[0].filename(), std::string_view("first \tfile.txt"));
     }
 
     ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
@@ -57,12 +58,12 @@ RUVIA_TEST(multipart_part_fields_unfold_mime_continuations) {
         parser.feed(std::string_view(wire).substr(offset, 1));
         for (;;) {
             const auto result = parser.poll();
-            RUVIA_CHECK(result.failure() == nullptr);
+            EXPECT_TRUE(result.failure() == nullptr);
             if (const auto* part = result.part()) {
-                RUVIA_CHECK(part_index < names.size());
+                EXPECT_TRUE(part_index < names.size());
                 if (part_index < names.size()) {
-                    RUVIA_CHECK_EQ(part->name(), names[part_index]);
-                    RUVIA_CHECK_EQ(part->content_type(), types[part_index]);
+                    EXPECT_EQ(part->name(), names[part_index]);
+                    EXPECT_EQ(part->content_type(), types[part_index]);
                     streamed[part_index].append(part->body());
                 }
                 if (part->phase() == ruvia::multipart_chunk_phase::complete ||
@@ -75,10 +76,10 @@ RUVIA_TEST(multipart_part_fields_unfold_mime_continuations) {
             break;
         }
     }
-    RUVIA_CHECK(done);
-    RUVIA_CHECK_EQ(part_index, names.size());
+    EXPECT_TRUE(done);
+    EXPECT_EQ(part_index, names.size());
     for (std::size_t index = 0; index < streamed.size(); ++index) {
-        RUVIA_CHECK_EQ(std::string_view(streamed[index]), bodies[index]);
+        EXPECT_EQ(std::string_view(streamed[index]), bodies[index]);
     }
 
     // Folded Content-Type values outlive the parser and survive moves even when
@@ -86,36 +87,36 @@ RUVIA_TEST(multipart_part_fields_unfold_mime_continuations) {
     auto moved = std::move(parsed);
     wire.assign(wire.size(), '#');
     if (moved.size() == names.size()) {
-        RUVIA_CHECK_EQ(moved[0].content_type(), types[0]);
-        RUVIA_CHECK_EQ(moved[1].content_type(), types[1]);
+        EXPECT_EQ(moved[0].content_type(), types[0]);
+        EXPECT_EQ(moved[1].content_type(), types[1]);
     }
 }
 
-RUVIA_TEST(multipart_unfolding_preserves_wire_limits_and_field_validation) {
+TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
     const std::string headers =
         "Content-Disposition: form-data;\r\n name=field\r\n"
         "Content-Type: text/plain;\r\n charset=utf-8\r\n\r\n";
     const std::string wire = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
     const auto accepted = ruvia::parse_multipart_body(wire,
         {.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .max_metadata_bytes_ = headers.size()});
-    RUVIA_CHECK_EQ(accepted.size(), std::size_t{1});
+    EXPECT_EQ(accepted.size(), std::size_t{1});
     bool oversized_rejected = false;
     try {
         (void)ruvia::parse_multipart_body(wire,
             {.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .max_metadata_bytes_ = headers.size() - 1});
     } catch (const ruvia::http_protocol_error& error) {
         oversized_rejected = true;
-        RUVIA_CHECK(error.status() == ruvia::http_status::content_too_large);
+        EXPECT_TRUE(error.status() == ruvia::http_status::content_too_large);
     }
-    RUVIA_CHECK(oversized_rejected);
+    EXPECT_TRUE(oversized_rejected);
     ruvia::multipart_parser limited({.boundary_ = ruvia::testing::make_multipart_boundary("abc"),
         .max_metadata_bytes_ = headers.size() - 1});
     limited.feed(wire);
     limited.finish_input();
     const auto limited_result = limited.poll();
-    RUVIA_CHECK(limited_result.failure() != nullptr);
+    EXPECT_TRUE(limited_result.failure() != nullptr);
     if (const auto* failure = limited_result.failure()) {
-        RUVIA_CHECK(failure->protocol_error().status() == ruvia::http_status::content_too_large);
+        EXPECT_TRUE(failure->protocol_error().status() == ruvia::http_status::content_too_large);
     }
 
     for (const std::string_view invalid : {
@@ -132,17 +133,16 @@ RUVIA_TEST(multipart_unfolding_preserves_wire_limits_and_field_validation) {
         } catch (const ruvia::http_protocol_error&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
         ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
         parser.feed(malformed);
         parser.finish_input();
         const auto streamed = parser.poll();
         const auto repeated = parser.poll();
-        RUVIA_CHECK(streamed.failure() != nullptr);
-        RUVIA_CHECK(repeated.failure() != nullptr);
+        EXPECT_TRUE(streamed.failure() != nullptr);
+        EXPECT_TRUE(repeated.failure() != nullptr);
         if (streamed.failure() != nullptr && repeated.failure() != nullptr) {
-            RUVIA_CHECK_EQ(std::string_view(streamed.failure()->protocol_error().what()),
-                std::string_view(repeated.failure()->protocol_error().what()));
+            EXPECT_EQ(std::string_view(streamed.failure()->protocol_error().what()), std::string_view(repeated.failure()->protocol_error().what()));
         }
     }
 }

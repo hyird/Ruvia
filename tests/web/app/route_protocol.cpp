@@ -1,4 +1,4 @@
-#include "test_harness.h"
+#include <gtest/gtest.h>
 
 // Extended CONNECT protocol identifiers must be HTTP tokens; invalid routes
 // fail at startup before any request can be served. The controller registry
@@ -28,7 +28,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(route_protocol_rejects_invalid_connect_protocol_at_startup) {
+TEST(Ruvia, route_protocol_rejects_invalid_connect_protocol_at_startup) {
     ruvia::test_app app;
     bool rejected = false;
     try {
@@ -36,5 +36,5 @@ RUVIA_TEST(route_protocol_rejects_invalid_connect_protocol_at_startup) {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }

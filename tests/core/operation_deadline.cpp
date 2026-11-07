@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <cstdint>
 
@@ -72,9 +74,10 @@ bool operation_timeout_uses_one_absolute_deadline() {
 
 }  // namespace
 
-int main() {
-    return operation_deadline_transitions_are_exclusive() &&
-                   operation_timeout_uses_one_absolute_deadline()
-               ? 0
-               : 1;
+TEST(Ruvia, OperationDeadlineTransitionsAreExclusive) {
+    EXPECT_TRUE(operation_deadline_transitions_are_exclusive());
+}
+
+TEST(Ruvia, OperationTimeoutUsesOneAbsoluteDeadline) {
+    EXPECT_TRUE(operation_timeout_uses_one_absolute_deadline());
 }

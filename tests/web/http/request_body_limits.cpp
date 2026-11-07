@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -171,7 +173,7 @@ class body_lane_routes final {
     }
 };
 
-void exercise_lazy_body_reads(ruvia::testing::test_context& ruvia_ctx,
+void exercise_lazy_body_reads(
     std::string_view target, std::string_view body, std::string_view expected) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -205,7 +207,7 @@ void exercise_lazy_body_reads(ruvia::testing::test_context& ruvia_ctx,
                 }
                 informational.push_back(byte);
             }
-            RUVIA_CHECK(informational.starts_with("HTTP/1.1 103 "));
+            EXPECT_TRUE(informational.starts_with("HTTP/1.1 103 "));
             const auto body_sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 asio::async_write(client, asio::buffer(body), std::move(handler));
             });
@@ -226,8 +228,8 @@ void exercise_lazy_body_reads(ruvia::testing::test_context& ruvia_ctx,
                 }
                 response.append(buffer.data(), received.result());
             }
-            RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-            RUVIA_CHECK(response.ends_with(expected));
+            EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+            EXPECT_TRUE(response.ends_with(expected));
         } catch (...) {
             failure = std::current_exception();
         }
@@ -329,22 +331,22 @@ using request_body_limits_test::body_lane_observed;
 using request_body_limits_test::exchange_raw_request;
 using request_body_limits_test::exercise_lazy_body_reads;
 
-RUVIA_TEST(web_request_decode_accepts_gzip_content) {
+TEST(Ruvia, web_request_decode_accepts_gzip_content) {
     const std::string plain(2048, 'x');
     const std::string encoded = gzip_compress(plain);
-    RUVIA_CHECK(!encoded.empty());
+    EXPECT_TRUE(!encoded.empty());
     const auto observation_value = read_context_gzip_body(encoded);
-    RUVIA_CHECK(!observation_value.error_status_.has_value());
-    RUVIA_CHECK_EQ(observation_value.body_, plain);
+    EXPECT_TRUE(!observation_value.error_status_.has_value());
+    EXPECT_EQ(observation_value.body_, plain);
 }
 
-RUVIA_TEST(web_request_decode_accepts_empty_encoded_representation) {
+TEST(Ruvia, web_request_decode_accepts_empty_encoded_representation) {
     const auto observation_value = read_context_gzip_body({});
-    RUVIA_CHECK(!observation_value.error_status_.has_value());
-    RUVIA_CHECK(observation_value.body_.empty());
+    EXPECT_TRUE(!observation_value.error_status_.has_value());
+    EXPECT_TRUE(observation_value.body_.empty());
 }
 
-RUVIA_TEST(context_request_cold_operation_rejects_after_request_scope_closes) {
+TEST(Ruvia, context_request_cold_operation_rejects_after_request_scope_closes) {
     auto operation = make_expired_context_text_read();
     bool rejected = false;
     asio::io_context io(1);
@@ -353,45 +355,45 @@ RUVIA_TEST(context_request_cold_operation_rejects_after_request_scope_closes) {
         asio::use_future);
     io.run();
     future.get();
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }
 
-RUVIA_TEST(streamed_request_cold_reads_share_a_lane_only_when_started) {
+TEST(Ruvia, streamed_request_cold_reads_share_a_lane_only_when_started) {
     body_lane_observed->first_read_ = false;
     body_lane_observed->eof_ = false;
     body_lane_observed->overlap_rejected_ = false;
-    exercise_lazy_body_reads(ruvia_ctx, "/server-lazy-body-read", "body", "read-complete");
-    RUVIA_CHECK(body_lane_observed->first_read_);
-    RUVIA_CHECK(body_lane_observed->eof_);
-    RUVIA_CHECK(body_lane_observed->overlap_rejected_);
+    exercise_lazy_body_reads("/server-lazy-body-read", "body", "read-complete");
+    EXPECT_TRUE(body_lane_observed->first_read_);
+    EXPECT_TRUE(body_lane_observed->eof_);
+    EXPECT_TRUE(body_lane_observed->overlap_rejected_);
 }
 
-RUVIA_TEST(multipart_request_cold_reads_preserve_parser_state_after_started_overlap) {
+TEST(Ruvia, multipart_request_cold_reads_preserve_parser_state_after_started_overlap) {
     body_lane_observed->multipart_eof_ = false;
     body_lane_observed->multipart_overlap_rejected_ = false;
     constexpr std::string_view body = "--lazy\r\nContent-Disposition: form-data; name=field\r\n\r\nvalue\r\n--lazy--\r\n";
-    exercise_lazy_body_reads(ruvia_ctx, "/server-lazy-multipart-read", body, "field:value");
-    RUVIA_CHECK(body_lane_observed->multipart_eof_);
-    RUVIA_CHECK(body_lane_observed->multipart_overlap_rejected_);
+    exercise_lazy_body_reads("/server-lazy-multipart-read", body, "field:value");
+    EXPECT_TRUE(body_lane_observed->multipart_eof_);
+    EXPECT_TRUE(body_lane_observed->multipart_overlap_rejected_);
 }
 
-RUVIA_TEST(streamed_request_body_stays_failed_after_truncated_read) {
+TEST(Ruvia, streamed_request_body_stays_failed_after_truncated_read) {
     body_lane_observed->truncated_read_failed_ = false;
     body_lane_observed->truncated_reread_rejected_ = false;
     body_lane_observed->truncated_reread_yielded_ = false;
     const auto response = exchange_raw_request(
         "POST /server-truncated-body-reread HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\n", {},
         false, true);
-    RUVIA_CHECK(body_lane_observed->truncated_read_failed_);
-    RUVIA_CHECK(body_lane_observed->truncated_reread_rejected_);
-    RUVIA_CHECK(!body_lane_observed->truncated_reread_yielded_);
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(body_lane_observed->truncated_read_failed_);
+    EXPECT_TRUE(body_lane_observed->truncated_reread_rejected_);
+    EXPECT_TRUE(!body_lane_observed->truncated_reread_yielded_);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     // The body was never consumed, so the connection cannot be reused.
-    RUVIA_CHECK(response.find("\r\nConnection: close\r\n") != std::string::npos);
-    RUVIA_CHECK(response.ends_with("reread-observed"));
+    EXPECT_TRUE(response.find("\r\nConnection: close\r\n") != std::string::npos);
+    EXPECT_TRUE(response.ends_with("reread-observed"));
 }
 
-RUVIA_TEST(streamed_chunked_body_of_small_chunks_keeps_trailers_and_pipeline) {
+TEST(Ruvia, streamed_chunked_body_of_small_chunks_keeps_trailers_and_pipeline) {
     // The body follows 100 Continue, so every chunk arrives through socket
     // reads after the head, with chunks split across read boundaries.
     constexpr std::size_t chunk_count = 3000;
@@ -410,15 +412,15 @@ RUVIA_TEST(streamed_chunked_body_of_small_chunks_keeps_trailers_and_pipeline) {
         "POST /server-small-chunk-body HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n"
         "Expect: 100-continue\r\n\r\n",
         body, true, false);
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     const auto first_end = response.find(expected + ";ok");
-    RUVIA_CHECK(first_end != std::string::npos);
+    EXPECT_TRUE(first_end != std::string::npos);
     const auto second = response.find("HTTP/1.1 200 ", first_end);
-    RUVIA_CHECK(second != std::string::npos);
-    RUVIA_CHECK(response.ends_with("next"));
+    EXPECT_TRUE(second != std::string::npos);
+    EXPECT_TRUE(response.ends_with("next"));
 }
 
-RUVIA_TEST(buffered_routes_answer_a_pipelined_burst_in_order) {
+TEST(Ruvia, buffered_routes_answer_a_pipelined_burst_in_order) {
     // One write carries every request, so each buffered-route response is
     // prepared while the next requests still sit behind it in the read buffer,
     // and the echoed bodies borrow that buffer until the response owns them.
@@ -431,22 +433,22 @@ RUVIA_TEST(buffered_routes_answer_a_pipelined_burst_in_order) {
     std::size_t position = 0;
     for (const std::string_view body : {"next", "first!", "second!", "next"}) {
         position = response.find("HTTP/1.1 200 ", position);
-        RUVIA_CHECK(position != std::string::npos);
+        EXPECT_TRUE(position != std::string::npos);
         if (position == std::string::npos) {
             return;
         }
         position = response.find("\r\n\r\n", position);
-        RUVIA_CHECK(position != std::string::npos);
+        EXPECT_TRUE(position != std::string::npos);
         if (position == std::string::npos) {
             return;
         }
         position += 4;
-        RUVIA_CHECK_EQ(std::string_view(response).substr(position, body.size()), body);
+        EXPECT_EQ(std::string_view(response).substr(position, body.size()), body);
     }
-    RUVIA_CHECK_EQ(position + 4, response.size());
+    EXPECT_EQ(position + 4, response.size());
 }
 
-RUVIA_TEST(buffered_known_length_body_read_from_socket_keeps_the_pipelined_request) {
+TEST(Ruvia, buffered_known_length_body_read_from_socket_keeps_the_pipelined_request) {
     // The body follows 100 Continue, so all of it arrives through socket reads
     // after the head, across several reads and capacity growth steps, with the
     // next request directly behind its last byte in the same write.
@@ -458,19 +460,19 @@ RUVIA_TEST(buffered_known_length_body_read_from_socket_keeps_the_pipelined_reque
         "POST /server-pipelined-echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(body.size()) +
             "\r\nExpect: 100-continue\r\n\r\n",
         body + "GET /server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", true, false);
-    RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     const auto echoed = response.find("\r\n\r\n");
-    RUVIA_CHECK(echoed != std::string::npos);
+    EXPECT_TRUE(echoed != std::string::npos);
     if (echoed == std::string::npos) {
         return;
     }
-    RUVIA_CHECK(std::string_view(response).substr(echoed + 4, body.size()) == body);
+    EXPECT_TRUE(std::string_view(response).substr(echoed + 4, body.size()) == body);
     const auto second = response.find("HTTP/1.1 200 ", echoed + 4 + body.size());
-    RUVIA_CHECK_EQ(second, echoed + 4 + body.size());
-    RUVIA_CHECK(response.ends_with("next"));
+    EXPECT_EQ(second, echoed + 4 + body.size());
+    EXPECT_TRUE(response.ends_with("next"));
 }
 
-RUVIA_TEST(server_rejects_absolute_form_targets_outside_http_schemes) {
+TEST(Ruvia, server_rejects_absolute_form_targets_outside_http_schemes) {
     // A front proxy that only recognises http(s) absolute URIs must not see a
     // different target than the one routed here, so other schemes are a 400.
     for (const std::string_view head : {
@@ -478,28 +480,28 @@ RUVIA_TEST(server_rejects_absolute_form_targets_outside_http_schemes) {
              "GET javascript:/server-small-chunk-next HTTP/1.1\r\nHost: localhost\r\n\r\n",
              "GET x:80 HTTP/1.1\r\nHost: localhost\r\n\r\n"}) {
         const auto response = exchange_raw_request(head, {}, false, false);
-        RUVIA_CHECK(response.starts_with("HTTP/1.1 400 "));
-        RUVIA_CHECK(response.find("next") == std::string::npos);
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 400 "));
+        EXPECT_TRUE(response.find("next") == std::string::npos);
     }
     const auto accepted = exchange_raw_request(
         "GET http://localhost/server-small-chunk-next HTTP/1.1\r\nHost: other\r\nConnection: close\r\n\r\n", {},
         false, false);
-    RUVIA_CHECK(accepted.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(accepted.ends_with("next"));
+    EXPECT_TRUE(accepted.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(accepted.ends_with("next"));
 }
 
-RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {
+TEST(Ruvia, web_request_decodes_content_coding_stacks_in_reverse_order) {
     const std::string plain(8192, 'm');
     // Applied in Content-Encoding order: gzip first, then deflate.
     const auto gzipped = ruvia::encode_http_content(
         ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = plain.size()});
-    RUVIA_CHECK(gzipped.has_value());
+    EXPECT_TRUE(gzipped.has_value());
     if (!gzipped.has_value()) {
         return;
     }
     const auto encoded = ruvia::encode_http_content(
         ruvia::http_content_coding::deflate, *gzipped, {.max_encoded_bytes_ = plain.size()});
-    RUVIA_CHECK(encoded.has_value());
+    EXPECT_TRUE(encoded.has_value());
     if (!encoded.has_value()) {
         return;
     }
@@ -507,14 +509,14 @@ RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {
         ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(*encoded),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             const auto body = co_await context_value.req().text();
-            RUVIA_CHECK_EQ(body, std::string_view(plain));
+            EXPECT_EQ(body, std::string_view(plain));
         });
 }
 
 // The streaming multipart reader decodes no content coding, so it refuses a
 // coded body before any part reaches the handler, advertising only identity
 // (RFC 9110 §15.5.16); a malformed Content-Encoding field is a 400.
-RUVIA_TEST(streamed_multipart_reader_refuses_content_coded_bodies) {
+TEST(Ruvia, streamed_multipart_reader_refuses_content_coded_bodies) {
     constexpr std::string_view body = "--lazy\r\nContent-Disposition: form-data; name=field\r\n\r\nvalue\r\n--lazy--\r\n";
     const auto exchange = [](std::string_view coding_field, std::string_view payload) {
         const std::string head =
@@ -526,16 +528,16 @@ RUVIA_TEST(streamed_multipart_reader_refuses_content_coded_bodies) {
     };
     body_lane_observed->multipart_reader_parts_ = 0;
     const auto identity = exchange("Content-Encoding: identity\r\n", body);
-    RUVIA_CHECK(identity.starts_with("HTTP/1.1 200 "));
-    RUVIA_CHECK(identity.ends_with("\r\n\r\nvalue"));
-    RUVIA_CHECK_EQ(body_lane_observed->multipart_reader_parts_.load(), 1U);
+    EXPECT_TRUE(identity.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(identity.ends_with("\r\n\r\nvalue"));
+    EXPECT_EQ(body_lane_observed->multipart_reader_parts_.load(), 1U);
 
     const auto gzip = exchange("Content-Encoding: gzip\r\n", gzip_compress(std::string(body)));
-    RUVIA_CHECK(gzip.starts_with("HTTP/1.1 415 "));
-    RUVIA_CHECK(gzip.find("\r\nAccept-Encoding: identity\r\n") != std::string::npos);
+    EXPECT_TRUE(gzip.starts_with("HTTP/1.1 415 "));
+    EXPECT_TRUE(gzip.find("\r\nAccept-Encoding: identity\r\n") != std::string::npos);
     const auto unknown = exchange("Content-Encoding: x-unknown\r\n", body);
-    RUVIA_CHECK(unknown.starts_with("HTTP/1.1 415 "));
-    RUVIA_CHECK(unknown.find("\r\nAccept-Encoding: identity\r\n") != std::string::npos);
-    RUVIA_CHECK(exchange("Content-Encoding: gzip;level=9\r\n", body).starts_with("HTTP/1.1 400 "));
-    RUVIA_CHECK_EQ(body_lane_observed->multipart_reader_parts_.load(), 1U);
+    EXPECT_TRUE(unknown.starts_with("HTTP/1.1 415 "));
+    EXPECT_TRUE(unknown.find("\r\nAccept-Encoding: identity\r\n") != std::string::npos);
+    EXPECT_TRUE(exchange("Content-Encoding: gzip;level=9\r\n", body).starts_with("HTTP/1.1 400 "));
+    EXPECT_EQ(body_lane_observed->multipart_reader_parts_.load(), 1U);
 }

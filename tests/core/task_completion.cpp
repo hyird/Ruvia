@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <memory>
 #include <optional>
 #include <thread>
@@ -92,12 +94,12 @@ bool check_cold_frame(bool cross_thread) {
 
 }  // namespace ruvia::test::task_completion_tests
 
-int main() {
-    for (const bool cross_thread : {false, true}) {
-        if (!ruvia::test::task_completion_tests::check_cold_frame<void>(cross_thread) ||
-            !ruvia::test::task_completion_tests::check_cold_frame<int>(cross_thread)) {
-            return 1;
-        }
-    }
-    return 0;
+TEST(Ruvia, ColdTaskFrameSameThread) {
+    EXPECT_TRUE(ruvia::test::task_completion_tests::check_cold_frame<void>(false));
+    EXPECT_TRUE(ruvia::test::task_completion_tests::check_cold_frame<int>(false));
+}
+
+TEST(Ruvia, ColdTaskFrameCrossThread) {
+    EXPECT_TRUE(ruvia::test::task_completion_tests::check_cold_frame<void>(true));
+    EXPECT_TRUE(ruvia::test::task_completion_tests::check_cold_frame<int>(true));
 }

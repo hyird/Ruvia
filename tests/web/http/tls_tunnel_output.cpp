@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -16,7 +18,6 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/web/http_client.h"
 
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
@@ -89,7 +90,7 @@ ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned m
     }
 }
 
-void exercise_client_connect(ruvia::testing::test_context& ruvia_ctx, unsigned mode) {
+void exercise_client_connect(unsigned mode) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     std::string received;
@@ -117,33 +118,33 @@ void exercise_client_connect(ruvia::testing::test_context& ruvia_ctx, unsigned m
                 } catch (const ruvia::http_client_error& error) {
                     unavailable = error.code() == ruvia::http_client_error::code_type::protocol_unavailable;
                 }
-                RUVIA_CHECK(unavailable);
+                EXPECT_TRUE(unavailable);
             } else {
                 auto result_value = co_await client.client().connect("target.test:443").open();
                 if (mode == 2) {
-                    RUVIA_CHECK(!result_value.tunnel() && result_value.response());
+                    EXPECT_TRUE(!result_value.tunnel() && result_value.response());
                     if (!result_value.response()) {
                         throw std::runtime_error("missing CONNECT rejection");
                     }
-                    RUVIA_CHECK(result_value.response()->status().value() == 407);
+                    EXPECT_TRUE(result_value.response()->status().value() == 407);
                     std::string text;
                     while (auto bytes = co_await result_value.response()->stream().text()) {
                         text.append(*bytes);
                     }
-                    RUVIA_CHECK(text == "denied");
+                    EXPECT_TRUE(text == "denied");
                 } else {
-                    RUVIA_CHECK(result_value.tunnel() && !result_value.response());
+                    EXPECT_TRUE(result_value.tunnel() && !result_value.response());
                     if (!result_value.tunnel()) {
                         throw std::runtime_error("CONNECT rejected");
                     }
                     auto tunnel = std::move(*result_value.tunnel());
-                    RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
+                    EXPECT_TRUE(tunnel.header("x-tunnel") == "owned-metadata");
                     const auto read_greeting = [&]() -> ruvia::task<void> {
                         std::string greeting;
                         while (auto bytes = co_await tunnel.read()) {
                             greeting.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
                         }
-                        RUVIA_CHECK(greeting == std::string(100003, 's'));
+                        EXPECT_TRUE(greeting == std::string(100003, 's'));
                     };
                     if (mode == 1) {
                         co_await read_greeting();
@@ -183,17 +184,17 @@ void exercise_client_connect(ruvia::testing::test_context& ruvia_ctx, unsigned m
         std::rethrow_exception(failure);
     }
     if (mode == 3) {
-        RUVIA_CHECK(received.empty());
+        EXPECT_TRUE(received.empty());
     } else if (mode != 2) {
-        RUVIA_CHECK(received == std::string(8 * 16384, 't'));
+        EXPECT_TRUE(received == std::string(8 * 16384, 't'));
     }
 }
 
 }  // namespace
 
-RUVIA_TEST(http1_client_tunnel_and_rejections_preserve_ownership_and_tcp_half_close) {
+TEST(Ruvia, http1_client_tunnel_and_rejections_preserve_ownership_and_tcp_half_close) {
     for (unsigned mode = 0; mode != 4; ++mode) {
-        exercise_client_connect(ruvia_ctx, mode);
+        exercise_client_connect(mode);
     }
 }
 
@@ -226,7 +227,7 @@ ruvia::task<void> write_all(asio::ip::tcp::socket& stream, std::string_view byte
 // A proxy that rejects CONNECT without Connection: close may follow the
 // rejection with bytes of unknown ownership. The client delivers the rejection
 // but never reuses that connection: the next request opens a new one.
-RUVIA_TEST(http1_client_rejected_keep_alive_connect_retires_the_proxy_connection) {
+TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connection) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     unsigned accepted = 0;
@@ -272,24 +273,24 @@ RUVIA_TEST(http1_client_rejected_keep_alive_connect_retires_the_proxy_connection
         try {
             {
                 auto result_value = co_await client.client().connect("target.test:443").open();
-                RUVIA_CHECK(!result_value.tunnel() && result_value.response());
+                EXPECT_TRUE(!result_value.tunnel() && result_value.response());
                 if (!result_value.response()) {
                     throw std::runtime_error("missing CONNECT rejection");
                 }
-                RUVIA_CHECK(result_value.response()->status().value() == 407);
+                EXPECT_TRUE(result_value.response()->status().value() == 407);
                 std::string text;
                 while (auto bytes = co_await result_value.response()->stream().text()) {
                     text.append(*bytes);
                 }
-                RUVIA_CHECK(text == "denied");
+                EXPECT_TRUE(text == "denied");
             }
             auto response = co_await client.client().get("/after").send();
-            RUVIA_CHECK(response.status().value() == 200);
+            EXPECT_TRUE(response.status().value() == 200);
             std::string text;
             while (auto bytes = co_await response.stream().text()) {
                 text.append(*bytes);
             }
-            RUVIA_CHECK(text == "ok");
+            EXPECT_TRUE(text == "ok");
         } catch (...) {
             failure = std::current_exception();
         }
@@ -311,6 +312,6 @@ RUVIA_TEST(http1_client_rejected_keep_alive_connect_retires_the_proxy_connection
     if (failure) {
         std::rethrow_exception(failure);
     }
-    RUVIA_CHECK_EQ(accepted, 2U);
-    RUVIA_CHECK(after_rejection.empty());
+    EXPECT_EQ(accepted, 2U);
+    EXPECT_TRUE(after_rejection.empty());
 }

@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <cstddef>
 #include <memory_resource>
@@ -23,7 +25,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 // Inbound buffer budgets on the streamed request body and CONNECT tunnel
@@ -161,7 +162,7 @@ constexpr std::string_view connect_request =
 
 }  // namespace
 
-RUVIA_TEST(streamed_request_body_reads_count_against_the_connection_inbound_budget) {
+TEST(Ruvia, streamed_request_body_reads_count_against_the_connection_inbound_budget) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, inbound_memory_config());
     {
@@ -171,8 +172,8 @@ RUVIA_TEST(streamed_request_body_reads_count_against_the_connection_inbound_budg
             "POST /inbound-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: 16\r\nConnection: close\r\n\r\n"
             "0123456789abcdef");
         const auto response = client.read_to_end();
-        RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
-        RUVIA_CHECK(response.ends_with("\r\n\r\n16"));
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response.ends_with("\r\n\r\n16"));
         client.close();
     }
     {
@@ -182,27 +183,27 @@ RUVIA_TEST(streamed_request_body_reads_count_against_the_connection_inbound_budg
             "POST /inbound-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n" +
             std::string(20000, 'b'));
         const auto response = client.read_to_end();
-        RUVIA_CHECK(response.starts_with("HTTP/1.1 503 "));
-        RUVIA_CHECK(response.find("inbound_buffer_limit") != std::string::npos);
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 503 "));
+        EXPECT_TRUE(response.find("inbound_buffer_limit") != std::string::npos);
         client.close();
     }
     server.finish();
 }
 
-RUVIA_TEST(tunnel_reads_count_against_the_connection_inbound_budget) {
+TEST(Ruvia, tunnel_reads_count_against_the_connection_inbound_budget) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, inbound_memory_config());
     test_client client(io, server.endpoint());
-    RUVIA_CHECK(open_tunnel(client));
+    EXPECT_TRUE(open_tunnel(client));
     client.send(std::string(20000, 't'));
     client.finish_sending();
     const auto output = client.read_to_end();
-    RUVIA_CHECK(output.ends_with("limited\n"));
+    EXPECT_TRUE(output.ends_with("limited\n"));
     client.close();
     server.finish();
 }
 
-RUVIA_TEST(tunnel_reads_count_against_the_worker_inbound_budget) {
+TEST(Ruvia, tunnel_reads_count_against_the_worker_inbound_budget) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, inbound_memory_config());
     // Two tunnels each hold their read window, within their own connection
@@ -210,17 +211,17 @@ RUVIA_TEST(tunnel_reads_count_against_the_worker_inbound_budget) {
     test_client first(io, server.endpoint());
     test_client second(io, server.endpoint());
     for (auto* const client : {&first, &second}) {
-        RUVIA_CHECK(open_tunnel(*client));
+        EXPECT_TRUE(open_tunnel(*client));
         client->send("a");
-        RUVIA_CHECK(client->read_until("\n") == std::optional<std::string>("ok\n"));
+        EXPECT_TRUE(client->read_until("\n") == std::optional<std::string>("ok\n"));
     }
     test_client third(io, server.endpoint());
-    RUVIA_CHECK(open_tunnel(third));
-    RUVIA_CHECK(third.read_to_end() == "limited\n");
+    EXPECT_TRUE(open_tunnel(third));
+    EXPECT_TRUE(third.read_to_end() == "limited\n");
     third.close();
     for (auto* const client : {&first, &second}) {
         client->finish_sending();
-        RUVIA_CHECK(client->read_to_end() == "end\n");
+        EXPECT_TRUE(client->read_to_end() == "end\n");
         client->close();
     }
     server.finish();

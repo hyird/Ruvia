@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gtest/gtest.h>
+
 #include <array>
 #include <concepts>
 #include <memory_resource>
@@ -16,8 +18,6 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_client_redirect.h"
 #include "ruvia/http/http_limits.h"
-
-#include "test_harness.h"
 
 namespace http_client_response_test {
 

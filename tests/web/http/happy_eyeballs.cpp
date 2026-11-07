@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <exception>
 #include <optional>
@@ -23,7 +25,6 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/http_client.h"
 
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace happy_eyeballs_tests {
@@ -149,7 +150,7 @@ private:
 };
 
 [[nodiscard]] ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment,
-    opposite_family_peer& peer, ruvia::testing::test_context& ruvia_ctx, std::string_view host,
+    opposite_family_peer& peer, std::string_view host,
     std::chrono::milliseconds connect_timeout) {
     const std::string authority = host.find(':') == std::string_view::npos ? std::string(host) : "[" + std::string(host) + "]";
     const std::string base_url = "http://" + authority + ":" + std::to_string(peer.port());
@@ -163,7 +164,7 @@ private:
         auto response = co_await client.client().get("/happy-eyeballs").send();
         const auto body = co_await response.stream().read_all();
         const std::string_view body_text(reinterpret_cast<const char*>(body.bytes().data()), body.size());
-        RUVIA_CHECK(body_text == "ok");
+        EXPECT_TRUE(body_text == "ok");
     } catch (...) {
         failure = std::current_exception();
         peer.stop();
@@ -185,9 +186,9 @@ private:
 }  // namespace happy_eyeballs_tests
 
 #if defined(_WIN32)
-RUVIA_TEST(http_client_tries_next_address_family_when_first_is_unavailable) {
+TEST(Ruvia, http_client_tries_next_address_family_when_first_is_unavailable) {
 #else
-RUVIA_TEST(http_client_fast_address_failure_immediately_starts_the_next_family) {
+TEST(Ruvia, http_client_fast_address_failure_immediately_starts_the_next_family) {
 #endif
     using namespace happy_eyeballs_tests;
     const auto first_is_v6 = localhost_first_is_v6();
@@ -212,13 +213,13 @@ RUVIA_TEST(http_client_fast_address_failure_immediately_starts_the_next_family) 
 #else
     constexpr auto connect_timeout = 150ms;
 #endif
-    auto root = loop.start(exercise(attachment, peer, ruvia_ctx, "localhost", connect_timeout));
+    auto root = loop.start(exercise(attachment, peer, "localhost", connect_timeout));
     attachment.run();
     root.get();
     lookups.join();
 }
 
-RUVIA_TEST(http_client_connects_to_an_ipv6_literal) {
+TEST(Ruvia, http_client_connects_to_an_ipv6_literal) {
     using namespace happy_eyeballs_tests;
     if (!localhost_first_is_v6()) {
         return;
@@ -229,7 +230,7 @@ RUVIA_TEST(http_client_connects_to_an_ipv6_literal) {
     auto worker = loop.handle();
     opposite_family_peer peer(io, worker, false);
     peer.start();
-    auto root = loop.start(exercise(attachment, peer, ruvia_ctx, "::1", 3s));
+    auto root = loop.start(exercise(attachment, peer, "::1", 3s));
     attachment.run();
     root.get();
 }

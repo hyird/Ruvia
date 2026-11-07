@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +22,6 @@
 #include "ruvia/http/http_response_stream.h"
 
 #include "http1_request_message_fixture.h"
-#include "test_harness.h"
 
 namespace {
 
@@ -104,27 +105,27 @@ bool throws_head_error(fn_type&& fn) {
 
 }  // namespace
 
-RUVIA_TEST(http1_head_metadata_body_preserves_declared_or_unknown_representation_length) {
+TEST(Ruvia, http1_head_metadata_body_preserves_declared_or_unknown_representation_length) {
     for (const auto version : {ruvia::http_protocol_version::http10, ruvia::http_protocol_version::http11}) {
         http_response response;
         response.head_metadata_body();
         const auto unknown = emit_buffered_head(response, http_known_method::head, version);
-        RUVIA_CHECK(unknown.find("Content-Length:") == std::string::npos);
+        EXPECT_TRUE(unknown.find("Content-Length:") == std::string::npos);
 
         response.header("Content-Length", "256");
         const auto declared = emit_buffered_head(response, http_known_method::head, version);
-        RUVIA_CHECK(declared.find("Content-Length: 256\r\n") != std::string::npos);
+        EXPECT_TRUE(declared.find("Content-Length: 256\r\n") != std::string::npos);
         const auto get = emit_buffered_head(response, http_known_method::get, version);
-        RUVIA_CHECK(get.find("Content-Length: 0\r\n") != std::string::npos);
+        EXPECT_TRUE(get.find("Content-Length: 0\r\n") != std::string::npos);
 
         response.remove_header("Content-Length");
         response.body("");
         const auto empty = emit_buffered_head(response, http_known_method::head, version);
-        RUVIA_CHECK(empty.find("Content-Length: 0\r\n") != std::string::npos);
+        EXPECT_TRUE(empty.find("Content-Length: 0\r\n") != std::string::npos);
     }
 }
 
-RUVIA_TEST(http1_response_head_reserve_preserves_inline_capacity_and_failed_growth) {
+TEST(Ruvia, http1_response_head_reserve_preserves_inline_capacity_and_failed_growth) {
     for (const std::size_t used : {std::size_t{0}, std::size_t{1}, ruvia::response_head_stack_bytes - 1, ruvia::response_head_stack_bytes}) {
         // Leave room for implementation-owned STL proxies, but not a spilled head.
         std::array<std::byte, 256> allocation_storage{};
@@ -135,7 +136,7 @@ RUVIA_TEST(http1_response_head_reserve_preserves_inline_capacity_and_failed_grow
         const auto remaining = ruvia::response_head_stack_bytes - used;
         buffer.reserve_additional(0);
         buffer.reserve_additional(remaining);
-        RUVIA_CHECK_EQ(buffer.view(), std::string_view(prefix));
+        EXPECT_EQ(buffer.view(), std::string_view(prefix));
 
         bool rejected = false;
         try {
@@ -143,19 +144,19 @@ RUVIA_TEST(http1_response_head_reserve_preserves_inline_capacity_and_failed_grow
         } catch (const std::bad_alloc&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
-        RUVIA_CHECK_EQ(buffer.view(), std::string_view(prefix));
+        EXPECT_TRUE(rejected);
+        EXPECT_EQ(buffer.view(), std::string_view(prefix));
         const std::string suffix(remaining, 's');
         buffer.append(suffix);
         const std::string expected = prefix + suffix;
-        RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+        EXPECT_EQ(buffer.view(), std::string_view(expected));
         buffer.reset();
         buffer.append("reusable");
-        RUVIA_CHECK_EQ(buffer.view(), std::string_view("reusable"));
+        EXPECT_EQ(buffer.view(), std::string_view("reusable"));
     }
 }
 
-RUVIA_TEST(http1_response_head_append_accepts_overlapping_written_inline_ranges) {
+TEST(Ruvia, http1_response_head_append_accepts_overlapping_written_inline_ranges) {
     for (const auto back : {std::size_t{0}, std::size_t{1}, ruvia::response_head_stack_bytes / 8, ruvia::response_head_stack_bytes / 4}) {
         ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
         const auto size = ruvia::response_head_stack_bytes / 4;
@@ -167,7 +168,7 @@ RUVIA_TEST(http1_response_head_append_accepts_overlapping_written_inline_ranges)
         }
         buffer.append(prefix);
         auto* const cursor = buffer.stack_cursor(size);
-        RUVIA_CHECK(cursor != nullptr);
+        EXPECT_TRUE(cursor != nullptr);
         if (cursor == nullptr) {
             continue;
         }
@@ -175,42 +176,42 @@ RUVIA_TEST(http1_response_head_append_accepts_overlapping_written_inline_ranges)
         const std::string_view source(cursor - back, size);
         const std::string expected = prefix + std::string(source);
         buffer.append(source);
-        RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+        EXPECT_EQ(buffer.view(), std::string_view(expected));
     }
 }
 
-RUVIA_TEST(http1_response_head_commit_checks_owner_and_accepts_inline_boundaries) {
+TEST(Ruvia, http1_response_head_commit_checks_owner_and_accepts_inline_boundaries) {
     ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
     ruvia::http_response_head_buffer other(std::pmr::new_delete_resource());
     buffer.append("prefix");
-    RUVIA_CHECK(throws_invalid([&] { buffer.commit_stack(nullptr); }));
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
-    RUVIA_CHECK(throws_invalid([&] { buffer.commit_stack(other.stack_cursor(1)); }));
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+    EXPECT_TRUE(throws_invalid([&] { buffer.commit_stack(nullptr); }));
+    EXPECT_EQ(buffer.view(), std::string_view("prefix"));
+    EXPECT_TRUE(throws_invalid([&] { buffer.commit_stack(other.stack_cursor(1)); }));
+    EXPECT_EQ(buffer.view(), std::string_view("prefix"));
 
     const auto remaining = ruvia::response_head_stack_bytes - buffer.view().size();
     auto* const cursor = buffer.stack_cursor(remaining);
-    RUVIA_CHECK(cursor != nullptr);
+    EXPECT_TRUE(cursor != nullptr);
     if (cursor == nullptr) {
         return;
     }
     std::memset(cursor, 's', remaining);
     buffer.commit_stack(cursor + remaining);
     const std::string expected = "prefix" + std::string(remaining, 's');
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+    EXPECT_EQ(buffer.view(), std::string_view(expected));
     buffer.commit_stack(cursor);
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+    EXPECT_EQ(buffer.view(), std::string_view("prefix"));
     buffer.commit_stack(cursor - 6);
-    RUVIA_CHECK(buffer.view().empty());
+    EXPECT_TRUE(buffer.view().empty());
     buffer.append("reused");
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("reused"));
+    EXPECT_EQ(buffer.view(), std::string_view("reused"));
 }
 
-RUVIA_TEST(http1_response_head_commit_after_spill_rejects_without_losing_content) {
+TEST(Ruvia, http1_response_head_commit_after_spill_rejects_without_losing_content) {
     ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
     buffer.append("prefix");
     auto* const cursor = buffer.stack_cursor(1);
-    RUVIA_CHECK(cursor != nullptr);
+    EXPECT_TRUE(cursor != nullptr);
     if (cursor == nullptr) {
         return;
     }
@@ -222,29 +223,29 @@ RUVIA_TEST(http1_response_head_commit_after_spill_rejects_without_losing_content
     } catch (const std::logic_error&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+    EXPECT_TRUE(rejected);
+    EXPECT_EQ(buffer.view(), std::string_view("prefix"));
     buffer.append("-retained");
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix-retained"));
+    EXPECT_EQ(buffer.view(), std::string_view("prefix-retained"));
     buffer.reset();
     auto* const fresh = buffer.stack_cursor(1);
-    RUVIA_CHECK(fresh != nullptr);
+    EXPECT_TRUE(fresh != nullptr);
     if (fresh == nullptr) {
         return;
     }
     fresh[0] = 'y';
     buffer.commit_stack(fresh + 1);
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("y"));
+    EXPECT_EQ(buffer.view(), std::string_view("y"));
 }
 
-RUVIA_TEST(http1_response_head_commit_survives_failed_spill) {
+TEST(Ruvia, http1_response_head_commit_survives_failed_spill) {
     std::array<std::byte, 256> allocation_storage{};
     std::pmr::monotonic_buffer_resource resource(
         allocation_storage.data(), allocation_storage.size(), std::pmr::null_memory_resource());
     ruvia::http_response_head_buffer buffer(&resource);
     buffer.append("prefix");
     auto* const cursor = buffer.stack_cursor(1);
-    RUVIA_CHECK(cursor != nullptr);
+    EXPECT_TRUE(cursor != nullptr);
     if (cursor == nullptr) {
         return;
     }
@@ -255,12 +256,12 @@ RUVIA_TEST(http1_response_head_commit_survives_failed_spill) {
     } catch (const std::bad_alloc&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
     buffer.commit_stack(cursor + 1);
-    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefixx"));
+    EXPECT_EQ(buffer.view(), std::string_view("prefixx"));
 }
 
-RUVIA_TEST(http1_response_trailers_preserve_fields_borrowed_from_output) {
+TEST(Ruvia, http1_response_trailers_preserve_fields_borrowed_from_output) {
     for (const std::size_t size : {std::size_t{8}, std::size_t{32}, std::size_t{4096}}) {
         for (const bool reserve_first : {false, true}) {
             std::pmr::string output(std::pmr::new_delete_resource());
@@ -277,12 +278,12 @@ RUVIA_TEST(http1_response_trailers_preserve_fields_borrowed_from_output) {
             const auto section = ruvia::validate_http_response_trailers(fields);
             const std::string expected = prefix + "X-Tail: " + std::string(size, 'v') + "\r\nX-Again: " + std::string(size, 'v') + "\r\n";
             ruvia::append_http1_response_trailers(output, section);
-            RUVIA_CHECK_EQ(std::string_view(output), std::string_view(expected));
+            EXPECT_EQ(std::string_view(output), std::string_view(expected));
         }
     }
 }
 
-RUVIA_TEST(http1_response_trailers_leave_existing_output_on_allocation_failure) {
+TEST(Ruvia, http1_response_trailers_leave_existing_output_on_allocation_failure) {
     std::array<std::byte, 256> allocation_storage{};
     std::pmr::monotonic_buffer_resource resource(allocation_storage.data(), allocation_storage.size(), std::pmr::null_memory_resource());
     std::pmr::string output("prefix", &resource);
@@ -295,13 +296,13 @@ RUVIA_TEST(http1_response_trailers_leave_existing_output_on_allocation_failure) 
     } catch (const std::bad_alloc&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("prefix"));
+    EXPECT_TRUE(rejected);
+    EXPECT_EQ(std::string_view(output), std::string_view("prefix"));
     output.append(" reused");
-    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("prefix reused"));
+    EXPECT_EQ(std::string_view(output), std::string_view("prefix reused"));
 }
 
-RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
+TEST(Ruvia, http1_buffered_response_plan_owns_request_version_and_length) {
     using ruvia::plan_buffered_http_response_write;
     using ruvia::testing::parse_http1_request_message;
 
@@ -314,26 +315,25 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
         }
         const auto response_plan = get_http1_buffered_response_plan(
             plan_buffered_http_response_write(http_known_method::get, response), connection_plan);
-        RUVIA_CHECK_EQ(
-            response_plan.head_plan().buffered()->content_length(), response_plan.content_length());
+        EXPECT_EQ(response_plan.head_plan().buffered()->content_length(), response_plan.content_length());
         return std::pair(
             emit_head(response, response_plan.head_plan()), response_plan.head_plan().protocol_version());
     };
 
     const auto [http10_head, http10_version] =
         emit_for("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
-    RUVIA_CHECK(http10_version == ruvia::http_protocol_version::http10);
-    RUVIA_CHECK(http10_head.starts_with("HTTP/1.1 200 OK\r\n"));
-    RUVIA_CHECK((http10_head.find("Content-Length: 5\r\n") != std::string_view::npos));
-    RUVIA_CHECK((http10_head.find("Connection: keep-alive\r\n") != std::string_view::npos));
+    EXPECT_TRUE(http10_version == ruvia::http_protocol_version::http10);
+    EXPECT_TRUE(http10_head.starts_with("HTTP/1.1 200 OK\r\n"));
+    EXPECT_TRUE((http10_head.find("Content-Length: 5\r\n") != std::string_view::npos));
+    EXPECT_TRUE((http10_head.find("Connection: keep-alive\r\n") != std::string_view::npos));
 
     const auto [http11_head, http11_version] = emit_for("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    RUVIA_CHECK(http11_version == ruvia::http_protocol_version::http11);
-    RUVIA_CHECK(http11_head.starts_with("HTTP/1.1 200 OK\r\n"));
-    RUVIA_CHECK(!(http11_head.find("Connection:") != std::string_view::npos));
+    EXPECT_TRUE(http11_version == ruvia::http_protocol_version::http11);
+    EXPECT_TRUE(http11_head.starts_with("HTTP/1.1 200 OK\r\n"));
+    EXPECT_TRUE(!(http11_head.find("Connection:") != std::string_view::npos));
 }
 
-RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
+TEST(Ruvia, http1_response_head_rejects_status_plan_mismatch) {
     http_response response(std::pmr::new_delete_resource());
     response.status(ruvia::http_status::multi_status);
     response.body("planned");
@@ -342,11 +342,11 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
         connection_plan_for(ruvia::http_protocol_version::http11));
 
     response.status(ruvia::http_status::already_reported);
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_head(response, plan.head_plan()); }));
-    RUVIA_CHECK_EQ(plan.head_plan().body_plan().response_status(), ruvia::http_status::multi_status);
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_head(response, plan.head_plan()); }));
+    EXPECT_EQ(plan.head_plan().body_plan().response_status(), ruvia::http_status::multi_status);
 }
 
-RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
+TEST(Ruvia, http1_response_head_rejects_representation_plan_mismatch) {
     http_response response(std::pmr::new_delete_resource());
     response.status(ruvia::http_status::multi_status);
     response.body("old");
@@ -355,11 +355,11 @@ RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
         connection_plan_for(ruvia::http_protocol_version::http11));
 
     response.body("longer");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_head(response, plan.head_plan()); }));
-    RUVIA_CHECK_EQ(plan.content_length(), std::uint64_t{3});
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_head(response, plan.head_plan()); }));
+    EXPECT_EQ(plan.content_length(), std::uint64_t{3});
 }
 
-RUVIA_TEST(http1_response_head_requires_upgrade_connection_option) {
+TEST(Ruvia, http1_response_head_requires_upgrade_connection_option) {
     for (const std::string_view connection : {"", "keep-alive", "close"}) {
         http_response response(std::pmr::new_delete_resource());
         response.header("Upgrade", "example/1");
@@ -372,14 +372,14 @@ RUVIA_TEST(http1_response_head_requires_upgrade_connection_option) {
         ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
         buffer.append("existing output");
 
-        RUVIA_CHECK(throws_invalid([&] {
+        EXPECT_TRUE(throws_invalid([&] {
             ruvia::append_http1_response_head(response, buffer, plan.head_plan());
         }));
-        RUVIA_CHECK_EQ(buffer.view(), std::string_view("existing output"));
+        EXPECT_EQ(buffer.view(), std::string_view("existing output"));
     }
 }
 
-RUVIA_TEST(http1_response_head_upgrade_connection_fields_round_trip) {
+TEST(Ruvia, http1_response_head_upgrade_connection_fields_round_trip) {
     for (unsigned int combination = 0; combination != 3; ++combination) {
         http_response response(std::pmr::new_delete_resource());
         response.header("uPgRaDe", "example/1");
@@ -392,37 +392,37 @@ RUVIA_TEST(http1_response_head_upgrade_connection_fields_round_trip) {
                 http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
         }
         const auto head = emit_buffered_head(response);
-        RUVIA_CHECK(head.find("UpGrAdE") != std::string_view::npos);
+        EXPECT_TRUE(head.find("UpGrAdE") != std::string_view::npos);
 
         std::array<char, 256> request_buffer;
         auto request = ruvia::http1_client_request_writer().prepare(
             ruvia::http_origin_view::http({.host_ = "example.test"}), {}, request_buffer);
         auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&request);
-        RUVIA_CHECK(prepared_req != nullptr);
+        EXPECT_TRUE(prepared_req != nullptr);
         if (prepared_req == nullptr) {
             continue;
         }
         ruvia::http1_client_response_parser parser(
             std::move(*prepared_req).take_exchange_state(), std::pmr::new_delete_resource());
         const auto parsed = parser.parse(head);
-        RUVIA_CHECK(parsed.parsed() != nullptr);
+        EXPECT_TRUE(parsed.parsed() != nullptr);
         if (const auto* accepted = parsed.parsed()) {
-            RUVIA_CHECK_EQ(accepted->head().status(), ruvia::http_status::ok);
-            RUVIA_CHECK_EQ(accepted->consumed_bytes(), head.size());
-            RUVIA_CHECK(accepted->plan().known_length() != nullptr);
+            EXPECT_EQ(accepted->head().status(), ruvia::http_status::ok);
+            EXPECT_EQ(accepted->consumed_bytes(), head.size());
+            EXPECT_TRUE(accepted->plan().known_length() != nullptr);
             if (const auto* known_length = accepted->plan().known_length()) {
-                RUVIA_CHECK_EQ(known_length->content_length(), std::size_t{5});
-                RUVIA_CHECK_EQ(known_length->persistence(), ruvia::http1_close_policy::allow_reuse);
+                EXPECT_EQ(known_length->content_length(), std::size_t{5});
+                EXPECT_EQ(known_length->persistence(), ruvia::http1_close_policy::allow_reuse);
             }
         }
     }
 }
 
-RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
-    const auto rejects = [&ruvia_ctx](std::string_view value) {
+TEST(Ruvia, http1_response_head_validates_trailer_field_names) {
+    const auto rejects = [](std::string_view value) {
         http_response response(std::pmr::new_delete_resource());
-        RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("Trailer", value); }));
-        RUVIA_CHECK(throws_invalid([&] { response.header("Trailer", value); }));
+        EXPECT_TRUE(throws_invalid([&] { response.header_stable_view("Trailer", value); }));
+        EXPECT_TRUE(throws_invalid([&] { response.header("Trailer", value); }));
     };
 
     rejects("Content-Length");
@@ -432,80 +432,80 @@ RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     http_response valid(std::pmr::new_delete_resource());
     valid.header("Trailer", "ETag, X-Checksum");
     const auto valid_head = emit_chunked_stream_head(valid);
-    RUVIA_CHECK(valid_head.find("Trailer: ETag, X-Checksum\r\n") != std::string_view::npos);
+    EXPECT_TRUE(valid_head.find("Trailer: ETag, X-Checksum\r\n") != std::string_view::npos);
 
     http_response empty(std::pmr::new_delete_resource());
     empty.header("Trailer", "");
-    RUVIA_CHECK(!throws_invalid([&] { (void)emit_buffered_head(empty); }));
+    EXPECT_TRUE(!throws_invalid([&] { (void)emit_buffered_head(empty); }));
 }
 
-RUVIA_TEST(stable_view_headers_validate_representation_metadata_on_insertion) {
+TEST(Ruvia, stable_view_headers_validate_representation_metadata_on_insertion) {
     for (const auto invalid : {ruvia::http_header_view{"Content-Type", "text plain"},
              ruvia::http_header_view{"Content-Encoding", "gzip;q=1"},
              ruvia::http_header_view{"Trailer", "Content-Length"}}) {
         http_response response(std::pmr::new_delete_resource());
-        RUVIA_CHECK(throws_invalid([&] { response.header_stable_view(invalid.name(), invalid.value()); }));
-        RUVIA_CHECK(!response.header(invalid.name()).has_value());
+        EXPECT_TRUE(throws_invalid([&] { response.header_stable_view(invalid.name(), invalid.value()); }));
+        EXPECT_TRUE(!response.header(invalid.name()).has_value());
     }
 }
 
-RUVIA_TEST(http1_response_head_rejects_non_empty_trailer_without_chunked_framing) {
+TEST(Ruvia, http1_response_head_rejects_non_empty_trailer_without_chunked_framing) {
     http_response buffered(std::pmr::new_delete_resource());
     buffered.header("Trailer", "ETag");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(buffered); }));
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_buffered_head(buffered); }));
 
     http_response close_delimited(std::pmr::new_delete_resource());
     close_delimited.header("Trailer", "ETag");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_close_delimited_stream_head(close_delimited); }));
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_close_delimited_stream_head(close_delimited); }));
 
     http_response head(std::pmr::new_delete_resource());
     head.header("Trailer", "ETag");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_chunked_stream_head(head, http_known_method::head); }));
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_chunked_stream_head(head, http_known_method::head); }));
 
     http_response chunked(std::pmr::new_delete_resource());
     chunked.header("Trailer", "ETag");
-    RUVIA_CHECK(!throws_invalid([&] { (void)emit_chunked_stream_head(chunked); }));
+    EXPECT_TRUE(!throws_invalid([&] { (void)emit_chunked_stream_head(chunked); }));
 }
 
-RUVIA_TEST(response_head_emits_well_formed_normal) {
+TEST(Ruvia, response_head_emits_well_formed_normal) {
     http_response response(std::pmr::new_delete_resource());
     response.status(ruvia::http_status::ok);
     response.header("X-Foo", "bar");
     response.body("hello");
     const auto head = emit_buffered_head(response);
 
-    RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
-    RUVIA_CHECK((head.find("X-Foo: bar\r\n") != std::string_view::npos));
-    RUVIA_CHECK(!(head.find("Server:") != std::string_view::npos));               // product policy is explicit
-    RUVIA_CHECK((head.find("Date: ") != std::string_view::npos));                 // auto-injected
-    RUVIA_CHECK((head.find("Content-Length: 5\r\n") != std::string_view::npos));  // auto, body size
-    RUVIA_CHECK(head.ends_with("\r\n\r\n"));                                      // blank-line terminator
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 200 OK\r\n"));
+    EXPECT_TRUE((head.find("X-Foo: bar\r\n") != std::string_view::npos));
+    EXPECT_TRUE(!(head.find("Server:") != std::string_view::npos));               // product policy is explicit
+    EXPECT_TRUE((head.find("Date: ") != std::string_view::npos));                 // auto-injected
+    EXPECT_TRUE((head.find("Content-Length: 5\r\n") != std::string_view::npos));  // auto, body size
+    EXPECT_TRUE(head.ends_with("\r\n\r\n"));                                      // blank-line terminator
 }
 
-RUVIA_TEST(response_head_extension_status_uses_an_empty_reason_phrase) {
+TEST(Ruvia, response_head_extension_status_uses_an_empty_reason_phrase) {
     http_response response(std::pmr::new_delete_resource());
     response.status(ruvia::http_status_code::from_value(299));
     const auto head = emit_buffered_head(response);
 
     // RFC 9112 section 4 keeps the SP before the optional reason-phrase.
     // An unregistered status must not be mislabeled as a generic client error.
-    RUVIA_CHECK(head.starts_with("HTTP/1.1 299 \r\n"));
-    RUVIA_CHECK(!(head.find("Bad Request") != std::string_view::npos));
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 299 \r\n"));
+    EXPECT_TRUE(!(head.find("Bad Request") != std::string_view::npos));
 }
 
-RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) {
+TEST(Ruvia, response_head_preserves_explicit_server_and_does_not_duplicate_date) {
     http_response response(std::pmr::new_delete_resource());
     response.header("Server", "custom");
     response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
     response.body("x");
     const auto head = emit_buffered_head(response);
 
-    RUVIA_CHECK((head.find("Server: custom\r\n") != std::string_view::npos));
-    RUVIA_CHECK_EQ(count_occurrences(head, "Server: "), std::size_t{1});
-    RUVIA_CHECK_EQ(count_occurrences(head, "Date: "), std::size_t{1});  // exactly one Date
+    EXPECT_TRUE((head.find("Server: custom\r\n") != std::string_view::npos));
+    EXPECT_EQ(count_occurrences(head, "Server: "), std::size_t{1});
+    EXPECT_EQ(count_occurrences(head, "Date: "), std::size_t{1});  // exactly one Date
 }
 
-RUVIA_TEST(response_head_suppresses_auto_content_length) {
+TEST(Ruvia, response_head_suppresses_auto_content_length) {
     // A streaming/chunked writer owns framing itself. The handler's chunked
     // hint is replaced by one canonical chunked field and no Content-Length
     // survives.
@@ -514,13 +514,13 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
     response.header("Transfer-Encoding", "ChUnKeD");
     response.header("Content-Length", "999");
     const auto head = emit_chunked_stream_head(response);
-    RUVIA_CHECK(!(head.find("Content-Length:") != std::string_view::npos));
-    RUVIA_CHECK((head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
-    RUVIA_CHECK(!(head.find("ChUnKeD") != std::string_view::npos));
-    RUVIA_CHECK_EQ(count_occurrences(head, "Transfer-Encoding: "), std::size_t{1});
+    EXPECT_TRUE(!(head.find("Content-Length:") != std::string_view::npos));
+    EXPECT_TRUE((head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
+    EXPECT_TRUE(!(head.find("ChUnKeD") != std::string_view::npos));
+    EXPECT_EQ(count_occurrences(head, "Transfer-Encoding: "), std::size_t{1});
 }
 
-RUVIA_TEST(response_head_canonicalizes_managed_framing_fields_across_case) {
+TEST(Ruvia, response_head_canonicalizes_managed_framing_fields_across_case) {
     std::uint64_t state_value = 0x5d28'c4f1'9e73'ab06ULL;
     const auto next_value = [&state_value] {
         state_value ^= state_value << 13U;
@@ -559,41 +559,41 @@ RUVIA_TEST(response_head_canonicalizes_managed_framing_fields_across_case) {
         buffered.header(random_case("Transfer-Encoding"), random_case("chunked"));
         buffered.header("X-Sample", std::to_string(sample));
         const auto buffered_head = emit_buffered_head(buffered);
-        RUVIA_CHECK_EQ(count_occurrences(buffered_head, "Content-Length: "), std::size_t{1});
-        RUVIA_CHECK((buffered_head.find("Content-Length: 7\r\n") != std::string_view::npos));
-        RUVIA_CHECK(!(buffered_head.find("Content-Length: 999\r\n") != std::string_view::npos));
-        RUVIA_CHECK(!(buffered_head.find("Transfer-Encoding:") != std::string_view::npos));
-        RUVIA_CHECK_EQ(count_occurrences(ascii_lower(buffered_head), "chunked"), std::size_t{0});
-        RUVIA_CHECK(buffered_head.ends_with("\r\n\r\n"));
+        EXPECT_EQ(count_occurrences(buffered_head, "Content-Length: "), std::size_t{1});
+        EXPECT_TRUE((buffered_head.find("Content-Length: 7\r\n") != std::string_view::npos));
+        EXPECT_TRUE(!(buffered_head.find("Content-Length: 999\r\n") != std::string_view::npos));
+        EXPECT_TRUE(!(buffered_head.find("Transfer-Encoding:") != std::string_view::npos));
+        EXPECT_EQ(count_occurrences(ascii_lower(buffered_head), "chunked"), std::size_t{0});
+        EXPECT_TRUE(buffered_head.ends_with("\r\n\r\n"));
 
         http_response chunked(std::pmr::new_delete_resource());
         chunked.header(random_case("Content-Length"), "999");
         chunked.header(random_case("Transfer-Encoding"), random_case("chunked"));
         chunked.header("X-Sample", std::to_string(sample));
         const auto chunked_head = emit_chunked_stream_head(chunked);
-        RUVIA_CHECK(!(chunked_head.find("Content-Length:") != std::string_view::npos));
-        RUVIA_CHECK_EQ(count_occurrences(chunked_head, "Transfer-Encoding: "), std::size_t{1});
-        RUVIA_CHECK((chunked_head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
-        RUVIA_CHECK_EQ(count_occurrences(ascii_lower(chunked_head), "transfer-encoding:"), std::size_t{1});
-        RUVIA_CHECK_EQ(count_occurrences(ascii_lower(chunked_head), "chunked"), std::size_t{1});
-        RUVIA_CHECK(chunked_head.ends_with("\r\n\r\n"));
+        EXPECT_TRUE(!(chunked_head.find("Content-Length:") != std::string_view::npos));
+        EXPECT_EQ(count_occurrences(chunked_head, "Transfer-Encoding: "), std::size_t{1});
+        EXPECT_TRUE((chunked_head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos));
+        EXPECT_EQ(count_occurrences(ascii_lower(chunked_head), "transfer-encoding:"), std::size_t{1});
+        EXPECT_EQ(count_occurrences(ascii_lower(chunked_head), "chunked"), std::size_t{1});
+        EXPECT_TRUE(chunked_head.ends_with("\r\n\r\n"));
     }
 }
 
-RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
+TEST(Ruvia, http1_response_head_rejects_http10_chunked_payload_plan) {
     http_response response(std::pmr::new_delete_resource());
     response.body("hello");
     const auto plan = http1_chunked_response_stream_head_plan(
         plan_http_response_body(http_known_method::get, response.status()),
         connection_plan_for(ruvia::http_protocol_version::http10));
 
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_head(response, plan); }));
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_head(response, plan); }));
 }
 
 // RFC 9112 section 6.1: the writer alone frames a response. A handler-set
 // Transfer-Encoding other than exactly `chunked` names a coding the writer
 // never applies, so every final head rejects it before any output or mutation.
-RUVIA_TEST(http1_response_head_rejects_transfer_encoding_other_than_chunked) {
+TEST(Ruvia, http1_response_head_rejects_transfer_encoding_other_than_chunked) {
     const auto rejected_without_output = [](const http_response& response, const http1_response_head_plan& plan) {
         ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
         buffer.append("existing output");
@@ -611,11 +611,11 @@ RUVIA_TEST(http1_response_head_rejects_transfer_encoding_other_than_chunked) {
                 const auto buffered = get_http1_buffered_response_plan(
                     ruvia::plan_buffered_http_response_write(method, response),
                     connection_plan_for(ruvia::http_protocol_version::http11));
-                RUVIA_CHECK(rejected_without_output(response, buffered.head_plan()));
-                RUVIA_CHECK(rejected_without_output(response,
+                EXPECT_TRUE(rejected_without_output(response, buffered.head_plan()));
+                EXPECT_TRUE(rejected_without_output(response,
                     http1_chunked_response_stream_head_plan(
                         body_plan, connection_plan_for(ruvia::http_protocol_version::http11))));
-                RUVIA_CHECK(rejected_without_output(response,
+                EXPECT_TRUE(rejected_without_output(response,
                     http1_close_delimited_response_stream_head_plan(
                         body_plan, connection_plan_for(ruvia::http_protocol_version::http10))));
             }
@@ -623,10 +623,10 @@ RUVIA_TEST(http1_response_head_rejects_transfer_encoding_other_than_chunked) {
 
         http_response committed(std::pmr::new_delete_resource());
         committed.header("Transfer-Encoding", coding);
-        RUVIA_CHECK(throws_head_error([&] {
+        EXPECT_TRUE(throws_head_error([&] {
             (void)ruvia::http1_commit_final_response(committed, ruvia::plan_http11_request_connection(true));
         }));
-        RUVIA_CHECK(!committed.header("Connection").has_value());
+        EXPECT_TRUE(!committed.header("Connection").has_value());
 
         for (const auto framing : {ruvia::http_response_stream_framing::http1_chunked,
                  ruvia::http_response_stream_framing::http1_close_delimited,
@@ -645,9 +645,9 @@ RUVIA_TEST(http1_response_head_rejects_transfer_encoding_other_than_chunked) {
                 invalid = true;
             }
             if (framing == ruvia::http_response_stream_framing::http2_frames) {
-                RUVIA_CHECK(invalid);
+                EXPECT_TRUE(invalid);
             } else {
-                RUVIA_CHECK(head_error);
+                EXPECT_TRUE(head_error);
             }
         }
     }
@@ -655,7 +655,7 @@ RUVIA_TEST(http1_response_head_rejects_transfer_encoding_other_than_chunked) {
 
 // The chunked hint never reaches a wire that cannot carry it: only the HTTP/1
 // chunk writer keeps it, as its own canonical field.
-RUVIA_TEST(response_stream_head_replaces_chunked_transfer_encoding_hint_with_writer_framing) {
+TEST(Ruvia, response_stream_head_replaces_chunked_transfer_encoding_hint_with_writer_framing) {
     for (const auto framing : {ruvia::http_response_stream_framing::http1_chunked,
              ruvia::http_response_stream_framing::http1_close_delimited,
              ruvia::http_response_stream_framing::http2_frames}) {
@@ -666,118 +666,118 @@ RUVIA_TEST(response_stream_head_replaces_chunked_transfer_encoding_hint_with_wri
         const auto prepared = ruvia::prepare_http_response_stream_head(std::move(response), plan);
         const auto transfer_encoding = prepared.response().header("Transfer-Encoding");
         if (framing == ruvia::http_response_stream_framing::http1_chunked) {
-            RUVIA_CHECK_EQ(transfer_encoding.value_or(""), std::string_view("chunked"));
+            EXPECT_EQ(transfer_encoding.value_or(""), std::string_view("chunked"));
         } else {
-            RUVIA_CHECK(!transfer_encoding.has_value());
+            EXPECT_TRUE(!transfer_encoding.has_value());
         }
     }
 }
 
-RUVIA_TEST(http1_chunked_stream_does_not_invent_framing_for_head) {
+TEST(Ruvia, http1_chunked_stream_does_not_invent_framing_for_head) {
     http_response metadata(std::pmr::new_delete_resource());
     metadata.header("Content-Length", "5");
     metadata.header("Transfer-Encoding", "chunked");
     const auto metadata_wire = emit_chunked_stream_head(metadata, http_known_method::head);
-    RUVIA_CHECK((metadata_wire.find("Content-Length: 5\r\n") != std::string_view::npos));
-    RUVIA_CHECK(!(metadata_wire.find("Transfer-Encoding:") != std::string_view::npos));
+    EXPECT_TRUE((metadata_wire.find("Content-Length: 5\r\n") != std::string_view::npos));
+    EXPECT_TRUE(!(metadata_wire.find("Transfer-Encoding:") != std::string_view::npos));
 
     http_response unknown(std::pmr::new_delete_resource());
     const auto unknown_wire = emit_chunked_stream_head(unknown, http_known_method::head);
-    RUVIA_CHECK(!(unknown_wire.find("Content-Length:") != std::string_view::npos));
-    RUVIA_CHECK(!(unknown_wire.find("Transfer-Encoding:") != std::string_view::npos));
+    EXPECT_TRUE(!(unknown_wire.find("Content-Length:") != std::string_view::npos));
+    EXPECT_TRUE(!(unknown_wire.find("Transfer-Encoding:") != std::string_view::npos));
 }
 
-RUVIA_TEST(http1_buffered_head_keeps_declared_length_without_body) {
+TEST(Ruvia, http1_buffered_head_keeps_declared_length_without_body) {
     // RFC 9110 section 8.6: HEAD Content-Length is what GET would send.
     http_response metadata(std::pmr::new_delete_resource());
     metadata.header("Content-Length", "1048576");
     const auto metadata_wire = emit_buffered_head(metadata, http_known_method::head);
-    RUVIA_CHECK_EQ(count_occurrences(metadata_wire, "Content-Length: "), std::size_t{1});
-    RUVIA_CHECK((metadata_wire.find("Content-Length: 1048576\r\n") != std::string_view::npos));
+    EXPECT_EQ(count_occurrences(metadata_wire, "Content-Length: "), std::size_t{1});
+    EXPECT_TRUE((metadata_wire.find("Content-Length: 1048576\r\n") != std::string_view::npos));
 
     // A materialized representation remains authoritative.
     http_response materialized(std::pmr::new_delete_resource());
     materialized.body("hello");
     materialized.header("Content-Length", "999");
     const auto materialized_wire = emit_buffered_head(materialized, http_known_method::head);
-    RUVIA_CHECK_EQ(count_occurrences(materialized_wire, "Content-Length: "), std::size_t{1});
-    RUVIA_CHECK((materialized_wire.find("Content-Length: 5\r\n") != std::string_view::npos));
+    EXPECT_EQ(count_occurrences(materialized_wire, "Content-Length: "), std::size_t{1});
+    EXPECT_TRUE((materialized_wire.find("Content-Length: 5\r\n") != std::string_view::npos));
 
     // A zero-byte buffered response without apply_content_encoding emits Content-Length: 0 on HEAD.
     http_response zero_representation(std::pmr::new_delete_resource());
     zero_representation.body("");
     const auto zero_wire = emit_buffered_head(zero_representation, http_known_method::head);
-    RUVIA_CHECK_EQ(count_occurrences(zero_wire, "Content-Length: "), std::size_t{1});
-    RUVIA_CHECK((zero_wire.find("Content-Length: 0\r\n") != std::string_view::npos));
+    EXPECT_EQ(count_occurrences(zero_wire, "Content-Length: "), std::size_t{1});
+    EXPECT_TRUE((zero_wire.find("Content-Length: 0\r\n") != std::string_view::npos));
 
     // Applying a content coding without an encoded body removes Content-Length on HEAD.
     http_response coded_head(std::pmr::new_delete_resource());
     coded_head.header("Content-Length", "1024");
     coded_head.apply_content_encoding("gzip");
     const auto coded_wire = emit_buffered_head(coded_head, http_known_method::head);
-    RUVIA_CHECK_EQ(count_occurrences(coded_wire, "Content-Length: "), std::size_t{0});
-    RUVIA_CHECK((coded_wire.find("Content-Encoding: gzip\r\n") != std::string_view::npos));
+    EXPECT_EQ(count_occurrences(coded_wire, "Content-Length: "), std::size_t{0});
+    EXPECT_TRUE((coded_wire.find("Content-Encoding: gzip\r\n") != std::string_view::npos));
 }
 
-RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
+TEST(Ruvia, response_head_close_delimited_stream_rejects_declared_framing) {
     http_response response(std::pmr::new_delete_resource());
     response.body("streamed");
     response.header("Transfer-Encoding", "chunked");
     response.header("Content-Length", "8");
 
     const auto head = emit_close_delimited_stream_head(response);
-    RUVIA_CHECK(!(head.find("Transfer-Encoding:") != std::string_view::npos));
-    RUVIA_CHECK(!(head.find("Content-Length:") != std::string_view::npos));
+    EXPECT_TRUE(!(head.find("Transfer-Encoding:") != std::string_view::npos));
+    EXPECT_TRUE(!(head.find("Content-Length:") != std::string_view::npos));
 
     // A HEAD response has no payload and may retain representation length
     // metadata, but HTTP/1.0 still cannot carry Transfer-Encoding.
     const auto metadata_head = emit_close_delimited_stream_head(response, http_known_method::head);
-    RUVIA_CHECK(!(metadata_head.find("Transfer-Encoding:") != std::string_view::npos));
-    RUVIA_CHECK((metadata_head.find("Content-Length: 8\r\n") != std::string_view::npos));
+    EXPECT_TRUE(!(metadata_head.find("Transfer-Encoding:") != std::string_view::npos));
+    EXPECT_TRUE((metadata_head.find("Content-Length: 8\r\n") != std::string_view::npos));
 
     http_response not_modified(std::pmr::new_delete_resource());
     not_modified.status(ruvia::http_status::not_modified);
     not_modified.header("Transfer-Encoding", "chunked");
     not_modified.header("Content-Length", "123");
     const auto not_modified_head = emit_close_delimited_stream_head(not_modified);
-    RUVIA_CHECK(!(not_modified_head.find("Transfer-Encoding:") != std::string_view::npos));
-    RUVIA_CHECK((not_modified_head.find("Content-Length: 123\r\n") != std::string_view::npos));
+    EXPECT_TRUE(!(not_modified_head.find("Transfer-Encoding:") != std::string_view::npos));
+    EXPECT_TRUE((not_modified_head.find("Content-Length: 123\r\n") != std::string_view::npos));
 }
 
-RUVIA_TEST(response_head_validates_explicit_content_length_metadata) {
+TEST(Ruvia, response_head_validates_explicit_content_length_metadata) {
     http_response malformed(std::pmr::new_delete_resource());
     malformed.status(ruvia::http_status::not_modified);
     malformed.header("Content-Length", "invalid");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(malformed); }));
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_buffered_head(malformed); }));
 
     http_response conflicting(std::pmr::new_delete_resource());
     conflicting.status(ruvia::http_status::not_modified);
     conflicting.header("Content-Length", "7, 8");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(conflicting); }));
+    EXPECT_TRUE(throws_invalid([&] { (void)emit_buffered_head(conflicting); }));
 
     http_response equivalent(std::pmr::new_delete_resource());
     equivalent.status(ruvia::http_status::not_modified);
     equivalent.header("Content-Length", "0007, 7");
     const auto canonical = emit_buffered_head(equivalent);
-    RUVIA_CHECK_EQ(count_occurrences(canonical, "Content-Length: "), std::size_t{1});
-    RUVIA_CHECK((canonical.find("Content-Length: 7\r\n") != std::string_view::npos));
+    EXPECT_EQ(count_occurrences(canonical, "Content-Length: "), std::size_t{1});
+    EXPECT_TRUE((canonical.find("Content-Length: 7\r\n") != std::string_view::npos));
 
     http_response head_metadata(std::pmr::new_delete_resource());
     head_metadata.header("Content-Length", "bad");
-    RUVIA_CHECK(throws_invalid(
+    EXPECT_TRUE(throws_invalid(
         [&] { (void)emit_close_delimited_stream_head(head_metadata, http_known_method::head); }));
 }
 
-RUVIA_TEST(response_head_bodyless_status_omits_auto_content_length) {
+TEST(Ruvia, response_head_bodyless_status_omits_auto_content_length) {
     http_response response(std::pmr::new_delete_resource());
     response.status(ruvia::http_status::no_content);
     const auto head = emit_buffered_head(response);
-    RUVIA_CHECK(head.starts_with("HTTP/1.1 204 No Content\r\n"));
-    RUVIA_CHECK(!(head.find("Content-Length:") != std::string_view::npos));
-    RUVIA_CHECK(head.ends_with("\r\n\r\n"));
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 204 No Content\r\n"));
+    EXPECT_TRUE(!(head.find("Content-Length:") != std::string_view::npos));
+    EXPECT_TRUE(head.ends_with("\r\n\r\n"));
 }
 
-RUVIA_TEST(response_head_reset_content_canonicalizes_zero_length) {
+TEST(Ruvia, response_head_reset_content_canonicalizes_zero_length) {
     // RFC 9110 §15.3.6 forbids 205 content. Even if the application supplies a
     // body and contradictory framing, both buffered and streaming head emission
     // must suppress it and retain an unambiguous persistent HTTP/1 message.
@@ -788,16 +788,16 @@ RUVIA_TEST(response_head_reset_content_canonicalizes_zero_length) {
         response.header("Content-Length", "16");
         response.header("Transfer-Encoding", "chunked");
         const auto head = streaming ? emit_chunked_stream_head(response) : emit_buffered_head(response);
-        RUVIA_CHECK(head.starts_with("HTTP/1.1 205 Reset Content\r\n"));
-        RUVIA_CHECK_EQ(count_occurrences(head, "Content-Length: "), std::size_t{1});
-        RUVIA_CHECK((head.find("Content-Length: 0\r\n") != std::string_view::npos));
-        RUVIA_CHECK(!(head.find("Content-Length: 16\r\n") != std::string_view::npos));
-        RUVIA_CHECK(!(head.find("Transfer-Encoding:") != std::string_view::npos));
-        RUVIA_CHECK(head.ends_with("\r\n\r\n"));
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 205 Reset Content\r\n"));
+        EXPECT_EQ(count_occurrences(head, "Content-Length: "), std::size_t{1});
+        EXPECT_TRUE((head.find("Content-Length: 0\r\n") != std::string_view::npos));
+        EXPECT_TRUE(!(head.find("Content-Length: 16\r\n") != std::string_view::npos));
+        EXPECT_TRUE(!(head.find("Transfer-Encoding:") != std::string_view::npos));
+        EXPECT_TRUE(head.ends_with("\r\n\r\n"));
     }
 }
 
-RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
+TEST(Ruvia, response_head_heap_spill_preserves_full_output) {
     // Force the emitted head well past the 512-byte stack buffer so the heap
     // (reserve_additional) emit path runs. Every header must survive intact and
     // the precomputed size bound must not undercount -- an undercount would let
@@ -811,50 +811,49 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
     response.body("body");
     const auto head = emit_buffered_head(response);
 
-    RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 200 OK\r\n"));
     for (int i = 0; i < 10; ++i) {
-        RUVIA_CHECK(head.find("X-Pad-" + std::to_string(i) + ": " + big + "\r\n") !=
+        EXPECT_TRUE(head.find("X-Pad-" + std::to_string(i) + ": " + big + "\r\n") !=
                     std::string_view::npos);
     }
-    RUVIA_CHECK((head.find("Content-Length: 4\r\n") != std::string_view::npos));
-    RUVIA_CHECK(head.ends_with("\r\n\r\n"));
+    EXPECT_TRUE((head.find("Content-Length: 4\r\n") != std::string_view::npos));
+    EXPECT_TRUE(head.ends_with("\r\n\r\n"));
 }
 
-RUVIA_TEST(response_head_rejects_oversized_field_section) {
+TEST(Ruvia, response_head_rejects_oversized_field_section) {
     http_response oversized(std::pmr::new_delete_resource());
     oversized.header("X-Oversized", std::string(ruvia::max_http_header_bytes, 'v'));
-    RUVIA_CHECK(throws_head_error([&] { (void)emit_buffered_head(oversized); }));
+    EXPECT_TRUE(throws_head_error([&] { (void)emit_buffered_head(oversized); }));
 
     http_response many(std::pmr::new_delete_resource());
     for (std::size_t i = 0; i < 80; ++i) {
         many.header("X-Field-" + std::to_string(i), "value");
     }
-    RUVIA_CHECK(!emit_buffered_head(many).empty());
+    EXPECT_TRUE(!emit_buffered_head(many).empty());
 }
 
-RUVIA_TEST(stable_view_headers_reject_malformed_name_and_value) {
+TEST(Ruvia, stable_view_headers_reject_malformed_name_and_value) {
     http_response response(std::pmr::new_delete_resource());
-    RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("Bad Name", "value"); }));
-    RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("X-Test", std::string_view("bad\r\nvalue", 10)); }));
-    RUVIA_CHECK(response.headers().empty());
+    EXPECT_TRUE(throws_invalid([&] { response.header_stable_view("Bad Name", "value"); }));
+    EXPECT_TRUE(throws_invalid([&] { response.header_stable_view("X-Test", std::string_view("bad\r\nvalue", 10)); }));
+    EXPECT_TRUE(response.headers().empty());
 }
 
-RUVIA_TEST(stable_view_headers_reject_request_only_te_field) {
+TEST(Ruvia, stable_view_headers_reject_request_only_te_field) {
     http_response response(std::pmr::new_delete_resource());
-    RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("TE", "trailers"); }));
-    RUVIA_CHECK(!response.header("TE").has_value());
+    EXPECT_TRUE(throws_invalid([&] { response.header_stable_view("TE", "trailers"); }));
+    EXPECT_TRUE(!response.header("TE").has_value());
 }
 
-RUVIA_TEST(http1_commit_final_response_preserves_custom_connection_options_when_closing) {
+TEST(Ruvia, http1_commit_final_response_preserves_custom_connection_options_when_closing) {
     http_response response(std::pmr::new_delete_resource());
     response.status(ruvia::http_status::ok);
     response.header("X-Custom-Hop", "secret-hop");
     response.header("Connection", "keep-alive, X-Custom-Hop");
     const auto committed =
         ruvia::http1_commit_final_response(response, ruvia::plan_http11_request_connection(true));
-    RUVIA_CHECK_EQ(committed.disposition(), ruvia::http1_close_policy::close_after_response);
-    RUVIA_CHECK_EQ(
-        response.header("Connection").value_or(""), std::string_view("close, X-Custom-Hop"));
+    EXPECT_EQ(committed.disposition(), ruvia::http1_close_policy::close_after_response);
+    EXPECT_EQ(response.header("Connection").value_or(""), std::string_view("close, X-Custom-Hop"));
 
     http_response upgrade_response(std::pmr::new_delete_resource());
     upgrade_response.status(ruvia::http_status::upgrade_required);
@@ -863,7 +862,6 @@ RUVIA_TEST(http1_commit_final_response_preserves_custom_connection_options_when_
     upgrade_response.header("Connection", "X-Hop-2");
     const auto upgrade_committed = ruvia::http1_commit_final_response(
         upgrade_response, ruvia::plan_http11_request_connection(true));
-    RUVIA_CHECK_EQ(upgrade_committed.disposition(), ruvia::http1_close_policy::close_after_response);
-    RUVIA_CHECK_EQ(upgrade_response.header("Connection").value_or(""),
-        std::string_view("close, Upgrade, X-Hop-2"));
+    EXPECT_EQ(upgrade_committed.disposition(), ruvia::http1_close_policy::close_after_response);
+    EXPECT_EQ(upgrade_response.header("Connection").value_or(""), std::string_view("close, Upgrade, X-Hop-2"));
 }

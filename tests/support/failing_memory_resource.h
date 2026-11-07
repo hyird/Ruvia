@@ -15,9 +15,8 @@ public:
         successful_allocations_ = successful_allocations;
     }
 
-    void fail_after_stl_operation(std::size_t successful_allocations,
-        ruvia::testing::test_context& context) noexcept {
-        if (ruvia::test::stl_allocation_failure_injection_enabled(context)) {
+    void fail_after_stl_operation(std::size_t successful_allocations) {
+        if (ruvia::test::stl_allocation_failure_injection_enabled()) {
             fail_after(successful_allocations);
         }
     }

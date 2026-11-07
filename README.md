@@ -22,7 +22,7 @@ Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声
 | `RUVIA_BUILD_HTTP` | `ON` | 构建 `ruvia::http`。 |
 | `RUVIA_BUILD_WEB` | `ON` | 构建 `ruvia::web`（要求 `RUVIA_BUILD_CORE=ON` 且 `RUVIA_BUILD_HTTP=ON`）。 |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | 构建 `examples/` 示例程序（要求 `RUVIA_BUILD_WEB=ON`）。 |
-| `RUVIA_BUILD_TESTS` | `OFF` | 构建 `tests/` 测试套件。 |
+| `RUVIA_BUILD_TESTS` | `OFF` | 构建 GoogleTest 测试套件并通过 CTest 运行（依赖 `gtest`）。 |
 | `RUVIA_ENABLE_HTTP2` | `ON` | 启用 HTTP/2 公开 API、实现与测试（依赖 `nghttp2`）。 |
 | `RUVIA_ENABLE_HTTP3` | `ON` | 启用 HTTP/3/QUIC 公开 API、服务端 `listen_config::http3_`、实现与测试（依赖 `nghttp3`、`ngtcp2`；Web 同时使用 `ngtcp2[openssl]`）；关闭时配置 `http3_` 启动失败。 |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | 启用 MariaDB 驱动与公开数据库 API（依赖 `libmariadb`）。 |
@@ -58,6 +58,11 @@ ctest --test-dir build -C Release --output-on-failure
 
 Visual Studio 多配置构建（包括安装包消费方）无需设置 `CMAKE_BUILD_TYPE`；HTTP/2 与 QUIC 的查找模块按配置选择同一依赖安装中的 `lib` 或 `debug/lib`，避免 Release 链入 Debug 静态运行时。
 
+本地构建默认不启用 LTO；CI 的 Release 构建显式设置
+`CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON`。
+测试可执行文件支持 GoogleTest 的 `--gtest_list_tests` 与
+`--gtest_filter=Ruvia.<测试名>`；CTest 保持按可执行文件隔离进程级夹具。
+
 真实网络测试通过 `tests/web/support/tcp_port_reservation.h` 选择 loopback
 临时端口并持有全局可见的保留，直到服务器停止并 join；预留 socket 仅 bind、
 不 listen，避免抢走测试连接。POSIX 选端口后以 `SO_REUSEPORT` 共享并保持绑定；
@@ -70,10 +75,11 @@ Windows 测试需配对运行 Debug 与 Release：Debug 保留默认 STL 迭代�
 Release 执行完整分配失败扫描。MSVC 调试 STL 会在空容器构造及移动的
 `noexcept` 路径分配迭代器代理；测试不能按分配大小或序号猜测并跳过代理，
 也不能向这些路径注入 `bad_alloc`。此类扫描在 Debug 仍执行成功路径、值语义、
-所有权及回收检查，但不注入失败，并单独报告 `[PARTIAL]`（汇总不计为 passed）；
+所有权及回收检查，但不注入失败；GoogleTest XML 报告通过
+`stl_allocation_failure_scan` 属性标记遗漏，其他失败仍照常使测试失败。
 真实可捕获的裸分配及已构造容器增长失败仍执行。Release 从首个失败位置逐点
 扫描至成功，并检查回滚、重试与回收；只有 Debug 与 Release 配对结果才能声称
-覆盖这两类契约。`[PARTIAL]` 本身不使进程返回失败，失败检查仍优先报告 `[FAIL]`。
+覆盖这两类契约。可向测试可执行文件传入 `--gtest_output=xml:report.xml` 获取报告。
 
 ```powershell
 cmake --build build --config Debug "-j$([Environment]::ProcessorCount)"

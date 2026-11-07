@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -15,7 +17,6 @@
 #include "ruvia/web/db/db_schema.h"
 
 #include "backend_client_fixture.h"
-#include "test_harness.h"
 #include "test_io_context.h"
 
 namespace {
@@ -29,7 +30,7 @@ constexpr std::array database_drivers{
 };
 }  // namespace
 
-RUVIA_TEST(db_pool_rejects_zero_capacity_at_configuration) {
+TEST(Ruvia, db_pool_rejects_zero_capacity_at_configuration) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     for (const auto driver : database_drivers) {
         const ruvia::db_config config{.driver_ = driver, .pool_size_per_worker_ = 0};
@@ -45,13 +46,13 @@ RUVIA_TEST(db_pool_rejects_zero_capacity_at_configuration) {
         } catch (const std::invalid_argument&) {
             migrator_rejected = true;
         }
-        RUVIA_CHECK(client_rejected);
-        RUVIA_CHECK(migrator_rejected);
+        EXPECT_TRUE(client_rejected);
+        EXPECT_TRUE(migrator_rejected);
     }
     pool.join();
 }
 
-RUVIA_TEST(db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
+TEST(Ruvia, db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
     for (const auto driver : database_drivers) {
         const ruvia::db_config config{
             .driver_ = driver, .host_ = "localhost", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
@@ -65,7 +66,7 @@ RUVIA_TEST(db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
             }
             pool.join();
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
         // The same configuration is accepted once the loop borrows a pool.
         ruvia::blocking_pool lookups({.thread_count_ = 1});
         ruvia::event_loop_pool pool({.loop_count_ = 1, .blocking_pool_ = &lookups});
@@ -77,7 +78,7 @@ RUVIA_TEST(db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
     }
 }
 
-RUVIA_TEST(db_pool_opens_the_configured_number_of_connections) {
+TEST(Ruvia, db_pool_opens_the_configured_number_of_connections) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const auto driver : database_drivers) {
         peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb,
@@ -100,11 +101,11 @@ RUVIA_TEST(db_pool_opens_the_configured_number_of_connections) {
         };
         ruvia::test::drive_backend_client(attachment, client, connected);
         peer.wait_for_disconnects();
-        RUVIA_CHECK_EQ(peer.startups(), std::size_t{3});
+        EXPECT_EQ(peer.startups(), std::size_t{3});
     }
 }
 
-RUVIA_TEST(db_pool_failed_startup_retires_already_connected_slots) {
+TEST(Ruvia, db_pool_failed_startup_retires_already_connected_slots) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const auto driver : database_drivers) {
         peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb,
@@ -127,15 +128,15 @@ RUVIA_TEST(db_pool_failed_startup_retires_already_connected_slots) {
         } catch (const ruvia::db_error& error) {
             timed_out = error.code() == ruvia::db_error::code_type::timeout;
         }
-        RUVIA_CHECK(timed_out);
-        RUVIA_CHECK(!entered);
+        EXPECT_TRUE(timed_out);
+        EXPECT_TRUE(!entered);
         peer.wait_for_disconnects();
-        RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+        EXPECT_EQ(peer.startups(), std::size_t{2});
     }
 }
 
 #ifdef RUVIA_ENABLE_MARIADB
-RUVIA_TEST(db_pool_transaction_retirement_checks_server_state_before_reuse) {
+TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
     // Successful control commands may chain a new transaction or leave
@@ -170,23 +171,23 @@ RUVIA_TEST(db_pool_transaction_retirement_checks_server_state_before_reuse) {
                         failed = error.code() == db_error::code_type::statement_failed &&
                                  error.sql_state() == "42S02";
                     }
-                    RUVIA_CHECK(failed);
+                    EXPECT_TRUE(failed);
                 }
-                RUVIA_CHECK(!transaction.active());
+                EXPECT_TRUE(!transaction.active());
                 const auto rows = co_await handle.query("SELECT v FROM records");
-                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                EXPECT_EQ(rows.size(), std::size_t{1});
                 if (!rows.empty()) {
-                    RUVIA_CHECK(rows.front()["v"].as<std::string_view>() == "available");
+                    EXPECT_TRUE(rows.front()["v"].as<std::string_view>() == "available");
                 }
             });
-            RUVIA_CHECK_EQ(peer.startups(), status == 2 ? std::size_t{1} : std::size_t{2});
+            EXPECT_EQ(peer.startups(), status == 2 ? std::size_t{1} : std::size_t{2});
         }
     }
 }
 #endif
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
-RUVIA_TEST(db_pool_allows_parallel_transactions_and_reuses_released_connections) {
+TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -212,7 +213,7 @@ RUVIA_TEST(db_pool_allows_parallel_transactions_and_reuses_released_connections)
         } catch (const db_error& error) {
             timed_out = error.code() == db_error::code_type::timeout;
         }
-        RUVIA_CHECK(timed_out);
+        EXPECT_TRUE(timed_out);
 
         stop_source stop;
         task_scope pending(value.worker());
@@ -227,23 +228,23 @@ RUVIA_TEST(db_pool_allows_parallel_transactions_and_reuses_released_connections)
         pending.spawn(wait_for_connection());
         stop.request_stop();
         co_await pending.join();
-        RUVIA_CHECK(cancelled);
+        EXPECT_TRUE(cancelled);
 
         co_await first.rollback();
         const auto result = co_await handle.query("SELECT available");
-        RUVIA_CHECK_EQ(result.size(), std::size_t{1});
+        EXPECT_EQ(result.size(), std::size_t{1});
         co_await second.rollback();
     });
     peer.wait_for_disconnects();
-    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    EXPECT_EQ(peer.startups(), std::size_t{2});
     const auto statements = peer.postgres_parses();
-    RUVIA_CHECK_EQ(statements.size(), std::size_t{5});
+    EXPECT_EQ(statements.size(), std::size_t{5});
     if (statements.size() == 5) {
-        RUVIA_CHECK_EQ(statements[3].sql_, "SELECT available");
+        EXPECT_EQ(statements[3].sql_, "SELECT available");
     }
 }
 
-RUVIA_TEST(db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
+TEST(Ruvia, db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
@@ -271,7 +272,7 @@ RUVIA_TEST(db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
         pending.spawn(wait_for_connection());
         value.close();
         co_await pending.join();
-        RUVIA_CHECK(closing);
+        EXPECT_TRUE(closing);
     });
     peer.wait_for_disconnects();
 }

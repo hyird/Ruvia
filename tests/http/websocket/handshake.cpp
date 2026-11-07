@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <array>
 #include <cstddef>
 #include <span>
@@ -13,7 +15,6 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http1_request_message_fixture.h"
-#include "test_harness.h"
 
 namespace {
 
@@ -105,7 +106,7 @@ std::string_view content_length_one_handshake() {
 
 }  // namespace
 
-RUVIA_TEST(ws_h1_handshake_preserves_application_request_headers) {
+TEST(Ruvia, ws_h1_handshake_preserves_application_request_headers) {
     constexpr std::string_view raw =
         "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
@@ -122,60 +123,60 @@ RUVIA_TEST(ws_h1_handshake_preserves_application_request_headers) {
         "\r\n";
     const auto request = parse_request(raw);
 
-    RUVIA_CHECK(request.header("Host") == "example.test");
-    RUVIA_CHECK(request.header("Origin") == "https://origin.example");
-    RUVIA_CHECK(request.header("Authorization") == "Bearer credential");
-    RUVIA_CHECK(request.header("Cookie") == "sid=one; theme=dark");
-    RUVIA_CHECK(request.header("Sec-WebSocket-Protocol") == "chat");
-    RUVIA_CHECK(request.header("Sec-WebSocket-Extensions") == "permessage-deflate");
-    RUVIA_CHECK(request.header("X-End-To-End") == "retained");
-    RUVIA_CHECK(accepts_request(raw));
+    EXPECT_TRUE(request.header("Host") == "example.test");
+    EXPECT_TRUE(request.header("Origin") == "https://origin.example");
+    EXPECT_TRUE(request.header("Authorization") == "Bearer credential");
+    EXPECT_TRUE(request.header("Cookie") == "sid=one; theme=dark");
+    EXPECT_TRUE(request.header("Sec-WebSocket-Protocol") == "chat");
+    EXPECT_TRUE(request.header("Sec-WebSocket-Extensions") == "permessage-deflate");
+    EXPECT_TRUE(request.header("X-End-To-End") == "retained");
+    EXPECT_TRUE(accepts_request(raw));
 }
 
-RUVIA_TEST(ws_public_subprotocol_set_validates_unique_tokens) {
+TEST(Ruvia, ws_public_subprotocol_set_validates_unique_tokens) {
     ruvia::websocket_subprotocol_set protocols;
-    RUVIA_CHECK(protocols.append_list(", chat, superchat,"));
-    RUVIA_CHECK(protocols.contains("chat"));
-    RUVIA_CHECK(protocols.contains("superchat"));
-    RUVIA_CHECK(!protocols.append("chat"));
-    RUVIA_CHECK(!protocols.append_list("other, chat"));
-    RUVIA_CHECK(!protocols.append("bad token"));
+    EXPECT_TRUE(protocols.append_list(", chat, superchat,"));
+    EXPECT_TRUE(protocols.contains("chat"));
+    EXPECT_TRUE(protocols.contains("superchat"));
+    EXPECT_TRUE(!protocols.append("chat"));
+    EXPECT_TRUE(!protocols.append_list("other, chat"));
+    EXPECT_TRUE(!protocols.append("bad token"));
 
     // A received offer skips repeats instead of failing (RFC 6455 4.2.1).
     ruvia::websocket_subprotocol_set offered;
-    RUVIA_CHECK(offered.append_offered_list("chat, chat"));
-    RUVIA_CHECK(offered.append_offered_list("superchat, chat"));
-    RUVIA_CHECK(offered.contains("chat"));
-    RUVIA_CHECK(offered.contains("superchat"));
-    RUVIA_CHECK(!offered.append_offered_list("chat, bad token"));
+    EXPECT_TRUE(offered.append_offered_list("chat, chat"));
+    EXPECT_TRUE(offered.append_offered_list("superchat, chat"));
+    EXPECT_TRUE(offered.contains("chat"));
+    EXPECT_TRUE(offered.contains("superchat"));
+    EXPECT_TRUE(!offered.append_offered_list("chat, bad token"));
 }
 
-RUVIA_TEST(ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
+TEST(Ruvia, ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
     const auto with_protocols = [](std::string_view fields_value) {
         std::string request(valid_handshake());
         request.insert(request.size() - 2, fields_value);
         return request;
     };
 
-    RUVIA_CHECK(accepts_request(with_protocols("Sec-WebSocket-Protocol: , chat,, superchat,\r\n")));
+    EXPECT_TRUE(accepts_request(with_protocols("Sec-WebSocket-Protocol: , chat,, superchat,\r\n")));
     // Subprotocol identifiers are case-sensitive, so these are distinct.
-    RUVIA_CHECK(accepts_request(with_protocols("Sec-WebSocket-Protocol: chat, Chat\r\n")));
+    EXPECT_TRUE(accepts_request(with_protocols("Sec-WebSocket-Protocol: chat, Chat\r\n")));
 
-    RUVIA_CHECK(rejects_request(with_protocols("Sec-WebSocket-Protocol: bad token\r\n")));
-    RUVIA_CHECK(rejects_request(with_protocols("Sec-WebSocket-Protocol: \"chat\"\r\n")));
-    RUVIA_CHECK(rejects_request(with_protocols("Sec-WebSocket-Protocol: , ,\r\n")));
+    EXPECT_TRUE(rejects_request(with_protocols("Sec-WebSocket-Protocol: bad token\r\n")));
+    EXPECT_TRUE(rejects_request(with_protocols("Sec-WebSocket-Protocol: \"chat\"\r\n")));
+    EXPECT_TRUE(rejects_request(with_protocols("Sec-WebSocket-Protocol: , ,\r\n")));
     // Uniqueness binds the sending client (RFC 6455 section 4.1 item 10); the
     // server's checks (section 4.2.1) have no rule for a repeated offer.
-    RUVIA_CHECK(accepts_request(with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n")));
-    RUVIA_CHECK(
-        accepts_request(with_protocols("Sec-WebSocket-Protocol: chat\r\n"
-                                       "Sec-WebSocket-Protocol: superchat, chat\r\n")));
+    EXPECT_TRUE(accepts_request(with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n")));
+    EXPECT_TRUE(accepts_request(with_protocols(
+        "Sec-WebSocket-Protocol: chat\r\n"
+        "Sec-WebSocket-Protocol: superchat, chat\r\n")));
     constexpr std::array<std::string_view, 1> supported{"chat"};
     // 请求头借用原始报文，握手完成前必须保持报文存储存活。
     const auto repeated_wire = with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n");
     const auto repeated = parse_request(repeated_wire);
     const auto selected = ruvia::make_websocket_server_handshake(repeated, {.supported_subprotocols_ = supported});
-    RUVIA_CHECK(selected.subprotocol() == "chat");
+    EXPECT_TRUE(selected.subprotocol() == "chat");
 
     std::string too_many = "Sec-WebSocket-Protocol: ";
     for (std::size_t i = 0; i <= ruvia::max_websocket_subprotocols; ++i) {
@@ -186,10 +187,10 @@ RUVIA_TEST(ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
         too_many.append(std::to_string(i));
     }
     too_many.append("\r\n");
-    RUVIA_CHECK(rejects_request(with_protocols(too_many)));
+    EXPECT_TRUE(rejects_request(with_protocols(too_many)));
 }
 
-RUVIA_TEST(ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
+TEST(Ruvia, ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     const auto with_protocols = [](std::string_view fields_value) {
         std::string request(valid_handshake());
         request.insert(request.size() - 2, fields_value);
@@ -208,10 +209,10 @@ RUVIA_TEST(ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     };
 
     // Not required: an offer sharing nothing is still a valid handshake.
-    RUVIA_CHECK(accepts(valid_handshake(), false));
-    RUVIA_CHECK(accepts(with_protocols("Sec-WebSocket-Protocol: other\r\n"), false));
+    EXPECT_TRUE(accepts(valid_handshake(), false));
+    EXPECT_TRUE(accepts(with_protocols("Sec-WebSocket-Protocol: other\r\n"), false));
 
-    RUVIA_CHECK(accepts(with_protocols("Sec-WebSocket-Protocol: other, chat.v1\r\n"), true));
+    EXPECT_TRUE(accepts(with_protocols("Sec-WebSocket-Protocol: other, chat.v1\r\n"), true));
     for (const std::string_view raw_request :
         {valid_handshake(), std::string_view("GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
                                              "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
@@ -219,86 +220,85 @@ RUVIA_TEST(ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
                                              "Sec-WebSocket-Protocol: other, Chat.v1\r\n\r\n")}) {
         const auto result_value = validate(raw_request, true);
         const auto* failure = result_value.failure();
-        RUVIA_CHECK(failure != nullptr);
+        EXPECT_TRUE(failure != nullptr);
         if (failure != nullptr) {
-            RUVIA_CHECK(failure->protocol_error().status() == ruvia::http_status::bad_request);
+            EXPECT_TRUE(failure->protocol_error().status() == ruvia::http_status::bad_request);
             ruvia::http_response response;
             failure->apply_required_response_headers(response);
-            RUVIA_CHECK(!response.header("Sec-WebSocket-Version").has_value());
+            EXPECT_TRUE(!response.header("Sec-WebSocket-Version").has_value());
         }
     }
 }
 
-RUVIA_TEST(ws_extension_offers_must_match_the_rfc6455_abnf) {
+TEST(Ruvia, ws_extension_offers_must_match_the_rfc6455_abnf) {
     const auto with_extensions = [](std::string_view fields_value) {
         std::string request(valid_handshake());
         request.insert(request.size() - 2, fields_value);
         return request;
     };
 
-    RUVIA_CHECK(accepts_request(
+    EXPECT_TRUE(accepts_request(
         with_extensions("Sec-WebSocket-Extensions: , x-test; flag; value=token,,\r\n")));
-    RUVIA_CHECK(
-        accepts_request(with_extensions("Sec-WebSocket-Extensions: x-test; value=\"to\\ken\"\r\n")));
-    RUVIA_CHECK(
-        accepts_request(with_extensions("Sec-WebSocket-Extensions: x-test\r\n"
-                                        "Sec-WebSocket-Extensions: y-test; value=token\r\n")));
+    EXPECT_TRUE(accepts_request(with_extensions("Sec-WebSocket-Extensions: x-test; value=\"to\\ken\"\r\n")));
+    EXPECT_TRUE(accepts_request(with_extensions(
+        "Sec-WebSocket-Extensions: x-test\r\n"
+        "Sec-WebSocket-Extensions: y-test; value=token\r\n")));
 
-    RUVIA_CHECK(rejects_request(with_extensions("Sec-WebSocket-Extensions: , ,\r\n")));
-    RUVIA_CHECK(rejects_request(with_extensions("Sec-WebSocket-Extensions: \"x-test\"\r\n")));
-    RUVIA_CHECK(rejects_request(with_extensions("Sec-WebSocket-Extensions: x test\r\n")));
-    RUVIA_CHECK(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test;\r\n")));
-    RUVIA_CHECK(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test;; flag\r\n")));
-    RUVIA_CHECK(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test; =value\r\n")));
-    RUVIA_CHECK(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test; value=\r\n")));
-    RUVIA_CHECK(rejects_request(
+    EXPECT_TRUE(rejects_request(with_extensions("Sec-WebSocket-Extensions: , ,\r\n")));
+    EXPECT_TRUE(rejects_request(with_extensions("Sec-WebSocket-Extensions: \"x-test\"\r\n")));
+    EXPECT_TRUE(rejects_request(with_extensions("Sec-WebSocket-Extensions: x test\r\n")));
+    EXPECT_TRUE(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test;\r\n")));
+    EXPECT_TRUE(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test;; flag\r\n")));
+    EXPECT_TRUE(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test; =value\r\n")));
+    EXPECT_TRUE(rejects_request(with_extensions("Sec-WebSocket-Extensions: x-test; value=\r\n")));
+    EXPECT_TRUE(rejects_request(
         with_extensions("Sec-WebSocket-Extensions: x-test; value=\"bad value\"\r\n")));
-    RUVIA_CHECK(rejects_request(
+    EXPECT_TRUE(rejects_request(
         with_extensions("Sec-WebSocket-Extensions: x-test; value=\"unterminated\r\n")));
-    RUVIA_CHECK(rejects_request(
+    EXPECT_TRUE(rejects_request(
         with_extensions("Sec-WebSocket-Extensions: x-test; value=\"token\"junk\r\n")));
 }
 
-RUVIA_TEST(ws_valid_request_requires_all_conditions) {
-    RUVIA_CHECK(accepts_request(valid_handshake()));
+TEST(Ruvia, ws_valid_request_requires_all_conditions) {
+    EXPECT_TRUE(accepts_request(valid_handshake()));
 
     // Every individual requirement is necessary.
-    RUVIA_CHECK(rejects_request(post_handshake()));
-    RUVIA_CHECK(rejects_request(http10_handshake()));
+    EXPECT_TRUE(rejects_request(post_handshake()));
+    EXPECT_TRUE(rejects_request(http10_handshake()));
     // RFC 6455 permits additional HTTP fields, and RFC 9112 framing makes a
     // zero Content-Length an empty request. Its mere presence must not block
     // an otherwise valid protocol switch.
-    RUVIA_CHECK(accepts_request(content_length_zero_handshake()));
+    EXPECT_TRUE(accepts_request(content_length_zero_handshake()));
     // Actual request content still prevents switching protocols because those
     // octets belong to the HTTP message rather than to the websocket stream.
-    RUVIA_CHECK(rejects_request(content_length_one_handshake()));
+    EXPECT_TRUE(rejects_request(content_length_one_handshake()));
 
     constexpr std::string_view no_connection_upgrade =
         "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
-    RUVIA_CHECK(rejects_request(no_connection_upgrade));
+    EXPECT_TRUE(rejects_request(no_connection_upgrade));
 
     constexpr std::string_view duplicate_key =
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
-    RUVIA_CHECK(rejects_request(duplicate_key));
+    EXPECT_TRUE(rejects_request(duplicate_key));
 
     constexpr std::string_view duplicate_version =
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
-    RUVIA_CHECK(rejects_request(duplicate_version));
+    EXPECT_TRUE(rejects_request(duplicate_version));
 
     // The Upgrade header must name "websocket", not another protocol token.
     constexpr std::string_view wrong_upgrade =
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: not-websocket\r\n"
         "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
-    RUVIA_CHECK(rejects_request(wrong_upgrade));
+    EXPECT_TRUE(rejects_request(wrong_upgrade));
 
     // Sec-websocket-Key present exactly once but not a 16-byte base64 value
     // (RFC 6455 4.1) -> invalid. "YWJj" decodes to 3 bytes.
@@ -306,7 +306,7 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: YWJj\r\n\r\n";
-    RUVIA_CHECK(rejects_request(bad_key));
+    EXPECT_TRUE(rejects_request(bad_key));
 
     // "...ZR==" decodes to the same 16 bytes as the canonical "...ZQ==",
     // but sets unused base64 padding bits and must therefore be rejected.
@@ -315,22 +315,21 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZR==\r\n\r\n";
-    RUVIA_CHECK(rejects_request(non_canonical_key));
+    EXPECT_TRUE(rejects_request(non_canonical_key));
 
     const auto unsupported_version = validate_request(bad_version_handshake());
-    RUVIA_CHECK(unsupported_version.failure() != nullptr);
+    EXPECT_TRUE(unsupported_version.failure() != nullptr);
     if (const auto* failure = unsupported_version.failure()) {
         const auto error = failure->protocol_error();
-        RUVIA_CHECK_EQ(error.status(), ruvia::http_status::bad_request);
-        RUVIA_CHECK_EQ(
-            std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
+        EXPECT_EQ(error.status(), ruvia::http_status::bad_request);
+        EXPECT_EQ(std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
         ruvia::http_response response;
         failure->apply_required_response_headers(response);
-        RUVIA_CHECK_EQ(response.header("Sec-WebSocket-Version"), std::string_view("13"));
+        EXPECT_EQ(response.header("Sec-WebSocket-Version"), std::string_view("13"));
     }
 }
 
-RUVIA_TEST(ws_upgrade_uses_the_shared_recipient_list_semantics) {
+TEST(Ruvia, ws_upgrade_uses_the_shared_recipient_list_semantics) {
     constexpr std::string_view request =
         "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
@@ -340,10 +339,10 @@ RUVIA_TEST(ws_upgrade_uses_the_shared_recipient_list_semantics) {
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
         "\r\n";
-    RUVIA_CHECK(accepts_request(request));
+    EXPECT_TRUE(accepts_request(request));
 }
 
-RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
+TEST(Ruvia, ws_server_handshake_response_serialization_is_http_owned) {
     const auto request = parse_request(
         "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
@@ -367,21 +366,21 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
     for (const auto part : response_parts) {
         response.append(part);
     }
-    RUVIA_CHECK_EQ(response, std::string("HTTP/1.1 101 Switching Protocols\r\n"
-                                         "Upgrade: websocket\r\n"
-                                         "Connection: Upgrade\r\n"
-                                         "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
-                                         "Sec-WebSocket-Protocol: chat\r\n"
-                                         "Sec-WebSocket-Extensions: permessage-deflate; "
-                                         "server_no_context_takeover; client_no_context_takeover; "
-                                         "server_max_window_bits=15\r\n"
-                                         "\r\n"));
-    RUVIA_CHECK(handshake.compression() ==
+    EXPECT_EQ(response, std::string("HTTP/1.1 101 Switching Protocols\r\n"
+                                    "Upgrade: websocket\r\n"
+                                    "Connection: Upgrade\r\n"
+                                    "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
+                                    "Sec-WebSocket-Protocol: chat\r\n"
+                                    "Sec-WebSocket-Extensions: permessage-deflate; "
+                                    "server_no_context_takeover; client_no_context_takeover; "
+                                    "server_max_window_bits=15\r\n"
+                                    "\r\n"));
+    EXPECT_TRUE(handshake.compression() ==
                 (ruvia::websocket_compression{.enabled_ = true, .server_max_window_bits_ = 15}));
-    RUVIA_CHECK_EQ(handshake.subprotocol(), "chat");
+    EXPECT_EQ(handshake.subprotocol(), "chat");
 }
 
-RUVIA_TEST(ws_server_handshake_negotiates_directional_context_takeover_independently) {
+TEST(Ruvia, ws_server_handshake_negotiates_directional_context_takeover_independently) {
     const auto request = parse_request(
         "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
@@ -393,12 +392,12 @@ RUVIA_TEST(ws_server_handshake_negotiates_directional_context_takeover_independe
         "\r\n");
     const auto handshake = ruvia::make_websocket_server_handshake(
         request, {.deflate_ = {.enabled_ = true, .context_takeover_ = true}});
-    RUVIA_CHECK(handshake.compression().enabled_);
-    RUVIA_CHECK(!handshake.compression().server_no_context_takeover_);
-    RUVIA_CHECK(handshake.compression().client_no_context_takeover_);
+    EXPECT_TRUE(handshake.compression().enabled_);
+    EXPECT_TRUE(!handshake.compression().server_no_context_takeover_);
+    EXPECT_TRUE(handshake.compression().client_no_context_takeover_);
 }
 
-RUVIA_TEST(ws_handshake_copies_application_headers_and_preserves_multiple_cookies) {
+TEST(Ruvia, ws_handshake_copies_application_headers_and_preserves_multiple_cookies) {
     const auto request = parse_request(valid_handshake());
     std::string cookie = "sid=0123456789abcdef; HttpOnly";
     const std::array fields_value{ruvia::http_header_view("Set-Cookie", cookie),
@@ -409,14 +408,14 @@ RUVIA_TEST(ws_handshake_copies_application_headers_and_preserves_multiple_cookie
     cookie.assign(cookie.size(), 'x');
     std::string response;
     handshake.for_each_response_part([&](std::string_view part) { response.append(part); });
-    RUVIA_CHECK((response.find("set-cookie: sid=0123456789abcdef; HttpOnly\r\n") != std::string_view::npos));
-    RUVIA_CHECK((response.find("set-cookie: theme=dark\r\n") != std::string_view::npos));
-    RUVIA_CHECK((response.find("x-request-id: request-1\r\n") != std::string_view::npos));
-    RUVIA_CHECK((response.find("alt-svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
-    RUVIA_CHECK(response.ends_with("\r\n\r\n"));
+    EXPECT_TRUE((response.find("set-cookie: sid=0123456789abcdef; HttpOnly\r\n") != std::string_view::npos));
+    EXPECT_TRUE((response.find("set-cookie: theme=dark\r\n") != std::string_view::npos));
+    EXPECT_TRUE((response.find("x-request-id: request-1\r\n") != std::string_view::npos));
+    EXPECT_TRUE((response.find("alt-svc: h3=\":443\"; ma=86400\r\n") != std::string_view::npos));
+    EXPECT_TRUE(response.ends_with("\r\n\r\n"));
 }
 
-RUVIA_TEST(ws_handshake_rejects_application_framing_and_invalid_fields) {
+TEST(Ruvia, ws_handshake_rejects_application_framing_and_invalid_fields) {
     const auto request = parse_request(valid_handshake());
     for (const auto name : {"Connection", "Upgrade", "Content-Length", "Transfer-Encoding",
              "Sec-WebSocket-Accept", "Sec-WebSocket-Protocol", "TE", "Trailer", "bad name"}) {
@@ -427,7 +426,7 @@ RUVIA_TEST(ws_handshake_rejects_application_framing_and_invalid_fields) {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
     }
     const std::array fields_value{ruvia::http_header_view("Set-Cookie", "sid=a\r\nInjected: value")};
     bool rejected = false;
@@ -436,10 +435,10 @@ RUVIA_TEST(ws_handshake_rejects_application_framing_and_invalid_fields) {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }
 
-RUVIA_TEST(ws_handshake_bounds_application_header_size) {
+TEST(Ruvia, ws_handshake_bounds_application_header_size) {
     const auto request = parse_request(valid_handshake());
     const std::vector<ruvia::http_header_view> many(80, {"x", "v"});
     (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = many});
@@ -451,10 +450,10 @@ RUVIA_TEST(ws_handshake_bounds_application_header_size) {
     } catch (const std::length_error&) {
         size_rejected = true;
     }
-    RUVIA_CHECK(size_rejected);
+    EXPECT_TRUE(size_rejected);
 }
 
-RUVIA_TEST(ws_handshake_budget_covers_status_line_and_final_empty_line) {
+TEST(Ruvia, ws_handshake_budget_covers_status_line_and_final_empty_line) {
     const auto request = parse_request(valid_handshake());
     const auto serialize = [](const ruvia::websocket_server_handshake& handshake) {
         std::string response;
@@ -465,8 +464,7 @@ RUVIA_TEST(ws_handshake_budget_covers_status_line_and_final_empty_line) {
     // "x: " + value + CRLF fills the head to exactly max_http_header_bytes.
     const std::string largest(ruvia::max_http_header_bytes - base_size - 5, 'a');
     const std::array fitting{ruvia::http_header_view("x", largest)};
-    RUVIA_CHECK_EQ(serialize(ruvia::make_websocket_server_handshake(request, {.response_headers_ = fitting})).size(),
-        ruvia::max_http_header_bytes);
+    EXPECT_EQ(serialize(ruvia::make_websocket_server_handshake(request, {.response_headers_ = fitting})).size(), ruvia::max_http_header_bytes);
     const std::string oversized = largest + 'a';
     const std::array too_large{ruvia::http_header_view("x", oversized)};
     bool rejected = false;
@@ -475,10 +473,10 @@ RUVIA_TEST(ws_handshake_budget_covers_status_line_and_final_empty_line) {
     } catch (const std::length_error&) {
         rejected = true;
     }
-    RUVIA_CHECK(rejected);
+    EXPECT_TRUE(rejected);
 }
 
-RUVIA_TEST(ws_handshake_application_values_are_valid_for_both_http_versions) {
+TEST(Ruvia, ws_handshake_application_values_are_valid_for_both_http_versions) {
     const auto request = parse_request(valid_handshake());
     for (const auto value : {" leading", "trailing ", "\tleading", "trailing\t"}) {
         const std::array headers{ruvia::http_header_view("X-Test", value)};
@@ -488,13 +486,13 @@ RUVIA_TEST(ws_handshake_application_values_are_valid_for_both_http_versions) {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
+        EXPECT_TRUE(rejected);
     }
     const std::array headers{ruvia::http_header_view("X-Test", "")};
     const auto handshake = ruvia::make_websocket_server_handshake(request, {.response_headers_ = headers});
     std::string response;
     handshake.for_each_response_part([&](std::string_view part) { response.append(part); });
-    RUVIA_CHECK((response.find("x-test: \r\n") != std::string_view::npos));
+    EXPECT_TRUE((response.find("x-test: \r\n") != std::string_view::npos));
 }
 
 namespace {
