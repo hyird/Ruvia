@@ -9,6 +9,7 @@
 #include "ruvia/http/http_header.h"
 
 #include "context_request_fixture.h"
+#include "memory_resource_fixture.h"
 
 using ruvia::http_header_view;
 
@@ -56,42 +57,143 @@ TEST(Ruvia, context_request_priority_combines_repeated_field_values_before_parsi
 TEST(Ruvia, context_request_cookie_single_lookup_uses_last_duplicate) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1; b=2; a=3"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    const auto response = context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto cookie = context_value.req().cookie("a");
         EXPECT_TRUE(cookie.has_value());
-        EXPECT_EQ(*cookie, std::string_view("3"));
+        EXPECT_EQ(cookie.value_or("missing"), std::string_view("3"));
+        context_value.respond(context_value.text(ruvia::static_text("ok")));
         co_return;
     });
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
 }
 
 TEST(Ruvia, context_request_cookie_single_lookup_scans_repeated_cookie_fields) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1"}, http_header_view{"Cookie", "b=2"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    const auto response = context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto cookie = context_value.req().cookie("a");
         EXPECT_TRUE(cookie.has_value());
-        EXPECT_EQ(*cookie, std::string_view("1"));
+        EXPECT_EQ(cookie.value_or("missing"), std::string_view("1"));
+        context_value.respond(context_value.text(ruvia::static_text("ok")));
         co_return;
     });
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
 }
 
 TEST(Ruvia, context_request_cookie_fields_include_repeated_cookie_headers) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1"}, http_header_view{"Cookie", "b=2; a=3"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    const auto response = context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto& cookies = context_value.req().cookie_fields();
         EXPECT_EQ(cookies.size(), std::size_t{3});
-        EXPECT_EQ(cookies[0].name(), std::string_view("a"));
-        EXPECT_EQ(cookies[0].value(), std::string_view("1"));
-        EXPECT_EQ(cookies[1].name(), std::string_view("b"));
-        EXPECT_EQ(cookies[1].value(), std::string_view("2"));
-        EXPECT_EQ(cookies[2].name(), std::string_view("a"));
-        EXPECT_EQ(cookies[2].value(), std::string_view("3"));
+        if (cookies.size() == 3) {
+            EXPECT_EQ(cookies[0].name(), std::string_view("a"));
+            EXPECT_EQ(cookies[0].value(), std::string_view("1"));
+            EXPECT_EQ(cookies[1].name(), std::string_view("b"));
+            EXPECT_EQ(cookies[1].value(), std::string_view("2"));
+            EXPECT_EQ(cookies[2].name(), std::string_view("a"));
+            EXPECT_EQ(cookies[2].value(), std::string_view("3"));
+        }
         const auto latest = cookies.get("a");
         EXPECT_TRUE(latest.has_value());
-        EXPECT_EQ(*latest, std::string_view("3"));
+        EXPECT_EQ(latest.value_or("missing"), std::string_view("3"));
+        context_value.respond(context_value.text(ruvia::static_text("ok")));
         co_return;
     });
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
+}
+
+TEST(Ruvia, context_request_cookie_fields_preserve_literal_syntax_and_case_sensitive_names) {
+    auto request = make_request("/",
+        {http_header_view{"Cookie", "x=first; ignored; = unnamed; q=\"a;b\""},
+            http_header_view{"X-Other", "unrelated=value"},
+            http_header_view{"cOoKiE", "X=upper; x = last ; empty=;"}});
+    const auto response = context_request_test::with_context(request,
+        [](ruvia::context& context) -> ruvia::task<void> {
+            EXPECT_EQ(context.req().cookie("x").value_or("missing"), "last");
+            EXPECT_EQ(context.req().cookie("X").value_or("missing"), "upper");
+            const auto& fields = context.req().cookie_fields();
+            const http_header_view expected[] = {
+                {"x", "first"}, {"", "unnamed"}, {"q", "\"a"},
+                {"X", "upper"}, {"x", "last"}, {"empty", ""}};
+            EXPECT_EQ(fields.size(), std::size_t{6});
+            if (fields.size() == 6) {
+                for (std::size_t i = 0; i != fields.size(); ++i) {
+                    EXPECT_EQ(fields[i].name(), expected[i].name());
+                    EXPECT_EQ(fields[i].value(), expected[i].value());
+                }
+            }
+            EXPECT_EQ(fields.count("x"), std::size_t{2});
+            EXPECT_EQ(fields.get("x").value_or("missing"), "last");
+            EXPECT_EQ(fields.get("X").value_or("missing"), "upper");
+            EXPECT_EQ(fields.get("").value_or("missing"), "unnamed");
+            EXPECT_EQ(context.req().cookie("q").value_or("missing"), "\"a");
+            EXPECT_EQ(context.req().cookie("empty").value_or("missing"), "");
+            context.respond(context.text(ruvia::static_text("ok")));
+            co_return;
+        });
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
+}
+
+TEST(Ruvia, context_request_cookie_fields_keep_all_values_across_growth_and_cache_reads) {
+    std::string value;
+    for (std::size_t i = 0; i != 128; ++i) {
+        if (!value.empty()) {
+            value.append("; ");
+        }
+        value.append("c" + std::to_string(i) + "=v" + std::to_string(i));
+    }
+    auto request = make_request("/",
+        {http_header_view{"Cookie", value}, http_header_view{"Cookie", "c0=latest; tail=end"}});
+    const auto response = context_request_test::with_context(request,
+        [](ruvia::context& context) -> ruvia::task<void> {
+            ruvia::test::rejecting_memory_resource unrelated;
+            unrelated.reject_allocations();
+            {
+                const ruvia::test::default_resource_guard guard(unrelated);
+                const auto before = context.req().cookie("c0");
+                const auto& fields = context.req().cookie_fields();
+                EXPECT_EQ(fields.size(), std::size_t{130});
+                if (fields.size() == 130) {
+                    for (std::size_t i = 0; i != 128; ++i) {
+                        EXPECT_EQ(fields[i].name(), "c" + std::to_string(i));
+                        EXPECT_EQ(fields[i].value(), "v" + std::to_string(i));
+                    }
+                    EXPECT_EQ(fields[128].name(), "c0");
+                    EXPECT_EQ(fields[128].value(), "latest");
+                    EXPECT_EQ(fields[129].name(), "tail");
+                    EXPECT_EQ(fields[129].value(), "end");
+                    const auto first = fields[0].value();
+                    EXPECT_EQ(context.req().cookie("c0"), before);
+                    EXPECT_EQ(context.req().cookie_fields().get("tail").value_or("missing"), "end");
+                    EXPECT_EQ(first, "v0");
+                }
+                EXPECT_EQ(fields.count("c0"), std::size_t{2});
+                EXPECT_EQ(fields.get("c0").value_or("missing"), "latest");
+            }
+            context.respond(context.text(ruvia::static_text("ok")));
+            co_return;
+        });
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
+}
+
+TEST(Ruvia, context_request_cookie_fields_distinguish_no_pairs_from_missing_values) {
+    for (const bool include_header : {false, true}) {
+        auto request = ruvia::test_request::get("/");
+        if (include_header) {
+            request.header("Cookie", "; ignored ; flag ;");
+        }
+        const auto response = context_request_test::with_context(request,
+            [](ruvia::context& context) -> ruvia::task<void> {
+                EXPECT_TRUE(context.req().cookie_fields().empty());
+                EXPECT_FALSE(context.req().cookie("missing").has_value());
+                EXPECT_FALSE(context.req().cookie_fields().get("flag").has_value());
+                context.respond(context.text(ruvia::static_text("empty")));
+                co_return;
+            });
+        EXPECT_EQ(response.status(), ruvia::http_status::ok);
+        EXPECT_EQ(response.body(), "empty");
+    }
 }
 
 TEST(Ruvia, context_request_query_accessors_agree_on_decoded_values) {

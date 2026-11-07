@@ -408,48 +408,28 @@ const request_name_value_list& context_request::cookie_fields() const {
     if (cache) {
         return *cache;
     }
-    if (!context_->request_.header("Cookie").has_value()) {
-        return empty_request_fields();
-    }
-    std::size_t cookie_count = 0;
-    std::size_t cookie_header_count = 0;
-    std::string_view single_cookie_value{};
+    // Pool-backed growth returns replaced descriptor blocks immediately.
+    // Keep the candidate private until every Cookie field has been visited.
+    std::optional<request_name_value_list> cookies;
     for (const auto& header_field : context_->request_.headers()) {
         if (header_field.name().size() != 6U ||
             !http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
             continue;
         }
-        if (cookie_header_count == 0) {
-            single_cookie_value = header_field.value();
+        if (!cookies) {
+            cookies.emplace(detail::request_name_value_list_access::make(context_->pool()));
         }
-        ++cookie_header_count;
-        http_visit_cookie_pairs(
-            header_field.value(), [&cookie_count](std::string_view, std::string_view) {
-                ++cookie_count;
+        http_visit_cookie_pairs(header_field.value(),
+            [&cookies](std::string_view key, std::string_view value) {
+                detail::request_name_value_list_access::push_back(
+                    *cookies, http_header_view{key, value});
                 return true;
             });
     }
-    auto cookies = detail::request_name_value_list_access::make(context_->arena());
-    if (cookie_count != 0) {
-        detail::request_name_value_list_access::reserve(cookies, cookie_count);
-        const auto append_cookie_pair = [&cookies](std::string_view key, std::string_view value) {
-            detail::request_name_value_list_access::push_back(
-                cookies, http_header_view{key, value});
-            return true;
-        };
-        if (cookie_header_count == 1) {
-            http_visit_cookie_pairs(single_cookie_value, append_cookie_pair);
-        } else {
-            for (const auto& header_field : context_->request_.headers()) {
-                if (header_field.name().size() != 6U ||
-                    !http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
-                    continue;
-                }
-                http_visit_cookie_pairs(header_field.value(), append_cookie_pair);
-            }
-        }
+    if (!cookies) {
+        return empty_request_fields();
     }
-    cache.emplace(std::move(cookies));
+    cache.emplace(std::move(*cookies));
     return *cache;
 }
 

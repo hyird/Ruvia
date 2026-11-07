@@ -277,6 +277,7 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 | `c.req().query(name)` / `c.req().query<T>(name)` / `c.req().queries(name)` / `c.req().query_fields()` | 获取单个/类型化/多个同名 URL 查询参数（已自动 URL 解码） |
 | `c.req().header(name)` / `c.req().header_fields()` | 大小写不敏感读取请求头 |
 | `c.req().cookie(name)` / `c.req().signed_cookie({.name_ = ..., .secret_ = ...})` | 读取普通 Cookie 或验证 HMAC 签名并提取 Cookie 原值 |
+| `c.req().cookie_fields()` | 返回保留重复项与请求顺序的只读 `request_name_value_list`；名称区分大小写，`get(name)` 取最后一个同名值 |
 | `c.req().negotiate(type, supported)` | 在候选列表中按 `Accept*` 权重协商最佳匹配（单候选时 `has_value()` 即表示客户端接受该值） |
 | `co_await c.req().text()` / `co_await c.req().bytes()` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
 | `co_await c.req().discard_body()` | 丢弃剩余请求体字节 |
@@ -289,6 +290,9 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 | `c.early_data()` | 请求流是否实际携带 QUIC 0-RTT 数据；不会因为处理时握手已完成而清除此来源标记 |
 
 HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接借用连接缓冲并同步完成该读取步骤，不创建额外的正文 I/O 协程；返回的视图仍只在当前请求内有效。
+
+- **Cookie 缓存**：首次枚举时单遍解析全部 `Cookie` 首部；后续读取复用完整结果，分配失败不发布部分列表。
+- **Cookie 借用**：描述符使用 `c.pool()` 并随 Context 销毁；名称和值借用请求首部，不得逃逸请求生命周期。
 
 ### 3.2 构造响应与设置响应元数据
 
