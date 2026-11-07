@@ -35,12 +35,20 @@ public:
         nv_.clear();
     }
 
-    // Releases grown capacity after a submission so a large section does not
-    // stay pinned to the connection.
+    // Keep common sections warm; return oversized storage so one large field
+    // section cannot pin descriptor buffers to an idle connection.
     void release() noexcept {
         http_clear_pmr_string_retaining_small(owned_);
-        entries_ = std::pmr::vector<entry_type>(entries_.get_allocator());
-        nv_ = std::pmr::vector<nghttp2_nv>(nv_.get_allocator());
+        if (entries_.capacity() > http_retained_pmr_string_bytes / sizeof(entry_type)) {
+            entries_ = std::pmr::vector<entry_type>(entries_.get_allocator());
+        } else {
+            entries_.clear();
+        }
+        if (nv_.capacity() > http_retained_pmr_string_bytes / sizeof(nghttp2_nv)) {
+            nv_ = std::pmr::vector<nghttp2_nv>(nv_.get_allocator());
+        } else {
+            nv_.clear();
+        }
     }
 
     void reserve(std::size_t fields) {
