@@ -121,8 +121,8 @@ int main() {
 - 通过进程级单例 `ruvia::app()` 配置应用，在调用 `run()` 前完成监听、中间件、错误处理与后端注册。
 - 路由处理器与异步接口统一返回 `ruvia::task<t_type>`。任务默认惰性执行；一旦启动必须 `co_await` 或 `join` 直至完成，取消后同样如此。
 - 请求与消息上的视图仅借用所属 owner，不延长其生命周期。跨请求生命周期保存或投递到阻塞卸载池前必须复制为自有数据；阻塞卸载任务不得访问 `ruvia::context` 或 worker 局部状态。
-- 服务端支持基于 TCP 和 TLS 的 HTTP/1.0、HTTP/1.1 与 HTTP/2：TLS 通过 ALPN 协商 HTTP/2，明文 HTTP/2 使用 prior knowledge（不支持 HTTP/1 `Upgrade: h2c`）；WebSocket 使用 HTTP/1.1 `Upgrade` 或 HTTP/2 Extended `CONNECT`。
-- HTTPS 监听器可用 `listen_config::http3_` 在 UDP 端口（可与 `https_` 同号）提供 HTTP/3，并自动通告 Alt-Svc。支持显式开启的 0-RTT、连接迁移、CONNECT、WebSocket 和 CONNECT-UDP；重放策略及配置见 [监听器文档](doc/web-guide.md#ruvialisten_config-与-ruviatls_config)。
+- 服务端支持基于 TCP 和 TLS 的 HTTP/1.0、HTTP/1.1 与 HTTP/2：TLS 通过 ALPN 协商 HTTP/2，明文 HTTP/2 使用 prior knowledge（RFC 9113 §3.1 已废弃并移除 HTTP/1 `Upgrade: h2c`）；WebSocket 使用 HTTP/1.1 `Upgrade` 或 HTTP/2、HTTP/3 Extended `CONNECT`。
+- HTTPS 监听器可用 `listen_config::http3_` 在 UDP 端口（可与 `https_` 同号）提供 HTTP/3，并自动通告 Alt-Svc。支持显式开启的 0-RTT（`http3_early_data_`）与 QUIC Retry 地址验证（`http3_retry_`）、无状态重置（Stateless Reset）、连接迁移、CONNECT、WebSocket、CONNECT-UDP、RFC 9412 `ORIGIN` 帧与 RFC 9218 优先级动态更新；策略及配置见 [监听器文档](doc/web-guide.md#ruvialisten_config-与-ruviatls_config)。
 - 服务端连接始终留在接收它的业务 worker 上，业务 worker 彼此同构。Linux 等 POSIX 平台由每个业务 worker 以 `SO_REUSEADDR` + `SO_REUSEPORT` 绑定监听器并直接 accept，不可用则启动失败；Windows 由每个应用一个独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占全部监听器（含 HTTP/3 UDP socket），以 `AcceptEx` 接收尚未关联 IOCP 的裸 `SOCKET` 并派发给连接数最少的业务 worker，由其首次绑定自身 IOCP。`stop()` 直接断开全部连接，不设排空阶段。
 
 ## 示例导航与文档

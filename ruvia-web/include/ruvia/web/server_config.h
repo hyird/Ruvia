@@ -189,11 +189,11 @@ struct listen_config final {
     // the worker a keyed hash of the client's chosen ID selects (so its
     // retransmissions reach the same worker), and sends the datagrams workers
     // hand back through a bounded queue -- one past the bound is lost, as UDP
-    // may lose any. QUIC connection migration is
-    // disabled (disable_active_migration), Retry and 0-RTT are not offered,
-    // and no Stateless Reset is sent. CONNECT, and a route that would upgrade
-    // to WebSocket, is answered with 501; extended CONNECT (RFC 9220) is not
-    // advertised, so a request carrying :protocol is malformed. The server
+    // may lose any. Active client connection migration and NAT rebinding are
+    // supported, 0-RTT is opt-in via http3_early_data_, stateless Retry address
+    // validation is opt-in via http3_retry_, Stateless Reset is sent for
+    // retired server connection IDs, and CONNECT, RFC 9220 WebSocket and
+    // RFC 9297/9298 CONNECT-UDP / HTTP Datagrams are supported. The server
     // limits apply per request stream as for HTTP/2: idle_timeout_ is also
     // the QUIC max_idle_timeout, request_header_timeout_ and
     // header_completion_timeout_ bound the handshake, and a request body or an
@@ -208,6 +208,8 @@ struct listen_config final {
     std::chrono::seconds http3_alt_svc_max_age_{std::chrono::hours(24)};
     // Enable replayable QUIC 0-RTT; unsafe methods are rejected with 425.
     bool http3_early_data_{false};
+    // Require stateless QUIC Retry address validation before opening a session.
+    bool http3_retry_{false};
     tls_config tls_{};
     bool auto_https_redirect_{false};
 };

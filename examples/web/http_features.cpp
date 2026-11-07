@@ -1,7 +1,7 @@
-// HTTP/1 and HTTP/2 server features through the Web API.
-// Run ruvia_example_http_features, then query it with any HTTP/1.1 or HTTP/2 client.
+// HTTP/1, HTTP/2 and HTTP/3 server features through the Web API.
+// Run ruvia_example_http_features, then query it with any HTTP/1.1, HTTP/2 or HTTP/3 client.
 // Plain HTTP listens on 127.0.0.1:8093 and accepts HTTP/2 prior knowledge.
-// Set RUVIA_TLS_CERT and RUVIA_TLS_KEY to enable HTTPS on port 8444;
+// Set RUVIA_TLS_CERT and RUVIA_TLS_KEY to enable HTTPS and HTTP/3 on port 8444;
 // the certificate must cover localhost.
 
 #include <array>
@@ -45,13 +45,18 @@ private:
         // copies its input, but the operation must still finish in this request.
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hints));
         c.draft().priority({.urgency_ = 2, .incremental_ = true});
-        if (c.req().protocol_version() == ruvia::http_protocol_version::http2) {
-            if (connection.tls()) {
-                // Advertisements never change the client's trusted origin.
-                const std::array<std::string_view, 1> origins{"https://localhost:8444"};
-                c.advertise_origins(origins);
+        const auto protocol = c.req().protocol_version();
+        if ((protocol == ruvia::http_protocol_version::http2 ||
+                protocol == ruvia::http_protocol_version::http3) &&
+            connection.tls()) {
+            // Advertisements never change the client's trusted origin.
+            const std::array<std::string_view, 1> origins{"https://localhost:8444"};
+            c.advertise_origins(origins);
+            if (protocol == ruvia::http_protocol_version::http2) {
                 c.advertise_alternative_service("h2=\":8444\"; ma=60");
             }
+        }
+        if (protocol == ruvia::http_protocol_version::http2) {
             // Peer settings or capacity can decline push; the asset remains
             // available through an ordinary request.
             const bool pushed = c.push({
@@ -130,6 +135,9 @@ int main() {
         }
         if (certificate && key) {
             listener_value.https_ = 8444;
+#if defined(RUVIA_ENABLE_HTTP3)
+            listener_value.http3_ = 8444;
+#endif
             listener_value.tls_.identity_ = {
                 .certificate_chain_file_ = std::filesystem::path(*certificate),
                 .private_key_file_ = std::filesystem::path(*key),

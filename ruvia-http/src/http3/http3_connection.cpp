@@ -23,6 +23,7 @@
 #include "ruvia/http/http_status.h"
 
 #include "field/http_interim_response_validation.h"
+#include "field/http_origin_payload.h"
 #include "response/http_framed_response_head_plan.h"
 #include "server/http_date_cache.h"
 #include "util/quic_varint.h"
@@ -190,6 +191,17 @@ class http3_connection::impl final {
     };
 
 public:
+    struct control_frame_chunk final {
+        explicit control_frame_chunk(std::pmr::memory_resource* resource)
+            : bytes_(resource) {}
+        std::pmr::vector<std::byte> bytes_;
+        std::size_t written_{0};
+        std::size_t acknowledged_{0};
+    };
+    struct control_output_segment final {
+        bool nghttp3_{true};
+        std::size_t bytes_{0};
+    };
     impl(http3_role role, const http3_connection_options& options)
         : role_(role),
           resource_(resolve_resource(options.resource_)),
@@ -198,7 +210,10 @@ public:
           own_data_events_(options.own_data_events_),
           enable_h3_datagram_(options.enable_h3_datagram_),
           events_(resource_),
-          streams_(resource_) {
+          streams_(resource_),
+          initial_origin_payload_(resource_),
+          control_extension_frames_(resource_),
+          control_segments_(resource_) {
         if (options.max_concurrent_streams_ == 0 ||
             options.max_stream_output_bytes_ == 0 ||
             options.qpack_max_dtable_capacity_ >
@@ -207,7 +222,21 @@ public:
                 (std::numeric_limits<std::size_t>::max)()) {
             throw std::invalid_argument("invalid HTTP/3 connection options");
         }
-
+        if (!options.origins_.empty()) {
+            if (role != http3_role::server) {
+                throw std::invalid_argument("HTTP/3 client cannot advertise origins");
+            }
+            const auto payload_size = detail::http_origin_payload_size(options.origins_, 16384);
+            if (payload_size.index() != 0) {
+                throw std::invalid_argument("invalid HTTP/3 initial ORIGIN advertisement");
+            }
+            initial_origin_payload_.resize(std::get<0>(payload_size));
+            detail::write_http_origin_payload(initial_origin_payload_, options.origins_);
+            initial_origin_vec_ = {
+                .base = reinterpret_cast<std::uint8_t*>(initial_origin_payload_.data()),
+                .len = initial_origin_payload_.size(),
+            };
+        }
         static const nghttp3_callbacks callbacks = [] {
             nghttp3_callbacks value{};
             value.acked_stream_data = acked_stream_data_callback;
@@ -223,6 +252,8 @@ public:
             value.end_stream = end_stream_callback;
             value.reset_stream = reset_stream_callback;
             value.shutdown = shutdown_callback;
+            value.recv_origin = recv_origin_callback;
+            value.end_origin = end_origin_callback;
             value.stream_close2 = stream_close_callback;
             value.recv_settings2 = recv_settings_callback;
             return value;
@@ -239,6 +270,9 @@ public:
             static_cast<std::size_t>(options.qpack_blocked_streams_);
         settings.enable_connect_protocol = options.enable_connect_protocol_ ? 1 : 0;
         settings.h3_datagram = options.enable_h3_datagram_ ? 1 : 0;
+        if (!options.origins_.empty()) {
+            settings.origin_list = &initial_origin_vec_;
+        }
 
         const int result = role == http3_role::client
                                ? nghttp3_conn_client_new(
@@ -515,6 +549,38 @@ public:
         });
     }
 
+    static int recv_origin_callback(nghttp3_conn*, const std::uint8_t* origin,
+        std::size_t size, void* user_data) noexcept {
+        auto& self = *static_cast<impl*>(user_data);
+        if (size > self.max_field_section_size_ ||
+            self.building_origin_bytes_ > self.max_field_section_size_ - size) {
+            self.connection_error_ = NGHTTP3_H3_EXCESSIVE_LOAD;
+            return NGHTTP3_ERR_CALLBACK_FAILURE;
+        }
+        return callback_guard(self, [&] {
+            if (!self.building_origins_) {
+                self.building_origins_.emplace(self.resource_);
+            }
+            self.building_origin_bytes_ += size;
+            const std::string_view candidate(reinterpret_cast<const char*>(origin), size);
+            if (is_valid_http_serialized_origin(candidate)) {
+                self.building_origins_->origins_.emplace_back(candidate);
+            }
+        });
+    }
+
+    static int end_origin_callback(nghttp3_conn*, void* user_data) noexcept {
+        auto& self = *static_cast<impl*>(user_data);
+        return callback_guard(self, [&] {
+            if (!self.building_origins_) {
+                self.building_origins_.emplace(self.resource_);
+            }
+            self.events_.emplace_back(std::move(*self.building_origins_));
+            self.building_origins_.reset();
+            self.building_origin_bytes_ = 0;
+        });
+    }
+
     static int stream_close_callback(nghttp3_conn*, std::uint32_t flags,
         std::int64_t stream_id, std::uint64_t receive_error, std::uint64_t send_error,
         void* user_data, void*) noexcept {
@@ -696,6 +762,30 @@ public:
         if (status != http3_status::accepted) {
             return head_error_from(status);
         }
+        bool has_priority_header = false;
+        nghttp3_pri current_pri{NGHTTP3_DEFAULT_URGENCY, 0};
+        for (const auto& header : response.headers()) {
+            if (http_ascii_equals_ignore_case(header.name(), "priority")) {
+                if (!has_priority_header) {
+                    if (nghttp3_conn_get_stream_priority2(connection_, &current_pri, stream_id) != 0) {
+                        break;
+                    }
+                    has_priority_header = true;
+                }
+                if (const auto parsed = parse_http_priority(header.value()); parsed.index() == 0) {
+                    const auto& fields = std::get<0>(parsed);
+                    if (fields.urgency_) {
+                        current_pri.urgency = fields.urgency_->value();
+                    }
+                    if (fields.incremental_) {
+                        current_pri.inc = *fields.incremental_ ? 1 : 0;
+                    }
+                }
+            }
+        }
+        if (has_priority_header) {
+            (void)nghttp3_conn_set_server_stream_priority(connection_, stream_id, &current_pri);
+        }
         return std::nullopt;
     }
 
@@ -711,11 +801,22 @@ public:
     std::pmr::vector<http3_event> events_;
     std::size_t event_offset_{0};
     std::pmr::unordered_map<std::int64_t, stream_state> streams_;
+    std::pmr::vector<char> initial_origin_payload_;
+    nghttp3_vec initial_origin_vec_{};
+    std::optional<std::int64_t> control_stream_id_;
+    std::pmr::deque<control_frame_chunk> control_extension_frames_;
+    std::pmr::deque<control_output_segment> control_segments_;
+    std::size_t control_extension_pending_bytes_{0};
     std::optional<http3_headers_event> building_headers_;
     std::uint64_t building_header_bytes_{0};
+    std::optional<http_origin_advertisement> building_origins_;
+    std::uint64_t building_origin_bytes_{0};
     std::optional<std::uint64_t> connection_error_;
     std::exception_ptr callback_error_;
     bool control_streams_bound_{false};
+    bool control_stream_blocked_{false};
+    bool control_stream_shutdown_{false};
+    bool peeked_control_extension_{false};
     bool packet_input_{false};
     bool drain_final_{false};
 };
@@ -763,6 +864,7 @@ http3_status http3_connection::bind_control_streams(
     if (result != 0) {
         return impl_->status_from(result);
     }
+    impl_->control_stream_id_ = control_stream_id;
     impl_->control_streams_bound_ = true;
     return http3_status::accepted;
 }
@@ -806,6 +908,29 @@ http3_result http3_connection::peek_output(
     output.stream_id_ = -1;
     output.buffer_count_ = 0;
     output.fin_ = false;
+    impl_->peeked_control_extension_ = false;
+    if (impl_->control_stream_id_.has_value() && !impl_->control_stream_blocked_ &&
+        !impl_->control_stream_shutdown_) {
+        for (auto& frame : impl_->control_extension_frames_) {
+            if (frame.written_ == frame.bytes_.size()) {
+                continue;
+            }
+            if (frame.written_ == 0 &&
+                nghttp3_conn_is_stream_flushed(impl_->connection_, *impl_->control_stream_id_) == 0) {
+                break;
+            }
+            if (max_bytes == 0) {
+                return {http3_status::would_block, 0};
+            }
+            const auto offered = (std::min)(frame.bytes_.size() - frame.written_, max_bytes);
+            output.stream_id_ = *impl_->control_stream_id_;
+            output.buffers_[0] = {frame.bytes_.data() + frame.written_, offered};
+            output.buffer_count_ = 1;
+            output.fin_ = false;
+            impl_->peeked_control_extension_ = true;
+            return {http3_status::accepted, 0};
+        }
+    }
 
     std::array<nghttp3_vec, 16> vectors;
     std::int64_t stream_id = -1;
@@ -852,6 +977,38 @@ http3_status http3_connection::commit_output(
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
+    if (impl_->control_stream_id_.has_value() && stream_id == *impl_->control_stream_id_) {
+        const bool from_nghttp3 = !impl_->peeked_control_extension_;
+        impl_->peeked_control_extension_ = false;
+        if (bytes != 0) {
+            if (!impl_->control_segments_.empty() &&
+                impl_->control_segments_.back().nghttp3_ == from_nghttp3) {
+                impl_->control_segments_.back().bytes_ += bytes;
+            } else {
+                try {
+                    impl_->control_segments_.push_back({from_nghttp3, bytes});
+                } catch (...) {
+                    impl_->connection_error_ = NGHTTP3_H3_INTERNAL_ERROR;
+                    return http3_status::protocol_error;
+                }
+            }
+        }
+        if (!from_nghttp3) {
+            std::size_t remaining = bytes;
+            for (auto& frame : impl_->control_extension_frames_) {
+                if (frame.written_ == frame.bytes_.size()) {
+                    continue;
+                }
+                const auto step = (std::min)(remaining, frame.bytes_.size() - frame.written_);
+                frame.written_ += step;
+                remaining -= step;
+                if (remaining == 0) {
+                    break;
+                }
+            }
+            return remaining == 0 ? http3_status::accepted : http3_status::invalid_state;
+        }
+    }
     return impl_->status_from(
         nghttp3_conn_add_write_offset(impl_->connection_, stream_id, bytes));
 }
@@ -861,6 +1018,42 @@ http3_status http3_connection::acknowledge_output(
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
+    if (impl_->control_stream_id_.has_value() && stream_id == *impl_->control_stream_id_ &&
+        !impl_->control_segments_.empty()) {
+        while (bytes != 0 && !impl_->control_segments_.empty()) {
+            auto& segment = impl_->control_segments_.front();
+            const auto step = static_cast<std::size_t>(
+                (std::min)(bytes, static_cast<std::uint64_t>(segment.bytes_)));
+            if (segment.nghttp3_) {
+                const int result = nghttp3_conn_add_ack_offset(impl_->connection_, stream_id, step);
+                if (result != 0) {
+                    return impl_->status_from(result);
+                }
+            } else {
+                std::size_t remaining = step;
+                while (remaining != 0 && !impl_->control_extension_frames_.empty()) {
+                    auto& frame = impl_->control_extension_frames_.front();
+                    const auto consumed = (std::min)(remaining, frame.written_ - frame.acknowledged_);
+                    frame.acknowledged_ += consumed;
+                    impl_->control_extension_pending_bytes_ -= consumed;
+                    remaining -= consumed;
+                    if (frame.acknowledged_ == frame.bytes_.size()) {
+                        impl_->control_extension_frames_.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            segment.bytes_ -= step;
+            bytes -= step;
+            if (segment.bytes_ == 0) {
+                impl_->control_segments_.pop_front();
+            }
+        }
+        if (bytes == 0) {
+            return http3_status::accepted;
+        }
+    }
     return impl_->status_from(nghttp3_conn_add_ack_offset(
         impl_->connection_, stream_id, bytes));
 }
@@ -868,6 +1061,9 @@ http3_status http3_connection::acknowledge_output(
 http3_status http3_connection::unblock_stream(std::int64_t stream_id) noexcept {
     if (impl_->connection_error_) {
         return http3_status::closed;
+    }
+    if (impl_->control_stream_id_.has_value() && stream_id == *impl_->control_stream_id_) {
+        impl_->control_stream_blocked_ = false;
     }
     return impl_->status_from(
         nghttp3_conn_unblock_stream(impl_->connection_, stream_id));
@@ -1186,6 +1382,93 @@ std::optional<http3_peer_settings> http3_connection::peer_settings() const noexc
     return impl_->peer_settings_;
 }
 
+http3_status http3_connection::submit_origin_advertisement(
+    std::span<const std::string_view> origins) {
+    if (impl_->connection_error_) {
+        return http3_status::closed;
+    }
+    if (impl_->role_ != http3_role::server || !impl_->control_streams_bound_ ||
+        impl_->control_stream_shutdown_ || impl_->drain_final_) {
+        return http3_status::invalid_state;
+    }
+    const auto payload_size = detail::http_origin_payload_size(origins, 16384);
+    if (payload_size.index() != 0) {
+        return http3_status::invalid_state;
+    }
+    const auto length = std::get<0>(payload_size);
+    const auto length_varint_bytes = detail::quic_varint_size(length);
+    const auto total_bytes = 1 + length_varint_bytes + length;
+    if (total_bytes > impl_->max_stream_output_bytes_ -
+                          (std::min)(impl_->max_stream_output_bytes_, impl_->control_extension_pending_bytes_)) {
+        return http3_status::would_block;
+    }
+    impl::control_frame_chunk chunk(impl_->resource_);
+    chunk.bytes_.resize(total_bytes);
+    chunk.bytes_[0] = std::byte{0x0c};
+    (void)detail::encode_quic_varint(
+        {reinterpret_cast<char*>(chunk.bytes_.data() + 1), length_varint_bytes}, length);
+    detail::write_http_origin_payload(
+        {reinterpret_cast<char*>(chunk.bytes_.data() + 1 + length_varint_bytes), length}, origins);
+    impl_->control_extension_frames_.push_back(std::move(chunk));
+    impl_->control_extension_pending_bytes_ += total_bytes;
+    return http3_status::accepted;
+}
+
+http3_status http3_connection::submit_priority_update(
+    std::int64_t stream_id, http_priority_fields fields) {
+    if (impl_->connection_error_) {
+        return http3_status::closed;
+    }
+    if (impl_->role_ != http3_role::client || !impl_->control_streams_bound_ ||
+        stream_id < 0 || (stream_id & 3) != 0) {
+        return http3_status::invalid_state;
+    }
+    std::array<char, 32> encoded{};
+    const auto size = encode_http_priority(encoded, fields);
+    if (size.index() != 0) {
+        return http3_status::invalid_state;
+    }
+    const int result = nghttp3_conn_set_client_stream_priority(
+        impl_->connection_, stream_id,
+        reinterpret_cast<const std::uint8_t*>(encoded.data()),
+        std::get<0>(size));
+    impl_->throw_if_no_memory(result);
+    return impl_->status_from(result);
+}
+
+std::optional<http_priority> http3_connection::stream_priority(
+    std::int64_t stream_id) const noexcept {
+    if (impl_->connection_error_ || impl_->role_ != http3_role::server ||
+        stream_id < 0 || (stream_id & 3) != 0) {
+        return std::nullopt;
+    }
+    nghttp3_pri pri{};
+    if (nghttp3_conn_get_stream_priority2(impl_->connection_, &pri, stream_id) != 0) {
+        return std::nullopt;
+    }
+    const auto urgency = http_priority_urgency::try_from_value(pri.urgency);
+    if (!urgency) {
+        return std::nullopt;
+    }
+    return http_priority{*urgency, pri.inc != 0};
+}
+
+http3_status http3_connection::set_server_stream_priority(
+    std::int64_t stream_id, http_priority priority) noexcept {
+    if (impl_->connection_error_) {
+        return http3_status::closed;
+    }
+    if (impl_->role_ != http3_role::server || stream_id < 0 || (stream_id & 3) != 0) {
+        return http3_status::invalid_state;
+    }
+    const nghttp3_pri pri{
+        .urgency = priority.urgency_.value(),
+        .inc = static_cast<std::uint8_t>(priority.incremental_ ? 1 : 0),
+    };
+    return impl_->status_from(
+        nghttp3_conn_set_server_stream_priority(impl_->connection_, stream_id, &pri));
+}
+
 void http3_connection::mark_early_data(std::int64_t stream_id) {
     impl_->ensure_stream(stream_id).early_data_ = true;
 }
@@ -1270,6 +1553,9 @@ http3_status http3_connection::block_stream(std::int64_t stream_id) noexcept {
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
+    if (impl_->control_stream_id_.has_value() && stream_id == *impl_->control_stream_id_) {
+        impl_->control_stream_blocked_ = true;
+    }
     nghttp3_conn_block_stream(impl_->connection_, stream_id);
     return http3_status::accepted;
 }
@@ -1290,6 +1576,11 @@ http3_status http3_connection::shutdown_stream_write(
     std::int64_t stream_id) noexcept {
     if (impl_->connection_error_) {
         return http3_status::closed;
+    }
+    if (impl_->control_stream_id_.has_value() && stream_id == *impl_->control_stream_id_) {
+        impl_->control_stream_shutdown_ = true;
+        impl_->control_extension_frames_.clear();
+        impl_->control_extension_pending_bytes_ = 0;
     }
     if (auto* stream = impl_->find_stream(stream_id)) {
         stream->aborted_ = true;

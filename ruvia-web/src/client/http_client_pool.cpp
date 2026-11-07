@@ -190,17 +190,24 @@ void http_client_pool::reprioritize(http_client_response_state& state_value, htt
         std::terminate();
     }
 #ifdef RUVIA_ENABLE_HTTP2
-    if (state_value.transport_ != http_client_response_transport::http2 ||
-        state_value.connection_index_ >= connections_.size()) {
-        throw http_client_error(
-            http_client_error::code_type::protocol_unavailable, "priority updates require HTTP/2");
+    if (state_value.transport_ == http_client_response_transport::http2 &&
+        state_value.connection_index_ < connections_.size()) {
+        connection(state_value.connection_index_).reprioritize(state_value, priority);
+        return;
     }
-    connection(state_value.connection_index_).reprioritize(state_value, priority);
-#else
+#endif
+#ifdef RUVIA_ENABLE_HTTP3
+    if (state_value.transport_ == http_client_response_transport::http3 &&
+        state_value.connection_index_ < http3_connections_.size() &&
+        http3_connections_[state_value.connection_index_]) {
+        http3_connections_[state_value.connection_index_]->reprioritize(state_value, priority);
+        return;
+    }
+#endif
     (void)state_value;
     (void)priority;
-    throw http_client_error(http_client_error::code_type::protocol_unavailable, "priority updates require HTTP/2");
-#endif
+    throw http_client_error(
+        http_client_error::code_type::protocol_unavailable, "priority updates require HTTP/2 or HTTP/3");
 }
 
 std::optional<http_client_push> http_client_pool::next_push() {

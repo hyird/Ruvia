@@ -74,15 +74,25 @@ public:
             throw std::invalid_argument("invalid HTTP/3 QUIC connection options");
         }
         if (server != options.original_destination_connection_id_.has_value() ||
-            (!server && (options.stateless_reset_token_.has_value() || options.disable_active_migration_))) {
+            (!server && (options.retry_source_connection_id_.has_value() ||
+                            !options.retry_token_.empty() ||
+                            options.stateless_reset_token_.has_value() ||
+                            options.disable_active_migration_))) {
             throw std::invalid_argument("QUIC server-only transport parameters are mismatched to the role");
         }
-
+        if (server &&
+            (options.retry_source_connection_id_.has_value() != !options.retry_token_.empty() ||
+                (options.retry_source_connection_id_.has_value() &&
+                    options.retry_source_connection_id_->datalen == 0))) {
+            throw std::invalid_argument("invalid HTTP/3 QUIC connection options");
+        }
         callbacks_ = options.callbacks_;
         get_new_connection_id_ = options.callbacks_.get_new_connection_id2;
         remove_connection_id_ = options.callbacks_.remove_connection_id;
         handshake_completed_ = options.callbacks_.handshake_completed;
         handshake_confirmed_ = options.callbacks_.handshake_confirmed;
+        recv_retry_ = options.callbacks_.recv_retry;
+        recv_stateless_reset_ = options.callbacks_.recv_stateless_reset2;
         early_data_rejected_ = options.callbacks_.tls_early_data_rejected;
         callbacks_.get_new_connection_id2 =
             get_new_connection_id_ != nullptr ? get_new_connection_id_callback : nullptr;
@@ -92,6 +102,10 @@ public:
             handshake_completed_ != nullptr ? handshake_completed_callback : nullptr;
         callbacks_.handshake_confirmed =
             handshake_confirmed_ != nullptr ? handshake_confirmed_callback : nullptr;
+        callbacks_.recv_retry =
+            recv_retry_ != nullptr ? recv_retry_callback : nullptr;
+        callbacks_.recv_stateless_reset = nullptr;
+        callbacks_.recv_stateless_reset2 = recv_stateless_reset_callback;
         callbacks_.recv_stream_data = recv_stream_data_callback;
         callbacks_.acked_stream_data_offset = acked_stream_data_callback;
         callbacks_.extend_max_stream_data = extend_max_stream_data_callback;
@@ -127,6 +141,13 @@ public:
         if (server) {
             transport_params.original_dcid = *options.original_destination_connection_id_;
             transport_params.original_dcid_present = 1;
+            if (options.retry_source_connection_id_) {
+                transport_params.retry_scid = *options.retry_source_connection_id_;
+                transport_params.retry_scid_present = 1;
+                settings.token = options.retry_token_.data();
+                settings.tokenlen = options.retry_token_.size();
+                settings.token_type = NGTCP2_TOKEN_TYPE_RETRY;
+            }
             if (options.stateless_reset_token_) {
                 std::memcpy(transport_params.stateless_reset_token,
                     options.stateless_reset_token_->data(), options.stateless_reset_token_->size());
@@ -230,6 +251,21 @@ public:
     static int handshake_confirmed_callback(ngtcp2_conn* connection, void* user_data) noexcept {
         auto& value = self(user_data);
         return value.handshake_confirmed_(connection, value.callback_user_data_);
+    }
+
+    static int recv_retry_callback(
+        ngtcp2_conn* connection, const ngtcp2_pkt_hd* header, void* user_data) noexcept {
+        auto& value = self(user_data);
+        return value.recv_retry_(connection, header, value.callback_user_data_);
+    }
+
+    static int recv_stateless_reset_callback(
+        ngtcp2_conn* connection, const ngtcp2_pkt_stateless_reset2* reset, void* user_data) noexcept {
+        auto& value = self(user_data);
+        value.stateless_reset_received_ = true;
+        return value.recv_stateless_reset_ == nullptr
+                   ? 0
+                   : value.recv_stateless_reset_(connection, reset, value.callback_user_data_);
     }
 
     void discard_early_http3() {
@@ -387,6 +423,8 @@ public:
     ngtcp2_remove_connection_id remove_connection_id_{nullptr};
     ngtcp2_handshake_completed handshake_completed_{nullptr};
     ngtcp2_handshake_confirmed handshake_confirmed_{nullptr};
+    ngtcp2_recv_retry recv_retry_{nullptr};
+    ngtcp2_recv_stateless_reset2 recv_stateless_reset_{nullptr};
     ngtcp2_tls_early_data_rejected early_data_rejected_{nullptr};
     ngtcp2_conn* connection_{nullptr};
     ngtcp2_ccerr close_error_{};
@@ -397,6 +435,7 @@ public:
     bool datagram_turn_{true};
     bool early_http3_{false};
     bool packet_input_{false};
+    bool stateless_reset_received_{false};
     std::array<std::int64_t, 3> control_stream_ids_{};
     std::size_t control_stream_count_{0};
     bool http3_started_{false};
@@ -449,6 +488,14 @@ void http3_quic_connection::set_tls_native_handle(
 
 bool http3_quic_connection::handshake_completed() const noexcept {
     return ngtcp2_conn_get_handshake_completed2(impl_->connection_) != 0;
+}
+
+bool http3_quic_connection::after_retry() const noexcept {
+    return ngtcp2_conn_after_retry2(impl_->connection_) != 0;
+}
+
+bool http3_quic_connection::stateless_reset_received() const noexcept {
+    return impl_->stateless_reset_received_;
 }
 
 http3_quic_status http3_quic_connection::start_http3() {
@@ -917,6 +964,31 @@ http3_quic_connection::connection_error() const noexcept {
         return impl_->connection_error_;
     }
     return impl_->http3_.connection_error();
+}
+
+std::size_t write_http3_quic_stateless_reset(
+    const http3_quic_stateless_reset_token& token,
+    std::span<const std::uint8_t> random_bytes,
+    std::span<std::byte> output,
+    std::size_t max_packet_bytes) noexcept {
+    constexpr std::size_t min_packet_bytes =
+        1 + NGTCP2_MIN_STATELESS_RESET_RANDLEN + NGTCP2_STATELESS_RESET_TOKENLEN;
+    const std::size_t bound = (std::min)(output.size(), max_packet_bytes);
+    if (bound < min_packet_bytes ||
+        random_bytes.size() < NGTCP2_MIN_STATELESS_RESET_RANDLEN) {
+        return 0;
+    }
+    const std::size_t random_len =
+        (std::min)(random_bytes.size(), bound - 1 - NGTCP2_STATELESS_RESET_TOKENLEN);
+    if (random_len < NGTCP2_MIN_STATELESS_RESET_RANDLEN) {
+        return 0;
+    }
+    ngtcp2_stateless_reset_token native_token{};
+    std::memcpy(native_token.data, token.data(), token.size());
+    const auto written = ngtcp2_pkt_write_stateless_reset2(
+        reinterpret_cast<std::uint8_t*>(output.data()), bound, &native_token,
+        random_bytes.data(), random_len);
+    return written > 0 ? static_cast<std::size_t>(written) : 0;
 }
 
 }  // namespace ruvia

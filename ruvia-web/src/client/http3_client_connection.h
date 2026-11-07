@@ -9,6 +9,7 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_priority.h"
 
 namespace ruvia::detail {
 class http_client_pool;
@@ -33,6 +34,7 @@ public:
     [[nodiscard]] bool cancel_by_id(std::uint64_t id) noexcept;
     void abandon(http_client_response_state& response, bool malformed) noexcept;
     void release_data(http_client_response_state& response) noexcept;
+    void reprioritize(http_client_response_state& response, http_priority priority);
     [[nodiscard]] std::size_t available() const noexcept;
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] task<void> migrate(std::string local_address, std::uint16_t port);

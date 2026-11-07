@@ -62,7 +62,11 @@ void append_listen_config(
         }
         // The secret is generated per validated configuration.
         http3.emplace(detail::http_server_listener_definition::http3_service{
-            .port_ = config.http3_->value(), .alt_svc_max_age_ = config.http3_alt_svc_max_age_, .early_data_ = config.http3_early_data_, .secret_ = {}});
+            .port_ = config.http3_->value(),
+            .alt_svc_max_age_ = config.http3_alt_svc_max_age_,
+            .early_data_ = config.http3_early_data_,
+            .retry_ = config.http3_retry_,
+            .secret_ = {}});
 #else
         throw std::invalid_argument("HTTP/3 listen port requires a build with RUVIA_ENABLE_HTTP3");
 #endif

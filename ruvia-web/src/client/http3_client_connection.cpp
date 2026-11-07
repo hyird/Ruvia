@@ -376,6 +376,10 @@ public:
             }
         }
         while (auto event = quic_->next_event()) {
+            if (const auto* origins = std::get_if<http_origin_advertisement>(&*event)) {
+                pool_.advertisements().retain(index_, http_protocol_version::http3, *origins);
+                continue;
+            }
             if (const auto* away = std::get_if<http3_goaway_event>(&*event)) {
                 draining_ = true;
                 for (auto* item : streams_) {
@@ -1666,6 +1670,23 @@ task<bool> http3_client_connection::send_datagram(http_client_response_state& re
         }
         co_await self.changed_.wait();
     }
+}
+
+void http3_client_connection::reprioritize(http_client_response_state& response, http_priority priority) {
+    if (!session_) {
+        throw http_client_error(error_code::closing, "HTTP/3 response connection is retired");
+    }
+    auto& self = *session_;
+    if (response.connection_generation_ != self.generation_ || !self.open_ || !self.quic_ || self.quic_->closed()) {
+        throw http_client_error(error_code::closing, "HTTP/3 response connection is retired");
+    }
+    auto* item = self.find(static_cast<std::int64_t>(response.stream_id_));
+    if (item == nullptr || &item->response_ != &response || item->error_ || item->failure_) {
+        throw http_client_error(error_code::closing, "HTTP/3 response connection is retired");
+    }
+    require_accepted(self.quic_->http3().submit_priority_update(
+        item->id_, {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_}));
+    self.writer_.notify();
 }
 
 }  // namespace ruvia::detail

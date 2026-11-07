@@ -131,14 +131,21 @@ std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<ch
         bytes_value[count++] = static_cast<char>('0' + fields_value.urgency_->value());
     }
     if (fields_value.incremental_) {
-        if (count) {
-            bytes_value[count++] = ',';
-            bytes_value[count++] = ' ';
+        if (*fields_value.incremental_) {
+            if (count) {
+                bytes_value[count++] = ',';
+                bytes_value[count++] = ' ';
+            }
+            bytes_value[count++] = 'i';
+        } else {
+            if (count) {
+                bytes_value[count++] = ',';
+            }
+            bytes_value[count++] = 'i';
+            bytes_value[count++] = '=';
+            bytes_value[count++] = '?';
+            bytes_value[count++] = '0';
         }
-        bytes_value[count++] = 'i';
-        bytes_value[count++] = '=';
-        bytes_value[count++] = '?';
-        bytes_value[count++] = *fields_value.incremental_ ? '1' : '0';
     }
     if (output.size() < count) {
         return http_priority_error::output_too_small;

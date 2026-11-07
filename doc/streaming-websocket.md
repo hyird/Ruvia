@@ -145,16 +145,16 @@ ruvia::task<void> stream_subscription(
 
 ---
 
-## 2. HTTP/1.1 & HTTP/2 服务端高级协议能力
+## 2. HTTP/1.1、HTTP/2 & HTTP/3 服务端高级协议能力
 
 参考示例：[examples/web/http_features.cpp](../examples/web/http_features.cpp)。
 
 | `ruvia::context` / `context_request` 方法 | 适用协议与说明 |
 | --- | --- |
 | `co_await c.inform(const http_interim_response_head& response)` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`） |
-| `c.draft().priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置当前响应优先级；跨替换策略用 `c.policy().priority(...)`，客户端请求优先级用 `c.req().priority()` |
+| `c.draft().priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置当前响应优先级（HTTP/2 与 HTTP/3 同时更新流调度器优先级）；跨替换策略用 `c.policy().priority(...)`，客户端请求优先级（含 `PRIORITY_UPDATE` 帧动态更新）用 `c.req().priority()` |
 | `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳；`method_`、`scheme_`、`authority_`、`path_` 使用 `borrowed_text`，`headers_` 使用 `borrowed_http_headers`，拒绝临时拥有型字符串与临时首部容器；对端禁用推送，或已打开的推送流（不含仅预留的推送）已达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS`（包括其为 0）时返回 `false`，不发送 `PUSH_PROMISE`；已预留的推送在提交响应头时仍无并发额度则以 `RST_STREAM(CANCEL)` 取消，不视为连接失败 |
-| `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2）在连接上排入 RFC 8336 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
+| `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2、HTTP/3，需 TLS）在连接或控制流上排入 RFC 8336 / RFC 9412 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
 | `void c.advertise_alternative_service(std::string_view value)` | （HTTP/2）在连接上排入 RFC 7838 `ALTSVC` 帧通告替代服务 |
 | `c.req().trailers()` / `c.req().trailer(name)` | 在流式请求体读取到 EOF 后，读取客户端发送的请求 Trailer 首部；按 RFC 9110 §6.5.1 不允许出现在 Trailer 中的字段（如 `Content-Length`、`Cache-Control`）被丢弃而不导致请求失败，也不会并入请求头 |
 | `co_await stream.end(trailers)` | 在正文阶段结束响应并发送 Trailer；须在 commit 前声明 `c.draft().header("Trailer", "...")`，completed 结果不生产 trailers |
@@ -342,6 +342,7 @@ co_return c.text(body.text());
 | `response.json<T>(max_bytes)` | 收集正文并按公开 Model JSON 契约解析 |
 | `response.stream().read()` / `.text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
 | `response.pipe_to(c)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
+| `response.reprioritize(http_priority)` | 对尚在传输中的 HTTP/2 或 HTTP/3 响应流发送 RFC 9218 `PRIORITY_UPDATE` 帧 |
 | `client.connect(authority).open()`、`client.udp(path).open()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
 | `client.migrate(local_address, port)` | 对已有 HTTP/3 连接发起本地地址迁移，保留连接与流状态 |
 | `client.websocket(path).connect()` | 返回拥有型 WebSocket 连接；`send()` / `receive()` 收发消息，`close()` 执行关闭握手 |
@@ -364,6 +365,6 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 迁移沿用 ngtcp2 的路径验证机制；CID 容量、补充等待与截止期见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。迁移保持原连接，不自动重放失败请求。
 
-Server Push 与 ORIGIN/ALTSVC 帧观察仅适用于 HTTP/2。HTTP/3 不授权 Server Push；Alt-Svc 从已验证源站的响应字段获取，不把 HTTP/2 扩展帧接口当作 HTTP/3 能力。
+`client.next_advertisement()` 可观察 HTTP/2 与 HTTP/3 连接收到的 `ORIGIN` 帧（`advertisements_.receive_origins_ = true`）以及 HTTP/2 连接收到的 `ALTSVC` 帧（`advertisements_.receive_alternative_services_ = true`）。Server Push 仅适用于 HTTP/2；HTTP/3 的 Alt-Svc 发现从已验证源站的响应头获取。
 
 示例：[http_client.cpp](../examples/web/http_client.cpp)、[http_client_advanced.cpp](../examples/web/http_client_advanced.cpp)。

@@ -12,8 +12,10 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
@@ -155,7 +157,7 @@ struct http3_datagram_event final {
 using http3_event = std::variant<http3_headers_event, http3_data_event,
     http3_stream_end_event, http3_transport_action_event,
     http3_deferred_consume_event, http3_stream_close_event, http3_goaway_event,
-    http3_datagram_event>;
+    http3_datagram_event, http_origin_advertisement>;
 
 // The SETTINGS the peer sent (RFC 9114 §7.2.4) that select optional features.
 struct http3_peer_settings final {
@@ -231,6 +233,9 @@ struct http3_connection_options final {
     // Copies DATA into event-owned PMR storage. QUIC enables this because its
     // decrypted stream callback storage expires before receive_datagram returns.
     bool own_data_events_{false};
+    // Server only: serialized origins (RFC 9412 §2) sent in an ORIGIN frame on
+    // the control stream immediately after SETTINGS.
+    std::span<const std::string_view> origins_{};
 };
 
 // HTTP/3 stream codec. QUIC owns stream identifiers, retransmission, flow
@@ -348,6 +353,19 @@ public:
     // nullopt until the peer's SETTINGS frame arrived.
     [[nodiscard]] std::optional<http3_peer_settings> peer_settings() const noexcept;
 
+    // Server only: queues an RFC 9412 ORIGIN frame on the bound control stream.
+    [[nodiscard]] http3_status submit_origin_advertisement(
+        std::span<const std::string_view> origins);
+    // Client only: queues an RFC 9218 PRIORITY_UPDATE frame on the bound
+    // control stream for an open client-initiated bidirectional request stream.
+    [[nodiscard]] http3_status submit_priority_update(
+        std::int64_t stream_id, http_priority_fields fields);
+    // Server only: the current RFC 9218 priority of an open request stream.
+    [[nodiscard]] std::optional<http_priority> stream_priority(
+        std::int64_t stream_id) const noexcept;
+    // Server only: overrides the RFC 9218 priority of an open request stream.
+    [[nodiscard]] http3_status set_server_stream_priority(
+        std::int64_t stream_id, http_priority priority) noexcept;
     [[nodiscard]] http3_status close_stream(std::int64_t stream_id,
         std::optional<std::uint64_t> receive_error,
         std::optional<std::uint64_t> send_error) noexcept;

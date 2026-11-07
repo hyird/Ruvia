@@ -33,6 +33,7 @@
 #include "ruvia/http/http_response_server.h"
 
 #include "body/http_request_body_facade.h"
+#include "context/http_connection_advertisement_output.h"
 #include "context/http_interim_response_output.h"
 #include "http/http_protocol_error_info.h"
 #include "http3/http3_endpoint.h"
@@ -168,7 +169,8 @@ ngtcp2_conn* http3_session::native_connection(ngtcp2_crypto_conn_ref* reference)
 }
 
 http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial,
-    const asio::ip::udp::endpoint& remote)
+    const asio::ip::udp::endpoint& remote, const ngtcp2_cid& original_dcid,
+    std::optional<ngtcp2_cid> retry_scid, std::span<const std::uint8_t> retry_token)
     : endpoint_(endpoint),
       services_(endpoint.services()),
       slot_(std::move(slot)),
@@ -230,7 +232,9 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .callbacks_ = callbacks,
         .source_connection_id_ = source,
         .destination_connection_id_ = initial.scid,
-        .original_destination_connection_id_ = initial.dcid,
+        .original_destination_connection_id_ = original_dcid,
+        .retry_source_connection_id_ = retry_scid,
+        .retry_token_ = retry_token,
         .stateless_reset_token_ = reset_token,
         .initial_path_ = path(remote_),
         .version_ = initial.version,
@@ -269,8 +273,10 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     connection_ids_.reserve(2);
     register_connection_id(source);
     try {
-        // Retransmitted client Initials still carry the client's chosen ID.
-        register_connection_id(initial.dcid);
+        // Retransmitted client Initials still carry the Initial packet's ID.
+        if (ngtcp2_cid_eq(&source, &initial.dcid) == 0) {
+            register_connection_id(initial.dcid);
+        }
     } catch (...) {
         unregister_connection_ids();
         throw;
@@ -456,6 +462,13 @@ void http3_session::drain_events() {
         // A client GOAWAY (RFC 9114 §5.2) bounds only server push, which this
         // server never sends.
     }
+    for (auto& [stream_id, stream] : streams_) {
+        if (!stream->aborted() && !stream->handler_done()) {
+            if (const auto priority = codec().stream_priority(stream_id)) {
+                stream->set_priority(priority);
+            }
+        }
+    }
 }
 
 void http3_session::start_application() {
@@ -545,6 +558,7 @@ void http3_session::on_request_head(http3_headers_event& event) {
     auto stream_value = make_pmr_object<http3_stream>(worker_resource(), std::move(*head), std::move(resolution),
         body_mode, worker_resource(), static_cast<std::pmr::memory_resource*>(&inbound_buffers_));
     auto& stream = *stream_value;
+    stream.set_priority(codec().stream_priority(stream_id));
     streams_.emplace(stream_id, std::move(stream_value));
     // An accepted stream ends the stream-less idle wait (awaiting_stream).
     set_inactivity_phase();
@@ -823,12 +837,24 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                 output.session_.wake_writer();
                 co_return;
             });
+        http_connection_advertisement_output advertisements(
+            this,
+            [](void* raw, std::span<const std::string_view> origins) {
+                auto& session = *static_cast<http3_session*>(raw);
+                if (session.codec().submit_origin_advertisement(origins) != http3_status::accepted) {
+                    throw std::invalid_argument("HTTP/3 ORIGIN advertisement rejected");
+                }
+                session.wake_writer();
+            },
+            nullptr);
         const auto expectation_plan = head.expectation_plan(http_unsupported_expectation_policy::reject);
         auto admission_services = *base_services_;
         admission_services.bind_early_data(head.early_data());
-        // HTTP/3 has no ORIGIN or ALTSVC frame and this server never pushes,
-        // so those request lanes stay unbound.
-        admission_services.bind_request_channels({.interim_output_ = &interim_output});
+        admission_services.bind_request_channels({
+            .interim_output_ = &interim_output,
+            .connection_advertisements_ = &advertisements,
+            .priority_update_ = &stream->priority(),
+        });
         admission_services.bind_request_trailers(stream->trailers());
         auto admission = admit_http_request(
             {

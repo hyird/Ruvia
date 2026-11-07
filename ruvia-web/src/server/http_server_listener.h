@@ -73,6 +73,7 @@ struct http_server_listener_definition final {
         std::uint16_t port_;
         std::chrono::seconds alt_svc_max_age_;
         bool early_data_{false};
+        bool retry_{false};
         // Created once by server configuration validation and shared by every
         // worker: keys the connection IDs that steer packets between workers
         // and derives stateless reset tokens (RFC 9000 §10.3.2).

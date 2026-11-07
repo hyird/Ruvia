@@ -548,7 +548,8 @@ public:
     // Queues a promised request on this HTTP/2 connection. False means the
     // peer disabled push or its stream capacity cannot admit the promise.
     [[nodiscard]] bool push(http_push_request_view request);
-    // Connection-scoped HTTP/2 advertisements; ORIGIN requires TLS.
+    // Connection-scoped ORIGIN (HTTP/2 and HTTP/3, requires TLS) and ALTSVC
+    // (HTTP/2) advertisements.
     void advertise_origins(std::span<const std::string_view> origins);
     void advertise_alternative_service(std::string_view value);
 

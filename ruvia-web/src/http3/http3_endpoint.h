@@ -3,6 +3,7 @@
 #include <ngtcp2/ngtcp2.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -70,9 +71,9 @@ struct http3_worker_services final {
 // is handed to it through the directory; an unknown ID with a valid client
 // Initial opens a connection on this worker, bounded like TCP by
 // max_connections_per_worker_ (the connection idle longest is evicted
-// first); an unsupported version gets Version Negotiation (RFC 9000 §6); any
-// other datagram is dropped -- in particular no Stateless Reset is sent, so
-// a peer that lost its connection here learns of it by its idle timeout.
+// first); an unsupported version gets Version Negotiation (RFC 9000 §6); a
+// short header naming a retired ID of this worker gets a rate-limited
+// Stateless Reset (RFC 9000 §10.3); any other datagram is dropped.
 class http3_endpoint final {
 public:
     // `listener_index` names this listener's endpoint on every worker (and in
@@ -132,6 +133,13 @@ private:
     void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, bool handed_off) noexcept;
     void accept(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote) noexcept;
     void send_version_negotiation(const ngtcp2_version_cid& header, const asio::ip::udp::endpoint& remote) noexcept;
+    void send_retry(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote,
+        std::size_t max_packet_bytes) noexcept;
+    void send_stateless_connection_close(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote,
+        std::uint64_t error_code) noexcept;
+    void send_stateless_reset(std::span<const std::uint8_t> destination_cid, std::size_t trigger_bytes,
+        const asio::ip::udp::endpoint& remote) noexcept;
+    [[nodiscard]] bool consume_stateless_reset_budget() noexcept;
 
     const http3_worker_services& services_;
     http_server_session_config& session_;
@@ -144,6 +152,8 @@ private:
     std::pmr::vector<std::byte> receive_buffer_;
 #endif
     std::pmr::unordered_map<http3_cid_key, http3_session*, http3_cid_key_hash> connections_;
+    std::chrono::steady_clock::time_point stateless_reset_refill_at_{};
+    std::size_t stateless_reset_tokens_{32};
     // Between open() and close(): datagrams are processed.
     bool open_{false};
     bool admitting_{false};

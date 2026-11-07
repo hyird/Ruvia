@@ -71,7 +71,9 @@ public:
     // §7.2): a server connection ID owned by this worker, the client's chosen
     // ID as original_destination_connection_id.
     http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial,
-        const asio::ip::udp::endpoint& remote);
+        const asio::ip::udp::endpoint& remote, const ngtcp2_cid& original_dcid,
+        std::optional<ngtcp2_cid> retry_scid = std::nullopt,
+        std::span<const std::uint8_t> retry_token = {});
     ~http3_session();
 
     http3_session(const http3_session&) = delete;

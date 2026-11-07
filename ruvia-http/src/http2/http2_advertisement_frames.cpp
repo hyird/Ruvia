@@ -10,13 +10,13 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 
+#include "field/http_origin_payload.h"
 #include "http2/http2_local_settings.h"
 
 namespace ruvia {
 namespace {
 using error_type = http_connection_advertisement_error;
 constexpr std::size_t length_prefix_bytes = 2;
-constexpr std::size_t max_prefixed_length = 0xffff;
 std::size_t length(std::span<const char> bytes_value) {
     return (static_cast<unsigned char>(bytes_value[0]) << 8) | static_cast<unsigned char>(bytes_value[1]);
 }
@@ -24,21 +24,11 @@ std::size_t length(std::span<const char> bytes_value) {
 bool is_valid_alternative_service_stream(std::uint32_t stream_id, bool has_origin) {
     return stream_id <= detail::http2_max_stream_id && (stream_id == 0) == has_origin;
 }
-// Consumes the space of one length-prefixed origin from `remaining`; false when it does not fit.
 bool reserve_prefixed_origin(std::size_t& remaining, std::string_view origin) {
-    if (origin.size() > max_prefixed_length || remaining < length_prefix_bytes || origin.size() > remaining - length_prefix_bytes) {
-        return false;
-    }
-    remaining -= length_prefix_bytes + origin.size();
-    return true;
+    return detail::reserve_http_prefixed_origin(remaining, origin);
 }
 char* write_prefixed_origin(char* out, std::string_view origin) noexcept {
-    *out++ = static_cast<char>(origin.size() >> 8);
-    *out++ = static_cast<char>(origin.size());
-    if (!origin.empty()) {
-        std::memcpy(out, origin.data(), origin.size());
-    }
-    return out + origin.size();
+    return detail::write_http_prefixed_origin(out, origin);
 }
 std::pmr::vector<char> make_http2_frame(http2_frame_type type, std::uint32_t stream_id, std::size_t payload_size,
     std::pmr::memory_resource* resource) {
@@ -132,23 +122,10 @@ std::variant<std::pmr::vector<char>, error_type> encode_http2_alternative_servic
 namespace detail {
 std::variant<std::size_t, error_type> http2_origin_payload_size(
     std::span<const std::string_view> origins, std::uint32_t max_frame_size) {
-    const std::size_t payload_limit = std::min(max_frame_size, http2_max_frame_size);
-    std::size_t remaining = payload_limit;
-    for (const auto origin : origins) {
-        if (!is_valid_http_serialized_origin(origin)) {
-            return error_type::invalid_origin;
-        }
-        if (!reserve_prefixed_origin(remaining, origin)) {
-            return error_type::limit;
-        }
-    }
-    return payload_limit - remaining;
+    return http_origin_payload_size(origins, std::min(max_frame_size, http2_max_frame_size));
 }
 void http2_write_origin_payload(std::span<char> payload, std::span<const std::string_view> origins) noexcept {
-    auto* out = payload.data();
-    for (const auto origin : origins) {
-        out = write_prefixed_origin(out, origin);
-    }
+    write_http_origin_payload(payload, origins);
 }
 std::variant<std::size_t, error_type> http2_alternative_service_payload_size(
     std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size) {

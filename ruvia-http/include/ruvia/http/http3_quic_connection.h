@@ -40,14 +40,22 @@ struct http3_quic_connection_options final {
     // Crypto callbacks come from the selected ngtcp2 crypto adapter. The
     // wrapper owns stream-data, acknowledgement and stream-close callbacks.
     // get_new_connection_id2, remove_connection_id, handshake_completed,
-    // handshake_confirmed and tls_early_data_rejected, when set, receive callback_user_data_.
+    // handshake_confirmed, recv_retry, recv_stateless_reset2 and
+    // tls_early_data_rejected, when set, receive callback_user_data_.
     ngtcp2_callbacks callbacks_{};
     ngtcp2_cid source_connection_id_{};
     ngtcp2_cid destination_connection_id_{};
     // Server only and required (RFC 9000 §7.3): the Destination Connection ID
-    // of the client's first Initial packet. Retry is not supported, so this
-    // is always the connection ID the client chose.
+    // of the client's first Initial packet (extracted from the Retry token
+    // when Retry was used).
     std::optional<ngtcp2_cid> original_destination_connection_id_{};
+    // Server only: the Source Connection ID sent in the Retry packet that the
+    // client echoed as the Destination Connection ID of its second Initial
+    // (RFC 9000 §7.3, §18.2). Requires retry_token_ to be non-empty.
+    std::optional<ngtcp2_cid> retry_source_connection_id_{};
+    // Server only: the validated Retry token from the client's second Initial
+    // (RFC 9000 §8.1.2). Lifts the anti-amplification limit in ngtcp2.
+    std::span<const std::uint8_t> retry_token_{};
     // Server only: the stateless reset token of source_connection_id_
     // (RFC 9000 §10.3), sent as a transport parameter.
     std::optional<http3_quic_stateless_reset_token> stateless_reset_token_{};
@@ -112,6 +120,8 @@ public:
     [[nodiscard]] void* callback_user_data() const noexcept;
     void set_tls_native_handle(void* tls_native_handle) noexcept;
     [[nodiscard]] bool handshake_completed() const noexcept;
+    [[nodiscard]] bool after_retry() const noexcept;
+    [[nodiscard]] bool stateless_reset_received() const noexcept;
 
     // Opens and binds the local HTTP/3 control and QPACK streams after TLS has
     // established application keys. Safe to retry only when it would block.
@@ -175,5 +185,16 @@ private:
         const http3_quic_connection_options& options);
     std::unique_ptr<impl> impl_;
 };
+
+// Writes a QUIC Stateless Reset packet (RFC 9000 §10.3) into `output`, using
+// at most `max_packet_bytes` (pass `trigger_datagram_bytes - 1` so the packet
+// is strictly smaller than the datagram that triggered it, RFC 9000 §10.3.3).
+// Returns the number of bytes written, or 0 when `output`, `max_packet_bytes`
+// or `random_bytes` cannot form a valid Stateless Reset.
+[[nodiscard]] std::size_t write_http3_quic_stateless_reset(
+    const http3_quic_stateless_reset_token& token,
+    std::span<const std::uint8_t> random_bytes,
+    std::span<std::byte> output,
+    std::size_t max_packet_bytes) noexcept;
 
 }  // namespace ruvia

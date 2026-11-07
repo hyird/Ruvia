@@ -18,6 +18,7 @@
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/web/detail/router/route_handlers.h"
@@ -202,6 +203,12 @@ public:
     }
     [[nodiscard]] http_request_trailers& trailers() noexcept {
         return trailers_;
+    }
+    [[nodiscard]] const std::optional<http_priority>& priority() const& noexcept {
+        return priority_;
+    }
+    void set_priority(std::optional<http_priority> priority) noexcept {
+        priority_ = priority;
     }
     void defer_dispatch() noexcept {
         dispatch_pending_ = true;
@@ -389,6 +396,7 @@ private:
     route_resolution resolution_;
     request_body_mode body_mode_;
     http_request_trailers trailers_;
+    std::optional<http_priority> priority_{};
     // Received request content: the whole body (buffered), or the queue the
     // reader drains (streaming). active_chunk_ backs the last popped view.
     std::pmr::string body_;

@@ -139,6 +139,14 @@ public:
         } else if (const auto* action = std::get_if<http3_transport_action_event>(&event)) {
             transport_actions_.push_back(*action);
             sequence_.push_back('T');
+        } else if (const auto* origins = std::get_if<http_origin_advertisement>(&event)) {
+            std::vector<std::string> list;
+            list.reserve(origins->origins_.size());
+            for (const auto& origin : origins->origins_) {
+                list.emplace_back(origin);
+            }
+            origins_.push_back(std::move(list));
+            sequence_.push_back('O');
         }
     }
 
@@ -171,6 +179,7 @@ public:
     std::vector<http3_stream_close_event> closes_;
     std::vector<std::int64_t> goaways_;
     std::vector<http3_transport_action_event> transport_actions_;
+    std::vector<std::vector<std::string>> origins_;
     std::string sequence_;
 };
 

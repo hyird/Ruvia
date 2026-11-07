@@ -234,3 +234,90 @@ RUVIA_TEST(http3_datagram_truncated_prefix_and_disabled_setting_are_connection_e
     const std::string wire("\0hello", 6);
     RUVIA_CHECK(disabled.read_datagram(ruvia::testing::http3_bytes(wire)).status_ == ruvia::http3_status::protocol_error);
 }
+
+RUVIA_TEST(http3_origin_frame_advertises_initial_and_dynamic_origins) {
+    constexpr std::array<std::string_view, 2> initial_origins{
+        "https://example.test",
+        "https://api.example.test:8443",
+    };
+    ruvia::testing::http3_peers peers({.origins_ = initial_origins});
+    RUVIA_CHECK(peers.bind());
+
+    ruvia::testing::http3_event_log client_log;
+    RUVIA_CHECK(peers.to_client(client_log));
+    RUVIA_CHECK_EQ(client_log.origins_.size(), std::size_t{1});
+    if (client_log.origins_.size() == 1) {
+        RUVIA_CHECK_EQ(client_log.origins_[0].size(), std::size_t{2});
+        if (client_log.origins_[0].size() == 2) {
+            RUVIA_CHECK_EQ(client_log.origins_[0][0], std::string("https://example.test"));
+            RUVIA_CHECK_EQ(client_log.origins_[0][1], std::string("https://api.example.test:8443"));
+        }
+    }
+
+    constexpr std::array<std::string_view, 1> dynamic_origins{"https://cdn.example.test"};
+    RUVIA_CHECK(peers.client_.submit_origin_advertisement(dynamic_origins) ==
+                ruvia::http3_status::invalid_state);
+    RUVIA_CHECK(peers.server_.submit_origin_advertisement(dynamic_origins) ==
+                ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.server_.submit_origin_advertisement(std::span<const std::string_view>{}) ==
+                ruvia::http3_status::accepted);
+    constexpr std::array<std::string_view, 1> invalid_origin{"not-an-origin"};
+    RUVIA_CHECK(peers.server_.submit_origin_advertisement(invalid_origin) ==
+                ruvia::http3_status::invalid_state);
+
+    client_log.clear();
+    RUVIA_CHECK(peers.to_client(client_log));
+    RUVIA_CHECK_EQ(client_log.origins_.size(), std::size_t{2});
+    if (client_log.origins_.size() == 2) {
+        RUVIA_CHECK_EQ(client_log.origins_[0].size(), std::size_t{1});
+        if (!client_log.origins_[0].empty()) {
+            RUVIA_CHECK_EQ(client_log.origins_[0][0], std::string("https://cdn.example.test"));
+        }
+        RUVIA_CHECK(client_log.origins_[1].empty());
+    }
+}
+
+RUVIA_TEST(http3_priority_headers_and_priority_update_frames_reprioritize_streams) {
+    ruvia::testing::http3_peers peers;
+    RUVIA_CHECK(peers.bind());
+    ruvia::testing::http3_event_log client_log;
+    ruvia::testing::http3_event_log server_log;
+    RUVIA_CHECK(peers.to_client(client_log));
+    RUVIA_CHECK(peers.to_server(server_log));
+
+    constexpr std::array prioritized_request_fields{
+        ruvia::http3_field_view{":method", "GET"},
+        ruvia::http3_field_view{":scheme", "https"},
+        ruvia::http3_field_view{":authority", "example.test"},
+        ruvia::http3_field_view{":path", "/resource"},
+        ruvia::http3_field_view{"priority", "u=1, i"},
+    };
+    RUVIA_CHECK(peers.send_request(0, prioritized_request_fields, true, server_log));
+    auto initial_priority = peers.server_.stream_priority(0);
+    RUVIA_CHECK(initial_priority.has_value());
+    if (initial_priority) {
+        RUVIA_CHECK_EQ(initial_priority->urgency_.value(), std::uint8_t{1});
+        RUVIA_CHECK(initial_priority->incremental_);
+    }
+
+    RUVIA_CHECK(peers.client_.submit_priority_update(
+                    0, {.urgency_ = ruvia::http_priority_urgency(5), .incremental_ = false}) ==
+                ruvia::http3_status::accepted);
+    RUVIA_CHECK(peers.to_server(server_log));
+    auto updated_priority = peers.server_.stream_priority(0);
+    RUVIA_CHECK(updated_priority.has_value());
+    if (updated_priority) {
+        RUVIA_CHECK_EQ(updated_priority->urgency_.value(), std::uint8_t{5});
+        RUVIA_CHECK(!updated_priority->incremental_);
+    }
+
+    RUVIA_CHECK(peers.server_.set_server_stream_priority(
+                    0, {.urgency_ = ruvia::http_priority_urgency(2), .incremental_ = true}) ==
+                ruvia::http3_status::accepted);
+    auto overridden = peers.server_.stream_priority(0);
+    RUVIA_CHECK(overridden.has_value());
+    if (overridden) {
+        RUVIA_CHECK_EQ(overridden->urgency_.value(), std::uint8_t{2});
+        RUVIA_CHECK(overridden->incremental_);
+    }
+}
