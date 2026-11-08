@@ -49,10 +49,14 @@ template <typename rep_type, typename period_type>
     std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value = {});
 template <typename rep_type, typename period_type>
 sleep_operation sleep_for(worker_handle&&, std::chrono::duration<rep_type, period_type>, stop_token = {}) = delete;
+template <typename rep_type, typename period_type>
+sleep_operation sleep_for(const worker_handle&&, std::chrono::duration<rep_type, period_type>, stop_token = {}) = delete;
 [[nodiscard]] sleep_operation sleep_until(const worker_handle& worker_value,
     std::chrono::steady_clock::time_point deadline, stop_token stop_token_value = {});
 sleep_operation sleep_until(
     worker_handle&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
+sleep_operation sleep_until(
+    const worker_handle&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
 
 // One sleep on the caller's worker: single-use, movable only before it is
 // awaited, and started on the borrowed worker by co_await. An empty stop token

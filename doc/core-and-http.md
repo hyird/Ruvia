@@ -19,7 +19,7 @@
 - **根任务替换**：`root_task` 移动赋值先接管源状态，再退役旧状态；旧结果析构时重写源句柄或释放其宿主，不会丢失已接管的任务。
 - **作用域任务移交**：`make_scoped_operation()` 的结果可直接交给 `task_scope::spawn()`；执行完毕后的内部移交仍保留作用域登记，直到帧释放才允许 `close_and_join()` 完成。
 - **关闭重入**：冷帧清理可重入已开始关闭的 `operation_scope::close()`；存在运行中任务或尚未释放帧的完成任务时，仍须使用 `close_and_join()`，不能同步关闭。
-- **Worker 句柄借用**：`task_scope` 与 `worker_signal` 只接受左值 `worker_handle`，拒绝含 `const` 的右值；句柄须地址稳定并覆盖借用对象的寿命。
+- **Worker 句柄借用**：`task_scope`、`worker_signal` 构造及 `operation_scope::bind_worker()`、`sleep_for()`、`sleep_until()` 只接受左值 `worker_handle`，拒绝含 `const` 的右值；句柄须地址稳定并覆盖作用域、信号或等待操作的寿命。
 
 ---
 

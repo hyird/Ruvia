@@ -20,6 +20,16 @@
 
 namespace ruvia::test::scoped_operation_tests {
 
+template <typename worker_type>
+concept can_bind_worker = requires(operation_scope& scope, worker_type&& worker) {
+    scope.bind_worker(std::forward<worker_type>(worker));
+};
+
+static_assert(can_bind_worker<worker_handle&>);
+static_assert(can_bind_worker<const worker_handle&>);
+static_assert(!can_bind_worker<worker_handle&&>);
+static_assert(!can_bind_worker<const worker_handle&&>);
+
 enum class direct_child_outcome { immediate,
     suspended,
     failed,

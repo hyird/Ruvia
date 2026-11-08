@@ -55,6 +55,7 @@ public:
     }
     void bind_worker(const worker_handle&) && = delete;
     void bind_worker(worker_handle&&) = delete;
+    void bind_worker(const worker_handle&&) = delete;
 
 private:
     friend class detail::scoped_operation_registration;

@@ -38,6 +38,31 @@
 
 namespace {
 
+template <typename worker_type, typename... token_types>
+concept can_sleep_for = requires(worker_type&& worker, token_types&&... tokens) {
+    ruvia::sleep_for(std::forward<worker_type>(worker), std::chrono::milliseconds(1),
+        std::forward<token_types>(tokens)...);
+};
+
+template <typename worker_type, typename... token_types>
+concept can_sleep_until = requires(worker_type&& worker, token_types&&... tokens) {
+    ruvia::sleep_until(std::forward<worker_type>(worker), std::chrono::steady_clock::time_point{},
+        std::forward<token_types>(tokens)...);
+};
+
+static_assert(can_sleep_for<ruvia::worker_handle&>);
+static_assert(can_sleep_for<const ruvia::worker_handle&>);
+static_assert(!can_sleep_for<ruvia::worker_handle&&>);
+static_assert(!can_sleep_for<const ruvia::worker_handle&&>);
+static_assert(can_sleep_for<const ruvia::worker_handle&, ruvia::stop_token>);
+static_assert(!can_sleep_for<const ruvia::worker_handle&&, ruvia::stop_token>);
+static_assert(can_sleep_until<ruvia::worker_handle&>);
+static_assert(can_sleep_until<const ruvia::worker_handle&>);
+static_assert(!can_sleep_until<ruvia::worker_handle&&>);
+static_assert(!can_sleep_until<const ruvia::worker_handle&&>);
+static_assert(can_sleep_until<const ruvia::worker_handle&, ruvia::stop_token>);
+static_assert(!can_sleep_until<const ruvia::worker_handle&&, ruvia::stop_token>);
+
 bool timer_duration_conversions_preserve_integer_ticks_and_saturate() {
     using namespace std::chrono;
     for (const nanoseconds value : {nanoseconds(9'000'000'000'000'000'001LL),
