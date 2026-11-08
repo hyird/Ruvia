@@ -228,6 +228,7 @@ struct reentrant_response_file_release final {
     std::size_t releases_{0};
     ruvia::http_response_file_handle* replacement_target_{nullptr};
     ruvia::http_response_file_handle* replacement_source_{nullptr};
+    ruvia::http_response* rewritten_response_{nullptr};
 
     ruvia::http_response_file_handle opened() & noexcept {
         return {reinterpret_cast<ruvia::http_response_file_handle::native_type>(this), release};
@@ -238,6 +239,9 @@ struct reentrant_response_file_release final {
         ++record.releases_;
         if (record.replacement_target_ != nullptr) {
             *record.replacement_target_ = std::move(*record.replacement_source_);
+        }
+        if (record.rewritten_response_ != nullptr) {
+            record.rewritten_response_->static_body("callback");
         }
     }
 };
@@ -334,6 +338,32 @@ TEST(Ruvia, response_file_handle_move_assignment_detaches_source_before_retireme
         EXPECT_EQ(target.native(), reinterpret_cast<ruvia::http_response_file_handle::native_type>(&incoming));
         EXPECT_EQ(previous.releases_, 1U);
         EXPECT_EQ(incoming.releases_, 0U);
+    }
+    EXPECT_EQ(previous.releases_, 1U);
+    EXPECT_EQ(incoming.releases_, 1U);
+}
+
+TEST(Ruvia, response_file_move_assignment_commits_before_old_body_reuses_source) {
+    reentrant_response_file_release previous;
+    reentrant_response_file_release incoming;
+    const auto path = std::filesystem::path("response-retirement.bin");
+    const auto identity = ruvia::http_response_file_identity::unchecked();
+    {
+        ruvia::http_response source;
+        ruvia::http_response target;
+        source.file_body(path.native(), 1, 0, 1, identity, incoming.opened());
+        source.header("X-Source", "retained");
+        target.file_body(path.native(), 1, 0, 1, identity, previous.opened());
+        previous.rewritten_response_ = &source;
+
+        target = std::move(source);
+
+        EXPECT_EQ(previous.releases_, 1U);
+        EXPECT_EQ(incoming.releases_, 0U);
+        EXPECT_TRUE(target.file_body().has_value());
+        EXPECT_EQ(target.header("X-Source").value_or(""), "retained");
+        EXPECT_EQ(source.body_bytes(), "callback");
+        EXPECT_FALSE(source.header("X-Source").has_value());
     }
     EXPECT_EQ(previous.releases_, 1U);
     EXPECT_EQ(incoming.releases_, 1U);

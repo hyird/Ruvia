@@ -194,6 +194,8 @@ http_response& http_response::operator=(http_response&& other) noexcept {
     // source resource, leaving one response split across unrelated request arenas.
     // Reconstructing transfers every owning alternative together and does not
     // allocate on the response hot path.
+    // Keep old payloads alive until ownership and the return reference are committed.
+    http_response retired(std::move(*this));
     std::destroy_at(this);
     std::construct_at(this, std::move(other));
     return *this;

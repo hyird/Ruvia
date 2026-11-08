@@ -395,6 +395,8 @@ public:
 };
 ```
 
+- **协程边界**：`next` 仅组合 `task<void>::operator co_await()` 的公开等待协议，不依赖 core 内部等待物类型。
+
 #### 请求级类型化状态传递（`bind_request_state` / `request_state`）
 
 中间件向后续路由传递鉴权身份或上下文数据时，使用 `c.bind_request_state(const T&)`。绑定對象在中间件协程帧上持有并跨越 `co_await next_value()`：

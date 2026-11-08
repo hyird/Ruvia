@@ -96,7 +96,7 @@ public:
             explicit awaiter(task<void>&& task_value)
                 : awaiter_(std::move(task_value).operator co_await()) {}
 
-            detail::task_awaiter<void> awaiter_;
+            decltype(std::declval<task<void>>().operator co_await()) awaiter_;
         };
 
     public:
