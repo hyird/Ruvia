@@ -399,3 +399,49 @@ TEST(Ruvia, cookie_request_pair_preserves_contents_when_allocations_are_rejected
     }
     EXPECT_EQ(memory.live_bytes_, 0U);
 }
+
+TEST(Ruvia, cookie_request_pair_snapshots_only_overlapping_inputs) {
+    for (const bool alias_name : {false, true}) {
+        for (const auto aliased_size : {3U, 300U}) {
+            SCOPED_TRACE(alias_name);
+            SCOPED_TRACE(aliased_size);
+            const std::string aliased(aliased_size, alias_name ? 'n' : 'v');
+            const std::string independent(300, alias_name ? 'v' : 'n');
+            const auto expected = alias_name ? aliased + "=" + independent : independent + "=" + aliased;
+            std::string output = aliased;
+            output.resize(expected.size());
+            const std::string_view borrowed(output.data(), aliased.size());
+            ruvia::test::header_memory memory;
+            memory.reject_ = aliased_size == 3;
+
+            (void)ruvia::write_cookie_request_pair(output.data(),
+                alias_name ? borrowed : independent, alias_name ? independent : borrowed, &memory);
+
+            EXPECT_EQ(output, expected);
+            EXPECT_EQ(memory.live_bytes_, 0U);
+        }
+    }
+}
+
+TEST(Ruvia, cookie_request_pair_preserves_both_long_aliased_inputs_on_failure_and_retry) {
+    const std::string name(300, 'n');
+    const std::string value(300, 'v');
+    std::string output = value + name;
+    output.resize(name.size() + 1 + value.size());
+    const auto original = output;
+    const std::string_view borrowed_name(output.data() + value.size(), name.size());
+    const std::string_view borrowed_value(output.data(), value.size());
+    ruvia::test::header_memory memory;
+    memory.reject_ = true;
+
+    try {
+        (void)ruvia::write_cookie_request_pair(output.data(), borrowed_name, borrowed_value, &memory);
+    } catch (const std::bad_alloc&) {
+        ASSERT_EQ(output, original);
+        memory.reject_ = false;
+        (void)ruvia::write_cookie_request_pair(output.data(), borrowed_name, borrowed_value, &memory);
+    }
+
+    EXPECT_EQ(output, name + "=" + value);
+    EXPECT_EQ(memory.live_bytes_, 0U);
+}

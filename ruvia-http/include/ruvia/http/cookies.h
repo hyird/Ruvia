@@ -55,8 +55,9 @@ inline constexpr std::int64_t max_cookie_age_seconds = 34560000;
 }
 
 // Writes cookie_request_pair_size(name, value) bytes at out and returns the
-// end of the written pair. The inputs may overlap the written bytes; only that
-// case copies them first, from the default resource.
+// end of the written pair. Only inputs overlapping the written bytes need a
+// snapshot: short snapshots use the stack, otherwise resource (default if null).
+// Allocation failure leaves the output untouched.
 char* write_cookie_request_pair(
     char* out, std::string_view name, std::string_view value, std::pmr::memory_resource* resource = nullptr);
 

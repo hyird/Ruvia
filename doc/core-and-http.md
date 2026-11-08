@@ -163,7 +163,8 @@ pool.join();
 - **HTTP/2 与 HTTP/3 字段名规范化**：共用单遍 ASCII 转换；已小写名称在暂存阶段直接借用，需转换时写入拥有缓冲。
 - **Accept 参数值比较**：`charset` 及 `text/plain` 的 `format`、`delsp` 值忽略 ASCII 大小写（[RFC 3676 §4](https://www.rfc-editor.org/rfc/rfc3676.html#section-4)）；其他参数值保持大小写敏感，带引号值按解码后的字节比较。
 - **Cookie Max-Age**：十进制校验与转换单遍完成，仅对完整数值应用饱和；非法的后续 `Max-Age` 不覆盖此前有效值。
-- **Cookie 追加原子性**：`append_cookie_request_pair()` 失败保留原内容；扩容可能使旧借用视图失效，重试时重新获取视图。
+- **Cookie 写出原子性**：`write_cookie_request_pair()` 与 `append_cookie_request_pair()` 失败保留原内容；追加器扩容可能使旧借用视图失效，重试时重新获取视图。
+- **Cookie 快照预算**：仅暂存与输出重叠的输入；未重叠输入不占临时内存预算，双重叠共享一份快照。
 
 `http_priority::urgency_` 与 `http_priority_fields::urgency_` 共用 `http_priority_urgency`，后者仍以 `std::optional` 区分缺省参数。按 [RFC 9218 §4.1](https://www.rfc-editor.org/rfc/rfc9218.html#section-4.1)，值域为 `0..7`、默认值为 `3`；本地整数输入在窄化前检查，非法值抛出 `std::invalid_argument`，无异常探测用 `try_from_value()`。不隐式接受浮点或枚举，也不隐式转换回整数；需要整数时用 `urgency_.value()`（可选字段用 `urgency_->value()`），不要预先窄化。接收端仍按 RFC 9218 §4 忽略越界或类型不符的参数，不把本地构造失败规则套用到对端字段。
 

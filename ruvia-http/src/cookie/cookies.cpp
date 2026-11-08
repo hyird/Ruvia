@@ -7,6 +7,7 @@
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/http/detail/util/http_address_overlap.h"
@@ -110,25 +111,37 @@ set_cookie_plan::set_cookie_plan(
 char* write_cookie_request_pair(
     char* out, std::string_view name, std::string_view value, std::pmr::memory_resource* resource) {
     const std::string_view written(out, cookie_request_pair_size(name, value));
-    if (detail::http_text_overlaps(name, written) || detail::http_text_overlaps(value, written)) {
-        // Consume the inputs before any output byte overwrites them.
+    const bool name_overlaps = detail::http_text_overlaps(name, written);
+    const bool value_overlaps = detail::http_text_overlaps(value, written);
+    if (name_overlaps || value_overlaps) {
+        // Snapshot only bytes that writing the pair could overwrite.
+        const auto name_bytes = name_overlaps ? name.size() : 0;
+        const auto value_bytes = value_overlaps ? value.size() : 0;
         std::array<char, 256> stack_snapshot;
-        if (value.size() <= stack_snapshot.size() &&
-            name.size() <= stack_snapshot.size() - value.size()) {
-            if (!name.empty()) {
-                std::memcpy(stack_snapshot.data(), name.data(), name.size());
+        if (value_bytes <= stack_snapshot.size() &&
+            name_bytes <= stack_snapshot.size() - value_bytes) {
+            if (name_overlaps) {
+                std::memcpy(stack_snapshot.data(), name.data(), name_bytes);
             }
-            if (!value.empty()) {
-                std::memcpy(stack_snapshot.data() + name.size(), value.data(), value.size());
+            if (value_overlaps) {
+                std::memcpy(stack_snapshot.data() + name_bytes, value.data(), value_bytes);
             }
             return write_cookie_request_pair(out,
-                std::string_view(stack_snapshot.data(), name.size()),
-                std::string_view(stack_snapshot.data() + name.size(), value.size()), resource);
+                name_overlaps ? std::string_view(stack_snapshot.data(), name_bytes) : name,
+                value_overlaps ? std::string_view(stack_snapshot.data() + name_bytes, value_bytes) : value, resource);
         }
         auto* const resolved_resource = detail::http_pmr_resource_or_default(resource);
-        const std::pmr::string snapshot_name(name, resolved_resource);
-        const std::pmr::string snapshot_value(value, resolved_resource);
-        return write_cookie_request_pair(out, snapshot_name, snapshot_value, resolved_resource);
+        std::pmr::string snapshot(resolved_resource);
+        snapshot.reserve(name_bytes + value_bytes);
+        if (name_overlaps) {
+            snapshot.append(name);
+        }
+        if (value_overlaps) {
+            snapshot.append(value);
+        }
+        return write_cookie_request_pair(out,
+            name_overlaps ? std::string_view(snapshot.data(), name_bytes) : name,
+            value_overlaps ? std::string_view(snapshot.data() + name_bytes, value_bytes) : value, resolved_resource);
     }
     detail::http_raw_wire_sink sink(out);
     sink.append(name);
