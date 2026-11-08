@@ -18,9 +18,11 @@
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 
+#include "failing_memory_resource.h"
 #include "http1_request_message_fixture.h"
 
 namespace {
@@ -153,6 +155,178 @@ TEST(Ruvia, http1_response_head_reserve_preserves_inline_capacity_and_failed_gro
         buffer.reset();
         buffer.append("reusable");
         EXPECT_EQ(buffer.view(), std::string_view("reusable"));
+    }
+}
+
+TEST(Ruvia, http1_response_head_assignment_preserves_both_buffers_on_allocation_failure) {
+    for (const bool move : {false, true}) {
+        for (const bool target_on_heap : {false, true}) {
+            failing_memory_resource target_resource;
+            failing_memory_resource source_resource;
+            {
+                ruvia::http_response_head_buffer target(&target_resource);
+                ruvia::http_response_head_buffer source(&source_resource);
+                target.append("old");
+                if (target_on_heap) {
+                    target.append(std::string(1024, 'o'));
+                }
+                source.append("new");
+                source.append(std::string(4096, 'n'));
+                const std::string previous(target.view());
+                const std::string replacement(source.view());
+                const auto assign = [&] {
+                    if (move) {
+                        target = std::move(source);
+                    } else {
+                        target = source;
+                    }
+                };
+
+                target_resource.fail_after(0);
+                EXPECT_THROW(assign(), std::bad_alloc);
+                EXPECT_EQ(target.view(), previous);
+                EXPECT_EQ(source.view(), replacement);
+                EXPECT_EQ(target.can_append_on_stack(0), !target_on_heap);
+                EXPECT_FALSE(source.can_append_on_stack(0));
+
+                target_resource.allow_allocations();
+                assign();
+                EXPECT_EQ(target.view(), replacement);
+                EXPECT_FALSE(target.can_append_on_stack(0));
+                if (!move) {
+                    EXPECT_EQ(source.view(), replacement);
+                }
+                target_resource.fail_after(0);
+                EXPECT_THROW(target.reserve_additional(16 * 1024), std::bad_alloc);
+                EXPECT_EQ(target.view(), replacement);
+                source.reset();
+                source.append("source reused");
+                EXPECT_EQ(source.view(), "source reused");
+                EXPECT_EQ(target.view(), replacement);
+            }
+            EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+            EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+        }
+    }
+}
+
+TEST(Ruvia, http1_response_head_assignment_handles_storage_transitions_and_self_assignment) {
+    for (const bool move : {false, true}) {
+        for (const bool target_on_heap : {false, true}) {
+            for (const bool source_on_heap : {false, true}) {
+                failing_memory_resource target_resource;
+                failing_memory_resource source_resource;
+                ruvia::http_response_head_buffer target(&target_resource);
+                ruvia::http_response_head_buffer source(&source_resource);
+                target.append("old");
+                if (target_on_heap) {
+                    target.reserve_additional(2048);
+                }
+                // Inline sources may still own capacity retained by reset().
+                source.reserve_additional(2048);
+                source.reset();
+                source.append("replacement");
+                if (source_on_heap) {
+                    source.reserve_additional(2048);
+                } else {
+                    auto* const cursor = source.stack_cursor(1);
+                    ASSERT_NE(cursor, nullptr);
+                    *cursor = 'x';
+                }
+
+                if (move) {
+                    target = std::move(source);
+                } else {
+                    target = source;
+                    EXPECT_EQ(source.view(), "replacement");
+                }
+                EXPECT_EQ(target.view(), "replacement");
+                EXPECT_EQ(target.can_append_on_stack(0), !source_on_heap);
+                auto& same = target;
+                target = same;
+                EXPECT_EQ(target.view(), "replacement");
+                target = std::move(same);
+                EXPECT_EQ(target.view(), "replacement");
+                EXPECT_EQ(target.can_append_on_stack(0), !source_on_heap);
+                source.reset();
+                source.append("reused");
+                target.append("-extended");
+                EXPECT_EQ(source.view(), "reused");
+                EXPECT_EQ(target.view(), "replacement-extended");
+            }
+        }
+    }
+}
+
+TEST(Ruvia, http1_response_head_constructors_preserve_content_and_inherit_source_resource) {
+    for (const bool source_on_heap : {false, true}) {
+        failing_memory_resource resource;
+        {
+            ruvia::http_response_head_buffer source(&resource);
+            source.append("committed");
+            if (source_on_heap) {
+                source.append(std::string(4096, 's'));
+            } else {
+                auto* const cursor = source.stack_cursor(1);
+                ASSERT_NE(cursor, nullptr);
+                *cursor = 'x';
+            }
+            const std::string expected(source.view());
+            auto copy = source;
+            EXPECT_EQ(copy.view(), expected);
+            EXPECT_EQ(source.view(), expected);
+            EXPECT_EQ(copy.can_append_on_stack(0), !source_on_heap);
+            resource.fail_after(0);
+            EXPECT_THROW(copy.reserve_additional(16 * 1024), std::bad_alloc);
+            EXPECT_EQ(copy.view(), expected);
+            EXPECT_EQ(source.view(), expected);
+
+            resource.fail_after_stl_operation(0);
+            auto moved = std::move(copy);
+            resource.allow_allocations();
+            EXPECT_EQ(moved.view(), expected);
+            EXPECT_EQ(moved.can_append_on_stack(0), !source_on_heap);
+            resource.fail_after(0);
+            EXPECT_THROW(moved.reserve_additional(16 * 1024), std::bad_alloc);
+            EXPECT_EQ(moved.view(), expected);
+            copy.reset();
+            copy.append("reused");
+            EXPECT_EQ(copy.view(), "reused");
+            EXPECT_EQ(moved.view(), expected);
+            EXPECT_EQ(source.view(), expected);
+        }
+        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, http1_response_head_same_resource_move_does_not_allocate) {
+    for (const bool target_on_heap : {false, true}) {
+        for (const bool source_on_heap : {false, true}) {
+            failing_memory_resource resource;
+            {
+                ruvia::http_response_head_buffer target(&resource);
+                ruvia::http_response_head_buffer source(&resource);
+                target.append("old");
+                if (target_on_heap) {
+                    target.append(std::string(1024, 'o'));
+                }
+                source.append("new");
+                if (source_on_heap) {
+                    source.append(std::string(4096, 'n'));
+                }
+                const std::string expected(source.view());
+                resource.fail_after_stl_operation(0);
+                target = std::move(source);
+                resource.allow_allocations();
+                EXPECT_EQ(target.view(), expected);
+                EXPECT_EQ(target.can_append_on_stack(0), !source_on_heap);
+                source.reset();
+                source.append("reused");
+                EXPECT_EQ(source.view(), "reused");
+                EXPECT_EQ(target.view(), expected);
+            }
+            EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+        }
     }
 }
 

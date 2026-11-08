@@ -4,6 +4,7 @@
 #include <array>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/detail/util/http_address_overlap.h"
@@ -11,6 +12,45 @@
 #include "ruvia/http/http_pmr_string.h"
 
 namespace ruvia {
+
+http_response_head_buffer::http_response_head_buffer(const http_response_head_buffer& other)
+    : heap_(other.heap_, other.heap_.get_allocator()) {
+    copy_committed_state(other);
+}
+
+http_response_head_buffer::http_response_head_buffer(http_response_head_buffer&& other) noexcept
+    : heap_(std::move(other.heap_)) {
+    copy_committed_state(other);
+}
+
+http_response_head_buffer& http_response_head_buffer::operator=(const http_response_head_buffer& other) {
+    if (this != &other) {
+        heap_ = other.heap_;
+        copy_committed_state(other);
+    }
+    return *this;
+}
+
+http_response_head_buffer& http_response_head_buffer::operator=(http_response_head_buffer&& other) {
+    if (this != &other) {
+        if (heap_.get_allocator() == other.heap_.get_allocator()) {
+            heap_ = std::move(other.heap_);
+        } else {
+            heap_ = other.heap_;
+            other.heap_.clear();
+        }
+        copy_committed_state(other);
+    }
+    return *this;
+}
+
+void http_response_head_buffer::copy_committed_state(const http_response_head_buffer& other) noexcept {
+    // Heap replacement must succeed before publishing the inline bytes and state.
+    if (const auto* const stack_state = std::get_if<stack_state_type>(&other.state_)) {
+        std::memcpy(stack_.data(), other.stack_.data(), stack_state->used_);
+    }
+    state_ = other.state_;
+}
 
 void http_response_head_buffer::reset() noexcept {
     // Same retain-small-else-release policy as every other pooled scratch buffer.

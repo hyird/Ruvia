@@ -152,38 +152,58 @@ struct model_options final {
 
 namespace detail {
 
-// Construction is shared; containers decide how the normalized value is owned
-// (inline vector element or address-stable PMR box). `destination` is the
-// container, which a transferred value must not own.
-template <typename value_type, typename insert_type, typename... argument_types>
-value_type& emplace_model_value(std::pmr::memory_resource* resource, const void* destination,
-    insert_type insert, argument_types&&... arguments) {
+template <typename value_type, typename factory_type>
+struct model_value_construction final {
+    factory_type factory_;
+
+    operator value_type() && {
+        return factory_();
+    }
+};
+
+// Resource-owning values are normalized only after the container has allocated
+// their final storage. In particular, a failed growth must not consume an input
+// that aliases an existing element. The captured arguments are consumed inline.
+template <typename value_type, typename... argument_types>
+auto prepare_model_value(std::pmr::memory_resource* resource, const void* destination,
+    argument_types&&... arguments) {
     if constexpr (sizeof...(argument_types) == 1 &&
-                  (std::same_as<std::remove_cvref_t<argument_types>, value_type> && ...)) {
-        return [&]<typename input_type>(input_type&& value) -> value_type& {
-            if constexpr (std::is_lvalue_reference_v<input_type&&> ||
-                          std::is_const_v<std::remove_reference_t<input_type>>) {
-                // Borrowed/const inputs are cloned.
-                return insert(rebind_model_value(static_cast<const value_type&>(value), resource));
-            } else {
-                // Mutable rvalues transfer, unless consuming one would destroy the container.
-                if (model_value_rebind_access::contains(value, destination)) {
-                    throw_model_move_source_owns_destination();
+                  ((std::same_as<std::remove_cvref_t<argument_types>, value_type> &&
+                       !std::is_lvalue_reference_v<argument_types> &&
+                       !std::is_const_v<std::remove_reference_t<argument_types>>) &&
+                      ...)) {
+        if ((model_value_rebind_access::contains(arguments, destination) || ...)) {
+            throw_model_move_source_owns_destination();
+        }
+    }
+    auto construct = [resource, &arguments...]() -> value_type {
+        if constexpr (sizeof...(argument_types) == 1 &&
+                      (std::same_as<std::remove_cvref_t<argument_types>, value_type> && ...)) {
+            return [&]<typename input_type>(input_type&& value) -> value_type {
+                if constexpr (std::is_lvalue_reference_v<input_type&&> ||
+                              std::is_const_v<std::remove_reference_t<input_type>>) {
+                    return rebind_model_value(static_cast<const value_type&>(value), resource);
+                } else {
+                    return rebind_model_value(std::move(value), resource);
                 }
-                return insert(rebind_model_value(std::move(value), resource));
-            }
-        }(std::forward<argument_types>(arguments)...);
-    } else if constexpr (sizeof...(argument_types) == 0 && std::constructible_from<value_type, model_options>) {
-        // Fresh values are built owning on the destination resource.
-        return insert(value_type(model_options{.resource_ = resource}));
-    } else if constexpr (requires {
-                             value_type(std::forward<argument_types>(arguments)...,
-                                 model_options{.resource_ = resource});
-                         }) {
-        return insert(value_type(std::forward<argument_types>(arguments)...,
-            model_options{.resource_ = resource}));
+            }(std::forward<argument_types>(arguments)...);
+        } else if constexpr (sizeof...(argument_types) == 0 && std::constructible_from<value_type, model_options>) {
+            return value_type(model_options{.resource_ = resource});
+        } else if constexpr (requires {
+                                 value_type(std::forward<argument_types>(arguments)...,
+                                     model_options{.resource_ = resource});
+                             }) {
+            return value_type(std::forward<argument_types>(arguments)...,
+                model_options{.resource_ = resource});
+        } else {
+            return rebind_model_value(value_type(std::forward<argument_types>(arguments)...), resource);
+        }
+    };
+    if constexpr (model_value_rebind_access::has_rebind_for_model<value_type>()) {
+        return model_value_construction<value_type, decltype(construct)>{std::move(construct)};
     } else {
-        return insert(rebind_model_value(value_type(std::forward<argument_types>(arguments)...), resource));
+        // Scalar constructors intentionally reject non-numeric conversions.
+        return construct();
     }
 }
 
@@ -604,7 +624,7 @@ public:
 
     template <typename... args_type>
     t_type& emplace_back(args_type&&... args) & RUVIA_LIFETIMEBOUND {
-        return detail::emplace_model_value<t_type>(resource_, this, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
+        return items_.emplace_back(detail::prepare_model_value<t_type>(resource_, this, std::forward<args_type>(args)...));
     }
     template <typename... args_type>
     t_type& emplace_back(args_type&&...) && = delete;
@@ -808,7 +828,7 @@ public:
 
     template <typename... args_type>
     t_type& emplace_back(args_type&&... args) & RUVIA_LIFETIMEBOUND {
-        return detail::emplace_model_value<t_type>(resource_, this, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
+        return emplace_parsed(detail::prepare_model_value<t_type>(resource_, this, std::forward<args_type>(args)...));
     }
     template <typename... args_type>
     t_type& emplace_back(args_type&&...) && = delete;
@@ -891,15 +911,19 @@ private:
         inner_iterator_type current_{};
     };
 
-    t_type& emplace_parsed(t_type&& value) {
-        auto* const stored = construct_pmr_object<t_type>(
-            resolved_pmr_resource_tag{}, resource_, std::move(value));
-        try {
-            items_.push_back(stored);
-        } catch (...) {
-            destroy_pmr_object(resolved_pmr_resource_tag{}, stored, resource_);
-            throw;
+    template <typename input_type>
+    t_type& emplace_parsed(input_type&& value) {
+        // Admit the pointer slot before constructing a box can consume its input.
+        if (size() == items_.capacity()) {
+            if (size() == items_.max_size()) {
+                throw std::length_error("model boxed array is too large");
+            }
+            const auto growth = std::min(std::max(size(), std::size_t{1}), items_.max_size() - size());
+            items_.reserve(size() + growth);
         }
+        auto* const stored = construct_pmr_object<t_type>(
+            resolved_pmr_resource_tag{}, resource_, std::forward<input_type>(value));
+        items_.push_back(stored);
         return *stored;
     }
 

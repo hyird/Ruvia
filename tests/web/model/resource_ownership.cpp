@@ -357,6 +357,111 @@ TEST(Ruvia, model_resource_self_field_rebind_failure_preserves_owned_elements) {
     check.template operator()<"boxed">();
 }
 
+TEST(Ruvia, model_resource_insertion_failure_preserves_moved_strings_and_aliases) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
+    }
+    const std::string text(160, 's');
+    const auto check = [&]<typename sequence_type>(bool alias) {
+        bool succeeded = false;
+        bool rejected = false;
+        for (std::size_t allowance = 0; allowance != 8 && !succeeded; ++allowance) {
+            SCOPED_TRACE(allowance);
+            reject_after_resource resource;
+            {
+                sequence_type values({.resource_ = &resource});
+                ruvia::string external(text, {.resource_ = &resource});
+                if (alias) {
+                    values.emplace_back(text);
+                    if constexpr (requires { values.capacity(); }) {
+                        while (values.size() < values.capacity()) {
+                            values.emplace_back(text);
+                        }
+                    }
+                }
+                const auto old_size = values.size();
+                auto& source = alias ? values.front() : external;
+                const char* const original_text = source.data();
+                resource.remaining_ = allowance;
+                try {
+                    values.push_back(std::move(source));
+                    succeeded = true;
+                } catch (const std::bad_alloc&) {
+                    rejected = true;
+                }
+                resource.remaining_.reset();
+                if (succeeded) {
+                    ASSERT_EQ(values.size(), old_size + 1);
+                    EXPECT_EQ(values.back().view(), std::string_view(text));
+                    EXPECT_EQ(values.back().data(), original_text);
+                    EXPECT_TRUE((alias ? values.front() : external).empty());
+                } else {
+                    EXPECT_EQ(values.size(), old_size);
+                    EXPECT_EQ((alias ? values.front() : external).view(), std::string_view(text));
+                }
+                for (std::size_t index = alias && succeeded ? 1 : 0; index < old_size; ++index) {
+                    EXPECT_EQ(values[index].view(), std::string_view(text));
+                }
+            }
+            EXPECT_EQ(resource.allocations_.live_allocations(), std::size_t{0});
+        }
+        EXPECT_TRUE(succeeded);
+        EXPECT_TRUE(rejected);
+    };
+    for (bool alias : {false, true}) {
+        SCOPED_TRACE(alias);
+        check.template operator()<ruvia::array<ruvia::string>>(alias);
+        check.template operator()<ruvia::boxed_array<ruvia::string>>(alias);
+    }
+}
+
+TEST(Ruvia, model_resource_nested_insertion_failure_preserves_source_until_commit) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
+    }
+    const std::string first(160, 'a');
+    const std::string second(160, 'b');
+    const auto check = [&]<typename sequence_type>() {
+        bool succeeded = false;
+        bool rejected_after_preparation = false;
+        for (std::size_t allowance = 0; allowance != 16 && !succeeded; ++allowance) {
+            SCOPED_TRACE(allowance);
+            reject_after_resource resource;
+            {
+                sequence_type values({.resource_ = &resource});
+                ruvia::array<ruvia::string> source({.resource_ = &resource});
+                source.emplace_back(first);
+                source.emplace_back(second);
+                resource.remaining_ = allowance;
+                try {
+                    values.emplace_back(std::move(source));
+                    succeeded = true;
+                } catch (const std::bad_alloc&) {
+                    rejected_after_preparation |= allowance != 0;
+                }
+                resource.remaining_.reset();
+                if (succeeded) {
+                    EXPECT_TRUE(source.empty());
+                    ASSERT_EQ(values.size(), std::size_t{1});
+                    ASSERT_EQ(values.front().size(), std::size_t{2});
+                    EXPECT_EQ(values.front()[0].view(), std::string_view(first));
+                    EXPECT_EQ(values.front()[1].view(), std::string_view(second));
+                } else {
+                    EXPECT_TRUE(values.empty());
+                    ASSERT_EQ(source.size(), std::size_t{2});
+                    EXPECT_EQ(source[0].view(), std::string_view(first));
+                    EXPECT_EQ(source[1].view(), std::string_view(second));
+                }
+            }
+            EXPECT_EQ(resource.allocations_.live_allocations(), std::size_t{0});
+        }
+        EXPECT_TRUE(succeeded);
+        EXPECT_TRUE(rejected_after_preparation);
+    };
+    check.template operator()<ruvia::array<ruvia::array<ruvia::string>>>();
+    check.template operator()<ruvia::boxed_array<ruvia::array<ruvia::string>>>();
+}
+
 TEST(Ruvia, model_resource_scalar_array_moves_transfer_same_resource_storage) {
     const bool inject = ruvia::test::stl_allocation_failure_injection_enabled();
     const auto check = [inject]<typename sequence_type>() {

@@ -97,8 +97,12 @@ public:
             } else {
                 // Extract a source the old target may own before retiring it.
                 move_only_function incoming(std::move(other));
-                reset();
+                // Retire inline targets outside this wrapper's storage, and
+                // commit before destruction so reentrant assignments win.
+                move_only_function retired(std::move(*this));
                 move_from(incoming);
+                // Evaluate the return before retirement can destroy this wrapper.
+                return *this;
             }
         }
         return *this;

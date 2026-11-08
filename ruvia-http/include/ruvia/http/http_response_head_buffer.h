@@ -28,6 +28,12 @@ public:
     explicit http_response_head_buffer(std::pmr::polymorphic_allocator<char> allocator)
         : heap_(allocator) {}
 
+    // Construction inherits the source allocator; assignment retains the target allocator.
+    http_response_head_buffer(const http_response_head_buffer& other);
+    http_response_head_buffer(http_response_head_buffer&& other) noexcept;
+    http_response_head_buffer& operator=(const http_response_head_buffer& other);
+    http_response_head_buffer& operator=(http_response_head_buffer&& other);
+
     void reset() noexcept;
     // value may alias storage, including a written range returned by stack_cursor().
     void append(std::string_view value);
@@ -86,6 +92,7 @@ public:
 
 private:
     void spill_to_heap(std::size_t min_capacity);
+    void copy_committed_state(const http_response_head_buffer& other) noexcept;
     std::array<char, response_head_stack_bytes> stack_{};
     std::pmr::string heap_;
     std::variant<stack_state_type, heap_state_type> state_{stack_state_type{}};
