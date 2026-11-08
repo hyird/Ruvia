@@ -802,11 +802,14 @@ private:
                     continue;
                 }
                 const auto stream_id = headers->stream_id_;
-                stream.head_ = ruvia::http3_request_head::parse(std::move(*headers), std::pmr::get_default_resource());
-                if (!stream.head_) {
+                auto head = ruvia::http3_request_head::parse(std::move(*headers), std::pmr::get_default_resource());
+                if (!head) {
                     connection.reset_stream(stream_id, NGHTTP3_H3_MESSAGE_ERROR);
                     streams_.erase(stream_id);
-                } else if (stream.head_->stream_ended()) {
+                    continue;
+                }
+                stream.head_.emplace(std::move(*head));
+                if (stream.head_->stream_ended()) {
                     respond(stream_id, stream);
                 }
             } else if (const auto* data = std::get_if<ruvia::http3_data_event>(&*event)) {

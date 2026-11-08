@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -21,6 +22,9 @@
 #include "http3_relay.h"
 
 namespace {
+
+static_assert(std::is_nothrow_move_constructible_v<ruvia::http3_request_head>);
+static_assert(!std::is_move_assignable_v<ruvia::http3_request_head>);
 
 using field_list = std::initializer_list<std::pair<std::string_view, std::string_view>>;
 

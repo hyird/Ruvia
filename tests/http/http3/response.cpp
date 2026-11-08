@@ -465,7 +465,12 @@ TEST(Ruvia, http3_websocket_extended_connect_commits_negotiated_200) {
     std::optional<ruvia::http3_request_head> head;
     EXPECT_TRUE(peers.to_server([&](ruvia::http3_event& event) {
         if (auto* headers = std::get_if<ruvia::http3_headers_event>(&event)) {
-            head = ruvia::http3_request_head::parse(std::move(*headers), std::pmr::get_default_resource());
+            if (auto parsed = ruvia::http3_request_head::parse(
+                    std::move(*headers), std::pmr::get_default_resource())) {
+                head.emplace(std::move(*parsed));
+            } else {
+                head.reset();
+            }
         }
     }));
     EXPECT_TRUE(head.has_value());

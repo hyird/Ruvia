@@ -31,7 +31,7 @@ public:
         http3_headers_event event, std::pmr::memory_resource* resource);
 
     http3_request_head(http3_request_head&&) noexcept = default;
-    http3_request_head& operator=(http3_request_head&&) noexcept = default;
+    http3_request_head& operator=(http3_request_head&&) = delete;
     http3_request_head(const http3_request_head&) = delete;
     http3_request_head& operator=(const http3_request_head&) = delete;
 
