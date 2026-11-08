@@ -163,22 +163,23 @@ std::optional<double> parse_redis_optional_double(redis_value&& value, std::stri
 redis_set_result parse_redis_set_reply(
     redis_value&& value, std::pmr::memory_resource* resource, const redis_set_options& options) {
     throw_if_redis_error(value);
+    resource = pmr_resource_or_default(resource);
     const auto returns_previous = redis_set_returns_previous(options.previous_value_);
     if (value.null()) {
         const bool applied =
             returns_previous &&
             (!options.condition_.has_value() || *options.condition_ == redis_set_condition::if_absent);
-        return redis_types_access::set_result(applied);
+        return redis_types_access::set_result(applied, resource);
     }
     if (!returns_previous) {
         if (!http_ascii_equals_ignore_case(redis_value_string(value), "OK")) {
             throw redis_error(redis_error::code_type::command_error, "unexpected redis set reply");
         }
-        return redis_types_access::set_result(true);
+        return redis_types_access::set_result(true, resource);
     }
     const bool applied =
         !options.condition_.has_value() || *options.condition_ != redis_set_condition::if_absent;
-    return redis_types_access::set_result(applied, take_redis_string(std::move(value), resource));
+    return redis_types_access::set_result(applied, resource, take_redis_string(std::move(value), resource));
 }
 
 redis_ttl parse_redis_ttl(redis_value&& value, bool seconds_precision) {

@@ -12,9 +12,9 @@
 namespace ruvia::detail {
 
 struct redis_types_access final {
-    [[nodiscard]] static redis_set_result set_result(
-        bool applied, std::optional<std::pmr::string> previous = std::nullopt) {
-        return redis_set_result(applied, std::move(previous));
+    [[nodiscard]] static redis_set_result set_result(bool applied, std::pmr::memory_resource* resource,
+        std::optional<std::pmr::string> previous = std::nullopt) {
+        return redis_set_result(applied, resource, std::move(previous));
     }
 
     [[nodiscard]] static constexpr redis_scan_cursor scan_cursor(std::uint64_t value) noexcept {

@@ -387,7 +387,8 @@ ruvia::app()
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
 | RediSearch ORM | `repository<Entity>(redis_repository_config)` |
 
-- **SET 结果复制**：`redis_set_result` 复制 `previous()` 文本时沿用源 PMR，资源须覆盖副本寿命；`std::nullopt` 与空字符串保持区分。
+- **SET 结果资源**：`redis_set_result` 复制与移动构造继承源 PMR，赋值保留目标 PMR；空结果仍保留资源绑定，资源须覆盖结果寿命。
+- **SET 结果语义**：赋值失败保持原结果；`previous()` 的 `std::nullopt` 与空字符串保持区分。
 
 `redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。清除过滤时设置 `match_ = std::nullopt` 或调用 `match_.reset()`。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
 

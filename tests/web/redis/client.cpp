@@ -880,6 +880,84 @@ TEST(Ruvia, redis_set_result_copy_inherits_previous_value_resource) {
     });
 }
 
+TEST(Ruvia, redis_set_result_assignment_retains_destination_resource_across_absence) {
+    std::string text(4096, 'v');
+    text[17] = '\0';
+    scripted_redis_peer destination_peer({redis_bulk_reply(text), "+OK\r\n", "$-1\r\n"});
+    scripted_redis_peer source_peer({redis_bulk_reply(text), "$0\r\n\r\n"});
+    auto& io = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io);
+    ruvia::redis_client destination(worker.loop(), {.host_ = "127.0.0.1", .port_ = destination_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
+    ruvia::redis_client source(worker.loop(), {.host_ = "127.0.0.1", .port_ = source_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
+    auto verify = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        auto destination_redis = destination.handle();
+        auto source_redis = connected.handle();
+        const ruvia::redis_set_options return_previous{
+            .condition_ = ruvia::redis_set_condition::if_absent,
+            .previous_value_ = ruvia::redis_set_previous_value_policy::return_value};
+        const auto probe = co_await destination_redis.set("key", "replacement", return_previous);
+        auto* const owner = probe.previous()->get_allocator().resource();
+        const auto empty_ok = co_await destination_redis.set("key", "replacement");
+        const auto empty_nil = co_await destination_redis.set("key", "replacement", return_previous);
+        const auto value = co_await source_redis.set("key", "replacement", return_previous);
+        const auto empty_text = co_await source_redis.set("key", "replacement", return_previous);
+        EXPECT_NE(value.previous()->get_allocator().resource(), owner);
+        ruvia::test::rejecting_memory_resource unrelated;
+        unrelated.reject_allocations();
+        const auto check_previous = [&](const ruvia::redis_set_result& result, std::string_view expected) {
+            EXPECT_FALSE(result.applied());
+            EXPECT_TRUE(result.previous().has_value());
+            if (result.previous()) {
+                EXPECT_EQ(result.previous()->get_allocator().resource(), owner);
+                EXPECT_EQ(*result.previous(), expected);
+            }
+        };
+        for (const auto* absent : {&empty_ok, &empty_nil}) {
+            SCOPED_TRACE(absent == &empty_ok ? "status reply" : "nil reply");
+            auto target = *absent;
+            {
+                const default_resource_guard guard(unrelated);
+                EXPECT_NO_THROW(target = value);
+            }
+            check_previous(target, text);
+            const auto& copy_alias = target;
+            target = copy_alias;
+            auto& move_alias = target;
+            target = std::move(move_alias);
+            check_previous(target, text);
+
+            target = empty_text;
+            check_previous(target, {});
+            auto movable = value;
+            target = std::move(movable);
+            check_previous(target, text);
+            target = *absent;
+            EXPECT_TRUE(target.applied());
+            EXPECT_FALSE(target.previous());
+
+            auto copied_absent = target;
+            auto moved_absent = std::move(target);
+            movable = value;
+            {
+                const default_resource_guard guard(unrelated);
+                EXPECT_NO_THROW(copied_absent = value);
+                EXPECT_NO_THROW(moved_absent = std::move(movable));
+            }
+            check_previous(copied_absent, text);
+            check_previous(moved_absent, text);
+            auto reset = *absent;
+            moved_absent = std::move(reset);
+            EXPECT_TRUE(moved_absent.applied());
+            EXPECT_FALSE(moved_absent.previous());
+            moved_absent = empty_text;
+            check_previous(moved_absent, {});
+        }
+    };
+    ruvia::test::drive_backend_client(worker, destination, [&](ruvia::redis_client&) -> ruvia::task<void> {
+        co_await ruvia::test::exercise_backend_client(source, verify);
+    });
+}
+
 TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_shapes) {
     std::string key(128, 'k');
     std::string payload(64 * 1024 + 1, 'v');

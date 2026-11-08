@@ -223,8 +223,8 @@ class redis_set_result final {
 public:
     redis_set_result(const redis_set_result& other);
     redis_set_result(redis_set_result&&) noexcept = default;
-    redis_set_result& operator=(const redis_set_result&) = default;
-    redis_set_result& operator=(redis_set_result&&) = default;
+    redis_set_result& operator=(const redis_set_result& other);
+    redis_set_result& operator=(redis_set_result&& other);
 
     [[nodiscard]] constexpr bool applied() const noexcept {
         return applied_;
@@ -238,10 +238,14 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_set_result(bool applied, std::optional<std::pmr::string> previous) noexcept
-        : applied_(applied),
+    redis_set_result(bool applied, std::pmr::memory_resource* resource,
+        std::optional<std::pmr::string> previous) noexcept
+        : resource_(resource),
+          applied_(applied),
           previous_(std::move(previous)) {}
 
+    // Absent previous values retain the destination allocator binding.
+    std::pmr::memory_resource* resource_;
     bool applied_{false};
     std::optional<std::pmr::string> previous_;
 };

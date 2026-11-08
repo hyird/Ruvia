@@ -17,10 +17,43 @@ redis_error::code_type redis_error::code() const noexcept {
 }
 
 redis_set_result::redis_set_result(const redis_set_result& other)
-    : applied_(other.applied_) {
+    : resource_(other.resource_),
+      applied_(other.applied_) {
     if (other.previous_) {
-        previous_.emplace(*other.previous_, other.previous_->get_allocator());
+        previous_.emplace(*other.previous_, resource_);
     }
+}
+
+redis_set_result& redis_set_result::operator=(const redis_set_result& other) {
+    if (this != &other) {
+        if (other.previous_) {
+            if (previous_) {
+                previous_->assign(*other.previous_);
+            } else {
+                previous_.emplace(*other.previous_, resource_);
+            }
+        } else {
+            previous_.reset();
+        }
+        applied_ = other.applied_;
+    }
+    return *this;
+}
+
+redis_set_result& redis_set_result::operator=(redis_set_result&& other) {
+    if (this != &other) {
+        if (other.previous_) {
+            if (previous_) {
+                *previous_ = std::move(*other.previous_);
+            } else {
+                previous_.emplace(std::move(*other.previous_), resource_);
+            }
+        } else {
+            previous_.reset();
+        }
+        applied_ = other.applied_;
+    }
+    return *this;
 }
 
 redis_key_value::redis_key_value(const redis_key_value& other, allocator_type allocator)
