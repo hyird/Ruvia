@@ -233,7 +233,8 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 - **输入拥有期**：服务端请求视图零拷贝借用输入缓冲区；客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。
 - **分配失败**：以 `std::bad_alloc` 传出，不发布 `head_ready` 或成功状态。
 - **失败重试边界**：释放资源后可用同一缓冲区与偏移重试；部分元数据可能残留，不保证回滚。
-- **请求 PMR 拥有期**：覆盖 `http_request::reset()` 或对象析构；`reset()` 恢复默认构造状态并解除 PMR 引用。
+- **请求 PMR 拥有期**：覆盖 `http_request::reset()` 或对象析构；`reset()` 先恢复默认构造状态并解除旧 PMR 引用。
+- **请求退役提交**：移动赋值先整体接管新请求，再释放旧首部描述符，不分配内存；资源释放回调重入赋值或 `reset()` 时，其最终状态保留。
 - **响应 PMR 拥有期**：覆盖响应头或 `take_headers()` 返回向量的析构。
 
 请求转发使用 `"ruvia/http/http_client.h"` 的 `enum class http_request_field_source : std::uint8_t { generated, forwarded }`，不要把收到的字段当成新配置字段逐项送入 `is_valid_http_request_application_field`：

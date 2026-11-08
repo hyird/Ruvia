@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
@@ -32,6 +33,12 @@ using ruvia::request_content_coding;
 using ruvia::testing::parse_http1_request_message;
 
 using ruvia::test::header_memory;
+
+struct request_retirement_observation final {
+    http_request* request_;
+    http_request* replacement_;
+    bool committed_{};
+};
 
 }  // namespace
 
@@ -96,6 +103,83 @@ TEST(Ruvia, request_public_reset_clears_borrowed_views_and_owned_headers) {
     EXPECT_TRUE(request.body().empty());
     EXPECT_TRUE(request.protocol_version() == http_protocol_version::http11);
     EXPECT_TRUE(request.target_form() == http_request_target_form::origin);
+}
+
+TEST(Ruvia, request_reset_commits_before_retirement_and_preserves_reentrant_replacement) {
+    header_memory original_resource;
+    header_memory replacement_resource;
+    const http_header_view original_headers[]{{"Host", "old.test"}, {"Cookie", "sid=old"}};
+    const http_header_view replacement_headers[]{{"Cookie", "sid=new"}, {"Host", "new.test"}};
+    const std::array original_body{std::byte{'o'}, std::byte{'l'}, std::byte{'d'}};
+    const std::array replacement_body{std::byte{'n'}, std::byte{'e'}, std::byte{'w'}};
+    auto request = ruvia::make_parsed_http_request(
+        "POST", "https://old.test/old?key=old", original_headers, original_body, &original_resource);
+    auto replacement = ruvia::make_parsed_http_request(
+        "PUT", "https://new.test/new?key=new", replacement_headers, replacement_body, &replacement_resource);
+    request_retirement_observation observation{&request, &replacement};
+    original_resource.deallocation_context_ = &observation;
+    original_resource.before_deallocate_ = [](void* context) noexcept {
+        auto& state = *static_cast<request_retirement_observation*>(context);
+        const auto& value = *state.request_;
+        state.committed_ = value.method().empty() && value.known_method() == http_known_method::unknown &&
+                           value.target().empty() && value.scheme().empty() && value.authority().empty() &&
+                           value.path().empty() && value.query_string().empty() && value.headers().empty() &&
+                           !value.header("Host") && !value.cookie("sid") && value.body().empty();
+        if (state.committed_) {
+            *state.request_ = std::move(*state.replacement_);
+        }
+    };
+    original_resource.reject_ = true;
+    replacement_resource.reject_ = true;
+    request.reset();
+    EXPECT_TRUE(observation.committed_);
+    EXPECT_EQ(request.method(), std::string_view("PUT"));
+    EXPECT_EQ(request.target(), std::string_view("https://new.test/new?key=new"));
+    EXPECT_EQ(request.header("Host").value_or(""), std::string_view("new.test"));
+    EXPECT_EQ(request.cookie("sid").value_or(""), std::string_view("new"));
+    EXPECT_EQ(request.body(), std::string_view("new"));
+    EXPECT_TRUE(replacement.headers().empty());
+    EXPECT_EQ(original_resource.live_bytes_, std::size_t{0});
+    request.reset();
+    EXPECT_EQ(replacement_resource.live_bytes_, std::size_t{0});
+}
+
+TEST(Ruvia, request_move_commits_all_views_before_retirement_and_preserves_reentrant_reset) {
+    header_memory original_resource;
+    header_memory replacement_resource;
+    const http_header_view original_headers[]{{"Host", "old.test"}, {"Cookie", "sid=old"}};
+    const http_header_view replacement_headers[]{{"Cookie", "sid=new"}, {"Host", "new.test"}};
+    const std::array original_body{std::byte{'o'}, std::byte{'l'}, std::byte{'d'}};
+    const std::array replacement_body{std::byte{'n'}, std::byte{'e'}, std::byte{'w'}};
+    auto request = ruvia::make_parsed_http_request(
+        "GET", "/old", original_headers, original_body, &original_resource);
+    auto replacement = ruvia::make_parsed_http_request(
+        "POST", "https://new.test/new?key=new", replacement_headers, replacement_body, &replacement_resource);
+    request_retirement_observation observation{&request, &replacement};
+    original_resource.deallocation_context_ = &observation;
+    original_resource.before_deallocate_ = [](void* context) noexcept {
+        auto& state = *static_cast<request_retirement_observation*>(context);
+        const auto& value = *state.request_;
+        state.committed_ = value.method() == "POST" && value.known_method() == http_known_method::post &&
+                           value.target() == "https://new.test/new?key=new" && value.scheme() == "https" &&
+                           value.authority() == "new.test" && value.path() == "/new" &&
+                           value.query_string() == "key=new" && value.header("Host") == "new.test" &&
+                           value.cookie("sid") == "new" && value.body() == "new" &&
+                           state.replacement_->headers().empty();
+        if (state.committed_) {
+            state.request_->reset();
+        }
+    };
+    original_resource.reject_ = true;
+    replacement_resource.reject_ = true;
+    request = std::move(replacement);
+    EXPECT_TRUE(observation.committed_);
+    EXPECT_TRUE(request.method().empty());
+    EXPECT_TRUE(request.headers().empty());
+    EXPECT_TRUE(request.body().empty());
+    EXPECT_EQ(original_resource.live_bytes_, std::size_t{0});
+    request.reset();
+    EXPECT_EQ(replacement_resource.live_bytes_, std::size_t{0});
 }
 
 TEST(Ruvia, request_header_distinguishes_missing_from_present_empty) {

@@ -1,5 +1,8 @@
 #include "ruvia/http/http_request.h"
 
+#include <memory>
+#include <utility>
+
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
@@ -10,6 +13,18 @@
 #include "request/http_request_access.h"
 
 namespace ruvia {
+http_request& http_request::operator=(http_request&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    // Publish the whole request before an old descriptor's allocator can
+    // reenter. The return reference is fixed before retired storage is freed.
+    http_request retired(std::move(*this));
+    std::destroy_at(this);
+    std::construct_at(this, std::move(other));
+    return *this;
+}
+
 std::optional<std::string_view> http_request::header(std::string_view name) const noexcept {
     const auto kind = detail::classify_request_header(name);
     if (kind != detail::request_header_kind::other) {

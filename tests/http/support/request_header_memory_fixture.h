@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory_resource>
 #include <new>
+#include <utility>
 
 namespace ruvia::test {
 class header_memory final : public std::pmr::memory_resource {
@@ -10,6 +11,8 @@ public:
     std::size_t live_bytes_{0};
     std::size_t allocations_{0};
     bool reject_{false};
+    void (*before_deallocate_)(void*) noexcept {};
+    void* deallocation_context_{};
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
@@ -23,6 +26,9 @@ private:
     }
     void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
         live_bytes_ -= bytes_value;
+        if (const auto callback = std::exchange(before_deallocate_, nullptr)) {
+            callback(deallocation_context_);
+        }
         std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
