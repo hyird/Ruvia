@@ -2,14 +2,19 @@
 
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <memory_resource>
+#include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/http_io_buffer.h"
 
+#include "request_header_memory_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -40,6 +45,37 @@ private:
 void write_text(std::span<char> target, std::string_view text) {
     std::memcpy(target.data(), text.data(), text.size());
 }
+
+struct retirement_observation final {
+    ruvia::http_io_buffer* buffer_{};
+    std::string_view expected_{};
+    std::optional<std::size_t> capacity_{};
+    bool committed_{false};
+    std::unique_ptr<ruvia::http_io_buffer>* owner_{};
+};
+
+void observe_retirement(void* context) noexcept {
+    auto& observation = *static_cast<retirement_observation*>(context);
+    const auto capacity = observation.buffer_->capacity();
+    observation.committed_ = capacity >= observation.expected_.size() &&
+                             (!observation.capacity_ || capacity == *observation.capacity_) &&
+                             observation.buffer_->view() == observation.expected_;
+    // Only exercise reentry after the complete state is published.
+    if (!observation.committed_) {
+        return;
+    }
+    if (observation.owner_ != nullptr) {
+        observation.owner_->reset();
+        return;
+    }
+    observation.buffer_->clear();
+    observation.buffer_->append("new");
+}
+
+enum class reallocation_operation { reserve,
+    shrink,
+    append,
+    append_alias };
 
 }  // namespace
 
@@ -272,4 +308,113 @@ TEST(Ruvia, io_buffer_reader_prepares_when_no_spare_is_available) {
     space[0] = 'i';
     buffer.commit(1);
     EXPECT_EQ(buffer.view(), "bcdefghi");
+}
+
+TEST(Ruvia, io_buffer_clear_detaches_storage_before_reentrant_refill) {
+    ruvia::test::header_memory resource;
+    retirement_observation observation;
+    {
+        ruvia::http_io_buffer buffer(&resource);
+        buffer.append("seed");
+        observation = {&buffer, {}, 0};
+        resource.before_deallocate_ = observe_retirement;
+        resource.deallocation_context_ = &observation;
+
+        buffer.clear_retaining_small(0);
+
+        EXPECT_TRUE(observation.committed_);
+        EXPECT_EQ(buffer.view(), "new");
+    }
+    EXPECT_EQ(resource.live_bytes_, 0U);
+}
+
+TEST(Ruvia, io_buffer_reallocation_commits_before_reentrant_refill) {
+    for (const auto operation : {reallocation_operation::reserve, reallocation_operation::shrink,
+             reallocation_operation::append, reallocation_operation::append_alias}) {
+        SCOPED_TRACE(static_cast<int>(operation));
+        ruvia::test::header_memory resource;
+        retirement_observation observation;
+        {
+            ruvia::http_io_buffer buffer(&resource);
+            buffer.reserve(operation == reallocation_operation::shrink ? 16 : 4);
+            buffer.append("seed");
+            observation = {&buffer, "seed", 8};
+            if (operation == reallocation_operation::shrink) {
+                observation.capacity_ = 4;
+            } else if (operation == reallocation_operation::append) {
+                observation.expected_ = "seedmore";
+                observation.capacity_.reset();
+            } else if (operation == reallocation_operation::append_alias) {
+                observation.expected_ = "seedseed";
+                observation.capacity_.reset();
+            }
+            resource.before_deallocate_ = observe_retirement;
+            resource.deallocation_context_ = &observation;
+
+            switch (operation) {
+                case reallocation_operation::reserve:
+                    buffer.reserve(8);
+                    break;
+                case reallocation_operation::shrink:
+                    buffer.shrink_to(4);
+                    break;
+                case reallocation_operation::append:
+                    buffer.append("more");
+                    break;
+                case reallocation_operation::append_alias:
+                    buffer.append(buffer.view());
+                    break;
+            }
+
+            EXPECT_TRUE(observation.committed_);
+            EXPECT_EQ(buffer.view(), "new");
+        }
+        EXPECT_EQ(resource.live_bytes_, 0U);
+    }
+}
+
+TEST(Ruvia, io_buffer_retirement_can_destroy_its_owner) {
+    for (const bool release : {false, true}) {
+        SCOPED_TRACE(release);
+        ruvia::test::header_memory resource;
+        retirement_observation observation;
+        {
+            auto owner = std::make_unique<ruvia::http_io_buffer>(&resource);
+            owner->reserve(4);
+            owner->append("seed");
+            observation = {owner.get(), release ? "" : "seed", release ? 0U : 8U, false, &owner};
+            resource.before_deallocate_ = observe_retirement;
+            resource.deallocation_context_ = &observation;
+
+            if (release) {
+                owner->clear_retaining_small(0);
+            } else {
+                owner->reserve(8);
+            }
+
+            EXPECT_TRUE(observation.committed_);
+            EXPECT_EQ(owner, nullptr);
+        }
+        EXPECT_EQ(resource.live_bytes_, 0U);
+    }
+}
+
+TEST(Ruvia, io_buffer_allocation_failure_preserves_borrow_for_retry) {
+    ruvia::test::header_memory resource;
+    {
+        ruvia::http_io_buffer buffer(&resource);
+        buffer.reserve(4);
+        buffer.append("seed");
+        const auto borrowed = buffer.view();
+        resource.reject_ = true;
+
+        EXPECT_THROW(buffer.append(borrowed), std::bad_alloc);
+        EXPECT_EQ(buffer.view(), "seed");
+        EXPECT_EQ(borrowed, "seed");
+
+        resource.reject_ = false;
+        buffer.append(borrowed);
+        EXPECT_EQ(buffer.view(), "seedseed");
+    }
+    EXPECT_EQ(resource.live_bytes_, 0U);
 }

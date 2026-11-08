@@ -22,9 +22,9 @@ namespace ruvia {
 // Either failure is terminal because input/output may have
 // progressed. Later operations throw std::logic_error. finish() is idempotent;
 // writing after successful finish throws std::logic_error without changing output.
-// reset() returns an encoder in any phase to a fresh active stream, reusing the
-// codec's working memory; a codec that cannot be reset throws
-// http_content_codec_error and the encoder stays failed.
+// reset() returns an encoder in any phase to a fresh active stream. zlib and
+// Zstd reuse their working memory; Brotli has no native reset and rebuilds from
+// the same resource, which may allocate. A reset failure leaves the encoder failed.
 class http_content_encoder final {
 public:
     http_content_encoder(http_content_coding coding, std::pmr::memory_resource* resource);

@@ -96,10 +96,9 @@ struct http_content_encoder::impl_type final {
         std::visit([&](auto& stream) { encode_stream(stream, input, output, flush, finish_value); }, stream_);
     }
 
-    // Returns the codec to a fresh stream, keeping its working memory. Brotli
-    // has no reset: the encoder is rebuilt in place from the same resource. A
-    // failed rebuild leaves the variant valueless, which the owner never
-    // touches again because it stays failed.
+    // Reuse native working memory where supported. Brotli rebuilds from the
+    // same resource. A failed rebuild leaves the variant valueless, which the
+    // owner never touches again until another explicit reset().
     void reset() {
         if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&stream_)) {
             if (!deflater->reset()) {

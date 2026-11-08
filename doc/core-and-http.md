@@ -139,6 +139,9 @@ pool.join();
 | `"ruvia/http/http_utf8.h"` | `struct utf8_sequence final`、`scan_utf8_sequence`、`is_valid_utf8` | `ruvia` 命名空间下的共享 UTF-8 公开 API，`constexpr`、`noexcept`、零分配；整串校验或单序列扫描。扫描要求索引有效且首字节 ≥ `0x80`，返回完整序列或非法序列最大子部分的字节数及合法性；跨库调用不依赖 `detail` |
 | `"ruvia/http/http_number_format.h"` | `http_format_signed`、`http_format_unsigned`、`http_append_signed`、`http_append_unsigned`、`http_append_formatted_number`、`http_append_formatted_finite_number` | 整数切片格式化与 PMR 追加共用同一入口；浮点按原类型生成最短十进制文本，有限值入口在修改输出前拒绝 NaN 与无穷大 |
 
+- **缓冲退役顺序**：`http_io_buffer` 清空或重分配时先提交状态，再释放旧存储；`append()` 的新增字节一并提交，退役回调的重入写入保留。
+- **缓冲分配失败**：保留原窗口与已借用字节，恢复资源后可使用原输入重试。
+
 `decode_url_component()` 与 `percent_encode_uri_reference()` 的文本输入使用 `borrowed_text`：字符串字面量、`std::string_view` 和命名的 `std::string` / `std::pmr::string` 可直接传入，临时拥有型字符串（含 `const` 右值）在编译期拒绝。返回值可能借用原始输入，也可能借用输出 `storage`，两者的 owner 均须覆盖结果消费；不要根据某次内容是否需要转换来推断寿命。需要传入生成的字符串时先保存为命名 owner，需要独立结果时在 owner 仍有效期间复制视图；显式构造 `string_view` 不会延长 owner 寿命。支持零拷贝和输入／输出别名。
 
 - **URL 编码失败回滚**：`http_append_percent_byte()` 与 `percent_encode_uri_reference()` 发生分配或长度错误时保留原输出内容，允许恢复资源后重试。
@@ -197,6 +200,9 @@ pool.join();
 - **响应资源退役**：`http_response` 与 `http_response_file_handle` 移动赋值先清空源并提交接管，再释放旧资源；保留释放回调复用源对象或重入赋值的新写入，各句柄只释放一次。
 
 `encode_http_content` 的两个 overload（单个 coding，或按声明顺序依次编码的 coding 列表）与 `http_content_encode_context::encode` 统一返回 `std::optional<std::pmr::string>`：有值表示完整编码成功，`std::nullopt` 只表示结果超过 `max_encoded_bytes_`。预算为零只允许零字节表示；多 coding 按声明顺序编码，每个中间表示都受同一预算约束。输出使用 `options.resource_`；可复用上下文的状态使用构造时的资源，该资源必须覆盖上下文寿命，且上下文不可并发使用。成功、超预算或异常后上下文均可继续编码独立表示，不携带上一次的压缩历史；异常后内部状态直接丢弃，下次编码重新创建。`decode_http_content` 接受单个 coding 或 `Content-Encoding` 给出的 coding 列表，列表按逆序解码，每个中间表示都受同一解码上限约束；超过上限的 identity 表示在分配前即被拒绝；`http_content_decode_error` 只描述表示本身的数据错误（`unsupported_coding`、`invalid_content`、`decoded_size_exceeded`）。解码器工作内存同样受解码上限约束：`br` 声明的环形缓冲超出该上限可容纳的大小时（约为上限的三倍加 3 MiB 固定表空间）直接返回 `decoded_size_exceeded`，不按对端声明的窗口分配；`zstd` 解码器按 RFC 9659 接受最大 8 MiB 窗口，这是协议要求的下限。编码、解码与增量编码器在编解码器自身无法运行（状态无法创建或重置、库内部错误）时统一抛出 `http_content_codec_error`，分配异常保留原始类型。接收方用 `parse_http_content_coding`（单个字段值）、`parse_http_content_coding_headers`（字段行序列或 `http_response_headers`）或 `request_content_coding`（已解析的请求）读取 `Content-Encoding`。
+
+- **编码器重置内存**：`http_content_encoder::reset()` 对 zlib/Zstd 复用工作内存；Brotli 无原生重置接口，使用原 PMR 重建状态，可能重新分配。
+- **编码器重置失败**：保持失败态并拒绝后续写入；再次显式 `reset()` 成功后才可继续使用。
 
 Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常的“不划算”结果，仍回退 identity；请求拒绝 identity 时不设该预算，任何可接受的编码都优于 `406`。真实故障沿现有失败边界记录并翻译，不作为预算结果忽略。静态根预压缩同样只略过不划算的表示，真实编码异常使构建或刷新失败，不发布不完整的新快照。
 

@@ -60,15 +60,15 @@ void http_io_buffer::append(std::string_view bytes) {
         end_ += bytes.size();
         return;
     }
-    const bool aliases = detail::http_text_overlaps(bytes, std::string_view(storage_, capacity_));
-    if (!aliases) {
-        make_room(bytes.size());
-        std::memcpy(storage_ + end_, bytes.data(), bytes.size());
-        end_ += bytes.size();
+    const auto capacity = room_capacity(bytes.size());
+    if (capacity > capacity_ || detail::http_text_overlaps(bytes, std::string_view(storage_, capacity_))) {
+        // Publish the appended bytes together with the replacement storage.
+        reallocate(capacity, bytes);
         return;
     }
-    // Copy an aliasing source into new storage before the old one is freed.
-    reallocate(room_capacity(bytes.size()), bytes);
+    move_window_to_front();
+    std::memcpy(storage_ + end_, bytes.data(), bytes.size());
+    end_ += bytes.size();
 }
 
 void http_io_buffer::consume(std::size_t bytes) noexcept {
@@ -142,7 +142,8 @@ void http_io_buffer::reallocate(std::size_t capacity, std::string_view tail) {
     if (!tail.empty()) {
         std::memcpy(storage + live, tail.data(), tail.size());
     }
-    release();
+    // Publish the complete window before old storage can reenter its owner.
+    http_io_buffer retired(std::move(*this));
     storage_ = storage;
     capacity_ = capacity;
     begin_ = 0;
@@ -150,13 +151,14 @@ void http_io_buffer::reallocate(std::size_t capacity, std::string_view tail) {
 }
 
 void http_io_buffer::release() noexcept {
-    if (storage_ != nullptr) {
-        allocator_.deallocate(storage_, capacity_);
-    }
-    storage_ = nullptr;
-    capacity_ = 0;
+    auto* const storage = std::exchange(storage_, nullptr);
+    const auto capacity = std::exchange(capacity_, 0);
     begin_ = 0;
     end_ = 0;
+    if (storage != nullptr) {
+        auto allocator = allocator_;
+        allocator.deallocate(storage, capacity);
+    }
 }
 
 }  // namespace ruvia
