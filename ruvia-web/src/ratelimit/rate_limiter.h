@@ -82,11 +82,10 @@ struct rate_limit_slot final {
     rate_limit_scope scope_{};
     // 0 marks an empty slot; occupied slots never hash to 0.
     std::uint64_t key_hash_{0};
-    std::uint64_t window_start_ms_{0};
-    // Two windows after window_start_ms_ (saturating): from then on neither
-    // count reaches the estimate, so the entry is no longer live and another
-    // key may take the slot.
-    std::uint64_t stale_at_ms_{0};
+    std::chrono::steady_clock::time_point window_start_{};
+    // Elapsed milliseconds from window_start_: two whole windows must pass
+    // before another key can reclaim the slot.
+    std::uint64_t stale_after_ms_{0};
     // Admissions only; never exceeds the rule's max_requests_.
     std::size_t current_count_{0};
     std::size_t previous_count_{0};

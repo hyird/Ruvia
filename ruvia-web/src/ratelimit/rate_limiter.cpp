@@ -10,6 +10,7 @@
 #include <span>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/worker_timer.h"
 
 namespace ruvia::detail {
 
@@ -107,13 +108,6 @@ struct siphash_state final {
     return hash == empty_hash ? 1 : hash;
 }
 
-// Instants before the clock's epoch, which a steady clock never reports, read
-// as the epoch so the table works in unsigned milliseconds throughout.
-[[nodiscard]] std::uint64_t instant_ms(std::chrono::steady_clock::time_point now) noexcept {
-    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    return now_ms <= 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(now_ms);
-}
-
 [[nodiscard]] std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) noexcept {
     constexpr auto max_value = std::numeric_limits<std::uint64_t>::max();
     return right > max_value - left ? max_value : left + right;
@@ -174,12 +168,9 @@ struct wide_unsigned final {
     return static_cast<std::uint64_t>(rule.window_.count());
 }
 
-[[nodiscard]] std::uint64_t stale_at_ms(std::uint64_t window_start_ms, std::uint64_t window_ms) noexcept {
-    return saturating_add(window_start_ms, saturating_add(window_ms, window_ms));
-}
-
-[[nodiscard]] std::uint64_t elapsed_ms(std::uint64_t window_start_ms, std::uint64_t now_ms) noexcept {
-    return now_ms <= window_start_ms ? 0 : now_ms - window_start_ms;
+[[nodiscard]] std::uint64_t elapsed_ms(std::chrono::steady_clock::time_point start,
+    std::chrono::steady_clock::time_point now) noexcept {
+    return now <= start ? 0 : static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count());
 }
 
 [[nodiscard]] bool key_equals(
@@ -188,27 +179,28 @@ struct wide_unsigned final {
            std::ranges::equal(key, std::span(slot.key_).first(slot.key_size_));
 }
 
-[[nodiscard]] bool stale(const rate_limit_slot& slot, std::uint64_t now_ms) noexcept {
-    return slot.key_hash_ != empty_hash && slot.stale_at_ms_ <= now_ms;
+[[nodiscard]] bool stale(const rate_limit_slot& slot, std::chrono::steady_clock::time_point now) noexcept {
+    return slot.key_hash_ != empty_hash && elapsed_ms(slot.window_start_, now) >= slot.stale_after_ms_;
 }
 
-// Moves the key to the window containing now_ms. After one full window the
+// Moves the key to the window containing now. After one full window the
 // current count becomes the previous one; after two or more neither count is
 // inside the trailing window any more, so the key restarts as a new one.
-void roll_window(rate_limit_slot& slot, std::uint64_t window_ms, std::uint64_t now_ms) noexcept {
-    const auto elapsed = elapsed_ms(slot.window_start_ms_, now_ms);
+void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
+    const auto window_ms = window_length_ms(rule);
+    const auto elapsed = elapsed_ms(slot.window_start_, now);
     if (elapsed < window_ms) {
         return;
     }
     if (elapsed - window_ms < window_ms) {
         slot.previous_count_ = slot.current_count_;
-        slot.window_start_ms_ += window_ms;
+        // The elapsed check guarantees this advance fits before now.
+        slot.window_start_ += worker_timer_saturating_duration_cast(rule.window_);
     } else {
         slot.previous_count_ = 0;
-        slot.window_start_ms_ = now_ms;
+        slot.window_start_ = now;
     }
     slot.current_count_ = 0;
-    slot.stale_at_ms_ = stale_at_ms(slot.window_start_ms_, window_ms);
 }
 
 // Refusals leave the counts alone, so the estimate only decays: the previous
@@ -242,10 +234,10 @@ void roll_window(rate_limit_slot& slot, std::uint64_t window_ms, std::uint64_t n
 // the previous window that the trailing window still covers. Both sides are
 // scaled by the window so the comparison is exact.
 [[nodiscard]] std::optional<rate_limit_rejection> consume(
-    rate_limit_slot& slot, const rate_limit_rule& rule, std::uint64_t now_ms) noexcept {
+    rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
     const auto window_ms = window_length_ms(rule);
-    roll_window(slot, window_ms, now_ms);
-    const auto remaining_ms = window_ms - elapsed_ms(slot.window_start_ms_, now_ms);
+    roll_window(slot, rule, now);
+    const auto remaining_ms = window_ms - elapsed_ms(slot.window_start_, now);
     const auto limit = static_cast<std::uint64_t>(rule.max_requests_);
     const auto previous = static_cast<std::uint64_t>(slot.previous_count_);
     const auto current = static_cast<std::uint64_t>(slot.current_count_);
@@ -257,16 +249,17 @@ void roll_window(rate_limit_slot& slot, std::uint64_t window_ms, std::uint64_t n
 }
 
 [[nodiscard]] std::optional<rate_limit_rejection> consume_new_key(rate_limit_slot& slot, rate_limit_scope scope,
-    std::string_view key, std::uint64_t hash, const rate_limit_rule& rule, std::uint64_t now_ms) noexcept {
+    std::string_view key, std::uint64_t hash, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
     slot.scope_ = scope;
     slot.key_hash_ = hash;
-    slot.window_start_ms_ = now_ms;
-    slot.stale_at_ms_ = stale_at_ms(now_ms, window_length_ms(rule));
+    slot.window_start_ = now;
+    const auto window_ms = window_length_ms(rule);
+    slot.stale_after_ms_ = saturating_add(window_ms, window_ms);
     slot.current_count_ = 0;
     slot.previous_count_ = 0;
     slot.key_size_ = static_cast<std::uint8_t>(key.size());
     std::ranges::copy(key, slot.key_.begin());
-    return consume(slot, rule, now_ms);
+    return consume(slot, rule, now);
 }
 
 [[nodiscard]] std::optional<rate_limit_rejection> overflow_decision(const rate_limit_rule& rule) noexcept {
@@ -310,7 +303,8 @@ std::optional<rate_limit_rejection> rate_limiter::allow(rate_limit_scope scope, 
         return overflow_decision(rule);
     }
 
-    const auto now_ms = instant_ms(now);
+    // Preserve the arrival's sub-millisecond phase; only elapsed time is quantized.
+    now = std::max(now, std::chrono::steady_clock::time_point{});
     const auto hash = key_hash(hash_key_, scope, key);
     const auto mask = slots_.size() - 1;
     const auto start = static_cast<std::size_t>(hash) & mask;
@@ -324,18 +318,18 @@ std::optional<rate_limit_rejection> rate_limiter::allow(rate_limit_scope scope, 
     for (std::size_t probe_value = 0; probe_value < probe_window; ++probe_value) {
         auto& slot = slots_[(start + probe_value) & mask];
         if (slot.key_hash_ == empty_hash) {
-            return consume_new_key(reclaimable == nullptr ? slot : *reclaimable, scope, key, hash, rule, now_ms);
+            return consume_new_key(reclaimable == nullptr ? slot : *reclaimable, scope, key, hash, rule, now);
         }
         if (key_equals(slot, scope, key, hash)) {
-            return consume(slot, rule, now_ms);
+            return consume(slot, rule, now);
         }
-        if (reclaimable == nullptr && stale(slot, now_ms)) {
+        if (reclaimable == nullptr && stale(slot, now)) {
             reclaimable = &slot;
         }
     }
 
     if (reclaimable != nullptr) {
-        return consume_new_key(*reclaimable, scope, key, hash, rule, now_ms);
+        return consume_new_key(*reclaimable, scope, key, hash, rule, now);
     }
     return overflow_decision(rule);
 }

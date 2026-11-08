@@ -5,7 +5,7 @@
 // for keys a saturated table cannot place.
 //
 // Every request pins its arrival at an exact offset from one origin, so the
-// window arithmetic is checked to the millisecond without reading a clock.
+// window arithmetic includes sub-millisecond arrivals without reading a clock.
 
 #include <array>
 #include <charconv>
@@ -41,12 +41,12 @@ constexpr std::array<std::string_view, 4> held_addresses{"192.0.2.1", "192.0.2.2
 constexpr std::chrono::steady_clock::time_point window_origin{std::chrono::hours(1)};
 
 [[nodiscard]] ruvia::dispatch_response request_at(ruvia::test_app& app, std::string_view address,
-    std::chrono::milliseconds offset, std::string_view target = "/rate-limit-table/ok") {
+    std::chrono::steady_clock::duration offset, std::string_view target = "/rate-limit-table/ok") {
     return app.request(ruvia::test_request::get(target).remote(address).arrival(window_origin + offset));
 }
 
 [[nodiscard]] ruvia::http_status_code request_from(
-    ruvia::test_app& app, std::string_view address, std::chrono::milliseconds offset = {}) {
+    ruvia::test_app& app, std::string_view address, std::chrono::steady_clock::duration offset = {}) {
     return request_at(app, address, offset).status();
 }
 
@@ -198,6 +198,30 @@ TEST(Ruvia, rate_limit_refusal_headers_do_not_saturate_for_the_longest_window) {
     // rounded up to seconds without clamping.
     EXPECT_TRUE(header_number(refused, "Retry-After") == std::optional<std::uint64_t>(9'223'372'036'854'776ULL));
     EXPECT_TRUE(header_number(refused, "X-RateLimit-Reset") == std::optional<std::uint64_t>(18'446'744'073'709'552ULL));
+}
+
+TEST(Ruvia, rate_limit_reset_preserves_fractional_window_origin) {
+    using namespace std::chrono;
+    ruvia::test_app app;
+    configure_window_limit(app, 1, milliseconds(1000));
+    constexpr std::string_view client = "198.51.100.7";
+    EXPECT_EQ(request_from(app, client, microseconds(900)), ruvia::http_status::ok);
+    const auto before_roll = request_at(app, client, milliseconds(1000));
+    EXPECT_EQ(before_roll.status(), ruvia::http_status::too_many_requests);
+    EXPECT_EQ(header_number(before_roll, "X-RateLimit-Reset"), std::optional<std::uint64_t>(2));
+    const auto at_roll = request_at(app, client, milliseconds(1000) + microseconds(900));
+    EXPECT_EQ(at_roll.status(), ruvia::http_status::too_many_requests);
+    EXPECT_EQ(header_number(at_roll, "X-RateLimit-Reset"), std::optional<std::uint64_t>(1));
+    EXPECT_EQ(request_from(app, client, milliseconds(1001) + microseconds(900)), ruvia::http_status::ok);
+}
+
+TEST(Ruvia, rate_limit_reclamation_preserves_fractional_window_origin) {
+    using namespace std::chrono;
+    ruvia::test_app app;
+    configure_window_limit(app, 1, milliseconds(1000), 1);
+    EXPECT_EQ(request_from(app, held_addresses[0], microseconds(900)), ruvia::http_status::ok);
+    EXPECT_EQ(request_from(app, held_addresses[1], milliseconds(2000)), ruvia::http_status::too_many_requests);
+    EXPECT_EQ(request_from(app, held_addresses[1], milliseconds(2000) + microseconds(900)), ruvia::http_status::ok);
 }
 
 TEST(Ruvia, rate_limit_table_reclaims_a_slot_only_after_two_windows) {

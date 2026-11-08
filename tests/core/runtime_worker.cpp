@@ -16,6 +16,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -40,6 +41,16 @@
 #include "ruvia/core/worker_signal.h"
 
 namespace ruvia::test::runtime_worker_tests {
+
+static_assert(std::is_constructible_v<worker_signal, worker_handle&>);
+static_assert(std::is_constructible_v<worker_signal, const worker_handle&>);
+static_assert(!std::is_constructible_v<worker_signal, worker_handle&&>);
+static_assert(!std::is_constructible_v<worker_signal, const worker_handle&&>);
+static_assert(std::is_constructible_v<task_scope, worker_handle&>);
+static_assert(std::is_constructible_v<task_scope, const worker_handle&>);
+static_assert(!std::is_constructible_v<task_scope, worker_handle&&>);
+static_assert(!std::is_constructible_v<task_scope, const worker_handle&&>);
+static_assert(!std::is_constructible_v<task_scope, const worker_handle&&, task_scope_options>);
 
 struct root_assignment_result final {
     explicit root_assignment_result(int value, std::function<void()>* on_retire = nullptr,

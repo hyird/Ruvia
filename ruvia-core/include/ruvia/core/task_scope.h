@@ -24,6 +24,7 @@ public:
     // address-stable handle, matching the borrow-only hot-path rule.
     explicit task_scope(const worker_handle& worker_value, task_scope_options options = {});
     task_scope(worker_handle&&, task_scope_options = {}) = delete;
+    task_scope(const worker_handle&&, task_scope_options = {}) = delete;
     // Destruction requires that no child is active and no join is pending;
     // violating that is a lifecycle contract violation and terminates. A
     // scope whose children all completed may be destroyed without a join; a

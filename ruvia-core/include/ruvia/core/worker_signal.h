@@ -96,6 +96,7 @@ public:
     explicit worker_signal(const worker_handle& worker_value)
         : worker_(require_worker(worker_value)) {}
     worker_signal(worker_handle&&) = delete;
+    worker_signal(const worker_handle&&) = delete;
 
     ~worker_signal() {
         if (waiters_ != nullptr || scheduled_waiters_ != 0 || reserved_waits_ != 0) {
