@@ -81,63 +81,6 @@ private:
     }
 };
 
-// A worker pool keeps every class it ever served, so it pools only small
-// objects; larger blocks go to the worker's bounded block cache, whose
-// retention is capped and can be trimmed.
-constexpr std::pmr::pool_options worker_pool_options{
-    .largest_required_pool_block = detail::worker_block_cache::small_block_bytes};
-
-// libstdc++'s pool resources (the static libstdc++ of GCC 13 that Linux builds
-// link) choose a block pool by byte count alone, so allocate(17, 16) is served
-// from the 24-byte pool and every other block is only 8-aligned. A request
-// aligned above the pointer size is rounded up to its alignment first: with
-// one block size per request the chosen pool's block size is then a multiple
-// of the alignment, and libstdc++ aligns each chunk to at least its block
-// size. Alignments above std::max_align_t bypass the pools entirely.
-class aligned_pool_resource final : public std::pmr::memory_resource {
-public:
-    aligned_pool_resource(
-        const std::pmr::pool_options& options, std::pmr::memory_resource* upstream)
-        : pool_(options, upstream) {}
-
-private:
-    [[nodiscard]] static constexpr bool pooled_alignment(std::size_t alignment) noexcept {
-        return alignment <= alignof(std::max_align_t);
-    }
-
-    [[nodiscard]] static constexpr std::size_t pool_bytes(std::size_t bytes_value, std::size_t alignment) noexcept {
-        if (alignment <= alignof(void*)) {
-            return bytes_value;
-        }
-        if (bytes_value == 0) {
-            return alignment;
-        }
-        const auto rounded = (bytes_value + alignment - 1) & ~(alignment - 1);
-        return rounded < bytes_value ? bytes_value : rounded;
-    }
-
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (!pooled_alignment(alignment)) {
-            return pool_.upstream_resource()->allocate(bytes_value, alignment);
-        }
-        return pool_.allocate(pool_bytes(bytes_value, alignment), alignment);
-    }
-
-    void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
-        if (!pooled_alignment(alignment)) {
-            pool_.upstream_resource()->deallocate(block, bytes_value, alignment);
-            return;
-        }
-        pool_.deallocate(block, pool_bytes(bytes_value, alignment), alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::pmr::unsynchronized_pool_resource pool_;
-};
-
 }  // namespace
 
 std::pmr::memory_resource* process_resource() noexcept {
@@ -243,11 +186,9 @@ void task_frame_cache_release() noexcept {
 class worker_memory::impl_type final {
 public:
     impl_type(std::pmr::memory_resource& upstream, std::size_t retained_block_bytes)
-        : blocks_(upstream, retained_block_bytes),
-          pool_(worker_pool_options, &blocks_) {}
+        : blocks_(upstream, retained_block_bytes) {}
 
     detail::worker_block_cache blocks_;
-    aligned_pool_resource pool_;
 };
 
 void worker_memory::impl_deleter_type::operator()(impl_type* impl) const noexcept {
@@ -273,7 +214,7 @@ worker_memory::worker_memory(const memory_pool_config& config)
 worker_memory::worker_memory(std::pmr::memory_resource& upstream, const memory_pool_config& config)
     : impl_((validate_memory_pool_config(config),
           construct_pmr_object<impl_type>(&upstream, upstream, config.retained_block_bytes_))),
-      resource_(&impl_->pool_),
+      resource_(&impl_->blocks_),
       request_initial_buffer_bytes_(config.request_initial_buffer_bytes_) {}
 
 worker_memory::~worker_memory() = default;

@@ -14,14 +14,23 @@ worker_block_cache::~worker_block_cache() {
 void worker_block_cache::release_cached() noexcept {
     // The upstream may reenter this cache while releasing a block; drain
     // publishes each removal before the call.
-    bins_.drain([this](void* block, std::size_t block_bytes) noexcept {
+    const auto release = [this](void* block, std::size_t block_bytes) noexcept {
         upstream_->deallocate(block, block_bytes, block_alignment);
-    });
+    };
+    small_bins_.drain(release);
+    bins_.drain(release);
 }
 
 void* worker_block_cache::do_allocate(std::size_t bytes_value, std::size_t alignment) {
     if (!cacheable(bytes_value, alignment)) {
         return upstream_->allocate(bytes_value, alignment);
+    }
+    if (bytes_value <= small_block_bytes) {
+        const std::size_t block_bytes = small_bins_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
+        if (void* const block = small_bins_.take(block_bytes)) {
+            return block;
+        }
+        return upstream_->allocate(block_bytes, block_alignment);
     }
     const std::size_t block_bytes = bins_type::class_bytes(bytes_value);
     if (void* const block = bins_.take(block_bytes)) {
@@ -35,8 +44,15 @@ void worker_block_cache::do_deallocate(void* block, std::size_t bytes_value, std
         upstream_->deallocate(block, bytes_value, alignment);
         return;
     }
+    if (bytes_value <= small_block_bytes) {
+        const std::size_t block_bytes = small_bins_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
+        if (!small_bins_.store(block, block_bytes, retained_budget_bytes_ - bins_.cached_bytes())) {
+            upstream_->deallocate(block, block_bytes, block_alignment);
+        }
+        return;
+    }
     const std::size_t block_bytes = bins_type::class_bytes(bytes_value);
-    if (!bins_.store(block, block_bytes, retained_budget_bytes_)) {
+    if (!bins_.store(block, block_bytes, retained_budget_bytes_ - small_bins_.cached_bytes())) {
         upstream_->deallocate(block, block_bytes, block_alignment);
     }
 }

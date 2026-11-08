@@ -548,6 +548,37 @@ TEST(Ruvia, http_error_copy_move_and_assignment_preserve_owned_issues) {
     EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
+TEST(Ruvia, http_error_move_assignment_rebinds_equivalent_resource_diagnostics) {
+    counting_memory_resource upstream;
+    ruvia::test::equivalent_tracking_resource source(upstream);
+    ruvia::test::equivalent_tracking_resource target(upstream);
+    std::optional<ruvia::http_error> destination(std::in_place,
+        ruvia::http_error_info_options{}, &target);
+    const std::string text(256, 'x');
+    {
+        validator diagnostics({.resource_ = &source});
+        diagnostics.add(text, text, text);
+        ruvia::http_error input({.status_ = ruvia::http_status::unprocessable_content,
+                                    .code_ = text,
+                                    .message_ = text,
+                                    .validation_issues_ = diagnostics.issues()},
+            &source);
+        *destination = std::move(input);
+    }
+    source.retire();
+    EXPECT_EQ(destination->resource(), &target);
+    EXPECT_EQ(destination->status(), ruvia::http_status::unprocessable_content);
+    EXPECT_EQ(destination->code(), text);
+    EXPECT_EQ(destination->message(), text);
+    ASSERT_EQ(destination->validation_issues().size(), std::size_t{1});
+    EXPECT_EQ(destination->validation_issues()[0].field(), text);
+    EXPECT_EQ(destination->validation_issues()[0].code(), text);
+    EXPECT_EQ(destination->validation_issues()[0].message(), text);
+    destination.reset();
+    EXPECT_EQ(source.callbacks_after_retirement(), std::size_t{0});
+    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
+}
+
 TEST(Ruvia, validator_throw_if_invalid_raises_on_issues) {
     validator ok;
     ok.throw_if_invalid();  // no issues -> no throw

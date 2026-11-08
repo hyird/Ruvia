@@ -23,7 +23,6 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_runtime.h"
 
-#include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -109,8 +108,6 @@ TEST(Ruvia, worker_memory_returns_bulk_blocks_upstream) {
         const auto baseline = upstream.live_bytes_;
         auto* const block = resource->allocate(bulk_bytes);
         EXPECT_TRUE(upstream.live_bytes_ - baseline >= bulk_bytes);
-        // A pooled bulk block would stay reserved, with spares, for the worker's
-        // life; only the pool's own small bookkeeping may remain upstream.
         EXPECT_TRUE(upstream.live_bytes_ - baseline < 2 * bulk_bytes);
         resource->deallocate(block, bulk_bytes);
         EXPECT_TRUE(upstream.live_bytes_ - baseline < bulk_bytes / 16);
@@ -182,18 +179,73 @@ TEST(Ruvia, worker_memory_releases_large_blocks_freed_beyond_the_retention_budge
 }
 
 TEST(Ruvia, worker_memory_with_zero_retention_caches_nothing) {
-    constexpr std::size_t block_bytes = 30000;
+    for (const std::size_t block_bytes : {std::size_t{1}, std::size_t{17}, std::size_t{1024}, std::size_t{16384}, std::size_t{30000}}) {
+        SCOPED_TRACE(block_bytes);
+        counting_resource upstream;
+        ruvia::worker_memory worker_value(upstream, {.retained_block_bytes_ = 0});
+        auto* const resource = worker_value.resource();
+        const auto baseline = upstream.live_bytes_;
+        for (unsigned iteration = 0; iteration < 2; ++iteration) {
+            auto* const block = resource->allocate(block_bytes);
+            resource->deallocate(block, block_bytes);
+            EXPECT_EQ(upstream.live_bytes_, baseline);
+        }
+        EXPECT_TRUE(upstream.matched_returns_);
+    }
+}
+
+TEST(Ruvia, worker_memory_small_and_large_blocks_share_retention_budget) {
+    constexpr std::size_t budget = 32 * 1024;
+    for (const bool small_first : {false, true}) {
+        SCOPED_TRACE(small_first);
+        counting_resource upstream;
+        {
+            ruvia::worker_memory memory(upstream, {.retained_block_bytes_ = budget});
+            auto* const resource = memory.resource();
+            const auto baseline = upstream.live_bytes_;
+            auto* const small = resource->allocate(1024);
+            auto* const large = resource->allocate(budget);
+            if (small_first) {
+                resource->deallocate(small, 1024);
+                resource->deallocate(large, budget);
+            } else {
+                resource->deallocate(large, budget);
+                resource->deallocate(small, 1024);
+            }
+            EXPECT_LE(upstream.live_bytes_ - baseline, budget);
+            const auto allocations = upstream.allocations_;
+            const std::size_t cached_size = small_first ? 1024 : budget;
+            auto* const reused = resource->allocate(cached_size);
+            EXPECT_EQ(upstream.allocations_, allocations);
+            resource->deallocate(reused, cached_size);
+        }
+        EXPECT_EQ(upstream.live_bytes_, std::size_t{0});
+        EXPECT_TRUE(upstream.matched_returns_);
+    }
+}
+
+TEST(Ruvia, worker_memory_trim_releases_small_blocks_without_touching_live_storage) {
     counting_resource upstream;
-    ruvia::worker_memory worker_value(upstream, {.retained_block_bytes_ = 0});
-    auto* const resource = worker_value.resource();
-    auto* const warm = resource->allocate(block_bytes);
-    resource->deallocate(warm, block_bytes);
-    const auto live_after_free = upstream.live_bytes_;
-    const auto allocations_after_free = upstream.allocations_;
-    auto* const block = resource->allocate(block_bytes);
-    EXPECT_EQ(upstream.allocations_, allocations_after_free + 1);
-    resource->deallocate(block, block_bytes);
-    EXPECT_EQ(upstream.live_bytes_, live_after_free);
+    ruvia::worker_memory memory(upstream);
+    ruvia::worker_runtime runtime;
+    const auto owner = runtime.handle();
+    EXPECT_TRUE(owner.post([&] {
+                         auto* const resource = memory.resource();
+                         auto* const live = static_cast<std::byte*>(resource->allocate(17));
+                         std::fill_n(live, 17, std::byte{0x5a});
+                         const auto live_bytes = upstream.live_bytes_;
+                         auto* const retired = resource->allocate(1024);
+                         resource->deallocate(retired, 1024);
+                         memory.trim(owner);
+                         EXPECT_EQ(upstream.live_bytes_, live_bytes);
+                         EXPECT_TRUE(std::all_of(live, live + 17, [](std::byte value) {
+                             return value == std::byte{0x5a};
+                         }));
+                         resource->deallocate(live, 17);
+                     })
+            .accepted());
+    runtime.join();
+    EXPECT_TRUE(upstream.matched_returns_);
 }
 
 TEST(Ruvia, worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
@@ -362,16 +414,12 @@ TEST(Ruvia, worker_memory_passes_over_aligned_large_blocks_through) {
     {
         ruvia::worker_memory worker_value(upstream);
         auto* const resource = worker_value.resource();
-        // The first round may also grow the pool's own oversized-block
-        // bookkeeping, which it keeps; later rounds must round-trip exactly.
-        resource->deallocate(resource->allocate(block_bytes, alignment), block_bytes, alignment);
         for (unsigned iteration = 0; iteration < 2; ++iteration) {
             const auto live_before = upstream.live_bytes_;
             const auto allocations_before = upstream.allocations_;
             auto* const block = resource->allocate(block_bytes, alignment);
             EXPECT_TRUE(reinterpret_cast<std::uintptr_t>(block) % alignment == 0);
-            // Not served from the cache: each allocation reaches upstream
-            // (the pool may add its own header), and each free returns it.
+            // Over-aligned storage bypasses retention.
             EXPECT_TRUE(upstream.allocations_ > allocations_before);
             EXPECT_TRUE(upstream.live_bytes_ >= live_before + block_bytes);
             resource->deallocate(block, block_bytes, alignment);
@@ -382,9 +430,7 @@ TEST(Ruvia, worker_memory_passes_over_aligned_large_blocks_through) {
     EXPECT_TRUE(upstream.matched_returns_);
 }
 
-// Small pooled blocks honor every requested alignment, including the ones
-// libstdc++'s pool resources serve from a block size that is not a multiple
-// of the alignment (allocate(17, 16) from 24-byte blocks).
+// Non-multiple sizes must still honor every requested alignment.
 TEST(Ruvia, worker_memory_and_process_resource_align_small_blocks) {
     counting_resource upstream;
     {
@@ -607,11 +653,6 @@ TEST(Ruvia, worker_memory_construction_failure_reclaims_storage_and_allows_retry
     }
     const auto construction_attempts = baseline.attempts_;
     EXPECT_TRUE(construction_attempts != 0);
-    // worker_memory construction builds pmr containers whose noexcept
-    // constructors allocate debug iterator metadata under MSVC Debug STL.
-    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
-        return;
-    }
 
     for (std::size_t failure_point = 1; failure_point <= construction_attempts; ++failure_point) {
         counting_resource upstream;

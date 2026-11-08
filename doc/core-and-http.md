@@ -94,9 +94,11 @@ pool.join();
 
 `pool_lease_scheduler` 的空闲槽位仍同步获取；`release(slot)` 向排队者提交槽位归属后，通过后续 Worker 轮次恢复该协程，不在释放调用栈内执行下一位消费者，避免连续立即释放形成递归链。`close()` 同样先向全部排队者提交 `closed` 结果，再通过后续 Worker 轮次恢复它们，调用方的关闭序列在任何等待者观察到关闭前完成。提交后的取消或 `close()` 不撤销已交接槽位；尚未交接的等待者按原取消、超时和关闭规则完成。不得依赖 `release()` 或 `close()` 返回代表排队协程已经完成，销毁 scheduler 前仍须等待已启动的 acquire 完成。
 
-框架默认内存由 mimalloc 承载：`process_resource()` 是存活至进程结束的线程安全 PMR 适配器，不叠加进程级共享 pool；默认 Worker 内存、停止状态与协程帧使用该资源。Worker 提供小对象 pool、大块缓存、协程帧缓存及 `trim(owner)` 内存修剪入口。接受显式 PMR 的 API 始终优先使用调用方资源，调用方仍须保证资源覆盖所分配对象的生命周期。
+框架默认内存由 mimalloc 承载：`process_resource()` 是存活至进程结束的线程安全 PMR 适配器，不叠加进程级共享 pool；默认 Worker 内存、停止状态与协程帧使用该资源。接受显式 PMR 的 API 始终优先使用调用方资源，调用方仍须保证资源覆盖所分配对象的生命周期。
 
-`worker_memory` 构造中的分配失败以异常传给调用方，并将本次构造已经取得的存储全部归还上游；不因内部 pool 初始化失败终止进程。调用方可在资源恢复后重新构造，不能使用构造失败的对象。
+- **统一保留预算**：`worker_memory` 的大小空闲块共用 `retained_block_bytes_`，超额立即归还上游；设为零时不保留空闲块。
+- **空闲修剪**：`trim(owner)` 归还大小空闲块并清理调用线程的协程帧缓存，不影响在用对象；上游重入期间新缓存的块可留待下次修剪。
+- **构造失败回滚**：分配失败以异常传给调用方，本次构造已取得的存储全部归还上游；资源恢复后可重新构造。
 
 非 Windows 构建启用 mimalloc 普通 `override`，在最终链接中保留静态库，对标准 `malloc` / `free` 与全局 `new` / `delete` 使用 mimalloc；不得叠加另一套全局 allocator replacement。Windows 保持原静态 CRT 与普通 mimalloc 依赖，仅通过显式 API 承载框架资源和协程帧，不替换宿主标准分配接口。两种接入都不替换 `std::pmr::get_default_resource()` 对象，也不改变显式 PMR 的优先级。独立 `ruvia::http` 不依赖 core 或 mimalloc，未显式指定 PMR 时仍遵循调用方的标准 PMR 默认资源。
 

@@ -18,8 +18,7 @@ namespace ruvia {
 // heap allocation at the cost of that much storage per active connection.
 inline constexpr std::size_t request_arena_initial_bytes = std::size_t{4} * 1024;
 
-// Default upper bound on the large blocks one worker_memory keeps cached for
-// reuse after they are freed.
+// Default upper bound on freed blocks one worker_memory keeps for reuse.
 inline constexpr std::size_t default_retained_block_bytes = std::size_t{8} * 1024 * 1024;
 // Largest accepted retained_block_bytes_: no address space can hold more.
 inline constexpr std::size_t max_retained_block_bytes =
@@ -27,10 +26,9 @@ inline constexpr std::size_t max_retained_block_bytes =
 
 // request_initial_buffer_bytes_ must be greater than zero: it is the initial
 // block size of every request arena.
-// retained_block_bytes_ bounds the freed large blocks (above 16 KiB, up to
-// 1 MiB, sizes rounded to 4 KiB) a worker keeps for exact-size reuse; blocks
-// freed beyond it are returned immediately. Zero disables the cache; values
-// above max_retained_block_bytes are rejected.
+// retained_block_bytes_ bounds all freed blocks a worker keeps for reuse.
+// Blocks freed beyond it are returned immediately. Zero disables retention;
+// values above max_retained_block_bytes are rejected.
 struct memory_pool_config final {
     std::size_t request_initial_buffer_bytes_{request_arena_initial_bytes};
     std::size_t retained_block_bytes_{default_retained_block_bytes};
@@ -43,14 +41,13 @@ void validate_memory_pool_config(const memory_pool_config& config);
 // Explicit worker-local owner, not thread_local storage. All allocations and
 // deallocations are worker-affine; this pool has no internal synchronization.
 //
-// Two tiers: objects up to 16 KiB come from a small-object pool whose freed
-// storage stays reusable for the worker's life. Larger blocks come from a
-// bounded block cache: freed blocks up to 1 MiB (alignment up to 64) are kept,
-// in 4 KiB-rounded exact-size bins, for reuse while the cached total stays
-// within memory_pool_config::retained_block_bytes_; the excess goes back
-// upstream at once, and trim() returns every cached block. Larger or
-// over-aligned blocks pass straight through. Whether returned memory reaches
-// the OS is up to the C allocator. The pool must outlive every object using it.
+// Small and large blocks share one bounded cache. Sizes up to 16 KiB round
+// to alignof(std::max_align_t), larger sizes to 4 KiB. Freed blocks up to
+// 1 MiB (alignment up to 64) are retained within retained_block_bytes_;
+// excess blocks return upstream immediately, and trim() returns every cached
+// block. Larger or over-aligned blocks pass straight through. Whether returned
+// memory reaches the OS is up to the C allocator. The pool must outlive every
+// object using it.
 // Construction propagates allocation failures and returns all storage acquired
 // during the failed construction to its upstream.
 class worker_memory final {
@@ -68,9 +65,9 @@ public:
     worker_memory(const worker_memory&) = delete;
     worker_memory& operator=(const worker_memory&) = delete;
 
-    // Returns cached large blocks upstream and drains the calling thread's
-    // coroutine frame cache; live allocations and the small-object pool are
-    // untouched. Blocks newly cached by a reentrant upstream call may remain.
+    // Returns all cached blocks upstream and drains the calling thread's
+    // coroutine frame cache; live allocations are untouched.
+    // Blocks newly cached by a reentrant upstream call may remain.
     // Owner thread only: the first call binds `owner` as the worker this memory
     // serves, and every call throws std::logic_error unless it runs on that worker.
     void trim(const worker_handle& owner);

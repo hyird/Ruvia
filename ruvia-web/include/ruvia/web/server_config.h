@@ -135,8 +135,8 @@ struct server_config final {
     std::size_t max_inbound_buffer_bytes_per_connection_{64 * 1024 * 1024};
     std::optional<std::size_t> max_stream_body_bytes_{};
     std::size_t max_websocket_message_bytes_{default_max_websocket_message_bytes};
-    // Each worker's memory. retained_block_bytes_ bounds the freed 16 KiB-1 MiB
-    // blocks a worker keeps for reuse. A worker returns them, with its cached
+    // Each worker's memory. retained_block_bytes_ bounds all freed blocks
+    // retained for reuse. A worker returns them, with its cached
     // coroutine frames, at the first connection scan that follows a whole
     // connection_scan_interval_ with no request exchange in progress and no
     // connection activity.

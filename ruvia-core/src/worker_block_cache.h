@@ -7,14 +7,10 @@
 
 namespace ruvia::detail {
 
-// Upstream of a worker's small-object pool: an exact-size LIFO cache for
-// freed blocks above the pool cutoff. Sizes are rounded to 4 KiB, so every
-// request mapping to a bin can be served by any block stored in it. Freed
-// blocks are kept while the cached total stays within the retention budget;
-// the excess goes back upstream at once, and release_cached() returns every
-// cached block. Only freed blocks are ever held; live allocations are never
-// touched. Blocks above 1 MiB or with alignment above 64 pass straight through.
-// Worker-affine with no synchronization, like the pool it serves.
+// Worker-local exact-size cache. Small and large size classes share one
+// retention budget; only freed blocks count against it. Overflow returns
+// upstream immediately, and release_cached() never touches live allocations.
+// Blocks above 1 MiB or with alignment above 64 pass straight through.
 class worker_block_cache final : public std::pmr::memory_resource {
 public:
     static constexpr std::size_t small_block_bytes = std::size_t{16} * 1024;
@@ -34,11 +30,11 @@ public:
     }
 
 private:
+    using small_bins_type = size_class_lifo_bins<alignof(std::max_align_t), small_block_bytes>;
     using bins_type = size_class_lifo_bins<std::size_t{4} * 1024, std::size_t{1024} * 1024>;
 
     [[nodiscard]] static constexpr bool cacheable(std::size_t bytes_value, std::size_t alignment) noexcept {
-        return bytes_value > small_block_bytes && bytes_value <= bins_type::max_block_bytes &&
-               alignment <= block_alignment;
+        return bytes_value <= bins_type::max_block_bytes && alignment <= block_alignment;
     }
 
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override;
@@ -47,6 +43,7 @@ private:
 
     std::pmr::memory_resource* upstream_;
     std::size_t retained_budget_bytes_;
+    small_bins_type small_bins_;
     bins_type bins_;
 };
 

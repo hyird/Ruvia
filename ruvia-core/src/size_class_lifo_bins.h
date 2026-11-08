@@ -26,6 +26,10 @@ public:
         return (bytes_value + granularity - 1) & ~(granularity - 1);
     }
 
+    [[nodiscard]] std::size_t cached_bytes() const noexcept {
+        return cached_bytes_;
+    }
+
     [[nodiscard]] void* take(std::size_t block_bytes) noexcept {
         void*& head = bins_[bin_index(block_bytes)];
         void* const block = head;
