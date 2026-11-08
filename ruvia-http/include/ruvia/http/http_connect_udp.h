@@ -29,7 +29,15 @@ struct http_connect_udp_target_view final {
     port_number port_{};
 };
 struct http_connect_udp_target final {
-    // resource passed to the parser must outlive this result.
+    http_connect_udp_target() noexcept = default;
+    http_connect_udp_target(std::pmr::string host, port_number port = {}) noexcept;
+    http_connect_udp_target(const http_connect_udp_target& other);
+    http_connect_udp_target(http_connect_udp_target&&) noexcept = default;
+    http_connect_udp_target& operator=(const http_connect_udp_target&) = default;
+    http_connect_udp_target& operator=(http_connect_udp_target&&) = default;
+
+    // Construction inherits the source resource; assignment retains the
+    // destination resource. The resource backing host_ must outlive this value.
     std::pmr::string host_;
     std::uint16_t port_{0};
 };

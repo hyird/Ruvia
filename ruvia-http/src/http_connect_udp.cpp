@@ -1,6 +1,8 @@
 #include "ruvia/http/http_connect_udp.h"
 
 #include <array>
+#include <string>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
@@ -18,6 +20,15 @@
 #include "request/http_request_access.h"
 
 namespace ruvia {
+
+http_connect_udp_target::http_connect_udp_target(std::pmr::string host, port_number port) noexcept
+    : host_(std::move(host)),
+      port_(port.value()) {}
+
+http_connect_udp_target::http_connect_udp_target(const http_connect_udp_target& other)
+    : host_(other.host_, other.host_.get_allocator()),
+      port_(other.port_) {}
+
 namespace {
 constexpr std::string_view prefix{"/.well-known/masque/udp/"};
 bool valid_host(std::string_view host) {

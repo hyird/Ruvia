@@ -1,7 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <memory_resource>
+#include <new>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/http1_client_request_writer.h"
@@ -10,6 +14,8 @@
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_response_server.h"
+
+#include "request_header_memory_fixture.h"
 
 TEST(Ruvia, http_connect_udp_default_template_roundtrip_and_target_rejection) {
     for (const auto host : {"example.test", "192.0.2.6", "2001:db8::42"}) {
@@ -494,4 +500,84 @@ TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
     const auto encoded = ruvia::encode_http_connect_udp_path(target_view);
     EXPECT_TRUE(std::holds_alternative<std::pmr::string>(encoded));
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(request_view).has_value());
+}
+
+TEST(Ruvia, http_connect_udp_target_construction_inherits_resource) {
+    ruvia::test::header_memory memory;
+    {
+        auto parsed = ruvia::parse_http_connect_udp_path(
+            "/.well-known/masque/udp/copy-resource-source.example.test/443/", &memory);
+        auto& source = std::get<ruvia::http_connect_udp_target>(parsed);
+        const auto expected_host = std::string(source.host_);
+        ruvia::http_connect_udp_target copied(source);
+        EXPECT_EQ(copied.host_.get_allocator().resource(), &memory);
+        source.host_.assign("changed.test");
+        source.port_ = 80;
+        EXPECT_EQ(std::string_view(copied.host_), std::string_view(expected_host));
+        EXPECT_EQ(copied.port_, 443);
+
+        memory.reject_ = true;
+        ruvia::http_connect_udp_target moved(std::move(copied));
+        EXPECT_EQ(moved.host_.get_allocator().resource(), &memory);
+        EXPECT_EQ(std::string_view(moved.host_), std::string_view(expected_host));
+        EXPECT_EQ(moved.port_, 443);
+    }
+    EXPECT_EQ(memory.live_bytes_, 0U);
+}
+
+TEST(Ruvia, http_connect_udp_target_assignment_retains_resource_and_rolls_back_failure) {
+    for (const bool move_assignment : {false, true}) {
+        SCOPED_TRACE(move_assignment);
+        ruvia::test::header_memory source_memory;
+        ruvia::test::header_memory destination_memory;
+        {
+            ruvia::http_connect_udp_target source{
+                std::pmr::string("long-source-subdomain.example.test", &source_memory), 443};
+            ruvia::http_connect_udp_target destination{
+                std::pmr::string("old.test", &destination_memory), 80};
+            source_memory.reject_ = true;
+            destination_memory.reject_ = true;
+            if (move_assignment) {
+                EXPECT_THROW(destination = std::move(source), std::bad_alloc);
+            } else {
+                EXPECT_THROW(destination = source, std::bad_alloc);
+            }
+            EXPECT_EQ(source.host_, "long-source-subdomain.example.test");
+            EXPECT_EQ(source.port_, 443);
+            EXPECT_EQ(destination.host_, "old.test");
+            EXPECT_EQ(destination.port_, 80);
+            EXPECT_EQ(source.host_.get_allocator().resource(), &source_memory);
+            EXPECT_EQ(destination.host_.get_allocator().resource(), &destination_memory);
+
+            destination_memory.reject_ = false;
+            if (move_assignment) {
+                destination = std::move(source);
+            } else {
+                destination = source;
+            }
+            EXPECT_EQ(destination.host_, "long-source-subdomain.example.test");
+            EXPECT_EQ(destination.port_, 443);
+            EXPECT_EQ(destination.host_.get_allocator().resource(), &destination_memory);
+        }
+        EXPECT_EQ(source_memory.live_bytes_, 0U);
+        EXPECT_EQ(destination_memory.live_bytes_, 0U);
+    }
+}
+
+TEST(Ruvia, http_connect_udp_target_same_resource_move_requires_no_allocation) {
+    ruvia::test::header_memory memory;
+    {
+        ruvia::http_connect_udp_target source{
+            std::pmr::string("long-source-subdomain.example.test", &memory), 443};
+        ruvia::http_connect_udp_target destination{
+            std::pmr::string("long-retired-subdomain.example.test", &memory), 80};
+        memory.reject_ = true;
+
+        destination = std::move(source);
+
+        EXPECT_EQ(destination.host_, "long-source-subdomain.example.test");
+        EXPECT_EQ(destination.port_, 443);
+        EXPECT_EQ(destination.host_.get_allocator().resource(), &memory);
+    }
+    EXPECT_EQ(memory.live_bytes_, 0U);
 }

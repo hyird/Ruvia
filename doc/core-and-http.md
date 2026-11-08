@@ -351,3 +351,6 @@ HTTP/2 与 HTTP/3 分别由 `RUVIA_ENABLE_HTTP2`、`RUVIA_ENABLE_HTTP3` 控制�
 - **WebSocket 帧提交**：为帧头、掩码与需复制的负载统一预留空间后才发布输出；分配失败保留已有队列。
 
 `websocket_connection::submit_close()` 接受 `websocket_close_code`；`from_value()` / `try_from_value()` 在整数窄化前校验，发送与接收的状态码判定共用该值类型。`websocket_close_status::{normal_closure, going_away, internal_error}` 提供现有生命周期使用的常量，其余支持值由工厂构造；范围、保留码和 Web 关闭配置的用法见[WebSocket 关闭 API](streaming-websocket.md#32-ruviawebsocket-与-ruviawebsocket_message-api)。服务端主动发送客户端专属 `1010` 仍返回 `invalid_code`，UTF-8 原因与控制帧大小均按协议校验。
+
+- **CONNECT-UDP 目标所有权**：`http_connect_udp_target` 的复制与移动构造继承源 PMR；赋值保留目标资源，跨资源分配失败保留双方内容。
+- **CONNECT-UDP 目标构造**：使用 `http_connect_udp_target{std::pmr::string(host, resource), port}`，端口参数经 `port_number` 检查；该类型不再支持指定成员初始化，`host_`、`port_` 保持公开。
