@@ -1199,8 +1199,9 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
     co_await run_mysql_statement(
         pool, index, sql, classify_mariadb_statement(sql), params, resource, deadline_value);
     auto& connection = *pool.slot(index).connection_;
-    auto* raw_result = mysql_use_result(&connection);
-    if (raw_result == nullptr) {
+    std::unique_ptr<MYSQL_RES, decltype(&discard_unbuffered_result)> result(
+        mysql_use_result(&connection), &discard_unbuffered_result);
+    if (result == nullptr) {
         if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
             throw mysql_error(connection, "mysql_use_result", db_error::code_type::statement_failed);
         }
@@ -1209,14 +1210,14 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
         co_return empty;
     }
     db_stream_start start(resource);
-    start.result_ = raw_result;
-    const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
-    const auto* fields_value = mysql_fetch_fields(raw_result);
+    const auto field_count = static_cast<std::size_t>(mysql_num_fields(result.get()));
+    const auto* fields_value = mysql_fetch_fields(result.get());
     start.column_names_.reserve(field_count);
     for (std::size_t i = 0; i < field_count; ++i) {
         start.column_names_.emplace_back(
             fields_value[i].name, static_cast<std::size_t>(fields_value[i].name_length));
     }
+    start.result_ = result.release();
     co_return start;
 }
 

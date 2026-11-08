@@ -555,6 +555,7 @@ db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
 // usable the open transaction is rolled back first so the next caller does
 // not inherit it; a rollback that fails closes the connection, which ends the
 // transaction as well. The original failure is what the caller sees.
+// Callers must also close and release the lease if creating this task fails.
 template <typename driver_type>
 task<void> db_pool<driver_type>::retire_failed_transaction_slot(std::size_t index,
     std::pmr::memory_resource* resource, const operation_timeout& timeout, const std::exception_ptr& failure) {
@@ -593,10 +594,14 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     } catch (...) {
         failure = std::current_exception();
     }
-    // Release the failed statement's storage before awaiting ROLLBACK.
-    std::pmr::string(sql.get_allocator().resource()).swap(sql);
-    std::pmr::vector<db_value>(params.get_allocator().resource()).swap(params);
-    co_await retire_failed_transaction_slot(index, resource, timeout, failure);
+    try {
+        // Release the failed statement's storage before awaiting ROLLBACK.
+        std::pmr::string(sql.get_allocator().resource()).swap(sql);
+        std::pmr::vector<db_value>(params.get_allocator().resource()).swap(params);
+        co_await retire_failed_transaction_slot(index, resource, timeout, failure);
+    } catch (...) {
+        close_slot(index);
+    }
     cancellation.finish();
     release_slot(index);
     std::rethrow_exception(failure);
@@ -689,7 +694,11 @@ task<void> db_pool<driver_type>::finish_transaction(std::size_t index, std::stri
         failure = std::current_exception();
     }
     if (failure != nullptr) {
-        co_await retire_failed_transaction_slot(index, resource, timeout, failure);
+        try {
+            co_await retire_failed_transaction_slot(index, resource, timeout, failure);
+        } catch (...) {
+            close_slot(index);
+        }
     }
     cancellation.finish();
     release_slot(index);
