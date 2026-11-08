@@ -200,6 +200,14 @@ TEST(Ruvia, set_cookie_parser_saturates_max_age_overflow) {
     EXPECT_TRUE(negative->max_age_seconds() == std::numeric_limits<std::int64_t>::min());
 }
 
+TEST(Ruvia, set_cookie_parser_ignores_overflowing_max_age_with_trailing_bytes) {
+    const auto parsed_value = ruvia::parse_set_cookie(
+        "sid=abc; Max-Age=60; Max-Age=999999999999999999999999suffix; Path=/api");
+    ASSERT_TRUE(parsed_value.has_value());
+    EXPECT_EQ(parsed_value->max_age_seconds(), 60);
+    EXPECT_EQ(parsed_value->path(), "/api");
+}
+
 TEST(Ruvia, set_cookie_parser_ignores_invalid_later_expires_attribute) {
     const auto parsed_value =
         ruvia::parse_set_cookie("sid=abc; Expires=Sun, 06 Nov 1994 08:49:37 GMT; Expires=not-a-date");

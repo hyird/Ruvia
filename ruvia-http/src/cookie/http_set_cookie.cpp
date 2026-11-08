@@ -26,24 +26,18 @@ std::optional<std::int64_t> parse_max_age_seconds(std::string_view value) noexce
     if (value.empty()) {
         return std::nullopt;
     }
-    const bool negative = value.front() == '-';
-    const auto digit_offset = negative ? std::size_t{1} : std::size_t{0};
-    if (digit_offset == value.size()) {
-        return std::nullopt;
-    }
-    for (const char byte : value.substr(digit_offset)) {
-        if (byte < '0' || byte > '9') {
-            return std::nullopt;
-        }
-    }
 
     std::int64_t seconds = 0;
     const auto [parsed_value, error] =
         std::from_chars(value.data(), value.data() + value.size(), seconds);
-    if (error == std::errc::result_out_of_range) {
-        return negative ? std::numeric_limits<std::int64_t>::min() : max_cookie_age_seconds;
+    // Even overflow must consume the complete attribute before saturation.
+    if (parsed_value != value.data() + value.size()) {
+        return std::nullopt;
     }
-    if (error != std::errc{} || parsed_value != value.data() + value.size()) {
+    if (error == std::errc::result_out_of_range) {
+        return value.front() == '-' ? std::numeric_limits<std::int64_t>::min() : max_cookie_age_seconds;
+    }
+    if (error != std::errc{}) {
         return std::nullopt;
     }
     return seconds > max_cookie_age_seconds ? max_cookie_age_seconds : seconds;

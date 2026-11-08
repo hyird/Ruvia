@@ -139,6 +139,7 @@ pool.join();
 | `"ruvia/http/http_priority.h"` | `class http_priority_urgency`、`struct http_priority`、`struct http_priority_fields`、`parse_http_priority`、`encode_http_priority` | RFC 9218 可扩展 HTTP 优先级首部与 HTTP/2 `PRIORITY_UPDATE` 帧编解码 |
 
 - **HTTP/2 与 HTTP/3 字段名规范化**：共用单遍 ASCII 转换；已小写名称在暂存阶段直接借用，需转换时写入拥有缓冲。
+- **Cookie Max-Age**：十进制校验与转换单遍完成，仅对完整数值应用饱和；非法的后续 `Max-Age` 不覆盖此前有效值。
 
 `http_priority::urgency_` 与 `http_priority_fields::urgency_` 共用 `http_priority_urgency`，后者仍以 `std::optional` 区分缺省参数。按 [RFC 9218 §4.1](https://www.rfc-editor.org/rfc/rfc9218.html#section-4.1)，值域为 `0..7`、默认值为 `3`；本地整数输入在窄化前检查，非法值抛出 `std::invalid_argument`，无异常探测用 `try_from_value()`。不隐式接受浮点或枚举，也不隐式转换回整数；需要整数时用 `urgency_.value()`（可选字段用 `urgency_->value()`），不要预先窄化。接收端仍按 RFC 9218 §4 忽略越界或类型不符的参数，不把本地构造失败规则套用到对端字段。
 
