@@ -621,3 +621,96 @@ TEST(Ruvia, OneShotConcurrentCompletionReservation) {
 TEST(Ruvia, OneShotConcurrentCompletionReservationAfterThrow) {
     EXPECT_TRUE(ruvia::test::one_shot_tests::test_concurrent_completion_reservation(true));
 }
+
+TEST(Ruvia, WorkerDeliveryFailedExtractionRetainsRejectedPayload) {
+    using namespace ruvia::test::one_shot_tests;
+    payload_state state;
+    state.reenter_ = [] {};
+    {
+        auto result = ruvia::one_shot_complete_result<payload>::reject(
+            ruvia::one_shot_complete_status::receiver_closed, payload(state));
+        state.throw_on_move_ = true;
+        EXPECT_THROW(static_cast<void>(std::move(result).take_rejected()), std::runtime_error);
+        state.throw_on_move_ = false;
+        EXPECT_EQ(state.destroyed_, 0);
+        EXPECT_EQ(result.status(), ruvia::one_shot_complete_status::receiver_closed);
+        ASSERT_NE(result.rejected(), nullptr);
+        ASSERT_NE(result.rejected()->value_, nullptr);
+        EXPECT_EQ(*result.rejected()->value_, 42);
+        const auto extracted = std::move(result).take_rejected();
+        ASSERT_NE(extracted.value_, nullptr);
+        EXPECT_EQ(*extracted.value_, 42);
+        EXPECT_EQ(result.rejected(), nullptr);
+        EXPECT_EQ(result.status(), ruvia::one_shot_complete_status::receiver_closed);
+        EXPECT_THROW(static_cast<void>(std::move(result).take_rejected()), std::logic_error);
+    }
+    EXPECT_EQ(state.destroyed_, 1);
+}
+
+TEST(Ruvia, WorkerDeliveryExtractionDuringUnwindCommitsOnlyOnSuccess) {
+    using namespace ruvia::test::one_shot_tests;
+    using result_type = ruvia::one_shot_complete_result<payload>;
+    struct extract_on_unwind final {
+        result_type& result_;
+        bool& succeeded_;
+        bool& failed_;
+        ~extract_on_unwind() {
+            try {
+                const auto value = std::move(result_).take_rejected();
+                succeeded_ = value.value_ && *value.value_ == 42;
+            } catch (const std::runtime_error&) {
+                failed_ = true;
+            }
+        }
+    };
+    for (const bool fail_move : {false, true}) {
+        SCOPED_TRACE(fail_move);
+        payload_state state;
+        state.reenter_ = [] {};
+        {
+            auto result = result_type::reject(
+                ruvia::one_shot_complete_status::receiver_closed, payload(state));
+            state.throw_on_move_ = fail_move;
+            bool succeeded = false;
+            bool failed = false;
+            try {
+                const extract_on_unwind guard{result, succeeded, failed};
+                throw std::runtime_error("outer failure");
+            } catch (const std::runtime_error&) {
+            }
+            state.throw_on_move_ = false;
+            EXPECT_EQ(succeeded, !fail_move);
+            EXPECT_EQ(failed, fail_move);
+            if (fail_move) {
+                EXPECT_EQ(state.destroyed_, 0);
+                ASSERT_NE(result.rejected(), nullptr);
+                const auto retry = std::move(result).take_rejected();
+                ASSERT_NE(retry.value_, nullptr);
+                EXPECT_EQ(*retry.value_, 42);
+            }
+            EXPECT_EQ(result.rejected(), nullptr);
+            EXPECT_EQ(result.status(), ruvia::one_shot_complete_status::receiver_closed);
+        }
+        EXPECT_EQ(state.destroyed_, 1);
+    }
+}
+
+TEST(Ruvia, WorkerDeliveryRejectedAccessBypassesPayloadAddressOperator) {
+    struct non_addressable final {
+        int value_;
+        non_addressable* operator&() = delete;
+        const non_addressable* operator&() const = delete;
+    };
+    auto result = ruvia::one_shot_complete_result<non_addressable>::reject(
+        ruvia::one_shot_complete_status::receiver_closed, non_addressable{17});
+    const auto& constant = result;
+    ASSERT_NE(result.rejected(), nullptr);
+    ASSERT_NE(constant.rejected(), nullptr);
+    EXPECT_EQ(constant.rejected(), result.rejected());
+    EXPECT_EQ(result.rejected()->value_, 17);
+    EXPECT_EQ(constant.rejected()->value_, 17);
+    const auto extracted = std::move(result).take_rejected();
+    EXPECT_EQ(extracted.value_, 17);
+    EXPECT_EQ(result.rejected(), nullptr);
+    EXPECT_EQ(constant.rejected(), nullptr);
+}

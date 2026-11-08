@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -134,24 +135,29 @@ public:
     }
 
     [[nodiscard]] t_type* rejected() & noexcept {
-        return rejected_ ? &*rejected_ : nullptr;
+        return rejected_ ? std::addressof(*rejected_) : nullptr;
     }
 
     [[nodiscard]] const t_type* rejected() const& noexcept {
-        return rejected_ ? &*rejected_ : nullptr;
+        return rejected_ ? std::addressof(*rejected_) : nullptr;
     }
 
     t_type* rejected() && = delete;
     const t_type* rejected() const&& = delete;
 
+    // A failed extraction retains the payload, in the state its move left it.
+    // Only successful return-value construction consumes the rejected value.
     [[nodiscard]] t_type take_rejected() && {
         if (status_ == accepted_status || !rejected_) {
             throw std::logic_error("accepted delivery result has no rejected value");
         }
         struct clear_rejected final {
             std::optional<t_type>& rejected_;
+            const int exceptions_{std::is_nothrow_move_constructible_v<t_type> ? 0 : std::uncaught_exceptions()};
             ~clear_rejected() {
-                rejected_.reset();
+                if (std::is_nothrow_move_constructible_v<t_type> || std::uncaught_exceptions() == exceptions_) {
+                    rejected_.reset();
+                }
             }
         } clear{rejected_};
         return std::move(*rejected_);
