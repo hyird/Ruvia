@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/web/error.h"
@@ -827,6 +828,148 @@ TEST(Ruvia, validator_same_resource_moves_and_self_assignment_do_not_allocate) {
     }
     EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
     EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
+}
+
+TEST(Ruvia, validation_issue_copy_inherits_resource_and_outlives_validator) {
+    static_assert(std::is_nothrow_move_constructible_v<ruvia::validation_issue>);
+    counting_memory_resource upstream;
+    ruvia::test::equivalent_tracking_resource resource(upstream);
+    const std::string field(128, 'f');
+    const std::string code(96, 'c');
+    const std::string message(256, 'm');
+    std::optional<ruvia::validation_issue> copied;
+    {
+        validator input({.resource_ = &resource});
+        input.add(field, code, message);
+        copied.emplace(input.issues().front());
+    }
+    EXPECT_EQ(copied->field(), field);
+    EXPECT_EQ(copied->code(), code);
+    EXPECT_EQ(copied->message(), message);
+    if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+        const auto live = upstream.live_allocations();
+        for (std::size_t allowance = 0; allowance != 3; ++allowance) {
+            resource.reject_allocations_after(allowance);
+            EXPECT_THROW(static_cast<void>(ruvia::validation_issue(*copied)), std::bad_alloc);
+            resource.allow_allocations();
+            EXPECT_EQ(upstream.live_allocations(), live);
+            EXPECT_EQ(copied->field(), field);
+            EXPECT_EQ(copied->code(), code);
+            EXPECT_EQ(copied->message(), message);
+        }
+    }
+    copied.reset();
+    EXPECT_EQ(upstream.live_allocations(), 0u);
+}
+
+TEST(Ruvia, validation_issue_assignment_rebinds_atomically_and_allows_retry) {
+    const std::string field(128, 'f');
+    const std::string code(96, 'c');
+    const std::string message(256, 'm');
+    const bool inject_failures = ruvia::test::stl_allocation_failure_injection_enabled();
+    for (const bool move : {false, true}) {
+        for (std::size_t allowance = 0; allowance != (inject_failures ? 3u : 1u); ++allowance) {
+            counting_memory_resource source_upstream;
+            counting_memory_resource target_upstream;
+            ruvia::test::equivalent_tracking_resource source_resource(source_upstream);
+            ruvia::test::equivalent_tracking_resource target_resource(target_upstream);
+            std::optional<ruvia::validation_issue> destination;
+            {
+                validator initial({.resource_ = &target_resource});
+                initial.add("old-field", "old-code", "old-message");
+                destination.emplace(initial.issues().front());
+            }
+            {
+                validator input({.resource_ = &source_resource});
+                input.add(field, code, message);
+                auto source = input.issues().front();
+                const auto source_live = source_upstream.live_allocations();
+                const auto target_live = target_upstream.live_allocations();
+                if (inject_failures) {
+                    target_resource.reject_allocations_after(allowance);
+                    if (move) {
+                        EXPECT_THROW(*destination = std::move(source), std::bad_alloc);
+                    } else {
+                        EXPECT_THROW(*destination = source, std::bad_alloc);
+                    }
+                    target_resource.allow_allocations();
+                    EXPECT_EQ(destination->field(), "old-field");
+                    EXPECT_EQ(destination->code(), "old-code");
+                    EXPECT_EQ(destination->message(), "old-message");
+                    EXPECT_EQ(source.field(), field);
+                    EXPECT_EQ(source.code(), code);
+                    EXPECT_EQ(source.message(), message);
+                    EXPECT_EQ(source_upstream.live_allocations(), source_live);
+                    EXPECT_EQ(target_upstream.live_allocations(), target_live);
+                }
+                if (move) {
+                    *destination = std::move(source);
+                } else {
+                    *destination = source;
+                }
+            }
+            source_resource.retire();
+            EXPECT_EQ(destination->field(), field);
+            EXPECT_EQ(destination->code(), code);
+            EXPECT_EQ(destination->message(), message);
+            if (inject_failures) {
+                target_resource.reject_allocations_after(0);
+                EXPECT_THROW(static_cast<void>(ruvia::validation_issue(*destination)), std::bad_alloc);
+                target_resource.allow_allocations();
+            }
+            destination.reset();
+            EXPECT_EQ(source_resource.callbacks_after_retirement(), 0u);
+            EXPECT_EQ(source_upstream.live_allocations(), 0u);
+            EXPECT_EQ(target_upstream.live_allocations(), 0u);
+        }
+    }
+}
+
+TEST(Ruvia, validation_issue_equivalent_resource_moves_preserve_destination_allocator) {
+    const std::string field(128, 'f');
+    const std::string code(96, 'c');
+    const std::string message(256, 'm');
+    const bool inject_failures = ruvia::test::stl_allocation_failure_injection_enabled();
+    for (const bool distinct_resources : {false, true}) {
+        counting_memory_resource upstream;
+        ruvia::test::equivalent_tracking_resource source_resource(upstream);
+        ruvia::test::equivalent_tracking_resource target_resource(upstream);
+        auto* destination_resource = distinct_resources ? &target_resource : &source_resource;
+        std::optional<ruvia::validation_issue> destination;
+        std::array<const char*, 3> storage{};
+        {
+            validator input({.resource_ = &source_resource});
+            input.add(field, code, message);
+            auto source = input.issues().front();
+            validator initial({.resource_ = destination_resource});
+            initial.add(message, field, code);
+            destination.emplace(initial.issues().front());
+            storage = {source.field().data(), source.code().data(), source.message().data()};
+            if (inject_failures) {
+                source_resource.reject_allocations_after(0);
+                target_resource.reject_allocations_after(0);
+            }
+            auto moved = std::move(source);
+            *destination = std::move(moved);
+            auto* alias = std::addressof(*destination);
+            *destination = *alias;
+            *destination = std::move(*alias);
+            source_resource.allow_allocations();
+            target_resource.allow_allocations();
+        }
+        if (distinct_resources) {
+            source_resource.retire();
+        }
+        EXPECT_EQ(destination->field(), field);
+        EXPECT_EQ(destination->code(), code);
+        EXPECT_EQ(destination->message(), message);
+        EXPECT_EQ(destination->field().data(), storage[0]);
+        EXPECT_EQ(destination->code().data(), storage[1]);
+        EXPECT_EQ(destination->message().data(), storage[2]);
+        destination.reset();
+        EXPECT_EQ(source_resource.callbacks_after_retirement(), 0u);
+        EXPECT_EQ(upstream.live_allocations(), 0u);
+    }
 }
 
 }  // namespace validator_ownership_test

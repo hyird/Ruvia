@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <exception>
 #include <system_error>
+#include <utility>
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
@@ -100,6 +101,41 @@ namespace {
 }
 
 }  // namespace
+
+validation_issue::validation_issue(const validation_issue& other)
+    : validation_issue(other, other.field_.get_allocator().resource()) {}
+
+validation_issue::validation_issue(const validation_issue& other, std::pmr::memory_resource* resource)
+    : field_(other.field_, resource),
+      code_(other.code_, resource),
+      message_(other.message_, resource) {}
+
+void validation_issue::swap(validation_issue& other) noexcept {
+    // All fields share one resource; assignment preserves each destination allocator.
+    field_.swap(other.field_);
+    code_.swap(other.code_);
+    message_.swap(other.message_);
+}
+
+validation_issue& validation_issue::operator=(const validation_issue& other) {
+    if (this != &other) {
+        validation_issue candidate(other, field_.get_allocator().resource());
+        swap(candidate);
+    }
+    return *this;
+}
+
+validation_issue& validation_issue::operator=(validation_issue&& other) {
+    if (this != &other) {
+        if (field_.get_allocator() == other.field_.get_allocator()) {
+            validation_issue candidate(std::move(other));
+            swap(candidate);
+        } else {
+            *this = other;
+        }
+    }
+    return *this;
+}
 
 // http_error defaults to the process resource. An exception object may escape
 // the worker that handles it: one thrown by a run_blocking callable is built on

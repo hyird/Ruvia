@@ -179,6 +179,8 @@ ruvia::app().listen({
 - **抛出或构造业务错误**：
   - 在路由或中间件中可抛出 `ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "bad_input", .message_ = "..."})`，或直接 `co_return c.error({...});`。`http_error` 是唯一的拥有型应用错误：status / code / message / status_text 以及 `.validation_issues_` 全部深拷贝持有，`info()` 返回携带 issues 的 `http_error_info`。
 - **错误资源归属**：`http_error` 复制或移动赋值保留目标资源对象，包含嵌套诊断文本；不同资源对象即使 `is_equal()` 为真，也先在目标资源完整重建再提交，分配失败保留原值。
+- **独立校验诊断**：`validation_issue` 复制构造沿用源 PMR，赋值保留目标 PMR；保留诊断副本时须同步保留资源所有者。
+- **诊断赋值提交**：全部字段准备成功后才替换旧值；分配失败保留两端诊断，资源等价的移动不分配。
 - **全局与前缀级错误/404 处理器**：
   - `on_error` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c, ruvia::http_error_info error)`。处理器内再次抛出 `http_error`（含校验 issues）会按该错误生成默认响应，不会变成 500；协议层错误的 `error.code()` 为具体机器码（如 `missing_host`、`conflicting_content_length`），而非按状态派生的 `bad_request`。内置中间件的拒绝同样经过 `on_error`：全局与路由级限流为 `429` / `too_many_requests`（处理器返回的响应之后会追加 `Retry-After` 与 `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`），CSRF 校验失败为 `403` / `csrf_token_mismatch`，会话冲突为 `409` / `session_conflict`。
   - `on_not_found` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c)`。

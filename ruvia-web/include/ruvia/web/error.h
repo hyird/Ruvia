@@ -50,8 +50,15 @@ struct validation_issue_options final {
     std::pmr::memory_resource* resource_{nullptr};
 };
 
+// Standalone copies retain the source resource. Assignment retains the
+// destination resource and prepares all diagnostic text before committing.
 class validation_issue final {
 public:
+    validation_issue(const validation_issue& other);
+    validation_issue(validation_issue&&) noexcept = default;
+    validation_issue& operator=(const validation_issue& other);
+    validation_issue& operator=(validation_issue&& other);
+
     [[nodiscard]] std::string_view field() const& noexcept RUVIA_LIFETIMEBOUND {
         return field_;
     }
@@ -70,6 +77,9 @@ public:
 private:
     friend class validator;
     friend struct detail::validation_issue_access;
+
+    validation_issue(const validation_issue& other, std::pmr::memory_resource* resource);
+    void swap(validation_issue& other) noexcept;
 
     explicit validation_issue(validation_issue_options options)
         : validation_issue(resolved_pmr_resource_tag{}, options.field_.view(),
@@ -93,10 +103,7 @@ namespace detail {
 struct validation_issue_access final {
     [[nodiscard]] static validation_issue copy(
         const validation_issue& issue, std::pmr::memory_resource* resource) {
-        return validation_issue({.field_ = issue.field(),
-            .code_ = issue.code(),
-            .message_ = issue.message(),
-            .resource_ = resource});
+        return validation_issue(issue, pmr_resource_or_default(resource));
     }
 };
 
