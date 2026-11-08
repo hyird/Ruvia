@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -719,6 +720,14 @@ TEST(Ruvia, worker_notification_startup_validation_rolls_back) {
 }
 
 TEST(Ruvia, worker_notification_borrows_event_loop) {
+    static_assert(std::is_constructible_v<ruvia::worker_notification, ruvia::event_loop&>);
+    static_assert(std::is_constructible_v<ruvia::worker_notification, const ruvia::event_loop&>);
+    static_assert(!std::is_constructible_v<ruvia::worker_notification, ruvia::event_loop&&>);
+    static_assert(!std::is_constructible_v<ruvia::worker_notification, const ruvia::event_loop&&>);
+    static_assert(std::is_constructible_v<ruvia::worker_notification, ruvia::event_loop&, ruvia::worker_notification_options>);
+    static_assert(std::is_constructible_v<ruvia::worker_notification, const ruvia::event_loop&, ruvia::worker_notification_options>);
+    static_assert(!std::is_constructible_v<ruvia::worker_notification, ruvia::event_loop&&, ruvia::worker_notification_options>);
+    static_assert(!std::is_constructible_v<ruvia::worker_notification, const ruvia::event_loop&&, ruvia::worker_notification_options>);
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
     const auto loop = attachment.loop();

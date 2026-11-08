@@ -67,9 +67,11 @@ public:
         worker_runtime& runtime, worker_notification_options options = {});
     explicit worker_notification(
         worker_runtime_context& runtime, worker_notification_options options = {});
+    // Borrows the loop's handle; the loop must remain address-stable and alive.
     explicit worker_notification(
         const event_loop& loop, worker_notification_options options = {});
     worker_notification(event_loop&&, worker_notification_options = {}) = delete;
+    worker_notification(const event_loop&&, worker_notification_options = {}) = delete;
     ~worker_notification();
 
     worker_notification(const worker_notification&) = delete;
