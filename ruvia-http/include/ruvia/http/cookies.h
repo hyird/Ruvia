@@ -62,6 +62,7 @@ char* write_cookie_request_pair(
 
 // Cookie request pairs always include '=', including for an empty name.
 // Inputs may borrow header_value, including its terminating NUL.
+// Failure preserves the original contents; capacity may grow.
 template <typename string>
 void append_cookie_request_pair(string& header_value, std::string_view name, std::string_view value) {
     const auto start = header_value.size();
@@ -100,7 +101,12 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
     if constexpr (requires { header_value.get_allocator().resource(); }) {
         resource = header_value.get_allocator().resource();
     }
-    (void)write_cookie_request_pair(bytes + start + separator_bytes, name, value, resource);
+    try {
+        (void)write_cookie_request_pair(bytes + start + separator_bytes, name, value, resource);
+    } catch (...) {
+        header_value.resize(start);
+        throw;
+    }
     if (separator_bytes != 0) {
         bytes[start] = ';';
         bytes[start + 1] = ' ';

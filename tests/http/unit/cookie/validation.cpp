@@ -3,6 +3,7 @@
 #include <chrono>
 #include <limits>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -11,6 +12,8 @@
 
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_set_cookie.h"
+
+#include "request_header_memory_fixture.h"
 
 namespace {
 
@@ -375,4 +378,24 @@ TEST(Ruvia, cookie_request_pair_preserves_aliased_inputs_and_terminators) {
     auto expected = original + "; sid=" + original.substr(4);
     expected.push_back('\0');
     EXPECT_EQ(growing, expected);
+}
+
+TEST(Ruvia, cookie_request_pair_preserves_contents_when_allocations_are_rejected) {
+    ruvia::test::header_memory memory;
+    {
+        std::pmr::string header(&memory);
+        header.reserve(1024);
+        const std::string value(300, 'v');
+        const auto expected = std::string("\0=", 2) + value;
+        memory.reject_ = true;
+        try {
+            ruvia::append_cookie_request_pair(header, std::string_view(header.data(), 1), value);
+        } catch (const std::bad_alloc&) {
+            ASSERT_TRUE(header.empty());
+            memory.reject_ = false;
+            ruvia::append_cookie_request_pair(header, std::string_view(header.data(), 1), value);
+        }
+        EXPECT_EQ(std::string_view(header), std::string_view(expected));
+    }
+    EXPECT_EQ(memory.live_bytes_, 0U);
 }
