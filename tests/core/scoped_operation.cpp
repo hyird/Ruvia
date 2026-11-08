@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <exception>
 #include <future>
 #include <limits>
 #include <memory>
@@ -16,6 +17,115 @@
 #include "ruvia/core/worker_signal.h"
 
 #include "test_exceptions.h"
+
+namespace ruvia::test::scoped_operation_tests {
+
+enum class direct_child_outcome { immediate,
+    suspended,
+    failed,
+    cancelled };
+
+struct direct_retirement_observation final {
+    std::weak_ptr<int> payload_;
+    std::exception_ptr failure_;
+    int value_{};
+    int expirations_{};
+    bool expired_after_release_{};
+    bool joined_after_expiry_{};
+    bool cancelled_{};
+
+    static void expire(void* raw) noexcept {
+        auto& observation = *static_cast<direct_retirement_observation*>(raw);
+        ++observation.expirations_;
+        observation.expired_after_release_ = observation.payload_.expired();
+    }
+};
+
+ruvia::task<void> direct_scoped_child(std::shared_ptr<int> payload,
+    ruvia::worker_signal& gate, ruvia::stop_token token,
+    direct_child_outcome outcome, direct_retirement_observation& observation) {
+    if (outcome != direct_child_outcome::immediate) {
+        co_await gate.wait();
+    }
+    observation.value_ = *payload;
+    observation.cancelled_ = token.stop_requested();
+    if (outcome == direct_child_outcome::failed) {
+        throw std::runtime_error("scoped child failure");
+    }
+}
+
+ruvia::task<void> observe_direct_retirement(
+    ruvia::operation_scope& operations, direct_retirement_observation& observation) {
+    co_await operations.close_and_join();
+    observation.joined_after_expiry_ = observation.expirations_ == 1 &&
+                                       observation.payload_.expired() && !operations.has_pending_operations();
+}
+
+ruvia::task<void> exercise_direct_retirement(ruvia::worker_handle worker,
+    direct_child_outcome outcome, direct_retirement_observation& observation) {
+    ruvia::operation_scope operations;
+    operations.bind_worker(worker);
+    ruvia::task_scope children(worker);
+    ruvia::task_scope observers(worker);
+    ruvia::worker_signal gate(worker);
+    auto payload = std::make_shared<int>(42);
+    observation.payload_ = payload;
+    ruvia::scoped_capability_registration capability(
+        operations, &observation, &direct_retirement_observation::expire);
+    children.spawn(ruvia::make_scoped_operation(operations,
+        direct_scoped_child(std::move(payload), gate, children.token(), outcome, observation)));
+    observers.spawn(observe_direct_retirement(operations, observation));
+    if (outcome == direct_child_outcome::cancelled) {
+        children.request_stop();
+    }
+    gate.notify();
+    try {
+        co_await children.join();
+    } catch (...) {
+        observation.failure_ = std::current_exception();
+    }
+    co_await observers.join();
+}
+
+struct closing_frame_input final {
+    closing_frame_input(std::pmr::string payload, ruvia::operation_scope& scope,
+        int& retired, int& expired, bool& premature_expiry)
+        : payload_(std::move(payload)),
+          scope_(&scope),
+          retired_(&retired),
+          expired_(&expired),
+          premature_expiry_(&premature_expiry) {}
+    closing_frame_input(const closing_frame_input&) = delete;
+    closing_frame_input& operator=(const closing_frame_input&) = delete;
+    closing_frame_input(closing_frame_input&& other) noexcept
+        : payload_(std::move(other.payload_)),
+          scope_(std::exchange(other.scope_, nullptr)),
+          retired_(other.retired_),
+          expired_(other.expired_),
+          premature_expiry_(other.premature_expiry_) {}
+    closing_frame_input& operator=(closing_frame_input&&) = delete;
+    ~closing_frame_input() {
+        if (scope_ != nullptr) {
+            scope_->close();
+            scope_->close();
+            *premature_expiry_ = *premature_expiry_ || *expired_ != 0;
+            ++*retired_;
+        }
+    }
+
+    std::pmr::string payload_;
+    ruvia::operation_scope* scope_;
+    int* retired_;
+    int* expired_;
+    bool* premature_expiry_;
+};
+
+ruvia::task<void> cold_with_reentrant_close(closing_frame_input input) {
+    static_cast<void>(input);
+    co_return;
+}
+
+}  // namespace ruvia::test::scoped_operation_tests
 
 namespace {
 
@@ -373,6 +483,63 @@ ruvia::task<void> run_reentrant_cold_drop(const ruvia::worker_handle& worker_val
 }
 
 }  // namespace
+
+TEST(Ruvia, scoped_operation_direct_spawn_retires_frame_before_join_and_capability_expiry) {
+    using ruvia::test::scoped_operation_tests::direct_child_outcome;
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
+    const auto loop = loops.loop(0);
+    loops.start();
+    for (auto outcome : {direct_child_outcome::immediate, direct_child_outcome::suspended,
+             direct_child_outcome::failed, direct_child_outcome::cancelled}) {
+        SCOPED_TRACE(static_cast<int>(outcome));
+        ruvia::test::scoped_operation_tests::direct_retirement_observation observation;
+        auto root = loop.start(ruvia::test::scoped_operation_tests::exercise_direct_retirement(
+            loop.handle(), outcome, observation));
+        root.get();
+        EXPECT_EQ(observation.value_, 42);
+        EXPECT_EQ(observation.expirations_, 1);
+        EXPECT_TRUE(observation.expired_after_release_);
+        EXPECT_TRUE(observation.joined_after_expiry_);
+        EXPECT_EQ(observation.cancelled_, outcome == direct_child_outcome::cancelled);
+        if (outcome == direct_child_outcome::failed) {
+            ASSERT_TRUE(observation.failure_ != nullptr);
+            EXPECT_THROW(std::rethrow_exception(observation.failure_), std::runtime_error);
+        } else {
+            EXPECT_TRUE(observation.failure_ == nullptr);
+        }
+    }
+    loops.stop();
+    loops.join();
+}
+
+TEST(Ruvia, scoped_operation_cold_frame_cleanup_can_reenter_scope_close) {
+    ruvia::operation_scope scope;
+    counting_resource resource;
+    int retired = 0;
+    int expired = 0;
+    bool premature_expiry = false;
+    std::size_t bytes_at_expire = (std::numeric_limits<std::size_t>::max)();
+    test_scoped_capability capability(scope, expired, &resource, &bytes_at_expire);
+    auto first = ruvia::make_scoped_operation(scope,
+        ruvia::test::scoped_operation_tests::cold_with_reentrant_close(
+            ruvia::test::scoped_operation_tests::closing_frame_input(
+                std::pmr::string(1024, 'a', &resource), scope, retired, expired, premature_expiry)));
+    auto second = ruvia::make_scoped_operation(scope,
+        ruvia::test::scoped_operation_tests::cold_with_reentrant_close(
+            ruvia::test::scoped_operation_tests::closing_frame_input(
+                std::pmr::string(1024, 'b', &resource), scope, retired, expired, premature_expiry)));
+    scope.close();
+    EXPECT_EQ(retired, 2);
+    EXPECT_EQ(expired, 1);
+    EXPECT_FALSE(premature_expiry);
+    EXPECT_FALSE(scope.active());
+    EXPECT_FALSE(scope.has_pending_operations());
+    EXPECT_EQ(resource.in_use_allocations_, 0U);
+    EXPECT_EQ(bytes_at_expire, 0U);
+    scope.close();
+    EXPECT_EQ(retired, 2);
+    EXPECT_EQ(expired, 1);
+}
 
 TEST(Ruvia, scoped_operation_close_and_join_releases_frame_before_expiring_capabilities) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});

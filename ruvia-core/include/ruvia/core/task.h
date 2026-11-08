@@ -92,7 +92,7 @@ private:
         handle_.resume();
     }
 
-    void prepare_direct_completion() const noexcept {
+    void prepare_direct_completion() noexcept {
         if (registration_.scoped()) {
             registration_.prepare_completion();
         }

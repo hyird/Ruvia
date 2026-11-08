@@ -62,9 +62,15 @@ void operation_scope::close() noexcept {
     }
     for (auto* operation = head_; operation != nullptr; operation = operation->next_) {
         if (operation->phase_ == detail::scoped_operation_registration::phase::running ||
-            operation->phase_ == detail::scoped_operation_registration::phase::retiring) {
+            operation->phase_ == detail::scoped_operation_registration::phase::completing ||
+            (active_ && operation->phase_ == detail::scoped_operation_registration::phase::retiring)) {
             std::terminate();
         }
+    }
+    // An inactive scope already has a drain owner. Reentrant cold-frame
+    // cleanup may observe its retiring entries, but never unfinished work.
+    if (!active_) {
+        return;
     }
     expire_for_join();
 }
@@ -353,15 +359,18 @@ void scoped_operation_registration::start() noexcept {
     phase_ = phase::running;
 }
 
-void scoped_operation_registration::prepare_completion() const noexcept {
+void scoped_operation_registration::prepare_completion() noexcept {
     if (phase_ != phase::running) {
         std::terminate();
     }
     scope_->check_worker();
+    // The final suspend point permits owner relocation, not early retirement:
+    // the registration stays linked until the frame has been destroyed.
+    phase_ = phase::completing;
 }
 
 void scoped_operation_registration::complete() noexcept {
-    if (phase_ != phase::running) {
+    if (phase_ != phase::completing) {
         std::terminate();
     }
     phase_ = phase::complete;
@@ -374,7 +383,7 @@ void scoped_operation_registration::complete() noexcept {
 }
 
 void scoped_operation_registration::retire_frame() noexcept {
-    if (phase_ == phase::running || phase_ == phase::retiring) {
+    if (phase_ == phase::running || phase_ == phase::completing || phase_ == phase::retiring) {
         std::terminate();
     }
     if (phase_ == phase::cold) {

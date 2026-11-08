@@ -42,7 +42,7 @@ public:
     void bind(operation_scope& scope, void* target, void (*retire_cold)(void*) noexcept) noexcept;
     void prepare_start() const;
     void start() noexcept;
-    void prepare_completion() const noexcept;
+    void prepare_completion() noexcept;
     void complete() noexcept;
     void retire_frame() noexcept;
 
@@ -52,6 +52,7 @@ private:
         unscoped,
         cold,
         running,
+        completing,
         retiring,
         complete,
         expired,
