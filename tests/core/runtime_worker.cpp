@@ -2229,6 +2229,148 @@ bool test_reset_stop_registration_cancels_deferred_unstarted_callback() {
     return !ran && !reg.valid();
 }
 
+bool test_retired_stop_registration_cancels_deferred_callback(bool destroy) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    bool ran = false;
+    auto capture = std::make_shared<int>(42);
+    const std::weak_ptr<int> lifetime(capture);
+    std::optional<ruvia::event_loop_stop_registration> registration;
+    registration.emplace(attachment.loop().on_stop(
+        [capture = std::move(capture), &ran]() -> ruvia::task<void> {
+            ran = *capture == 42;
+            co_return;
+        }));
+    attachment.stop();
+    if (destroy) {
+        registration.reset();
+    } else {
+        *registration = ruvia::event_loop_stop_registration{};
+    }
+    const bool released_before_run = lifetime.expired();
+    attachment.run();
+    return released_before_run && !ran && (!registration || !registration->valid());
+}
+
+bool test_move_stop_registration_preserves_incoming_callback() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    int observed = 0;
+    auto old_capture = std::make_shared<int>(1);
+    const std::weak_ptr<int> old_lifetime(old_capture);
+    auto destination = attachment.loop().on_stop(
+        [capture = std::move(old_capture), &observed]() -> ruvia::task<void> {
+            observed += *capture;
+            co_return;
+        });
+    auto new_capture = std::make_shared<int>(10);
+    const std::weak_ptr<int> new_lifetime(new_capture);
+    auto source = attachment.loop().on_stop(
+        [capture = std::move(new_capture), &observed]() -> ruvia::task<void> {
+            observed += *capture;
+            co_return;
+        });
+    attachment.stop();
+    destination = std::move(source);
+    auto& alias = destination;
+    destination = std::move(alias);
+    auto transferred = std::move(destination);
+    const bool ownership_transferred = !source.valid() && !destination.valid() && transferred.valid() &&
+                                       old_lifetime.expired() && !new_lifetime.expired();
+    attachment.run();
+    return ownership_transferred && observed == 10 && new_lifetime.expired();
+}
+
+bool test_stop_registration_reentrant_retirement_preserves_replacement() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    int observed = 0;
+    ruvia::event_loop_stop_registration destination;
+    auto source = std::make_unique<ruvia::event_loop_stop_registration>(
+        attachment.loop().on_stop([&]() -> ruvia::task<void> {
+            observed += 10;
+            co_return;
+        }));
+    auto* owned_source = source.get();
+    auto replacement = attachment.loop().on_stop([&]() -> ruvia::task<void> {
+        observed += 100;
+        co_return;
+    });
+    struct callback final {
+        std::unique_ptr<ruvia::event_loop_stop_registration> source_;
+        ruvia::event_loop_stop_registration* destination_;
+        ruvia::event_loop_stop_registration* replacement_;
+        int* observed_;
+        callback(std::unique_ptr<ruvia::event_loop_stop_registration> source,
+            ruvia::event_loop_stop_registration& destination,
+            ruvia::event_loop_stop_registration& replacement,
+            int& observed)
+            : source_(std::move(source)),
+              destination_(&destination),
+              replacement_(&replacement),
+              observed_(&observed) {}
+        callback(callback&&) noexcept = default;
+        ~callback() {
+            if (source_) {
+                *destination_ = std::move(*replacement_);
+            }
+        }
+        ruvia::task<void> operator()() {
+            *observed_ += 1;
+            co_return;
+        }
+    };
+    destination = attachment.loop().on_stop(callback(std::move(source), destination, replacement, observed));
+    attachment.stop();
+    destination = std::move(*owned_source);
+    const bool replacement_transferred = destination.valid() && !replacement.valid();
+    attachment.run();
+    return replacement_transferred && observed == 100;
+}
+
+bool test_retired_started_stop_registration_keeps_capture(bool destroy, bool fail) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
+    const auto loop = loops.loop(0);
+    ruvia::worker_signal resume(loop.handle());
+    bool retained_while_suspended = false;
+    bool finished = false;
+    int observed = 0;
+    auto capture = std::make_shared<int>(42);
+    const std::weak_ptr<int> lifetime(capture);
+    std::optional<ruvia::event_loop_stop_registration> registration;
+    registration.emplace(loop.on_stop(
+        [&, capture = std::move(capture)]() -> ruvia::task<void> {
+            asio::post(loop.executor(), [&] {
+                if (destroy) {
+                    registration.reset();
+                } else {
+                    *registration = ruvia::event_loop_stop_registration{};
+                }
+                retained_while_suspended = !finished && !lifetime.expired();
+                resume.notify();
+            });
+            co_await resume.wait();
+            observed = *capture;
+            finished = true;
+            if (fail) {
+                throw std::runtime_error("retired stop callback");
+            }
+        }));
+    loops.start();
+    loops.stop();
+    bool reported_failure = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        if (std::string_view(error.what()) != "retired stop callback") {
+            return false;
+        }
+        reported_failure = true;
+    }
+    return retained_while_suspended && finished && observed == 42 && lifetime.expired() &&
+           reported_failure == fail && (!registration || !registration->valid());
+}
+
 bool test_stop_registration_move_can_stop_attachment() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context);
@@ -2592,6 +2734,30 @@ TEST(Ruvia, WorkerAsyncStopCallbacksStartTogetherAndKeepCapturesAlive) {
 }
 TEST(Ruvia, WorkerResetStopRegistrationCancelsDeferredUnstartedCallback) {
     EXPECT_TRUE(test_reset_stop_registration_cancels_deferred_unstarted_callback());
+}
+TEST(Ruvia, WorkerDestroyedStopRegistrationCancelsDeferredCallback) {
+    EXPECT_TRUE(test_retired_stop_registration_cancels_deferred_callback(true));
+}
+TEST(Ruvia, WorkerOverwrittenStopRegistrationCancelsDeferredCallback) {
+    EXPECT_TRUE(test_retired_stop_registration_cancels_deferred_callback(false));
+}
+TEST(Ruvia, WorkerMovedStopRegistrationPreservesIncomingCallback) {
+    EXPECT_TRUE(test_move_stop_registration_preserves_incoming_callback());
+}
+TEST(Ruvia, WorkerStopRegistrationReentrantRetirementPreservesReplacement) {
+    EXPECT_TRUE(test_stop_registration_reentrant_retirement_preserves_replacement());
+}
+TEST(Ruvia, WorkerDestroyedStopRegistrationKeepsStartedCallbackAlive) {
+    EXPECT_TRUE(test_retired_started_stop_registration_keeps_capture(true, false));
+}
+TEST(Ruvia, WorkerOverwrittenStopRegistrationKeepsStartedCallbackAlive) {
+    EXPECT_TRUE(test_retired_started_stop_registration_keeps_capture(false, false));
+}
+TEST(Ruvia, WorkerDestroyedStopRegistrationPreservesStartedCallbackFailure) {
+    EXPECT_TRUE(test_retired_started_stop_registration_keeps_capture(true, true));
+}
+TEST(Ruvia, WorkerOverwrittenStopRegistrationPreservesStartedCallbackFailure) {
+    EXPECT_TRUE(test_retired_started_stop_registration_keeps_capture(false, true));
 }
 TEST(Ruvia, WorkerStopRegistrationMoveCanStopAttachment) {
     EXPECT_TRUE(test_stop_registration_move_can_stop_attachment());

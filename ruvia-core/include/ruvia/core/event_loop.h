@@ -28,12 +28,12 @@ class event_loop_stop_listener;
 class event_loop_stop_registration final {
 public:
     event_loop_stop_registration() noexcept = default;
-    ~event_loop_stop_registration() = default;
+    ~event_loop_stop_registration();
 
     event_loop_stop_registration(const event_loop_stop_registration&) = delete;
     event_loop_stop_registration& operator=(const event_loop_stop_registration&) = delete;
     event_loop_stop_registration(event_loop_stop_registration&&) noexcept = default;
-    event_loop_stop_registration& operator=(event_loop_stop_registration&&) noexcept = default;
+    event_loop_stop_registration& operator=(event_loop_stop_registration&& other) noexcept;
 
     [[nodiscard]] bool valid() const noexcept;
     void reset() noexcept;
@@ -210,8 +210,8 @@ public:
 
     // Stop cleanup is asynchronous and joined before runtime retirement. The
     // callable owner remains address-stable until its returned task and
-    // completion handler have both finished; resetting the registration only
-    // unregisters cleanup that has not started.
+    // completion handler have both finished. Resetting, replacing or destroying
+    // the registration only unregisters cleanup that has not started.
     // Cancelling an unstarted callback moves and destroys its target outside
     // the listener lock; those operations may request loop stop.
     template <typename fn_type>

@@ -406,6 +406,22 @@ event_loop_stop_registration::event_loop_stop_registration(
     std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept
     : listener_(std::move(listener_value)) {}
 
+event_loop_stop_registration::~event_loop_stop_registration() {
+    reset();
+}
+
+event_loop_stop_registration& event_loop_stop_registration::operator=(
+    event_loop_stop_registration&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    // Commit the incoming listener before retiring a callback that may own
+    // the source registration or reenter this destination.
+    event_loop_stop_registration retired(std::move(other));
+    listener_.swap(retired.listener_);
+    return *this;
+}
+
 bool event_loop_stop_registration::valid() const noexcept {
     return listener_ != nullptr;
 }
