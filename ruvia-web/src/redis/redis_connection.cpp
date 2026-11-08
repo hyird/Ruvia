@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -124,18 +123,20 @@ void redis_connection::ensure_reader() {
 }
 
 task<void> redis_connection::write_request(const operation_timeout& timeout, redis_request_content content) {
-    const auto serialized_bytes = write_buffer_.size();
+    struct request_buffer_release final {
+        std::pmr::string& buffer_;
+        redis_request_content content_;
+
+        ~request_buffer_release() noexcept {
+            if (content_ == redis_request_content::credential) {
+                OPENSSL_cleanse(buffer_.data(), buffer_.size());
+            }
+            http_clear_pmr_string_retaining_small(buffer_, redis_retained_write_buffer_bytes);
+        }
+    } release{write_buffer_, content};
+    // Closing the socket does not end an in-flight write's borrow. Retire the
+    // buffer only after the transport task completes, including on exception.
     const auto written = co_await transport_.write(write_buffer_, timeout);
-    if (content == redis_request_content::credential) {
-        OPENSSL_cleanse(write_buffer_.data(), serialized_bytes);
-    }
-    // The transport no longer borrows the buffer. Retention is amortized on
-    // the request just sent so one oversized request does not pin its
-    // capacity for the lifetime of this long-lived connection.
-    constexpr auto size_limit = std::numeric_limits<std::size_t>::max();
-    const auto amortized_bytes = serialized_bytes <= size_limit / 4 ? serialized_bytes * 4 : size_limit;
-    http_clear_pmr_string_retaining_small(
-        write_buffer_, std::max(redis_retained_write_buffer_bytes, amortized_bytes));
     throw_if_aborted();
     if (!written.ok()) {
         throw_redis_io_error(written);

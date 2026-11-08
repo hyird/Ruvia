@@ -33,10 +33,8 @@ struct redis_reader_deleter {
 class redis_reply_builder;
 
 inline constexpr std::size_t redis_read_buffer_bytes = 8192;
-// Serialized request storage a connection keeps after a write: this much, or
-// four times the request it just sent when larger. A steady stream of
-// similar-sized commands reuses one allocation while a single oversized
-// request is not pinned for the connection's lifetime.
+// Serialized request capacity retained after a write's transport borrow ends.
+// Larger buffers return to their PMR resource, including on failure.
 inline constexpr std::size_t redis_retained_write_buffer_bytes = std::size_t{64} * 1024;
 
 // A credential request (AUTH) is wiped from the write buffer once written, so

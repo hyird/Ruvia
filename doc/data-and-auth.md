@@ -361,6 +361,7 @@ ruvia::app()
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
 - 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.handle(options = {})` 获取 `redis_handle`；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
 - 每条连接复用回复解析根槽；嵌套值和字符串仍由当前操作指定的资源持有，失败或取消时随未完成的回复一起回收。
+- **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还所属 PMR。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
 - `subscription_ping_interval_`（默认 30 秒，`std::nullopt` 关闭）是 Pub/Sub 订阅连接在 `read()` 等待期间的空闲探活间隔，语义见 4.3。
 - **连接竞速（[RFC 8305 §4–5](https://www.rfc-editor.org/rfc/rfc8305.html#section-4)）**：保留系统解析结果的 RFC 6724 优先级，从首选地址族开始交错 IPv6 / IPv4，每隔 `250ms` 追加一次并行尝试，首个成功者获胜，其余取消并等待结束。
