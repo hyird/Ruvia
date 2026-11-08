@@ -203,3 +203,56 @@ TEST(Ruvia, dotenv_errors_name_non_ascii_paths_in_utf8) {
 
     std::filesystem::remove_all(directory);
 }
+
+TEST(Ruvia, dotenv_preserves_utf8_values_and_escaped_characters) {
+    const auto path = write_temp_env("ruvia_dotenv_utf8_values.env",
+        "DOTENV_UTF8_UNQUOTED=\xE4\xB8\xAD\xE6\x96\x87 # comment\n"
+        "DOTENV_UTF8_SINGLE='caf\xC3\xA9'\n"
+        "DOTENV_UTF8_DOUBLE=\"\xE4\xB8\xAD\\n\xE6\x96\x87\"\n"
+        "DOTENV_UTF8_LITERAL_DOUBLE=\"caf\xC3\xA9\"\n"
+        "DOTENV_UTF8_UNKNOWN_ESCAPE=\"\\\xC3\xA9\"\n");
+    auto& app = ruvia::app();
+    app.load_dotenv(path, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
+    std::filesystem::remove(path);
+    const auto& env = app.env();
+
+    EXPECT_EQ(env.get("DOTENV_UTF8_UNQUOTED").value_or(""), "\xE4\xB8\xAD\xE6\x96\x87");
+    EXPECT_EQ(env.get("DOTENV_UTF8_SINGLE").value_or(""), "caf\xC3\xA9");
+    EXPECT_EQ(env.get("DOTENV_UTF8_DOUBLE").value_or(""), "\xE4\xB8\xAD\n\xE6\x96\x87");
+    EXPECT_EQ(env.get("DOTENV_UTF8_LITERAL_DOUBLE").value_or(""), "caf\xC3\xA9");
+    EXPECT_EQ(env.get("DOTENV_UTF8_UNKNOWN_ESCAPE").value_or(""), "\\\xC3\xA9");
+}
+
+TEST(Ruvia, dotenv_invalid_utf8_rejects_all_entries_without_changing_prior_state) {
+    const auto earlier = write_temp_env("ruvia_dotenv_utf8_earlier.env", "DOTENV_UTF8_ROLLBACK=original\n");
+    auto& app = ruvia::app();
+    app.load_dotenv(earlier, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
+    std::filesystem::remove(earlier);
+    const auto& env = app.env();
+    const auto size = env.size();
+    const auto loaded = env.loaded();
+    constexpr std::string_view invalid_values[] = {
+        "caf\xE9",
+        "'caf\xE9'",
+        "\"caf\xE9\"",
+        "\"\\\xE9\"",
+    };
+    constexpr ruvia::dotenv_existing_variable_policy policies[] = {
+        ruvia::dotenv_existing_variable_policy::preserve,
+        ruvia::dotenv_existing_variable_policy::override,
+    };
+    for (const auto value : invalid_values) {
+        const auto invalid = write_temp_env("ruvia_dotenv_utf8_invalid.env",
+            std::string("DOTENV_UTF8_ROLLBACK=changed\nDOTENV_UTF8_PARTIAL=not_committed\nDOTENV_UTF8_INVALID=") +
+                std::string(value) + '\n');
+        for (const auto policy : policies) {
+            EXPECT_THROW(app.load_dotenv(invalid, {.existing_variables_ = policy}), std::invalid_argument);
+            EXPECT_EQ(env.get("DOTENV_UTF8_ROLLBACK").value_or(""), "original");
+            EXPECT_FALSE(env.get("DOTENV_UTF8_PARTIAL").has_value());
+            EXPECT_FALSE(env.get("DOTENV_UTF8_INVALID").has_value());
+            EXPECT_EQ(env.size(), size);
+            EXPECT_EQ(env.loaded(), loaded);
+        }
+        std::filesystem::remove(invalid);
+    }
+}

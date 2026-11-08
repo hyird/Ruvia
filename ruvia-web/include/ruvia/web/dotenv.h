@@ -39,7 +39,8 @@ enum class dotenv_missing_file_policy : std::uint8_t {
 // escapes; as in POSIX sh, a backslash before any other character is kept
 // together with that character ("\q" yields \q). Assigning one name twice in
 // the same file is rejected as a duplicate variable name: the existing-variable
-// policy only arbitrates against variables from earlier loads.
+// policy only arbitrates against variables from earlier loads. Values must be
+// well-formed UTF-8; an encoding error rejects the complete file before commit.
 struct dotenv_options final {
     dotenv_existing_variable_policy existing_variables_{dotenv_existing_variable_policy::preserve};
     dotenv_missing_file_policy missing_file_{dotenv_missing_file_policy::ignore};

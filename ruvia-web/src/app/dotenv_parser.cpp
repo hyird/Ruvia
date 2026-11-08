@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "ruvia/http/http_utf8.h"
+
 #include "app/env_state.h"
 
 namespace ruvia::detail {
@@ -63,6 +65,16 @@ namespace {
     return result_value;
 }
 
+[[nodiscard]] std::size_t dotenv_utf8_sequence_length(std::string_view value, std::size_t index,
+    const std::filesystem::path& path, std::size_t line_number) {
+    const auto sequence = ::ruvia::scan_utf8_sequence(value, index);
+    if (!sequence.well_formed_) {
+        throw std::invalid_argument(
+            location_message(path, line_number, "value is not valid UTF-8").c_str());
+    }
+    return sequence.length_;
+}
+
 // The complete set of escapes inside double quotes. As in POSIX sh double
 // quotes, a backslash before any other character is not an escape: the
 // backslash and that character are both kept literally.
@@ -90,6 +102,10 @@ namespace {
     bool has_escape = false;
     for (std::size_t index = 1; index < value.size(); ++index) {
         const char current = value[index];
+        if (static_cast<unsigned char>(current) >= 0x80) {
+            index += dotenv_utf8_sequence_length(value, index, path, line_number) - 1;
+            continue;
+        }
         if (current == '"') {
             consumed = index + 1;
             if (!has_escape) {
@@ -110,7 +126,11 @@ namespace {
                 result.push_back(*decoded);
             } else {
                 result.push_back('\\');
-                result.push_back(escaped);
+                const auto length = static_cast<unsigned char>(escaped) >= 0x80
+                                        ? dotenv_utf8_sequence_length(value, index, path, line_number)
+                                        : 1;
+                result.append(value.substr(index, length));
+                index += length - 1;
             }
             literal_start = index + 1;
         }
@@ -121,14 +141,17 @@ namespace {
 
 [[nodiscard]] std::pmr::string parse_single_quoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
-    const auto close = value.find('\'', 1);
-    if (close == std::string_view::npos) {
-        throw std::invalid_argument(
-            location_message(path, line_number, "unterminated single-quoted value").c_str());
+    for (std::size_t index = 1; index < value.size(); ++index) {
+        if (value[index] == '\'') {
+            consumed = index + 1;
+            return std::pmr::string(value.substr(1, index - 1), process_resource());
+        }
+        if (static_cast<unsigned char>(value[index]) >= 0x80) {
+            index += dotenv_utf8_sequence_length(value, index, path, line_number) - 1;
+        }
     }
-
-    consumed = close + 1;
-    return std::pmr::string(value.substr(1, close - 1), process_resource());
+    throw std::invalid_argument(
+        location_message(path, line_number, "unterminated single-quoted value").c_str());
 }
 
 void validate_quoted_remainder(
@@ -140,12 +163,16 @@ void validate_quoted_remainder(
     }
 }
 
-[[nodiscard]] std::pmr::string parse_unquoted_value(std::string_view value) {
+[[nodiscard]] std::pmr::string parse_unquoted_value(std::string_view value,
+    const std::filesystem::path& path, std::size_t line_number) {
     std::size_t end = value.size();
     for (std::size_t index = 0; index < value.size(); ++index) {
         if (value[index] == '#' && (index == 0 || is_space(value[index - 1]))) {
             end = index;
             break;
+        }
+        if (static_cast<unsigned char>(value[index]) >= 0x80) {
+            index += dotenv_utf8_sequence_length(value, index, path, line_number) - 1;
         }
     }
 
@@ -173,7 +200,7 @@ void validate_quoted_remainder(
         return parsed_value;
     }
 
-    return parse_unquoted_value(value);
+    return parse_unquoted_value(value, path, line_number);
 }
 
 void strip_utf8_bom(std::string_view& line) noexcept {
