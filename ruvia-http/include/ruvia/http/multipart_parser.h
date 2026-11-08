@@ -30,6 +30,11 @@ struct multipart_stream_part_access;
 // request body; unfolded header blocks and escaped names own PMR storage.
 class multipart_part final {
 public:
+    multipart_part(const multipart_part& other);
+    multipart_part(multipart_part&&) noexcept = default;
+    multipart_part& operator=(const multipart_part& other);
+    multipart_part& operator=(multipart_part&& other);
+
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* borrowed = std::get_if<std::string_view>(&name_)) {
             return *borrowed;
@@ -69,13 +74,20 @@ private:
 
     multipart_part(text_storage_type name, text_storage_type filename,
         content_type_storage_type content_type_value, std::string_view body,
-        bool filename_present) noexcept
-        : name_(std::move(name)),
+        bool filename_present, std::pmr::memory_resource* resource) noexcept
+        : resource_(resource),
+          name_(std::move(name)),
           filename_(std::move(filename)),
           content_type_(std::move(content_type_value)),
           body_(body),
           filename_present_(filename_present) {}
 
+    multipart_part(const multipart_part& other, std::pmr::memory_resource* resource);
+    [[nodiscard]] static text_storage_type copy_text(
+        const text_storage_type& text, std::pmr::memory_resource* resource);
+    void swap(multipart_part& other) noexcept;
+
+    std::pmr::memory_resource* resource_;
     text_storage_type name_;
     text_storage_type filename_;
     content_type_storage_type content_type_;

@@ -450,6 +450,7 @@ CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字�
 - **标量类型**：`ruvia::bool_value`、`ruvia::int8`、`ruvia::uint8`、`ruvia::int16`、`ruvia::uint16`、`ruvia::int32`、`ruvia::uint32`、`ruvia::int64`、`ruvia::uint64`、`ruvia::float_value`、`ruvia::double_value`
 - **字符串与字节**：`ruvia::string`（UTF-8 字符串）、`ruvia::bytes`（JSON 中以 Base64 编码的二进制数据）
 - **复合与容器类型**：嵌套的另一个 `RUVIA_MODEL` 类型、`ruvia::array<T>`（连续数组）、`ruvia::boxed_array<T>`（支持前向声明的自引用递归模型数组）
+- **容器字段重绑定**：`array` / `boxed_array` 的字符串及嵌套值先完整准备候选，再消费源；`set()` 从字段自身移动时同样保持失败原值，成功后统一提交。
 
 `float_value` / `double_value` 的构造与模型 `set()` 在宽浮点数窄化前检查有限值范围：超出目标类型有限范围时抛 `std::out_of_range`，setter 保留原字段值或 null 状态。范围内仍按目标浮点类型舍入；显式 NaN/infinity 的既有行为不变，JSON 序列化为 `null`。
 

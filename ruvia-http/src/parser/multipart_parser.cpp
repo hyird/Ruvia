@@ -32,7 +32,7 @@ struct multipart_part_access final {
             content_type.emplace<std::pmr::string>(content_type_value, resource);
         }
         return multipart_part(
-            std::move(name), std::move(filename), std::move(content_type), body, filename_present);
+            std::move(name), std::move(filename), std::move(content_type), body, filename_present, resource);
     }
 
     template <http_temporary_owning_char_string content_type>
@@ -71,6 +71,54 @@ struct multipart_stream_part_access final {
 }  // namespace ruvia::detail
 
 namespace ruvia {
+
+multipart_part::text_storage_type multipart_part::copy_text(
+    const text_storage_type& text, std::pmr::memory_resource* resource) {
+    if (const auto* borrowed = std::get_if<std::string_view>(&text)) {
+        return *borrowed;
+    }
+    return std::pmr::string(std::get<std::pmr::string>(text), resource);
+}
+
+multipart_part::multipart_part(const multipart_part& other)
+    : multipart_part(other, other.resource_) {}
+
+multipart_part::multipart_part(const multipart_part& other, std::pmr::memory_resource* resource)
+    : resource_(resource),
+      name_(copy_text(other.name_, resource)),
+      filename_(copy_text(other.filename_, resource)),
+      content_type_(copy_text(other.content_type_, resource)),
+      body_(other.body_),
+      filename_present_(other.filename_present_) {}
+
+void multipart_part::swap(multipart_part& other) noexcept {
+    // Assignment candidates use this same resource, including owned text variants.
+    name_.swap(other.name_);
+    filename_.swap(other.filename_);
+    content_type_.swap(other.content_type_);
+    std::swap(body_, other.body_);
+    std::swap(filename_present_, other.filename_present_);
+}
+
+multipart_part& multipart_part::operator=(const multipart_part& other) {
+    if (this != &other) {
+        multipart_part candidate(other, resource_);
+        swap(candidate);
+    }
+    return *this;
+}
+
+multipart_part& multipart_part::operator=(multipart_part&& other) {
+    if (this != &other) {
+        if (resource_ == other.resource_) {
+            multipart_part candidate(std::move(other));
+            swap(candidate);
+        } else {
+            *this = other;
+        }
+    }
+    return *this;
+}
 
 namespace {
 

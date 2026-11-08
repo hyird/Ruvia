@@ -30,6 +30,9 @@ RUVIA_MODEL(resource_dense_node,
 RUVIA_MODEL(resource_pair,
     RUVIA_REQUIRED_FIELD(first, ruvia::string),
     RUVIA_REQUIRED_FIELD(second, ruvia::string));
+RUVIA_MODEL(resource_text_sequences,
+    RUVIA_OPTIONAL_FIELD(dense, ruvia::array<ruvia::boxed_array<ruvia::string>>),
+    RUVIA_OPTIONAL_FIELD(boxed, ruvia::boxed_array<ruvia::string>));
 
 class reject_after_resource final : public std::pmr::memory_resource {
 public:
@@ -291,6 +294,67 @@ TEST(Ruvia, model_resource_moves_reject_a_source_that_owns_the_destination) {
         EXPECT_TRUE(dense_grandchildren.empty());
     }
     EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+TEST(Ruvia, model_resource_self_field_rebind_failure_preserves_owned_elements) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
+    }
+    const std::string first(160, 'a');
+    const std::string second(160, 'b');
+    const auto check = [&]<ruvia::fixed_string field>() {
+        bool reached_success = false;
+        bool failed_after_preparation = false;
+        for (std::size_t allowance = 0; allowance != 16; ++allowance) {
+            reject_after_resource resource;
+            {
+                resource_text_sequences value({.resource_ = &resource});
+                auto& items = value.ensure<field>();
+                const auto append = [&](std::string_view text) {
+                    if constexpr (requires { items.front().view(); }) {
+                        items.emplace_back(text);
+                    } else {
+                        items.emplace_back().emplace_back(text);
+                    }
+                };
+                append(first);
+                append(second);
+                const auto retained = resource.allocations_.live_allocations();
+                resource.remaining_ = allowance;
+                bool failed = false;
+                try {
+                    value.set<field>(std::move(items));
+                    reached_success = true;
+                } catch (const std::bad_alloc&) {
+                    failed = true;
+                    failed_after_preparation |= allowance != 0;
+                }
+                resource.remaining_.reset();
+                ASSERT_EQ(value.get<field>()->size(), std::size_t{2});
+                const auto text_at = [&](std::size_t index) {
+                    const auto& item = (*value.get<field>())[index];
+                    if constexpr (requires { item.view(); }) {
+                        return item.view();
+                    } else {
+                        return item.front().view();
+                    }
+                };
+                EXPECT_EQ(text_at(0), std::string_view(first));
+                EXPECT_EQ(text_at(1), std::string_view(second));
+                if (failed) {
+                    EXPECT_EQ(resource.allocations_.live_allocations(), retained);
+                }
+            }
+            EXPECT_EQ(resource.allocations_.live_allocations(), std::size_t{0});
+            if (reached_success) {
+                break;
+            }
+        }
+        EXPECT_TRUE(reached_success);
+        EXPECT_TRUE(failed_after_preparation);
+    };
+    check.template operator()<"dense">();
+    check.template operator()<"boxed">();
 }
 
 TEST(Ruvia, model_resource_scalar_array_moves_transfer_same_resource_storage) {

@@ -487,14 +487,7 @@ public:
             detail::throw_model_move_source_owns_destination();
         }
 
-        auto rebound = [&]() {
-            if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
-                return other.rebind_for_model(resource_);
-            } else {
-                return std::move(other).rebind_for_model(resource_);
-            }
-        }();
-        other.clear();
+        auto rebound = std::move(other).rebind_for_model(resource_);
         items_ = std::move(rebound.items_);
         return *this;
     }
@@ -652,18 +645,25 @@ private:
     }
 
     [[nodiscard]] array rebind_for_model(std::pmr::memory_resource* resource) && {
-        array rebound(resolved_pmr_resource_tag{}, resource);
-        if constexpr (!detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
+        if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
+            // A later element may still allocate; retain every source until the
+            // complete candidate exists, including when assigning a field to itself.
+            auto rebound = std::as_const(*this).rebind_for_model(resource);
+            clear();
+            return rebound;
+        } else {
+            array rebound(resolved_pmr_resource_tag{}, resource);
             if (resource == resource_) {
                 rebound.items_ = std::move(items_);
-                return rebound;
+            } else {
+                rebound.reserve(size());
+                for (auto& value : items_) {
+                    (void)rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
+                }
             }
+            clear();
+            return rebound;
         }
-        rebound.reserve(size());
-        for (auto& value : items_) {
-            (void)rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
-        }
-        return rebound;
     }
 
     [[nodiscard]] bool owns_for_model(const void* address) const noexcept {
@@ -712,14 +712,7 @@ public:
             detail::throw_model_move_source_owns_destination();
         }
 
-        auto rebound = [&]() {
-            if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
-                return other.rebind_for_model(resource_);
-            } else {
-                return std::move(other).rebind_for_model(resource_);
-            }
-        }();
-        other.clear();
+        auto rebound = std::move(other).rebind_for_model(resource_);
         clear();
         items_ = std::move(rebound.items_);
         return *this;
@@ -920,19 +913,24 @@ private:
     }
 
     [[nodiscard]] boxed_array rebind_for_model(std::pmr::memory_resource* resource) && {
-        boxed_array rebound(resolved_pmr_resource_tag{}, resource);
-        if constexpr (!detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
+        if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
+            // Prepare both nested values and their boxes before consuming the source.
+            auto rebound = std::as_const(*this).rebind_for_model(resource);
+            clear();
+            return rebound;
+        } else {
+            boxed_array rebound(resolved_pmr_resource_tag{}, resource);
             if (resource == resource_) {
                 rebound.items_ = std::move(items_);
-                items_.clear();
-                return rebound;
+            } else {
+                rebound.reserve(size());
+                for (auto& value : *this) {
+                    rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
+                }
             }
+            clear();
+            return rebound;
         }
-        rebound.reserve(size());
-        for (auto& value : *this) {
-            rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
-        }
-        return rebound;
     }
 
     [[nodiscard]] bool owns_for_model(const void* address) const noexcept {

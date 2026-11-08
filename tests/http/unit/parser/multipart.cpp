@@ -15,6 +15,118 @@
 #include "multipart_boundary_fixture.h"
 #include "test_exceptions.h"
 
+TEST(Ruvia, multipart_part_assignment_failure_preserves_all_fields) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
+    }
+    const std::string old_wire =
+        "--b\r\nContent-Disposition: form-data; name=old; filename=\"a\\\"b\"\r\n"
+        "Content-Type: text/plain\r\n\r\nold-body\r\n--b--\r\n";
+    const std::string new_wire =
+        "--b\r\nContent-Disposition: form-data; name=new; filename=\"" +
+        std::string(4096, 'f') +
+        "\\\"b\"\r\nContent-Type: application/octet-stream\r\n\r\nnew-body\r\n--b--\r\n";
+    for (const bool move : {false, true}) {
+        failing_memory_resource target_resource;
+        failing_memory_resource source_resource;
+        {
+            auto destination = ruvia::parse_multipart_body(old_wire,
+                {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &target_resource});
+            auto source = ruvia::parse_multipart_body(new_wire,
+                {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &source_resource});
+            ASSERT_EQ(destination.size(), std::size_t{1});
+            ASSERT_EQ(source.size(), std::size_t{1});
+            target_resource.fail_after(0);
+            if (move) {
+                EXPECT_THROW(destination[0] = std::move(source[0]), std::bad_alloc);
+            } else {
+                EXPECT_THROW(destination[0] = source[0], std::bad_alloc);
+            }
+            target_resource.allow_allocations();
+            EXPECT_EQ(destination[0].name(), "old");
+            EXPECT_EQ(destination[0].filename(), "a\"b");
+            EXPECT_EQ(destination[0].content_type(), "text/plain");
+            EXPECT_EQ(destination[0].body(), "old-body");
+            EXPECT_TRUE(destination[0].has_filename());
+            EXPECT_EQ(source[0].name(), "new");
+            EXPECT_EQ(source[0].filename(), std::string(4096, 'f') + "\"b");
+            EXPECT_EQ(source[0].body(), "new-body");
+        }
+        EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, multipart_part_assignment_owns_decoded_fields_on_destination_resource) {
+    const std::string plain_wire = "--b\r\nContent-Disposition: form-data; name=old\r\n\r\nold-body\r\n--b--\r\n";
+    const std::string text(160, 'x');
+    const std::string owned_wire = "--b\r\nContent-Disposition: form-data;\r\n name=\"" + text +
+                                   "\"; filename=\"" + text + "\"\r\nContent-Type:\r\n application/" +
+                                   text + "\r\n\r\nnew-body\r\n--b--\r\n";
+    for (const bool move : {false, true}) {
+        failing_memory_resource target_resource;
+        failing_memory_resource source_resource;
+        {
+            auto destination = ruvia::parse_multipart_body(plain_wire,
+                {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &target_resource});
+            {
+                auto source = ruvia::parse_multipart_body(owned_wire,
+                    {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &source_resource});
+                if (move) {
+                    destination[0] = std::move(source[0]);
+                } else {
+                    destination[0] = source[0];
+                }
+            }
+            EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+            EXPECT_EQ(destination[0].name(), text);
+            EXPECT_EQ(destination[0].filename(), text);
+            EXPECT_EQ(destination[0].content_type(), "application/" + text);
+            EXPECT_EQ(destination[0].body(), "new-body");
+            if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+                target_resource.fail_after(0);
+                EXPECT_THROW((void)ruvia::multipart_part(destination[0]), std::bad_alloc);
+                target_resource.allow_allocations();
+            }
+            const auto copied = destination[0];
+            EXPECT_EQ(copied.filename(), text);
+            auto* const self = &destination[0];
+            destination[0] = *self;
+            destination[0] = std::move(*self);
+            EXPECT_EQ(destination[0].filename(), text);
+        }
+        EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, multipart_part_same_resource_move_and_borrowed_replacement_do_not_allocate) {
+    failing_memory_resource resource;
+    const std::string plain_wire = "--b\r\nContent-Disposition: form-data; name=plain\r\n\r\nbody\r\n--b--\r\n";
+    const std::string filename(160, 'f');
+    const std::string owned_wire = "--b\r\nContent-Disposition: form-data; name=owned; filename=\"" +
+                                   filename + "\\\"\"\r\n\r\nupload\r\n--b--\r\n";
+    {
+        auto destination = ruvia::parse_multipart_body(plain_wire,
+            {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &resource});
+        auto source = ruvia::parse_multipart_body(owned_wire,
+            {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &resource});
+        auto borrowed = ruvia::parse_multipart_body(plain_wire,
+            {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &resource});
+        resource.fail_after_stl_operation(0);
+        destination[0] = std::move(source[0]);
+        EXPECT_EQ(destination[0].filename(), filename + "\"");
+        EXPECT_EQ(destination[0].body(), "upload");
+        destination[0] = borrowed[0];
+        resource.allow_allocations();
+        EXPECT_EQ(destination[0].name(), "plain");
+        EXPECT_FALSE(destination[0].has_filename());
+        EXPECT_EQ(destination[0].body(), "body");
+        EXPECT_EQ(destination[0].name().data(), borrowed[0].name().data());
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+}
+
 TEST(Ruvia, multipart_parser_retries_owned_metadata_without_consuming_limits) {
     const std::string name(160, 'n');
     const std::string filename(160, 'f');

@@ -168,6 +168,8 @@ pool.join();
 - **首部转移模式**：`http_response_headers::transfer_from()` 与 `http_response::transfer_headers_from()` 仅接受 `merge` / `assign` / `apply`；非法值在变更前抛出 `std::invalid_argument`，空源也不例外。
 - **Multipart 流式缓冲**：`multipart_parser` 复用 `http_io_buffer`，增长时只复制未消费字节。
 - **Multipart 借用重试**：`feed()` 可接收最新分片的正文视图；分配失败后，该视图仍可用于原样重试。
+- **Multipart 值赋值**：`multipart_part` 先准备全部元数据再提交；复制或跨资源移动失败时保留两端原值，同资源移动不分配。
+- **Multipart 资源归属**：复制构造沿用源 PMR，赋值保留目标 PMR；解码文本由该资源持有，未改写字段与正文仍借用原始输入。
 
 `http_response::body_segment_count()` 枚举表示的存储片段，不等同于待发送的字节数。长度为零的文件范围仍返回一个 file segment，保留路径、句柄与 identity，调用方必须完成适用的文件验证，不能因 `send_body() == false` 丢弃它；普通空字节正文没有 segment。`send_body()` 仍只表示方法/状态允许且正文长度非零时需要传送 payload。
 
