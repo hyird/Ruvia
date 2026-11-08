@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -15,6 +16,57 @@
 #include "util/geometric_reserve.h"
 
 namespace ruvia {
+
+http_origin_advertisement& http_origin_advertisement::operator=(const http_origin_advertisement& other) {
+    if (this != &other) {
+        std::pmr::vector<std::pmr::string> candidate(other.origins_, origins_.get_allocator());
+        origins_.swap(candidate);
+    }
+    return *this;
+}
+
+http_origin_advertisement& http_origin_advertisement::operator=(http_origin_advertisement&& other) {
+    if (this != &other) {
+        // Nested strings retain their allocator objects, even for equivalent resources.
+        if (origins_.get_allocator().resource() == other.origins_.get_allocator().resource()) {
+            http_origin_advertisement candidate(std::move(other));
+            origins_.swap(candidate.origins_);
+        } else {
+            *this = other;
+        }
+    }
+    return *this;
+}
+
+http_alternative_service_advertisement& http_alternative_service_advertisement::operator=(
+    const http_alternative_service_advertisement& other) {
+    if (this != &other) {
+        const auto stream_id = other.stream_id_;
+        std::pmr::string origin(other.origin_, origin_.get_allocator());
+        std::pmr::string field_value(other.field_value_, field_value_.get_allocator());
+        origin_.swap(origin);
+        field_value_.swap(field_value);
+        stream_id_ = stream_id;
+    }
+    return *this;
+}
+
+http_alternative_service_advertisement& http_alternative_service_advertisement::operator=(
+    http_alternative_service_advertisement&& other) {
+    if (this != &other) {
+        if (origin_.get_allocator() == other.origin_.get_allocator() &&
+            field_value_.get_allocator() == other.field_value_.get_allocator()) {
+            http_alternative_service_advertisement candidate(std::move(other));
+            origin_.swap(candidate.origin_);
+            field_value_.swap(candidate.field_value_);
+            stream_id_ = candidate.stream_id_;
+        } else {
+            *this = other;
+        }
+    }
+    return *this;
+}
+
 namespace {
 using error_type = http_connection_advertisement_error;
 constexpr std::size_t length_prefix_bytes = 2;

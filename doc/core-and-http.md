@@ -199,6 +199,8 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 ### 4. HTTP/1.x、HTTP/2 与 HTTP/3 Sans-I/O 状态机
 
 - **跨协议描述符存储**：协议解析与首部写出共用 `parser/http_header_descriptor_storage.h`；预留或追加超过 32 项时才整体迁入调用方 PMR（缺省为默认资源）。
+- **通告值资源**：`http_origin_advertisement` 与 `http_alternative_service_advertisement` 复制构造沿用源 PMR，赋值保留目标 PMR；嵌套字符串同步绑定目标资源。
+- **通告赋值提交**：复制或跨资源移动分配失败时保留两端原值；同资源移动不分配，完成提交后才释放旧存储。
 
 #### 4.1 HTTP/1.0 & HTTP/1.1 状态机
 

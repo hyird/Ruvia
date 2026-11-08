@@ -11,10 +11,17 @@
 namespace ruvia {
 // The resource must outlive the advertisement and all retained frame results.
 // Encoders validate limits before allocation and write into the final owned result.
+// Copies inherit the source resource; assignment retains destination resources
+// and commits only after every allocation succeeds.
 struct http_origin_advertisement final {
     std::pmr::vector<std::pmr::string> origins_;
     explicit http_origin_advertisement(std::pmr::memory_resource* resource)
         : origins_(resource) {}
+    http_origin_advertisement(const http_origin_advertisement& other)
+        : origins_(other.origins_, other.origins_.get_allocator()) {}
+    http_origin_advertisement(http_origin_advertisement&&) noexcept = default;
+    http_origin_advertisement& operator=(const http_origin_advertisement& other);
+    http_origin_advertisement& operator=(http_origin_advertisement&& other);
 };
 struct http_alternative_service_advertisement final {
     std::uint32_t stream_id_{0};
@@ -23,6 +30,13 @@ struct http_alternative_service_advertisement final {
     explicit http_alternative_service_advertisement(std::pmr::memory_resource* resource)
         : origin_(resource),
           field_value_(resource) {}
+    http_alternative_service_advertisement(const http_alternative_service_advertisement& other)
+        : stream_id_(other.stream_id_),
+          origin_(other.origin_, other.origin_.get_allocator()),
+          field_value_(other.field_value_, other.field_value_.get_allocator()) {}
+    http_alternative_service_advertisement(http_alternative_service_advertisement&&) noexcept = default;
+    http_alternative_service_advertisement& operator=(const http_alternative_service_advertisement& other);
+    http_alternative_service_advertisement& operator=(http_alternative_service_advertisement&& other);
 };
 enum class http_connection_advertisement_error : std::uint8_t {
     malformed_payload,
