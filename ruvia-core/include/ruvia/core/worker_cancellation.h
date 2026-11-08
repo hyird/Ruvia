@@ -141,6 +141,8 @@ inline constexpr bool worker_cancellation_post_is_inline =
 // owner state before arm(), which may deliver an already-requested stop inline.
 // reset() joins the callback before clearing its identity; a late posted
 // cancellation cannot address a reused slot.
+// The target is borrowed without retaining it; its owner must keep it alive
+// until reset() has joined the callback.
 template <typename target_type>
 class worker_cancellation_registration final {
     static_assert(worker_cancellation_post_is_inline<target_type>);
@@ -152,6 +154,8 @@ public:
           id_(require_target(target).next_operation_id()) {
         identity = id_;
     }
+    worker_cancellation_registration(std::shared_ptr<target_type>&&, std::uint64_t&) = delete;
+    worker_cancellation_registration(const std::shared_ptr<target_type>&&, std::uint64_t&) = delete;
     worker_cancellation_registration(const worker_cancellation_registration&) = delete;
     worker_cancellation_registration& operator=(const worker_cancellation_registration&) = delete;
     worker_cancellation_registration(worker_cancellation_registration&&) = delete;
@@ -193,8 +197,8 @@ private:
     target_type* target_;
     std::uint64_t* identity_{};
     std::uint64_t id_;
-    stop_registration registration_;
     bool armed_{};
+    stop_registration registration_;
 };
 
 }  // namespace ruvia

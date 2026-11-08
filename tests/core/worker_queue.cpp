@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
@@ -57,6 +59,11 @@ TEST(Ruvia, worker_cancellation_registration_retires_before_slot_reuse) {
     const auto worker_value = attachment.loop().handle();
     auto target = ruvia::make_worker_cancellation_target(state, worker_value);
     using registration = ruvia::worker_cancellation_registration<ruvia::worker_cancellation_target<owner>>;
+    using target_owner = std::shared_ptr<ruvia::worker_cancellation_target<owner>>;
+    static_assert(std::is_constructible_v<registration, target_owner&, std::uint64_t&>);
+    static_assert(std::is_constructible_v<registration, const target_owner&, std::uint64_t&>);
+    static_assert(!std::is_constructible_v<registration, target_owner&&, std::uint64_t&>);
+    static_assert(!std::is_constructible_v<registration, const target_owner&&, std::uint64_t&>);
     std::optional<registration> current;
     ruvia::stop_source old_stop;
     ruvia::stop_source new_stop;

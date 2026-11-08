@@ -33,6 +33,7 @@
 | `"ruvia/core/timer.h"` | `enum class timer_sleep_result { elapsed, stop_requested }`、`class sleep_operation final`、`sleep_for(const worker_handle&, duration, [stop_token])`、`sleep_until(const worker_handle&, deadline, [stop_token])` | 在绑定 Worker 上挂起当前协程指定时长或直至截止时间点；返回可丢弃、仅启动前可移动的单次冷 `sleep_operation`，须在绑定 Worker 上 `co_await` 启动。若传入的 `stop_token` 触发或 Worker 停止定时器，返回 `stop_requested` 而不抛异常 |
 
 - **注册重入边界**：两种 `register_callback()` 入口均先固定取消状态，再内部移交回调或退役旧注册；后续不再读取 token 宿主，旧载荷析构可清空或销毁 token。
+- **取消目标借用**：`worker_cancellation_registration` 不保留目标的共享引用，只接受左值 `shared_ptr`、拒绝含 `const` 的右值；目标须由调用方持续持有，直至 `reset()` 等待回调结束并清除操作身份。
 - **时长转换**：`worker_timer_saturating_duration_cast()` 对不宽于 `uintmax_t` 的整数计数按任意有理周期精确换算；正小数 tick 向上取整，负数向零截断，越界饱和，不依赖浮点中间值。
 
 `stop_group group{first.token(), second.token(), ...}` 或 `stop_group group{tokens_span}` 可组合任意数量的父状态，也可输入另一个 group 的 `token()`。group 不可复制或移动，必须保持地址稳定并存活到使用其 token 的所有操作结束 / join；token 的复制不会延长 group 的父源注册寿命。0 / 1 个不同有效源直接透传，不创建新状态；真实多源组合创建一个下游状态，前两个父注册内嵌，更多父注册按实际数量分配。重复源与嵌套源都只触发每个下游回调一次，不存在用户源容量被框架内部源占用的问题。
