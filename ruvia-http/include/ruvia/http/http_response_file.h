@@ -68,11 +68,13 @@ public:
           release_(std::exchange(other.release_, nullptr)) {}
 
     http_response_file_handle& operator=(http_response_file_handle&& other) noexcept {
-        if (this != &other) {
-            reset();
-            native_ = std::exchange(other.native_, native_type{});
-            release_ = std::exchange(other.release_, nullptr);
+        if (this == &other) {
+            return *this;
         }
+        http_response_file_handle retired(std::move(other));
+        std::swap(native_, retired.native_);
+        std::swap(release_, retired.release_);
+        // Commit both owners and the return reference before release can reenter.
         return *this;
     }
 

@@ -224,6 +224,24 @@ void release_counted_response_file_handle(ruvia::http_response_file_handle::nati
     last_released_response_file_handle = value;
 }
 
+struct reentrant_response_file_release final {
+    std::size_t releases_{0};
+    ruvia::http_response_file_handle* replacement_target_{nullptr};
+    ruvia::http_response_file_handle* replacement_source_{nullptr};
+
+    ruvia::http_response_file_handle opened() & noexcept {
+        return {reinterpret_cast<ruvia::http_response_file_handle::native_type>(this), release};
+    }
+
+    static void release(ruvia::http_response_file_handle::native_type value) noexcept {
+        auto& record = *reinterpret_cast<reentrant_response_file_release*>(value);
+        ++record.releases_;
+        if (record.replacement_target_ != nullptr) {
+            *record.replacement_target_ = std::move(*record.replacement_source_);
+        }
+    }
+};
+
 }  // namespace
 
 TEST(Ruvia, response_file_body_owns_its_opened_handle_until_replacement) {
@@ -273,6 +291,52 @@ TEST(Ruvia, response_file_body_owns_its_opened_handle_until_replacement) {
     // Destroying the response releases the last handle.
     EXPECT_EQ(released_response_file_handles, std::size_t{3});
     EXPECT_EQ(last_released_response_file_handle, ruvia::http_response_file_handle::native_type{9});
+}
+
+TEST(Ruvia, response_file_handle_move_assignment_preserves_reentrant_replacement) {
+    reentrant_response_file_release previous;
+    reentrant_response_file_release incoming;
+    reentrant_response_file_release replacement;
+    {
+        auto target = previous.opened();
+        auto source = incoming.opened();
+        auto next = replacement.opened();
+        previous.replacement_target_ = &target;
+        previous.replacement_source_ = &next;
+
+        target = std::move(source);
+
+        EXPECT_FALSE(source);
+        EXPECT_FALSE(next);
+        EXPECT_EQ(target.native(), reinterpret_cast<ruvia::http_response_file_handle::native_type>(&replacement));
+        EXPECT_EQ(previous.releases_, 1U);
+        EXPECT_EQ(incoming.releases_, 1U);
+        EXPECT_EQ(replacement.releases_, 0U);
+    }
+    EXPECT_EQ(previous.releases_, 1U);
+    EXPECT_EQ(incoming.releases_, 1U);
+    EXPECT_EQ(replacement.releases_, 1U);
+}
+
+TEST(Ruvia, response_file_handle_move_assignment_detaches_source_before_retirement) {
+    reentrant_response_file_release previous;
+    reentrant_response_file_release incoming;
+    {
+        auto target = previous.opened();
+        auto source = incoming.opened();
+        ruvia::http_response_file_handle empty;
+        previous.replacement_target_ = &source;
+        previous.replacement_source_ = &empty;
+
+        target = std::move(source);
+
+        EXPECT_FALSE(source);
+        EXPECT_EQ(target.native(), reinterpret_cast<ruvia::http_response_file_handle::native_type>(&incoming));
+        EXPECT_EQ(previous.releases_, 1U);
+        EXPECT_EQ(incoming.releases_, 0U);
+    }
+    EXPECT_EQ(previous.releases_, 1U);
+    EXPECT_EQ(incoming.releases_, 1U);
 }
 
 TEST(Ruvia, response_file_body_move_preserves_owned_path_and_identity) {
