@@ -184,7 +184,9 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
 - **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。`clone()` 只复制当前语句可达的节点与子查询，不携带被替换子句、退役来源与废弃节点。
-- **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from`、`subquery`、`exists` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载在实参与当前 Query 使用同一 PMR resource 时直接接管其 AST，否则复制。两种右值路径都会让实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。
+- **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from`、`subquery`、`exists` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载在实参与当前 Query 使用同一 PMR resource 时直接接管其 AST，否则复制。两种右值路径仅在成功提交后让实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。
+- **组合失败回滚**：校验或分配失败不消费源查询，也不改变目标原有 SQL 与参数；资源恢复后可重试。
+- **锁子句替换**：`lock()` 完整构造候选后才替换旧锁；失败保留原有模式、等待策略与表名。
 - **语句类型切换**：`insert_into`、`update`、`delete_from` 把 Query 切换到另一种语句时，只保留 `WHERE` 与 `WITH`；已有 `FROM` / `JOIN`、投影、`VALUES` / 赋值、`GROUP BY` / `HAVING`、`ORDER BY`、`LIMIT` / `OFFSET`、锁、集合操作或 `DISTINCT` 时抛出 `std::invalid_argument`，以免残留的 `FROM` 静默变成 `UPDATE ... FROM` / `DELETE ... USING` 扩大目标范围。需要关联来源时显式使用 `update_from` / `delete_using`；同类语句重新指定目标不受影响。
 - **标识符**：`FROM` / `JOIN` 别名、`INSERT` / `UPDATE` / `DELETE` 目标别名、CTE 名与 `lock` 的 `OF` 目标必须是不含 `.` 的单个标识符（表名本身仍可带 schema 限定）；投影别名与列名遵循相同的唯一性规则。
 - **原始 SQL（`sql()` / `db_expr::raw_sql`）**：语法片段以 `-` 或 `/` 结尾时，编译器在其后的参数前补一个空格，避免负数字面量或 `*` 拼出 `--` / `/*` 注释。PostgreSQL 绑定模式下片段不得包含位置参数（`$` 后接数字且不处于标识符中，如 `$1`），否则抛出 `std::invalid_argument`，值请通过 `value()` 参数传入；字面量模式（如函数体 DDL）与 MariaDB 不受此限制。

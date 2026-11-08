@@ -1383,8 +1383,9 @@ private:
     // appends it here; the returned handle addresses the appended node.
     [[nodiscard]] detail::db_query_node make_node(detail::db_node_kind kind, std::span<const db_expression> args = {}) const;
     db_expression push_node(detail::db_query_node&& node);
+    // Callers prepare clause metadata and reserve every publication slot first.
     [[nodiscard]] db_query adopt(db_query&& query) const;
-    [[nodiscard]] std::size_t add_subquery(db_query&& query);
+    [[nodiscard]] db_expression add_subquery(detail::db_node_kind kind, db_query&& query);
     storage_owner_type storage_;
 };
 

@@ -94,11 +94,12 @@ void validate_cte(const db_query_storage& s, std::string_view name, const column
     }
 }
 template <class column_range>
-void append_cte(db_query_storage& s, std::string_view name, db_query&& body, bool recursive,
+db_stored_cte prepare_cte(db_query_storage& s, std::string_view name, bool recursive,
     db_materialization materialization, const column_range& columns) {
-    const auto index = s.queries_.size();
-    s.queries_.push_back(std::move(body));
-    s.ctes_.emplace_back(name, index, recursive, materialization, columns, s.resource_);
+    db_stored_cte prepared(name, s.queries_.size(), recursive, materialization, columns, s.resource_);
+    reserve_append(s.queries_, 1);
+    reserve_append(s.ctes_, 1);
+    return prepared;
 }
 }  // namespace
 
@@ -1825,33 +1826,34 @@ db_query db_query::adopt(db_query&& query) const {
     if (&query == this) {
         return query.clone(resource());
     }
-    db_query taken(std::move(query));
-    return taken.resource() == resource() ? std::move(taken) : taken.clone(resource());
+    if (query.resource() == resource()) {
+        return std::move(query);
+    }
+    auto snapshot = query.clone(resource());
+    query.storage_.reset();
+    return snapshot;
 }
-std::size_t db_query::add_subquery(db_query&& query) {
+db_expression db_query::add_subquery(db_node_kind kind, db_query&& query) {
     query.require_select_query();
-    auto snapshot = adopt(std::move(query));
+    auto node_value = make_node(kind);
     auto& s = storage();
-    s.queries_.push_back(std::move(snapshot));
-    return s.queries_.size() - 1;
+    node_value.query_ = s.queries_.size();
+    detail::reserve_append(s.nodes_, 1);
+    detail::reserve_append(s.queries_, 1);
+    s.queries_.push_back(adopt(std::move(query)));
+    return push_node(std::move(node_value));
 }
 db_expression db_query::subquery(const db_query& query) {
     return subquery(query.clone(resource()));
 }
 db_expression db_query::subquery(db_query&& query) {
-    const auto query_index = add_subquery(std::move(query));
-    auto node_value = make_node(db_node_kind::subquery);
-    node_value.query_ = query_index;
-    return push_node(std::move(node_value));
+    return add_subquery(db_node_kind::subquery, std::move(query));
 }
 db_expression db_query::exists(const db_query& query) {
     return exists(query.clone(resource()));
 }
 db_expression db_query::exists(db_query&& query) {
-    const auto query_index = add_subquery(std::move(query));
-    auto node_value = make_node(db_node_kind::exists);
-    node_value.query_ = query_index;
-    return push_node(std::move(node_value));
+    return add_subquery(db_node_kind::exists, std::move(query));
 }
 db_expression db_query::aggregate(std::string_view function, std::span<const db_expression> args, bool distinct, std::span<const db_order_term> order) {
     detail::require_name(function, true);
@@ -1985,8 +1987,9 @@ db_query& db_query::from(db_query&& query, std::string_view alias, const db_sour
     source_value.alias_ = alias;
     source_value.query_ = s.queries_.size();
     detail::set_source_options(source_value, options, s.resource_);
+    detail::reserve_append(s.queries_, 1);
     s.queries_.push_back(adopt(std::move(query)));
-    s.source_ = std::move(source_value);
+    s.source_.emplace(std::move(source_value));
     return *this;
 }
 db_query& db_query::from_function(db_expression function, std::string_view alias, const db_source_options& options) {
@@ -2036,8 +2039,11 @@ db_query& db_query::join(db_join_type type, db_query&& query, db_expression on, 
     source_value.query_ = s.queries_.size();
     source_value.alias_ = alias;
     detail::set_source_options(source_value, options, s.resource_);
+    detail::db_stored_join join_value(type, std::move(source_value), predicate, s.resource_);
+    detail::reserve_append(s.queries_, 1);
+    detail::reserve_append(s.joins_, 1);
     s.queries_.push_back(adopt(std::move(query)));
-    s.joins_.emplace_back(type, std::move(source_value), predicate, s.resource_);
+    s.joins_.push_back(std::move(join_value));
     return *this;
 }
 db_query& db_query::join_function(db_join_type type, db_expression function, db_expression on, std::string_view alias, const db_source_options& options) {
@@ -2290,6 +2296,7 @@ db_query& db_query::insert_from(db_query&& query) {
     query.require_select_query();
     auto& s = storage();
     const auto index = s.queries_.size();
+    detail::reserve_append(s.queries_, 1);
     s.queries_.push_back(adopt(std::move(query)));
     s.insert_query_ = index;
     return *this;
@@ -2445,7 +2452,8 @@ db_query& db_query::lock(const db_lock_options& options) {
     for (const auto& table : options.tables_) {
         detail::require_unqualified_name(table);
     }
-    storage().lock_.emplace(options, resource());
+    detail::db_stored_lock lock_value(options, resource());
+    storage().lock_.emplace(std::move(lock_value));
     return *this;
 }
 db_query& db_query::clear_lock() {
@@ -2458,14 +2466,18 @@ db_query& db_query::with(std::string_view name, const db_query& query, const db_
 db_query& db_query::with(std::string_view name, db_query&& query, const db_cte_options& options) {
     auto& s = storage();
     detail::validate_cte(s, name, options.columns_.view());
-    detail::append_cte(s, name, adopt(std::move(query)), options.recursive_, options.materialization_, options.columns_.view());
+    auto cte = detail::prepare_cte(s, name, options.recursive_, options.materialization_, options.columns_.view());
+    s.queries_.push_back(adopt(std::move(query)));
+    s.ctes_.push_back(std::move(cte));
     return *this;
 }
 void db_query::with_columns(std::string_view name, const db_query& query, db_materialization materialization,
     std::span<const std::pmr::string> columns) {
     auto& s = storage();
     detail::validate_cte(s, name, columns);
-    detail::append_cte(s, name, query.clone(resource()), false, materialization, columns);
+    auto cte = detail::prepare_cte(s, name, false, materialization, columns);
+    s.queries_.push_back(query.clone(resource()));
+    s.ctes_.push_back(std::move(cte));
 }
 db_query& db_query::combine(db_set_operation operation, const db_query& query) {
     return combine(operation, query.clone(resource()));
@@ -2477,6 +2489,8 @@ db_query& db_query::combine(db_set_operation operation, db_query&& query) {
         throw std::invalid_argument("set operations require SELECT or VALUES queries");
     }
     const auto index = s.queries_.size();
+    detail::reserve_append(s.queries_, 1);
+    detail::reserve_append(s.set_operations_, 1);
     s.queries_.push_back(adopt(std::move(query)));
     s.set_operations_.push_back({operation, index});
     return *this;

@@ -2400,4 +2400,207 @@ TEST(Ruvia, db_query_rvalue_composition_matches_copying_and_consumes_the_argumen
     EXPECT_TRUE(testing::throws_on([&] { (void)foreign.compile(db_driver::postgresql, nullptr); }));
 }
 
+enum class query_composition { scalar,
+    exists,
+    source,
+    join,
+    insert,
+    cte,
+    combine };
+
+db_query composition_target(std::pmr::memory_resource* resource, query_composition operation) {
+    db_query target(resource);
+    if (operation == query_composition::insert) {
+        db_query initial(resource);
+        initial.select(initial.value(7));
+        target.insert_into("items", {"id"}).insert_from(std::move(initial));
+    } else {
+        target.select(target.value(9)).from("items");
+    }
+    return target;
+}
+
+template <typename query_type>
+std::optional<db_expression> compose_query(db_query& target, query_type&& source, query_composition operation) {
+    constexpr std::string_view alias = "nested_query_with_a_long_alias";
+    constexpr std::array<borrowed_text, 1> columns{"nested_column_with_a_long_name"};
+    switch (operation) {
+        case query_composition::scalar:
+            return target.subquery(std::forward<query_type>(source));
+        case query_composition::exists:
+            return target.exists(std::forward<query_type>(source));
+        case query_composition::source:
+            target.from(std::forward<query_type>(source), alias);
+            break;
+        case query_composition::join:
+            target.join(db_join_type::cross, std::forward<query_type>(source), {}, alias);
+            break;
+        case query_composition::insert:
+            target.insert_from(std::forward<query_type>(source));
+            break;
+        case query_composition::cte:
+            target.with(alias, std::forward<query_type>(source), {.columns_ = columns});
+            break;
+        case query_composition::combine:
+            target.combine(db_set_operation::union_all, std::forward<query_type>(source));
+            break;
+    }
+    return std::nullopt;
+}
+
+TEST(Ruvia, db_query_failed_rvalue_composition_preserves_both_queries_and_allows_retry) {
+    for (const auto operation : {query_composition::scalar, query_composition::exists,
+             query_composition::source, query_composition::join, query_composition::insert,
+             query_composition::cte, query_composition::combine}) {
+        SCOPED_TRACE(static_cast<int>(operation));
+        for (const bool same_resource : {true, false}) {
+            SCOPED_TRACE(same_resource);
+            bool succeeded = false;
+            bool failed = false;
+            for (std::size_t fail_after = 0; fail_after < 64 && !succeeded; ++fail_after) {
+                SCOPED_TRACE(fail_after);
+                failing_memory_resource target_resource, source_resource;
+                {
+                    auto target = composition_target(&target_resource, operation);
+                    auto* source_allocator = same_resource ? &target_resource : &source_resource;
+                    db_query source(source_allocator);
+                    source.select(source.value(17)).from("source_rows");
+                    const auto original_target = compile_sql([&] {
+                        return target.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                    });
+                    const auto original_source = compile_sql([&] {
+                        return source.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                    });
+                    auto expected = target.clone(nullptr);
+                    if (const auto expression = compose_query(expected, std::as_const(source), operation)) {
+                        expected.select(*expression);
+                    }
+                    const auto expected_sql = compile_sql([&] {
+                        return expected.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                    });
+                    std::optional<db_expression> expression;
+                    target_resource.fail_after_stl_operation(fail_after);
+                    try {
+                        expression = compose_query(target, std::move(source), operation);
+                        succeeded = true;
+                    } catch (const std::bad_alloc&) {
+                        failed = true;
+                        target_resource.allow_allocations();
+                        EXPECT_EQ(source.resource(), source_allocator);
+                        EXPECT_EQ(compile_sql([&] {
+                            return source.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                        }),
+                            original_source);
+                        EXPECT_EQ(compile_sql([&] {
+                            return target.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                        }),
+                            original_target);
+                        expression = compose_query(target, std::move(source), operation);
+                    }
+                    target_resource.allow_allocations();
+                    EXPECT_THROW((void)source.resource(), std::logic_error);
+                    if (expression) {
+                        target.select(*expression);
+                    }
+                    EXPECT_EQ(compile_sql([&] {
+                        return target.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                    }),
+                        expected_sql);
+                }
+                EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+                EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+            }
+            EXPECT_TRUE(succeeded);
+            if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+                EXPECT_TRUE(failed);
+            }
+        }
+    }
+}
+
+TEST(Ruvia, db_query_self_composition_preserves_snapshot_across_failed_preparation) {
+    for (const auto operation : {query_composition::scalar, query_composition::exists,
+             query_composition::source, query_composition::join,
+             query_composition::cte, query_composition::combine}) {
+        SCOPED_TRACE(static_cast<int>(operation));
+        bool succeeded = false;
+        for (std::size_t fail_after = 0; fail_after < 64 && !succeeded; ++fail_after) {
+            SCOPED_TRACE(fail_after);
+            failing_memory_resource resource;
+            {
+                auto query = composition_target(&resource, operation);
+                const auto original = compile_sql([&] {
+                    return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                });
+                auto expected = query.clone(nullptr);
+                if (const auto expression = compose_query(expected, std::as_const(query), operation)) {
+                    expected.select(*expression);
+                }
+                const auto expected_sql = compile_sql([&] {
+                    return expected.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                });
+                std::optional<db_expression> expression;
+                resource.fail_after_stl_operation(fail_after);
+                try {
+                    expression = compose_query(query, std::move(query), operation);
+                    succeeded = true;
+                } catch (const std::bad_alloc&) {
+                    resource.allow_allocations();
+                    EXPECT_EQ(compile_sql([&] {
+                        return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                    }),
+                        original);
+                    expression = compose_query(query, std::move(query), operation);
+                }
+                resource.allow_allocations();
+                EXPECT_EQ(query.resource(), &resource);
+                if (expression) {
+                    query.select(*expression);
+                }
+                EXPECT_EQ(compile_sql([&] {
+                    return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                }),
+                    expected_sql);
+            }
+            EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+        }
+        EXPECT_TRUE(succeeded);
+    }
+}
+
+TEST(Ruvia, db_query_failed_lock_replacement_preserves_previous_lock_and_allows_retry) {
+    constexpr std::string_view alias = "locking_table_alias_with_long_name";
+    const std::array<borrowed_text, 1> tables{alias};
+    bool succeeded = false;
+    bool failed = false;
+    for (std::size_t fail_after = 0; fail_after < 16 && !succeeded; ++fail_after) {
+        SCOPED_TRACE(fail_after);
+        failing_memory_resource resource;
+        {
+            db_query query(&resource);
+            query.select(query.star()).from("items", alias).lock({.mode_ = db_row_lock::update});
+            const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr); });
+            resource.fail_after_stl_operation(fail_after);
+            try {
+                query.lock({.mode_ = db_row_lock::share, .nowait_ = true, .tables_ = tables});
+                succeeded = true;
+            } catch (const std::bad_alloc&) {
+                failed = true;
+                resource.allow_allocations();
+                EXPECT_EQ(compile_sql([&] { return query.compile(db_driver::postgresql, nullptr); }), original);
+                query.lock({.mode_ = db_row_lock::share, .nowait_ = true, .tables_ = tables});
+            }
+            resource.allow_allocations();
+            EXPECT_EQ(compile_sql([&] { return query.compile(db_driver::postgresql, nullptr); }),
+                "SELECT * FROM \"items\" AS \"locking_table_alias_with_long_name\" "
+                "FOR SHARE OF \"locking_table_alias_with_long_name\" NOWAIT");
+        }
+        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    EXPECT_TRUE(succeeded);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        EXPECT_TRUE(failed);
+    }
+}
+
 }  // namespace
