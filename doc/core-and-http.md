@@ -161,6 +161,7 @@ pool.join();
 | `"ruvia/http/multipart_parser.h"` | `parse_multipart_boundary`、`parse_multipart_body`、`class multipart_parser final` | 一次性与流式增量（`feed` / `poll`）的 `multipart/form-data` 解析器 |
 | `"ruvia/http/sse.h"` | `struct sse_message final`、`format_sse_message` | Server-Sent Events 消息格式化与校验 |
 
+- **首部转移模式**：`http_response_headers::transfer_from()` 与 `http_response::transfer_headers_from()` 仅接受 `merge` / `assign` / `apply`；非法值在变更前抛出 `std::invalid_argument`，空源也不例外。
 - **Multipart 流式缓冲**：`multipart_parser` 复用 `http_io_buffer`，增长时只复制未消费字节。
 - **Multipart 借用重试**：`feed()` 可接收最新分片的正文视图；分配失败后，该视图仍可用于原样重试。
 

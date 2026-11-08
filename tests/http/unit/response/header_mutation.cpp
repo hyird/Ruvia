@@ -303,6 +303,26 @@ TEST(Ruvia, response_header_transfer_appends_disjoint_fields_with_their_rules) {
     EXPECT_EQ(applied.headers().size(), std::size_t{2});
 }
 
+TEST(Ruvia, response_header_transfer_rejects_unknown_modes_without_mutation) {
+    auto* const resource = std::pmr::new_delete_resource();
+    for (const std::string_view source_name : {"X-Added", "X-Existing", ""}) {
+        SCOPED_TRACE(source_name);
+        ruvia::http_response source_value(resource);
+        if (!source_name.empty()) {
+            source_value.header(source_name, "new");
+        }
+        ruvia::http_response destination(resource);
+        destination.header("X-Existing", "old");
+
+        EXPECT_THROW(
+            destination.transfer_headers_from(source_value, static_cast<ruvia::http_response_header_transfer>(255)),
+            std::invalid_argument);
+        EXPECT_EQ(destination.headers().size(), std::size_t{1});
+        EXPECT_EQ(destination.header("X-Existing").value_or(""), "old");
+        EXPECT_FALSE(destination.header("X-Added").has_value());
+    }
+}
+
 TEST(Ruvia, response_header_transfer_failure_leaves_destination_unchanged) {
     failing_memory_resource resource;
     {

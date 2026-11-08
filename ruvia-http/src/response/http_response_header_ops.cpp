@@ -159,6 +159,14 @@ bool http_response_headers::try_append_disjoint(
 
 void http_response_headers::transfer_from(
     const http_response_headers& source, http_response_header_transfer mode) {
+    switch (mode) {
+        case http_response_header_transfer::merge:
+        case http_response_header_transfer::assign:
+        case http_response_header_transfer::apply:
+            break;
+        default:
+            throw std::invalid_argument("invalid HTTP response header transfer mode");
+    }
     if (try_append_disjoint(source, mode)) {
         return;
     }
