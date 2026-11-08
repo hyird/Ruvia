@@ -240,6 +240,70 @@ TEST(Ruvia, http_accept_match_media_parameter_lookup_handles_order_and_quoted_va
     }
 }
 
+TEST(Ruvia, http_accept_match_plain_text_parameters_ignore_value_case) {
+    struct media_case final {
+        std::string_view field_;
+        std::string_view offered_;
+        int quality_;
+    };
+    constexpr media_case cases[] = {
+        {"text/plain;format=Flowed;q=0.7", "text/plain;format=flowed", 700},
+        {"text/plain;format=fixed;q=0.4", "TEXT/PLAIN;FORMAT=FIXED", 400},
+        {"text/plain;delsp=Yes;q=0.6", "text/plain;format=flowed;delsp=yes", 600},
+        {R"(text/plain;format="\F\L\O\W\E\D";delsp="\N\O";q=0.5)",
+            "text/plain;format=flowed;delsp=no", 500},
+        {"text/plain;format=flowed;delsp=yes;q=0.3",
+            R"(text/plain;format="\F\L\O\W\E\D";DELSP="\Y\E\S")", 300},
+    };
+    for (const auto& item : cases) {
+        SCOPED_TRACE(item.field_);
+        ruvia::http_accept_match match;
+        match.update_media_type(item.field_, item.offered_);
+        EXPECT_EQ(match.quality(), item.quality_);
+    }
+}
+
+TEST(Ruvia, http_accept_match_plain_text_parameter_exclusions_survive_field_order) {
+    constexpr std::string_view offered = "text/plain;format=flowed;delsp=yes";
+    constexpr std::string_view general = "*/*;q=0.8";
+    for (const std::string_view excluded : {
+             "text/plain;format=FLOWED;q=0",
+             "text/*;delsp=YES;q=0",
+             "*/*;format=FLOWED;delsp=YES;q=0"}) {
+        SCOPED_TRACE(excluded);
+        for (const bool exclusion_first : {false, true}) {
+            ruvia::http_accept_match match;
+            match.update_media_type(exclusion_first ? excluded : general, offered);
+            match.update_media_type(exclusion_first ? general : excluded, offered);
+            EXPECT_EQ(match.quality(), 0);
+            EXPECT_FALSE(match.matched());
+        }
+        ruvia::http_accept_match joined;
+        joined.update_media_type(std::string(general) + ", " + std::string(excluded), offered);
+        EXPECT_FALSE(joined.matched());
+    }
+}
+
+TEST(Ruvia, http_accept_match_preserves_other_parameter_value_case) {
+    struct media_case final {
+        std::string_view field_;
+        std::string_view offered_;
+    };
+    constexpr media_case cases[] = {
+        {"application/plain;format=Flowed", "application/plain;format=flowed"},
+        {"text/example;format=Flowed", "text/example;format=flowed"},
+        {"application/plain;delsp=Yes", "application/plain;delsp=yes"},
+        {"text/example;delsp=Yes", "text/example;delsp=yes"},
+        {"text/plain;profile=Example", "text/plain;profile=example"},
+    };
+    for (const auto& item : cases) {
+        SCOPED_TRACE(item.field_);
+        ruvia::http_accept_match match;
+        match.update_media_type(item.field_, item.offered_);
+        EXPECT_FALSE(match.matched());
+    }
+}
+
 TEST(Ruvia, accepts_media_type_requires_a_valid_complete_offered_value) {
     constexpr std::string_view field = "text/plain;charset=utf-8;q=1";
     for (const std::string_view offered : {

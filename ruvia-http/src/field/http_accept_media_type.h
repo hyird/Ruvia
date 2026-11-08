@@ -32,7 +32,7 @@ namespace ruvia::detail {
             if (http_ascii_equals_ignore_case(name, "q")) {
                 return true;
             }
-            if (!offered_parameters.contains(name, value)) {
+            if (!offered_parameters.contains(name, value, offered_parts)) {
                 return false;
             }
             ++parameter_count;

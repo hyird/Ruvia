@@ -150,10 +150,19 @@ struct http_media_type_parameters final {
         });
     }
 
-    [[nodiscard]] bool contains(std::string_view name, std::string_view value) const noexcept {
+    [[nodiscard]] bool contains(std::string_view name, std::string_view value,
+        const http_media_type_parts& parts) const noexcept {
         const auto parameter_value = find(name);
-        return parameter_value.has_value() && http_media_parameter_value_equals(*parameter_value, value,
-                                                  http_ascii_equals_ignore_case(name, "charset"));
+        if (!parameter_value.has_value()) {
+            return false;
+        }
+        // RFC 3676 section 4 defines these case-insensitive values only for text/plain.
+        const bool ascii_case_insensitive = http_ascii_equals_ignore_case(name, "charset") ||
+                                            ((http_ascii_equals_ignore_case(name, "format") ||
+                                                 http_ascii_equals_ignore_case(name, "delsp")) &&
+                                                http_ascii_equals_ignore_case(parts.type_, "text") &&
+                                                http_ascii_equals_ignore_case(parts.subtype_, "plain"));
+        return http_media_parameter_value_equals(*parameter_value, value, ascii_case_insensitive);
     }
 };
 
