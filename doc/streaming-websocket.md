@@ -61,7 +61,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 | `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
 | `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
 | `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
-| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 仅在正文阶段等待；`c.stop_token()` 取消（含客户端断开）或停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常 |
+| `task<timer_sleep_result> sleep(timeout_duration duration) &` | 仅在正文阶段等待；`c.stop_token()` 取消（含客户端断开）或停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常 |
 | `bool aborted() const noexcept` | 只报告已观察到的真实失败/中止（写失败、客户端断开），正常完成（含 HEAD、304）为 `false` |
 | `task<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
 
@@ -97,7 +97,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 | --- | --- |
 | `task<stream_commit_result> commit()` | 与普通流相同：先检查 `body` / `completed`，再启动订阅或事件生产 |
 | `task<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
-| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration)` | 挂起等待指定时长 |
+| `task<timer_sleep_result> sleep(timeout_duration duration)` | 挂起等待指定时长；输入契约见 [Core 超时文档](core-and-http.md) |
 | `bool aborted() const noexcept` | 只报告真实失败，正常 HEAD 完成不是取消 |
 | `task<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
 

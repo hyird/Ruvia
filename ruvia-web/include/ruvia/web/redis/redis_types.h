@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
@@ -59,9 +60,9 @@ struct redis_config final {
     // when the command is written, so slot acquisition (acquire_timeout) and a
     // lazy connect (connect_timeout) do not consume the server-side window.
     // Infinite waits require an explicit stop_token or operation timeout.
-    std::optional<std::chrono::milliseconds> connect_timeout_{std::chrono::seconds(5)};
-    std::optional<std::chrono::milliseconds> command_timeout_{std::chrono::seconds(30)};
-    std::optional<std::chrono::milliseconds> acquire_timeout_{std::chrono::seconds(5)};
+    std::optional<timeout_duration> connect_timeout_{std::chrono::seconds(5)};
+    std::optional<timeout_duration> command_timeout_{std::chrono::seconds(30)};
+    std::optional<timeout_duration> acquire_timeout_{std::chrono::seconds(5)};
     // Absence disables the reply byte limit.
     std::optional<std::size_t> max_reply_bytes_{64 * 1024 * 1024};
     // Must be greater than zero.
@@ -74,13 +75,15 @@ struct redis_config final {
     // read with redis_error(timeout). Any received byte restarts the interval;
     // PING replies are consumed and never surface as events. Absence disables
     // the probe; a configured interval must be greater than zero.
-    std::optional<std::chrono::milliseconds> subscription_ping_interval_{std::chrono::seconds(30)};
+    std::optional<timeout_duration> subscription_ping_interval_{std::chrono::seconds(30)};
 };
 
 class redis_block_wait final {
 public:
-    [[nodiscard]] static redis_block_wait for_duration(std::chrono::milliseconds duration) {
-        if (duration.count() <= 0) {
+    // Positive fractional milliseconds round up; values beyond the millisecond
+    // range saturate. Non-positive waits must use an explicit policy instead.
+    [[nodiscard]] static redis_block_wait for_duration(timeout_duration duration) {
+        if (duration.value().count() <= 0) {
             throw std::invalid_argument("redis block duration must be greater than zero");
         }
         return redis_block_wait(duration);
@@ -94,15 +97,16 @@ public:
         return !duration_.has_value();
     }
 
+    // Canonical, safely converted Redis wire duration; absence means infinite.
     [[nodiscard]] std::optional<std::chrono::milliseconds> duration() const noexcept {
-        return duration_;
+        return duration_.has_value() ? std::optional(duration_->value()) : std::nullopt;
     }
 
 private:
-    explicit redis_block_wait(std::optional<std::chrono::milliseconds> duration) noexcept
+    explicit redis_block_wait(std::optional<timeout_duration> duration) noexcept
         : duration_(duration) {}
 
-    std::optional<std::chrono::milliseconds> duration_;
+    std::optional<timeout_duration> duration_;
 };
 
 struct redis_stream_read_view final {

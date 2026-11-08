@@ -35,7 +35,7 @@ namespace {
 }  // namespace
 
 redis_pool::redis_pool(asio::io_context& io_context, const redis_config_storage& config,
-    asio::ssl::context& tls_context, std::optional<std::chrono::milliseconds> command_timeout,
+    asio::ssl::context& tls_context, std::optional<timeout_duration> command_timeout,
     std::size_t pool_size, const worker_handle& worker_value, std::pmr::memory_resource* resource)
     : config_(config),
       command_timeout_(command_timeout),
@@ -104,7 +104,7 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
 
 task<redis_value> redis_pool::execute_owned(redis_owned_command command,
     std::pmr::memory_resource* resource, operation_options options,
-    std::optional<std::chrono::milliseconds> reply_timeout, request_io_metrics* io_metrics,
+    std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
     std::optional<operation_timeout> deadline) {
     return execute_commands<redis_value>(
         std::move(command), std::move(options), reply_timeout, resource, deadline, io_metrics);
@@ -112,7 +112,7 @@ task<redis_value> redis_pool::execute_owned(redis_owned_command command,
 
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, operation_options options,
-    std::optional<std::chrono::milliseconds> reply_timeout, request_io_metrics* io_metrics,
+    std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
     std::optional<operation_timeout> deadline) {
     return execute_commands<redis_value>(
         std::move(args), std::move(options), reply_timeout, resource, deadline, io_metrics);
@@ -128,7 +128,7 @@ task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
 // enclosing caller; owned commands can be released after encoding.
 template <typename result_type, typename command_source_type>
 task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
-    std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
+    std::optional<timeout_duration> reply_timeout, std::pmr::memory_resource* resource,
     std::optional<operation_timeout> deadline, request_io_metrics* io_metrics, bool wrap_transaction) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     constexpr bool single_reply = std::is_same_v<result_type, redis_value>;

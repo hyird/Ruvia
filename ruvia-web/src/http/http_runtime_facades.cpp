@@ -198,9 +198,9 @@ task<void> response_stream_writer::writeln(std::string_view chunk) & {
 }
 
 task<timer_sleep_result> response_stream_writer::sleep(
-    std::chrono::milliseconds duration) & {
+    timeout_duration duration) & {
     require_active();
-    return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration, stop_token_));
+    return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration.value(), stop_token_));
 }
 
 task<void> response_stream_writer::end(std::span<const http_header_view> trailers) & {
@@ -214,7 +214,7 @@ task<void> response_stream_writer::end(std::span<const http_header_view> trailer
         operation_scope_, end_owned(target_, end_, std::move(owned_trailers_value), output_active_));
 }
 
-task<timer_sleep_result> sse_writer::sleep(std::chrono::milliseconds duration) {
+task<timer_sleep_result> sse_writer::sleep(timeout_duration duration) {
     return writer().sleep(duration);
 }
 

@@ -8,7 +8,7 @@ namespace ruvia::detail {
 
 // The one lifecycle check of server routes and clients.
 inline void validate_websocket_lifecycle_options(const websocket_lifecycle_options& options) {
-    if (options.close_handshake_timeout_.has_value() && options.close_handshake_timeout_->count() <= 0) {
+    if (options.close_handshake_timeout_.has_value() && options.close_handshake_timeout_->value().count() <= 0) {
         throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
     }
     const auto& heartbeat = options.heartbeat_;
@@ -18,8 +18,8 @@ inline void validate_websocket_lifecycle_options(const websocket_lifecycle_optio
         }
         return;
     }
-    if (heartbeat.ping_interval_->count() <= 0 ||
-        (heartbeat.pong_timeout_.has_value() && heartbeat.pong_timeout_->count() <= 0)) {
+    if (heartbeat.ping_interval_->value().count() <= 0 ||
+        (heartbeat.pong_timeout_.has_value() && heartbeat.pong_timeout_->value().count() <= 0)) {
         throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
     }
 }

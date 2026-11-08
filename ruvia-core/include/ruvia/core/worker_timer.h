@@ -3,6 +3,8 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <compare>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -62,13 +64,14 @@ enum class worker_timer_schedule_status : std::uint8_t {
     worker_stopping,
 };
 
-// Converts to steady-clock ticks with saturation at both bounds. Integral
-// counts up to uintmax_t width stay exact, rounding positive fractions upward.
-// Other conversions use long double; NaN maps to zero, infinities saturate.
-template <typename rep_type, typename period_type>
-[[nodiscard]] inline std::chrono::steady_clock::duration worker_timer_saturating_duration_cast(
+// Converts directly from the original count domain to the requested tick type.
+// Integral counts up to uintmax_t width stay exact, rounding positive fractions
+// upward and saturating at both bounds. Other conversions use long double;
+// NaN maps to zero, infinities saturate.
+template <typename target_type = std::chrono::steady_clock::duration, typename rep_type, typename period_type>
+[[nodiscard]] constexpr target_type worker_timer_saturating_duration_cast(
     std::chrono::duration<rep_type, period_type> value) noexcept {
-    using target_type = std::chrono::steady_clock::duration;
+    static_assert(std::is_integral_v<typename target_type::rep> && std::is_signed_v<typename target_type::rep>);
     using factor = std::ratio_divide<period_type, typename target_type::period>;
     if constexpr (std::is_integral_v<rep_type> &&
                   std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits &&
@@ -163,8 +166,48 @@ template <typename rep_type, typename period_type>
     }
 }
 
+// Public relative-time inputs retain their original representation until this
+// boundary. Non-positive values remain available to each consumer's policy.
+class timeout_duration final {
+public:
+    constexpr timeout_duration() noexcept = default;
+
+    template <std::integral rep_type, typename period_type>
+    constexpr timeout_duration(std::chrono::duration<rep_type, period_type> value) noexcept
+        : value_(worker_timer_saturating_duration_cast<std::chrono::milliseconds>(value)) {}
+
+    template <std::integral count_type>
+    explicit constexpr timeout_duration(count_type milliseconds) noexcept
+        : timeout_duration(std::chrono::duration<count_type, std::milli>(milliseconds)) {}
+
+    [[nodiscard]] constexpr std::chrono::milliseconds value() const noexcept {
+        return value_;
+    }
+
+    // Mixed comparisons must unwrap explicitly: rounding elapsed time here
+    // could otherwise make a positive fractional millisecond expire early.
+    template <typename left_type, typename right_type>
+        requires std::same_as<std::remove_cvref_t<left_type>, timeout_duration> &&
+                 std::same_as<std::remove_cvref_t<right_type>, timeout_duration>
+    friend constexpr auto operator<=>(left_type&& left, right_type&& right) noexcept {
+        return left.value_ <=> right.value_;
+    }
+
+    template <typename left_type, typename right_type>
+        requires std::same_as<std::remove_cvref_t<left_type>, timeout_duration> &&
+                 std::same_as<std::remove_cvref_t<right_type>, timeout_duration>
+    friend constexpr bool operator==(left_type&& left, right_type&& right) noexcept {
+        return left.value_ == right.value_;
+    }
+
+private:
+    std::chrono::milliseconds value_{};
+};
+
+template <typename rep_type, typename period_type>
 [[nodiscard]] inline std::chrono::steady_clock::time_point worker_timer_saturating_deadline(
-    std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration delay) noexcept {
+    std::chrono::steady_clock::time_point now, std::chrono::duration<rep_type, period_type> value) noexcept {
+    const auto delay = worker_timer_saturating_duration_cast(value);
     if (delay <= std::chrono::steady_clock::duration::zero()) {
         return now;
     }
@@ -175,52 +218,21 @@ template <typename rep_type, typename period_type>
     return now + delay;
 }
 
-[[nodiscard]] inline std::chrono::steady_clock::time_point worker_timer_deadline_after(
-    std::chrono::steady_clock::duration delay) noexcept {
-    return worker_timer_saturating_deadline(std::chrono::steady_clock::now(), delay);
-}
-
 // Non-positive delays map to zero; positive delays round up to whole
 // milliseconds and saturate at the representable maximum.
-[[nodiscard]] inline std::chrono::milliseconds worker_timer_ceil_milliseconds(
-    std::chrono::steady_clock::duration value) noexcept {
-    using milliseconds_type = std::chrono::milliseconds;
-    if (value <= std::chrono::steady_clock::duration::zero()) {
-        return milliseconds_type::zero();
+template <typename rep_type, typename period_type>
+[[nodiscard]] constexpr std::chrono::milliseconds worker_timer_ceil_milliseconds(
+    std::chrono::duration<rep_type, period_type> value) noexcept {
+    if (value <= std::chrono::duration<rep_type, period_type>::zero()) {
+        return std::chrono::milliseconds::zero();
     }
-
-    using factor = std::ratio_divide<std::chrono::steady_clock::duration::period, milliseconds_type::period>;
-    if constexpr (factor::num == 1) {
-        const auto count = value.count() / factor::den;
-        if (std::cmp_greater_equal(count, milliseconds_type::max().count())) {
-            return milliseconds_type::max();
-        }
-        return milliseconds_type(static_cast<milliseconds_type::rep>(count) + (value.count() % factor::den != 0));
-    } else if constexpr (factor::den == 1) {
-        if (std::cmp_greater(value.count(), milliseconds_type::max().count() / factor::num)) {
-            return milliseconds_type::max();
-        }
-        return milliseconds_type(static_cast<milliseconds_type::rep>(value.count()) * factor::num);
-    } else {
-        using millisecond_float_type = std::chrono::duration<long double, milliseconds_type::period>;
-        const auto count = std::chrono::duration_cast<millisecond_float_type>(value).count();
-        if (std::isnan(count)) {
-            return milliseconds_type::zero();
-        }
-        const auto maximum = static_cast<long double>(milliseconds_type::max().count());
-        const auto rounded = std::ceil(count);
-        if (rounded >= maximum) {
-            return milliseconds_type::max();
-        }
-        return milliseconds_type(static_cast<milliseconds_type::rep>(rounded));
-    }
+    return worker_timer_saturating_duration_cast<std::chrono::milliseconds>(value);
 }
 
 template <typename rep_type, typename period_type>
 [[nodiscard]] inline std::chrono::steady_clock::time_point worker_timer_deadline_after(
     std::chrono::duration<rep_type, period_type> delay) noexcept {
-    return worker_timer_saturating_deadline(
-        std::chrono::steady_clock::now(), worker_timer_saturating_duration_cast(delay));
+    return worker_timer_saturating_deadline(std::chrono::steady_clock::now(), delay);
 }
 
 // Borrowed timer token. A registration is bound to the worker of its most

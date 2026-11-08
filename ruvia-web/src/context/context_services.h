@@ -13,6 +13,7 @@
 
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
@@ -54,7 +55,7 @@ struct context_worker_services final {
     bool precompressed_static_files_{};
     // Bounds each blocking-pool wait of a file response's open, as the body
     // reads the transport waits on are bounded: the server write_timeout_.
-    std::optional<std::chrono::milliseconds> file_io_timeout_{};
+    std::optional<timeout_duration> file_io_timeout_{};
     // Where a file response's real faults (no blocking pool, a stalled open)
     // are reported; the worker's connection failure outlet, never null.
     const connection_failure_sink* connection_failure_{};
@@ -283,7 +284,7 @@ public:
         return worker_services_.precompressed_static_files_;
     }
 
-    [[nodiscard]] constexpr std::optional<std::chrono::milliseconds> file_io_timeout() const noexcept {
+    [[nodiscard]] constexpr std::optional<timeout_duration> file_io_timeout() const noexcept {
         return worker_services_.file_io_timeout_;
     }
 

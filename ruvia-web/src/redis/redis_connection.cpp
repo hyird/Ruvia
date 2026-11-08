@@ -220,7 +220,7 @@ task<redis_value> redis_connection::read_reply(const operation_timeout& timeout,
 }
 
 task<void> redis_connection::connect(const operation_timeout* operation_timeout_value,
-    std::optional<std::chrono::milliseconds> command_timeout) {
+    std::optional<timeout_duration> command_timeout) {
     if (connected_) {
         // A peer that closed the idle connection or sent unsolicited bytes
         // would desynchronize the next reply; reconnect instead.
@@ -251,7 +251,7 @@ task<void> redis_connection::connect(const operation_timeout* operation_timeout_
 }
 
 task<void> redis_connection::authenticate(const operation_timeout& connect_timeout,
-    std::optional<std::chrono::milliseconds> command_timeout) {
+    std::optional<timeout_duration> command_timeout) {
     const auto deadline_value = connect_timeout.constrained_by(command_timeout);
     // An ACL user must authenticate by name even without a password (a
     // nopass user accepts any); skipping AUTH would connect as "default".

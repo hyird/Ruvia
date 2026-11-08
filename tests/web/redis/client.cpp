@@ -41,6 +41,43 @@ bool throws_invalid_argument(fn_type&& fn) {
     }
 }
 
+TEST(Ruvia, redis_block_wait_saturates_before_narrowing_and_rounds_up) {
+    using namespace std::chrono_literals;
+    const auto huge = std::chrono::duration<std::uint64_t, std::milli>{
+        (std::numeric_limits<std::uint64_t>::max)()};
+    const auto saturated = ruvia::redis_block_wait::for_duration(huge);
+    EXPECT_TRUE(!saturated.infinite());
+    EXPECT_TRUE(saturated.duration() == std::chrono::milliseconds::max());
+    EXPECT_TRUE(ruvia::redis_block_wait::for_duration(
+                    std::chrono::duration<std::uint64_t>{(std::numeric_limits<std::uint64_t>::max)()})
+                    .duration() == std::chrono::milliseconds::max());
+    EXPECT_TRUE(ruvia::redis_block_wait::for_duration(1ns).duration() == 1ms);
+    EXPECT_TRUE(ruvia::redis_block_wait::for_duration(1001us).duration() == 2ms);
+    EXPECT_TRUE(ruvia::redis_block_wait::for_duration(2s).duration() == 2000ms);
+    EXPECT_TRUE(throws_invalid_argument([] { (void)ruvia::redis_block_wait::for_duration(0ms); }));
+    EXPECT_TRUE(throws_invalid_argument([] { (void)ruvia::redis_block_wait::for_duration(-1ns); }));
+    EXPECT_TRUE(throws_invalid_argument([] { (void)ruvia::redis_block_wait::for_duration(-1ms); }));
+    const auto infinite = ruvia::redis_block_wait::indefinitely();
+    EXPECT_TRUE(infinite.infinite());
+    EXPECT_TRUE(!infinite.duration().has_value());
+}
+
+TEST(Ruvia, redis_timeout_config_rejects_non_positive_inputs) {
+    using namespace std::chrono_literals;
+    auto& io_context = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io_context);
+    for (const auto field : {&ruvia::redis_config::connect_timeout_, &ruvia::redis_config::command_timeout_,
+             &ruvia::redis_config::acquire_timeout_, &ruvia::redis_config::subscription_ping_interval_}) {
+        ruvia::redis_config config{.tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+        for (const auto invalid : {0ms, -1ms}) {
+            config.*field = invalid;
+            EXPECT_TRUE(throws_invalid_argument([&] {
+                ruvia::redis_client client(worker.loop(), config);
+            }));
+        }
+    }
+}
+
 TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_operation_cancellation) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
@@ -72,6 +109,10 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
         co_await expect_timeout(bounded.blpop(keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1))));
         co_await expect_timeout(bounded.xread_group("workers", "consumer", streams,
             {.block_ = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(10))}));
+        const auto huge_wait = ruvia::redis_block_wait::for_duration(
+            std::chrono::duration<std::uint64_t, std::milli>{(std::numeric_limits<std::uint64_t>::max)()});
+        co_await expect_timeout(bounded.blpop(keys, huge_wait));
+        co_await expect_timeout(bounded.xread_group("workers", "consumer", streams, {.block_ = huge_wait}));
         co_await expect_timeout(bounded.command("BLPOP", "queue", "1"));
 
         for (auto args : {std::initializer_list<std::string_view>{"SELECT", "1"},
@@ -120,6 +161,8 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
         co_await expect_cancelled(cancelled.xread_group(
             "workers", "consumer", streams, {.block_ = ruvia::redis_block_wait::indefinitely()}));
         co_await expect_cancelled(cancelled.blpop(keys, ruvia::redis_block_wait::indefinitely()));
+        co_await expect_cancelled(cancelled.blpop(keys, huge_wait));
+        co_await expect_cancelled(cancelled.xread_group("workers", "consumer", streams, {.block_ = huge_wait}));
         co_await expect_cancelled(cancelled.command("BLPOP", "queue", "0"));
     });
 }

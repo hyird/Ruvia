@@ -14,7 +14,7 @@
 namespace ruvia {
 
 inline void validate_operation_options(const operation_options& options) {
-    if (options.timeout_.has_value() && options.timeout_->count() <= 0) {
+    if (options.timeout_.has_value() && options.timeout_->value().count() <= 0) {
         throw std::invalid_argument("operation timeout must be greater than zero");
     }
 }
@@ -40,9 +40,9 @@ class operation_timeout final {
 public:
     using clock_type = std::chrono::steady_clock;
 
-    explicit operation_timeout(std::optional<std::chrono::milliseconds> timeout) noexcept {
+    explicit operation_timeout(std::optional<timeout_duration> timeout) noexcept {
         if (timeout.has_value()) {
-            deadline_ = worker_timer_deadline_after(*timeout);
+            deadline_ = worker_timer_deadline_after(timeout->value());
         }
     }
 
@@ -50,15 +50,15 @@ public:
         return deadline_;
     }
 
-    [[nodiscard]] std::optional<std::chrono::milliseconds> remaining() const noexcept {
+    [[nodiscard]] std::optional<timeout_duration> remaining() const noexcept {
         if (!deadline_.has_value()) {
             return std::nullopt;
         }
         const auto now = clock_type::now();
         if (now >= *deadline_) {
-            return std::chrono::milliseconds(0);
+            return timeout_duration{};
         }
-        return worker_timer_ceil_milliseconds(*deadline_ - now);
+        return timeout_duration(worker_timer_ceil_milliseconds(*deadline_ - now));
     }
 
     [[nodiscard]] bool expired() const noexcept {
@@ -66,7 +66,7 @@ public:
     }
 
     [[nodiscard]] operation_timeout constrained_by(
-        std::optional<std::chrono::milliseconds> timeout) const noexcept {
+        std::optional<timeout_duration> timeout) const noexcept {
         operation_timeout constrained(timeout);
         if (!deadline_.has_value()) {
             return constrained;
@@ -100,11 +100,11 @@ public:
         arm(deadline_value, std::monostate{});
     }
 
-    void arm(std::optional<std::chrono::milliseconds> timeout) noexcept
+    void arm(std::optional<timeout_duration> timeout) noexcept
         requires std::is_same_v<kind_type, std::monostate>
     {
         if (timeout.has_value()) {
-            arm(worker_timer_deadline_after(*timeout), std::monostate{});
+            arm(worker_timer_deadline_after(timeout->value()), std::monostate{});
         } else {
             reset();
         }

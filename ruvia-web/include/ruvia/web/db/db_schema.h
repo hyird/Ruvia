@@ -85,7 +85,9 @@ private:
 
 struct db_migrator_options final {
     borrowed_text table_{"ruvia_schema_migrations"};
-    std::chrono::seconds lock_timeout_{30};
+    // Positive lock wait; integer counts mean milliseconds. MariaDB rounds up
+    // to whole seconds; PostgreSQL rejects values beyond its int32 millisecond range.
+    timeout_duration lock_timeout_{std::chrono::seconds(30)};
     std::pmr::memory_resource* resource_{nullptr};
 };
 

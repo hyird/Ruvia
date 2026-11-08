@@ -57,12 +57,12 @@ struct db_config_storage final {
     client_tls_config_storage tls_;
     std::pmr::string database_;
     std::size_t pool_size_per_worker_;
-    std::optional<std::chrono::milliseconds> connect_timeout_;
-    std::optional<std::chrono::milliseconds> read_timeout_;
-    std::optional<std::chrono::milliseconds> write_timeout_;
-    std::optional<std::chrono::milliseconds> query_timeout_;
-    std::optional<std::chrono::milliseconds> acquire_timeout_;
-    std::optional<std::chrono::milliseconds> transaction_timeout_;
+    std::optional<timeout_duration> connect_timeout_;
+    std::optional<timeout_duration> read_timeout_;
+    std::optional<timeout_duration> write_timeout_;
+    std::optional<timeout_duration> query_timeout_;
+    std::optional<timeout_duration> acquire_timeout_;
+    std::optional<timeout_duration> transaction_timeout_;
     // Whether a slot whose connection ended connects again on its next use.
     // Off for a pool bound to the sessions it opened at startup (the
     // migrator's): a statement on a lost session then fails rather than run

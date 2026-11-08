@@ -13,6 +13,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_request_trailers.h"
@@ -191,11 +192,11 @@ public:
     // or `completion` since it opened (the stream's request_body_timeout_ and
     // body_completion_timeout_).
     [[nodiscard]] bool request_body_overdue(std::int64_t now_ms,
-        const std::optional<std::chrono::milliseconds>& inactivity,
-        const std::optional<std::chrono::milliseconds>& completion) const noexcept {
+        const std::optional<timeout_duration>& inactivity,
+        const std::optional<timeout_duration>& completion) const noexcept {
         return request_body_open_ &&
-               ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->count()) ||
-                   (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->count()));
+               ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->value().count()) ||
+                   (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->value().count()));
     }
 
 private:

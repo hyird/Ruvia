@@ -47,9 +47,9 @@ public:
     // fires: the acquire completes only through release(), close() (closed),
     // or its stop token (cancelled). It never throws for that.
     [[nodiscard]] pool_lease_acquire acquire(
-        const std::optional<std::chrono::milliseconds>& timeout = std::nullopt, stop_token stop = {}) &;
+        const std::optional<timeout_duration>& timeout = std::nullopt, stop_token stop = {}) &;
     pool_lease_acquire acquire(
-        const std::optional<std::chrono::milliseconds>& = std::nullopt, stop_token = {}) && = delete;
+        const std::optional<timeout_duration>& = std::nullopt, stop_token = {}) && = delete;
 
     // Return a caller-owned slot on the bound worker. A queued acquire takes
     // ownership before this call returns, but its coroutine resumes in a later
@@ -90,7 +90,7 @@ private:
     friend class detail::pool_waiter_queue;
 
     pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
-        std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value) noexcept;
+        std::optional<timeout_duration> timeout, stop_token stop_token_value) noexcept;
     void cancel_registrations() noexcept;
     void complete(worker_wait_result<std::size_t> result_value) noexcept;
     void complete(worker_wait_status status) noexcept;
@@ -98,7 +98,7 @@ private:
     [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept;
 
     pool_lease_scheduler::impl_type* owner_;
-    std::optional<std::chrono::milliseconds> timeout_;
+    std::optional<timeout_duration> timeout_;
     stop_token stop_token_;
     std::optional<worker_wait_result<std::size_t>> result_;
     std::uint64_t waiter_id_{0};

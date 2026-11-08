@@ -9,6 +9,7 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/core/worker_timer.h"
 
 #include "http2/http2_sans_io_termination.h"
 
@@ -75,14 +76,14 @@ public:
     // `timeout` in the connection scanner's clock. The first observation
     // starts the clock, so the wait is charged from at most one scan after it
     // began, never earlier.
-    [[nodiscard]] bool send_window_wait_expired(std::int64_t now_ms, std::chrono::milliseconds timeout) noexcept {
+    [[nodiscard]] bool send_window_wait_expired(std::int64_t now_ms, timeout_duration timeout) noexcept {
         if (!waiting_send_window_ || send_window_wait_expired_) {
             return false;
         }
         if (!send_window_wait_observed_ms_.has_value()) {
             send_window_wait_observed_ms_ = now_ms;
         }
-        send_window_wait_expired_ = now_ms - *send_window_wait_observed_ms_ >= timeout.count();
+        send_window_wait_expired_ = now_ms - *send_window_wait_observed_ms_ >= timeout.value().count();
         return send_window_wait_expired_;
     }
 

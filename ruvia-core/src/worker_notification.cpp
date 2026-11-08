@@ -73,11 +73,11 @@ worker_notification_state::worker_notification_state(asio::io_context& io_contex
     if (!worker_.valid() || !worker_.accepting()) {
         throw std::invalid_argument("worker notification requires an accepting worker runtime");
     }
-    if (options.startup_timeout_ <= std::chrono::milliseconds::zero() ||
-        options.startup_timeout_ > std::chrono::minutes(1)) {
+    if (options.startup_timeout_.value() <= std::chrono::milliseconds::zero() ||
+        options.startup_timeout_.value() > std::chrono::minutes(1)) {
         throw std::invalid_argument("worker notification startup timeout must be in (0, 1 minute]");
     }
-    wake_ = make_native_wake_pair(options.startup_timeout_);
+    wake_ = make_native_wake_pair(options.startup_timeout_.value());
 }
 
 worker_notification_state::~worker_notification_state() {

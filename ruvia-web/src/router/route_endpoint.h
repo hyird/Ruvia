@@ -212,7 +212,7 @@ public:
         if (config.datagrams_ && protocol.empty()) {
             throw std::invalid_argument("HTTP Datagrams require an upgrade-protocol tunnel route");
         }
-        if (config.peer_transport_fin_timeout_ <= std::chrono::milliseconds::zero()) {
+        if (config.peer_transport_fin_timeout_.value() <= std::chrono::milliseconds::zero()) {
             throw std::invalid_argument("CONNECT peer transport FIN timeout must be greater than zero");
         }
         return route_endpoint(

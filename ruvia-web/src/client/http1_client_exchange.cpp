@@ -641,7 +641,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
     auto& upload = *state_value.upload_;
     worker_timer_registration continue_timer;
     if (!upload.content_released_) {
-        (void)pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(upload.config_.continue_timeout_),
+        (void)pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(upload.config_.continue_timeout_.value()),
             [&upload, &parser](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired && !upload.output_.stopped_) {
                     parser.release_request_content();

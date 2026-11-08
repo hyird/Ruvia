@@ -98,14 +98,15 @@ struct db_config final {
     // alias are worker_count * pool_size_per_worker. A transaction or streaming
     // result holds its connection until completed or released.
     std::size_t pool_size_per_worker_{1};
-    // Absence disables the corresponding timeout.
-    std::optional<std::chrono::milliseconds> connect_timeout_{std::chrono::seconds(5)};
+    // Absence disables the corresponding timeout. Integer chrono inputs are
+    // rounded up to milliseconds and saturated before any signed narrowing.
+    std::optional<timeout_duration> connect_timeout_{std::chrono::seconds(5)};
     // Bound one socket wait for readability or writability, for both drivers,
     // with millisecond precision (including exclusive transactions and streams).
-    std::optional<std::chrono::milliseconds> read_timeout_{};
-    std::optional<std::chrono::milliseconds> write_timeout_{};
-    std::optional<std::chrono::milliseconds> query_timeout_{std::chrono::seconds(30)};
-    std::optional<std::chrono::milliseconds> acquire_timeout_{std::chrono::seconds(5)};
+    std::optional<timeout_duration> read_timeout_{};
+    std::optional<timeout_duration> write_timeout_{};
+    std::optional<timeout_duration> query_timeout_{std::chrono::seconds(30)};
+    std::optional<timeout_duration> acquire_timeout_{std::chrono::seconds(5)};
     // Overall deadline of one connection lease: a transaction from the moment
     // begin_transaction() holds its connection (before BEGIN) through commit()
     // or rollback(), and a streaming result from query_stream() until it is
@@ -118,7 +119,7 @@ struct db_config final {
     // releases its locks; the next operation, commit() included, then fails
     // with timeout. The connection is never returned to the pool after expiry.
     // db_migrator applies the same value to transactional migrations.
-    std::optional<std::chrono::milliseconds> transaction_timeout_{std::chrono::seconds(60)};
+    std::optional<timeout_duration> transaction_timeout_{std::chrono::seconds(60)};
 };
 
 // Query-result caching stores rows in Redis. The types are declared in every

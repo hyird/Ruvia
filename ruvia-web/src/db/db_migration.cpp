@@ -40,7 +40,7 @@ struct db_migrator_options_storage final {
           lock_timeout_(source_value.lock_timeout_) {}
 
     std::pmr::string table_;
-    std::chrono::seconds lock_timeout_;
+    timeout_duration lock_timeout_;
 };
 
 void validate_db_migrator_options(const db_migrator_options& options, db_driver driver) {
@@ -48,12 +48,11 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
         throw std::invalid_argument("database migration table has an invalid backend identifier");
     }
     detail::validate_db_identifier(options.table_, driver);
-    if (options.lock_timeout_.count() <= 0) {
+    if (options.lock_timeout_.value().count() <= 0) {
         throw std::invalid_argument("database migration lock timeout must be greater than zero");
     }
     if (driver == db_driver::postgresql) {
-        // PostgreSQL receives this value in milliseconds, and a valid seconds
-        // duration can still overflow that representation during conversion.
+        // Check the backend's millisecond range before opening a connection.
         (void)detail::postgres_lock_timeout_milliseconds(options.lock_timeout_);
     }
 }
@@ -236,10 +235,12 @@ private:
     // losing the connection releases them -- including the migration's own
     // failure path, which closes it.
     [[nodiscard]] static task<void> acquire_lock(db_handle& handle, db_driver driver,
-        std::string_view lock_name, std::chrono::seconds lock_timeout,
+        std::string_view lock_name, timeout_duration lock_timeout,
         std::pmr::memory_resource* resource) {
         if (driver == db_driver::mariadb) {
-            const auto lock_seconds = static_cast<std::int64_t>(lock_timeout.count());
+            // Milliseconds are already bounded by int64; rounding after
+            // division by 1000 keeps the SQL integer safely in range.
+            const auto lock_seconds = std::chrono::ceil<std::chrono::seconds>(lock_timeout.value()).count();
             std::array<db_value, 2> lock_params{db_value{lock_name}, db_value{lock_seconds}};
             auto lock_result = co_await handle.query(
                 "SELECT GET_LOCK(?, ?)", std::span<const db_value>(lock_params));

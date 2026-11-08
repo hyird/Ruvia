@@ -486,7 +486,7 @@ ruvia::task<void> await_disconnects(const ruvia::worker_handle& worker, peer_typ
 
 template <typename callback_type>
 void drive_client(peer_type& peer, ruvia::db_driver driver,
-    std::optional<std::chrono::milliseconds> transaction_timeout, callback_type&& callback) {
+    std::optional<ruvia::timeout_duration> transaction_timeout, callback_type&& callback) {
     auto config = peer.config();
     config.driver_ = driver;
     config.transaction_timeout_ = transaction_timeout;
@@ -505,7 +505,7 @@ void drive_client(peer_type& peer, ruvia::db_driver driver,
 
 TEST(Ruvia, db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non_positive_values) {
     using namespace ruvia;
-    EXPECT_TRUE(db_config{}.transaction_timeout_ == std::chrono::milliseconds(60000));
+    EXPECT_TRUE(db_config{}.transaction_timeout_->value() == std::chrono::milliseconds(60000));
     event_loop_pool pool({.loop_count_ = 1});
     for (const auto driver : drivers) {
         for (const auto value : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {

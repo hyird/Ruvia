@@ -157,7 +157,7 @@ template <typename transport_type>
 template <typename transport_type>
 [[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<transport_type>& session_value,
     std::exception_ptr failure, const connection_failure_sink& sink_value, std::string_view remote,
-    connection_scanner::entry& scanner, std::chrono::milliseconds timeout) {
+    connection_scanner::entry& scanner, timeout_duration timeout) {
     if (failure != nullptr) {
         session_value.abort();
     }
@@ -176,9 +176,9 @@ template <typename transport_type>
             }
         } deadline_value{session_value, 0, {}};
         const auto now = steady_now_ms();
-        deadline_value.deadline_ = timeout.count() > (std::numeric_limits<std::int64_t>::max)() - now
+        deadline_value.deadline_ = timeout.value().count() > (std::numeric_limits<std::int64_t>::max)() - now
                                        ? (std::numeric_limits<std::int64_t>::max)()
-                                       : now + timeout.count();
+                                       : now + timeout.value().count();
         scanner.register_periodic_check(deadline_value.registration_, &deadline_value, &drain_deadline::tick);
         try {
             co_await session_value.finish();

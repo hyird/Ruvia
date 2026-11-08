@@ -56,7 +56,7 @@ namespace ruvia::detail {
 
 // db_config's read and write timeouts bound waiting without socket progress in
 // that direction; waiting while output is pending waits to write.
-[[nodiscard]] inline std::optional<std::chrono::milliseconds> db_io_timeout(
+[[nodiscard]] inline std::optional<timeout_duration> db_io_timeout(
     const db_config_storage& config, db_socket_readiness wanted) noexcept {
     return has_db_socket_readiness(wanted, db_socket_readiness::write) ? config.write_timeout_ : config.read_timeout_;
 }
@@ -794,7 +794,7 @@ public:
             io_deadline_.reset();
             if (const auto io_timeout = db_io_timeout(pool_.config(), wanted)) {
                 io_deadline_ = worker_timer_saturating_deadline(
-                    *group.stretch_start_, worker_timer_saturating_duration_cast(*io_timeout));
+                    *group.stretch_start_, worker_timer_saturating_duration_cast(io_timeout->value()));
             }
             auto until = pool_.state().earliest_deadline(slot);
             if (io_deadline_.has_value() && (!until.has_value() || *io_deadline_ < *until)) {

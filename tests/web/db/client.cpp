@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -70,6 +71,27 @@ TEST(Ruvia, db_error_carries_category_and_native_diagnostics) {
     EXPECT_TRUE(closing.code() == ruvia::db_error::code_type::closing);
 }
 
+TEST(Ruvia, db_config_rejects_non_positive_timeouts) {
+    auto config = test_db_config();
+    for (const auto field : {&ruvia::db_config::connect_timeout_, &ruvia::db_config::read_timeout_,
+             &ruvia::db_config::write_timeout_, &ruvia::db_config::query_timeout_,
+             &ruvia::db_config::acquire_timeout_, &ruvia::db_config::transaction_timeout_}) {
+        for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
+            config.*field = invalid;
+            EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(config); }));
+        }
+        (config.*field).reset();
+    }
+}
+
+TEST(Ruvia, db_migrator_rejects_non_positive_lock_timeouts) {
+    ruvia::db_migrator_options options;
+    for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
+        options.lock_timeout_ = invalid;
+        EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(test_db_config(), options); }));
+    }
+}
+
 TEST(Ruvia, db_migrator_validates_before_opening_connection) {
     const std::array<ruvia::db_migration, 2> migrations{{
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 1"}},
@@ -112,19 +134,16 @@ TEST(Ruvia, db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 TEST(Ruvia, db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
-    auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
-    ruvia::db_migrator_options options;
-    options.lock_timeout_ = std::chrono::seconds::max();
-
-    bool rejected = false;
-    try {
-        (void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>(), options);
-    } catch (const std::invalid_argument& error) {
-        rejected =
-            std::string_view(error.what()) ==
-            "database migration lock timeout cannot be represented as PostgreSQL milliseconds";
+    const auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
+    for (const auto timeout : {
+             ruvia::timeout_duration(std::chrono::duration<std::uint64_t, std::milli>{
+                 std::numeric_limits<std::uint64_t>::max()}),
+             ruvia::timeout_duration(std::chrono::milliseconds{
+                 std::int64_t{std::numeric_limits<std::int32_t>::max()} + 1})}) {
+        const ruvia::db_migrator_options options{.lock_timeout_ = timeout};
+        EXPECT_THROW((void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>(), options),
+            std::invalid_argument);
     }
-    EXPECT_TRUE(rejected);
 }
 #endif
 

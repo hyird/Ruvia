@@ -4,7 +4,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <future>
+#include <limits>
 #include <memory>
 #include <semaphore>
 #include <stdexcept>
@@ -349,15 +351,19 @@ task<void> exercise_saturating_timeout(
     blocking_pool& pool, worker_handle worker_value, thread_gate& gate_value, bool& success) {
     // Keep the pool occupied so a wrapped timeout cannot hide behind a task
     // that happens to finish before the receiver arms its deadline.
-    std::thread releaser([&pool, &gate_value] {
-        while (pool.stats().queued_ == 0) {
+    std::atomic_bool completed{false};
+    std::thread releaser([&pool, &gate_value, &completed] {
+        while (pool.stats().queued_ == 0 && !completed.load(std::memory_order_relaxed)) {
             std::this_thread::yield();
         }
         gate_value.release_.release();
     });
 
+    using wide_milliseconds = std::chrono::duration<std::uint64_t, std::milli>;
     auto result_value = co_await ruvia::run_blocking(
-        worker_value, {.timeout_ = std::chrono::milliseconds::max()}, [] { return 17; });
+        worker_value, {.timeout_ = wide_milliseconds(std::numeric_limits<std::uint64_t>::max())},
+        [] { return 17; });
+    completed.store(true, std::memory_order_relaxed);
     releaser.join();
     success = result_value.completed() && std::move(result_value).value() == 17;
 }

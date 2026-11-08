@@ -12,6 +12,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 
@@ -49,7 +50,7 @@ struct worker_capability_options final {
     const trusted_proxy_set* trusted_proxies_{nullptr};
     bool precompressed_static_files_{false};
     // The server write_timeout_ bounding a file response's open on the pool.
-    std::optional<std::chrono::milliseconds> file_io_timeout_{};
+    std::optional<timeout_duration> file_io_timeout_{};
     // The worker's connection failure outlet; required.
     const connection_failure_sink* connection_failure_{nullptr};
 };

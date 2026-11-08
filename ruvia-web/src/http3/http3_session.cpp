@@ -120,12 +120,12 @@ void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp2_rand_
     }
 }
 
-[[nodiscard]] std::uint64_t duration_nanoseconds(const std::optional<std::chrono::milliseconds>& value) noexcept {
+[[nodiscard]] std::uint64_t duration_nanoseconds(const std::optional<timeout_duration>& value) noexcept {
     if (!value.has_value()) {
         return 0;
     }
     constexpr auto max_milliseconds = static_cast<std::int64_t>(UINT64_MAX / NGTCP2_MILLISECONDS);
-    const auto milliseconds = (std::max)(value->count(), std::int64_t{0});
+    const auto milliseconds = (std::max)(value->value().count(), std::int64_t{0});
     return milliseconds >= max_milliseconds ? UINT64_MAX
                                             : static_cast<std::uint64_t>(milliseconds) * NGTCP2_MILLISECONDS;
 }

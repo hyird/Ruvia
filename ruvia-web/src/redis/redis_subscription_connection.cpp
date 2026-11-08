@@ -199,7 +199,7 @@ void redis_subscription_connection::begin_idle_probe(task_scope& ping_writes, co
     // Only a waiting read observes input, so the idle clock starts with it.
     read_started_ = clock_type::now();
     probe_started_.reset();
-    arm_idle_probe(worker_timer_saturating_deadline(read_started_, worker_timer_saturating_duration_cast(*interval)));
+    arm_idle_probe(worker_timer_saturating_deadline(read_started_, worker_timer_saturating_duration_cast(interval->value())));
 }
 
 void redis_subscription_connection::end_idle_probe() noexcept {
@@ -237,7 +237,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
     if (closed_ || ping_writes_ == nullptr) {
         return;
     }
-    const auto interval = worker_timer_saturating_duration_cast(*owner_.config_.subscription_ping_interval_);
+    const auto interval = worker_timer_saturating_duration_cast(owner_.config_.subscription_ping_interval_->value());
     const auto now = clock_type::now();
     const auto idle_since = std::max(last_input_, read_started_);
     if (probe_started_.has_value() && *probe_started_ <= idle_since) {

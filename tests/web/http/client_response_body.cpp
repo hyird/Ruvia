@@ -11,6 +11,7 @@
 #include <exception>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -1249,6 +1250,36 @@ TEST(Ruvia, http_client_strips_decoded_content_encoding_and_rejects_overdeep_kno
         }
         EXPECT_TRUE(rejected_overdeep);
         co_await peer.wait();
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
+TEST(Ruvia, http_client_preserves_large_unsigned_timeout_bounds) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    loopback_response_server server(io, worker.handle_, {"first", "second"}, std::chrono::milliseconds(10));
+    const std::string config_url = "http://127.0.0.1:" + std::to_string(server.port());
+    auto config = local_http_client_config(config_url);
+    const auto large = std::chrono::duration<std::uint64_t, std::milli>{std::numeric_limits<std::uint64_t>::max()};
+    config.connect_timeout_ = large;
+    config.write_timeout_ = large;
+    config.read_timeout_ = large;
+    config.request_timeout_ = large;
+    config.acquire_timeout_ = large;
+    config.idle_timeout_ = large;
+    config.http2_ping_interval_ = large;
+    config.push_.timeout_ = large;
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    server.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        auto first = co_await client.client().get("/large-config").send();
+        auto first_body = co_await first.stream().read_all();
+        EXPECT_EQ(first_body.text(), std::string_view("first"));
+        auto second = co_await client.with_options({.timeout_ = large}).get("/large-operation").send();
+        auto second_body = co_await second.stream().read_all();
+        EXPECT_EQ(second_body.text(), std::string_view("second"));
+        co_await server.wait();
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -3319,10 +3350,11 @@ TEST(Ruvia, http_client_abandoned_request_cancels_its_connect_in_progress) {
 TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_before_reusing_connection) {
     enum class release_mode { immediate,
         continued,
-        timed_out };
-    for (const auto mode : {release_mode::immediate, release_mode::continued, release_mode::timed_out}) {
+        timed_out,
+        submillisecond_timeout };
+    for (const auto mode : {release_mode::immediate, release_mode::continued, release_mode::timed_out, release_mode::submillisecond_timeout}) {
         const bool expect_continue = mode != release_mode::immediate;
-        const bool timeout_release = mode == release_mode::timed_out;
+        const bool timeout_release = mode == release_mode::timed_out || mode == release_mode::submillisecond_timeout;
         for (const bool known_length : {false, true}) {
             auto& io = ruvia::test::new_test_io_context();
             test_worker worker(io);
@@ -3401,7 +3433,16 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
             ruvia::http_client client(worker.attachment_.loop(), config);
             auto operation = [&]() -> ruvia::task<void> {
                 const acceptor_closer closer{acceptor};
-                auto exchange = co_await client.client().request("POST", "/early").upload({.content_length_ = known_length ? std::optional<ruvia::http_content_length>{3} : std::nullopt, .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none, .continue_timeout_ = std::chrono::milliseconds(timeout_release ? 20 : 60000)});
+                ruvia::http_client_upload_config upload{
+                    .content_length_ = known_length ? std::optional<ruvia::http_content_length>{3} : std::nullopt,
+                    .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none,
+                    .continue_timeout_ = std::chrono::duration<std::uint64_t, std::milli>{std::numeric_limits<std::uint64_t>::max()}};
+                if (timeout_release) {
+                    upload.continue_timeout_ = mode == release_mode::submillisecond_timeout
+                                                   ? std::chrono::microseconds(1)
+                                                   : std::chrono::microseconds(20000);
+                }
+                auto exchange = co_await client.client().request("POST", "/early").upload(upload);
                 if (timeout_release) {
                     co_await exchange.body().write("a");
                 }

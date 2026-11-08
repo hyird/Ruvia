@@ -33,13 +33,13 @@ struct redis_config_storage final {
     std::uint32_t database_;
     std::size_t pool_size_per_worker_;
     std::size_t blocking_pool_size_per_worker_;
-    std::optional<std::chrono::milliseconds> connect_timeout_;
-    std::optional<std::chrono::milliseconds> command_timeout_;
-    std::optional<std::chrono::milliseconds> acquire_timeout_;
+    std::optional<timeout_duration> connect_timeout_;
+    std::optional<timeout_duration> command_timeout_;
+    std::optional<timeout_duration> acquire_timeout_;
     std::optional<std::size_t> max_reply_bytes_;
     std::size_t max_array_depth_;
     client_tcp_config tcp_;
-    std::optional<std::chrono::milliseconds> subscription_ping_interval_;
+    std::optional<timeout_duration> subscription_ping_interval_;
 
 private:
     struct validated_config_tag_type final {};

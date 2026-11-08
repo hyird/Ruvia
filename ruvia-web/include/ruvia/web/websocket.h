@@ -18,6 +18,7 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/websocket_protocol.h"
 
@@ -26,8 +27,8 @@ namespace ruvia {
 struct websocket_heartbeat_config final {
     // Absence disables heartbeat. When ping is present and pong is absent,
     // pong defaults to the ping interval during configuration normalization.
-    std::optional<std::chrono::milliseconds> ping_interval_{};
-    std::optional<std::chrono::milliseconds> pong_timeout_{};
+    std::optional<timeout_duration> ping_interval_{};
+    std::optional<timeout_duration> pong_timeout_{};
 };
 
 // Runtime-only liveness policy. Wire framing and close-handshake state remain in
@@ -37,7 +38,7 @@ struct websocket_lifecycle_options final {
     // A locally initiated Close waits for the peer Close before the underlying
     // transport is ended. The timeout starts when the Close is submitted, so it
     // also bounds writing the Close frame. nullopt disables this guard.
-    std::optional<std::chrono::milliseconds> close_handshake_timeout_{std::chrono::seconds(5)};
+    std::optional<timeout_duration> close_handshake_timeout_{std::chrono::seconds(5)};
 };
 
 struct websocket_route_config final {

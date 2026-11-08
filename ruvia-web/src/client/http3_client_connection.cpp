@@ -84,8 +84,8 @@ void initialize_quic_crypto() {
 ngtcp2_tstamp timestamp() noexcept {
     return static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now().time_since_epoch()).count());
 }
-ngtcp2_duration quic_duration(std::chrono::milliseconds value) noexcept {
-    const auto count = static_cast<std::uint64_t>((std::max)(value.count(), std::int64_t{0}));
+ngtcp2_duration quic_duration(timeout_duration value) noexcept {
+    const auto count = static_cast<std::uint64_t>((std::max)(value.value().count(), std::int64_t{0}));
     return count > UINT64_MAX / NGTCP2_MILLISECONDS ? UINT64_MAX : count * NGTCP2_MILLISECONDS;
 }
 ngtcp2_cid random_cid() {
@@ -330,7 +330,7 @@ public:
             return;
         }
         try {
-            (void)pool_.worker().schedule_timer(idle_timer_, worker_timer_deadline_after(*pool_.config().idle_timeout_),
+            (void)pool_.worker().schedule_timer(idle_timer_, worker_timer_deadline_after(pool_.config().idle_timeout_->value()),
                 [this](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired && streams_.empty()) {
                         close();
@@ -399,7 +399,7 @@ public:
             return;
         }
         if (pool_.config().read_timeout_ && !item.done_ && item.response_.http3_data_credit_ == 0) {
-            item.read_deadline_ = worker_timer_deadline_after(*pool_.config().read_timeout_);
+            item.read_deadline_ = worker_timer_deadline_after(pool_.config().read_timeout_->value());
             schedule(item);
         }
     }
@@ -1094,7 +1094,7 @@ public:
         attempt.completed_ = true;
     }
     task<void> send_body(stream& item, std::string_view bytes) {
-        item.write_deadline_ = pool_.config().write_timeout_ ? std::optional(worker_timer_deadline_after(*pool_.config().write_timeout_)) : std::nullopt;
+        item.write_deadline_ = pool_.config().write_timeout_ ? std::optional(worker_timer_deadline_after(pool_.config().write_timeout_->value())) : std::nullopt;
         schedule(item);
         while (!bytes.empty()) {
             check(item);
@@ -1108,7 +1108,7 @@ public:
             bytes.remove_prefix(sent.accepted_bytes_);
             pool_.wire_counters().sent_ += sent.accepted_bytes_;
             if (sent.accepted_bytes_ != 0 && pool_.config().write_timeout_) {
-                item.write_deadline_ = worker_timer_deadline_after(*pool_.config().write_timeout_);
+                item.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
                 schedule(item);
             }
             writer_.notify();
@@ -1125,7 +1125,7 @@ public:
             co_await item.signal_.wait();
             const auto remaining = quic_->http3().pending_output_bytes(item.id_);
             if (remaining < outstanding && pool_.config().write_timeout_) {
-                item.write_deadline_ = worker_timer_deadline_after(*pool_.config().write_timeout_);
+                item.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
                 schedule(item);
             }
             outstanding = remaining;
@@ -1410,7 +1410,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                     const auto waves = (remaining + live + 1) / 2;
                     const auto left = bound.remaining().value_or(race.pool_.config().connect_timeout_);
                     const auto divisor = static_cast<std::int64_t>((std::min)(waves, static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)())));
-                    const auto slice = (std::max)(client_connection_attempt_delay, left / (std::max)(divisor, std::int64_t{1}));
+                    const auto slice = (std::max)(client_connection_attempt_delay, left.value() / (std::max)(divisor, std::int64_t{1}));
                     const auto candidate_bound = bound.constrained_by(slice);
                     entry.running_ = true;
                     try {
@@ -1795,7 +1795,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                     output->wake_ = [](void* target) noexcept { static_cast<worker_signal*>(target)->notify(); };
                     worker_timer_registration continue_timer;
                     if (request.upload() && !request.upload()->content_released_) {
-                        (void)self.pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(request.upload()->config_.continue_timeout_),
+                        (void)self.pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(request.upload()->config_.continue_timeout_.value()),
                             [&item, upload = request.upload()](worker_timer_outcome outcome) noexcept {
                                 if (outcome == worker_timer_outcome::expired) {
                                     upload->content_released_ = true;
@@ -1928,7 +1928,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     }
     bool expired = false;
     worker_timer_registration timer;
-    (void)self.pool_.worker().schedule_timer(timer, worker_timer_deadline_after(self.pool_.config().connect_timeout_),
+    (void)self.pool_.worker().schedule_timer(timer, worker_timer_deadline_after(self.pool_.config().connect_timeout_.value()),
         [&self, &expired](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { expired = true; self.changed_.notify(); } });
     for (;;) {
         if (!self.open_ || expired) {

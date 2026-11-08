@@ -432,8 +432,7 @@ task<http_client_response> http_client_handle::dispatch(
 
 task<http_client_exchange> http_client_handle::dispatch_upload(const http_client_request_view& head, http_client_upload_config upload) const {
     registration_.require_active();
-    if (head.content_.borrowed_bytes() != nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_ <= std::chrono::milliseconds::zero() ||
-        upload.continue_timeout_ > std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::duration::max()) ||
+    if (head.content_.borrowed_bytes() != nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() ||
         (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_value)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }

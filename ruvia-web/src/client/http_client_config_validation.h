@@ -44,7 +44,7 @@ namespace ruvia::detail {
         host = host.substr(1, host.size() - 2);
     }
     if (config.push_.max_queued_pushes_ == 0 || config.push_.max_concurrent_pushes_ == 0 ||
-        (config.push_.timeout_ && config.push_.timeout_->count() <= 0)) {
+        (config.push_.timeout_ && config.push_.timeout_->value().count() <= 0)) {
         throw std::invalid_argument("HTTP push bounds and configured timeout must be positive");
     }
     if (config.advertisements_.max_queued_advertisements_ == 0 || config.advertisements_.max_retained_bytes_ == 0) {

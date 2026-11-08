@@ -49,7 +49,7 @@ namespace {
 // The server-side wait starts when the command is written, so the reply
 // deadline is armed at write time: slot acquisition and a lazy connect must not
 // consume the block window. The grace covers the reply's network latency.
-[[nodiscard]] std::optional<std::chrono::milliseconds> redis_block_reply_timeout(
+[[nodiscard]] std::optional<timeout_duration> redis_block_reply_timeout(
     const operation_options& options, redis_block_wait wait) {
     if (const auto duration = wait.duration(); duration.has_value()) {
         constexpr auto grace = std::chrono::seconds(1);
@@ -138,7 +138,7 @@ task<std::optional<redis_x_read_group_result>> redis_handle::xread_group(
     registration_.require_active();
     auto args = detail::redis_x_read_group_args(group, consumer, streams, options, resource_);
     auto* selected_pool = &pool();
-    std::optional<std::chrono::milliseconds> reply_timeout;
+    std::optional<timeout_duration> reply_timeout;
     if (options.block_.has_value()) {
         selected_pool = &blocking_pool();
         reply_timeout = redis_block_reply_timeout(operation_options_, *options.block_);

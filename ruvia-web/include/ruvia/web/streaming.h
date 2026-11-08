@@ -15,6 +15,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/sse.h"
 #include "ruvia/web/detail/callback_ref.h"
@@ -118,8 +119,8 @@ public:
     /// 仅在正文阶段挂起生产者；正常超时返回 elapsed，context::stop_token()
     /// 取消（含客户端断开）返回 stop_requested。提交前或响应完成后调用抛 logic_error。
     /// HTTP/2 对端终止仍作为传输错误报告。
-    task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &;
-    task<timer_sleep_result> sleep(std::chrono::milliseconds) && = delete;
+    task<timer_sleep_result> sleep(timeout_duration duration) &;
+    task<timer_sleep_result> sleep(timeout_duration) && = delete;
 
     /// 仅报告已观察到的真实失败或取消；正常完成不等于 aborted。
     /// 观察写失败与读侧终止（HTTP/1 请求体完整消费后的 FIN/RST，HTTP/2 流终止）。
@@ -216,7 +217,7 @@ public:
     [[nodiscard]] task<stream_commit_result> commit();
     task<void> write(const sse_message& message);
 
-    task<timer_sleep_result> sleep(std::chrono::milliseconds duration);
+    task<timer_sleep_result> sleep(timeout_duration duration);
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_ == nullptr || writer_->aborted();

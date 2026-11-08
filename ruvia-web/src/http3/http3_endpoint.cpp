@@ -267,7 +267,7 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
                                         : server.request_header_timeout_;
             constexpr auto max_milliseconds = static_cast<std::int64_t>(UINT64_MAX / NGTCP2_MILLISECONDS);
             const auto milliseconds =
-                timeout_ms.has_value() ? (std::max)(timeout_ms->count(), std::int64_t{1}) : std::int64_t{0};
+                timeout_ms.has_value() ? (std::max)(timeout_ms->value().count(), std::int64_t{1}) : std::int64_t{0};
             const ngtcp2_duration token_lifetime =
                 timeout_ms.has_value()
                     ? (milliseconds >= max_milliseconds

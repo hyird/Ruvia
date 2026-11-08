@@ -71,13 +71,13 @@ void ensure_mysql_thread_initialized() {
 // libmariadb's own timeouts are whole seconds; a positive millisecond limit
 // rounds up so it never expires early.
 [[nodiscard]] bool set_mysql_timeout(
-    MYSQL& connection, mysql_option option, std::optional<std::chrono::milliseconds> timeout) noexcept {
+    MYSQL& connection, mysql_option option, std::optional<timeout_duration> timeout) noexcept {
     if (!timeout.has_value()) {
         return true;
     }
     unsigned int seconds = 0;
-    if (timeout->count() > 0) {
-        const auto rounded = std::chrono::ceil<std::chrono::seconds>(*timeout).count();
+    if (timeout->value().count() > 0) {
+        const auto rounded = std::chrono::ceil<std::chrono::seconds>(timeout->value()).count();
         seconds = std::in_range<unsigned int>(rounded) ? static_cast<unsigned int>(rounded)
                                                        : std::numeric_limits<unsigned int>::max();
     }

@@ -54,7 +54,7 @@ struct response_file_io final {
     // Bounds each read the response waits on. Servers pass write_timeout_: the
     // next write waits for the read. An abandoned read keeps running on the
     // pool and frees its own handle and buffer; the response does not wait.
-    std::optional<std::chrono::milliseconds> timeout_;
+    std::optional<timeout_duration> timeout_;
 };
 
 // Why a file body could not be produced.

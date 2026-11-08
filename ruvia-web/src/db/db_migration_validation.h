@@ -1,8 +1,8 @@
 #pragma once
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -13,24 +13,18 @@
 
 namespace ruvia::detail {
 
-// PostgreSQL's lock_timeout is serialized as an integer number of
-// milliseconds.  Do not duration_cast() an arbitrary seconds value: the
-// seconds-to-milliseconds multiplication can overflow before the result is
-// handed to the backend.  This helper is deliberately checked rather than
-// saturating; silently making an enormous configured timeout finite changes
-// the migration lock contract.
-[[nodiscard]] inline std::uint64_t postgres_lock_timeout_milliseconds(std::chrono::seconds timeout) {
-    if (timeout.count() <= 0) {
+// PostgreSQL's lock_timeout is an int32 millisecond setting. Keep the
+// backend range check before connecting rather than narrowing or silently
+// shortening a configured migration lock wait.
+[[nodiscard]] inline std::uint64_t postgres_lock_timeout_milliseconds(timeout_duration timeout) {
+    if (timeout.value().count() <= 0) {
         throw std::invalid_argument("database migration lock timeout must be greater than zero");
     }
-    constexpr auto milliseconds_per_second = std::int64_t{1000};
-    constexpr auto max_seconds = std::chrono::milliseconds::max().count() / milliseconds_per_second;
-    if (timeout.count() > max_seconds) {
+    if (timeout.value().count() > std::numeric_limits<std::int32_t>::max()) {
         throw std::invalid_argument(
             "database migration lock timeout cannot be represented as PostgreSQL milliseconds");
     }
-    return static_cast<std::uint64_t>(timeout.count()) *
-           static_cast<std::uint64_t>(milliseconds_per_second);
+    return static_cast<std::uint64_t>(timeout.value().count());
 }
 
 // A migration table name is a SQL identifier that cannot be parameterized, so

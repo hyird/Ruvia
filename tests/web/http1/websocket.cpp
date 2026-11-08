@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -60,9 +61,12 @@ constexpr std::size_t fair_handoff_messages = 33;
 
 class http1_websocket_routes final {
     RUVIA_ROUTES_BEGIN(http1_websocket_routes)
-    // The longest heartbeat a route accepts; the Pong timeout defaults to it.
+    // Unsigned input beyond the signed millisecond range saturates before
+    // normalization; the Pong timeout defaults to the saturated Ping interval.
     const auto longest_heartbeat = ruvia::websocket_route_config{
-        .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds::max()}}};
+        .lifecycle_ = {.heartbeat_ = {.ping_interval_ =
+                                          std::chrono::duration<std::uint64_t, std::milli>{
+                                              (std::numeric_limits<std::uint64_t>::max)()}}}};
     const auto required_subprotocol =
         ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
     const auto takeover_deflate =

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/port_number.h"
 
 namespace ruvia::detail {
@@ -63,11 +64,22 @@ void ensure_positive_duration(std::chrono::duration<rep_type, period_type> value
     }
 }
 
+inline void ensure_positive_duration(timeout_duration value, const char* message) {
+    ensure_positive_duration(value.value(), message);
+}
+
 template <typename rep_type, typename period_type>
 void ensure_positive_optional_duration(
     const std::optional<std::chrono::duration<rep_type, period_type>>& value, const char* message) {
     if (value.has_value() && value->count() <= 0) {
         throw std::invalid_argument(message);
+    }
+}
+
+inline void ensure_positive_optional_duration(
+    const std::optional<timeout_duration>& value, const char* message) {
+    if (value.has_value()) {
+        ensure_positive_duration(*value, message);
     }
 }
 

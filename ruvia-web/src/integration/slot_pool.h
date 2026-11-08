@@ -107,7 +107,7 @@ public:
     // The common free-slot path completes directly in the caller's frame.
     // Saturated pools use the same scheduler, timeout and cancellation path.
     [[nodiscard]] acquire_awaiter acquire(const operation_timeout& timeout,
-        std::optional<std::chrono::milliseconds> acquire_timeout, stop_token stop_token_value) {
+        std::optional<timeout_duration> acquire_timeout, stop_token stop_token_value) {
         return acquire_awaiter(owner_, scheduler_.acquire(
                                            timeout.constrained_by(acquire_timeout).remaining(), std::move(stop_token_value)));
     }

@@ -37,7 +37,7 @@ void server_websocket_connection<stream_type>::resume_pong_window_on_read_start(
         pong != nullptr && !write_lane_.write_in_progress() &&
         lifecycle_options_.heartbeat_.pong_timeout_.has_value()) {
         const auto now = steady_now_ms();
-        if (now - pong->sent_at_ms() >= lifecycle_options_.heartbeat_.pong_timeout_->count()) {
+        if (now - pong->sent_at_ms() >= lifecycle_options_.heartbeat_.pong_timeout_->value().count()) {
             liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
         }
     }

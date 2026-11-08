@@ -31,7 +31,7 @@ public:
         const http_client_websocket_handshake& handshake, websocket_client_deflate_offer deflate,
         operation_options options,
         websocket_lifecycle_options lifecycle, std::size_t message_limit,
-        std::optional<std::chrono::milliseconds> read_timeout)
+        std::optional<timeout_duration> read_timeout)
         : worker_(worker),
           tunnel_(std::move(tunnel)),
           transport_state_(*tunnel_.response_.state_),
@@ -218,7 +218,7 @@ public:
         operation_guard operation(*state, state->read_id_, std::move(options));
         worker_timer_registration close_timer;
         if (const auto bound = state->lifecycle_.close_handshake_timeout_) {
-            (void)state->worker_.schedule_timer(close_timer, worker_timer_deadline_after(*bound),
+            (void)state->worker_.schedule_timer(close_timer, worker_timer_deadline_after(bound->value()),
                 [state = state.get()](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         state->abort(http_client_error::code_type::timeout);
@@ -365,7 +365,7 @@ private:
         if (auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_);
             pong && read_active_ && !write_lane_.write_in_progress()) {
             const auto now = steady_now_ms();
-            if (now - pong->sent_at_ms() >= lifecycle_.heartbeat_.pong_timeout_->count()) {
+            if (now - pong->sent_at_ms() >= lifecycle_.heartbeat_.pong_timeout_->value().count()) {
                 liveness_ = websocket_awaiting_pong(now, pong->challenge());
             }
         }
@@ -427,7 +427,7 @@ private:
                     worker_timer_registration close_timer;
                     if (event->close() && lifecycle_.close_handshake_timeout_) {
                         (void)worker_.schedule_timer(close_timer,
-                            worker_timer_deadline_after(*lifecycle_.close_handshake_timeout_),
+                            worker_timer_deadline_after(lifecycle_.close_handshake_timeout_->value()),
                             [this](worker_timer_outcome outcome) noexcept {
                                 if (outcome == worker_timer_outcome::expired) {
                                     abort(http_client_error::code_type::timeout);
@@ -460,7 +460,7 @@ private:
             }
             worker_timer_registration read_timer;
             if (read_timeout_) {
-                (void)worker_.schedule_timer(read_timer, worker_timer_deadline_after(*read_timeout_),
+                (void)worker_.schedule_timer(read_timer, worker_timer_deadline_after(read_timeout_->value()),
                     [this](worker_timer_outcome outcome) noexcept {
                         if (outcome == worker_timer_outcome::expired) {
                             abort(http_client_error::code_type::timeout);
@@ -487,7 +487,7 @@ private:
         bool expired = false;
         worker_timer_registration timer;
         if (const auto timeout = lifecycle_.close_handshake_timeout_) {
-            (void)worker_.schedule_timer(timer, worker_timer_deadline_after(*timeout),
+            (void)worker_.schedule_timer(timer, worker_timer_deadline_after(timeout->value()),
                 [this, &expired](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         expired = true;
@@ -500,7 +500,7 @@ private:
             for (;;) {
                 worker_timer_registration read_timer;
                 if (!lifecycle_.close_handshake_timeout_ && read_timeout_) {
-                    (void)worker_.schedule_timer(read_timer, worker_timer_deadline_after(*read_timeout_),
+                    (void)worker_.schedule_timer(read_timer, worker_timer_deadline_after(read_timeout_->value()),
                         [this](worker_timer_outcome outcome) noexcept {
                             if (outcome == worker_timer_outcome::expired) {
                                 abort(http_client_error::code_type::timeout);
@@ -542,7 +542,7 @@ private:
     std::pmr::string subprotocol_;
     operation_options options_;
     websocket_lifecycle_options lifecycle_;
-    std::optional<std::chrono::milliseconds> read_timeout_;
+    std::optional<timeout_duration> read_timeout_;
     websocket_write_lane write_lane_;
     worker_signal heartbeat_signal_;
     websocket_peer_close_info peer_close_;
@@ -748,7 +748,7 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
         [&opening_stop] { opening_stop.request_stop(); });
     bool opening_expired = false;
     worker_timer_registration opening_timer;
-    (void)pool.worker().schedule_timer(opening_timer, worker_timer_deadline_after(pool.config().connect_timeout_),
+    (void)pool.worker().schedule_timer(opening_timer, worker_timer_deadline_after(pool.config().connect_timeout_.value()),
         [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
             if (outcome == worker_timer_outcome::expired) {
                 opening_expired = true;

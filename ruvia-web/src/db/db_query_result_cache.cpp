@@ -29,7 +29,7 @@ namespace {
 // query it caches.
 [[nodiscard]] operation_options db_cache_options(const operation_options& base, const operation_timeout& timeout) {
     auto result_value = db_remaining_options(base, timeout);
-    if (result_value.timeout_.has_value() && result_value.timeout_->count() == 0) {
+    if (result_value.timeout_.has_value() && result_value.timeout_->value().count() == 0) {
         throw_db_cache_timeout();
     }
     return result_value;

@@ -163,7 +163,7 @@ bool client_tcp_transport::arm(lane_deadline& lane, const operation_timeout& tim
         lane.deadline_.reset();
         return true;
     }
-    if (remaining->count() == 0) {
+    if (remaining->value().count() == 0) {
         lane.deadline_.reset();
         return false;
     }

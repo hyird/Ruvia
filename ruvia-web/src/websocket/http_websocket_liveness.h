@@ -117,7 +117,7 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
         const auto* close = std::get_if<websocket_awaiting_peer_close>(&state_value);
         return liveness_mode == websocket_liveness_mode::awaiting_peer_close && close != nullptr &&
                        options.close_handshake_timeout_.has_value() &&
-                       now - close->started_at_ms() >= options.close_handshake_timeout_->count()
+                       now - close->started_at_ms() >= options.close_handshake_timeout_->value().count()
                    ? websocket_liveness_decision::abort_transport
                    : websocket_liveness_decision::idle;
     }
@@ -126,8 +126,8 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
         return websocket_liveness_decision::idle;
     }
 
-    const auto ping_interval = options.heartbeat_.ping_interval_->count();
-    const auto pong_timeout = options.heartbeat_.pong_timeout_->count();
+    const auto ping_interval = options.heartbeat_.ping_interval_->value().count();
+    const auto pong_timeout = options.heartbeat_.pong_timeout_->value().count();
     const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value);
     if (pong != nullptr && pong_observable) {
         return now - pong->sent_at_ms() >= pong_timeout ? websocket_liveness_decision::abort_transport
@@ -163,8 +163,8 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
     std::int64_t delay = 1;
     if (writing) {
         const auto elapsed = std::max<std::int64_t>(0, now - last_active_ms);
-        const auto ping = options.heartbeat_.ping_interval_->count();
-        const auto pong = options.heartbeat_.pong_timeout_->count();
+        const auto ping = options.heartbeat_.ping_interval_->value().count();
+        const auto pong = options.heartbeat_.pong_timeout_->value().count();
         if (elapsed >= ping) {
             delay = elapsed - ping >= pong ? 0 : pong - (elapsed - ping);
         } else {
@@ -174,9 +174,9 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
                         : until_ping + pong;
         }
     } else if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state)) {
-        delay = remaining(pong->sent_at_ms(), options.heartbeat_.pong_timeout_->count());
+        delay = remaining(pong->sent_at_ms(), options.heartbeat_.pong_timeout_->value().count());
     } else if (std::holds_alternative<websocket_liveness_idle>(state)) {
-        delay = remaining(last_active_ms, options.heartbeat_.ping_interval_->count());
+        delay = remaining(last_active_ms, options.heartbeat_.ping_interval_->value().count());
     }
     return std::chrono::milliseconds(std::max<std::int64_t>(1, delay));
 }

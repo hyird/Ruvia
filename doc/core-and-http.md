@@ -28,13 +28,17 @@
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
 | `"ruvia/core/stop_token.h"` | `class stop_source final`、`class stop_token final`、`class stop_registration final`、`class stop_group final` | `stop_token` 只观察一个状态；`stop_group` 显式拥有父源注册和下游取消状态。`token.register_callback(fn)` 返回自有注册；`token.register_callback(registration, fn)` 替换调用方持有的注册。每个注册只嵌入一个侵入式节点，不额外分配节点；析构自动注销，并等待其他线程正在执行的回调结束 |
-| `"ruvia/core/operation_options.h"` / `"ruvia/core/operation_timeout.h"` | `struct operation_options final`、`validate_operation_options`、`override_operation_options`、`class operation_timeout final`、`template <typename Kind = std::monostate> class operation_deadline final` | 通用操作选项（`timeout_` 与 `stop_token_`）、跨异步阶段共享的 `steady_clock` 截止时间计算器与零分配三态（inactive / active / expired）截止期状态机 |
+| `"ruvia/core/worker_timer.h"` | `class timeout_duration final` | 相对超时、心跳间隔与 Web 流等待的受检整数时长；`value()` 显式返回 `std::chrono::milliseconds`，不接受浮点 chrono 输入 |
+| `"ruvia/core/operation_options.h"` / `"ruvia/core/operation_timeout.h"` | `struct operation_options final`、`validate_operation_options`、`override_operation_options`、`class operation_timeout final`、`template <typename Kind = std::monostate> class operation_deadline final` | `timeout_`、相对截止期输入与 `remaining()` 使用 `std::optional<timeout_duration>`；异步阶段共享 `steady_clock` 截止时间，截止期状态互斥（inactive / active / expired） |
 | `"ruvia/core/worker_timer.h"` | `class worker_timer_registration final`、`class worker_timer_cancellation final`、`enum class worker_timer_outcome { expired, cancelled }` | 单 Worker 侵入式定时器注册句柄，配合 `worker_handle::schedule_timer` 使用；提供 `cancel()`（静默取消）与 `cancel_and_notify()` |
 | `"ruvia/core/timer.h"` | `enum class timer_sleep_result { elapsed, stop_requested }`、`class sleep_operation final`、`sleep_for(const worker_handle&, duration, [stop_token])`、`sleep_until(const worker_handle&, deadline, [stop_token])` | 在绑定 Worker 上挂起当前协程指定时长或直至截止时间点；返回可丢弃、仅启动前可移动的单次冷 `sleep_operation`，须在绑定 Worker 上 `co_await` 启动。若传入的 `stop_token` 触发或 Worker 停止定时器，返回 `stop_requested` 而不抛异常 |
 
 - **注册重入边界**：两种 `register_callback()` 入口均先固定取消状态，再内部移交回调或退役旧注册；后续不再读取 token 宿主，旧载荷析构可清空或销毁 token。
 - **取消目标借用**：`worker_cancellation_registration` 不保留目标的共享引用，只接受左值 `shared_ptr`、拒绝含 `const` 的右值；目标须由调用方持续持有，直至 `reset()` 等待回调结束并清除操作身份。
-- **时长转换**：`worker_timer_saturating_duration_cast()` 对不宽于 `uintmax_t` 的整数计数按任意有理周期精确换算；正小数 tick 向上取整，负数向零截断，越界饱和，不依赖浮点中间值。
+- **时长转换**：`worker_timer_saturating_duration_cast<Target>()` 对不宽于 `uintmax_t` 的整数计数按有理周期精确换算；正小数 tick 向上取整，负数向零截断，越界饱和。目标默认 `steady_clock::duration`，`timeout_duration` 使用毫秒目标，不先窄化源计数。
+- **输入与禁用**：超时配置直接接受整数 chrono 时长；显式整数构造按毫秒计。未配置仍为 `std::nullopt`；零或负值是否拒绝、立即结束由原入口策略决定，不能代替未配置。
+- **显式解包**：读取计数用 `.value().count()`（optional 用 `->value().count()`）；与经过时长比较前必须 `.value()`，禁止混合类型比较把经过时长先向上取整而提前触发超时。
+- **统一入口**：槽位租约、HTTP 客户端/服务器、WebSocket、数据库、Redis 的超时与探活使用同一类型；缓存 TTL、会话有效期与限流窗口不属于该契约。
 
 `stop_group group{first.token(), second.token(), ...}` 或 `stop_group group{tokens_span}` 可组合任意数量的父状态，也可输入另一个 group 的 `token()`。group 不可复制或移动，必须保持地址稳定并存活到使用其 token 的所有操作结束 / join；token 的复制不会延长 group 的父源注册寿命。0 / 1 个不同有效源直接透传，不创建新状态；真实多源组合创建一个下游状态，前两个父注册内嵌，更多父注册按实际数量分配。重复源与嵌套源都只触发每个下游回调一次，不存在用户源容量被框架内部源占用的问题。
 

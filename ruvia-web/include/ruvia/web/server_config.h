@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
@@ -77,22 +78,22 @@ struct server_config final {
     // drains with GOAWAY. Upgraded WebSockets use their route lifecycle
     // heartbeat and close-handshake deadlines instead, even when heartbeat is
     // disabled.
-    std::optional<std::chrono::milliseconds> idle_timeout_{std::chrono::seconds(75)};
+    std::optional<timeout_duration> idle_timeout_{std::chrono::seconds(75)};
     // How often connection timeouts are checked. A timeout fires once at least
     // its duration has passed, and at most about two intervals later. A worker
     // with no connection stops scanning until its next connection.
-    std::chrono::milliseconds connection_scan_interval_{std::chrono::seconds(1)};
+    timeout_duration connection_scan_interval_{std::chrono::seconds(1)};
     // Request-head inactivity; also bounds an HTTP/2 connection until the
     // client preface and SETTINGS arrive (with header_completion_timeout_).
-    std::optional<std::chrono::milliseconds> request_header_timeout_{std::chrono::seconds(60)};
+    std::optional<timeout_duration> request_header_timeout_{std::chrono::seconds(60)};
     // Request-body inactivity. HTTP/2 times each stream's body on its own: a
     // stream that receives no DATA for this long (or whose body outlasts
     // body_completion_timeout_) is reset with RST_STREAM(CANCEL), leaving the
     // connection and its other streams untouched.
-    std::optional<std::chrono::milliseconds> request_body_timeout_{std::chrono::seconds(60)};
+    std::optional<timeout_duration> request_body_timeout_{std::chrono::seconds(60)};
     // Absolute phase deadlines: progress does not renew these limits.
-    std::optional<std::chrono::milliseconds> header_completion_timeout_{std::chrono::seconds(30)};
-    std::optional<std::chrono::milliseconds> body_completion_timeout_{std::chrono::seconds(120)};
+    std::optional<timeout_duration> header_completion_timeout_{std::chrono::seconds(30)};
+    std::optional<timeout_duration> body_completion_timeout_{std::chrono::seconds(120)};
     // Inactivity of a connection write in progress: a buffered response, one
     // write of a response stream, a WebSocket or CONNECT tunnel write, or
     // HTTP/2 frame output (its RFC 8441 WebSockets and tunnels included).
@@ -109,7 +110,7 @@ struct server_config final {
     // before its head, or its connection (HTTP/1) or stream (HTTP/2) ends.
     // So is the open context::file() and context::static_file() wait on: its
     // task then throws a 503 file_read_unavailable http_error.
-    std::optional<std::chrono::milliseconds> write_timeout_{std::chrono::seconds(60)};
+    std::optional<timeout_duration> write_timeout_{std::chrono::seconds(60)};
     // Bounded by default so a connection flood cannot exhaust FDs or memory.
     // At the cap, a new connection takes the slot of the connection that has
     // been idle between requests longest -- an HTTP/1 keep-alive connection

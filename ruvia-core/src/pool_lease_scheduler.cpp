@@ -137,12 +137,12 @@ pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_h
 pool_lease_scheduler::~pool_lease_scheduler() = default;
 
 pool_lease_acquire pool_lease_scheduler::acquire(
-    const std::optional<std::chrono::milliseconds>& timeout, stop_token stop_token_value) & {
+    const std::optional<timeout_duration>& timeout, stop_token stop_token_value) & {
     return pool_lease_acquire(*impl_, timeout, std::move(stop_token_value));
 }
 
 pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
-    std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value) noexcept
+    std::optional<timeout_duration> timeout, stop_token stop_token_value) noexcept
     : owner_(&owner_value),
       timeout_(timeout),
       stop_token_(std::move(stop_token_value)) {
@@ -216,7 +216,7 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     // pending deadline: the waiter still completes on release, close(), or
     // its stop token.
     if (timeout_.has_value() && owner_->worker_.valid()) {
-        if (*timeout_ <= std::chrono::milliseconds::zero()) {
+        if (timeout_->value() <= std::chrono::milliseconds::zero()) {
             if (!detail::worker_handle_access::timers_stopping(owner_->worker_)) {
                 complete(worker_wait_status::timed_out);
             }
@@ -226,7 +226,7 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
                 // before it can be destroyed. Its expiry can unlink the waiter
                 // directly; cross-thread stop notifications still use waiter IDs.
                 (void)owner_->worker_.schedule_timer(deadline_timer_,
-                    worker_timer_deadline_after(*timeout_),
+                    worker_timer_deadline_after(timeout_->value()),
                     [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
                         if (outcome == worker_timer_outcome::expired) {
                             (void)waiter_state->queue_.expire(*waiter);

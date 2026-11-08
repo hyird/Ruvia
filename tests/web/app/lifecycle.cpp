@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <semaphore>
@@ -300,6 +301,38 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
         stopped.connect(endpoint, error);
         EXPECT_TRUE(error == asio::error::connection_refused);
     }
+}
+
+TEST(Ruvia, app_unsigned_max_timeouts_preserve_response_delivery) {
+    install_hooks();
+    auto& app = ruvia::app();
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    const auto huge = std::chrono::duration<std::uint64_t, std::milli>{
+        (std::numeric_limits<std::uint64_t>::max)()};
+    app.server({.worker_count_ = 1,
+        .idle_timeout_ = huge,
+        .connection_scan_interval_ = huge,
+        .request_header_timeout_ = huge,
+        .request_body_timeout_ = huge,
+        .header_completion_timeout_ = huge,
+        .body_completion_timeout_ = huge,
+        .write_timeout_ = huge});
+    app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
+    app_run run(app);
+    ASSERT_TRUE(state().started_.try_acquire_for(3s));
+    asio::ip::tcp::socket client(io);
+    client.connect(endpoint);
+    send(client, "GET /fast HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    std::string response;
+    EXPECT_TRUE(read_to_end(client, response));
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.ends_with("fast"));
+    client.close();
+    app.stop();
+    run.join();
+    EXPECT_TRUE(run.failure() == nullptr);
 }
 
 // A stop disconnects directly, with no drain phase: an idle keep-alive

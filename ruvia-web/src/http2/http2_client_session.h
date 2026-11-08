@@ -88,8 +88,8 @@ public:
     // `ping_interval` bounds silence: no received frame for one interval sends
     // a PING, and another silent interval fails the session with timeout.
     http2_client_session(handler_type& handler, client_tcp_transport& transport, task_scope& tasks,
-        const worker_handle& worker_value, std::optional<std::chrono::milliseconds> write_timeout,
-        std::optional<std::chrono::milliseconds> ping_interval, std::pmr::memory_resource* resource)
+        const worker_handle& worker_value, std::optional<timeout_duration> write_timeout,
+        std::optional<timeout_duration> ping_interval, std::pmr::memory_resource* resource)
         : handler_(handler),
           transport_(transport),
           tasks_(tasks),
@@ -106,7 +106,7 @@ public:
         static_assert(http2_client_session_handler<handler_type>);
     }
     http2_client_session(handler_type&, client_tcp_transport&, task_scope&, worker_handle&&,
-        std::optional<std::chrono::milliseconds>, std::optional<std::chrono::milliseconds>,
+        std::optional<timeout_duration>, std::optional<timeout_duration>,
         std::pmr::memory_resource*) = delete;
 
     http2_client_session(const http2_client_session&) = delete;
@@ -176,7 +176,7 @@ public:
                 last_input_ = std::chrono::steady_clock::now();
                 ping_pending_ = false;
                 schedule_ping(generation,
-                    worker_timer_saturating_deadline(last_input_, worker_timer_saturating_duration_cast(*ping_interval_)));
+                    worker_timer_saturating_deadline(last_input_, worker_timer_saturating_duration_cast(ping_interval_->value())));
             }
         } catch (...) {
             const auto failure = std::current_exception();
@@ -454,7 +454,7 @@ private:
             return;
         }
         const auto now = std::chrono::steady_clock::now();
-        const auto interval = worker_timer_saturating_duration_cast(*ping_interval_);
+        const auto interval = worker_timer_saturating_duration_cast(ping_interval_->value());
         try {
             if (ping_pending_ && last_input_ > ping_sent_at_) {
                 ping_pending_ = false;
@@ -634,8 +634,8 @@ private:
     client_tcp_transport& transport_;
     task_scope& tasks_;
     const worker_handle& worker_;
-    std::optional<std::chrono::milliseconds> write_timeout_;
-    std::optional<std::chrono::milliseconds> ping_interval_;
+    std::optional<timeout_duration> write_timeout_;
+    std::optional<timeout_duration> ping_interval_;
     std::pmr::memory_resource* resource_;
     std::optional<::ruvia::http2_connection> connection_;
     http_io_buffer read_buffer_;

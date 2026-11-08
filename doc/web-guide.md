@@ -67,18 +67,20 @@ int main() {
 
 #### `ruvia::server_config`
 
+时长输入、取整与显式解包见 [Core 超时契约](core-and-http.md)。
+
 | 字段名 | 类型与默认值 | 说明 |
 | --- | --- | --- |
 | `worker_count_` | `std::size_t`（默认 `max(1u, hardware_concurrency())`） | 业务 worker 线程数 |
 | `process_signal_handlers_` | `process_signal_handler_policy`（默认 `external_owner`） | 设为 `install` 时自动安装 `SIGINT` / `SIGTERM` 信号处理以触发 `stop()` |
 | `worker_queue_capacity_` | `std::size_t`（默认 `1024`） | 每个 worker 跨线程任务投递队列容量 |
-| `idle_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `75s`） | 空闲连接超时时间。HTTP/1 为等待下一个请求时的无活动时长，也是处理器既不读也不写时的兜底。HTTP/2 没有任何流时从最后一条流结束（或连接就绪）起计时，`PING`、`SETTINGS`、`WINDOW_UPDATE` 等不开启流的帧以及服务端自身的写出都不续期（与 Pingora `h2_idle_timeout` 一致），到期按下文连接级 `GOAWAY` 排空结束；有在途流时与 HTTP/1 处理器兜底相同 |
-| `connection_scan_interval_` | `std::chrono::milliseconds`（默认 `1s`） | 连接超时扫描周期。worker 没有任何连接且空闲修剪已执行后扫描停止，下一个连接到来时恢复 |
-| `request_header_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求头读取超时；HTTP/2 连接收到客户端连接前言与 `SETTINGS` 之前、以及头块（`CONTINUATION`）未完成时同样受此约束 |
-| `request_body_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 请求体单次读取超时。HTTP/2 按流计时：某条流超过该时长没有收到请求体 `DATA` 时，只以 `RST_STREAM(CANCEL)` 重置该流（不发送响应），连接与其他流不受影响，其他流或控制帧不续期 |
-| `header_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `30s`） | 请求头整体完成截止时间；HTTP/2 连接就绪（连接前言与 `SETTINGS`）同样受此截止期约束 |
-| `body_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `120s`） | 请求体整体完成截止时间。HTTP/2 按流计时：自该流请求头到达起计算，到期只重置该流 |
-| `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 写入无进展超时：每次 socket 写入期间独立计时，只有写入进展续期（读到的数据不续期），不是整体截止期。覆盖 HTTP/1 响应、HTTP/1 升级连接（WebSocket 消息、控制帧与关闭帧，`CONNECT` 隧道数据，与是否启用 WebSocket 心跳无关）以及 HTTP/2 连接的全部帧输出（含 RFC 8441 WebSocket 与 `CONNECT` 隧道），与读方向当前处于空闲、读取请求体还是长连接阶段无关：对端停止读取时关闭连接。HTTP/2 流等待对端流控窗口（发送窗口为 0）也受此限制：连续等待超过该时长的流以 `RST_STREAM(CANCEL)` 重置，只影响该流（与 Pingora 以写超时约束 h2 流控等待一致）。阻塞池上的文件正文读取与 `c.file()` / `c.static_file()` 的打开等待同样以此为界，超时返回 `503 file_read_unavailable`（见 §6.1） |
+| `idle_timeout_` | `std::optional<timeout_duration>`（默认 `75s`） | 空闲连接超时时间。HTTP/1 为等待下一个请求时的无活动时长，也是处理器既不读也不写时的兜底。HTTP/2 没有任何流时从最后一条流结束（或连接就绪）起计时，`PING`、`SETTINGS`、`WINDOW_UPDATE` 等不开启流的帧以及服务端自身的写出都不续期（与 Pingora `h2_idle_timeout` 一致），到期按下文连接级 `GOAWAY` 排空结束；有在途流时与 HTTP/1 处理器兜底相同 |
+| `connection_scan_interval_` | `timeout_duration`（默认 `1s`） | 连接超时扫描周期。worker 没有任何连接且空闲修剪已执行后扫描停止，下一个连接到来时恢复 |
+| `request_header_timeout_` | `std::optional<timeout_duration>`（默认 `60s`） | 请求头读取超时；HTTP/2 连接收到客户端连接前言与 `SETTINGS` 之前、以及头块（`CONTINUATION`）未完成时同样受此约束 |
+| `request_body_timeout_` | `std::optional<timeout_duration>`（默认 `60s`） | 请求体单次读取超时。HTTP/2 按流计时：某条流超过该时长没有收到请求体 `DATA` 时，只以 `RST_STREAM(CANCEL)` 重置该流（不发送响应），连接与其他流不受影响，其他流或控制帧不续期 |
+| `header_completion_timeout_` | `std::optional<timeout_duration>`（默认 `30s`） | 请求头整体完成截止时间；HTTP/2 连接就绪（连接前言与 `SETTINGS`）同样受此截止期约束 |
+| `body_completion_timeout_` | `std::optional<timeout_duration>`（默认 `120s`） | 请求体整体完成截止时间。HTTP/2 按流计时：自该流请求头到达起计算，到期只重置该流 |
+| `write_timeout_` | `std::optional<timeout_duration>`（默认 `60s`） | 写入无进展超时：每次 socket 写入期间独立计时，只有写入进展续期（读到的数据不续期），不是整体截止期。覆盖 HTTP/1 响应、HTTP/1 升级连接（WebSocket 消息、控制帧与关闭帧，`CONNECT` 隧道数据，与是否启用 WebSocket 心跳无关）以及 HTTP/2 连接的全部帧输出（含 RFC 8441 WebSocket 与 `CONNECT` 隧道），与读方向当前处于空闲、读取请求体还是长连接阶段无关：对端停止读取时关闭连接。HTTP/2 流等待对端流控窗口（发送窗口为 0）也受此限制：连续等待超过该时长的流以 `RST_STREAM(CANCEL)` 重置，只影响该流（与 Pingora 以写超时约束 h2 流控等待一致）。阻塞池上的文件正文读取与 `c.file()` / `c.static_file()` 的打开等待同样以此为界，超时返回 `503 file_read_unavailable`（见 §6.1） |
 | `max_connections_per_worker_` | `std::optional<std::size_t>`（默认 `1024`） | 单个 worker 允许的最大并发连接数。达到上限时，新连接接管“请求间空闲最久”的连接的槽位（等待下一个请求的 HTTP/1 keep-alive 连接，或没有任何流的 HTTP/2 连接），后者的 socket 立即关闭（与 nginx 在 `worker_connections` 用尽时复用 keep-alive 连接的机制一致）；被淘汰连接的会话退出前 `active_connections_` 可能短暂超过上限，但打开的 socket 数不超过。没有空闲连接时，新 socket 在 TLS 与协议识别之前直接关闭（不伪造响应），并计入 `connections_refused_` |
 | `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数；HTTP/2 达到上限时按下文连接级两阶段 `GOAWAY` 排空，往返期间在途的流仍被处理（产品上限：最多再接纳 128 条，往返最长 1 秒）；HTTP/3 同理 |
 | `max_buffered_body_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | 缓冲式路由默认允许的最大请求体字节数 |

@@ -70,7 +70,7 @@ detail::redis_pool& redis_handle::blocking_pool() const noexcept {
 }
 
 task<redis_value> redis_handle::execute(detail::redis_pool& pool_value, detail::redis_owned_command&& command,
-    std::optional<std::chrono::milliseconds> reply_timeout) const {
+    std::optional<timeout_duration> reply_timeout) const {
     return pool_value.execute_owned(std::move(command), resource_, operation_options_, reply_timeout, io_metrics_);
 }
 

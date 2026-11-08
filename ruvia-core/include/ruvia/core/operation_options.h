@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "ruvia/core/stop_token.h"
+#include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
 
@@ -14,7 +15,7 @@ namespace ruvia {
 // state is supplied; use a caller-owned stop_group for cumulative cancellation.
 // Timeout overrides may tighten, but never relax, the existing bound.
 struct operation_options final {
-    std::optional<std::chrono::milliseconds> timeout_{};
+    std::optional<timeout_duration> timeout_{};
     stop_token stop_token_{};
 };
 

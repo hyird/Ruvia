@@ -30,8 +30,8 @@ namespace {
 }
 
 [[nodiscard]] bool timeout_expired(
-    const std::optional<std::chrono::milliseconds>& timeout, std::int64_t inactive_ms) noexcept {
-    return timeout.has_value() && inactive_ms >= timeout->count();
+    const std::optional<timeout_duration>& timeout, std::int64_t inactive_ms) noexcept {
+    return timeout.has_value() && inactive_ms >= timeout->value().count();
 }
 
 [[nodiscard]] std::int64_t close_deadline_after(std::int64_t now, std::chrono::milliseconds delay) noexcept {
@@ -366,7 +366,7 @@ void connection_scanner::impl_type::schedule() {
     const auto timer_state = timer_state_;
     // A stopped timer queue arms nothing: scanning ends with the worker, as it
     // does for a scan timer that stop_timers() cancels.
-    (worker_).schedule_timer(timer_, ::ruvia::worker_timer_deadline_after(options_.scan_interval_), [timer_state](worker_timer_outcome outcome) {
+    (worker_).schedule_timer(timer_, ::ruvia::worker_timer_deadline_after(options_.scan_interval_.value()), [timer_state](worker_timer_outcome outcome) {
         if (outcome == worker_timer_outcome::cancelled) {
             return;
         }
@@ -452,7 +452,7 @@ void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
     if (!entry_value.close_requested_) {
         const auto now = cached_now_ms_;
         if (entry_value.reading_request_head_) {
-            request_close(entry_value, close_deadline_after(now, options_.scan_interval_));
+            request_close(entry_value, close_deadline_after(now, options_.scan_interval_.value()));
             return;
         }
         // A stalled write cannot carry a graceful end (GOAWAY, close alert);

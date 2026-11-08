@@ -213,10 +213,10 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
         request.client_.registration_.require_active();
         if (total) {
             const auto elapsed = std::chrono::ceil<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
-            if (elapsed >= *total) {
+            if (elapsed >= total->value()) {
                 throw http_client_error(http_client_error::code_type::timeout, "HTTP redirect deadline expired");
             }
-            request.client_.options_.timeout_ = *total - elapsed;
+            request.client_.options_.timeout_ = total->value() - elapsed;
         }
         std::optional<task<http_client_response>> dispatched;
         {

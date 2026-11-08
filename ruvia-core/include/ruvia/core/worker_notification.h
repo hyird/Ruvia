@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
 
@@ -16,7 +17,7 @@ class worker_runtime_context;
 struct worker_notification_options final {
     // Bounds the Windows native wake-pipe connection wait (at most one minute).
     // Synchronous setup system calls are not hard-real-time bounded.
-    std::chrono::milliseconds startup_timeout_{std::chrono::seconds(5)};
+    timeout_duration startup_timeout_{std::chrono::seconds(5)};
 };
 
 // coalesced means an existing pending notification covers this call;

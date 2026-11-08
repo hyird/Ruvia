@@ -806,13 +806,13 @@ private:
 
     // `reply_timeout` starts when the command is written (see redis_pool).
     [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command,
-        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt) const;
+        std::optional<timeout_duration> reply_timeout = std::nullopt) const;
 
     // One scoped pooled command whose reply `mapper` decodes in the handle's
     // memory domain, with the map_redis_command mapper contract.
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command,
-        mapper_type mapper, std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt) const {
+        mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const {
         return scoped(detail::map_redis_command<result_type>(
             execute(pool, std::move(command), reply_timeout), resource_, std::move(mapper)));
     }

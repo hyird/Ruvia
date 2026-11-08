@@ -35,18 +35,18 @@ public:
     // `tls_context` is borrowed from the owning runtime and shared by every
     // pool of the alias; it is configured only when TLS is enabled.
     redis_pool(asio::io_context& io_context, const redis_config_storage& config, asio::ssl::context& tls_context,
-        std::optional<std::chrono::milliseconds> command_timeout, std::size_t pool_size,
+        std::optional<timeout_duration> command_timeout, std::size_t pool_size,
         const worker_handle& worker_value, std::pmr::memory_resource* resource = nullptr);
-    redis_pool(asio::io_context&, redis_config_storage&&, asio::ssl::context&, std::optional<std::chrono::milliseconds>,
+    redis_pool(asio::io_context&, redis_config_storage&&, asio::ssl::context&, std::optional<timeout_duration>,
         std::size_t, const worker_handle&, std::pmr::memory_resource* = nullptr) = delete;
     redis_pool(asio::io_context&, const redis_config_storage&&, asio::ssl::context&,
-        std::optional<std::chrono::milliseconds>, std::size_t, const worker_handle&,
+        std::optional<timeout_duration>, std::size_t, const worker_handle&,
         std::pmr::memory_resource* = nullptr) = delete;
     redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&,
-        std::optional<std::chrono::milliseconds>, std::size_t, worker_handle&&,
+        std::optional<timeout_duration>, std::size_t, worker_handle&&,
         std::pmr::memory_resource* = nullptr) = delete;
     redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&,
-        std::optional<std::chrono::milliseconds>, std::size_t, const worker_handle&&,
+        std::optional<timeout_duration>, std::size_t, const worker_handle&&,
         std::pmr::memory_resource* = nullptr) = delete;
     ~redis_pool();
 
@@ -60,11 +60,11 @@ public:
     // `io_metrics` is the request's counter block, or null outside a request.
     task<redis_value> execute_owned(redis_owned_command command,
         std::pmr::memory_resource* resource, operation_options options = {},
-        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt,
+        std::optional<timeout_duration> reply_timeout = std::nullopt,
         request_io_metrics* io_metrics = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
-        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt,
+        std::optional<timeout_duration> reply_timeout = std::nullopt,
         request_io_metrics* io_metrics = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
     // The caller keeps `args` alive until the operation completes. `deadline`
     // is copied, so repeated commands share the operation's absolute bound.
@@ -91,12 +91,12 @@ private:
 
     template <typename result_type, typename command_source_type>
     task<result_type> execute_commands(command_source_type source, operation_options options,
-        std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
+        std::optional<timeout_duration> reply_timeout, std::pmr::memory_resource* resource,
         std::optional<operation_timeout> deadline, request_io_metrics* io_metrics = nullptr,
         bool wrap_transaction = false);
 
     const redis_config_storage& config_;
-    std::optional<std::chrono::milliseconds> command_timeout_;
+    std::optional<timeout_duration> command_timeout_;
     std::pmr::memory_resource* resource_;
     client_wire_counters wire_counters_;
     slot_pool_type slots_;

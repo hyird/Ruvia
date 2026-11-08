@@ -51,7 +51,7 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
         (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
         return;
     }
-    stream.read_deadline_ = worker_timer_deadline_after(*read_timeout);
+    stream.read_deadline_ = worker_timer_deadline_after(read_timeout->value());
     schedule_http2_stream_timer(stream);
 }
 
@@ -790,7 +790,7 @@ task<void> http_client_connection::stream_http2_upload(
     worker_timer_registration continue_timer;
     if (request.upload() != nullptr && !request.upload()->content_released_) {
         (void)pool_.worker().schedule_timer(continue_timer,
-            worker_timer_deadline_after(request.upload()->config_.continue_timeout_),
+            worker_timer_deadline_after(request.upload()->config_.continue_timeout_.value()),
             [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
                     policy->content_released_ = true;

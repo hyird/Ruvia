@@ -73,7 +73,7 @@ public:
     // replaced. The optional operation deadline bounds establishment together
     // with connect_timeout; AUTH and SELECT replies also honor command_timeout.
     task<void> connect(const operation_timeout* operation_timeout_value,
-        std::optional<std::chrono::milliseconds> command_timeout);
+        std::optional<timeout_duration> command_timeout);
     // Serialized request storage: append RESP commands, then write_request().
     [[nodiscard]] std::pmr::string& write_buffer() noexcept {
         return write_buffer_;
@@ -100,7 +100,7 @@ public:
 private:
     void ensure_reader();
     task<void> authenticate(const operation_timeout& connect_timeout,
-        std::optional<std::chrono::milliseconds> command_timeout);
+        std::optional<timeout_duration> command_timeout);
     // One connection-setup command (AUTH, SELECT) and its reply.
     task<redis_value> exchange_control_command(
         std::span<const std::string_view> args, operation_timeout deadline, redis_request_content content);

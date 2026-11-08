@@ -26,17 +26,17 @@ namespace ruvia::detail {
 // Worker-owned connection activity tracking options, copied from the server
 // configuration after validate_server_limits has checked every duration.
 struct connection_scanner_options final {
-    std::chrono::milliseconds scan_interval_{std::chrono::seconds(1)};
+    timeout_duration scan_interval_{std::chrono::seconds(1)};
     // Inactivity timeouts measured from the connection's last successful I/O
     // (idle_timeout_ also bounds phase::awaiting_stream, measured from entering
     // it). Absence disables the corresponding phase timeout.
-    std::optional<std::chrono::milliseconds> idle_timeout_{};
-    std::optional<std::chrono::milliseconds> initial_read_timeout_{};
-    std::optional<std::chrono::milliseconds> payload_read_timeout_{};
-    std::optional<std::chrono::milliseconds> write_timeout_{};
+    std::optional<timeout_duration> idle_timeout_{};
+    std::optional<timeout_duration> initial_read_timeout_{};
+    std::optional<timeout_duration> payload_read_timeout_{};
+    std::optional<timeout_duration> write_timeout_{};
     // Absolute phase deadlines, independent of successful I/O progress.
-    std::optional<std::chrono::milliseconds> initial_read_completion_timeout_{};
-    std::optional<std::chrono::milliseconds> payload_read_completion_timeout_{};
+    std::optional<timeout_duration> initial_read_completion_timeout_{};
+    std::optional<timeout_duration> payload_read_completion_timeout_{};
     // The first tick after a whole scan interval in which no entry carried a
     // request exchange and none had activity (I/O, registration or retirement)
     // trims this memory on the worker, once per such quiet period. Must belong

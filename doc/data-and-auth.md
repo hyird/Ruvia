@@ -158,6 +158,8 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 // report.applied(), report.skipped(), report.changed()
 ```
 
+- **迁移锁时长**：`db_migrator_options::lock_timeout_` 使用 `timeout_duration`，默认 `30s`；MariaDB 向上取整至整秒，PostgreSQL 超过 `INT32_MAX` 毫秒时在连接前拒绝。输入与解包规则见 [Core 超时契约](core-and-http.md)。
+
 迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不自动建列，也不把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
 
 迁移锁（MariaDB `GET_LOCK`、PostgreSQL 会话级咨询锁）归属取得它的会话，因此迁移器只使用一条连接，且该连接结束后不再重连：会话因传输失败而断开，或某条 `unwrapped` 迁移使连接停留在事务中（如单独执行 `BEGIN`、MariaDB 的 `SET autocommit = 0`）而在归还时被关闭后，后续迁移与历史记录都以 `db_error`（`io_error`）失败，不会在未持锁的新会话上继续执行。失败时迁移器不显式释放锁，而是关闭会话使锁随之释放。

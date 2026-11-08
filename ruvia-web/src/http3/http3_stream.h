@@ -15,6 +15,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_pmr_string.h"
@@ -141,14 +142,14 @@ public:
 
     // True once per wait, when it has been observed for `timeout` in the
     // scanner's clock. The first observation starts the clock.
-    [[nodiscard]] bool output_wait_expired(std::int64_t now_ms, std::chrono::milliseconds timeout) noexcept {
+    [[nodiscard]] bool output_wait_expired(std::int64_t now_ms, timeout_duration timeout) noexcept {
         if (!waiting_output_ || output_wait_expired_) {
             return false;
         }
         if (!output_wait_observed_ms_.has_value()) {
             output_wait_observed_ms_ = now_ms;
         }
-        output_wait_expired_ = now_ms - *output_wait_observed_ms_ >= timeout.count();
+        output_wait_expired_ = now_ms - *output_wait_observed_ms_ >= timeout.value().count();
         return output_wait_expired_;
     }
 
@@ -349,11 +350,11 @@ public:
     // `completion` since it opened (request_body_timeout_ and
     // body_completion_timeout_).
     [[nodiscard]] bool request_body_overdue(std::int64_t now_ms,
-        const std::optional<std::chrono::milliseconds>& inactivity,
-        const std::optional<std::chrono::milliseconds>& completion) const noexcept {
+        const std::optional<timeout_duration>& inactivity,
+        const std::optional<timeout_duration>& completion) const noexcept {
         return request_body_open_ &&
-               ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->count()) ||
-                   (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->count()));
+               ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->value().count()) ||
+                   (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->value().count()));
     }
 
     void mark_tunnel() noexcept {

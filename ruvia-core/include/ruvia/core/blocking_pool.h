@@ -487,7 +487,7 @@ template <typename fn_type>
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     std::optional<std::chrono::steady_clock::duration> timeout;
     if (options.timeout_) {
-        timeout = worker_timer_saturating_duration_cast(*options.timeout_);
+        timeout = worker_timer_saturating_duration_cast(options.timeout_->value());
     }
     return detail::run_blocking_until(std::move(worker_value), timeout, std::move(options.stop_token_), std::move(fn));
 }
