@@ -165,7 +165,7 @@ void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
         // The payload writer replaces each ill-formed UTF-8 subpart with U+FFFD, so
         // two distinct ill-formed names could serialize as one; only well-formed
         // names keep the raw uniqueness check equal to the signed one.
-        if (!detail::is_valid_utf8(name)) {
+        if (!::ruvia::is_valid_utf8(name)) {
             throw std::invalid_argument("JWT custom claim name must be well-formed UTF-8");
         }
         for (std::size_t j = 0; j < i; ++j) {

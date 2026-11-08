@@ -45,9 +45,9 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
         throw std::invalid_argument("SSE retry delay must not be negative");
     }
     // An event stream is UTF-8 (WHATWG HTML, "Parsing an event stream").
-    if (!detail::is_valid_utf8(message.event_.view()) ||
-        (message.id_.has_value() && !detail::is_valid_utf8(message.id_->view())) ||
-        (message.data_.has_value() && !detail::is_valid_utf8(message.data_->view()))) {
+    if (!is_valid_utf8(message.event_.view()) ||
+        (message.id_.has_value() && !is_valid_utf8(message.id_->view())) ||
+        (message.data_.has_value() && !is_valid_utf8(message.data_->view()))) {
         throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 

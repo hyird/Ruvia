@@ -215,7 +215,7 @@ public:
                 return websocket_inbound_result::make_message(
                     message, websocket_inbound_content_encoding::per_message_deflate);
             }
-            if (opcode == websocket_opcode::text && !is_valid_utf8(message_)) {
+            if (opcode == websocket_opcode::text && !::ruvia::is_valid_utf8(message_)) {
                 return websocket_inbound_result::make_failure(
                     websocket_protocol_failure::invalid_payload_data);
             }
@@ -236,7 +236,7 @@ public:
                     return websocket_inbound_result::make_message(
                         message, websocket_inbound_content_encoding::per_message_deflate);
                 }
-                if (opcode == websocket_opcode::text && !is_valid_utf8(frame.payload())) {
+                if (opcode == websocket_opcode::text && !::ruvia::is_valid_utf8(frame.payload())) {
                     return websocket_inbound_result::make_failure(
                         websocket_protocol_failure::invalid_payload_data);
                 }

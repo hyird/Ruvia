@@ -230,7 +230,7 @@ public:
         if (data_frame && message_limit_.exceeds(payload_value.size())) {
             return websocket_frame_submit_status::message_too_large;
         }
-        if (opcode == websocket_opcode::text && !detail::is_valid_utf8(payload_value)) {
+        if (opcode == websocket_opcode::text && !is_valid_utf8(payload_value)) {
             return websocket_frame_submit_status::invalid_text_payload;
         }
         if (control_frame && payload_value.size() > 125) {
@@ -454,7 +454,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 return protocol_failure_event(detail::websocket_protocol_failure::protocol_error);
             }
             const std::string_view view = impl_->inbound_inflated_;
-            if (message.opcode() == websocket_opcode::text && !detail::is_valid_utf8(view)) {
+            if (message.opcode() == websocket_opcode::text && !is_valid_utf8(view)) {
                 return protocol_failure_event(detail::websocket_protocol_failure::invalid_payload_data);
             }
             if (impl_->close_phase_ != close_phase_type::open) {

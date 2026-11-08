@@ -23,7 +23,7 @@ websocket_close_payload_encode_result encode_websocket_close_payload(
         return websocket_close_payload_encode_result(
             websocket_close_payload_encode_failure(websocket_close_payload_encode_error::reason_too_large));
     }
-    if (!is_valid_utf8(reason)) {
+    if (!::ruvia::is_valid_utf8(reason)) {
         return websocket_close_payload_encode_result(
             websocket_close_payload_encode_failure(websocket_close_payload_encode_error::invalid_reason));
     }
@@ -44,7 +44,7 @@ std::optional<websocket_protocol_failure> websocket_close_payload_failure(
     if (!websocket_close_code::is_valid_value(read_websocket_uint16(payload_value.data()))) {
         return websocket_protocol_failure::protocol_error;
     }
-    if (!is_valid_utf8(payload_value.substr(2))) {
+    if (!::ruvia::is_valid_utf8(payload_value.substr(2))) {
         return websocket_protocol_failure::invalid_payload_data;
     }
     return std::nullopt;

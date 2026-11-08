@@ -191,7 +191,7 @@ template <typename escaped_budget_type>
             return token;
         }
         if (uc >= 0x80) {
-            const auto sequence = scan_utf8_sequence(remaining, i);
+            const auto sequence = ::ruvia::scan_utf8_sequence(remaining, i);
             if (!sequence.well_formed_) {
                 return std::nullopt;
             }

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-namespace ruvia::detail {
+namespace ruvia {
 
 struct utf8_sequence final {
     // Bytes of the well-formed sequence, or of the maximal subpart (Unicode 3.9,
@@ -12,7 +12,8 @@ struct utf8_sequence final {
     bool well_formed_;
 };
 
-// Classifies the UTF-8 sequence beginning at input[i] (whose lead byte is >= 0x80)
+// Requires i < input.size() and input[i] >= 0x80 when interpreted as unsigned.
+// Classifies the UTF-8 sequence beginning at input[i]
 // under the Unicode 3.9 Table 3-7 constraints: no overlong forms (C0/C1, E0 80-9F,
 // F0 80-8F), no UTF-16 surrogate code points (ED A0-BF), nothing above U+10FFFF
 // (F4 90-.., F5+), and no stray or truncated continuation bytes. The single owner
@@ -66,4 +67,4 @@ struct utf8_sequence final {
     return true;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

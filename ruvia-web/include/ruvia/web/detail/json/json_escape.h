@@ -72,7 +72,7 @@ inline void append_json_string(string_t_type& output, std::string_view value) {
     while ((i = find_json_string_token_byte(value, i)) != std::string_view::npos) {
         const auto c = static_cast<unsigned char>(value[i]);
         if (c >= 0x80) {
-            const auto sequence = scan_utf8_sequence(value, i);
+            const auto sequence = ::ruvia::scan_utf8_sequence(value, i);
             if (!sequence.well_formed_) {
                 if (i > chunk_begin) {
                     output.append(value.data() + chunk_begin, i - chunk_begin);
@@ -107,7 +107,7 @@ template <typename output_type>
     for (std::size_t i = 0; i < name.size();) {
         const auto byte = static_cast<unsigned char>(name[i]);
         if (byte >= 0x80) {
-            const auto sequence = scan_utf8_sequence(name, i);
+            const auto sequence = ::ruvia::scan_utf8_sequence(name, i);
             if (!sequence.well_formed_) {
                 return false;
             }

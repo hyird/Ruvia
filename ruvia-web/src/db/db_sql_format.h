@@ -37,7 +37,7 @@ inline void require_db_dialect(db_driver driver) {
             ++i;
             continue;
         }
-        const auto sequence = scan_utf8_sequence(name, i);
+        const auto sequence = ::ruvia::scan_utf8_sequence(name, i);
         if (!sequence.well_formed_) {
             return false;
         }
