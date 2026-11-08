@@ -52,10 +52,8 @@ inline void http_append_unsigned(std::pmr::string& output, std::uint64_t value) 
 }
 
 inline void http_append_signed(std::pmr::string& output, std::int64_t value) {
-    // Sign plus the 19 digits of the most negative std::int64_t.
-    std::array<char, 20> digits;
-    const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr;
-    output.append(digits.data(), static_cast<std::size_t>(end - digits.data()));
+    std::array<char, http_max_signed_decimal_size> digits;
+    output.append(http_format_signed(digits, value));
 }
 
 // Append the shortest decimal form of an arithmetic value; `error_message` is

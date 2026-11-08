@@ -377,7 +377,7 @@ void append_entity_array_value(std::pmr::string& output, const t_type& value) {
     } else if constexpr (std::is_same_v<t_type, bool>) {
         output += value ? "t" : "f";
     } else if constexpr (std::is_floating_point_v<t_type>) {
-        append_db_number(output, static_cast<double>(value));
+        append_db_number(output, value);
     } else if constexpr (std::is_signed_v<t_type>) {
         append_db_number(output, static_cast<std::int64_t>(value));
     } else {

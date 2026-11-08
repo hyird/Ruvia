@@ -2,14 +2,19 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -41,6 +46,8 @@ RUVIA_DB_ENTITY(composite_entity_type, "composite_items",
     db_column<"item_id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"name", std::pmr::string>,
     db_column<"revision", std::int64_t>)
+RUVIA_DB_ENTITY(numeric_array_entity, "numeric_arrays",
+    db_column<"samples", std::pmr::vector<long double>, db_column_options{.data_type_ = db_data_type::numeric}>)
 
 struct child;
 struct parent;
@@ -1123,6 +1130,54 @@ TEST(Ruvia, db_repository_insert_batches_merge_columns_without_reinterpreting_ro
         EXPECT_TRUE(upsert.sql().find(driver == db_driver::postgresql
                                           ? "\"name\" = excluded.\"name\""
                                           : "`name` = VALUES(`name`)") != std::string_view::npos);
+        co_return;
+    });
+}
+
+TEST(Ruvia, db_repository_numeric_arrays_preserve_floating_precision_and_range) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<numeric_array_entity>();
+        for (const auto input : {std::nextafter(1.0L, 2.0L), std::numeric_limits<long double>::max(),
+                 std::numeric_limits<long double>::lowest()}) {
+            numeric_array_entity entity;
+            entity.set<"samples">(std::pmr::vector<long double>{input});
+            auto builder = repository.insert_builder(entity);
+            const auto statement = builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+            const auto sql = statement.sql();
+            const auto opening = sql.find('{');
+            const auto closing = sql.find('}', opening);
+            EXPECT_NE(opening, std::string_view::npos);
+            EXPECT_NE(closing, std::string_view::npos);
+            if (opening == std::string_view::npos || closing == std::string_view::npos) {
+                co_return;
+            }
+            long double decoded{};
+            const auto end = sql.data() + closing;
+            const auto parsed = std::from_chars(sql.data() + opening + 1, end, decoded);
+            EXPECT_EQ(parsed.ec, std::errc{});
+            EXPECT_EQ(parsed.ptr, end);
+            EXPECT_EQ(decoded, input);
+        }
+        co_return;
+    });
+}
+
+TEST(Ruvia, db_repository_nonfinite_array_elements_preserve_prior_insert_rows) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<numeric_array_entity>();
+        numeric_array_entity entity;
+        entity.set<"samples">(std::pmr::vector<long double>{2.0L});
+        auto builder = repository.insert_builder(entity);
+        const auto before = builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+        for (const auto invalid : {std::numeric_limits<long double>::infinity(),
+                 -std::numeric_limits<long double>::infinity(), std::numeric_limits<long double>::quiet_NaN()}) {
+            entity.set<"samples">(std::pmr::vector<long double>{1.0L, invalid});
+            EXPECT_THROW(builder.values(entity), std::invalid_argument);
+            const auto after = builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+            EXPECT_EQ(after.sql(), before.sql());
+        }
         co_return;
     });
 }

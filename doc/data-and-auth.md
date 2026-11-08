@@ -242,6 +242,7 @@ RUVIA_DB_PROJECTION(device_summary,
 - **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::pmr::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
 - **可空列约定**：顶层列类型直接使用值类型（如 `std::int64_t`、`std::pmr::string`），并在 `db_column_options` 中设置 `.nullable_ = true`。通过 `entity.set_null<"notes">()` 置空，通过 `entity.is_null<"notes">()` 检查是否为 `NULL`。
 - **实体数值输入**：SQL 与 Redis 实体的 `set<"field">()` 在发布字段前检查整数范围和有限浮点溢出，超界抛出 `std::out_of_range`，保留原值及 unset/null 状态。SQL 数组及 optional 元素递归应用同一规则，后续元素失败不会发布部分新数组。整数列拒绝隐式浮点输入（包括模型标量包装及数组元素），调用方须先显式选择整数转换策略；浮点字段保留通常的精度舍入和显式非有限值语义。检查仅覆盖 `set()`，不拦截调用方经可变 `get()` 或显式转换自行执行的赋值。
+- **PostgreSQL 浮点数组写入**：按元素的原始浮点类型生成十进制文本，不先转为 `double`；`long double` 的额外精度与范围可由显式 `numeric` 数组列承载。NaN 与无穷大在编码时拒绝，写 Builder 保留此前已接受的行。
 - **生成列（Computed Columns）**：设置 `db_column_options{.generated_type_ = ruvia::db_generated_type::stored}`，ORM 在 `INSERT` / `UPDATE` 时自动跳过该列并在 `RETURNING` 中回填数据库计算结果。
 - **列选项编译期校验**：`db_column` 以 `requires` 约束拒绝互相矛盾的选项，非法组合不构成合法类型、直接编译失败，Repository 也不会接受这类声明：
   - `.generated_`（自增标识）与 `.generated_type_`（计算列）互斥，二者都不能与 `.read_only_` 同用；`.generated_` 要求非空整数列。
