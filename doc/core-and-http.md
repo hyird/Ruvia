@@ -16,6 +16,8 @@
 | `"ruvia/core/scoped_operation.h"` | `class operation_scope final`、`class scoped_capability_registration final`、`make_scoped_operation(...)` | 将借用型能力（capability）与惰性协程操作 `task<T>` 绑定到同一 Worker 作用域，`close_and_join()` 先回收冷协程帧并等待已启动操作完成后再失效 capability；`bind_worker(worker)` 借用该 Worker 句柄后，作用域内每个操作的启动、完成与冷帧回收都必须在该 Worker 上，否则 `std::terminate()` |
 | `"ruvia/core/async.h"` | `template <typename T> asio::awaitable<T> as_awaitable(task<T> task_value)`、`template <typename Result = void> class asio_completion final`、`template <typename Result = void, typename Initiate> auto async_asio(Initiate&& initiate)` | 将 `ruvia::task<T>` 适配为 `asio::awaitable<T>`，或将基于完成回调的 Asio 异步启动操作适配为 Ruvia 协程可直接 `co_await` 的 awaiter（返回 `asio_completion<Result>`，提供 `error_code()`、`succeeded()`、`failed()`、`result()` / `take_result()`） |
 
+- **根任务替换**：`root_task` 移动赋值先接管源状态，再退役旧状态；旧结果析构时重写源句柄或释放其宿主，不会丢失已接管的任务。
+
 ---
 
 ### 2. 停止令牌、超时、截止期与定时器

@@ -180,8 +180,9 @@ public:
 
     root_task& operator=(root_task&& other) noexcept {
         if (this != &other) {
-            reset();
-            state_ = std::move(other.state_);
+            // The old result may own or replace the source during retirement.
+            root_task incoming(std::move(other));
+            state_.swap(incoming.state_);
         }
         return *this;
     }

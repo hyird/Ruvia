@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <future>
 #include <memory>
 #include <memory_resource>
@@ -30,12 +31,105 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/root_task.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_runtime_context.h"
 #include "ruvia/core/worker_signal.h"
+
+namespace ruvia::test::runtime_worker_tests {
+
+struct root_assignment_result final {
+    explicit root_assignment_result(int value, std::function<void()>* on_retire = nullptr,
+        std::unique_ptr<root_task<root_assignment_result>> child = {}) noexcept
+        : value_(value),
+          on_retire_(on_retire),
+          child_(std::move(child)) {}
+    root_assignment_result(root_assignment_result&& other) noexcept
+        : value_(other.value_),
+          on_retire_(std::exchange(other.on_retire_, nullptr)),
+          child_(std::move(other.child_)) {}
+    root_assignment_result(const root_assignment_result&) = delete;
+    root_assignment_result& operator=(const root_assignment_result&) = delete;
+    root_assignment_result& operator=(root_assignment_result&&) = delete;
+    ~root_assignment_result() {
+        if (on_retire_ != nullptr && *on_retire_) {
+            auto callback = std::exchange(*on_retire_, {});
+            callback();
+        }
+    }
+
+    int value_;
+    std::function<void()>* on_retire_;
+    std::unique_ptr<root_task<root_assignment_result>> child_;
+};
+
+task<root_assignment_result> make_root_assignment_result(root_assignment_result value, bool fail = false) {
+    if (fail) {
+        throw std::runtime_error("expected root task failure");
+    }
+    co_return std::move(value);
+}
+
+TEST(Ruvia, WorkerRootMoveAssignmentCapturesSourceBeforeRetiringOldResult) {
+    std::function<void()> retirement;
+    event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 8});
+    const auto loop = loops.loop(0);
+    auto source = loop.start(make_root_assignment_result(root_assignment_result(42)));
+    auto replacement = loop.start(make_root_assignment_result(root_assignment_result(99)));
+    auto destination = loop.start(make_root_assignment_result(root_assignment_result(7, &retirement)));
+    loops.start();
+    source.wait();
+    replacement.wait();
+    destination.wait();
+    loops.stop();
+    loops.join();
+
+    bool retired = false;
+    retirement = [&] {
+        retired = true;
+        source = std::move(replacement);
+    };
+    destination = std::move(source);
+    EXPECT_TRUE(retired);
+    EXPECT_EQ(destination.get().value_, 42);
+    ASSERT_TRUE(source.valid());
+    EXPECT_EQ(source.get().value_, 99);
+}
+
+TEST(Ruvia, WorkerRootMoveAssignmentCanTakeSourceOwnedByOldResult) {
+    for (const bool fail : {false, true}) {
+        SCOPED_TRACE(fail);
+        std::function<void()> retirement;
+        event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 8});
+        const auto loop = loops.loop(0);
+        auto child = std::make_unique<root_task<root_assignment_result>>(
+            loop.start(make_root_assignment_result(root_assignment_result(42), fail)));
+        auto* const source = child.get();
+        auto destination = loop.start(make_root_assignment_result(
+            root_assignment_result(7, &retirement, std::move(child))));
+        loops.start();
+        source->wait();
+        destination.wait();
+        loops.stop();
+        loops.join();
+
+        bool retired = false;
+        retirement = [&] { retired = true; };
+        destination = std::move(*source);
+        EXPECT_TRUE(retired);
+        if (fail) {
+            EXPECT_THROW(static_cast<void>(destination.get()), std::runtime_error);
+        } else {
+            EXPECT_EQ(destination.get().value_, 42);
+        }
+        EXPECT_FALSE(destination.valid());
+    }
+}
+
+}  // namespace ruvia::test::runtime_worker_tests
 
 namespace {
 
