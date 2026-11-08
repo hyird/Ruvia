@@ -334,8 +334,10 @@ public:
     // request_stop() may invoke the callback on the requesting thread; callbacks
     // that affect worker-owned state must post only an id/generation to that
     // worker and let the owner validate it there.
+    // Callback retirement or moves may destroy this token; retain its entry state.
     [[nodiscard]] stop_registration register_callback(move_only_function<void()> callback_value) const {
-        return stop_registration(state_, std::move(callback_value));
+        const auto state = state_;
+        return stop_registration(state, std::move(callback_value));
     }
 
     // Reuses caller-owned registration storage, replacing any earlier
@@ -344,8 +346,9 @@ public:
     // await_suspend; it preserves the embedded, zero-allocation node
     // representation.
     void register_callback(stop_registration& registration, move_only_function<void()> callback_value) const {
+        const auto state = state_;
         registration.reset();
-        registration.register_callback(state_, std::move(callback_value));
+        registration.register_callback(state, std::move(callback_value));
     }
 
 private:

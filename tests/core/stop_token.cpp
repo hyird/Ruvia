@@ -205,6 +205,62 @@ TEST(Ruvia, stop_token_registration_reuse_replaces_previous_callback) {
     EXPECT_EQ(second_calls, 1);
 }
 
+TEST(Ruvia, stop_token_replacement_preserves_entry_state_when_retirement_clears_token) {
+    struct clear_token final {
+        clear_token(ruvia::stop_token& token, ruvia::stop_source* source) noexcept
+            : token_(token),
+              source_(source) {}
+        ~clear_token() {
+            token_ = {};
+            if (source_ != nullptr) {
+                source_->request_stop();
+            }
+        }
+        ruvia::stop_token& token_;
+        ruvia::stop_source* source_;
+    };
+    for (const bool stop_during_retirement : {false, true}) {
+        int calls = 0;
+        ruvia::stop_source source;
+        auto token = source.token();
+        ruvia::stop_registration registration;
+        auto payload = std::make_unique<clear_token>(token, stop_during_retirement ? &source : nullptr);
+        token.register_callback(registration, [owned = std::move(payload)] {});
+
+        token.register_callback(registration, [&calls] { ++calls; });
+        EXPECT_TRUE(!token.has_state());
+        EXPECT_EQ(registration.registered(), !stop_during_retirement);
+        EXPECT_EQ(calls, static_cast<int>(stop_during_retirement));
+        source.request_stop();
+        source.request_stop();
+        EXPECT_EQ(calls, 1);
+    }
+}
+
+TEST(Ruvia, stop_token_replacement_survives_token_destruction) {
+    struct destroy_token final {
+        explicit destroy_token(std::unique_ptr<ruvia::stop_token>& owner) noexcept
+            : owner_(owner) {}
+        ~destroy_token() {
+            owner_.reset();
+        }
+        std::unique_ptr<ruvia::stop_token>& owner_;
+    };
+    int calls = 0;
+    ruvia::stop_source source;
+    auto token = std::make_unique<ruvia::stop_token>(source.token());
+    ruvia::stop_registration registration;
+    auto payload = std::make_unique<destroy_token>(token);
+    token->register_callback(registration, [owned = std::move(payload)] {});
+
+    token->register_callback(registration, [&calls] { ++calls; });
+    EXPECT_TRUE(!token);
+    EXPECT_TRUE(registration.registered());
+    source.request_stop();
+    source.request_stop();
+    EXPECT_EQ(calls, 1);
+}
+
 TEST(Ruvia, stop_token_registration_can_reset_during_synchronous_construction_callback) {
     ruvia::stop_source first;
     ruvia::stop_source second;
