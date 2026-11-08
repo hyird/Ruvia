@@ -190,8 +190,8 @@ public:
     // not that its frames reached the socket. Frame headers are additional overhead.
     // Validate the complete input's length/terminal intent before consuming anything.
     // END_STREAM is emitted only after consuming this entire input. An empty
-    // terminal input is still a DATA frame, sent only while both the connection
-    // and the stream send windows are positive (RFC 9113 section 6.9); otherwise
+    // terminal input is still a DATA frame. The nghttp2 backend defers it until
+    // both connection and stream send windows are positive; otherwise
     // it returns {0, backpressured} without changing anything, and the caller
     // retries once send_window_state() reports available window.
     [[nodiscard]] http2_data_submit_result submit_data(std::uint32_t stream_id,

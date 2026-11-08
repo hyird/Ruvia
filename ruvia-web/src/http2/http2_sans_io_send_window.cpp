@@ -74,8 +74,8 @@ task<http2_stream_data_write_status> write_http2_stream_data(
         if (signal == nullptr) {
             co_return http2_stream_data_write_status::peer_closed;
         }
-        // Every DATA frame, an empty END_STREAM included, waits for positive
-        // connection and stream windows (RFC 9113 §6.9).
+        // Match the protocol engine's nghttp2 backpressure contract, including
+        // empty END_STREAM DATA.
         if (!bytes.empty() || http2_ends_stream(end_stream)) {
             const auto window = connection.send_window_state(stream_id);
             if (!window || connection.stream_aborted(stream_id)) {
