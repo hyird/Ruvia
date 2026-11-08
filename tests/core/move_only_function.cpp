@@ -77,6 +77,49 @@ struct destroy_owner_delete final {
     }
 };
 
+struct callback_lifetime final {
+    bool* alive_;
+
+    explicit callback_lifetime(bool& alive) noexcept
+        : alive_(&alive) {
+        alive = true;
+    }
+
+    callback_lifetime(callback_lifetime&& other) noexcept
+        : alive_(std::exchange(other.alive_, nullptr)) {}
+
+    ~callback_lifetime() {
+        if (alive_ != nullptr) {
+            *alive_ = false;
+        }
+    }
+};
+
+struct clear_reentry_target final {
+    callback_lifetime lifetime_;
+    reentry_state* state_;
+
+    explicit clear_reentry_target(bool& alive, reentry_state* state = nullptr) noexcept
+        : lifetime_(alive),
+          state_(state) {}
+
+    clear_reentry_target(clear_reentry_target&& other) noexcept
+        : lifetime_(std::move(other.lifetime_)),
+          state_(std::exchange(other.state_, nullptr)) {}
+
+    ~clear_reentry_target() {
+        if (auto* const state = std::exchange(state_, nullptr)) {
+            ++state->reentries_;
+            EXPECT_FALSE(static_cast<bool>(*state->destination_));
+            *state->destination_ = std::move(state->replacement_);
+        }
+    }
+
+    int operator()() const noexcept {
+        return lifetime_.alive_ != nullptr && *lifetime_.alive_;
+    }
+};
+
 }  // namespace ruvia::test::move_only_function_tests
 
 TEST(Ruvia, move_assignment_extracts_source_owned_by_old_target) {
@@ -167,5 +210,38 @@ TEST(Ruvia, move_assignment_retirement_can_destroy_destination_owner) {
         EXPECT_EQ(owner, nullptr);
         EXPECT_FALSE(static_cast<bool>(source));
         EXPECT_EQ(destroyed, 2);
+    }
+}
+
+TEST(Ruvia, null_assignment_preserves_reentrant_replacement_lifetime) {
+    using namespace ruvia::test::move_only_function_tests;
+
+    for (const bool heap_target : {false, true}) {
+        SCOPED_TRACE(heap_target);
+        bool original_alive = false;
+        bool replacement_alive = false;
+        callback destination;
+        reentry_state state;
+        state.destination_ = &destination;
+        state.replacement_ = callback(clear_reentry_target(replacement_alive));
+        if (heap_target) {
+            destination = callback([target = clear_reentry_target(original_alive, &state), padding = std::array<char, 64>{}] {
+                (void)padding;
+                return target();
+            });
+        } else {
+            destination = callback(clear_reentry_target(original_alive, &state));
+        }
+
+        destination = nullptr;
+
+        EXPECT_FALSE(original_alive);
+        EXPECT_TRUE(replacement_alive);
+        EXPECT_EQ(state.reentries_, 1);
+        EXPECT_FALSE(static_cast<bool>(state.replacement_));
+        ASSERT_TRUE(static_cast<bool>(destination));
+        EXPECT_EQ(destination(), 1);
+        destination = nullptr;
+        EXPECT_FALSE(replacement_alive);
     }
 }

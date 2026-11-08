@@ -109,8 +109,7 @@ public:
     }
 
     move_only_function& operator=(std::nullptr_t) noexcept {
-        reset();
-        return *this;
+        return *this = move_only_function{};
     }
 
     [[nodiscard]] explicit operator bool() const noexcept {

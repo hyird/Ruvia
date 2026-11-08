@@ -95,7 +95,7 @@ pool.join();
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消） |
 | `"ruvia/core/memory/memory_pool.h"` | `class worker_memory final`、`class request_memory final`、`struct memory_pool_config` | Worker 级可回收内存池与单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`、`trim(owner)`） |
 | `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_object` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
-| `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；移动赋值先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；析构重入赋值最终生效 |
+| `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；移动赋值与赋空共用退役路径：先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；旧目标析构时的重入赋值最终生效 |
 | `"ruvia/core/local_ring_queue.h"` | `class local_ring_queue<T>` | 预分配容量的单线程零分配环形队列 |
 | `"ruvia/core/fnv1a.h"` | `fnv1a_offset_basis`、`fnv1a_prime`、`fnv1a_accumulate`、`fnv1a_accumulate_integer` | 零分配、可编译期求值的 64 位 FNV-1a 非密码学散列；整数按小端字节混入，跨平台结果一致 |
 | `"ruvia/core/bytes.h"` / `"ruvia/core/failure_report.h"` / `"ruvia/core/socket.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address`、`close_socket` | 字节/字符零拷贝视图转换（拒绝绑定临时拥有型字符串或连续字节容器，调用方须保持底层存储存活到消费完成）、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`）与取消未完成 I/O 后关闭 TCP socket |
