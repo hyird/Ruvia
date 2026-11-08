@@ -540,6 +540,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
   - `T ruvia::from_json<T>(std::string_view json, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，模型字段校验失败抛携带 issues 的 `ruvia::http_error`）
   - `std::pmr::string ruvia::to_json(const T& value, model_options options = {})`（无短转义形式的控制字符输出为小写 `\u00xx`）
   - `T ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，字段校验失败抛携带 issues 的 `ruvia::http_error`）
+- **数值与布尔 JSON 输出**：`to_json()` 不按标量类型的长度上界预分配；短输出复用返回字符串的内联存储，超出容量时才使用指定 PMR 分配。
 - **零拷贝动态 JSON 视图（`"ruvia/web/model.h"`）**：
   - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）
   - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。`get<T>()` / `get<T>("key")` 的结果可能借用 token 字节，因此只能在左值 token 上调用，右值 token 上调用编译失败。

@@ -146,6 +146,27 @@ TEST(Ruvia, model_json_codec_supports_public_scalar_and_array_roots) {
     EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::string>("null"); }));
 }
 
+TEST(Ruvia, model_json_scalar_roots_keep_short_output_in_inline_storage) {
+    ruvia::test::counting_memory_resource resource;
+    {
+        const auto number = ruvia::to_json(ruvia::float_value(1.5f), {.resource_ = &resource});
+        const auto wide_number = ruvia::to_json(ruvia::double_value(2.25), {.resource_ = &resource});
+        const auto nonfinite = ruvia::to_json(ruvia::double_value(std::numeric_limits<double>::infinity()), {.resource_ = &resource});
+        const auto integer = ruvia::to_json(ruvia::int64(7), {.resource_ = &resource});
+        EXPECT_EQ(number, "1.5");
+        EXPECT_EQ(wide_number, "2.25");
+        EXPECT_EQ(nonfinite, "null");
+        EXPECT_EQ(integer, "7");
+        EXPECT_EQ(resource.allocation_count(), std::size_t{0});
+    }
+    {
+        const auto encoded = ruvia::to_json(ruvia::double_value(std::numeric_limits<double>::max()), {.resource_ = &resource});
+        EXPECT_EQ(encoded.get_allocator().resource(), &resource);
+        EXPECT_EQ(ruvia::from_json<ruvia::double_value>(encoded).value_, std::numeric_limits<double>::max());
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+}
+
 TEST(Ruvia, model_json_writer_replaces_ill_formed_utf8_with_replacement_characters) {
     // Each literal piece ends at a hex escape so the next letter is not read as a
     // further hex digit.

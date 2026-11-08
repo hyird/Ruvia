@@ -1646,9 +1646,11 @@ template <typename t_type>
     requires detail::is_model_json_value<t_type>
 [[nodiscard]] inline std::pmr::string to_json(const t_type& value, model_options options = {}) {
     std::pmr::string output(pmr_resource_or_default(options.resource_));
-    // MSVC reserve(n) can leave no room for the trailing NUL, so resize(n)
-    // allocates again. One extra byte stays in the same allocation.
-    output.reserve(detail::json_size_hint_value(value) + 1);
+    if constexpr (!detail::is_ruvia_scalar<t_type>) {
+        // MSVC reserve(n) can leave no room for the trailing NUL, so resize(n)
+        // allocates again. One extra byte stays in the same allocation.
+        output.reserve(detail::json_size_hint_value(value) + 1);
+    }
     detail::append_json_value(output, value);
     return output;
 }
