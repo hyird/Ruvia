@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,11 +16,14 @@
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_trailers.h"
 
+#include "failing_memory_resource.h"
 #include "http3_relay.h"
+#include "stl_allocation_fixture.h"
 
 namespace {
 
@@ -118,6 +122,94 @@ TEST(Ruvia, http3_request_head_parses_get_received_over_nghttp3) {
     EXPECT_TRUE(request.cookie("session") == std::string_view("abc"));
     EXPECT_TRUE(request.cookie("theme") == std::string_view("dark"));
     EXPECT_TRUE(request.body().empty());
+}
+
+TEST(Ruvia, http3_request_head_keeps_cookie_crumbs_after_moving) {
+    const std::string long_cookie = "session=" + std::string(128, 'x');
+    const std::string long_joined = long_cookie + "; b=2";
+    struct cookie_case final {
+        std::array<std::string_view, 3> crumbs_;
+        std::string_view expected_;
+    };
+    const std::array cases{
+        cookie_case{{"", "", ""}, ""},
+        cookie_case{{"", long_cookie, ""}, long_cookie},
+        cookie_case{{long_cookie, "", "b=2"}, long_joined},
+        cookie_case{{"a=1", "", ""}, "a=1"},
+        cookie_case{{"", "", "a=1"}, "a=1"},
+        cookie_case{{"", "a=1", "b=2"}, "a=1; b=2"},
+        cookie_case{{"a=1", "", "a=2"}, "a=1; a=2"},
+        cookie_case{{"a=1", "b=2", ""}, "a=1; b=2"},
+    };
+    for (const auto& test_case : cases) {
+        SCOPED_TRACE(test_case.expected_);
+        failing_memory_resource field_resource;
+        failing_memory_resource projection_resource;
+        {
+            std::optional<ruvia::http3_request_head> head;
+            {
+                auto event = make_headers_event(&field_resource,
+                    {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}}, true);
+                for (const auto crumb : test_case.crumbs_) {
+                    event.fields_.emplace_back("cookie", crumb, &field_resource);
+                }
+                auto source = ruvia::http3_request_head::parse(std::move(event), &projection_resource);
+                ASSERT_TRUE(source.has_value());
+                head.emplace(std::move(*source));
+            }
+            const auto request = head->build_request(&projection_resource);
+            if (test_case.expected_.empty()) {
+                EXPECT_TRUE(!request.header("cookie").has_value());
+            } else {
+                EXPECT_TRUE(request.header("cookie") == test_case.expected_);
+            }
+        }
+        EXPECT_EQ(field_resource.live_allocations(), std::size_t{0});
+        EXPECT_EQ(projection_resource.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, http3_request_head_bounds_single_and_joined_cookie_values) {
+    for (const bool split : {false, true}) {
+        for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
+            std::pmr::unsynchronized_pool_resource resource;
+            const std::string first = "a=" + std::string(ruvia::max_http_header_bytes - 2 - (split ? 5 : 0) + excess, 'x');
+            auto event = make_headers_event(&resource,
+                {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"},
+                    {"cookie", first}},
+                true);
+            if (split) {
+                event.fields_.emplace_back("cookie", "b=2", &resource);
+            }
+            const auto head = ruvia::http3_request_head::parse(std::move(event), &resource);
+            if (excess != 0) {
+                EXPECT_TRUE(!head.has_value());
+            } else {
+                ASSERT_TRUE(head.has_value());
+                const auto request = head->build_request(&resource);
+                EXPECT_TRUE(request.header("cookie") == first + (split ? "; b=2" : ""));
+            }
+        }
+    }
+}
+
+TEST(Ruvia, http3_request_head_cookie_merge_releases_resources_after_allocation_failure) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "requires STL without noexcept debug metadata allocation";
+    }
+    failing_memory_resource field_resource;
+    failing_memory_resource projection_resource;
+    {
+        const std::string first = "a=" + std::string(128, 'x');
+        auto event = make_headers_event(&field_resource,
+            {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"},
+                {"cookie", first}, {"cookie", "b=2"}},
+            true);
+        projection_resource.fail_after_stl_operation(0);
+        EXPECT_THROW((void)ruvia::http3_request_head::parse(std::move(event), &projection_resource), std::bad_alloc);
+    }
+    EXPECT_EQ(field_resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(projection_resource.live_allocations(), std::size_t{0});
 }
 
 // RFC 9114 §4.4: CONNECT carries only :method and :authority, and its target
@@ -292,26 +384,27 @@ TEST(Ruvia, http3_request_head_preserves_transport_early_data_provenance) {
 
 TEST(Ruvia, http3_request_head_enforces_materialized_field_count_limit) {
     std::pmr::unsynchronized_pool_resource resource;
-    // :authority synthesizes Host, leaving room for max_http_header_fields - 1
-    // regular fields; one more is rejected by parse() rather than failing in
-    // build_request().
-    for (const std::size_t regular_count :
-        {ruvia::max_http_header_fields - 1, ruvia::max_http_header_fields}) {
-        auto event = make_headers_event(&resource,
-            {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}},
-            true);
-        for (std::size_t index = 0; index < regular_count; ++index) {
-            event.fields_.emplace_back("x-field", "v", &resource);
-        }
-        auto parsed = ruvia::http3_request_head::parse(std::move(event), &resource);
-        if (regular_count < ruvia::max_http_header_fields) {
-            EXPECT_TRUE(parsed.has_value());
-            if (parsed) {
+    // Host synthesis and a nonempty Cookie each consume one materialized field.
+    for (const bool with_cookie : {false, true}) {
+        const auto regular_limit = ruvia::max_http_header_fields - 1 - static_cast<std::size_t>(with_cookie);
+        for (const std::size_t regular_count : {regular_limit, regular_limit + 1}) {
+            auto event = make_headers_event(&resource,
+                {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}},
+                true);
+            for (std::size_t index = 0; index < regular_count; ++index) {
+                event.fields_.emplace_back("x-field", "v", &resource);
+            }
+            if (with_cookie) {
+                event.fields_.emplace_back("cookie", "a=1", &resource);
+            }
+            auto parsed = ruvia::http3_request_head::parse(std::move(event), &resource);
+            if (regular_count == regular_limit) {
+                ASSERT_TRUE(parsed.has_value());
                 const auto request = parsed->build_request(&resource);
                 EXPECT_EQ(request.headers().size(), ruvia::max_http_header_fields);
+            } else {
+                EXPECT_TRUE(!parsed.has_value());
             }
-        } else {
-            EXPECT_TRUE(!parsed.has_value());
         }
     }
 }

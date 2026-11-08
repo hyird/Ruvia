@@ -172,24 +172,34 @@ bool http3_request_head::validate() {
             case detail::request_header_kind::host:
                 host_ = index;
                 break;
-            case detail::request_header_kind::cookie:
+            case detail::request_header_kind::cookie: {
                 // RFC 9114 §4.2.1 joins split crumbs with "; ". An empty crumb
                 // is no cookie-pair (RFC 6265 §4.2.1) and contributes nothing.
-                if (!value.empty()) {
-                    constexpr std::string_view cookie_separator = "; ";
-                    const auto separator_bytes = cookie_.empty() ? std::size_t{0} : cookie_separator.size();
-                    if (value.size() > max_http_header_bytes ||
-                        cookie_.size() > max_http_header_bytes - separator_bytes ||
-                        cookie_.size() + separator_bytes > max_http_header_bytes - value.size()) {
-                        return false;
-                    }
-                    detail::reserve_geometric(cookie_, cookie_.size() + separator_bytes + value.size());
-                    if (separator_bytes != 0) {
-                        cookie_.append(cookie_separator);
-                    }
-                    cookie_.append(value);
+                if (value.empty()) {
+                    continue;
                 }
+                if (value.size() > max_http_header_bytes) {
+                    return false;
+                }
+                // A single crumb already has stable ownership in fields_.
+                if (first_cookie_ == absent) {
+                    first_cookie_ = index;
+                    continue;
+                }
+                constexpr std::string_view cookie_separator = "; ";
+                const auto prefix_bytes = cookie_.empty() ? field_value(first_cookie_).size() : cookie_.size();
+                if (prefix_bytes > max_http_header_bytes - cookie_separator.size() ||
+                    value.size() > max_http_header_bytes - cookie_separator.size() - prefix_bytes) {
+                    return false;
+                }
+                detail::reserve_geometric(cookie_, prefix_bytes + cookie_separator.size() + value.size());
+                if (cookie_.empty()) {
+                    cookie_.append(field_value(first_cookie_));
+                }
+                cookie_.append(cookie_separator);
+                cookie_.append(value);
                 continue;
+            }
             case detail::request_header_kind::expect:
                 // An extensible list: unsupported members stay for the Web
                 // product's 417 policy.
@@ -266,7 +276,7 @@ bool http3_request_head::validate() {
     }
     const bool synthesize_host = host_ == absent && authority_ != absent &&
                                  (is_http_request_scheme(scheme_value) || detail::is_valid_host_header(authority()));
-    const bool has_cookie = !cookie_.empty();
+    const bool has_cookie = first_cookie_ != absent;
     if (regular_.size() + static_cast<std::size_t>(synthesize_host) + static_cast<std::size_t>(has_cookie) >
         max_http_header_fields) {
         return false;
@@ -306,7 +316,8 @@ http_request http3_request_head::build_request(std::pmr::memory_resource* resour
     // never manufacture an invalid regular field from that distinct grammar.
     const bool synthesize_host = host_ == absent && authority_ != absent &&
                                  (is_http_request_scheme(scheme()) || detail::is_valid_host_header(authority()));
-    const bool has_cookie = !cookie_.empty();
+    const auto cookie_value = cookie_.empty() ? field_value(first_cookie_) : std::string_view(cookie_);
+    const bool has_cookie = !cookie_value.empty();
     detail::http_request_access::reserve_headers(request,
         regular_.size() + static_cast<std::size_t>(synthesize_host) + static_cast<std::size_t>(has_cookie));
     for (const auto& field : regular_) {
@@ -322,7 +333,7 @@ http_request http3_request_head::build_request(std::pmr::memory_resource* resour
     }
     if (has_cookie &&
         !detail::http_request_access::add_header(
-            request, http_header_view{"cookie", cookie_}, detail::request_header_kind::cookie)) {
+            request, http_header_view{"cookie", cookie_value}, detail::request_header_kind::cookie)) {
         throw std::logic_error("validated HTTP/3 request cannot be materialized");
     }
     return request;

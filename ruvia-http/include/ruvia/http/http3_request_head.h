@@ -99,6 +99,7 @@ private:
     std::uint32_t protocol_{absent};
     std::uint32_t host_{absent};
     std::optional<std::uint64_t> declared_content_length_;
+    std::uint32_t first_cookie_{absent};
     http_request_expectations expectations_{};
     bool stream_ended_{false};
     bool early_data_{false};

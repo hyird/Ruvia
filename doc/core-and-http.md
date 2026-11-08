@@ -268,6 +268,7 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **出站地址稳定**：名称拥有缓冲首次使用时按整节字节上界预留，后续增长不重分配；字段视图只借用至 `nghttp3` 完成提交。
 - **请求投影 `http3_request_head`**：普通字段索引首次使用时按剩余字段上界一次预留；仅含伪首部与 Cookie 的请求不分配该索引。
 - **投影所有权**：`http3_request_head` 仅可移动构造、不可复制或赋值；`std::optional` 持有点使用 `emplace` 重建。
+- **Cookie 惰性合并**：首个非空碎片直接借用请求投影已拥有的字段；第二个非空碎片出现时才分配合并缓冲，空碎片不参与。
 
 `http3_quic_connection` 用 `ngtcp2` 承担 QUIC v1 包处理、丢包恢复、流量控制、流 ID 与定时到期，并把流数据桥接到 `http3_connection`。ngtcp2 的解密回调缓冲在回调返回后失效，因此该包装器强制启用 `own_data_events_`，在返回 `receive_datagram()` 前把 DATA 复制到事件的 PMR 存储；直接使用 `http3_connection` 时可保留默认借用模式。调用方提供 ngtcp2 加密回调、TLS native handle 和 UDP I/O：`receive_datagram()` 输入一个 UDP 数据报，`next_datagram()` 产出一个拥有字节与目标路径的数据报，`expiry()` / `handle_expiry()` 驱动最近到期事件。TLS 使用 `ngtcp2_crypto_ossl` 时适配层属于 `ruvia::web` 的 OpenSSL 依赖；`ruvia::http` 本身只链接 ngtcp2 core 与 nghttp3。
 
