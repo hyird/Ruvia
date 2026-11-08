@@ -53,9 +53,9 @@ void http_response_head_buffer::copy_committed_state(const http_response_head_bu
 }
 
 void http_response_head_buffer::reset() noexcept {
-    // Same retain-small-else-release policy as every other pooled scratch buffer.
-    http_clear_pmr_string_retaining_small(heap_, response_head_retained_heap_bytes);
+    // Publish the empty inline state before retiring storage can reenter this buffer.
     state_.emplace<stack_state_type>();
+    http_clear_pmr_string_retaining_small(heap_, response_head_retained_heap_bytes);
 }
 
 void http_response_head_buffer::spill_to_heap(std::size_t min_capacity) {

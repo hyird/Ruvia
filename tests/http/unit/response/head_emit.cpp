@@ -24,6 +24,7 @@
 
 #include "failing_memory_resource.h"
 #include "http1_request_message_fixture.h"
+#include "request_header_memory_fixture.h"
 
 namespace {
 
@@ -156,6 +157,28 @@ TEST(Ruvia, http1_response_head_reserve_preserves_inline_capacity_and_failed_gro
         buffer.append("reusable");
         EXPECT_EQ(buffer.view(), std::string_view("reusable"));
     }
+}
+
+TEST(Ruvia, http1_response_head_reset_preserves_reentrant_refill) {
+    ruvia::test::header_memory resource;
+    {
+        ruvia::http_response_head_buffer buffer(&resource);
+        buffer.append(std::string(ruvia::response_head_retained_heap_bytes + 1, 'h'));
+        resource.deallocation_context_ = &buffer;
+        resource.before_deallocate_ = [](void* context) noexcept {
+            static_cast<ruvia::http_response_head_buffer*>(context)->append("next");
+        };
+
+        buffer.reset();
+        EXPECT_EQ(buffer.view(), "next");
+        EXPECT_TRUE(buffer.can_append_on_stack(ruvia::response_head_stack_bytes - 4));
+        buffer.append("-head");
+        EXPECT_EQ(buffer.view(), "next-head");
+        buffer.reset();
+        buffer.append("reused");
+        EXPECT_EQ(buffer.view(), "reused");
+    }
+    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
 }
 
 TEST(Ruvia, http1_response_head_assignment_preserves_both_buffers_on_allocation_failure) {
