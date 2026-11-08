@@ -2,11 +2,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "failing_memory_resource.h"
 
 namespace {
 
@@ -49,6 +53,26 @@ TEST(Ruvia, percent_byte_decoding_rejects_out_of_range_and_truncated_triplets) {
     EXPECT_TRUE(!ruvia::http_try_decode_percent_byte("x20", 0).has_value());
 }
 
+TEST(Ruvia, percent_byte_append_allocation_failure_preserves_output) {
+    for (std::size_t spare = 0; spare != 3; ++spare) {
+        SCOPED_TRACE(spare);
+        failing_memory_resource resource;
+        {
+            std::pmr::string output(&resource);
+            output.reserve(128);
+            output.assign(output.capacity() - spare, 'x');
+            const std::string original(output);
+            resource.fail_after(0);
+            EXPECT_THROW(ruvia::http_append_percent_byte(output, 0xaf), std::bad_alloc);
+            EXPECT_EQ(output, std::string_view(original));
+            resource.allow_allocations();
+            ruvia::http_append_percent_byte(output, 0xaf);
+            EXPECT_EQ(output, std::string_view(original + "%AF"));
+        }
+        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
+}
+
 TEST(Ruvia, url_decode_borrows_unchanged_input_and_decodes_into_storage) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string storage("keep", &resource);
@@ -88,6 +112,66 @@ TEST(Ruvia, uri_reference_encoding_borrows_or_writes_storage) {
     storage.assign("/c d");
     EXPECT_EQ(ruvia::percent_encode_uri_reference(storage, storage), std::string_view("/c%20d"));
     EXPECT_EQ(std::string_view(storage), std::string_view("/c%20d"));
+}
+
+TEST(Ruvia, uri_reference_encoding_allocation_failure_preserves_output_and_allows_retry) {
+    const std::string input = "prefix/" + std::string(1024, ' ') + "%2F?x=%yy#first#second";
+    std::string expected = "prefix/";
+    for (std::size_t index = 0; index != 1024; ++index) {
+        expected += "%20";
+    }
+    expected += "%2F?x=%25yy#first%23second";
+    for (int state = 0; state != 3; ++state) {
+        SCOPED_TRACE(state);
+        bool saw_failure = false;
+        bool succeeded = false;
+        for (std::size_t budget = 0; budget != 16 && !succeeded; ++budget) {
+            SCOPED_TRACE(budget);
+            failing_memory_resource resource;
+            {
+                std::pmr::string output(&resource);
+                if (state == 1) {
+                    output.assign(128, 'k');
+                } else if (state == 2) {
+                    output.assign(input);
+                }
+                const std::string original(output);
+                const std::string_view reference = state == 2 ? std::string_view(output) : std::string_view(input);
+                resource.fail_after_stl_operation(budget);
+                try {
+                    EXPECT_EQ(ruvia::percent_encode_uri_reference(reference, output), std::string_view(expected));
+                    succeeded = true;
+                } catch (const std::bad_alloc&) {
+                    saw_failure = true;
+                    EXPECT_EQ(output, std::string_view(original));
+                }
+                resource.allow_allocations();
+                if (!succeeded) {
+                    // Reborrow after failure so even a broken implementation cannot
+                    // turn the retry check into a dangling input access.
+                    const std::string_view retry = state == 2 ? std::string_view(output) : std::string_view(input);
+                    EXPECT_EQ(ruvia::percent_encode_uri_reference(retry, output), std::string_view(expected));
+                }
+                EXPECT_EQ(output.get_allocator().resource(), &resource);
+            }
+            EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+        }
+        EXPECT_TRUE(succeeded);
+        EXPECT_EQ(saw_failure, ruvia::test::stl_allocation_failure_injection_enabled());
+    }
+}
+
+TEST(Ruvia, uri_reference_encoding_reuses_sufficient_destination_capacity) {
+    failing_memory_resource resource;
+    {
+        std::pmr::string output("keep", &resource);
+        output.reserve(128);
+        resource.fail_after_stl_operation(0);
+        EXPECT_EQ(ruvia::percent_encode_uri_reference("/a b%2F?x=%yy#one#two", output),
+            std::string_view("/a%20b%2F?x=%25yy#one%23two"));
+        resource.allow_allocations();
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, url_decode_invalid) {

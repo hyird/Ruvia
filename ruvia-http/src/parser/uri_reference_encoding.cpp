@@ -96,45 +96,58 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::stri
     const auto reference = text.view();
     const auto layout = find_uri_reference_layout(reference);
     bool fragment_seen = false;
-    std::pmr::string aliased_output(storage.get_allocator());
+    const bool initially_empty = storage.empty();
+    std::pmr::string staged(storage.get_allocator());
     std::pmr::string* encoded = nullptr;
-    for (std::size_t i = 0; i < reference.size(); ++i) {
-        const auto byte = static_cast<unsigned char>(reference[i]);
-        // A lone or malformed '%' is not an escape and is encoded like any
-        // other octet the reference cannot carry literally.
-        const bool escape = byte == '%' && http_try_decode_percent_byte(reference, i).has_value();
-        if (escape || (byte != '%' && uri_reference_keeps_literal(byte, i, layout, fragment_seen))) {
-            const std::size_t width = escape ? 3 : 1;
-            if (encoded != nullptr) {
-                if (width > encoded->max_size() - encoded->size()) {
+    try {
+        for (std::size_t i = 0; i < reference.size(); ++i) {
+            const auto byte = static_cast<unsigned char>(reference[i]);
+            // A lone or malformed '%' is not an escape and is encoded like any
+            // other octet the reference cannot carry literally.
+            const bool escape = byte == '%' && http_try_decode_percent_byte(reference, i).has_value();
+            if (escape || (byte != '%' && uri_reference_keeps_literal(byte, i, layout, fragment_seen))) {
+                const std::size_t width = escape ? 3 : 1;
+                if (encoded != nullptr) {
+                    if (width > encoded->max_size() - encoded->size()) {
+                        throw std::length_error("URI reference exceeds string capacity");
+                    }
+                    detail::reserve_geometric(*encoded, encoded->size() + width);
+                    encoded->append(reference.substr(i, width));
+                }
+                i += width - 1;
+                continue;
+            }
+            if (encoded == nullptr) {
+                // Nonempty storage can be overwritten only when every possible
+                // triplet fits without another allocation. Empty storage rolls back
+                // by clearing; aliased input always needs independent storage.
+                const bool can_reuse = (initially_empty || reference.size() <= storage.capacity() / 3) &&
+                                       !detail::http_text_aliases_string(reference, storage);
+                encoded = can_reuse ? &storage : &staged;
+                if (reference.size() > encoded->max_size() - 2) {
                     throw std::length_error("URI reference exceeds string capacity");
                 }
-                detail::reserve_geometric(*encoded, encoded->size() + width);
-                encoded->append(reference.substr(i, width));
+                detail::reserve_geometric(*encoded, reference.size() + 2);
+                encoded->clear();
+                encoded->append(reference.substr(0, i));
             }
-            i += width - 1;
-            continue;
-        }
-        if (encoded == nullptr) {
-            encoded = detail::http_text_aliases_string(reference, storage) ? &aliased_output : &storage;
-            if (reference.size() > encoded->max_size() - 2) {
+            if (encoded->size() > encoded->max_size() - 3) {
                 throw std::length_error("URI reference exceeds string capacity");
             }
-            detail::reserve_geometric(*encoded, reference.size() + 2);
-            encoded->clear();
-            encoded->append(reference.substr(0, i));
+            detail::reserve_geometric(*encoded, encoded->size() + 3);
+            http_append_percent_byte(*encoded, byte);
         }
-        if (encoded->size() > encoded->max_size() - 3) {
-            throw std::length_error("URI reference exceeds string capacity");
+    } catch (...) {
+        if (initially_empty && encoded == &storage) {
+            storage.clear();
         }
-        detail::reserve_geometric(*encoded, encoded->size() + 3);
-        http_append_percent_byte(*encoded, byte);
+        throw;
     }
     if (encoded == nullptr) {
         return reference;
     }
-    if (encoded == &aliased_output) {
-        storage = std::move(aliased_output);
+    if (encoded == &staged) {
+        storage = std::move(staged);
     }
     return storage;
 }

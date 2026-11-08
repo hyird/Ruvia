@@ -126,6 +126,8 @@ pool.join();
 
 `decode_url_component()` 与 `percent_encode_uri_reference()` 的文本输入使用 `borrowed_text`：字符串字面量、`std::string_view` 和命名的 `std::string` / `std::pmr::string` 可直接传入，临时拥有型字符串（含 `const` 右值）在编译期拒绝。返回值可能借用原始输入，也可能借用输出 `storage`，两者的 owner 均须覆盖结果消费；不要根据某次内容是否需要转换来推断寿命。需要传入生成的字符串时先保存为命名 owner，需要独立结果时在 owner 仍有效期间复制视图；显式构造 `string_view` 不会延长 owner 寿命。支持零拷贝和输入／输出别名。
 
+- **URL 编码失败回滚**：`http_append_percent_byte()` 与 `percent_encode_uri_reference()` 发生分配或长度错误时保留原输出内容，允许恢复资源后重试。
+
 `http_status_code::from_value()`、`try_from_value()` 与 `is_valid_value()` 接受原始整数类型并在窄化前检查 `100..599`；超宽或负数不能通过截断变成有效状态码。浮点、枚举及其他依赖隐式转换的调用须先由调用方完成明确的整数转换和相应校验；不要预先窄化到 `uint16_t`，否则会丢失原始边界信息。
 
 端口输入统一使用 `port_number`：包括 `http_origin_options::port_`、`http_connect_udp_target_view::port_`、`http_authority_view::effective_port()` / `http_authorities_equal()` 的默认端口，以及 Web 的监听、数据库和 Redis 配置；可选端口仍保留 `std::optional`。合法整数可直接填入，窄化前按原始宽度检查 `0..65535`，负数或超范围值抛出 `std::invalid_argument`；需要无异常探测时用 `port_number::try_from_value()`。浮点与枚举不隐式接受，也不提供到原始整数的隐式转换；不要在调用前窄化。零端口与缺省端口不同，各入口按自身契约解释零端口：Authority 比较的默认端口 `0` 仍表示未知 scheme 默认值，省略／空端口不能因此等于显式 `:0`。已解析的协议端口和系统观察结果仍可返回 `std::uint16_t`；默认值回填后的裸数值不能独自保留这些语义差异，Authority 等价判断使用 `http_authorities_equal()`。

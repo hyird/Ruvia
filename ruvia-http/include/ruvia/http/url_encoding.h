@@ -57,11 +57,10 @@ enum class url_decode_mode : std::uint8_t { percent,
 }
 
 // Appends the canonical uppercase pct-encoded triplet for byte. Callers own the
-// policy deciding which bytes need escaping.
+// policy deciding which bytes need escaping. Failure leaves output unchanged.
 inline void http_append_percent_byte(std::pmr::string& output, unsigned char byte) {
-    output.push_back('%');
-    output.push_back(http_upper_hex_digit(byte >> 4));
-    output.push_back(http_upper_hex_digit(byte));
+    const char triplet[]{'%', http_upper_hex_digit(byte >> 4), http_upper_hex_digit(byte)};
+    output.append(triplet, sizeof(triplet));
 }
 
 // Repairs an application-supplied RFC 3986 URI-reference (for example a
@@ -74,9 +73,10 @@ inline void http_append_percent_byte(std::pmr::string& output, unsigned char byt
 // the delimiting '@' remains (section 3.2.1), and only the first '#' starts the
 // fragment. Returns `reference` itself, without allocating, when it needs no
 // encoding; otherwise the encoded reference replaces `storage`'s contents and
-// the result views `storage`. `reference` may alias `storage`. Keep the input
-// owner alive until the result is consumed; owning-string temporaries are
-// rejected even when their particular contents would require transformation.
+// the result views `storage`. Failure preserves storage's original contents.
+// `reference` may alias `storage`. Keep the input owner alive until the result
+// is consumed; owning-string temporaries are rejected even when their particular
+// contents would require transformation.
 [[nodiscard]] std::string_view percent_encode_uri_reference(borrowed_text reference, std::pmr::string& storage);
 
 namespace detail {
