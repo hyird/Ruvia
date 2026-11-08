@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -22,7 +23,9 @@
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/http_status.h"
 
+#include "failing_memory_resource.h"
 #include "http3_relay.h"
+#include "stl_allocation_fixture.h"
 
 namespace {
 
@@ -114,63 +117,101 @@ TEST(Ruvia, http3_buffered_response_head_maps_status_fields_and_content_length) 
 }
 
 TEST(Ruvia, http3_field_sections_keep_interleaved_names_and_values_after_submission) {
-    ruvia::testing::http3_peers peers;
-    EXPECT_TRUE(peers.bind());
-    ruvia::testing::http3_event_log request;
-    EXPECT_TRUE(peers.send_request(0, get_request_fields, true, request));
+    for (const std::size_t extra_fields : {std::size_t{0}, std::size_t{34}}) {
+        SCOPED_TRACE(extra_fields);
+        ruvia::testing::http3_peers peers;
+        EXPECT_TRUE(peers.bind());
+        ruvia::testing::http3_event_log request;
+        EXPECT_TRUE(peers.send_request(0, get_request_fields, true, request));
 
-    std::array<std::string, 6> names{std::string(80, 'a'), "X-Small", std::string(64, 'b'),
-        std::string(31, 'c') + "Z" + std::string(31, 'c'),
-        "Z" + std::string(63, 'd'), std::string(64, 'e') + "Z"};
-    const std::array<std::string, 6> normalized{std::string(80, 'a'), "x-small", std::string(64, 'b'),
-        std::string(31, 'c') + "z" + std::string(31, 'c'),
-        "z" + std::string(63, 'd'), std::string(64, 'e') + "z"};
-    std::array<std::string, 6> values{"value-0", "value-1", "value-2", "value-3", "value-4", "value-5"};
-    const auto expected_values = values;
-    std::vector<ruvia::http_header_view> fields;
-    for (std::size_t index = 0; index < names.size(); ++index) {
-        fields.emplace_back(names[index], values[index]);
+        std::vector<std::string> names{std::string(80, 'a'), "X-Small", std::string(64, 'b'),
+            std::string(31, 'c') + "Z" + std::string(31, 'c'),
+            "Z" + std::string(63, 'd'), std::string(64, 'e') + "Z"};
+        std::vector<std::string> normalized{std::string(80, 'a'), "x-small", std::string(64, 'b'),
+            std::string(31, 'c') + "z" + std::string(31, 'c'),
+            "z" + std::string(63, 'd'), std::string(64, 'e') + "z"};
+        std::vector<std::string> values{"value-0", "value-1", "value-2", "value-3", "value-4", "value-5"};
+        for (std::size_t index = 0; index < extra_fields; ++index) {
+            names.push_back("X-Extra-" + std::to_string(index));
+            normalized.push_back("x-extra-" + std::to_string(index));
+            values.push_back("value-extra-" + std::to_string(index));
+        }
+        const auto expected_values = values;
+        std::vector<ruvia::http_header_view> fields;
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            fields.emplace_back(names[index], values[index]);
+        }
+        {
+            const ruvia::http_interim_response_head hints(
+                ruvia::http_status::early_hints, std::span<const ruvia::http_header_view>(fields));
+            EXPECT_TRUE(peers.server_.submit_interim_response_head(0, hints) == ruvia::http3_status::accepted);
+            ruvia::http_response response;
+            for (const auto& field : fields) {
+                response.header_stable_view(field.name(), field.value());
+            }
+            const auto submitted = peers.server_.submit_streaming_response_head(
+                0, ruvia::http_known_method::get, std::move(response), ruvia::http_response_trailer_intent::present);
+            EXPECT_TRUE(std::holds_alternative<ruvia::http_response_stream_commit_plan>(submitted));
+            const auto data = peers.server_.submit_data(0, ruvia::testing::http3_bytes("payload"));
+            EXPECT_TRUE(data.status_ == ruvia::http3_status::accepted && data.accepted_bytes_ == 7);
+            EXPECT_TRUE(peers.server_.finish_response(0, ruvia::validate_http_response_trailers(
+                                                             std::span<const ruvia::http_header_view>(fields))) ==
+                        ruvia::http3_status::accepted);
+        }
+        // QPACK encoding happens after every source has been replaced.
+        for (auto& name : names) {
+            name.assign(name.size(), 'q');
+        }
+        for (auto& value : values) {
+            value.assign(value.size(), 'r');
+        }
+        ruvia::testing::http3_event_log client;
+        EXPECT_TRUE(peers.to_client(client));
+        EXPECT_EQ(client.sequence_, std::string("HHDHE"));
+        EXPECT_EQ(client.data(0), std::string("payload"));
+        EXPECT_TRUE(client.ended(0));
+        EXPECT_EQ(client.headers_.size(), std::size_t{3});
+        if (client.headers_.size() != 3) {
+            return;
+        }
+        EXPECT_TRUE(client.headers_[0].field(":status") == std::string_view("103"));
+        EXPECT_TRUE(client.headers_[1].field(":status") == std::string_view("200"));
+        for (const auto& section : client.headers_) {
+            for (std::size_t index = 0; index < normalized.size(); ++index) {
+                EXPECT_TRUE(section.field(normalized[index]) == expected_values[index]);
+            }
+        }
     }
+}
+
+TEST(Ruvia, http3_interim_allocation_failure_leaves_only_the_final_response_on_wire) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "requires STL without noexcept debug metadata allocation";
+    }
+    failing_memory_resource resource;
     {
+        ruvia::testing::http3_peers peers({.resource_ = &resource});
+        ASSERT_TRUE(peers.bind());
+        ruvia::testing::http3_event_log request;
+        ASSERT_TRUE(peers.send_request(0, get_request_fields, true, request));
+        const std::vector<ruvia::http_header_view> fields(80, ruvia::http_header_view{"x-hint", "value"});
         const ruvia::http_interim_response_head hints(
             ruvia::http_status::early_hints, std::span<const ruvia::http_header_view>(fields));
-        EXPECT_TRUE(peers.server_.submit_interim_response_head(0, hints) == ruvia::http3_status::accepted);
-        ruvia::http_response response;
-        for (const auto& field : fields) {
-            response.header_stable_view(field.name(), field.value());
-        }
-        const auto submitted = peers.server_.submit_streaming_response_head(
-            0, ruvia::http_known_method::get, std::move(response), ruvia::http_response_trailer_intent::present);
-        EXPECT_TRUE(std::holds_alternative<ruvia::http_response_stream_commit_plan>(submitted));
-        const auto data = peers.server_.submit_data(0, ruvia::testing::http3_bytes("payload"));
-        EXPECT_TRUE(data.status_ == ruvia::http3_status::accepted && data.accepted_bytes_ == 7);
-        EXPECT_TRUE(peers.server_.finish_response(0, ruvia::validate_http_response_trailers(
-                                                         std::span<const ruvia::http_header_view>(fields))) ==
-                    ruvia::http3_status::accepted);
+        const auto live = resource.live_allocations();
+        resource.fail_after_stl_operation(0);
+        EXPECT_THROW((void)peers.server_.submit_interim_response_head(0, hints), std::bad_alloc);
+        EXPECT_EQ(resource.live_allocations(), live);
+        resource.allow_allocations();
+
+        constexpr std::array final_fields{ruvia::http3_field_view{":status", "204"}};
+        ASSERT_TRUE(peers.server_.submit_response(0, final_fields, true) == ruvia::http3_status::accepted);
+        ruvia::testing::http3_event_log client;
+        ASSERT_TRUE(peers.to_client(client));
+        ASSERT_EQ(client.headers_.size(), std::size_t{1});
+        EXPECT_TRUE(client.headers_[0].field(":status") == "204");
+        EXPECT_TRUE(client.ended(0));
     }
-    // QPACK encoding happens after every source has been replaced.
-    for (auto& name : names) {
-        name.assign(name.size(), 'q');
-    }
-    for (auto& value : values) {
-        value.assign(value.size(), 'r');
-    }
-    ruvia::testing::http3_event_log client;
-    EXPECT_TRUE(peers.to_client(client));
-    EXPECT_EQ(client.sequence_, std::string("HHDHE"));
-    EXPECT_EQ(client.data(0), std::string("payload"));
-    EXPECT_TRUE(client.ended(0));
-    EXPECT_EQ(client.headers_.size(), std::size_t{3});
-    if (client.headers_.size() != 3) {
-        return;
-    }
-    EXPECT_TRUE(client.headers_[0].field(":status") == std::string_view("103"));
-    EXPECT_TRUE(client.headers_[1].field(":status") == std::string_view("200"));
-    for (const auto& section : client.headers_) {
-        for (std::size_t index = 0; index < normalized.size(); ++index) {
-            EXPECT_TRUE(section.field(normalized[index]) == expected_values[index]);
-        }
-    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 // RFC 9110 §9.3.2: a HEAD response is the head alone, ending the stream.

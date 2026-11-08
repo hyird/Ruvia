@@ -27,6 +27,7 @@
 #include "field/http_interim_response_validation.h"
 #include "field/http_lower_header_name.h"
 #include "field/http_origin_payload.h"
+#include "parser/http_header_descriptor_storage.h"
 #include "response/http_framed_response_head_plan.h"
 #include "server/http_date_cache.h"
 #include "util/http_c_library_memory.h"
@@ -73,7 +74,7 @@ public:
     outbound_field_section& operator=(outbound_field_section&&) = delete;
 
     void add_literal(std::string_view name, std::string_view value) {
-        fields_.push_back(make_nv(name, value));
+        fields_.append(make_nv(name, value));
     }
 
     void add_lowercased(std::string_view name, std::string_view value) {
@@ -88,11 +89,11 @@ public:
             names_.resize(offset + size);
             return names_.data() + offset;
         });
-        fields_.push_back(make_nv(lower, value));
+        fields_.append(make_nv(lower, value));
     }
 
     [[nodiscard]] const nghttp3_nv* data() const& noexcept RUVIA_LIFETIMEBOUND {
-        return fields_.data();
+        return fields_.view().data();
     }
     const nghttp3_nv* data() const&& = delete;
 
@@ -103,17 +104,8 @@ public:
 private:
     const std::size_t name_bytes_;
     std::pmr::string names_;
-    std::pmr::vector<nghttp3_nv> fields_;
+    detail::http_header_descriptor_storage<nghttp3_nv> fields_;
 };
-
-template <typename field_range_type>
-[[nodiscard]] std::size_t total_name_bytes(const field_range_type& fields) noexcept {
-    std::size_t bytes = 0;
-    for (const auto& field : fields) {
-        bytes += field.name().size();
-    }
-    return bytes;
-}
 
 }  // namespace
 
@@ -731,7 +723,7 @@ public:
         }
         detail::http_content_length_state content_length_state;
         bool has_content_length = false;
-        std::pmr::vector<nghttp3_nv> native_fields(resource_);
+        detail::http_header_descriptor_storage<nghttp3_nv> native_fields(resource_);
         native_fields.reserve(fields.size());
         for (const auto& field : fields) {
             if (http_ascii_equals_ignore_case(field.name_, "content-length")) {
@@ -741,7 +733,7 @@ public:
                 }
                 has_content_length = true;
             }
-            native_fields.push_back(make_nv(field.name_, field.value_, field.sensitive_));
+            native_fields.append(make_nv(field.name_, field.value_, field.sensitive_));
         }
         std::optional<std::uint64_t> content_length;
         if (has_content_length) {
@@ -754,7 +746,7 @@ public:
             }
         }
         return submit_head(
-            stream_id, native_fields.data(), native_fields.size(), end_stream, request, content_length);
+            stream_id, native_fields.view().data(), native_fields.size(), end_stream, request, content_length);
     }
 
     // A server request stream that exists and has no final head yet.
@@ -801,8 +793,17 @@ public:
             content_length_value = http_format_unsigned(content_length_bytes, *planned_length);
         }
 
-        outbound_field_section section(
-            resource_, total_name_bytes(response.headers()), response.headers().size() + 3);
+        std::size_t name_bytes = 0;
+        std::size_t field_count = 1 + static_cast<std::size_t>(!generated_date.empty()) +
+                                  static_cast<std::size_t>(!content_length_value.empty());
+        for (const auto& header : response.headers()) {
+            if ((detail::http_response_header_access::known_bit(header) & writer_framed_bits) != 0) {
+                continue;
+            }
+            name_bytes += header.name().size();
+            ++field_count;
+        }
+        outbound_field_section section(resource_, name_bytes, field_count);
         section.add_literal(":status", detail::http_status_code_token_view(status_token));
         for (const auto& header : response.headers()) {
             if ((detail::http_response_header_access::known_bit(header) & writer_framed_bits) != 0) {
@@ -1256,13 +1257,13 @@ http3_status http3_connection::submit_trailers(std::int64_t stream_id,
     if (stream->content_length_.has_value() && stream->submitted_bytes_ != *stream->content_length_) {
         throw std::length_error("HTTP/3 content ended before the declared Content-Length");
     }
-    std::pmr::vector<nghttp3_nv> native_fields(impl_->resource_);
+    detail::http_header_descriptor_storage<nghttp3_nv> native_fields(impl_->resource_);
     native_fields.reserve(fields.size());
     for (const auto& field : fields) {
-        native_fields.push_back(make_nv(field.name_, field.value_, field.sensitive_));
+        native_fields.append(make_nv(field.name_, field.value_, field.sensitive_));
     }
     const int result = nghttp3_conn_submit_trailers(impl_->connection_, stream_id,
-        native_fields.data(), native_fields.size());
+        native_fields.view().data(), native_fields.size());
     if (result != 0) {
         impl_->throw_if_no_memory(result);
         return impl_->status_from(result);
@@ -1386,7 +1387,11 @@ http3_status http3_connection::finish_response(
         throw std::length_error("HTTP/3 content ended before the declared Content-Length");
     }
     const auto fields = trailers.fields();
-    outbound_field_section section(impl_->resource_, total_name_bytes(fields), fields.size());
+    std::size_t name_bytes = 0;
+    for (const auto& field : fields) {
+        name_bytes += field.name().size();
+    }
+    outbound_field_section section(impl_->resource_, name_bytes, fields.size());
     for (const auto& field : fields) {
         section.add_lowercased(field.name(), field.value());
     }
@@ -1444,9 +1449,18 @@ http3_connection::submit_websocket_handshake(std::int64_t stream_id, const http_
     }
     auto negotiation = detail::make_websocket_server_negotiation(request, options, impl_->resource_);
     const auto headers = negotiation.response_headers();
-    outbound_field_section section(impl_->resource_, total_name_bytes(headers), headers.size() + 4);
+    std::size_t name_bytes = 0;
+    bool has_date = false;
+    for (const auto& field : headers) {
+        name_bytes += field.name().size();
+        has_date = has_date || http_ascii_equals_ignore_case(field.name(), "date");
+    }
+    const auto field_count = headers.size() + 1 + static_cast<std::size_t>(!has_date) +
+                             static_cast<std::size_t>(!negotiation.subprotocol().empty()) +
+                             static_cast<std::size_t>(!negotiation.extensions().empty());
+    outbound_field_section section(impl_->resource_, name_bytes, field_count);
     section.add_literal(":status", "200");
-    if (std::ranges::none_of(headers, [](const auto& field) { return http_ascii_equals_ignore_case(field.name(), "date"); })) {
+    if (!has_date) {
         section.add_literal("date", detail::cached_date_value());
     }
     if (!negotiation.subprotocol().empty()) {

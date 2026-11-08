@@ -171,6 +171,8 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 ### 4. HTTP/1.x、HTTP/2 与 HTTP/3 Sans-I/O 状态机
 
+- **跨协议描述符存储**：协议解析与首部写出共用 `parser/http_header_descriptor_storage.h`；预留或追加超过 32 项时才整体迁入调用方 PMR（缺省为默认资源）。
+
 #### 4.1 HTTP/1.0 & HTTP/1.1 状态机
 
 - **服务端解析与序列化**：
@@ -188,7 +190,16 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 出站长度与范围尺寸共用 `"ruvia/http/http_request_content_semantics.h"` 的 `http_content_length`：包括 `http1_client_request_head_view::content_length_`、`http2_request_content::known_length()` / `streaming()`（可选位置仍保留 `std::optional`），以及 `resolve_http_byte_range_set()`、`make_http_multipart_byte_range_plan()`、`http_selected_representation_metadata::length_`、`http_response::file_body()` / `multipart_file_body()` / `content_range()` / `content_range_unsatisfied()`。非负整数可直接填入，构造前检查 `0..UINT64_MAX`，负数抛出 `std::invalid_argument`，无异常探测用 `http_content_length::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先转成无符号数。已解析或已计算的协议长度仍返回 `std::uint64_t` / `std::size_t`。
 
-HTTP/1 请求头与响应头解析的字段描述符共用内部存储（`parser/http_header_descriptor_storage.h`）：前 32 项内联，超出后整体迁入传入的 PMR（缺省为默认资源）并按实际字段数增长。服务端 `parsed_request_header_block` 与客户端 `http1_client_parsed_response_head` 均不按首部字节上限预留线程栈数组。字段区段同时受 64 KiB 字节上限（`max_http_header_bytes`）与字段行数上限 `max_http_header_fields`（256，与 Pingora 解析器默认值相同；仅凭字节上限，最短 4 字节的字段行可使一个头部携带约 16 K 个字段，其描述符远大于头部本身）约束：服务端请求头第 257 行即返回 `431 header_too_large`，客户端响应头报告 `header_too_large`；`http_field_section_budget` 对接收与生成的头部及 Trailer（`http_request_trailers`、`make_parsed_http_request`、客户端请求写出、响应头与 Trailer 输出、WebSocket 握手）执行同一字节与行数规则。服务端请求视图零拷贝借用输入缓冲区，客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。PMR 分配失败以 `std::bad_alloc` 传出，此时不发布 head_ready 或成功状态；释放资源后可用同一缓冲区与偏移重试，但部分元数据可能残留，不保证回滚。PMR 须存活至其拥有的描述符存储释放：服务端请求为 `http_request::reset()`（恢复为默认构造状态，同时不再引用该 PMR）或请求对象析构，客户端响应头为 `take_headers()` 返回的向量或响应头析构。
+- **解析描述符增长**：服务端 `parsed_request_header_block` 与客户端 `http1_client_parsed_response_head` 按实际字段数增长，不按首部字节上限预留线程栈数组。
+- **字段区段上限**：64 KiB 字节上限（`max_http_header_bytes`）与 256 行上限（`max_http_header_fields`，与 Pingora 解析器默认值相同）同时生效。
+- **描述符放大防线**：仅凭字节上限，最短 4 字节的字段行可使一个头部携带约 16 K 个字段，其描述符远大于头部本身。
+- **行数超额处理**：服务端请求头第 257 行返回 `431 header_too_large`；客户端响应头报告 `header_too_large`。
+- **区段预算入口**：`http_field_section_budget` 对接收与生成的头部及 Trailer 执行同一字节与行数规则，覆盖 `http_request_trailers`、`make_parsed_http_request`、客户端请求写出、响应头与 Trailer 输出、WebSocket 握手。
+- **输入拥有期**：服务端请求视图零拷贝借用输入缓冲区；客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。
+- **分配失败**：以 `std::bad_alloc` 传出，不发布 `head_ready` 或成功状态。
+- **失败重试边界**：释放资源后可用同一缓冲区与偏移重试；部分元数据可能残留，不保证回滚。
+- **请求 PMR 拥有期**：覆盖 `http_request::reset()` 或对象析构；`reset()` 恢复默认构造状态并解除 PMR 引用。
+- **响应 PMR 拥有期**：覆盖响应头或 `take_headers()` 返回向量的析构。
 
 请求转发使用 `"ruvia/http/http_client.h"` 的 `enum class http_request_field_source : std::uint8_t { generated, forwarded }`，不要把收到的字段当成新配置字段逐项送入 `is_valid_http_request_application_field`：
 
@@ -266,6 +277,7 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 
 - **留存输入借用**：`http3_data_event` 和 `read_stream()` 在编译期拒绝直接传入临时拥有型字符串或连续容器，后者也拒绝 `std::initializer_list`；命名输入及显式借用视图仍可使用。借用模式下，底层存储须覆盖对应事件的消费；显式构造 view/span 不延长 owner 寿命。
 - **出站地址稳定**：名称拥有缓冲首次使用时按整节字节上界预留，后续增长不重分配；字段视图只借用至 `nghttp3` 完成提交。
+- **出站字段计数**：按实际发送数量预留描述符，扣除被过滤的分帧字段并计入生成字段。
 - **请求投影 `http3_request_head`**：普通字段索引首次使用时按剩余字段上界一次预留；仅含伪首部与 Cookie 的请求不分配该索引。
 - **投影所有权**：`http3_request_head` 仅可移动构造、不可复制或赋值；`std::optional` 持有点使用 `emplace` 重建。
 - **Cookie 惰性合并**：首个非空碎片直接借用请求投影已拥有的字段；第二个非空碎片出现时才分配合并缓冲，空碎片不参与。

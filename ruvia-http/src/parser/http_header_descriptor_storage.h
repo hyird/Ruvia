@@ -15,8 +15,8 @@
 
 namespace ruvia::detail {
 
-// Both HTTP/1 parsers keep borrowed descriptors inline and spill only when the
-// actual field count requires it. Views are rebound after moves, never cached.
+// Borrowed field descriptors stay inline until their reserved or appended count
+// needs PMR overflow. Views are rebound after moves, never cached.
 template <typename field_type>
 class http_header_descriptor_storage final {
     static_assert(std::is_trivially_copyable_v<field_type>);
