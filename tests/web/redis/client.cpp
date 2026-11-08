@@ -837,6 +837,49 @@ TEST(Ruvia, redis_string_array_replies_reject_nil_elements) {
     peer.join();
 }
 
+TEST(Ruvia, redis_set_result_copy_inherits_previous_value_resource) {
+    std::string text(4096, 'v');
+    text[17] = '\0';
+    scripted_redis_peer peer({redis_bulk_reply(text), "$0\r\n\r\n", "$-1\r\n"});
+    auto& io = ruvia::test::new_test_io_context();
+    auto worker = ruvia::attach_event_loop(io);
+    ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
+    ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
+        auto redis = connected.handle();
+        ruvia::test::rejecting_memory_resource unrelated;
+        unrelated.reject_allocations();
+        for (int index = 0; index != 3; ++index) {
+            SCOPED_TRACE(index);
+            std::optional<ruvia::redis_set_result> copied;
+            std::pmr::memory_resource* owner = nullptr;
+            bool rejected = false;
+            {
+                const auto result = co_await redis.set("key", "replacement",
+                    {.condition_ = ruvia::redis_set_condition::if_absent,
+                        .previous_value_ = ruvia::redis_set_previous_value_policy::return_value});
+                if (result.previous()) {
+                    owner = result.previous()->get_allocator().resource();
+                }
+                try {
+                    const default_resource_guard guard(unrelated);
+                    copied.emplace(result);
+                } catch (const std::bad_alloc&) {
+                    rejected = true;
+                }
+            }
+            EXPECT_FALSE(rejected);
+            if (copied) {
+                EXPECT_EQ(copied->applied(), index == 2);
+                EXPECT_EQ(copied->previous().has_value(), index != 2);
+                if (copied->previous()) {
+                    EXPECT_EQ(copied->previous()->get_allocator().resource(), owner);
+                    EXPECT_EQ(*copied->previous(), index == 0 ? std::string_view(text) : std::string_view{});
+                }
+            }
+        }
+    });
+}
+
 TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_shapes) {
     std::string key(128, 'k');
     std::string payload(64 * 1024 + 1, 'v');

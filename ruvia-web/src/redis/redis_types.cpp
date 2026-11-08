@@ -16,6 +16,13 @@ redis_error::code_type redis_error::code() const noexcept {
     return code_;
 }
 
+redis_set_result::redis_set_result(const redis_set_result& other)
+    : applied_(other.applied_) {
+    if (other.previous_) {
+        previous_.emplace(*other.previous_, other.previous_->get_allocator());
+    }
+}
+
 redis_key_value::redis_key_value(const redis_key_value& other, allocator_type allocator)
     : key_(other.key_, allocator.resource()),
       value_(other.value_, allocator.resource()) {}

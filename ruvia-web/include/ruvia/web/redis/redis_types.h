@@ -221,6 +221,11 @@ struct redis_types_access;
 
 class redis_set_result final {
 public:
+    redis_set_result(const redis_set_result& other);
+    redis_set_result(redis_set_result&&) noexcept = default;
+    redis_set_result& operator=(const redis_set_result&) = default;
+    redis_set_result& operator=(redis_set_result&&) = default;
+
     [[nodiscard]] constexpr bool applied() const noexcept {
         return applied_;
     }

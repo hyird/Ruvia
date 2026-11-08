@@ -6,16 +6,19 @@
 #include <barrier>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <future>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <ratio>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -803,6 +806,36 @@ bool timer_registration_rejects_reentrant_acquire() {
 TEST(Ruvia, TimerDurationConversionsPreserveIntegerTicksAndSaturate) {
     EXPECT_TRUE(timer_duration_conversions_preserve_integer_ticks_and_saturate());
 }
+
+TEST(Ruvia, timer_fractional_duration_conversion_preserves_rounding_and_bounds) {
+    using target_type = std::chrono::steady_clock::duration;
+    using period_type = std::ratio_multiply<target_type::period, std::ratio<3, 5>>;
+    using signed_type = std::chrono::duration<std::int64_t, period_type>;
+    using unsigned_type = std::chrono::duration<std::uint64_t, period_type>;
+    for (const auto& [input, expected] : {std::pair<std::int64_t, std::int64_t>{0, 0},
+             {1, 1}, {4, 3}, {5, 3}, {-1, 0}, {-4, -2}, {-5, -3},
+             {9'000'000'000'000'000'003LL, 5'400'000'000'000'000'002LL},
+             {-9'000'000'000'000'000'003LL, -5'400'000'000'000'000'001LL}}) {
+        SCOPED_TRACE(input);
+        EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type(input)).count(), expected);
+    }
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(unsigned_type(10'000'000'000'000'000'002ULL)).count(), 6'000'000'000'000'000'002LL);
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(unsigned_type::max()), target_type::max());
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type::min()).count(), -5'534'023'222'112'865'484LL);
+}
+
+TEST(Ruvia, timer_fractional_duration_conversion_avoids_intermediate_overflow) {
+    using target_type = std::chrono::steady_clock::duration;
+    using period_type = std::ratio_multiply<target_type::period, std::ratio<9'000'000'001LL, 9'000'000'000LL>>;
+    using signed_type = std::chrono::duration<std::int64_t, period_type>;
+    using unsigned_type = std::chrono::duration<std::uint64_t, period_type>;
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type(8'999'999'999LL)).count(), 9'000'000'000LL);
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type(-8'999'999'999LL)).count(), -8'999'999'999LL);
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type::max()), target_type::max());
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type::min()), target_type::min());
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(unsigned_type::max()), target_type::max());
+}
+
 TEST(Ruvia, TimerImmediateShutdownWorks) {
     EXPECT_TRUE(timer_immediate_shutdown_works());
 }

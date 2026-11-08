@@ -16,6 +16,18 @@ db_value::db_value(std::string_view value)
 db_value::db_value(std::in_place_type_t<std::pmr::string>, std::pmr::string value)
     : storage_(std::in_place_type<std::pmr::string>, std::move(value)) {}
 
+db_value::db_value(const db_value& other)
+    : storage_(std::visit(
+          [](const auto& value) -> storage_type {
+              using value_type = std::remove_cvref_t<decltype(value)>;
+              if constexpr (std::is_same_v<value_type, std::pmr::string>) {
+                  return storage_type(std::in_place_type<value_type>, value, value.get_allocator());
+              } else {
+                  return storage_type(std::in_place_type<value_type>, value);
+              }
+          },
+          other.storage_)) {}
+
 db_value::db_value(bool value)
     : storage_(std::in_place_type<bool>, value) {}
 

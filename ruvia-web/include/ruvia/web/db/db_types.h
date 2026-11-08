@@ -323,7 +323,7 @@ public:
 
     db_value(bool value);
 
-    db_value(const db_value&) = default;
+    db_value(const db_value& other);
     db_value(db_value&&) noexcept = default;
     db_value& operator=(const db_value&) = delete;
     db_value& operator=(db_value&&) = delete;

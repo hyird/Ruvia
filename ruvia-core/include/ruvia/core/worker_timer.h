@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -62,7 +63,7 @@ enum class worker_timer_schedule_status : std::uint8_t {
 };
 
 // Converts to steady-clock ticks with saturation at both bounds. Integral
-// whole-factor scaling/division of counts up to uintmax_t width stays exact.
+// counts up to uintmax_t width stay exact, rounding positive fractions upward.
 // Other conversions use long double; NaN maps to zero, infinities saturate.
 template <typename rep_type, typename period_type>
 [[nodiscard]] inline std::chrono::steady_clock::duration worker_timer_saturating_duration_cast(
@@ -90,9 +91,60 @@ template <typename rep_type, typename period_type>
             return target_type::min();
         }
         return target_type(static_cast<typename target_type::rep>(count) * factor::num);
+    } else if constexpr (std::is_integral_v<rep_type> &&
+                         std::numeric_limits<rep_type>::digits <= std::numeric_limits<std::uintmax_t>::digits) {
+        using count_type = std::conditional_t<std::is_signed_v<rep_type>, std::intmax_t, std::uintmax_t>;
+        using target_rep = typename target_type::rep;
+        const bool negative = std::cmp_less(static_cast<count_type>(value.count()), 0);
+        const auto raw = static_cast<std::uintmax_t>(value.count());
+        const auto magnitude = negative ? std::uintmax_t{0} - raw : raw;
+        const auto limit = negative
+                               ? std::uintmax_t{0} - static_cast<std::uintmax_t>(target_type::min().count())
+                               : static_cast<std::uintmax_t>(target_type::max().count());
+        constexpr auto numerator = static_cast<std::uintmax_t>(factor::num);
+        constexpr auto denominator = static_cast<std::uintmax_t>(factor::den);
+        const auto whole = magnitude / denominator;
+        if (whole > limit / numerator) {
+            return negative ? target_type::min() : target_type::max();
+        }
+        const auto integral = whole * numerator;
+        const auto remainder = magnitude % denominator;
+        std::uintmax_t fraction = 0;
+        std::uintmax_t residue = 0;
+        if (remainder <= (std::numeric_limits<std::uintmax_t>::max)() / numerator) {
+            const auto product = remainder * numerator;
+            fraction = product / denominator;
+            residue = product % denominator;
+        } else {
+            // Divide the remainder product bitwise instead of overflowing it.
+            // Each residue addition is below 2 * denominator <= UINTMAX_MAX.
+            for (auto bit = std::bit_floor(numerator); bit != 0; bit >>= 1) {
+                fraction *= 2;
+                residue *= 2;
+                if (residue >= denominator) {
+                    residue -= denominator;
+                    ++fraction;
+                }
+                if ((numerator & bit) != 0) {
+                    residue += remainder;
+                    if (residue >= denominator) {
+                        residue -= denominator;
+                        ++fraction;
+                    }
+                }
+            }
+        }
+        if (!negative && residue != 0) {
+            ++fraction;
+        }
+        if (fraction >= limit - integral) {
+            return negative ? target_type::min() : target_type::max();
+        }
+        const auto ticks = static_cast<target_rep>(integral + fraction);
+        return target_type(negative ? -ticks : ticks);
     } else {
-        // Discard this alternative for whole-factor integer conversions so
-        // MSVC /WX does not reject an emitted unreachable fallback.
+        // Discard this alternative for integral conversions so MSVC /WX does
+        // not reject an emitted unreachable fallback.
         using wide_type = std::chrono::duration<long double, typename target_type::period>;
         const auto count = std::chrono::duration_cast<wide_type>(value).count();
         if (std::isnan(count)) {

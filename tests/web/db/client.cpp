@@ -269,3 +269,38 @@ TEST(Ruvia, db_expression_values_use_explicit_resource_for_owned_parameters) {
         }
     }
 }
+
+TEST(Ruvia, db_value_copy_inherits_owned_text_resource_and_rolls_back_failure) {
+    ruvia::test::counting_memory_resource allocations;
+    ruvia::test::equivalent_tracking_resource resource(allocations);
+    rejecting_memory_resource unrelated;
+    unrelated.reject_allocations();
+    {
+        std::optional<ruvia::db_value> copied;
+        {
+            const std::string text(4096, 'v');
+            ruvia::db_query query(&resource);
+            query.select(query.value(text));
+            const auto statement = query.compile(ruvia::db_driver::postgresql, &resource);
+            ASSERT_EQ(statement.params().size(), std::size_t{1});
+            const auto retained = allocations.live_allocations();
+            resource.reject_allocations_after(0);
+            EXPECT_THROW((void)ruvia::db_value(statement.params()[0]), std::bad_alloc);
+            resource.allow_allocations();
+            EXPECT_EQ(allocations.live_allocations(), retained);
+            {
+                default_resource_guard guard(&unrelated);
+                copied.emplace(statement.params()[0]);
+            }
+        }
+        // The owning copy still uses the original resource after its statement dies.
+        resource.reject_allocations_after(0);
+        EXPECT_THROW((void)ruvia::db_value(*copied), std::bad_alloc);
+        resource.allow_allocations();
+        {
+            default_resource_guard guard(&unrelated);
+            const ruvia::db_value second(*copied);
+        }
+    }
+    EXPECT_EQ(allocations.live_allocations(), std::size_t{0});
+}
