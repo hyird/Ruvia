@@ -25,6 +25,13 @@ http_response_head_buffer::http_response_head_buffer(http_response_head_buffer&&
 
 http_response_head_buffer& http_response_head_buffer::operator=(const http_response_head_buffer& other) {
     if (this != &other) {
+        if (other.heap_.size() > heap_.capacity()) {
+            // Retire the old allocation only after the complete state is published.
+            std::pmr::string prepared(other.heap_, heap_.get_allocator());
+            heap_.swap(prepared);
+            copy_committed_state(other);
+            return *this;
+        }
         heap_ = other.heap_;
         copy_committed_state(other);
     }
@@ -35,6 +42,12 @@ http_response_head_buffer& http_response_head_buffer::operator=(http_response_he
     if (this != &other) {
         if (heap_.get_allocator() == other.heap_.get_allocator()) {
             heap_ = std::move(other.heap_);
+        } else if (other.heap_.size() > heap_.capacity()) {
+            std::pmr::string prepared(other.heap_, heap_.get_allocator());
+            heap_.swap(prepared);
+            other.heap_.clear();
+            copy_committed_state(other);
+            return *this;
         } else {
             heap_ = other.heap_;
             other.heap_.clear();

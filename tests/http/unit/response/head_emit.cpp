@@ -205,12 +205,14 @@ TEST(Ruvia, http1_response_head_assignment_preserves_both_buffers_on_allocation_
                     }
                 };
 
-                target_resource.fail_after(0);
-                EXPECT_THROW(assign(), std::bad_alloc);
-                EXPECT_EQ(target.view(), previous);
-                EXPECT_EQ(source.view(), replacement);
-                EXPECT_EQ(target.can_append_on_stack(0), !target_on_heap);
-                EXPECT_FALSE(source.can_append_on_stack(0));
+                if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+                    target_resource.fail_after(0);
+                    EXPECT_THROW(assign(), std::bad_alloc);
+                    EXPECT_EQ(target.view(), previous);
+                    EXPECT_EQ(source.view(), replacement);
+                    EXPECT_EQ(target.can_append_on_stack(0), !target_on_heap);
+                    EXPECT_FALSE(source.can_append_on_stack(0));
+                }
 
                 target_resource.allow_allocations();
                 assign();
@@ -319,6 +321,54 @@ TEST(Ruvia, http1_response_head_constructors_preserve_content_and_inherit_source
             EXPECT_EQ(source.view(), expected);
         }
         EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, http1_response_head_growing_assignment_commits_before_retirement) {
+    struct assignment_observation final {
+        ruvia::http_response_head_buffer* target_;
+        ruvia::http_response_head_buffer* source_;
+        std::string_view expected_;
+        bool move_;
+        bool committed_{false};
+    };
+
+    for (const bool move : {false, true}) {
+        ruvia::test::header_memory target_resource;
+        ruvia::test::header_memory source_resource;
+        {
+            ruvia::http_response_head_buffer target(&target_resource);
+            ruvia::http_response_head_buffer source(&source_resource);
+            target.append(std::string(1024, 'o'));
+            source.append(std::string(ruvia::response_head_retained_heap_bytes + 1, 'n'));
+            const std::string expected(source.view());
+            assignment_observation observation{&target, &source, expected, move};
+            target_resource.deallocation_context_ = &observation;
+            target_resource.before_deallocate_ = [](void* context) noexcept {
+                auto& state = *static_cast<assignment_observation*>(context);
+                state.committed_ = state.target_->view() == state.expected_ &&
+                                   state.source_->view() == (state.move_ ? std::string_view() : state.expected_);
+                // Only reenter after publication; a broken implementation is merely observed.
+                if (state.committed_) {
+                    state.target_->reset();
+                    state.target_->append("refilled");
+                }
+            };
+            if (move) {
+                target = std::move(source);
+            } else {
+                target = source;
+            }
+            target_resource.before_deallocate_ = nullptr;
+            EXPECT_TRUE(observation.committed_);
+            EXPECT_EQ(target.view(), "refilled");
+            source.reset();
+            source.append("reused");
+            EXPECT_EQ(source.view(), "reused");
+            EXPECT_EQ(target.view(), "refilled");
+        }
+        EXPECT_EQ(target_resource.live_bytes_, std::size_t{0});
+        EXPECT_EQ(source_resource.live_bytes_, std::size_t{0});
     }
 }
 

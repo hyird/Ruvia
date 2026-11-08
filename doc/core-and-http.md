@@ -224,6 +224,7 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
   - `"ruvia/http/http_response_head_buffer.h"`：响应头缓冲保留 inline scratch 的两阶段写入能力。`stack_cursor(bound)` 只检查当前剩余空间，不占用独占 reservation；对象须存活且地址不变。`commit_stack(end)` 将 inline 已提交长度设到本对象数组内的端点（允许 one-past 和缩短长度），允许抛出异常：已经 spill 到堆时抛 `std::logic_error`，空指针或其他对象的端点抛 `std::invalid_argument`，拒绝时保留已有内容。失败的 reserve 不会使仍处于 inline 状态的 cursor 失效；堆状态须先 `reset()` 再取得新的 inline cursor。
   - **响应头缓冲资源**：`http_response_head_buffer` 复制构造沿用源 PMR，赋值保留目标 PMR；同资源移动不分配。
   - **响应头缓冲提交**：复制或跨资源移动赋值分配失败时，保留两端已提交内容；未提交的 inline scratch 不属于复制契约。
+  - **响应头缓冲赋值退役**：复制或跨资源移动赋值扩容时，先提交两端状态，再释放目标旧存储；释放回调的重入写入保留，容量足够时仍原地复用。
   - **响应头缓冲重置**：`reset()` 在释放超限堆存储前提交空 inline 状态，保留释放回调的重入写入。
 - **客户端写出与响应解析**：
   - `"ruvia/http/http1_client_request_writer.h"` & `"ruvia/http/http1_request_content_writer.h"`：生成客户端请求头与流式分块请求体，产出 `http1_client_exchange_state`。
