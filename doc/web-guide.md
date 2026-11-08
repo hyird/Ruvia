@@ -558,6 +558,8 @@ Ruvia 提供三种静态文件服务方式：
 
 三者均内置路径穿越防护、点文件策略（`static_dotfile_policy::deny` 默认拒绝隐藏文件）、`ETag` / `Last-Modified` 条件请求（`304 Not Modified`）与 `Range` 分段响应（`206 Partial Content`）。`c.static_file()` 的 `relative_path_` 是已解码的文件路径，`/` 与 `\` 均为段分隔符；含 `.` 或 `..` 段、空的中间段、绝对路径或 NUL 时一律返回 `403`，不做解析或夹取。命名参数（如 `/files/:name`）可在单个段内解码出 `%2F` / `%5C`，因此 `sub%2F..%2Fsecret` 这类拼写同样被拒绝。
 
+- **目录索引**：规范化后的目录路径按 `index_file_` 查找快照；路径末尾有无分隔符不影响索引选择。
+
 多个范围的请求返回 `multipart/byteranges`，各部分只带 `Content-Type` 与 `Content-Range`；选中预压缩变体（带 `Content-Encoding`）时多范围请求返回完整的 `200` 表示（单个范围仍是带 `Content-Encoding` 的单部分 `206`）。`If-Range` 匹配后的 `206` 只带必需字段（`ETag`、`Cache-Control`、`Vary`、`Content-Range` 或 multipart `Content-Type` 等）及描述所发字节的 `Content-Encoding`，不再重复 `Content-Type`、`Last-Modified`（RFC 9110 §15.3.7）。
 
 非 resident 文件响应会验证索引或构造时记录的文件身份，零字节文件也不例外：空文件在索引后被改写或删除，不能以旧 `Content-Length: 0` 成功提交。`c.file()` 与 `c.static_file()` 返回 `task<http_response>`：文件只打开一次，打开（`c.file()` 的打开与 `fstat` 快照、`static_root` 在根目录之下的按条目打开）在 worker 的阻塞池上执行，任何平台上 worker 都不做文件系统调用；任务完成时状态（`200/206/304/404/403/412/416/500/503`）、`ETag`、`Content-Length`、Range 处理与打开的句柄均已确定，中间件与处理器可直接检查。不发送文件字节的响应（`HEAD`、`304`、`412`、`416`）在池上打开时同时校验索引身份，文件已变化则返回 `500 static_file_changed`。响应正文由同一句柄（读取时为其复制句柄）提供，传输层不再按路径重新解析。两者在返回任务前即完成输入拥有化：路径、`relative_path_` 与 `content_type_` 由调用本身复制到请求存储（`static_file()` 同时完成路径规范化、索引查找与表示选择），保存任务后释放这些来源再 `co_await` 也安全；无法表示文件的路径（`404`）、被拒绝的相对路径（`403`）、未索引的名称（`404`）与不可接受的编码（`406`）在调用时即抛出。只有 `static_file()` 的 `root` 仍是借用，必须活到返回的任务完成；文档根请求的内部分发走同一条池上打开路径，并在等待期间持有快照租约。

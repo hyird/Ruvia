@@ -1631,6 +1631,47 @@ TEST(Ruvia, static_file_directory_root_index_and_403) {
     fs::remove_all(dir);
 }
 
+TEST(Ruvia, static_file_directory_indexes_survive_path_normalization_storage_growth) {
+    namespace fs = std::filesystem;
+    constexpr std::string_view index = "directory-index-document.html";
+    constexpr std::string_view long_directory = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz/nested-directory";
+    const auto dir = fs::temp_directory_path() / "ruvia_static_normalized_directory_indexes";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "nested" / "dir");
+    fs::create_directories(dir / long_directory);
+    std::ofstream(dir / "nested" / "dir" / index) << "short-index";
+    std::ofstream(dir / long_directory / index) << "long-index";
+
+    {
+        ruvia::static_root_options options;
+        options.index_file_ = index;
+        options.resident_max_bytes_ = 64;
+        options.resident_budget_bytes_ = 128;
+        const ruvia::static_root root(dir, options);
+        const std::array<std::pair<std::string_view, std::string_view>, 3> cases{{
+            {"nested/dir", "short-index"},
+            {"nested\\dir", "short-index"},
+            {"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz\\nested-directory\\", "long-index"},
+        }};
+        for (const auto& [path, expected] : cases) {
+            SCOPED_TRACE(path);
+            static_file_test_request request;
+            const auto response = with_static_context(request,
+                [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+                    try {
+                        const auto result = co_await ctx.static_file(root, {.relative_path_ = path});
+                        co_return std::pair(result.status(), std::string(result.body_bytes()));
+                    } catch (const ruvia::http_error& error) {
+                        co_return std::pair(error.info().status(), std::string{});
+                    }
+                });
+            EXPECT_EQ(response.first, ruvia::http_status::ok);
+            EXPECT_EQ(response.second, expected);
+        }
+    }
+    fs::remove_all(dir);
+}
+
 #if defined(__linux__)
 TEST(Ruvia, file_response_rejects_a_fifo_without_blocking_the_worker) {
     namespace fs = std::filesystem;

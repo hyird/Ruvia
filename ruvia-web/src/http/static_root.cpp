@@ -292,8 +292,10 @@ namespace {
     if (!entry_value.has_value() && detail::static_root_access::is_indexed_directory(root, relative)) {
         // A normalized path never ends with '/'.
         const auto index = detail::static_root_access::index_file(root);
+        // reserve() may invalidate a normalized path borrowed from storage.
+        const bool copy_relative = relative.data() != storage.data();
         storage.reserve(relative.size() + (relative.empty() ? 0U : 1U) + index.size());
-        if (relative.data() != storage.data()) {
+        if (copy_relative) {
             storage.assign(relative.data(), relative.size());
         }
         if (!storage.empty()) {
