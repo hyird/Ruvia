@@ -5,9 +5,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/response/http_response_body_access.h"
-#include "ruvia/http/detail/server/http_final_response_control_plan.h"
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_response_stream.h"
 
@@ -17,6 +14,8 @@
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_websocket_handshake.h"
+#include "response/http_final_response_control_plan.h"
+#include "response/http_response_body_access.h"
 #include "response/http_response_content_semantics.h"
 
 namespace ruvia::detail {

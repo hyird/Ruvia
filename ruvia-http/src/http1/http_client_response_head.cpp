@@ -2,13 +2,13 @@
 
 #include <variant>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
 
 #include "client/http_client_response_head.h"
 #include "parser/http_header_block_parser.h"
+#include "parser/http_parser_syntax.h"
 #include "response/http_response_content_semantics.h"
 
 namespace ruvia::detail {

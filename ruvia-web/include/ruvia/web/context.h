@@ -284,6 +284,7 @@ private:
     explicit dispatch_response(std::pmr::memory_resource* resource = nullptr)
         : headers_(pmr_resource_or_default(resource)),
           body_(pmr_resource_or_default(resource)) {}
+    void copy_head_from(const http_response& response);
     http_status_code status_{http_status::ok};
     std::pmr::vector<http_header> headers_;
     std::pmr::string body_;
@@ -562,9 +563,7 @@ public:
     context_request req() const&& = delete;
 
     // Connection metadata borrows this request's transport state.
-    [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND {
-        return conn_info_;
-    }
+    [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND;
     const conn_info& conn() const&& = delete;
 
     // The exception that failed the current middleware/handler dispatch, or
@@ -860,7 +859,6 @@ private:
 
     request_memory& memory_;
     const http_request& request_;
-    conn_info conn_info_;
     // context cannot escape request dispatch and therefore borrows the stable
     // server-owned handle without touching its shared ownership count.
     detail::worker_context_capabilities capabilities_;

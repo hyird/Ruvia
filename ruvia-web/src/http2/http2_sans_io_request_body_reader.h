@@ -23,7 +23,7 @@ public:
     // does, so an unread content never prompts the client to send it.
     http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id,
         http2_sans_io_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure,
-        http2_sans_io_stream_signal& signal, worker_signal& write_signal,
+        multiplexed_stream_signal& signal, worker_signal& write_signal,
         http_interim_response_output* continue_output) noexcept
         : connection_(connection),
           stream_id_(stream_id),
@@ -76,7 +76,7 @@ private:
     std::uint32_t stream_id_;
     http2_sans_io_body_queue& body_queue_;
     const std::optional<http_request_body_failure>& body_failure_;
-    http2_sans_io_stream_signal& signal_;
+    multiplexed_stream_signal& signal_;
     worker_signal& write_signal_;
     http_interim_response_output* continue_output_;
 };

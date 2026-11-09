@@ -19,7 +19,7 @@ namespace ruvia::detail {
 // and writer; this adapter returns flow credit only after consuming DATA.
 class http3_tunnel_transport final {
 public:
-    http3_tunnel_transport(http3_session& session, http3_stream& stream, http3_stream_signal& signal) noexcept
+    http3_tunnel_transport(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal) noexcept
         : session_(session),
           stream_(stream),
           signal_(signal) {}
@@ -106,8 +106,8 @@ public:
 
 private:
     struct output_deadline final {
-        http3_stream_signal& signal_;
-        explicit output_deadline(http3_stream_signal& signal)
+        multiplexed_stream_signal& signal_;
+        explicit output_deadline(multiplexed_stream_signal& signal)
             : signal_(signal) {
             signal_.set_waiting_output(true);
         }
@@ -125,7 +125,7 @@ private:
 
     http3_session& session_;
     http3_stream& stream_;
-    http3_stream_signal& signal_;
+    multiplexed_stream_signal& signal_;
 };
 
 }  // namespace ruvia::detail

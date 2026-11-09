@@ -5,11 +5,11 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/http/detail/response/http_response_body_access.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/http_response.h"
 
 #include "coding/http_content_length.h"
+#include "response/http_response_body_access.h"
+#include "response/http_response_header_state.h"
 
 // Content-Length planning for protocols whose frames delimit the content
 // (HTTP/2 DATA frames, RFC 9113 §8.1.1; HTTP/3 DATA frames, RFC 9114 §4.1.2).

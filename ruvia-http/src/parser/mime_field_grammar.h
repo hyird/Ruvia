@@ -51,13 +51,6 @@ namespace ruvia::detail {
     });
 }
 
-[[nodiscard]] inline bool http_valid_mime_field_body(std::string_view value) noexcept {
-    return std::ranges::all_of(value, [](char byte) {
-        const auto character = static_cast<unsigned char>(byte);
-        return character == '\t' || (character >= 0x20 && character != 0x7F);
-    });
-}
-
 [[nodiscard]] inline bool http_valid_mime_parameter_value(std::string_view value) noexcept {
     if (value.empty()) {
         return false;

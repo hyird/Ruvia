@@ -5,10 +5,11 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_response.h"
+
+#include "response/http_response_header_state.h"
 
 namespace ruvia::detail {
 

@@ -125,7 +125,9 @@ void external_context_claim::release(event_loop_state* state_value) noexcept {
 attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool)
     : claim_(io_context),
       runtime_(io_context, queue_capacity, pool),
-      stop_(runtime_) {}
+      stop_(runtime_) {
+    worker_handle_access::enable_external_runner(runtime_.handle());
+}
 
 // The callback owner is kept alive by the completion handler until both the
 // returned task frame and its completion chain have retired.
@@ -263,7 +265,7 @@ void event_loop_state::attach(const std::shared_ptr<event_loop_state>& self) {
     attached.stop_.configure({
         // Only stop() requests this chain, so its gate is already sealing.
         // Joining it keeps the chain from finalizing before the gate drains.
-        .stop_admission_ = [this] { stop(); },
+        .stop_admission_ = [this] { complete_stop_admission(); },
         // Releasing the claim can destroy this state together with its chain;
         // the chain then releases its work guard on the still-running context.
         .finalize_ =
@@ -324,37 +326,25 @@ void event_loop_state::stop() noexcept {
     if (stopping_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    retirement_.close_root_admission();
-    if (!retirement_.try_begin()) {
+    const std::weak_ptr<event_loop_state> weak = weak_from_this();
+    if (!retirement_.begin_stop([weak] {
+            if (auto state_value = weak.lock()) {
+                auto* const state_ptr = state_value.get();
+                state_ptr->defer_finalize_stop(std::move(state_value));
+            }
+        })) {
         return;
     }
-    const std::weak_ptr<event_loop_state> weak = weak_from_this();
-    retirement_.set_finalize([weak] {
-        if (auto state_value = weak.lock()) {
-            auto* const state_ptr = state_value.get();
-            state_ptr->defer_finalize_stop(std::move(state_value));
-        }
-    });
     if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
         attached->stop_.request_stop();
     } else {
         owned_runtime().request_stop();
     }
-    // close() can lose the race to a dispatcher that already set
-    // accepting=false but has not yet called every shutdown listener. Do
-    // not seal the retirement gate until both that first notification batch
-    // and the worker's queued posts have drained, so every listener and
-    // draining post can acquire its cleanup lease.
-    try {
-        worker_handle_access::when_shutdown_notifications_complete(runtime_.handle(), [weak] {
-            if (const auto state_value = weak.lock()) {
-                state_value->retirement_.finish();
-                state_value->schedule_finalize_when_idle();
-            }
-        });
-    } catch (...) {
-        fail_teardown_start(std::current_exception());
-    }
+}
+
+void event_loop_state::complete_stop_admission() noexcept {
+    stop();
+    schedule_finalize_when_idle();
 }
 
 void event_loop_state::schedule_finalize_when_idle() noexcept {

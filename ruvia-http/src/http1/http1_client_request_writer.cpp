@@ -3,8 +3,6 @@
 #include <array>
 #include <cstdint>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
@@ -15,8 +13,10 @@
 
 #include "client/http1_client_request_headers.h"
 #include "client/http_origin_view.h"
+#include "field/http_connection_fields.h"
 #include "field/http_expect_token.h"
 #include "parser/http_header_descriptor_storage.h"
+#include "parser/http_parser_syntax.h"
 #include "parser/http_request_target.h"
 #include "util/http_wire_sink.h"
 
@@ -27,11 +27,10 @@ struct http1_client_request_prepare_result_access final {
         http1_client_request_prepare_error>;
 
     [[nodiscard]] static http1_client_exchange_state exchange_state(http_known_method method,
-        http_connection_options connection_options, http1_close_policy close_policy,
-        http1_client_initial_content_state content_state,
+        http1_close_policy close_policy, http1_client_initial_content_state content_state,
         std::pmr::string offered_upgrade_protocols) noexcept {
-        return http1_client_exchange_state(method, connection_options, close_policy, content_state,
-            std::move(offered_upgrade_protocols));
+        return http1_client_exchange_state(
+            method, close_policy, content_state, std::move(offered_upgrade_protocols));
     }
 
     [[nodiscard]] static constexpr result_type buffer_too_small(
@@ -340,7 +339,7 @@ struct request_head_write_plan final {
                                              ? detail::http1_client_initial_content_state::pending
                                              : detail::http1_client_initial_content_state::complete);
     auto exchange_state = detail::http1_client_request_prepare_result_access::exchange_state(
-        known_method, header_facts.connection_options_, effective_close_policy, content_state,
+        known_method, effective_close_policy, content_state,
         std::move(offered_upgrade_protocols));
     const request_head_write_plan write_plan{origin.host(), port_value, method, target, headers, content_length_value,
         connect, explicit_content, expect_continue, generate_connection_close};

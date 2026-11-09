@@ -1,6 +1,6 @@
 #include "client/http1_client_request_headers.h"
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 

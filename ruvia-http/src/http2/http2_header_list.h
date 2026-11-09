@@ -13,10 +13,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 
+#include "parser/http_parser_syntax.h"
 #include "util/geometric_reserve.h"
 
 namespace ruvia::detail {

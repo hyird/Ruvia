@@ -12,7 +12,7 @@
 - **优先级准则**：正确性与并发安全第一，其次长期可维护性，最后是经实测证明的性能。
 - **少即是多（Less is More）**：能删则删、能简则简，新增设计只服务当前明确需求，至少两个真实调用方共享才提取抽象。
 - **反过度设计**：严禁预设扩展点、单用法泛型/策略层、无状态包装或将同步/非事务操作伪装成异步/事务。
-- **遵循标准**：严格遵守现行 RFC（HTTP 参照 RFC 9110/9111/9112/9113，TLS 1.3 参照 RFC 9846）及勘误，区分 MUST/SHOULD/MAY 与收发/代理义务，不把发送方限制当成接收方拒绝规则。
+- **遵循标准**：严格遵守现行 RFC（HTTP 参照 RFC 9110/9111/9112/9113/9114，QUIC 参照 RFC 9000，TLS 1.3 参照 RFC 9846）及勘误，区分 MUST/SHOULD/MAY 与收发/代理义务，不把发送方限制当成接收方拒绝规则。
 - **借鉴权威**：优先借鉴同领域权威项目（如 Pingora）的成熟机制，不闭门造车，不以主观“更严格”代替标准。
 - **单一权威实现**：同类能力统一入口、共用唯一主链与状态机，不维护平行分叉实现。
 - **零技术债务与纯粹契约**：不为缩小 diff 塞入兼容开关，内部代码、协议、存储与缓存保持当前唯一契约，不引入无外部标准依据的内部版本号或代次后缀。
@@ -27,14 +27,14 @@
 flowchart TB
     subgraph web ["ruvia-web (ruvia::web) — 应用框架与异步 I/O 驱动"]
         w_app["路由 / 中间件 / Model & ORM / Session / 限流 / 静态文件"]
-        w_io["服务端网络驱动 / TLS (OpenSSL 3.0+) / DB & Redis & JWT 驱动"]
+        w_io["服务端与客户端网络驱动 / TLS & QUIC Crypto (OpenSSL 3.0+) / DB & Redis & JWT 驱动"]
     end
     subgraph core ["ruvia-core (ruvia::core) — 独立运行时底座"]
         c_rt["协程 task / standalone Asio 事件循环 / 定时器最小堆 / stop_token"]
         c_pool["有界通道 / pool_lease_scheduler / blocking_pool / 两级 PMR 内存池"]
     end
     subgraph http ["ruvia-http (ruvia::http) — 纯 Sans-I/O 协议引擎"]
-        h_proto["HTTP/1.x / HTTP/2 / HPACK / 内容编码 / Multipart / Range / Cookie / WebSocket / Capsule"]
+        h_proto["HTTP/1.x / HTTP/2 / HTTP/3 / HPACK / QPACK / QUIC / 内容编码 / Multipart / Range / Cookie / WebSocket / Capsule"]
     end
 
     web -->|"消费纯值协议计划驱动异步读写与超时"| http
@@ -166,6 +166,7 @@ sequenceDiagram
 - **内容编码、Range 与 Cookie**：传输解压逆序级联零内部暂存，内容编码限制层数与中间块上限（Zstd 锁定 8 MiB 窗口），应用编码自动弱化强 `ETag` 并合并 `Vary`；`Range` 单遍原地归并，多段 `Range` 遇已编码表示回退完整表示；`Set-Cookie` 按 `(name, domain, path, partitioned)` 四元键原地去重。
 - **HTTP/2 流控与防洪（RFC 9113）**：`SETTINGS` 在候选副本校验无溢出后提交；`DATA` 先预留容量再扣窗口，丢弃帧立即归还窗口，移除流时 `flush_window_debt` 防连接窗口萎缩；内置 `PING / SETTINGS`、Rapid-Reset 净差值（防 CVE-2023-44487）、畸形流与空闲流优先级防洪预算；入站正文采用双缓冲队列配线性流控信用令牌，未决流租约登记至定长账本随流控确认解锁。
 - **HPACK 状态同步**：入站先构造独立条目防自别名、支持首部块异常回滚，移除等待 `CONTINUATION` 的流转入 `discarded_header_stream_` 保同步；出站 `checkpoint` 原子回滚且敏感首部标 `never_indexed`。
+- **HTTP/3 与 QUIC（RFC 9000 / RFC 9114）**：`ruvia-http` 封装无 OpenSSL 依赖的 `nghttp3` / `ngtcp2` core 状态机，`ruvia-web` 接入 OpenSSL 3.0+ QUIC TLS、Retry 地址验证、无状态重置、连接迁移与 0-RTT 重放防线（非安全方法拒绝早期数据）；多路复用流与 HTTP/2 共享连接终止、流唤醒与流控信用回收契约。
 - **全双工会话（WebSocket / SSE / Capsule）**：读、写、心跳与关闭保持单向线性通道互斥（读活跃驱动心跳超时，写超期独立判定失活），任一方向出错或关闭协同唤醒排空另一方向；WebSocket 写通道仅在完整消息边界间轮询控制帧，`permessage-deflate` 禁用单帧压缩时绕过字典更新；`CONNECT-UDP`（RFC 9298）强制 `Capsule-Protocol: ?1`，未知 Capsule 零缓冲流式跳过。
 
 ### Web 与数据访问

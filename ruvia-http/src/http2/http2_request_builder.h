@@ -8,7 +8,6 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
@@ -16,6 +15,7 @@
 
 #include "http2/http2_request_headers.h"
 #include "http2/http2_stream_state.h"
+#include "parser/http_parser_syntax.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
 

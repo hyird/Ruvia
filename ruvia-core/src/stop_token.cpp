@@ -33,12 +33,11 @@ void stop_state::request_stop() noexcept {
             head_->previous_ = nullptr;
         }
         node->next_ = nullptr;
-        node->linked_ = false;
         running_ = node;
         lock.unlock();
         // The callback may destroy the node, and an unlink waiting on another
         // thread frees it once running_ moves on: the node is not touched again.
-        node->callback_->invoke();
+        node->invoke();
         lock.lock();
         running_ = nullptr;
         if (std::exchange(run_awaited_, false)) {
@@ -53,9 +52,11 @@ bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_ph
     if ((flags_.load(std::memory_order_relaxed) & requested_flag) != 0) {
         return false;
     }
+    node.linked_ = true;
     auto expected = stop_registration_phase::registering;
     if (!phase.compare_exchange_strong(expected, stop_registration_phase::registered,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
+        node.linked_ = false;
         if (expected != stop_registration_phase::reset_pending) {
             std::terminate();
         }
@@ -66,13 +67,12 @@ bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_ph
         head_->previous_ = &node;
     }
     head_ = &node;
-    node.linked_ = true;
     return true;
 }
 
 void stop_state::unlink(stop_callback_node& node) noexcept {
     std::unique_lock lock(mutex_);
-    if (node.linked_) {
+    if (head_ == &node || node.previous_ != nullptr) {
         if (node.previous_ != nullptr) {
             node.previous_->next_ = node.next_;
         } else {
@@ -81,7 +81,8 @@ void stop_state::unlink(stop_callback_node& node) noexcept {
         if (node.next_ != nullptr) {
             node.next_->previous_ = node.previous_;
         }
-        node.linked_ = false;
+        node.previous_ = nullptr;
+        node.next_ = nullptr;
         return;
     }
     // Never linked, or its run already returned.
@@ -143,26 +144,6 @@ namespace {
 
 stop_group::stop_group(std::span<const stop_token> parents)
     : extra_parents_(extra_parent_count(parents), process_resource()) {
-    std::size_t count = 0;
-    std::array<std::size_t, 2> first_two_indices{};
-    for (std::size_t index = 0; index != parents.size(); ++index) {
-        if (parents[index].stop_requested()) {
-            output_ = parents[index];
-            return;
-        }
-        if (unique_parent(parents, index)) {
-            output_ = parents[index];
-            if (count < first_two_indices.size()) {
-                first_two_indices[count] = index;
-            }
-            ++count;
-        }
-    }
-    if (count < 2) {
-        return;
-    }
-    source_.emplace();
-    output_ = source_->token();
     // Capture the state, never this: downstream callbacks may destroy the
     // group, including the parent registration currently invoking us.
     const auto register_parent = [this](const stop_token& parent, stop_registration& registration) {
@@ -170,17 +151,49 @@ stop_group::stop_group(std::span<const stop_token> parents)
             state->request_stop();
         });
     };
-    register_parent(parents[first_two_indices[0]], parents_[0]);
-    register_parent(parents[first_two_indices[1]], parents_[1]);
-    if (count == 2) {
+    if (!extra_parents_.empty()) {
+        source_.emplace();
+        output_ = source_->token();
+        std::size_t slot = 0;
+        for (std::size_t index = 0; index != parents.size(); ++index) {
+            if (!unique_parent(parents, index)) {
+                continue;
+            }
+            if (slot < parents_.size()) {
+                register_parent(parents[index], parents_[slot]);
+            } else {
+                register_parent(parents[index], extra_parents_[slot - parents_.size()]);
+            }
+            ++slot;
+        }
         return;
     }
-    std::size_t extra_slot = 0;
-    for (std::size_t index = first_two_indices[1] + 1; index != parents.size(); ++index) {
+    const stop_token* first = nullptr;
+    const stop_token* second = nullptr;
+    for (std::size_t index = 0; index != parents.size(); ++index) {
+        if (parents[index].stop_requested()) {
+            output_ = parents[index];
+            return;
+        }
         if (unique_parent(parents, index)) {
-            register_parent(parents[index], extra_parents_[extra_slot++]);
+            if (first == nullptr) {
+                first = &parents[index];
+            } else {
+                second = &parents[index];
+            }
         }
     }
+    if (first == nullptr) {
+        return;
+    }
+    if (second == nullptr) {
+        output_ = *first;
+        return;
+    }
+    source_.emplace();
+    output_ = source_->token();
+    register_parent(*first, parents_[0]);
+    register_parent(*second, parents_[1]);
 }
 
 }  // namespace ruvia

@@ -41,7 +41,7 @@ application& application::compression(compression_config config) {
 application& application::compression(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change compression config while app is running",
-        [](detail::app_state& state_value) { state_value.options_.compression_.reset(); });
+        [](detail::app_state& state_value) { state_value.options_.clear_compression(); });
 }
 
 application& application::cors(cors_config config) {
@@ -53,7 +53,7 @@ application& application::cors(cors_config config) {
 application& application::cors(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change CORS config while app is running",
-        [](detail::app_state& state_value) { state_value.options_.cors_.reset(); });
+        [](detail::app_state& state_value) { state_value.options_.clear_cors(); });
 }
 
 application& application::document_root(document_root_config config) {

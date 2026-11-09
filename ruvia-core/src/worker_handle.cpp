@@ -108,6 +108,12 @@ bool detail::worker_handle_access::timers_stopping(const worker_handle& worker_v
     return !worker_value.dispatcher_ || worker_value.dispatcher_->timers_stopping();
 }
 
+void detail::worker_handle_access::enable_external_runner(const worker_handle& worker_value) noexcept {
+    if (worker_value.dispatcher_) {
+        worker_value.dispatcher_->enable_external_runner();
+    }
+}
+
 worker_timer_schedule_status worker_handle::schedule_timer(worker_timer_registration& registration,
     std::chrono::steady_clock::time_point deadline_value,
     move_only_function<void(worker_timer_outcome)> completion) const& {

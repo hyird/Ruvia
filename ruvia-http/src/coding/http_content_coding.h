@@ -4,8 +4,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_content_coding.h"
+
+#include "field/http_connection_fields.h"
 
 namespace ruvia::detail {
 

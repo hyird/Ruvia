@@ -148,58 +148,18 @@ inline stop_state_ref::~stop_state_ref() {
     }
 }
 
-class stop_callback final {
-public:
-    explicit stop_callback(move_only_function<void()> callback_value) noexcept
-        : callback_(std::move(callback_value)) {}
-
-    // Callers only wrap a non-empty callback: registration returns early on an
-    // empty one, and invoke() runs the stored callback at most once.
-    void operator()() noexcept {
-        try {
-            callback_();
-        } catch (...) {
-            std::terminate();
-        }
-    }
-
-private:
-    move_only_function<void()> callback_;
-};
-
-class stop_callback_state final {
-public:
-    explicit stop_callback_state(move_only_function<void()> callback_value) noexcept
-        : callback_(std::move(callback_value)) {}
-
-    [[nodiscard]] std::optional<stop_callback> take() noexcept {
-        if (invoked_.test_and_set(std::memory_order_acq_rel)) {
-            return std::nullopt;
-        }
-        return stop_callback(std::move(callback_));
-    }
-
-    void invoke() noexcept {
-        if (auto callback = take()) {
-            (*callback)();
-        }
-    }
-
-private:
-    std::atomic_flag invoked_ = ATOMIC_FLAG_INIT;
-    move_only_function<void()> callback_;
-};
-
-// One registration's link into one stop state. Destruction unlinks it; if the
-// callback is running on another thread, it waits for that run to return, so
-// the callback state can be released next.
+// One registration's link into one stop state. Destruction unlinks a linked
+// node; if the callback is running on another thread, it waits for that run to
+// return before destroying the stored callback.
 class stop_callback_node final {
 public:
-    stop_callback_node(const stop_state_ref& state_value, stop_callback_state& callback) noexcept
+    stop_callback_node(const stop_state_ref& state_value, move_only_function<void()> callback_value) noexcept
         : state_(state_value),
-          callback_(&callback) {}
+          callback_(std::move(callback_value)) {}
     ~stop_callback_node() {
-        state_->unlink(*this);
+        if (linked_) {
+            state_->unlink(*this);
+        }
     }
 
     stop_callback_node(const stop_callback_node&) = delete;
@@ -207,13 +167,38 @@ public:
     stop_callback_node(stop_callback_node&&) = delete;
     stop_callback_node& operator=(stop_callback_node&&) = delete;
 
+    [[nodiscard]] move_only_function<void()> take() noexcept {
+        if (invoked_.test_and_set(std::memory_order_acq_rel)) {
+            return {};
+        }
+        return std::move(callback_);
+    }
+
+    static void invoke(move_only_function<void()>&& callback) noexcept {
+        if (!callback) {
+            return;
+        }
+        try {
+            callback();
+        } catch (...) {
+            std::terminate();
+        }
+    }
+
+    void invoke() noexcept {
+        auto callback = take();
+        invoke(std::move(callback));
+    }
+
 private:
+    friend class ::ruvia::stop_registration;
     friend class stop_state;
 
     stop_state_ref state_;
-    stop_callback_state* callback_;
+    move_only_function<void()> callback_;
     stop_callback_node* previous_{nullptr};
     stop_callback_node* next_{nullptr};
+    std::atomic_flag invoked_{};
     bool linked_{false};
 };
 
@@ -272,7 +257,7 @@ private:
             return;
         }
         if (state->stop_requested()) {
-            detail::stop_callback(std::move(callback_value))();
+            detail::stop_callback_node::invoke(std::move(callback_value));
             return;
         }
 
@@ -281,29 +266,25 @@ private:
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             std::terminate();
         }
-        callback_state_.emplace(std::move(callback_value));
-        callback_.emplace(state, *callback_state_);
+        callback_.emplace(state, std::move(callback_value));
         if (state->link(*callback_, phase_)) {
             return;
         }
+        auto callback = callback_->take();
         callback_.reset();
-        auto callback = callback_state_->take();
-        callback_state_.reset();
         const auto previous_phase =
             phase_.exchange(registration_phase_type::idle, std::memory_order_acq_rel);
-        if (previous_phase != registration_phase_type::reset_pending && callback.has_value()) {
-            (*callback)();
+        if (previous_phase != registration_phase_type::reset_pending) {
+            detail::stop_callback_node::invoke(std::move(callback));
         }
     }
 
     // Unlink waits for an invocation on another thread before retiring its state.
     void clear_registration() noexcept {
         callback_.reset();
-        callback_state_.reset();
     }
 
     std::atomic<registration_phase_type> phase_{registration_phase_type::idle};
-    std::optional<detail::stop_callback_state> callback_state_;
     std::optional<detail::stop_callback_node> callback_;
 };
 
@@ -406,8 +387,8 @@ public:
     explicit stop_group(std::span<const stop_token> parents);
     stop_group(std::initializer_list<stop_token> parents)
         : stop_group(std::span<const stop_token>(parents.begin(), parents.size())) {}
-    stop_group(stop_token first, stop_token second)
-        : stop_group({std::move(first), std::move(second)}) {}
+    stop_group(const stop_token& first, const stop_token& second)
+        : stop_group(std::span<const stop_token>(std::array<stop_token, 2>{first, second})) {}
     ~stop_group() = default;
 
     stop_group(const stop_group&) = delete;

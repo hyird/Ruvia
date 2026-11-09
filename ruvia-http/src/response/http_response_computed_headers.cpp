@@ -3,11 +3,11 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_response.h"
 
+#include "response/http_response_header_bits.h"
 #include "response/http_response_header_storage.h"
 #include "util/http_wire_sink.h"
 // The two response fields Ruvia formats itself rather than taking as a value:

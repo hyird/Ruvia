@@ -3,6 +3,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace ruvia::detail {
 
@@ -53,4 +54,5 @@ inline constexpr std::uint32_t response_header_proxy_connection = 1U << 25;
            bit == response_header_last_modified || bit == response_header_location;
 }
 
+[[nodiscard]] std::uint32_t classify_response_header_name(std::string_view name) noexcept;
 }  // namespace ruvia::detail

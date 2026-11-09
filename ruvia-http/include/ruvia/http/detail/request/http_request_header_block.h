@@ -10,11 +10,12 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {
+
+enum class request_header_kind : std::uint8_t;
 
 // Owns field descriptors and the parser's request_header_kind for each field.
 // Kinds sit in the same allocation so Cookie/Accept scans do not re-classify

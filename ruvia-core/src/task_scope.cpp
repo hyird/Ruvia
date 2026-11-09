@@ -97,7 +97,6 @@ void task_scope::spawn(task<void> task_value) & {
 }
 
 void task_scope::request_stop() & noexcept {
-    stop_requested_ = true;
     stop_source_.request_stop();
 }
 
@@ -106,7 +105,7 @@ stop_token task_scope::token() const& {
 }
 
 bool task_scope::stop_requested() const& noexcept {
-    return stop_requested_;
+    return stop_source_.stop_requested();
 }
 
 std::size_t task_scope::size() const& noexcept {
@@ -187,7 +186,6 @@ void task_scope::finish(node_type* node_value) noexcept {
     } catch (...) {
         if (failure_ == nullptr) {
             failure_ = std::current_exception();
-            stop_requested_ = true;
             notify_stop = true;
         } else if (!equivalent_failures(std::current_exception(), failure_)) {
             // join rethrows only the first failure; later distinct ones have no other owner.

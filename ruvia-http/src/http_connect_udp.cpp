@@ -5,7 +5,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_datagram.h"
@@ -14,6 +13,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
+#include "field/http_connection_fields.h"
 #include "field/http_te_fields.h"
 #include "parser/http_request_target.h"
 #include "parser/http_uri_grammar.h"

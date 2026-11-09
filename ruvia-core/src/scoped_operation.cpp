@@ -10,11 +10,8 @@ namespace ruvia {
 // Keeps a reentrant join from publishing retirement during frame/capability
 // cleanup. Its registration is a value, not a frame-owner base class.
 struct operation_scope::drain_guard final {
-    explicit drain_guard(operation_scope& scope) noexcept
-        : registration_(scope) {
-        if (registration_.scope_ == nullptr) {
-            scope.link(registration_);
-        }
+    explicit drain_guard(operation_scope& scope) noexcept {
+        scope.link(registration_);
         registration_.phase_ = detail::scoped_operation_registration::phase::retiring;
     }
 
@@ -272,15 +269,6 @@ void operation_scope::unlink(detail::scoped_operation_registration& operation) n
 }
 
 namespace detail {
-
-scoped_operation_registration::scoped_operation_registration(operation_scope& scope) noexcept {
-    if (scope.active()) {
-        phase_ = phase::cold;
-        scope.link(*this);
-    } else {
-        phase_ = phase::expired;
-    }
-}
 
 scoped_operation_registration::scoped_operation_registration(
     scoped_operation_registration&& other, void* new_frame_target) noexcept {

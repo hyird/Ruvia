@@ -53,7 +53,7 @@ void invoke_stop_hooks(detail::app_state& state_value) noexcept {
 class process_signal_handling final {
 public:
     explicit process_signal_handling(application& owner)
-        : runtime_({.queue_capacity_ = 128}),
+        : runtime_({.queue_capacity_ = 1, .io_policy_ = worker_io_policy::single_owner}),
           signals_(runtime_.io_context()) {
         runtime_.configure({
             .stop_admission_ = [this] {

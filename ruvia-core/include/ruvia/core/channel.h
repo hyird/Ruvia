@@ -196,15 +196,11 @@ struct channel_receive_awaiter final {
         wait_.start("channel receive must run on its bound worker");
         auto& owner_value = wait_.state();
         auto lock = owner_value.lock_state();
-        if (owner_value.receiver_closed_) {
-            (void)wait_.complete_status(std::holds_alternative<channel_worker_stopping>(owner_value.lifecycle_)
-                                            ? worker_wait_status::worker_stopping
-                                            : worker_wait_status::closed);
-            return true;
-        }
-        if (auto* item = owner_value.dequeue()) {
-            (void)wait_.complete_result(worker_wait_result_access::value(item));
-            return true;
+        if (!owner_value.receiver_closed_) {
+            if (auto* item = owner_value.dequeue()) {
+                (void)wait_.complete_result(worker_wait_result_access::value(item));
+                return true;
+            }
         }
         if (std::holds_alternative<channel_worker_stopping>(owner_value.lifecycle_)) {
             (void)wait_.complete_status(worker_wait_status::worker_stopping);

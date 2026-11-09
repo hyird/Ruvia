@@ -2,12 +2,6 @@
 #include <optional>
 #include <stdexcept>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/response/http1_status_line.h"
-#include "ruvia/http/detail/response/http_response_body_access.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
-#include "ruvia/http/detail/server/http_final_response_control_plan.h"
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_field_section.h"
@@ -17,6 +11,11 @@
 #include "ruvia/http/http_status.h"
 
 #include "coding/http_content_length.h"
+#include "field/http_connection_fields.h"
+#include "response/http1_status_line.h"
+#include "response/http_final_response_control_plan.h"
+#include "response/http_response_body_access.h"
+#include "response/http_response_header_state.h"
 #include "response/http_response_header_storage.h"
 #include "server/http_date_cache.h"
 #include "util/http_wire_sink.h"
@@ -250,18 +249,6 @@ void append_http1_response_trailers(
     output.reserve(output.size() + bytes);
     detail::http_string_wire_sink sink(output);
     detail::emit_response_trailer_fields(sink, fields);
-}
-
-http_response_trailer_section validate_http_response_trailers(
-    std::span<const http_header_view> trailers) {
-    auto section_size = http_trailer_section_budget();
-    for (const auto& trailer : trailers) {
-        if (!detail::response_trailer_field_valid(trailer.name(), trailer.value()) ||
-            !section_size.add_field(trailer.name(), trailer.value())) {
-            throw std::invalid_argument("invalid HTTP response trailer section");
-        }
-    }
-    return http_response_trailer_section(trailers);
 }
 
 namespace {

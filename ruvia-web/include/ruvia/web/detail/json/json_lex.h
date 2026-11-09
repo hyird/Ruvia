@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <string_view>
 
 namespace ruvia::detail {
 
+inline constexpr std::size_t max_json_depth = 64;
 inline void skip_json_whitespace(std::string_view& input) noexcept {
     while (!input.empty()) {
         const char c = input.front();

@@ -29,11 +29,16 @@ class event_loop_retirement final {
 public:
     event_loop_retirement() = default;
 
-    void set_finalize(move_only_function<void()> finalize) noexcept {
+    [[nodiscard]] bool begin_stop(move_only_function<void()> finalize) noexcept {
         {
             const std::lock_guard lock(mutex_);
+            root_admission_closed_ = true;
+            if (sealed_ || finalized_) {
+                return false;
+            }
             std::swap(finalize_, finalize);
         }
+        return true;
     }
 
     [[nodiscard]] bool try_begin() noexcept {
@@ -96,11 +101,6 @@ public:
     [[nodiscard]] std::size_t pending() const noexcept {
         const std::lock_guard lock(mutex_);
         return pending_;
-    }
-
-    void close_root_admission() noexcept {
-        const std::lock_guard lock(mutex_);
-        root_admission_closed_ = true;
     }
 
     void close_admission() noexcept {
@@ -215,6 +215,7 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     [[noreturn]] void fail_teardown_start(std::exception_ptr failure) noexcept;
 
     void stop() noexcept;
+    void complete_stop_admission() noexcept;
     void finalize_stop() noexcept;
     // Asio service shutdown of an attached context: retires the worker before
     // the context destroys its scheduler.

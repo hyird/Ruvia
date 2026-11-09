@@ -12,7 +12,6 @@
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/protocol_byte_limit.h"
@@ -20,6 +19,7 @@
 #include "ruvia/http/websocket_protocol.h"
 
 #include "coding/http_zlib_stream.h"
+#include "parser/http_parser_syntax.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_handshake_fields.h"
 #include "websocket/websocket_deflate_message.h"

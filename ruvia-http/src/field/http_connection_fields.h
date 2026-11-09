@@ -9,12 +9,12 @@
 #include <type_traits>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_known_headers.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
+
+#include "parser/http_parser_syntax.h"
+#include "response/http_response_header_bits.h"
 
 namespace ruvia::detail {
 
@@ -50,9 +50,7 @@ inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
     }
 }
 
-[[nodiscard]] inline bool is_forbidden_http_binary_response_field(std::string_view name) noexcept {
-    return is_forbidden_http_binary_connection_field(name) || http_ascii_equals_ignore_case(name, "te");
-}
+[[nodiscard]] bool is_forbidden_http_binary_response_field(std::string_view name) noexcept;
 
 // The field identity of a response field line: classify_request_header(name),
 // which also identifies response control fields (Trailer, TE, Upgrade). A

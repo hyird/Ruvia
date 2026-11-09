@@ -36,6 +36,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
@@ -172,14 +173,11 @@ struct blocking_result_access;
 
 template <typename t_type>
 struct blocking_payload final {
-    blocking_status status_{blocking_status::completed};
-    std::optional<t_type> value_;
-    std::exception_ptr error_;
-};
+    using value_storage_type =
+        std::conditional_t<std::is_void_v<t_type>, std::monostate, std::optional<t_type>>;
 
-template <>
-struct blocking_payload<void> final {
     blocking_status status_{blocking_status::completed};
+    [[no_unique_address]] value_storage_type value_{};
     std::exception_ptr error_;
 };
 

@@ -11,7 +11,6 @@
 #include <variant>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/detail/request/http_request_header_block.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
@@ -140,7 +139,7 @@ public:
 private:
     friend struct detail::http_request_access;
 
-    static constexpr std::size_t cached_header_slots = detail::request_header_kind_count - 1;
+    static constexpr std::size_t cached_header_slots = 32;
 
     http_request() noexcept = default;
 

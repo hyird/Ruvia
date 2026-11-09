@@ -2,11 +2,11 @@
 #include <optional>
 #include <utility>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_client_response_head.h"
 
 #include "client/http_client_response_head.h"
+#include "field/http_connection_fields.h"
 #include "response/http_response_content_semantics.h"
 
 // Whether a parsed response head lets the exchange continue: may this 101 switch
@@ -31,7 +31,7 @@ namespace {
         !request_content_allows_switch) {
         return false;
     }
-    if (!http1_client_exchange_state_access::connection_options(exchange_state).upgrade() ||
+    if (detail::http1_client_exchange_state_access::offered_upgrade_protocols(exchange_state).empty() ||
         response.connection_options_.close() || !response.connection_options_.upgrade() ||
         !response.upgrade_protocols_.has_protocol()) {
         return false;

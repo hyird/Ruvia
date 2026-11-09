@@ -33,13 +33,7 @@ http2_buffered_response_writer::http2_buffered_response_writer(http2_sans_io_ses
       write_signal_(write_signal),
       output_budget_(output_budget),
       file_io_(std::move(file_io)),
-      file_read_released_(file_io_.worker_) {}
-
-http2_buffered_response_writer::file_read_slot::~file_read_slot() {
-    --owner_->file_reads_;
-    owner_->file_read_released_.notify();
-}
-
+      file_reads_(file_io_.worker_, http2_file_read_slots) {}
 void http2_buffered_response_writer::wake_writer() noexcept {
     write_signal_.notify();
 }
@@ -51,19 +45,6 @@ bool http2_buffered_response_writer::stream_ended(std::uint32_t stream_id) const
     auto* runtime = stream_runtimes_.find(stream_id);
     auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
     return signal != nullptr && signal->terminated();
-}
-
-task<bool> http2_buffered_response_writer::acquire_file_read(std::uint32_t stream_id) {
-    // Every holder ends its read and submission (or its stream) and notifies,
-    // so a waiter wakes to re-check its own stream.
-    while (file_reads_ >= http2_file_read_slots) {
-        co_await file_read_released_.wait();
-        if (stream_ended(stream_id)) {
-            co_return false;
-        }
-    }
-    ++file_reads_;
-    co_return true;
 }
 
 task<http2_buffered_response_writer::data_write_result_type> http2_buffered_response_writer::write_data(
@@ -93,7 +74,7 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
     };
     wake_writer();
     for (;;) {
-        std::optional<file_read_slot> slot;
+        std::optional<multiplexed_file_read_limiter::slot> slot;
         std::size_t max_bytes = response_file_read_ahead_bytes;
         if (source.file_bytes_pending()) {
             // Read only what the peer has granted: a stream without send
@@ -104,10 +85,11 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
                 http2_send_window_wait_status::aborted) {
                 co_return write_result{.committed_status_ = committed_status};
             }
-            if (!(co_await acquire_file_read(stream_id))) {
+            if (!(co_await file_reads_.acquire(
+                    [this, stream_id]() noexcept { return stream_ended(stream_id); }))) {
                 co_return write_result{.committed_status_ = committed_status};
             }
-            slot.emplace(*this);
+            slot.emplace(file_reads_);
             if (stream_ended(stream_id)) {
                 co_return write_result{.committed_status_ = committed_status};
             }
@@ -163,21 +145,10 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
     // transfer a representation.
     if (!write_plan.body_plan().body_suppressed() &&
         (response.file_body() || response.has_multipart_file_body())) {
-        source.emplace(response, file_io_);
-        bool opened = false;
-        {
-            if (!(co_await acquire_file_read(stream_id))) {
-                co_return write_result{};
-            }
-            const file_read_slot slot(*this);
-            opened = co_await source->open_first();
-        }
-        // The blocking open may have yielded while the peer closed its stream.
-        if (stream_ended(stream_id)) {
-            co_return write_result{};
-        }
-        if (!opened) {
-            co_return write_result{.file_failure_ = *source->failure()};
+        if (const auto open_failure = co_await file_reads_.open_file_body(
+                source, response, file_io_,
+                [this, stream_id]() noexcept { return stream_ended(stream_id); })) {
+            co_return *open_failure;
         }
     }
 

@@ -7,8 +7,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_request.h"
@@ -16,6 +14,8 @@
 
 #include "coding/http_content_codec.h"
 #include "request/http_request_access.h"
+#include "response/http_response_header_bits.h"
+#include "response/http_response_header_state.h"
 #include "response/http_response_header_storage.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token

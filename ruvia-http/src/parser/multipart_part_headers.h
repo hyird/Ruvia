@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/multipart_parser.h"
 
 #include "parser/mime_field_grammar.h"
@@ -20,10 +21,12 @@ namespace ruvia::detail {
     return http_ascii_equals_ignore_case(http_header_token_before_parameters(disposition), "form-data");
 }
 
-class http_multipart_part_header_parse_result;
+struct http_multipart_part_headers final {
+    std::string_view name_;
+    std::string_view filename_;
+    std::string_view content_type_;
+    bool filename_present_{false};
 
-class http_multipart_part_headers final {
-public:
     [[nodiscard]] constexpr std::string_view name() const noexcept {
         return name_;
     }
@@ -39,77 +42,10 @@ public:
     [[nodiscard]] constexpr std::string_view content_type() const noexcept {
         return content_type_;
     }
-
-private:
-    friend class http_multipart_part_header_parse_result;
-
-    constexpr http_multipart_part_headers(std::string_view name, std::string_view filename,
-        std::string_view content_type_value, bool filename_present) noexcept
-        : name_(name),
-          filename_(filename),
-          content_type_(content_type_value),
-          filename_present_(filename_present) {}
-
-    std::string_view name_;
-    std::string_view filename_;
-    std::string_view content_type_;
-    bool filename_present_{false};
 };
 
-class http_multipart_part_header_parse_failure final {
-public:
-    [[nodiscard]] constexpr multipart_parse_error parse_error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http_multipart_part_header_parse_result;
-
-    explicit constexpr http_multipart_part_header_parse_failure(multipart_parse_error error) noexcept
-        : error_(error) {}
-
-    multipart_parse_error error_;
-};
-
-class http_multipart_part_header_parse_result final {
-public:
-    [[nodiscard]] constexpr const http_multipart_part_headers* headers() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    const http_multipart_part_headers* headers() const&& = delete;
-
-    [[nodiscard]] constexpr const http_multipart_part_header_parse_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    const http_multipart_part_header_parse_failure* failure() const&& = delete;
-
-private:
-    friend http_multipart_part_header_parse_result http_parse_multipart_part_headers(
-        std::string_view) noexcept;
-
-    using value_type = std::variant<http_multipart_part_headers, http_multipart_part_header_parse_failure>;
-
-    explicit constexpr http_multipart_part_header_parse_result(http_multipart_part_headers headers) noexcept
-        : value_(headers) {}
-
-    explicit constexpr http_multipart_part_header_parse_result(
-        http_multipart_part_header_parse_failure failure) noexcept
-        : value_(failure) {}
-
-    [[nodiscard]] static constexpr http_multipart_part_header_parse_result make_headers(
-        std::string_view name, std::string_view filename, std::string_view content_type_value,
-        bool filename_present) noexcept {
-        return http_multipart_part_header_parse_result(
-            http_multipart_part_headers(name, filename, content_type_value, filename_present));
-    }
-
-    [[nodiscard]] static constexpr http_multipart_part_header_parse_result make_failure(
-        multipart_parse_error error) noexcept {
-        return http_multipart_part_header_parse_result(http_multipart_part_header_parse_failure(error));
-    }
-
-    value_type value_;
-};
+using http_multipart_part_header_parse_result =
+    std::variant<http_multipart_part_headers, multipart_parse_error>;
 
 [[nodiscard]] inline http_multipart_part_header_parse_result http_parse_multipart_part_headers(
     std::string_view headers) noexcept {
@@ -122,22 +58,19 @@ private:
                                                              : remaining_headers.substr(0, line_end);
         const auto colon = line.find(':');
         if (colon == std::string_view::npos || !http_valid_mime_field_name(line.substr(0, colon)) ||
-            !http_valid_mime_field_body(line.substr(colon + 1))) {
-            return http_multipart_part_header_parse_result::make_failure(
-                multipart_parse_error::invalid_part_headers);
+            !is_valid_http_field_value_bytes(line.substr(colon + 1))) {
+            return multipart_parse_error::invalid_part_headers;
         }
         const auto key = line.substr(0, colon);
         const auto value = http_trim_ows(line.substr(colon + 1));
         if (http_ascii_equals_ignore_case(key, "Content-Disposition")) {
             if (disposition) {
-                return http_multipart_part_header_parse_result::make_failure(
-                    multipart_parse_error::invalid_content_disposition);
+                return multipart_parse_error::invalid_content_disposition;
             }
             disposition = value;
         } else if (http_ascii_equals_ignore_case(key, "Content-Type")) {
             if (content_type || !http_valid_mime_media_type(value)) {
-                return http_multipart_part_header_parse_result::make_failure(
-                    multipart_parse_error::invalid_part_headers);
+                return multipart_parse_error::invalid_part_headers;
             }
             content_type = value;
         }
@@ -148,8 +81,7 @@ private:
     }
 
     if (!disposition || !http_is_form_data_disposition(*disposition)) {
-        return http_multipart_part_header_parse_result::make_failure(
-            multipart_parse_error::invalid_content_disposition);
+        return multipart_parse_error::invalid_content_disposition;
     }
 
     // name and filename keep their wire spelling (token or validated
@@ -173,17 +105,18 @@ private:
         return true;
     });
     if (!valid) {
-        return http_multipart_part_header_parse_result::make_failure(
-            multipart_parse_error::invalid_content_disposition);
+        return multipart_parse_error::invalid_content_disposition;
     }
     if (!name) {
-        return http_multipart_part_header_parse_result::make_failure(
-            multipart_parse_error::missing_field_name);
+        return multipart_parse_error::missing_field_name;
     }
 
-    return http_multipart_part_header_parse_result::make_headers(*name,
-        filename.value_or(std::string_view{}), content_type.value_or(std::string_view{}),
-        filename.has_value());
+    return http_multipart_part_headers{
+        .name_ = *name,
+        .filename_ = filename.value_or(std::string_view{}),
+        .content_type_ = content_type.value_or(std::string_view{}),
+        .filename_present_ = filename.has_value(),
+    };
 }
 
 }  // namespace ruvia::detail

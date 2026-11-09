@@ -92,6 +92,26 @@ std::string_view http1_client_response_parse_error_message(
     return "invalid HTTP/1 response";
 }
 
+detail::http1_client_request_content_phase
+http1_client_response_parser::initial_request_content_phase(
+    const http1_client_exchange_state& state_value) noexcept {
+    switch (detail::http1_client_exchange_state_access::content_state(state_value)) {
+        case detail::http1_client_initial_content_state::complete:
+            return detail::http1_client_request_content_phase::content_complete;
+        case detail::http1_client_initial_content_state::pending:
+            return detail::http1_client_request_content_phase::content_pending;
+        case detail::http1_client_initial_content_state::awaiting_continue:
+            return detail::http1_client_request_content_phase::awaiting_continue;
+    }
+    return detail::http1_client_request_content_phase::content_complete;
+}
+
+http1_client_response_parser::http1_client_response_parser(
+    http1_client_exchange_state exchange_state, std::pmr::memory_resource* resource) noexcept
+    : exchange_state_(std::move(exchange_state)),
+      resource_(resource),
+      request_content_phase_(initial_request_content_phase(exchange_state_)) {}
+
 http1_client_response_parse_result http1_client_response_parser::parse(std::string_view buffer) {
     if (phase_ != phase_type::await_response) {
         throw std::logic_error("HTTP/1 client response parser is already terminal");

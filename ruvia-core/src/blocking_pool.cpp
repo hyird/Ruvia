@@ -223,11 +223,6 @@ struct blocking_pool::impl_type final {
         std::pmr::vector<std::thread> joining_threads(process_resource());
         {
             std::unique_lock lock(mutex_);
-            if (std::ranges::any_of(threads_, [](const std::thread& thread) {
-                    return thread.joinable() && thread.get_id() == std::this_thread::get_id();
-                })) {
-                throw std::logic_error("cannot join a blocking pool from one of its threads");
-            }
             condition_.wait(lock, [this] { return !joining_; });
             if (!joined_) {
                 joining_ = true;

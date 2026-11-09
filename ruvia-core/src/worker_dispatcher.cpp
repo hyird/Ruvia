@@ -536,8 +536,8 @@ void worker_dispatcher::abandon_queued() noexcept {
 }
 
 bool worker_dispatcher::is_current() const noexcept {
-    if (g_current_worker == this) {
-        return true;
+    if (g_current_worker != nullptr || !external_runner_.load(std::memory_order_acquire)) {
+        return g_current_worker == this;
     }
     std::lock_guard lock(mutex_);
     return context_attached_ && io_context_.get_executor().running_in_this_thread();

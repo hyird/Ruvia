@@ -27,6 +27,7 @@
 
 #include "context/context_services.h"
 #include "http3/http3_connection_id.h"
+#include "http3/http3_quic_runtime.h"
 #include "http3/http3_response_write.h"
 #include "http3/http3_stream.h"
 #include "server/connection_count.h"
@@ -121,13 +122,6 @@ private:
         ended,
     };
 
-    struct free_tls final {
-        void operator()(SSL* tls) const noexcept;
-    };
-    struct free_crypto final {
-        void operator()(ngtcp2_crypto_ossl_ctx* crypto) const noexcept;
-    };
-
     static ngtcp2_conn* native_connection(ngtcp2_crypto_conn_ref* reference) noexcept;
     static int new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token,
         std::size_t size, void* user_data) noexcept;
@@ -154,9 +148,6 @@ private:
     // Requests.
     [[nodiscard]] bool admit_stream(std::int64_t stream_id);
     [[nodiscard]] task<void> dispatch_one(std::int64_t stream_id);
-    [[nodiscard]] task<http_response> respond_body_failure(const http_request& request,
-        request_memory& request_memory_value, http_request_body_failure failure,
-        const context_services& request_services, http_response_tail& tail);
     void finish_stream_handler(std::int64_t stream_id) noexcept;
     void remove_stream_if_done(std::int64_t stream_id) noexcept;
     void set_inactivity_phase() noexcept;
@@ -199,7 +190,7 @@ private:
     inbound_buffer_resource inbound_buffers_;
     std::optional<context_services> base_services_;
     http_request_admission_policy admission_policy_;
-    http3_termination termination_;
+    multiplexed_session_termination termination_;
     worker_signal write_signal_;
     worker_signal handler_finished_;
     // Declared after the inbound buffers their bodies borrow.

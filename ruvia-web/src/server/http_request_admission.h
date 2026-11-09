@@ -190,6 +190,22 @@ public:
         http_response& response, const http_server_options& options, const route_table& routes,
         request_memory& memory, const context_services& services) const;
 
+    [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response,
+        const http_server_options& options, const worker_handle& worker, const route_table& routes,
+        request_memory& memory, const context_services& services) const {
+        const auto first = prepare(response, options, worker);
+        if (const auto* ready = first.ready()) {
+            co_return *ready;
+        }
+        co_return co_await finish_prepare(first, response, options, routes, memory, services);
+    }
+
+    [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response,
+        const http_server_options& options, const route_table& routes, request_memory& memory,
+        const context_services& services) const {
+        return prepare_or_finish(response, options, services.worker(), routes, memory, services);
+    }
+
     // Records a terminal outcome whose final status was committed. A single
     // null check when no access log is configured.
     void record_access(const access_log_sink& access_log, http_status_code status) const noexcept;

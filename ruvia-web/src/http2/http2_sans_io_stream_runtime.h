@@ -8,7 +8,6 @@
 #include <memory_resource>
 #include <optional>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -19,73 +18,10 @@
 #include "ruvia/http/http_request_trailers.h"
 
 #include "http2/http2_sans_io_request_body.h"
-#include "http2/http2_sans_io_stream_signal.h"
-#include "http2/http2_sans_io_termination.h"
 #include "router/route_resolution.h"
+#include "server/multiplexed_stream_signal.h"
 
 namespace ruvia::detail {
-
-class http2_sans_io_selected_route final {
-public:
-    [[nodiscard]] const route_resolution& resolution() const& noexcept RUVIA_LIFETIMEBOUND {
-        return resolution_;
-    }
-    const route_resolution& resolution() const&& = delete;
-
-    [[nodiscard]] http2_request_body_runtime& body() & noexcept RUVIA_LIFETIMEBOUND {
-        return body_;
-    }
-    http2_request_body_runtime& body() && = delete;
-
-    [[nodiscard]] const http2_request_body_runtime& body() const& noexcept RUVIA_LIFETIMEBOUND {
-        return body_;
-    }
-    const http2_request_body_runtime& body() const&& = delete;
-
-    [[nodiscard]] bool dispatched() const noexcept {
-        return signal() != nullptr;
-    }
-
-    [[nodiscard]] http2_sans_io_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http2_sans_io_stream_signal>(&dispatch_);
-    }
-    [[nodiscard]] http2_sans_io_stream_signal* signal() && = delete;
-
-    [[nodiscard]] const http2_sans_io_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::get_if<http2_sans_io_stream_signal>(&dispatch_);
-    }
-    [[nodiscard]] const http2_sans_io_stream_signal* signal() const&& = delete;
-
-private:
-    friend class http2_sans_io_stream_runtime;
-
-    // The private token lets the owning runtime construct this non-movable
-    // address-stable state directly inside its optional storage.
-    struct token_type final {};
-    struct awaiting_dispatch_type final {};
-
-    using dispatch_state_type = std::variant<awaiting_dispatch_type, http2_sans_io_stream_signal>;
-
-public:
-    http2_sans_io_selected_route(token_type, route_resolution resolution, request_body_mode body_mode,
-        std::pmr::memory_resource* resource) noexcept
-        : resolution_(std::move(resolution)),
-          body_(body_mode, resource) {}
-
-private:
-    [[nodiscard]] http2_sans_io_stream_signal* begin_dispatch(
-        const worker_handle& worker_value, http2_sans_io_termination& termination) {
-        if (dispatched()) {
-            return nullptr;
-        }
-        dispatch_.emplace<http2_sans_io_stream_signal>(worker_value, termination);
-        return signal();
-    }
-
-    route_resolution resolution_;
-    http2_request_body_runtime body_;
-    dispatch_state_type dispatch_;
-};
 
 class http2_sans_io_stream_runtime final {
 public:
@@ -94,7 +30,9 @@ public:
         : stream_id_(stream_id),
           resource_(pmr_resource_or_default(resource)),
           body_resource_(body_resource != nullptr ? body_resource : resource_),
-          trailers_(resource_) {}
+          trailers_(resource_),
+          buffered_body_(body_resource_),
+          body_queue_(body_resource_) {}
 
     void bind_push_parent(std::uint32_t id) noexcept {
         push_parent_ = id;
@@ -144,45 +82,87 @@ public:
         return request_head_ ? &*request_head_ : nullptr;
     }
     http2_request_head_event* request_head() && = delete;
+
     [[nodiscard]] bool select_route(route_resolution resolution, request_body_mode body_mode) noexcept {
-        if (selected_route_) {
+        if (route_selected_) {
             return false;
         }
-        selected_route_.emplace(
-            http2_sans_io_selected_route::token_type{}, std::move(resolution), body_mode, body_resource_);
+        resolution_ = std::move(resolution);
+        body_mode_ = body_mode;
+        route_selected_ = true;
         return true;
     }
 
-    [[nodiscard]] http2_sans_io_selected_route* selected_route() & noexcept RUVIA_LIFETIMEBOUND {
-        return selected_route_ ? &*selected_route_ : nullptr;
+    [[nodiscard]] bool route_selected() const noexcept {
+        return route_selected_;
     }
-    http2_sans_io_selected_route* selected_route() && = delete;
 
-    [[nodiscard]] const http2_sans_io_selected_route* selected_route() const& noexcept RUVIA_LIFETIMEBOUND {
-        return selected_route_ ? &*selected_route_ : nullptr;
+    [[nodiscard]] const route_resolution& resolution() const& noexcept RUVIA_LIFETIMEBOUND {
+        return resolution_;
     }
-    const http2_sans_io_selected_route* selected_route() const&& = delete;
+    const route_resolution& resolution() const&& = delete;
 
-    void reset_selected_route() noexcept {
-        selected_route_.reset();
+    [[nodiscard]] request_body_mode body_mode() const noexcept {
+        return body_mode_;
+    }
+
+    [[nodiscard]] http2_request_body_store_status store_body(
+        http2_message_body_chunk_event& chunk, protocol_byte_limit total_limit, std::size_t backlog_limit) {
+        const auto data = chunk.bytes();
+        if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
+            return http2_request_body_store_status::too_large;
+        }
+        if (body_mode_ == request_body_mode::stream) {
+            if (!body_queue_.enqueue_bounded(data, chunk.take_credit(), backlog_limit)) {
+                return http2_request_body_store_status::backlog_overflow;
+            }
+        } else {
+            try {
+                if (!data.empty()) {
+                    buffered_body_.append(data.data(), data.size());
+                }
+            } catch (const inbound_buffer_limit_error&) {
+                return http2_request_body_store_status::backlog_overflow;
+            }
+        }
+        received_bytes_ += data.size();
+        return http2_request_body_store_status::stored;
+    }
+
+    [[nodiscard]] std::string_view buffered_body() const& noexcept RUVIA_LIFETIMEBOUND {
+        return buffered_body_;
+    }
+    std::string_view buffered_body() const&& = delete;
+
+    [[nodiscard]] http2_sans_io_body_queue& body_queue() & noexcept RUVIA_LIFETIMEBOUND {
+        return body_queue_;
+    }
+    http2_sans_io_body_queue& body_queue() && = delete;
+
+    [[nodiscard]] const http2_sans_io_body_queue& body_queue() const& noexcept RUVIA_LIFETIMEBOUND {
+        return body_queue_;
+    }
+    const http2_sans_io_body_queue& body_queue() const&& = delete;
+
+    void discard_body() noexcept {
+        std::pmr::string(buffered_body_.get_allocator()).swap(buffered_body_);
+        body_queue_.discard();
     }
 
     [[nodiscard]] bool dispatched() const noexcept {
-        const auto* selected = selected_route();
-        return selected != nullptr && selected->dispatched();
+        return signal_.has_value();
     }
 
-    [[nodiscard]] http2_sans_io_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
-        auto* selected = selected_route();
-        return selected != nullptr ? selected->signal() : nullptr;
+    [[nodiscard]] multiplexed_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
+        return signal_ ? &*signal_ : nullptr;
     }
-    http2_sans_io_stream_signal* signal() && = delete;
+    multiplexed_stream_signal* signal() && = delete;
 
-    [[nodiscard]] const http2_sans_io_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
-        const auto* selected = selected_route();
-        return selected != nullptr ? selected->signal() : nullptr;
+    [[nodiscard]] const multiplexed_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
+        return signal_ ? &*signal_ : nullptr;
     }
-    const http2_sans_io_stream_signal* signal() const&& = delete;
+    const multiplexed_stream_signal* signal() const&& = delete;
+
     // Request-body DATA arrived at `now_ms` (the time of the read carrying it).
     void note_request_body_progress(std::int64_t now_ms) noexcept {
         request_body_progress_ms_ = now_ms;
@@ -202,10 +182,13 @@ public:
 private:
     friend class http2_sans_io_stream_runtime_table;
 
-    [[nodiscard]] http2_sans_io_stream_signal* begin_dispatch(
-        const worker_handle& worker_value, http2_sans_io_termination& termination) {
-        auto* selected = selected_route();
-        return selected != nullptr ? selected->begin_dispatch(worker_value, termination) : nullptr;
+    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
+        const worker_handle& worker_value, multiplexed_session_termination& termination) {
+        if (!route_selected_ || signal_) {
+            return nullptr;
+        }
+        signal_.emplace(worker_value, termination);
+        return &*signal_;
     }
 
     void mark_tunnel() noexcept {
@@ -225,6 +208,7 @@ private:
     void mark_request_body_closed() noexcept {
         request_body_open_ = false;
     }
+
     std::uint32_t stream_id_;
     std::uint32_t push_parent_{};
     std::pmr::memory_resource* resource_;
@@ -232,11 +216,17 @@ private:
     http_request_trailers trailers_;
     std::optional<http_priority> priority_update_{};
     std::optional<http2_request_head_event> request_head_;
-    std::optional<http2_sans_io_selected_route> selected_route_;
+    route_resolution resolution_{};
+    request_body_mode body_mode_{request_body_mode::buffered};
+    std::pmr::string buffered_body_;
+    http2_sans_io_body_queue body_queue_;
+    std::size_t received_bytes_{0};
+    std::optional<multiplexed_stream_signal> signal_;
     std::optional<http_request_body_failure> body_failure_{};
     // Valid while request_body_open_, in the connection scanner's clock.
     std::int64_t request_body_opened_ms_{0};
     std::int64_t request_body_progress_ms_{0};
+    bool route_selected_{false};
     bool tunnel_{false};
     bool request_body_open_{false};
     bool response_committed_{false};
@@ -249,7 +239,7 @@ private:
 class http2_sans_io_stream_runtime_table final {
 public:
     explicit http2_sans_io_stream_runtime_table(
-        std::pmr::memory_resource* resource, http2_sans_io_termination& termination,
+        std::pmr::memory_resource* resource, multiplexed_session_termination& termination,
         std::pmr::memory_resource* body_resource = nullptr)
         : resource_(pmr_resource_or_default(resource)),
           body_resource_(body_resource != nullptr ? body_resource : resource_),
@@ -272,7 +262,7 @@ public:
 
     // The dispatch signal of a stream that has one. A stream with no runtime,
     // or one admitted but not yet dispatched, has nothing to wake.
-    [[nodiscard]] http2_sans_io_stream_signal* signal_for(std::uint32_t stream_id) noexcept {
+    [[nodiscard]] multiplexed_stream_signal* signal_for(std::uint32_t stream_id) noexcept {
         auto* runtime = find(stream_id);
         return runtime != nullptr ? runtime->signal() : nullptr;
     }
@@ -312,7 +302,7 @@ public:
         return *result_value;
     }
 
-    [[nodiscard]] http2_sans_io_stream_signal* begin_dispatch(
+    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
         std::uint32_t stream_id, const worker_handle& worker_value) {
         auto* runtime = find(stream_id);
         if (runtime == nullptr) {
@@ -320,7 +310,7 @@ public:
         }
         return runtime->begin_dispatch(worker_value, termination_);
     }
-    http2_sans_io_stream_signal* begin_dispatch(std::uint32_t, worker_handle&&) = delete;
+    multiplexed_stream_signal* begin_dispatch(std::uint32_t, worker_handle&&) = delete;
 
     [[nodiscard]] bool mark_tunnel(std::uint32_t stream_id) noexcept {
         auto* runtime = find(stream_id);
@@ -407,7 +397,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::pmr::memory_resource* body_resource_;
-    http2_sans_io_termination& termination_;
+    multiplexed_session_termination& termination_;
     std::array<std::optional<http2_sans_io_stream_runtime>, inline_capacity> inline_{};
     std::pmr::vector<overflow_runtime_type> overflow_;
     std::size_t size_{0};

@@ -38,7 +38,7 @@ namespace ruvia::detail {
 class http2_sans_io_tunnel_transport final {
 public:
     http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection,
-        std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, http2_sans_io_stream_signal& signal,
+        std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, multiplexed_stream_signal& signal,
         worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept
         : engine_(&engine),
           connection_(connection),
@@ -139,7 +139,7 @@ private:
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
     http2_sans_io_body_queue& body_queue_;
-    http2_sans_io_stream_signal& signal_;
+    multiplexed_stream_signal& signal_;
     worker_signal& write_signal_;
     http2_data_output_budget& output_budget_;
     bool aborted_{false};

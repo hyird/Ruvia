@@ -8,15 +8,17 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
+
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 
 struct http_request_access final {
     static constexpr std::size_t cached_header_slots = http_request::cached_header_slots;
+    static_assert(cached_header_slots == request_header_kind_count - 1);
 
     [[nodiscard]] static http_request make() noexcept {
         return http_request();

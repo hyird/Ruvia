@@ -343,9 +343,6 @@ public:
         bool drain_unstarted = false;
         {
             std::unique_lock lock(mutex_);
-            if (thread_.joinable() && thread_.get_id() == std::this_thread::get_id()) {
-                throw std::logic_error("cannot join a worker runtime from its owner");
-            }
             if (stop_dispatching_ && stop_dispatch_thread_ == std::this_thread::get_id()) {
                 throw std::logic_error("cannot join a worker runtime while dispatching its stop hooks");
             }

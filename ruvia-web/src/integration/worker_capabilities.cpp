@@ -41,7 +41,19 @@ worker_capabilities::worker_capabilities(asio::io_context& io_context, const wor
       worker_states_(resource, definitions.worker_states_),
       rate_limiter_(
           options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_, resource),
-      options_(require_worker_capability_options(std::move(options))) {}
+      options_(require_worker_capability_options(std::move(options))),
+      worker_services_{
+          .worker_ = worker_,
+          .clients_ = client_registries(),
+          .rate_limiter_ = &rate_limiter_,
+          .env_ = options_.env_,
+          .max_decoded_body_bytes_ = options_.max_decoded_body_bytes_,
+          .states_ = &worker_states_,
+          .precompressed_static_files_ = options_.precompressed_static_files_,
+          .file_io_timeout_ = options_.file_io_timeout_,
+          .connection_failure_ = options_.connection_failure_,
+          .trusted_proxies_ = options_.trusted_proxies_,
+      } {}
 
 task<void> worker_capabilities::start() {
     worker_states_.initialize();
@@ -80,19 +92,7 @@ task<void> worker_capabilities::stop() {
 }
 
 context_services worker_capabilities::make_context_services(const stop_token& stop_token_value) {
-    return context_services(context_worker_services{
-                                .worker_ = worker_,
-                                .clients_ = client_registries(),
-                                .rate_limiter_ = &rate_limiter_,
-                                .env_ = options_.env_,
-                                .max_decoded_body_bytes_ = options_.max_decoded_body_bytes_,
-                                .states_ = &worker_states_,
-                                .precompressed_static_files_ = options_.precompressed_static_files_,
-                                .file_io_timeout_ = options_.file_io_timeout_,
-                                .connection_failure_ = options_.connection_failure_,
-                                .trusted_proxies_ = options_.trusted_proxies_,
-                            },
-        stop_token_value);
+    return context_services(worker_services_, stop_token_value);
 }
 
 worker_client_registry_view worker_capabilities::client_registries() noexcept {

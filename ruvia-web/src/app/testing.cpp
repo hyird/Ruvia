@@ -194,22 +194,12 @@ struct test_app::impl_type final {
                                           detail::http_response_coding_policy::disabled(),
                                           request.remote_address_, request.remote_address_,
                                           request_start);
-        const auto preparation = tail.prepare(response, options_, worker_);
-        const auto prepared = preparation.ready() != nullptr
-                                  ? *preparation.ready()
-                                  : co_await tail.finish_prepare(
-                                        preparation, response, options_, routes_value, request_memory_value,
-                                        request_services);
+        const auto prepared = co_await tail.prepare_or_finish(
+            response, options_, worker_, routes_value, request_memory_value, request_services);
 
         // Copy everything out while the request arena is still alive.
         dispatch_response result_value(process_resource());
-        result_value.status_ = response.status();
-        if (!response.headers().empty()) {
-            result_value.headers_.reserve(response.headers().size());
-            for (const auto& header : response.headers()) {
-                result_value.headers_.emplace_back(header.name(), header.value(), process_resource());
-            }
-        }
+        result_value.copy_head_from(response);
         // On the wire, HEAD responses and content-forbidden statuses carry no
         // body, so the facade must not surface one
         // either. Writer-synthesized fields (Content-Length, Date, Connection)
@@ -256,7 +246,7 @@ test_app& test_app::compression(compression_config config) {
 
 test_app& test_app::compression(std::nullptr_t) {
     impl_->require_configurable();
-    impl_->options_.compression_.reset();
+    impl_->options_.clear_compression();
     return *this;
 }
 
@@ -268,7 +258,7 @@ test_app& test_app::cors(cors_config config) {
 
 test_app& test_app::cors(std::nullptr_t) {
     impl_->require_configurable();
-    impl_->options_.cors_.reset();
+    impl_->options_.clear_cors();
     return *this;
 }
 
@@ -280,8 +270,7 @@ test_app& test_app::rate_limit(rate_limit_config config) {
 
 test_app& test_app::rate_limit(std::nullptr_t) {
     impl_->require_configurable();
-    impl_->options_.default_rate_limit_per_worker_.reset();
-    impl_->options_.rate_limit_capacity_per_worker_ = default_rate_limit_capacity_per_worker;
+    impl_->options_.clear_rate_limit();
     return *this;
 }
 
@@ -293,7 +282,7 @@ test_app& test_app::trusted_proxies(trusted_proxy_config config) {
 
 test_app& test_app::trusted_proxies(std::nullptr_t) {
     impl_->require_configurable();
-    impl_->options_.trusted_proxies_ = detail::trusted_proxy_set(process_resource());
+    impl_->options_.clear_trusted_proxies();
     return *this;
 }
 

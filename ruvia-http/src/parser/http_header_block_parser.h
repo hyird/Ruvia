@@ -7,8 +7,6 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
@@ -18,8 +16,10 @@
 #include "coding/http_content_length.h"
 #include "coding/http_transfer_encoding.h"
 #include "field/field_value_scan.h"
+#include "field/http_connection_fields.h"
 #include "field/http_request_field_validation.h"
 #include "parser/http_header_descriptor_storage.h"
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 

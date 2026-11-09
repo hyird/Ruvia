@@ -8,13 +8,13 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "field/http_connection_fields.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 
 namespace ruvia {

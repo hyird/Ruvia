@@ -13,7 +13,6 @@
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/websocket/websocket_compression_extension.h"
-#include "ruvia/http/detail/websocket/websocket_switching_protocols_head_prefix.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
@@ -138,6 +137,8 @@ namespace detail {
 class http2_connection;
 class http2_stream_state;
 class websocket_request_header_validator;
+inline constexpr std::string_view websocket_switching_protocols_head_prefix =
+    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
 [[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(
     const http2_stream_state&, const http_request&,
     websocket_handshake_validation_options) noexcept;
@@ -255,8 +256,7 @@ public:
 
     template <typename visitor_type>
     void for_each_response_part(visitor_type&& visitor) const& {
-        visitor(std::string_view(detail::websocket_switching_protocols_head_prefix.data(),
-            detail::websocket_switching_protocols_head_prefix.size()));
+        visitor(detail::websocket_switching_protocols_head_prefix);
         visitor(std::string_view(accept_.data(), accept_.size()));
         visitor(crlf);
         if (!subprotocol_.empty()) {

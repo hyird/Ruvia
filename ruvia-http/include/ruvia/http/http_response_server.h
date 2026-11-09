@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
@@ -19,6 +18,13 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_head_buffer.h"
 namespace ruvia {
+
+namespace detail {
+
+[[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
+[[nodiscard]] bool is_forbidden_http_binary_response_field(std::string_view name) noexcept;
+
+}  // namespace detail
 
 class http_response_trailer_section;
 

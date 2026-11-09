@@ -5,9 +5,10 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
+
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia {
 

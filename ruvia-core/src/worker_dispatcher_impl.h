@@ -154,6 +154,9 @@ public:
         return timers_stopping_.load(std::memory_order_acquire);
     }
     [[nodiscard]] bool is_current() const noexcept;
+    void enable_external_runner() noexcept {
+        external_runner_.store(true, std::memory_order_release);
+    }
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
     [[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept {
@@ -259,6 +262,7 @@ private:
     worker_id_type worker_id_{0};
     std::atomic_bool accepting_{true};
     std::atomic_bool context_attached_{true};
+    std::atomic_bool external_runner_{false};
     bool drain_scheduled_{false};
     bool abandon_drain_{false};
     bool shutdown_notification_active_{false};

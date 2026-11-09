@@ -25,7 +25,6 @@ namespace detail {
 class scoped_operation_registration final {
 public:
     scoped_operation_registration() noexcept = default;
-    explicit scoped_operation_registration(operation_scope& scope) noexcept;
     scoped_operation_registration(
         scoped_operation_registration&& other, void* new_frame_target) noexcept;
     ~scoped_operation_registration();
@@ -172,32 +171,11 @@ struct task_promise_pending final {};
 struct task_promise_completed final {};
 
 template <typename t_type>
-class task_promise_value final {
-public:
-    template <typename u_type>
-        requires std::constructible_from<t_type, u_type>
-    explicit task_promise_value(u_type&& value) noexcept(std::is_nothrow_constructible_v<t_type, u_type>)
-        : value_(std::forward<u_type>(value)) {}
-
-    [[nodiscard]] t_type take_value() && {
-        return std::move(value_);
-    }
-
-private:
+struct task_promise_value final {
     t_type value_;
 };
 
-class task_promise_failure final {
-public:
-    explicit task_promise_failure(std::exception_ptr exception) noexcept
-        : exception_(std::move(exception)) {}
-
-    [[nodiscard]] const std::exception_ptr& exception() const& noexcept {
-        return exception_;
-    }
-    const std::exception_ptr& exception() const&& = delete;
-
-private:
+struct task_promise_failure final {
     std::exception_ptr exception_;
 };
 
@@ -215,7 +193,7 @@ public:
     template <typename input_type>
         requires(!std::is_void_v<result_type> && std::constructible_from<result_type, input_type>)
     void complete(input_type&& value) noexcept(std::is_nothrow_constructible_v<result_type, input_type>) {
-        state_.template emplace<completed_type>(std::forward<input_type>(value));
+        state_.template emplace<completed_type>(result_type(std::forward<input_type>(value)));
     }
 
     void fail() noexcept {
@@ -224,14 +202,14 @@ public:
 
     result_type result() {
         if (const auto* failure = std::get_if<task_promise_failure>(&state_)) [[unlikely]] {
-            std::rethrow_exception(failure->exception());
+            std::rethrow_exception(failure->exception_);
         }
         if constexpr (std::is_void_v<result_type>) {
             assert(std::holds_alternative<completed_type>(state_));
         } else {
             auto* value = std::get_if<completed_type>(&state_);
             assert(value != nullptr);
-            return std::move(*value).take_value();
+            return std::move(value->value_);
         }
     }
 

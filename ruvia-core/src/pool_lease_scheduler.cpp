@@ -13,24 +13,143 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
 
-#include "pool_waiter_queue.h"
-
 namespace ruvia {
 
 class pool_lease_scheduler::impl_type final {
 public:
     using acquire_result_type = worker_wait_result<std::size_t>;
 
+    static constexpr std::size_t no_free_slot = static_cast<std::size_t>(-1);
+    static constexpr std::size_t slot_leased = static_cast<std::size_t>(-2);
+
+    // Intrusive FIFO of one pool_lease_scheduler. The scheduler is only ever
+    // touched from its worker thread, so the queue needs no synchronization.
+    class waiter_queue_type final {
+    public:
+        void enqueue(pool_lease_acquire& waiter) noexcept {
+            waiter.previous_ = tail_;
+            waiter.next_ = nullptr;
+            waiter.queued_ = true;
+            if (tail_ != nullptr) {
+                tail_->next_ = std::addressof(waiter);
+            } else {
+                head_ = std::addressof(waiter);
+            }
+            tail_ = std::addressof(waiter);
+        }
+
+        void remove(pool_lease_acquire& waiter) noexcept {
+            if (!waiter.queued_) {
+                return;
+            }
+            if (waiter.previous_ != nullptr) {
+                waiter.previous_->next_ = waiter.next_;
+            } else {
+                head_ = waiter.next_;
+            }
+            if (waiter.next_ != nullptr) {
+                waiter.next_->previous_ = waiter.previous_;
+            } else {
+                tail_ = waiter.previous_;
+            }
+            waiter.previous_ = nullptr;
+            waiter.next_ = nullptr;
+            waiter.queued_ = false;
+        }
+
+        // Commit the freed slot to the next waiter before deferring its continuation.
+        // Cancellation and closure cannot replace this result after the handoff.
+        [[nodiscard]] bool commit_handoff(
+            std::size_t index, std::coroutine_handle<>& continuation) noexcept {
+            continuation = {};
+            if (head_ == nullptr) {
+                return false;
+            }
+            auto* waiter = head_;
+            waiter->cancel_registrations();
+            waiter->complete(detail::worker_wait_result_access::value(index));
+            continuation = waiter->take_continuation();
+            return true;
+        }
+
+        [[nodiscard]] bool cancel(pool_lease_acquire& waiter) noexcept {
+            std::coroutine_handle<> continuation;
+            if (!commit_cancellation(waiter, continuation)) {
+                return false;
+            }
+            if (continuation) {
+                continuation.resume();
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool cancel(std::uint64_t id) noexcept {
+            auto* waiter = find(id);
+            return waiter != nullptr && cancel(*waiter);
+        }
+
+        // Commit cancellation while still inside a stop callback, but let the
+        // caller resume the coroutine only after that callback has returned.
+        [[nodiscard]] bool commit_cancellation(
+            pool_lease_acquire& waiter, std::coroutine_handle<>& continuation) noexcept {
+            continuation = {};
+            if (!waiter.queued_) {
+                return false;
+            }
+            waiter.cancel_registrations();
+            waiter.complete(worker_wait_status::cancelled);
+            continuation = waiter.take_continuation();
+            return true;
+        }
+
+        [[nodiscard]] bool expire(pool_lease_acquire& waiter) noexcept {
+            if (!waiter.queued_) {
+                return false;
+            }
+            waiter.cancel_registrations();
+            waiter.complete(worker_wait_status::timed_out);
+            waiter.resume();
+            return true;
+        }
+
+        // Commit closure for the entire current queue and resume every waiter in a
+        // later worker turn, as release() does: closure runs inside the owner's own
+        // teardown, which must finish before any waiter observes it.
+        void close_all(const worker_handle& worker) noexcept {
+            while (head_ != nullptr) {
+                auto* waiter = head_;
+                waiter->cancel_registrations();
+                waiter->complete(worker_wait_status::closed);
+                if (auto continuation = waiter->take_continuation()) {
+                    worker.defer_resume(continuation);
+                }
+            }
+        }
+
+    private:
+        [[nodiscard]] pool_lease_acquire* find(std::uint64_t id) const noexcept {
+            auto* waiter = head_;
+            while (waiter != nullptr) {
+                if (waiter->waiter_id_ == id) {
+                    return waiter;
+                }
+                waiter = waiter->next_;
+            }
+            return nullptr;
+        }
+
+        pool_lease_acquire* head_{nullptr};
+        pool_lease_acquire* tail_{nullptr};
+    };
+
     impl_type(std::size_t pool_size, const worker_handle& worker_value, std::pmr::memory_resource* resource)
         : worker_(worker_value),
-          free_slots_(pmr_resource_or_default(resource)),
-          busy_(pmr_resource_or_default(resource)),
+          next_free_(pool_size, no_free_slot, pmr_resource_or_default(resource)),
           waiter_state_(std::allocate_shared<waiter_state_type>(
               std::pmr::polymorphic_allocator<waiter_state_type>(process_resource()), worker_value)) {
-        free_slots_.reserve(pool_size);
-        busy_.resize(pool_size, 0);
         for (std::size_t i = 0; i < pool_size; ++i) {
-            free_slots_.push_back(i);
+            next_free_[i] = free_head_;
+            free_head_ = i;
         }
     }
 
@@ -45,7 +164,7 @@ public:
             : worker_(std::move(worker_value)) {}
 
         worker_handle worker_;
-        detail::pool_waiter_queue queue_;
+        waiter_queue_type queue_;
 
         void request_cancellation(pool_lease_acquire& waiter, std::uint64_t waiter_id) {
             if (worker_.is_current()) {
@@ -66,7 +185,8 @@ public:
         }
     };
 
-    [[nodiscard]] std::optional<acquire_result_type> try_acquire(const stop_token& stop_token_value) {
+    [[nodiscard]] std::optional<acquire_result_type> try_acquire(
+        const std::optional<timeout_duration>& timeout, const stop_token& stop_token_value) {
         if (!worker_.is_current()) {
             throw std::logic_error("pool lease acquire must run on its bound worker");
         }
@@ -76,12 +196,15 @@ public:
         if (stop_token_value.stop_requested()) {
             return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::cancelled);
         }
-        if (free_slots_.empty()) {
+        if (free_head_ == no_free_slot) {
+            if (timeout.has_value() && timeout->value().count() <= 0 &&
+                worker_.valid() && !detail::worker_handle_access::timers_stopping(worker_)) {
+                return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::timed_out);
+            }
             return std::nullopt;
         }
-        const auto slot = free_slots_.back();
-        free_slots_.pop_back();
-        busy_[slot] = 1;
+        const auto slot = free_head_;
+        free_head_ = std::exchange(next_free_[slot], slot_leased);
         return detail::worker_wait_result_access::value(slot);
     }
 
@@ -94,7 +217,7 @@ public:
     }
 
     void release(std::size_t slot) noexcept {
-        if (slot >= busy_.size() || busy_[slot] == 0) {
+        if (slot >= next_free_.size() || next_free_[slot] != slot_leased) {
             std::terminate();
         }
         std::coroutine_handle<> continuation;
@@ -104,8 +227,8 @@ public:
             }
             return;
         }
-        busy_[slot] = 0;
-        free_slots_.push_back(slot);
+        next_free_[slot] = free_head_;
+        free_head_ = slot;
     }
 
     [[nodiscard]] bool close() noexcept {
@@ -118,8 +241,8 @@ public:
     }
 
     worker_handle worker_;
-    std::pmr::vector<std::size_t> free_slots_;
-    std::pmr::vector<std::uint8_t> busy_;
+    std::pmr::vector<std::size_t> next_free_;
+    std::size_t free_head_{no_free_slot};
     std::shared_ptr<waiter_state_type> waiter_state_;
     std::size_t reserved_acquires_{0};
     std::uint64_t next_waiter_id_{0};
@@ -160,17 +283,19 @@ pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept
 
 pool_lease_acquire::~pool_lease_acquire() {
     if (owner_ != nullptr) {
-        cancel_registrations();
+        if (queued_) {
+            cancel_registrations();
+        }
         --owner_->reserved_acquires_;
     }
 }
 
 void pool_lease_acquire::cancel_registrations() noexcept {
-    deadline_timer_.cancel();
-    stop_registration_.reset();
-    if (owner_ != nullptr) {
+    if (queued_ && owner_ != nullptr) {
         owner_->waiter_state_->queue_.remove(*this);
     }
+    deadline_timer_.cancel();
+    stop_registration_.reset();
 }
 
 void pool_lease_acquire::complete(worker_wait_result<std::size_t> result_value) noexcept {
@@ -199,7 +324,7 @@ bool pool_lease_acquire::await_ready() {
         throw std::logic_error("pool lease acquire cannot be awaited");
     }
     awaited_ = true;
-    if (auto acquired = owner_->try_acquire(stop_token_)) {
+    if (auto acquired = owner_->try_acquire(timeout_, stop_token_)) {
         result_.emplace(std::move(*acquired));
     }
     return result_.has_value();
@@ -215,36 +340,30 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     // A stopped timer queue arms nothing, exactly as stop_timers() cancels a
     // pending deadline: the waiter still completes on release, close(), or
     // its stop token.
-    if (timeout_.has_value() && owner_->worker_.valid()) {
-        if (timeout_->value() <= std::chrono::milliseconds::zero()) {
-            if (!detail::worker_handle_access::timers_stopping(owner_->worker_)) {
-                complete(worker_wait_status::timed_out);
-            }
-        } else {
-            try {
-                // The worker-local timer belongs to this acquire and is cancelled
-                // before it can be destroyed. Its expiry can unlink the waiter
-                // directly; cross-thread stop notifications still use waiter IDs.
-                (void)owner_->worker_.schedule_timer(deadline_timer_,
-                    worker_timer_deadline_after(timeout_->value()),
-                    [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
-                        if (outcome == worker_timer_outcome::expired) {
-                            (void)waiter_state->queue_.expire(*waiter);
-                        }
-                    });
-            } catch (...) {
-                waiter_state->queue_.remove(*this);
-                throw;
-            }
+    if (timeout_.has_value() && timeout_->value().count() > 0 &&
+        owner_->worker_.valid()) {
+        try {
+            // The worker-local timer belongs to this acquire and is cancelled
+            // before it can be destroyed. Its expiry can unlink the waiter
+            // directly; cross-thread stop notifications still use waiter IDs.
+            (void)owner_->worker_.schedule_timer(deadline_timer_,
+                worker_timer_deadline_after(timeout_->value()),
+                [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        (void)waiter_state->queue_.expire(*waiter);
+                    }
+                });
+        } catch (...) {
+            cancel_registrations();
+            throw;
         }
     }
 
-    if (!result_.has_value() && stop_token_.stoppable()) {
+    if (stop_token_.stoppable()) {
         stop_token_.register_callback(stop_registration_,
             [waiter_state, waiter = this, waiter_id] { waiter_state->request_cancellation(*waiter, waiter_id); });
     }
     if (result_.has_value()) {
-        cancel_registrations();
         return false;
     }
     continuation_ = continuation;
@@ -252,7 +371,6 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
 }
 
 worker_wait_result<std::size_t> pool_lease_acquire::await_resume() {
-    cancel_registrations();
     if (!result_.has_value()) {
         std::terminate();
     }

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/field/request_header_kind.h"
+#include "field/request_header_kind.h"
 
 namespace ruvia::detail {
 

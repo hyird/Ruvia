@@ -2,8 +2,10 @@
 
 #include <array>
 #include <cmath>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -20,11 +22,40 @@
 
 // Internal URL-encoded form parser for RUVIA_MODEL.
 
+namespace ruvia {
+class request_name_value_list;
+}  // namespace ruvia
+
 namespace ruvia::detail {
+
+// application/x-www-form-urlencoded body whose names and values are still
+// percent-encoded.
+struct form_body_input final {
+    std::string_view body_;
+    model_string_storage string_storage_{model_string_storage::borrowed};
+};
+
+// Borrowed input for form-style schema materialization: an encoded body, or
+// request fields (query, path, headers, cookies) whose values are already
+// decoded. Never a dynamic public model.
+using model_input = std::variant<form_body_input, std::reference_wrapper<const request_name_value_list>>;
+
+// Visits each name/value pair of a URL-encoded form body with the name decoded
+// and the value still encoded. Form decoding keeps malformed '%' sequences
+// literally (WHATWG), so the body needs no separate percent-encoding pass and
+// never fails.
+template <typename visitor_type>
+    requires std::invocable<visitor_type&, std::string_view, std::string_view>
+void visit_form_body_fields(std::string_view body, std::pmr::memory_resource* resource, visitor_type&& visitor) {
+    auto& visitor_ref = visitor;
+    std::pmr::string decoded_name(resource);
+    (void)ruvia::visit_url_encoded_pairs(body, [&](std::string_view name, std::string_view value) {
+        visitor_ref(*ruvia::decode_url_component(name, decoded_name, url_decode_mode::form), value);
+    });
+}
 
 enum class form_value_encoding : std::uint8_t { url_encoded,
     decoded };
-
 [[nodiscard]] inline std::optional<bool> parse_form_bool(std::string_view decoded) noexcept {
     if (decoded == "true" || decoded == "1") {
         return true;

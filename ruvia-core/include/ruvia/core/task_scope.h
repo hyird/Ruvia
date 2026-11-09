@@ -121,7 +121,6 @@ private:
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
     stop_source stop_source_;
-    bool stop_requested_{false};
     std::size_t active_{0};
     retiring_guard* retiring_{nullptr};
     lifecycle_type lifecycle_;

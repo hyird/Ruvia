@@ -7,7 +7,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 
@@ -17,6 +16,7 @@
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_stream_state.h"
+#include "parser/http_parser_syntax.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_handshake_fields.h"
 #include "websocket/websocket_server_negotiation.h"

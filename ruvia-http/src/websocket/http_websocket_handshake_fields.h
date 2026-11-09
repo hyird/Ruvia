@@ -3,9 +3,10 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_handshake.h"
+
+#include "field/request_header_kind.h"
 
 namespace ruvia {
 

@@ -3,10 +3,11 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/multipart_parser.h"
+
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia {
 

@@ -4,9 +4,6 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/client/http1_client_exchange_state_access.h"
-#include "ruvia/http/detail/client/http1_client_parsed_status_line.h"
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_header.h"
@@ -15,6 +12,7 @@
 
 #include "coding/http_content_length.h"
 #include "coding/http_transfer_encoding.h"
+#include "field/http_connection_fields.h"
 #include "parser/http_header_descriptor_storage.h"
 // The two steps between an HTTP/1 client response head on the wire and the plan
 // the parser acts on: reading the status line and header fields into borrowed
@@ -22,6 +20,28 @@
 // body is framed and whether the connection survives.
 
 namespace ruvia::detail {
+
+struct http1_client_exchange_state_access final {
+    [[nodiscard]] static constexpr http_known_method method(
+        const http1_client_exchange_state& state_value) noexcept {
+        return state_value.method_;
+    }
+
+    [[nodiscard]] static constexpr http1_close_policy close_policy(
+        const http1_client_exchange_state& state_value) noexcept {
+        return state_value.close_policy_;
+    }
+
+    [[nodiscard]] static constexpr http1_client_initial_content_state content_state(
+        const http1_client_exchange_state& state_value) noexcept {
+        return state_value.content_state_;
+    }
+
+    [[nodiscard]] static std::string_view offered_upgrade_protocols(
+        const http1_client_exchange_state& state_value) noexcept {
+        return state_value.offered_upgrade_protocols_;
+    }
+};
 
 struct http1_client_parsed_response_head final {
     explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line,

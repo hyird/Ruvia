@@ -20,9 +20,9 @@
 #include "http2/http2_sans_io_session_context.h"
 #include "http2/http2_sans_io_session_lifecycle.h"
 #include "http2/http2_sans_io_stream_runtime.h"
-#include "http2/http2_sans_io_termination.h"
 #include "server/http_request_admission.h"
 #include "server/inbound_buffer_resource.h"
+#include "server/multiplexed_stream_signal.h"
 
 namespace ruvia {
 class worker_memory;
@@ -103,9 +103,6 @@ private:
     void on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept;
     [[nodiscard]] bool push_request(std::uint32_t associated_stream_id, http_push_request_view request);
     [[nodiscard]] task<void> dispatch_one(std::uint32_t stream_id);
-    [[nodiscard]] task<http_response> respond_body_failure(const http_request& request,
-        request_memory& request_memory_value, http_request_body_failure failure,
-        const context_services& request_services, http_response_tail& tail);
     [[nodiscard]] bool admit_stream(std::uint32_t stream_id);
     void remove_stream_runtime(std::uint32_t stream_id) noexcept;
     // Scanner tick: resets each stream whose request body outlasted
@@ -132,7 +129,7 @@ private:
     worker_signal handler_finished_;
     worker_signal writer_finished_;
     http2_sans_io_session_lifecycle lifecycle_;
-    http2_sans_io_termination termination_;
+    multiplexed_session_termination termination_;
     http_request_admission_policy admission_policy_;
     http2_sans_io_stream_runtime_table stream_runtimes_;
     http2_buffered_response_writer buffered_response_writer_;

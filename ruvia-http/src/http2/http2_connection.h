@@ -32,7 +32,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_types.h"

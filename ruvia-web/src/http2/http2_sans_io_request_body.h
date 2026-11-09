@@ -7,7 +7,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
@@ -16,7 +15,6 @@
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 
-#include "http2/http2_sans_io_stream_signal.h"
 #include "server/inbound_buffer_resource.h"
 
 // Where a dispatched HTTP/2 request body lives on the Web side. The protocol
@@ -116,6 +114,14 @@ public:
     }
     std::string_view pop() && = delete;
 
+    void discard() noexcept {
+        std::pmr::string(queued_chunk_.get_allocator()).swap(queued_chunk_);
+        std::pmr::string(active_chunk_.get_allocator()).swap(active_chunk_);
+        queued_bytes_ = 0;
+        queued_credit_.reset();
+        active_credit_.reset();
+    }
+
 private:
     // The byte storage is destroyed before its credits, so return-window side
     // effects cannot outlive the copied data they account for.
@@ -125,122 +131,6 @@ private:
     std::pmr::string active_chunk_;
     std::size_t queued_bytes_{0};
     bool ended_{false};
-};
-
-class http2_buffered_request_body final {
-public:
-    explicit http2_buffered_request_body(std::pmr::memory_resource* resource) noexcept
-        : bytes_(pmr_resource_or_default(resource)) {}
-
-    [[nodiscard]] http2_request_body_store_status store(
-        std::string_view data, protocol_byte_limit total_limit) {
-        if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
-            return http2_request_body_store_status::too_large;
-        }
-        try {
-            if (!data.empty()) {
-                bytes_.append(data.data(), data.size());
-            }
-        } catch (const inbound_buffer_limit_error&) {
-            return http2_request_body_store_status::backlog_overflow;
-        }
-        received_bytes_ += data.size();
-        return http2_request_body_store_status::stored;
-    }
-
-    [[nodiscard]] std::string_view bytes() const& noexcept {
-        return bytes_;
-    }
-    std::string_view bytes() const&& = delete;
-
-private:
-    std::size_t received_bytes_{0};
-    std::pmr::string bytes_;
-};
-
-class http2_streaming_request_body final {
-public:
-    explicit http2_streaming_request_body(std::pmr::memory_resource* resource) noexcept
-        : queue_(pmr_resource_or_default(resource)) {}
-
-    [[nodiscard]] http2_request_body_store_status store(std::string_view data,
-        protocol_byte_limit total_limit, std::size_t backlog_limit, http2_received_data_credit&& credit) {
-        if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
-            return http2_request_body_store_status::too_large;
-        }
-        if (!queue_.enqueue_bounded(data, std::move(credit), backlog_limit)) {
-            return http2_request_body_store_status::backlog_overflow;
-        }
-        received_bytes_ += data.size();
-        return http2_request_body_store_status::stored;
-    }
-
-    [[nodiscard]] http2_sans_io_body_queue& queue() & noexcept {
-        return queue_;
-    }
-    http2_sans_io_body_queue& queue() && = delete;
-
-    [[nodiscard]] const http2_sans_io_body_queue& queue() const& noexcept {
-        return queue_;
-    }
-    const http2_sans_io_body_queue& queue() const&& = delete;
-
-private:
-    std::size_t received_bytes_{0};
-    http2_sans_io_body_queue queue_;
-};
-
-// Route-selected request-body storage belongs to ruvia-web. The protocol core
-// emits ordered DATA events without knowing whether an application buffers or
-// streams them; this runtime applies product limits only after route resolution.
-class http2_request_body_runtime final {
-public:
-    [[nodiscard]] request_body_mode mode() const noexcept {
-        return std::holds_alternative<http2_buffered_request_body>(storage_)
-                   ? request_body_mode::buffered
-                   : request_body_mode::stream;
-    }
-
-    [[nodiscard]] http2_buffered_request_body* buffered() & noexcept {
-        return std::get_if<http2_buffered_request_body>(&storage_);
-    }
-    http2_buffered_request_body* buffered() && = delete;
-
-    [[nodiscard]] const http2_buffered_request_body* buffered() const& noexcept {
-        return std::get_if<http2_buffered_request_body>(&storage_);
-    }
-    const http2_buffered_request_body* buffered() const&& = delete;
-
-    [[nodiscard]] http2_streaming_request_body* streaming() & noexcept {
-        return std::get_if<http2_streaming_request_body>(&storage_);
-    }
-    http2_streaming_request_body* streaming() && = delete;
-
-    [[nodiscard]] const http2_streaming_request_body* streaming() const& noexcept {
-        return std::get_if<http2_streaming_request_body>(&storage_);
-    }
-    const http2_streaming_request_body* streaming() const&& = delete;
-
-private:
-    friend class http2_sans_io_selected_route;
-
-    using storage_type = std::variant<http2_buffered_request_body, http2_streaming_request_body>;
-
-    http2_request_body_runtime(request_body_mode mode, std::pmr::memory_resource* resource) noexcept
-        : storage_(make_storage(mode, resource)) {}
-
-    [[nodiscard]] static storage_type make_storage(
-        request_body_mode mode, std::pmr::memory_resource* resource) noexcept {
-        if (mode == request_body_mode::buffered) {
-            return storage_type(std::in_place_type<http2_buffered_request_body>, resource);
-        }
-        if (mode == request_body_mode::stream) {
-            return storage_type(std::in_place_type<http2_streaming_request_body>, resource);
-        }
-        std::terminate();
-    }
-
-    storage_type storage_;
 };
 
 }  // namespace ruvia::detail

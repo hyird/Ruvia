@@ -49,8 +49,6 @@ struct context_worker_services final {
     rate_limiter* rate_limiter_{};
     const ruvia::env* env_{};
     std::size_t max_decoded_body_bytes_{default_max_buffered_body_bytes};
-    std::pmr::memory_resource* inbound_buffer_pool_{};
-    const route_table* routes_{};
     const worker_state_registry* states_{};
     bool precompressed_static_files_{};
     // Bounds each blocking-pool wait of a file response's open, as the body
@@ -64,6 +62,8 @@ struct context_worker_services final {
 
 struct context_connection_services final {
     conn_info info_;
+    std::pmr::memory_resource* inbound_buffer_pool_{};
+    const route_table* routes_{};
     // Whether the peer is a configured trusted proxy. Decided once per
     // connection: the peer address never changes, so its IP parse and block
     // match are not repeated per request.
@@ -106,40 +106,41 @@ class context_services final {
 public:
     context_services() = delete;
 
-    context_services(context_worker_services worker_services, const stop_token& stop_token_value)
-        : worker_services_(worker_services),
+    context_services(const context_worker_services& worker_services, const stop_token& stop_token_value)
+        : worker_services_(&worker_services),
           request_services_{.stop_token_ = stop_token_value} {
-        if (!worker_services_.worker_.get().valid()) {
+        if (!worker_services_->worker_.get().valid()) {
             throw std::invalid_argument("context services require a valid worker");
         }
     }
-    context_services(context_worker_services, stop_token&&) = delete;
+    context_services(context_worker_services&&, const stop_token&) = delete;
+    context_services(const context_worker_services&, stop_token&&) = delete;
 
     [[nodiscard]] constexpr worker_client_registry_view client_registries() const noexcept {
-        return worker_services_.clients_;
+        return worker_services_->clients_;
     }
 
     [[nodiscard]] detail::rate_limiter* rate_limiter() const noexcept {
-        return worker_services_.rate_limiter_;
+        return worker_services_->rate_limiter_;
     }
 
     [[nodiscard]] const ruvia::env* env() const noexcept {
-        return worker_services_.env_;
+        return worker_services_->env_;
     }
 
     [[nodiscard]] std::pmr::memory_resource* inbound_buffer_pool() const noexcept {
-        return worker_services_.inbound_buffer_pool_;
+        return connection_services_.inbound_buffer_pool_;
     }
 
     [[nodiscard]] context_services with_inbound_buffer_pool(std::pmr::memory_resource& resource) const noexcept {
         auto services = *this;
-        services.worker_services_.inbound_buffer_pool_ = &resource;
+        services.connection_services_.inbound_buffer_pool_ = &resource;
         return services;
     }
     context_services with_inbound_buffer_pool(std::pmr::memory_resource&&) const = delete;
 
     [[nodiscard]] constexpr std::size_t max_decoded_body_bytes() const noexcept {
-        return worker_services_.max_decoded_body_bytes_;
+        return worker_services_->max_decoded_body_bytes_;
     }
 
     // Ceiling for this request's decoded Content-Encoding representation. A
@@ -148,9 +149,9 @@ public:
     // worker-wide bound.
     [[nodiscard]] constexpr std::size_t max_decoded_request_body_bytes() const noexcept {
         const auto route_limit = request_services_.route_body_limit_;
-        return route_limit != 0 && route_limit < worker_services_.max_decoded_body_bytes_
+        return route_limit != 0 && route_limit < worker_services_->max_decoded_body_bytes_
                    ? route_limit
-                   : worker_services_.max_decoded_body_bytes_;
+                   : worker_services_->max_decoded_body_bytes_;
     }
 
     void bind_route_body_limit(std::size_t limit) noexcept {
@@ -166,7 +167,7 @@ public:
     }
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
-        return worker_services_.worker_.get();
+        return worker_services_->worker_.get();
     }
 
     [[nodiscard]] const stop_token& get_stop_token() const noexcept {
@@ -189,7 +190,7 @@ public:
     }
 
     [[nodiscard]] const route_table* routes() const noexcept {
-        return worker_services_.routes_;
+        return connection_services_.routes_;
     }
 
     // Every dispatch path hands the context the table it may re-enter, which
@@ -197,7 +198,7 @@ public:
     // handler asks for one. The route table is server-owned and outlives every
     // dispatched request.
     void bind_routes(const route_table& routes_value) noexcept {
-        worker_services_.routes_ = &routes_value;
+        connection_services_.routes_ = &routes_value;
     }
     void bind_routes(route_table&&) = delete;
 
@@ -267,8 +268,10 @@ public:
 
     // Subrequests inherit the parent connection identity, one dispatch level deeper.
     [[nodiscard]] context_services for_subrequest(const stop_token& stop_token_value) const {
-        context_services services(worker_services_, stop_token_value);
+        context_services services(*worker_services_, stop_token_value);
         services.connection_services_.info_ = connection_services_.info_;
+        services.connection_services_.inbound_buffer_pool_ = connection_services_.inbound_buffer_pool_;
+        services.connection_services_.routes_ = connection_services_.routes_;
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
         services.request_services_.io_metrics_ = request_services_.io_metrics_;
         services.request_services_.early_data_ = request_services_.early_data_;
@@ -281,15 +284,15 @@ public:
     // static_file() may negotiate an indexed precompressed variant. It never
     // performs request-time file compression.
     [[nodiscard]] constexpr bool precompressed_static_files() const noexcept {
-        return worker_services_.precompressed_static_files_;
+        return worker_services_->precompressed_static_files_;
     }
 
     [[nodiscard]] constexpr std::optional<timeout_duration> file_io_timeout() const noexcept {
-        return worker_services_.file_io_timeout_;
+        return worker_services_->file_io_timeout_;
     }
 
     [[nodiscard]] const connection_failure_sink& connection_failure() const noexcept {
-        return *worker_services_.connection_failure_;
+        return *worker_services_->connection_failure_;
     }
 
     // The request's Accept-Encoding selection as admission folded it, or
@@ -312,7 +315,7 @@ public:
     }
 
     [[nodiscard]] const worker_state_registry* worker_states() const noexcept {
-        return worker_services_.states_;
+        return worker_services_->states_;
     }
 
     [[nodiscard]] constexpr const conn_info& get_conn_info() const noexcept {
@@ -393,10 +396,10 @@ public:
 
 private:
     [[nodiscard]] bool trusts_peer(std::string_view remote_address) const noexcept {
-        return worker_services_.trusted_proxies_ != nullptr && worker_services_.trusted_proxies_->trusts(remote_address);
+        return worker_services_->trusted_proxies_ != nullptr && worker_services_->trusted_proxies_->trusts(remote_address);
     }
 
-    context_worker_services worker_services_;
+    const context_worker_services* worker_services_;
     context_connection_services connection_services_{.info_ = conn_info::plain({})};
     context_request_services request_services_;
 };

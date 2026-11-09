@@ -18,11 +18,11 @@
 
 #include "client/http_client_registry.h"
 #include "client/http_client_result_budget.h"
+#include "context/context_services.h"
 #include "db/db_registry.h"
 #include "integration/worker_client_registry_view.h"
 #include "ratelimit/rate_limiter.h"
 #include "redis/redis_registry.h"
-
 namespace ruvia {
 class env;
 }  // namespace ruvia
@@ -94,6 +94,7 @@ private:
     worker_state_registry worker_states_;
     rate_limiter rate_limiter_;
     worker_capability_options options_;
+    context_worker_services worker_services_;
 };
 
 }  // namespace ruvia::detail

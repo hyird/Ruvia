@@ -37,9 +37,9 @@ using write_result = http3_buffered_response_write_result;
 // Waits until acknowledgements free output budget; false when the stream or
 // connection ended first.
 [[nodiscard]] task<bool> await_output_budget(
-    http3_session& session, std::int64_t stream_id, http3_stream_signal& signal) {
+    http3_session& session, std::int64_t stream_id, multiplexed_stream_signal& signal) {
     struct output_wait final {
-        http3_stream_signal& signal_;
+        multiplexed_stream_signal& signal_;
         ~output_wait() {
             signal_.set_waiting_output(false);
         }
@@ -59,7 +59,7 @@ using write_result = http3_buffered_response_write_result;
 }  // namespace
 
 task<http3_data_write_status> write_http3_stream_data(
-    http3_session& session, std::int64_t stream_id, http3_stream_signal& signal, std::string_view bytes) {
+    http3_session& session, std::int64_t stream_id, multiplexed_stream_signal& signal, std::string_view bytes) {
     while (!bytes.empty()) {
         if (signal.terminated()) {
             co_return http3_data_write_status::terminated;
@@ -86,13 +86,7 @@ http3_buffered_response_writer::http3_buffered_response_writer(
     http3_session& session, response_file_io file_io) noexcept
     : session_(session),
       file_io_(std::move(file_io)),
-      file_read_released_(file_io_.worker_) {}
-
-http3_buffered_response_writer::file_read_slot::~file_read_slot() {
-    --owner_->file_reads_;
-    owner_->file_read_released_.notify();
-}
-
+      file_reads_(file_io_.worker_, http3_file_read_slots) {}
 bool http3_buffered_response_writer::stream_ended(std::int64_t stream_id) noexcept {
     auto* stream = session_.find_stream(stream_id);
     if (stream == nullptr || stream->aborted()) {
@@ -102,33 +96,21 @@ bool http3_buffered_response_writer::stream_ended(std::int64_t stream_id) noexce
     return signal != nullptr && signal->stopped();
 }
 
-task<bool> http3_buffered_response_writer::acquire_file_read(std::int64_t stream_id) {
-    // Every holder ends its read and submission (or its stream) and notifies,
-    // so a waiter wakes to re-check its own stream.
-    while (file_reads_ >= http3_file_read_slots) {
-        co_await file_read_released_.wait();
-        if (stream_ended(stream_id)) {
-            co_return false;
-        }
-    }
-    ++file_reads_;
-    co_return true;
-}
-
 task<http3_buffered_response_write_result> http3_buffered_response_writer::write_file_body(
-    std::int64_t stream_id, http3_stream_signal& signal, response_file_source& source,
+    std::int64_t stream_id, multiplexed_stream_signal& signal, response_file_source& source,
     http_status_code committed_status) {
     for (;;) {
-        std::optional<file_read_slot> slot;
+        std::optional<multiplexed_file_read_limiter::slot> slot;
         std::size_t max_bytes = response_file_read_ahead_bytes;
         if (source.file_bytes_pending()) {
             // Read only what the stream may submit: a stream whose peer stopped
             // acknowledging holds neither a read buffer nor a pool task.
             if (!(co_await await_output_budget(session_, stream_id, signal)) ||
-                !(co_await acquire_file_read(stream_id))) {
+                !(co_await file_reads_.acquire(
+                    [this, stream_id]() noexcept { return stream_ended(stream_id); }))) {
                 co_return write_result{.committed_status_ = committed_status};
             }
-            slot.emplace(*this);
+            slot.emplace(file_reads_);
             if (stream_ended(stream_id)) {
                 co_return write_result{.committed_status_ = committed_status};
             }
@@ -173,21 +155,10 @@ task<http3_buffered_response_write_result> http3_buffered_response_writer::write
     // status-suppressed bodies do not transfer a representation.
     if (!write_plan.body_plan().body_suppressed() &&
         (response.file_body() || response.has_multipart_file_body())) {
-        source.emplace(response, file_io_);
-        bool opened = false;
-        {
-            if (!(co_await acquire_file_read(stream_id))) {
-                co_return write_result{};
-            }
-            const file_read_slot slot(*this);
-            opened = co_await source->open_first();
-        }
-        // The blocking open may have yielded while the peer reset its stream.
-        if (stream_ended(stream_id)) {
-            co_return write_result{};
-        }
-        if (!opened) {
-            co_return write_result{.file_failure_ = *source->failure()};
+        if (const auto open_failure = co_await file_reads_.open_file_body(
+                source, response, file_io_,
+                [this, stream_id]() noexcept { return stream_ended(stream_id); })) {
+            co_return *open_failure;
         }
     }
 

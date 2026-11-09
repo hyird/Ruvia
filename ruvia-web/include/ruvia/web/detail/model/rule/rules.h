@@ -7,8 +7,7 @@
 #include <utility>
 
 #include "ruvia/web/detail/model/model_schema.h"
-#include "ruvia/web/detail/model/rule/rule_pack.h"
-
+#include "ruvia/web/detail/model/rule/rule_validation.h"
 namespace ruvia::detail {
 
 struct model_validation_access final {

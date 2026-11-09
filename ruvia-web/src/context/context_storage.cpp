@@ -26,7 +26,6 @@ context::context(request_memory& memory, const http_request& request,
     const detail::context_services& services)
     : memory_(memory),
       request_(request),
-      conn_info_(services.get_conn_info()),
       capabilities_(services.worker(), services.get_stop_token(), services.worker_states()),
       route_path_(route_path),
       param_names_(param_names),
@@ -38,6 +37,10 @@ context::context(request_memory& memory, const http_request& request,
     operation_scope_.bind_worker(services.worker());
 }
 context::~context() = default;
+
+const conn_info& context::conn() const& noexcept {
+    return services().get_conn_info();
+}
 
 bool context::is_subrequest() const noexcept {
     return services().dispatch_depth() != 0;
@@ -164,7 +167,7 @@ conn_info detail::context_services::resolve_conn_info(const http_request& reques
     if (!connection_services_.peer_trusted_) {
         return resolved;
     }
-    const auto forwarded = detail::resolve_forwarded_client(request, *worker_services_.trusted_proxies_);
+    const auto forwarded = detail::resolve_forwarded_client(request, *worker_services_->trusted_proxies_);
     resolved.apply_forwarded(forwarded.address_, forwarded.scheme_);
     return resolved;
 }

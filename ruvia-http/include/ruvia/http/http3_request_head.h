@@ -9,7 +9,6 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_request.h"

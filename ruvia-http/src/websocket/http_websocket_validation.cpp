@@ -2,15 +2,15 @@
 #include <cstddef>
 #include <optional>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "field/http_connection_fields.h"
+#include "parser/http_parser_syntax.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_handshake_fields.h"

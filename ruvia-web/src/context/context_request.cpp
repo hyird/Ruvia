@@ -187,20 +187,24 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
     std::span<const http_content_coding> codings, std::string_view raw,
     http_content_decode_options options) {
     if (worker_value.has_blocking_pool() && options.max_decoded_bytes_ > inline_request_decode_bytes) {
-        auto inline_result = decode_http_content(codings, raw,
-            {.max_decoded_bytes_ = inline_request_decode_bytes, .resource_ = options.resource_});
-        const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
-        if (failure == nullptr || *failure != http_content_decode_error::decoded_size_exceeded) {
-            co_return inline_result;
+        if (raw.size() <= inline_request_decode_bytes) {
+            auto inline_result = decode_http_content(codings, raw,
+                {.max_decoded_bytes_ = inline_request_decode_bytes, .resource_ = options.resource_});
+            const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
+            if (failure == nullptr || *failure != http_content_decode_error::decoded_size_exceeded) {
+                co_return inline_result;
+            }
         }
         // The job carries only its own copies; request memory stays on this worker.
-        std::pmr::vector<http_content_coding> owned_codings(codings.begin(), codings.end(), process_resource());
+        std::array<http_content_coding, max_content_codings> owned_codings{};
+        const auto coding_count = (std::min)(codings.size(), max_content_codings);
+        std::copy_n(codings.data(), coding_count, owned_codings.data());
         std::pmr::string owned_raw(raw, process_resource());
         auto offloaded = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value},
-            [owned_codings = std::move(owned_codings), owned_raw = std::move(owned_raw),
+            [owned_codings, coding_count, owned_raw = std::move(owned_raw),
                 limit = options.max_decoded_bytes_]() {
-                return decode_http_content(owned_codings, owned_raw,
-                    {.max_decoded_bytes_ = limit, .resource_ = process_resource()});
+                return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count),
+                    owned_raw, {.max_decoded_bytes_ = limit, .resource_ = process_resource()});
             });
         // A codec failure on the pool is rethrown here; pool saturation or
         // shutdown throws blocking_operation_rejected (mapped to 503).

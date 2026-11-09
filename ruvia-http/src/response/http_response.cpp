@@ -10,8 +10,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/response/http_response_body_access.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
@@ -19,7 +17,9 @@
 
 #include "field/http_entity_tag.h"
 #include "field/response_field_validation.h"
+#include "response/http_response_body_access.h"
 #include "response/http_response_content_semantics.h"
+#include "response/http_response_header_bits.h"
 #include "response/http_response_header_storage.h"
 
 namespace ruvia {

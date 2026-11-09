@@ -4,10 +4,11 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
-#include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/http1_response_head_error.h"
+
+#include "response/http_final_response_control_plan.h"
+#include "response/http_response_header_bits.h"
+#include "response/http_response_header_state.h"
 
 namespace ruvia {
 

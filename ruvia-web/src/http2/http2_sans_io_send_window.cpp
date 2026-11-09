@@ -7,7 +7,7 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] http2_stream_data_write_status classify_aborted_write(
-    const http2_sans_io_stream_signal* signal, const bool* aborted) noexcept {
+    const multiplexed_stream_signal* signal, const bool* aborted) noexcept {
     if (aborted != nullptr && *aborted) {
         return http2_stream_data_write_status::local_aborted;
     }
@@ -21,17 +21,17 @@ namespace {
 
 task<http2_send_window_wait_status> await_http2_send_window(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
-    http2_sans_io_stream_signal* signal, const bool* aborted) {
+    multiplexed_stream_signal* signal, const bool* aborted) {
     // Marks the whole wait, across wakes that find no capacity, so the
     // session's write_timeout check sees one continuous stall.
     struct send_window_wait_guard final {
-        http2_sans_io_stream_signal& signal_;
-        explicit send_window_wait_guard(http2_sans_io_stream_signal& signal_value) noexcept
+        multiplexed_stream_signal& signal_;
+        explicit send_window_wait_guard(multiplexed_stream_signal& signal_value) noexcept
             : signal_(signal_value) {
-            signal_.set_waiting_send_window(true);
+            signal_.set_waiting_output(true);
         }
         ~send_window_wait_guard() noexcept {
-            signal_.set_waiting_send_window(false);
+            signal_.set_waiting_output(false);
         }
         send_window_wait_guard(const send_window_wait_guard&) = delete;
         send_window_wait_guard& operator=(const send_window_wait_guard&) = delete;
@@ -59,7 +59,7 @@ task<http2_send_window_wait_status> await_http2_send_window(
 
 task<http2_stream_data_write_status> write_http2_stream_data(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
-    http2_sans_io_stream_signal* signal, worker_signal& write_signal,
+    multiplexed_stream_signal* signal, worker_signal& write_signal,
     http2_data_output_budget& output_budget, std::string_view bytes,
     http2_end_stream end_stream, const bool* aborted) {
     // The caller owns the suffix until consumed. Each reservation covers only

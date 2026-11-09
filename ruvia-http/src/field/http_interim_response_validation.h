@@ -3,13 +3,12 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_known_headers.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 
+#include "field/http_connection_fields.h"
 #include "field/response_field_validation.h"
+#include "response/http_response_header_bits.h"
 
 namespace ruvia::detail {
 

@@ -81,94 +81,17 @@ struct interim_target final {
     std::int64_t stream_id_;
 };
 
-// Resumes the coroutine on a later turn of its worker, letting other
-// connections run between bursts of one connection's output.
-struct worker_turn final {
-    explicit worker_turn(const worker_handle& worker_value) noexcept
-        : worker_(worker_value) {}
-    worker_turn(worker_handle&&) = delete;
-    const worker_turn* operator&() const = delete;
-    worker_turn* operator&() = delete;
-
-    [[nodiscard]] bool await_ready() const noexcept {
-        return false;
-    }
-    void await_suspend(std::coroutine_handle<> continuation) const noexcept {
-        worker_.defer_resume(continuation);
-    }
-    void await_resume() const noexcept {}
-
-    const worker_handle& worker_;
-};
-
-request_memory& emplace_request_memory(
-    std::optional<request_memory>& storage, worker_memory& memory, std::span<std::byte> initial_buffer) {
-    const auto initial_bytes = memory.request_initial_buffer_bytes();
-    if (initial_bytes <= initial_buffer.size()) {
-        storage.emplace(memory, initial_buffer.first(initial_bytes));
-    } else {
-        storage.emplace(memory);
-    }
-    return *storage;
-}
-
-void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp2_rand_ctx*) noexcept {
-    // ngtcp2 cannot fail this callback; packet protection without randomness
-    // must not continue.
-    if (!fill_random_bytes(std::span<unsigned char>(destination, size))) {
-        std::terminate();
-    }
-}
-
-[[nodiscard]] std::uint64_t duration_nanoseconds(const std::optional<timeout_duration>& value) noexcept {
-    if (!value.has_value()) {
-        return 0;
-    }
-    constexpr auto max_milliseconds = static_cast<std::int64_t>(UINT64_MAX / NGTCP2_MILLISECONDS);
-    const auto milliseconds = (std::max)(value->value().count(), std::int64_t{0});
-    return milliseconds >= max_milliseconds ? UINT64_MAX
-                                            : static_cast<std::uint64_t>(milliseconds) * NGTCP2_MILLISECONDS;
-}
-
-[[nodiscard]] std::chrono::steady_clock::time_point steady_time(ngtcp2_tstamp timestamp) noexcept {
-    using nanoseconds = std::chrono::nanoseconds;
-    if (timestamp >= static_cast<ngtcp2_tstamp>((std::numeric_limits<nanoseconds::rep>::max)())) {
-        return (std::chrono::steady_clock::time_point::max)();
-    }
-    return std::chrono::steady_clock::time_point(
-        std::chrono::ceil<std::chrono::steady_clock::duration>(nanoseconds(static_cast<nanoseconds::rep>(timestamp))));
-}
-
 [[nodiscard]] std::uint64_t error_value(http3_error_code code) noexcept {
     return static_cast<std::uint64_t>(code);
 }
 
 [[nodiscard]] ngtcp2_callbacks server_callbacks() noexcept {
-    ngtcp2_callbacks callbacks{};
+    auto callbacks = http3_quic_crypto_callbacks();
     callbacks.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
-    callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
-    callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
-    callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
-    callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
-    callbacks.update_key = ngtcp2_crypto_update_key_cb;
-    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
-    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
-    callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
-    callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
-    callbacks.rand = fill_random;
     return callbacks;
 }
 
 }  // namespace
-
-void http3_session::free_tls::operator()(SSL* tls) const noexcept {
-    SSL_free(tls);
-}
-
-void http3_session::free_crypto::operator()(ngtcp2_crypto_ossl_ctx* crypto) const noexcept {
-    ngtcp2_crypto_ossl_ctx_del(crypto);
-}
-
 ngtcp2_conn* http3_session::native_connection(ngtcp2_crypto_conn_ref* reference) noexcept {
     return static_cast<http3_session*>(reference->user_data)->connection_->native_handle();
 }
@@ -225,7 +148,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     auto callbacks = server_callbacks();
     callbacks.get_new_connection_id2 = new_connection_id;
     callbacks.remove_connection_id = remove_connection_id;
-    const auto handshake_timeout = duration_nanoseconds(
+    const auto handshake_timeout = http3_quic_duration(
         server.header_completion_timeout_.has_value() ? server.header_completion_timeout_ : server.request_header_timeout_);
     const http3_connection_options http3_options{
         .resource_ = services_.memory_.resource(),
@@ -247,7 +170,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .handshake_timeout_ = handshake_timeout == 0 ? UINT64_MAX : handshake_timeout,
         // Zero disables the QUIC idle timeout, as an absent idle_timeout_
         // disables the HTTP one.
-        .idle_timeout_ = duration_nanoseconds(server.idle_timeout_),
+        .idle_timeout_ = http3_quic_duration(server.idle_timeout_),
         .initial_max_data_ = (std::min)(http3_max_connection_receive_window,
             static_cast<std::uint64_t>(server.max_inbound_buffer_bytes_per_connection_)),
         .initial_max_stream_data_ = (std::min)(http3_max_stream_receive_window,
@@ -297,16 +220,11 @@ http3_session::~http3_session() {
 }
 
 ngtcp2_tstamp http3_session::now() noexcept {
-    return static_cast<ngtcp2_tstamp>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    return http3_quic_now();
 }
 
 ngtcp2_path http3_session::path(asio::ip::udp::endpoint& remote) noexcept {
-    return {
-        .local = {local_.data(), static_cast<ngtcp2_socklen>(local_.size())},
-        .remote = {remote.data(), static_cast<ngtcp2_socklen>(remote.size())},
-        .user_data = nullptr,
-    };
+    return http3_quic_path(local_, remote);
 }
 
 void http3_session::register_connection_id(const ngtcp2_cid& cid) {
@@ -852,16 +770,6 @@ bool http3_session::admit_stream(std::int64_t stream_id) {
     return true;
 }
 
-task<http_response> http3_session::respond_body_failure(const http_request& request,
-    request_memory& request_memory_value, http_request_body_failure failure,
-    const context_services& request_services, http_response_tail& tail) {
-    tail.disable_response_coding();
-    return respond_http_request_rejection(services_.routes_, request, request_memory_value,
-        http_request_rejection::error(copy_http_protocol_error_info(
-            request_memory_value.resource(), http_request_body_protocol_error(failure))),
-        request_services);
-}
-
 task<void> http3_session::dispatch_one(std::int64_t stream_id) {
     const auto& routes = services_.routes_;
     const auto& options = services_.options_;
@@ -871,7 +779,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         std::array<std::byte, http3_request_arena_stack_bytes> arena_block;
         std::optional<request_memory> request_memory_storage;
         auto& request_memory_value =
-            emplace_request_memory(request_memory_storage, services_.memory_, std::span<std::byte>(arena_block));
+            emplace_multiplexed_request_memory(request_memory_storage, services_.memory_, std::span<std::byte>(arena_block));
         auto* stream = find_stream(stream_id);
         auto* signal = stream != nullptr ? stream->signal() : nullptr;
         if (signal == nullptr) {
@@ -948,7 +856,8 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         } else if (const auto& body_failure = stream->body_failure();
             body_failure.has_value() && admission.endpoint() != http_request_endpoint::rejection) {
             body_failure_handled = true;
-            response = co_await respond_body_failure(request, request_memory_value, *body_failure, request_services, admission.tail());
+            response = co_await respond_http_request_body_failure(
+                routes, request, request_memory_value, *body_failure, request_services, admission.tail());
         } else {
             switch (admission.endpoint()) {
                 case http_request_endpoint::rejection:
@@ -1074,20 +983,16 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
 
         if (const auto& body_failure = stream->body_failure(); body_failure.has_value() && !body_failure_handled) {
             body_failure_handled = true;
-            response = co_await respond_body_failure(request, request_memory_value, *body_failure, request_services, admission.tail());
+            response = co_await respond_http_request_body_failure(
+                routes, request, request_memory_value, *body_failure, request_services, admission.tail());
         }
-        auto first_preparation = admission.tail().prepare(response, options, request_services.worker());
-        auto preparation = first_preparation.ready() != nullptr
-                               ? *first_preparation.ready()
-                               : co_await admission.tail().finish_prepare(
-                                     first_preparation, response, options, routes, request_memory_value, request_services);
+        auto preparation = co_await admission.tail().prepare_or_finish(
+            response, options, routes, request_memory_value, request_services);
         if (const auto& body_failure = stream->body_failure(); body_failure.has_value() && !body_failure_handled) {
-            response = co_await respond_body_failure(request, request_memory_value, *body_failure, request_services, admission.tail());
-            first_preparation = admission.tail().prepare(response, options, request_services.worker());
-            preparation = first_preparation.ready() != nullptr
-                              ? *first_preparation.ready()
-                              : co_await admission.tail().finish_prepare(
-                                    first_preparation, response, options, routes, request_memory_value, request_services);
+            response = co_await respond_http_request_body_failure(
+                routes, request, request_memory_value, *body_failure, request_services, admission.tail());
+            preparation = co_await admission.tail().prepare_or_finish(
+                response, options, routes, request_memory_value, request_services);
         }
         if (request_services.get_stop_token().stop_requested()) {
             reset_stream(stream_id, http3_error_code::request_cancelled);
@@ -1101,11 +1006,8 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             admission.tail().disable_response_coding();
             response = co_await routes.handle_exception(
                 request, request_memory_value, written.file_failure_->response_error(), request_services);
-            first_preparation = admission.tail().prepare(response, options, request_services.worker());
-            preparation = first_preparation.ready() != nullptr
-                              ? *first_preparation.ready()
-                              : co_await admission.tail().finish_prepare(
-                                    first_preparation, response, options, routes, request_memory_value, request_services);
+            preparation = co_await admission.tail().prepare_or_finish(
+                response, options, routes, request_memory_value, request_services);
             written = co_await buffered_response_writer_.write(stream_id, response, preparation.write_plan_);
             if (written.file_failure_ && !written.committed_status_) {
                 reset_stream(stream_id, http3_error_code::internal_error);
@@ -1229,7 +1131,7 @@ void http3_session::arm_timer() noexcept {
     }
     try {
         const auto status = services_.worker_.schedule_timer(
-            timer_, steady_time(expiry), [this](worker_timer_outcome outcome) { timer_fired(outcome); });
+            timer_, http3_quic_steady_time(expiry), [this](worker_timer_outcome outcome) { timer_fired(outcome); });
         if (status == worker_timer_schedule_status::worker_stopping) {
             close_now();
         }
@@ -1276,8 +1178,7 @@ void http3_session::enter_closing() noexcept {
     armed_expiry_ = UINT64_MAX;
     try {
         const auto status = services_.worker_.schedule_timer(timer_,
-            worker_timer_deadline_after(std::chrono::nanoseconds(static_cast<std::int64_t>(
-                (std::min)(connection_->close_period(), static_cast<ngtcp2_duration>(INT64_MAX))))),
+            worker_timer_deadline_after(http3_quic_nanoseconds(connection_->close_period())),
             [this](worker_timer_outcome outcome) { timer_fired(outcome); });
         if (status == worker_timer_schedule_status::worker_stopping) {
             lifecycle_ = lifecycle_type::ended;
@@ -1372,8 +1273,7 @@ void http3_session::arm_drain_timer() noexcept {
         return;
     }
     const auto round_trip = std::chrono::ceil<std::chrono::milliseconds>(
-        std::chrono::nanoseconds(static_cast<std::int64_t>(
-            (std::min)(connection_->close_period(), static_cast<ngtcp2_duration>(INT64_MAX)))));
+        http3_quic_nanoseconds(connection_->close_period()));
     const auto bound = (std::min)(http3_drain_round_trip_bound, (std::max)(round_trip, std::chrono::milliseconds(1)));
     try {
         const auto status = services_.worker_.schedule_timer(

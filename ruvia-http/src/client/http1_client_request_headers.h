@@ -3,11 +3,11 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 
+#include "field/http_connection_fields.h"
 #include "field/http_request_field_validation.h"
 
 // What a caller-supplied request header section must satisfy before the writer

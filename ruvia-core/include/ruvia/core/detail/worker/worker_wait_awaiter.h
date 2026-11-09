@@ -286,9 +286,9 @@ private:
         continuation.resume();
     }
 
-    static void request_cancellation(const std::shared_ptr<state_type>& state_value, std::uint64_t generation) {
-        auto lock = state_value->lock_state();
-        state_value->wait_slot_.cancel(generation);
+    static void request_cancellation(state_type& state_value, std::uint64_t generation) {
+        auto lock = state_value.lock_state();
+        state_value.wait_slot_.cancel(generation);
     }
 
     // The callback borrows the awaiter's state_, which outlives the
@@ -299,8 +299,8 @@ private:
     // callback from cancelling a later wait on the same slot.
     void register_cancellation() {
         stop_token_.register_callback(stop_registration_,
-            [state_value = &state_, generation = generation_] {
-                request_cancellation(*state_value, generation);
+            [state_ptr = state_.get(), generation = generation_] {
+                request_cancellation(*state_ptr, generation);
             });
     }
 

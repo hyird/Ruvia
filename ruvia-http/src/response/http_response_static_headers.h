@@ -5,9 +5,9 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/http_response.h"
 
+#include "response/http_response_header_bits.h"
 #include "response/http_response_header_storage.h"
 
 namespace ruvia::detail {

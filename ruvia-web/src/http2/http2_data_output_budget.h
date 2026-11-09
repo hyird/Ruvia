@@ -10,7 +10,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
 
-#include "http2/http2_sans_io_stream_signal.h"
+#include "server/multiplexed_stream_signal.h"
 
 namespace ruvia::detail {
 
@@ -41,7 +41,7 @@ public:
         return false;
     }
 
-    [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, http2_sans_io_stream_signal& stream,
+    [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, multiplexed_stream_signal& stream,
         const ruvia::http2_connection& connection, const bool* aborted) {
         while (!stream.terminated() && !connection.stream_aborted(stream_id) &&
                (aborted == nullptr || !*aborted)) {

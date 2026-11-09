@@ -6,7 +6,6 @@
 #include <string_view>
 
 #include "ruvia/web/detail/json/json_lex.h"
-#include "ruvia/web/detail/json/json_limits.h"
 #include "ruvia/web/detail/json/json_string.h"
 
 // The single owner of the JSON array and object grammars. Skipping, typed

@@ -26,6 +26,7 @@
 
 #include "router/route_resolution.h"
 #include "server/inbound_buffer_resource.h"
+#include "server/multiplexed_stream_signal.h"
 
 // Web-side state of one HTTP/3 request stream. The QUIC/HTTP/3 core owns
 // framing, QPACK and flow control; this runtime owns what a route needs: the
@@ -34,143 +35,6 @@
 // trailers, and the wake/stop signal a dispatched handler waits on.
 
 namespace ruvia::detail {
-
-// Connection-owned terminal state of one HTTP/3 connection. Stream waits that
-// must end on termination combine their own stop token with token().
-class http3_termination final {
-public:
-    http3_termination() noexcept = default;
-    http3_termination(const http3_termination&) = delete;
-    http3_termination& operator=(const http3_termination&) = delete;
-
-    [[nodiscard]] bool terminated() const noexcept {
-        return static_cast<bool>(error_);
-    }
-
-    [[nodiscard]] std::error_code error() const noexcept {
-        return error_;
-    }
-
-    [[nodiscard]] bool terminate(std::error_code error) noexcept {
-        if (terminated()) {
-            return false;
-        }
-        error_ = error ? error : std::make_error_code(std::errc::connection_aborted);
-        if (stop_source_) {
-            stop_source_->request_stop();
-        }
-        return true;
-    }
-
-    // Allocated on first use; already stopped once the connection terminated.
-    [[nodiscard]] stop_token token() {
-        if (!stop_source_) {
-            stop_source_.emplace();
-            if (terminated()) {
-                stop_source_->request_stop();
-            }
-        }
-        return stop_source_->token();
-    }
-
-private:
-    std::error_code error_;
-    std::optional<stop_source> stop_source_;
-};
-
-// The one wake primitive of a dispatched stream. Body readers and writers
-// waiting for output budget share it and always re-check their own readiness
-// after a wake.
-class http3_stream_signal final {
-public:
-    http3_stream_signal(const worker_handle& worker_value, http3_termination& termination)
-        : signal_(worker_value),
-          termination_(termination) {}
-    http3_stream_signal(worker_handle&&, http3_termination&) = delete;
-
-    void wake() noexcept {
-        signal_.notify();
-    }
-
-    // The stream ended abnormally (peer reset, local reset): every wait ends.
-    void stop() noexcept {
-        stopped_ = true;
-        if (stop_source_) {
-            stop_source_->request_stop();
-        }
-        wake();
-    }
-
-    [[nodiscard]] bool stopped() const noexcept {
-        return stopped_ || termination_.terminated();
-    }
-
-    [[nodiscard]] stop_token terminal_stop_token() {
-        if (!stop_source_) {
-            stop_source_.emplace();
-        }
-        if (stopped()) {
-            stop_source_->request_stop();
-        }
-        return stop_source_->token();
-    }
-
-    [[nodiscard]] bool terminated() const noexcept {
-        return termination_.terminated();
-    }
-
-    [[nodiscard]] std::error_code terminal_error() const noexcept {
-        return termination_.error();
-    }
-
-    [[nodiscard]] http3_termination& termination() & noexcept RUVIA_LIFETIMEBOUND {
-        return termination_;
-    }
-    http3_termination& termination() && = delete;
-
-    // Spans one whole wait for peer acknowledgements to free output budget;
-    // the connection scanner times it against write_timeout_.
-    void set_waiting_output(bool waiting) noexcept {
-        waiting_output_ = waiting;
-        output_wait_observed_ms_.reset();
-        output_wait_expired_ = false;
-    }
-
-    [[nodiscard]] bool waiting_output() const noexcept {
-        return waiting_output_;
-    }
-
-    // True once per wait, when it has been observed for `timeout` in the
-    // scanner's clock. The first observation starts the clock.
-    [[nodiscard]] bool output_wait_expired(std::int64_t now_ms, timeout_duration timeout) noexcept {
-        if (!waiting_output_ || output_wait_expired_) {
-            return false;
-        }
-        if (!output_wait_observed_ms_.has_value()) {
-            output_wait_observed_ms_ = now_ms;
-        }
-        output_wait_expired_ = now_ms - *output_wait_observed_ms_ >= timeout.value().count();
-        return output_wait_expired_;
-    }
-
-    [[nodiscard]] worker_signal::wait_operation wait() {
-        return signal_.wait();
-    }
-
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
-        return signal_.worker();
-    }
-    const worker_handle& worker() const&& = delete;
-
-private:
-    worker_signal signal_;
-    http3_termination& termination_;
-    std::optional<stop_source> stop_source_;
-    bool stopped_{false};
-    bool waiting_output_{false};
-    bool output_wait_expired_{false};
-    std::optional<std::int64_t> output_wait_observed_ms_;
-};
 
 enum class http3_body_store_status : std::uint8_t {
     stored,
@@ -390,7 +254,8 @@ public:
         return closed_;
     }
 
-    [[nodiscard]] http3_stream_signal* begin_dispatch(const worker_handle& worker_value, http3_termination& termination) {
+    [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
+        const worker_handle& worker_value, multiplexed_session_termination& termination) {
         if (signal_ || handler_done_) {
             return nullptr;
         }
@@ -403,14 +268,14 @@ public:
     [[nodiscard]] bool dispatched() const noexcept {
         return signal_.has_value();
     }
-    [[nodiscard]] http3_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] multiplexed_stream_signal* signal() & noexcept RUVIA_LIFETIMEBOUND {
         return signal_ ? &*signal_ : nullptr;
     }
-    http3_stream_signal* signal() && = delete;
-    [[nodiscard]] const http3_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
+    multiplexed_stream_signal* signal() && = delete;
+    [[nodiscard]] const multiplexed_stream_signal* signal() const& noexcept RUVIA_LIFETIMEBOUND {
         return signal_ ? &*signal_ : nullptr;
     }
-    const http3_stream_signal* signal() const&& = delete;
+    const multiplexed_stream_signal* signal() const&& = delete;
 
     void mark_handler_done() noexcept {
         handler_done_ = true;
@@ -433,7 +298,7 @@ private:
     std::size_t datagram_bytes_{0};
     std::size_t received_bytes_{0};
     std::optional<http_request_body_failure> body_failure_{};
-    std::optional<http3_stream_signal> signal_;
+    std::optional<multiplexed_stream_signal> signal_;
     std::int64_t request_body_opened_ms_{0};
     std::int64_t request_body_progress_ms_{0};
     bool request_body_open_{false};

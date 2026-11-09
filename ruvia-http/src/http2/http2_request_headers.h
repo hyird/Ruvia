@@ -3,7 +3,6 @@
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 
@@ -13,6 +12,7 @@
 #include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
+#include "parser/http_parser_syntax.h"
 #include "parser/http_request_target.h"
 
 namespace ruvia::detail {

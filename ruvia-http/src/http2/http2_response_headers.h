@@ -10,9 +10,6 @@
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
-#include "ruvia/http/detail/server/http_final_response_control_plan.h"
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_pmr_string.h"
@@ -24,7 +21,9 @@
 #include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
+#include "response/http_final_response_control_plan.h"
 #include "response/http_framed_response_head_plan.h"
+#include "response/http_response_header_state.h"
 #include "response/http_response_header_storage.h"
 #include "server/http_date_cache.h"
 

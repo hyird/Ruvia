@@ -1,10 +1,10 @@
 #include "ruvia/http/http_protocol_managed_fields.h"
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_field_syntax.h"
 
+#include "field/http_connection_fields.h"
 #include "field/http_request_field_validation.h"
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia {
 

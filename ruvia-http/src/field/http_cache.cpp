@@ -51,16 +51,7 @@ namespace {
 }  // namespace
 
 void cache_control_field_parser::update(std::string_view value) noexcept {
-    std::size_t pos = 0;
-    while (pos < value.size()) {
-        const auto comma = pos + http_find_unquoted_delimiter(value.substr(pos), 0, ',');
-        auto token = value.substr(pos, comma - pos);
-        pos = comma == value.size() ? value.size() : comma + 1;
-
-        token = http_trim_ows(token);
-        if (token.empty()) {
-            continue;
-        }
+    detail::http_visit_comma_separated_quoted(value, [this](std::string_view token) noexcept {
         const auto eq = token.find('=');
         const bool has_argument = eq != std::string_view::npos;
         const auto name = eq == std::string_view::npos ? token : token.substr(0, eq);
@@ -151,7 +142,8 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
             default:
                 break;
         }
-    }
+        return true;
+    });
 }
 
 cache_control parse_cache_control(std::string_view value) noexcept {

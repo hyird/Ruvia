@@ -4,9 +4,10 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_field_syntax.h"
+
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 struct http_structured_item {

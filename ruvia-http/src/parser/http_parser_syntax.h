@@ -5,8 +5,9 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/http_field_syntax.h"
+
+#include "field/request_header_kind.h"
 
 namespace ruvia::detail {
 

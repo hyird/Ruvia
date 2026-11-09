@@ -59,7 +59,7 @@ struct event_loop_pool::impl_type final {
             stable_runtime->configure({
                 .stop_admission_ = [weak_loop, stable_runtime] {
                     if (const auto locked_loop = weak_loop.lock()) {
-                        locked_loop->stop();
+                        locked_loop->complete_stop_admission();
                     } else {
                         // Construction rollback can destroy an unpublished
                         // state before its core owner drains this control.

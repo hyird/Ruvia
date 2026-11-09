@@ -2,7 +2,6 @@
 #include <stdexcept>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_base64.h"
@@ -10,6 +9,7 @@
 #include "ruvia/http/websocket_client_negotiation.h"
 
 #include "client/http1_client_request_headers.h"
+#include "field/http_connection_fields.h"
 #include "parser/http_header_descriptor_storage.h"
 #include "websocket/http_websocket_accept_key.h"
 

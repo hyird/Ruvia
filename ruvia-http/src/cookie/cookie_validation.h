@@ -8,11 +8,11 @@
 #include <string_view>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
+#include "parser/http_parser_syntax.h"
 #include "parser/http_uri_grammar.h"
 
 namespace ruvia::detail {

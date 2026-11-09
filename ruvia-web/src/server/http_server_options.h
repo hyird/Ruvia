@@ -159,9 +159,22 @@ struct http_server_options final {
 
     void set_server(const server_config& config);
     void set_compression(compression_config config);
+    void clear_compression() noexcept {
+        compression_.reset();
+    }
     void set_cors(const cors_config& config);
+    void clear_cors() noexcept {
+        cors_.reset();
+    }
     void set_rate_limit(const rate_limit_config& config);
+    void clear_rate_limit() noexcept {
+        default_rate_limit_per_worker_.reset();
+        rate_limit_capacity_per_worker_ = default_rate_limit_capacity_per_worker;
+    }
     void set_trusted_proxies(const trusted_proxy_config& config);
+    void clear_trusted_proxies() noexcept {
+        trusted_proxies_ = trusted_proxy_set(process_resource());
+    }
 };
 
 }  // namespace ruvia::detail

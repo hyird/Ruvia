@@ -8,14 +8,12 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_known_headers.h"
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http_response.h"
 
+#include "field/http_connection_fields.h"
 #include "field/response_field_validation.h"
+#include "response/http_response_header_bits.h"
 #include "response/http_response_header_storage.h"
 #include "response/http_response_static_headers.h"
 
@@ -173,6 +171,7 @@ void http_response_headers::transfer_from(
     // Fields that meet existing ones are resolved on a staged copy, so a
     // failure leaves this block unchanged.
     auto staged = clone(source.size());
+    const auto original_size = staged.size();
     bool removed_cookies = false;
     for (const auto& header_value : source) {
         const auto known_bit = detail::http_response_header_access::known_bit(header_value);
@@ -206,8 +205,10 @@ void http_response_headers::transfer_from(
             }();
             const auto existing_count = [&] {
                 std::size_t count = 0;
-                for (const auto& candidate : std::as_const(staged)) {
-                    if (matches_header(candidate)) {
+                const auto* const items = staged.data();
+                for (std::size_t index = 0, limit = std::min(original_size, staged.size());
+                    index < limit; ++index) {
+                    if (matches_header(items[index])) {
                         ++count;
                     }
                 }

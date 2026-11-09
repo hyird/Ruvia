@@ -5,16 +5,16 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "field/http_connection_fields.h"
 #include "field/http_request_field_validation.h"
+#include "parser/http_parser_syntax.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_accept_key.h"
 #include "websocket/http_websocket_permessage_deflate.h"

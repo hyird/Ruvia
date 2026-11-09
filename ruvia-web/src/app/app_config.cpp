@@ -225,10 +225,7 @@ application& application::rate_limit(rate_limit_config config) {
 application& application::rate_limit(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the default rate limit per worker while app is running",
-        [](detail::app_state& state_value) {
-            state_value.options_.default_rate_limit_per_worker_.reset();
-            state_value.options_.rate_limit_capacity_per_worker_ = default_rate_limit_capacity_per_worker;
-        });
+        [](detail::app_state& state_value) { state_value.options_.clear_rate_limit(); });
 }
 
 application& application::trusted_proxies(trusted_proxy_config config) {
@@ -241,9 +238,8 @@ application& application::trusted_proxies(trusted_proxy_config config) {
 
 application& application::trusted_proxies(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
-        "cannot change trusted proxies while app is running", [](detail::app_state& state_value) {
-            state_value.options_.trusted_proxies_ = detail::trusted_proxy_set(process_resource());
-        });
+        "cannot change trusted proxies while app is running",
+        [](detail::app_state& state_value) { state_value.options_.clear_trusted_proxies(); });
 }
 
 application& application::on_access(access_log_callback callback_value) {

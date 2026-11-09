@@ -9,7 +9,7 @@
 
 namespace ruvia {
 void context::advertise_origins(std::span<const std::string_view> origins) {
-    if (services().connection_advertisements() == nullptr || conn_info_.tls() == nullptr) {
+    if (services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
     }
     services().connection_advertisements()->advertise_origins(origins);

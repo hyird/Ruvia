@@ -2,12 +2,12 @@
 #include <string_view>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_set_cookie.h"
 
+#include "response/http_response_header_bits.h"
 #include "response/http_response_header_storage.h"
 
 // Set-Cookie is the one response field that neither replaces nor appends by

@@ -40,6 +40,17 @@ std::optional<std::string_view> dispatch_response::header(std::string_view name)
     return std::nullopt;
 }
 
+void dispatch_response::copy_head_from(const http_response& response) {
+    status_ = response.status();
+    if (!response.headers().empty()) {
+        auto* const resource = headers_.get_allocator().resource();
+        headers_.reserve(response.headers().size());
+        for (const auto& header : response.headers()) {
+            headers_.emplace_back(header.name(), header.value(), resource);
+        }
+    }
+}
+
 task<dispatch_response> context::dispatch(dispatch_options options) {
     if (!services().routes() || !capabilities_.worker().is_current()) {
         throw std::logic_error("dispatch requires a routed context on its owning worker");
@@ -160,16 +171,10 @@ task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr
         const auto discarded_headers = std::move(headers);
     }
     dispatch_response result(pool());
-    result.status_ = response.status();
+    result.copy_head_from(response);
     // As on the wire: HEAD and content-forbidden statuses carry no body.
     if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {
         result.body_.assign(response.body_bytes());
-    }
-    if (!response.headers().empty()) {
-        result.headers_.reserve(response.headers().size());
-        for (const auto& header : response.headers()) {
-            result.headers_.emplace_back(header.name(), header.value(), pool());
-        }
     }
     co_return result;
 }

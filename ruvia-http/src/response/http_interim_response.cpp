@@ -2,13 +2,13 @@
 
 #include <stdexcept>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/response/http1_status_line.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
+#include "field/http_connection_fields.h"
 #include "field/http_interim_response_validation.h"
+#include "response/http1_status_line.h"
 #include "util/http_wire_sink.h"
 
 namespace ruvia {

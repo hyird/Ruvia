@@ -3,12 +3,12 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_limits.h"
 
+#include "field/http_connection_fields.h"
 #include "http2/http2_field_name.h"
+#include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 

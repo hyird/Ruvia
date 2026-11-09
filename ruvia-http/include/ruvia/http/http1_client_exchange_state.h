@@ -5,14 +5,18 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/http/detail/client/http1_client_initial_content_state.h"
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_known_method.h"
 
 namespace ruvia {
 
 namespace detail {
+
+enum class http1_client_initial_content_state : std::uint8_t {
+    complete,
+    pending,
+    awaiting_continue,
+};
 
 struct http1_client_request_prepare_result_access;
 
@@ -36,19 +40,16 @@ private:
     friend struct detail::http1_client_request_prepare_result_access;
     friend struct detail::http1_client_exchange_state_access;
 
-    http1_client_exchange_state(http_known_method method,
-        detail::http_connection_options connection_options, http1_close_policy close_policy,
+    http1_client_exchange_state(http_known_method method, http1_close_policy close_policy,
         detail::http1_client_initial_content_state content_state,
         std::pmr::string offered_upgrade_protocols) noexcept
         : offered_upgrade_protocols_(std::move(offered_upgrade_protocols)),
           method_(method),
-          connection_options_(connection_options),
           close_policy_(close_policy),
           content_state_(content_state) {}
 
     std::pmr::string offered_upgrade_protocols_;
     http_known_method method_{http_known_method::unknown};
-    detail::http_connection_options connection_options_;
     http1_close_policy close_policy_{http1_close_policy::allow_reuse};
     detail::http1_client_initial_content_state content_state_{
         detail::http1_client_initial_content_state::complete};

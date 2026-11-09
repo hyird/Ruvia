@@ -27,7 +27,7 @@ public:
     // continue_output is non-null when the request carries a pending
     // 100-continue expectation: the first read sends it, as the HTTP/1 reader
     // does, so content the handler never reads is never solicited.
-    http3_request_body_reader(http3_session& session, http3_stream& stream, http3_stream_signal& signal,
+    http3_request_body_reader(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal,
         http_interim_response_output* continue_output) noexcept
         : session_(session),
           stream_(stream),
@@ -69,7 +69,7 @@ public:
 private:
     http3_session& session_;
     http3_stream& stream_;
-    http3_stream_signal& signal_;
+    multiplexed_stream_signal& signal_;
     http_interim_response_output* continue_output_;
 };
 

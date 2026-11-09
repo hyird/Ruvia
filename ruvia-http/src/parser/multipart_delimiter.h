@@ -15,182 +15,58 @@
 
 namespace ruvia::detail {
 
-class http_multipart_delimiter_result;
-
-[[nodiscard]] inline http_multipart_delimiter_result http_match_multipart_delimiter_line(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
-    std::size_t& padding_cursor) noexcept;
-[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_delimiter_from_cursor(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
-    bool check_leading_dash, std::size_t rebase_crlf_offset,
-    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept;
-[[nodiscard]] inline http_multipart_delimiter_result http_find_initial_multipart_delimiter(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished,
-    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept;
-[[nodiscard]] inline http_multipart_delimiter_result http_find_multipart_body_delimiter(
-    std::string_view input, const multipart_boundary& boundary, bool input_finished, bool at_body_start,
-    std::size_t& search_cursor, std::size_t& padding_cursor) noexcept;
-
-class http_multipart_delimiter_no_match final {
-private:
-    friend class http_multipart_delimiter_result;
-    constexpr http_multipart_delimiter_no_match() noexcept = default;
+enum class http_multipart_delimiter_kind : std::uint8_t {
+    no_match,
+    invalid,
+    need_input,
+    part,
+    close,
 };
 
-// The complete dash-boundary follows CRLF but the line is not a delimiter line.
-// RFC 2046 section 5.1.1 lets recipients match on the boundary alone, so the
-// encapsulation is malformed rather than content.
-class http_multipart_delimiter_invalid final {
-private:
-    friend class http_multipart_delimiter_result;
-    constexpr http_multipart_delimiter_invalid() noexcept = default;
-};
-
-class http_multipart_delimiter_need_input final {
-public:
-    // Initial search: offset of the leading "--". Body search: offset of the
-    // CRLF that belongs to the delimiter rather than the preceding part.
-    [[nodiscard]] constexpr std::size_t offset() const noexcept {
-        return offset_;
-    }
-
-private:
-    friend class http_multipart_delimiter_result;
-
-    explicit constexpr http_multipart_delimiter_need_input(std::size_t offset) noexcept
-        : offset_(offset) {}
-
-    std::size_t offset_;
-};
-
-class http_multipart_part_delimiter final {
-public:
-    [[nodiscard]] constexpr std::size_t offset() const noexcept {
-        return offset_;
-    }
-
-    [[nodiscard]] constexpr std::size_t line_bytes() const noexcept {
-        return line_bytes_;
-    }
-
-private:
-    friend class http_multipart_delimiter_result;
-
-    constexpr http_multipart_part_delimiter(std::size_t offset, std::size_t line_bytes) noexcept
-        : offset_(offset),
-          line_bytes_(line_bytes) {}
-
-    std::size_t offset_;
-    std::size_t line_bytes_;
-};
-
-class http_multipart_close_delimiter final {
-public:
-    [[nodiscard]] constexpr std::size_t offset() const noexcept {
-        return offset_;
-    }
-
-    [[nodiscard]] constexpr std::size_t line_bytes() const noexcept {
-        return line_bytes_;
-    }
-
-private:
-    friend class http_multipart_delimiter_result;
-
-    constexpr http_multipart_close_delimiter(std::size_t offset, std::size_t line_bytes) noexcept
-        : offset_(offset),
-          line_bytes_(line_bytes) {}
-
-    std::size_t offset_;
-    std::size_t line_bytes_;
-};
-
-// Delimiter scanning distinguishes absence, a malformed delimiter line, an input-boundary ambiguity, a
-// regular part delimiter, and the terminal close delimiter. Only outcomes
-// that found a candidate expose its offset; only complete delimiter lines
+// Delimiter scanning distinguishes absence, a malformed delimiter line, an
+// input-boundary ambiguity, a regular part delimiter, and the terminal close
+// delimiter. Candidate outcomes expose their offset; complete delimiter lines
 // expose their line length.
-class http_multipart_delimiter_result final {
-public:
-    [[nodiscard]] constexpr const http_multipart_delimiter_no_match* no_match() const& noexcept {
-        return std::get_if<http_multipart_delimiter_no_match>(&value_);
-    }
-    const http_multipart_delimiter_no_match* no_match() const&& = delete;
-
-    [[nodiscard]] constexpr bool invalid() const noexcept {
-        return std::holds_alternative<http_multipart_delimiter_invalid>(value_);
-    }
-
-    [[nodiscard]] constexpr const http_multipart_delimiter_need_input* need_input() const& noexcept {
-        return std::get_if<http_multipart_delimiter_need_input>(&value_);
-    }
-    const http_multipart_delimiter_need_input* need_input() const&& = delete;
-
-    [[nodiscard]] constexpr const http_multipart_part_delimiter* part() const& noexcept {
-        return std::get_if<http_multipart_part_delimiter>(&value_);
-    }
-    const http_multipart_part_delimiter* part() const&& = delete;
-
-    [[nodiscard]] constexpr const http_multipart_close_delimiter* close() const& noexcept {
-        return std::get_if<http_multipart_close_delimiter>(&value_);
-    }
-    const http_multipart_close_delimiter* close() const&& = delete;
-
-private:
-    friend http_multipart_delimiter_result http_match_multipart_delimiter_line(
-        std::string_view, const multipart_boundary&, bool, std::size_t&) noexcept;
-    friend http_multipart_delimiter_result http_find_multipart_delimiter_from_cursor(
-        std::string_view, const multipart_boundary&, bool, bool, std::size_t,
-        std::size_t&, std::size_t&) noexcept;
-    friend http_multipart_delimiter_result http_find_initial_multipart_delimiter(
-        std::string_view, const multipart_boundary&, bool, std::size_t&, std::size_t&) noexcept;
-    friend http_multipart_delimiter_result http_find_multipart_body_delimiter(
-        std::string_view, const multipart_boundary&, bool, bool, std::size_t&, std::size_t&) noexcept;
-
-    using value_type = std::variant<http_multipart_delimiter_no_match, http_multipart_delimiter_invalid,
-        http_multipart_delimiter_need_input,
-        http_multipart_part_delimiter, http_multipart_close_delimiter>;
-
-    template <typename result_type>
-    explicit constexpr http_multipart_delimiter_result(result_type result_value) noexcept
-        : value_(result_value) {}
+struct http_multipart_delimiter_result final {
+    http_multipart_delimiter_kind kind_{http_multipart_delimiter_kind::no_match};
+    std::size_t offset_{0};
+    std::size_t line_bytes_{0};
 
     [[nodiscard]] static constexpr http_multipart_delimiter_result make_no_match() noexcept {
-        return http_multipart_delimiter_result(http_multipart_delimiter_no_match());
+        return {.kind_ = http_multipart_delimiter_kind::no_match};
     }
 
     [[nodiscard]] static constexpr http_multipart_delimiter_result make_invalid() noexcept {
-        return http_multipart_delimiter_result(http_multipart_delimiter_invalid());
+        return {.kind_ = http_multipart_delimiter_kind::invalid};
     }
 
     [[nodiscard]] static constexpr http_multipart_delimiter_result make_need_input(
         std::size_t offset = 0) noexcept {
-        return http_multipart_delimiter_result(http_multipart_delimiter_need_input(offset));
+        return {.kind_ = http_multipart_delimiter_kind::need_input, .offset_ = offset};
     }
 
     [[nodiscard]] static constexpr http_multipart_delimiter_result make_part(
         std::size_t offset, std::size_t line_bytes) noexcept {
-        return http_multipart_delimiter_result(http_multipart_part_delimiter(offset, line_bytes));
+        return {.kind_ = http_multipart_delimiter_kind::part,
+            .offset_ = offset,
+            .line_bytes_ = line_bytes};
     }
 
     [[nodiscard]] static constexpr http_multipart_delimiter_result make_close(
         std::size_t offset, std::size_t line_bytes) noexcept {
-        return http_multipart_delimiter_result(http_multipart_close_delimiter(offset, line_bytes));
+        return {.kind_ = http_multipart_delimiter_kind::close,
+            .offset_ = offset,
+            .line_bytes_ = line_bytes};
     }
 
     [[nodiscard]] constexpr http_multipart_delimiter_result rebased(std::size_t base) const noexcept {
-        if (const auto* need_input = this->need_input()) {
-            return make_need_input(base + need_input->offset());
+        if (kind_ == http_multipart_delimiter_kind::need_input ||
+            kind_ == http_multipart_delimiter_kind::part ||
+            kind_ == http_multipart_delimiter_kind::close) {
+            return {.kind_ = kind_, .offset_ = base + offset_, .line_bytes_ = line_bytes_};
         }
-        if (const auto* part = this->part()) {
-            return make_part(base + part->offset(), part->line_bytes());
-        }
-        if (const auto* close = this->close()) {
-            return make_close(base + close->offset(), close->line_bytes());
-        }
-        return invalid() ? make_invalid() : make_no_match();
+        return *this;
     }
-
-    value_type value_;
 };
 
 [[nodiscard]] inline bool http_multipart_marker_prefix_matches(
@@ -273,7 +149,7 @@ private:
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
     if (check_leading_dash && search_cursor == 0 && !input.empty() && input.front() == '-') {
         auto match = http_match_multipart_delimiter_line(input, boundary, input_finished, padding_cursor);
-        if (match.no_match() == nullptr) {
+        if (match.kind_ != http_multipart_delimiter_kind::no_match) {
             return match;
         }
         padding_cursor = 0;
@@ -282,7 +158,7 @@ private:
         prefix = input.find("\r\n--", prefix + 1)) {
         auto match = http_match_multipart_delimiter_line(
             input.substr(prefix + 2), boundary, input_finished, padding_cursor);
-        if (match.no_match() != nullptr) {
+        if (match.kind_ == http_multipart_delimiter_kind::no_match) {
             padding_cursor = 0;
             continue;
         }
@@ -298,7 +174,7 @@ private:
     std::size_t& search_cursor, std::size_t& padding_cursor) noexcept {
     auto match = http_find_multipart_delimiter_from_cursor(
         input, boundary, input_finished, true, 2, search_cursor, padding_cursor);
-    if (match.no_match() == nullptr) {
+    if (match.kind_ != http_multipart_delimiter_kind::no_match) {
         return match;
     }
     // The CRLF belongs to the preamble, but the first marker byte may still

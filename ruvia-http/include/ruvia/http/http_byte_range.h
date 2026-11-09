@@ -172,17 +172,22 @@ private:
             return http_byte_range_set{};
         }
         if (!last.empty()) {
-            auto normalized_first = first;
-            auto normalized_last = last;
-            while (normalized_first.size() > 1 && normalized_first.front() == '0') {
-                normalized_first.remove_prefix(1);
-            }
-            while (normalized_last.size() > 1 && normalized_last.front() == '0') {
-                normalized_last.remove_prefix(1);
-            }
-            if (normalized_first.size() > normalized_last.size() ||
-                (normalized_first.size() == normalized_last.size() && normalized_first > normalized_last)) {
+            if (start > end) {
                 return http_byte_range_set{};
+            }
+            if (start == (std::numeric_limits<std::uint64_t>::max)() && end == start) {
+                auto normalized_first = first;
+                auto normalized_last = last;
+                while (normalized_first.size() > 1 && normalized_first.front() == '0') {
+                    normalized_first.remove_prefix(1);
+                }
+                while (normalized_last.size() > 1 && normalized_last.front() == '0') {
+                    normalized_last.remove_prefix(1);
+                }
+                if (normalized_first.size() > normalized_last.size() ||
+                    (normalized_first.size() == normalized_last.size() && normalized_first > normalized_last)) {
+                    return http_byte_range_set{};
+                }
             }
         }
         if (start >= representation_length) {

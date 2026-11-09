@@ -2,11 +2,11 @@
 
 #include <utility>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_field_syntax.h"
 
 #include "field/http_entity_tag.h"
+#include "parser/http_parser_syntax.h"
 #include "request/http_request_access.h"
 
 namespace ruvia {

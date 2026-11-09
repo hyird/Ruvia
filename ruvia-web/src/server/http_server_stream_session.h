@@ -642,11 +642,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             bool head_failure_recovered = false;
             std::optional<http1_file_response_body<stream_type>> file_body;
             for (;;) {
-                const auto preparation = tail.prepare(response, options_, worker_);
-                const auto prepared = preparation.ready() != nullptr
-                                          ? *preparation.ready()
-                                          : co_await tail.finish_prepare(preparation, response, options_,
-                                                routes_value, request_memory_value, services);
+                const auto prepared = co_await tail.prepare_or_finish(
+                    response, options_, routes_value, request_memory_value, services);
                 if (prepared.recovered_) {
                     connection_plan = http1_commit_final_response(response, connection_plan);
                     request_completion = request_completion->with_buffered_connection_plan(connection_plan);

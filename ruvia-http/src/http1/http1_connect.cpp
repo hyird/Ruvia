@@ -1,7 +1,8 @@
-#include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
+
+#include "field/http_connection_fields.h"
+#include "response/http_response_header_state.h"
 
 namespace ruvia {
 http1_response_head_plan prepare_http1_connect_response_head(

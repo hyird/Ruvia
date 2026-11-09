@@ -10,8 +10,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/client/http1_client_exchange_state_access.h"
-#include "ruvia/http/detail/client/http1_client_parsed_status_line.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_transfer_coding.h"
@@ -22,6 +20,13 @@ namespace detail {
 
 struct http1_client_response_parse_result_access;
 struct http1_client_response_plan_access;
+
+// A validated HTTP/1 status line, kept by http1_client_response_parser from
+// the arrival of its line feed until the head it starts completes.
+struct http1_client_parsed_status_line final {
+    http_received_status received_status_;
+    http_protocol_version protocol_version_;
+};
 
 // One request-content lifecycle for the response side of an HTTP/1 exchange.
 // Expect and completion are not independent booleans: releasing the gate,
@@ -426,18 +431,8 @@ public:
     [[nodiscard]] http1_client_response_parse_result parse(std::string_view buffer);
 
 private:
-    [[nodiscard]] static constexpr detail::http1_client_request_content_phase
-    initial_request_content_phase(const http1_client_exchange_state& state_value) noexcept {
-        switch (detail::http1_client_exchange_state_access::content_state(state_value)) {
-            case detail::http1_client_initial_content_state::complete:
-                return detail::http1_client_request_content_phase::content_complete;
-            case detail::http1_client_initial_content_state::pending:
-                return detail::http1_client_request_content_phase::content_pending;
-            case detail::http1_client_initial_content_state::awaiting_continue:
-                return detail::http1_client_request_content_phase::awaiting_continue;
-        }
-        return detail::http1_client_request_content_phase::content_complete;
-    }
+    [[nodiscard]] static detail::http1_client_request_content_phase
+    initial_request_content_phase(const http1_client_exchange_state& state_value) noexcept;
 
     enum class phase_type : std::uint8_t {
         await_response,
@@ -457,11 +452,4 @@ private:
     std::optional<detail::http1_client_parsed_status_line> status_line_;
     std::size_t status_line_end_{0};
 };
-
-inline http1_client_response_parser::http1_client_response_parser(
-    http1_client_exchange_state exchange_state, std::pmr::memory_resource* resource) noexcept
-    : exchange_state_(std::move(exchange_state)),
-      resource_(resource),
-      request_content_phase_(initial_request_content_phase(exchange_state_)) {}
-
 }  // namespace ruvia

@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "parser/http_parser_syntax.h"
 
 #include <algorithm>
 #include <limits>
@@ -7,7 +7,12 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
 
+#include "field/field_value_scan.h"
 namespace ruvia::detail {
+
+bool is_valid_long_http_field_value_bytes(const char* data, std::size_t size) noexcept {
+    return http_field_value_prefix_size({data, size}) == size;
+}
 
 request_header_kind classify_request_header(std::string_view name) noexcept {
     if (name.empty()) {

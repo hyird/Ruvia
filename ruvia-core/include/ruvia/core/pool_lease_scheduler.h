@@ -15,10 +15,6 @@
 #include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia {
-namespace detail {
-class pool_waiter_queue;
-}  // namespace detail
-
 class pool_lease_acquire;
 
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
@@ -87,7 +83,6 @@ public:
 
 private:
     friend class pool_lease_scheduler;
-    friend class detail::pool_waiter_queue;
 
     pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
         std::optional<timeout_duration> timeout, stop_token stop_token_value) noexcept;

@@ -14,8 +14,8 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/parser/multipart_input_lifecycle.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_protocol_error.h"
 
 namespace ruvia {
@@ -68,6 +68,7 @@ public:
 
 private:
     friend struct detail::multipart_part_access;
+    friend class multipart_parser;
 
     using text_storage_type = std::variant<std::string_view, std::pmr::string>;
     using content_type_storage_type = text_storage_type;
@@ -448,14 +449,11 @@ private:
 
     std::pmr::memory_resource* resource_;
     multipart_boundary boundary_;
-    detail::multipart_input_lifecycle input_;
-    std::pmr::string current_name_;
-    std::pmr::string current_filename_;
+    std::variant<std::string_view, http_io_buffer> input_;
+    multipart_part::text_storage_type current_name_;
+    multipart_part::text_storage_type current_filename_;
+    multipart_part::text_storage_type current_content_type_;
     std::pmr::string current_headers_;
-    std::pmr::string current_content_type_;
-    std::string_view current_name_view_{};
-    std::string_view current_filename_view_{};
-    std::string_view current_content_type_view_{};
     state_type state_{progress_state_type::boundary};
     std::size_t pending_erase_bytes_{0};
     std::size_t remaining_parts_;
@@ -463,12 +461,10 @@ private:
     std::size_t header_scan_offset_{0};
     std::size_t delimiter_scan_offset_{0};
     std::size_t delimiter_padding_offset_{0};
+    bool input_eof_{false};
     bool next_chunk_is_first_{false};
     bool first_boundary_{true};
-    bool current_name_owned_{false};
-    bool current_filename_present_{false};
-    bool current_filename_owned_{false};
-    bool current_content_type_owned_{false};
+    bool has_current_filename_{false};
 };
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
