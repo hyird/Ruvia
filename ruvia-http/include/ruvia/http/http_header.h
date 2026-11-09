@@ -100,10 +100,11 @@ public:
             } else if (other.bytes_ == nullptr) {
                 release();
             } else if (other.resource_ != nullptr && resource_->is_equal(*other.resource_)) {
-                release();
+                http_header retired(std::move(*this));
                 bytes_ = std::exchange(other.bytes_, nullptr);
                 name_size_ = std::exchange(other.name_size_, 0);
                 value_size_ = std::exchange(other.value_size_, 0);
+                return *this;
             } else {
                 http_header replacement(other.name(), other.value(), resource_);
                 swap_storage(replacement);
@@ -151,12 +152,12 @@ private:
           value_size_(value_size) {}
 
     void release() noexcept {
-        if (bytes_ != nullptr && resource_ != nullptr) {
-            resource_->deallocate(bytes_, name_size_ + value_size_, alignof(char));
+        auto* const bytes = std::exchange(bytes_, nullptr);
+        const auto size = std::exchange(name_size_, 0) + std::exchange(value_size_, 0);
+        auto* const resource = resource_;
+        if (bytes != nullptr && resource != nullptr) {
+            resource->deallocate(bytes, size, alignof(char));
         }
-        bytes_ = nullptr;
-        name_size_ = 0;
-        value_size_ = 0;
     }
 
     void swap_storage(http_header& other) noexcept {

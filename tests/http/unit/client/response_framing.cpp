@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <initializer_list>
 #include <memory_resource>
 #include <new>
 #include <string>
@@ -11,6 +12,7 @@
 
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
+#include "request_header_memory_fixture.h"
 #include "stl_allocation_fixture.h"
 
 // HTTP/1 client responses: what the head says about the body.
@@ -101,6 +103,53 @@ TEST(Ruvia, http_owned_header_assignment_preserves_resources_and_allows_retry) {
     }
     EXPECT_EQ(first_resource.live_allocations(), std::size_t{0});
     EXPECT_EQ(second_resource.live_allocations(), std::size_t{0});
+}
+
+TEST(Ruvia, http_owned_header_assignment_commits_before_retirement) {
+    enum class operation { copy_empty,
+        move_empty,
+        move_owned };
+    struct observation final {
+        ruvia::http_header* target_;
+        ruvia::http_header* source_;
+        std::pmr::memory_resource* resource_;
+        bool empty_;
+        bool committed_{false};
+    };
+
+    for (const auto action : {operation::copy_empty, operation::move_empty, operation::move_owned}) {
+        SCOPED_TRACE(static_cast<int>(action));
+        ruvia::test::header_memory resource;
+        {
+            ruvia::http_header target("X-Old", "before", &resource);
+            const bool empty = action != operation::move_owned;
+            ruvia::http_header source(empty ? "" : "X-New", empty ? "" : "after", &resource);
+            observation state{&target, &source, &resource, empty};
+            resource.deallocation_context_ = &state;
+            resource.before_deallocate_ = [](void* context) noexcept {
+                auto& observed = *static_cast<observation*>(context);
+                observed.committed_ = observed.target_->name() == (observed.empty_ ? "" : "X-New") &&
+                                      observed.target_->value() == (observed.empty_ ? "" : "after") &&
+                                      observed.source_->name().empty() && observed.source_->value().empty();
+                // Only reenter after publication; otherwise merely inspect live bytes.
+                if (observed.committed_) {
+                    *observed.target_ = ruvia::http_header("X-Reentrant", "kept", observed.resource_);
+                }
+            };
+            if (action == operation::copy_empty) {
+                target = source;
+            } else {
+                target = std::move(source);
+            }
+            resource.before_deallocate_ = nullptr;
+            EXPECT_TRUE(state.committed_);
+            EXPECT_EQ(target.name(), "X-Reentrant");
+            EXPECT_EQ(target.value(), "kept");
+            EXPECT_TRUE(source.name().empty());
+            EXPECT_TRUE(source.value().empty());
+        }
+        EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    }
 }
 
 TEST(Ruvia, http_client_response_header_extraction_preserves_owned_fields_on_failure) {
