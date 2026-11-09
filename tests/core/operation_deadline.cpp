@@ -119,7 +119,8 @@ TEST(Ruvia, timeout_duration_checks_the_original_integer_domain) {
     using thirds = std::chrono::duration<std::int64_t, std::ratio<1, 3>>;
     EXPECT_EQ(ruvia::timeout_duration(thirds(7)).value(), std::chrono::milliseconds(2334));
     EXPECT_EQ(ruvia::timeout_duration(thirds(-7)).value(), std::chrono::milliseconds(-2333));
-    EXPECT_EQ(ruvia::timeout_duration(std::chrono::hours::min()).value(),
+    using wide_hours = std::chrono::duration<std::int64_t, std::ratio<3600>>;
+    EXPECT_EQ(ruvia::timeout_duration(wide_hours::min()).value(),
         std::chrono::milliseconds::min());
 
     options.timeout_ = std::chrono::nanoseconds(-1);
