@@ -1281,7 +1281,97 @@ private:
 // assignment is a no-op. Existing views must be refreshed after either changes.
 // Views and potentially borrowed get<T>() results must not outlive their token.
 // Default construction represents JSON null.
-class json_value final {
+namespace detail {
+
+template <typename derived_type, fixed_string default_token>
+class json_token_base {
+public:
+    json_token_base(const json_token_base&) = delete;
+    json_token_base& operator=(const json_token_base&) = delete;
+
+    json_token_base(json_token_base&& other) noexcept
+        : resource_(other.resource_),
+          storage_(std::move(other.storage_)) {
+        other.storage_.assign_borrowed(default_token.view());
+    }
+
+    json_token_base& operator=(json_token_base&& other) {
+        if (this != &other) {
+            storage_.assign_from(std::move(other.storage_), resource_);
+            other.storage_.assign_borrowed(default_token.view());
+        }
+        return *this;
+    }
+
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
+        return storage_.view();
+    }
+    [[nodiscard]] std::string_view view() const&& = delete;
+
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
+
+    // The callback receives a field name and json_value borrowing this object's
+    // token; both are valid only for the duration of the callback.
+    template <typename visitor_type>
+    [[nodiscard]] bool for_each_field(visitor_type&& visitor) const;
+
+    // Compare retained token bytes exactly, ignoring allocator and JSON
+    // normalization, to preserve the zero-cost view semantics.
+    [[nodiscard]] friend bool operator==(const derived_type& left, const derived_type& right) noexcept {
+        return left.view() == right.view();
+    }
+
+protected:
+    friend struct model_value_factory;
+    friend struct model_value_rebind_access;
+    template <typename view_type>
+    friend std::optional<view_type> parse_json_view_value(std::string_view&,
+        std::pmr::memory_resource*, std::size_t, model_string_storage, bool, json_parse_budget&);
+
+    json_token_base(resolved_pmr_resource_tag, std::string_view body,
+        std::pmr::memory_resource* resource) noexcept
+        : resource_(resource),
+          storage_(body) {}
+
+    json_token_base(resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
+        model_text_storage&& storage) noexcept
+        : resource_(resource),
+          storage_(std::move(storage)) {}
+
+    [[nodiscard]] static derived_type parse_token(
+        std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
+        if (!is_complete_json_value(body, options, require_object)) {
+            throw std::invalid_argument(error_message);
+        }
+        return derived_type(
+            resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
+    }
+
+    void assign_owned(std::string_view value) {
+        storage_.assign_owned(value, resource_);
+    }
+
+    [[nodiscard]] derived_type rebind_for_model(std::pmr::memory_resource* resource) const& {
+        return derived_type(resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
+    }
+
+    [[nodiscard]] derived_type rebind_for_model(std::pmr::memory_resource* resource) && {
+        auto rebound = derived_type(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+        storage_.assign_borrowed(default_token.view());
+        return rebound;
+    }
+
+    std::pmr::memory_resource* resource_;
+    model_text_storage storage_;
+};
+
+}  // namespace detail
+
+class json_value final : public detail::json_token_base<json_value, "null"> {
+    using base_type = detail::json_token_base<json_value, "null">;
+
 public:
     enum class kind_type : unsigned char { object,
         array,
@@ -1291,15 +1381,11 @@ public:
         null };
 
     explicit json_value(model_options options = {})
-        : json_value(resolved_pmr_resource_tag{}, "null",
+        : base_type(resolved_pmr_resource_tag{}, "null",
               pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static json_value parse(std::string_view body, model_parse_options options = {}) {
-        if (!detail::is_complete_json_value(body, options, false)) {
-            throw std::invalid_argument("invalid JSON value");
-        }
-        return json_value(
-            resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
+        return parse_token(body, options, false, "invalid JSON value");
     }
 
     template <typename traits_type, typename allocator_type>
@@ -1312,25 +1398,8 @@ public:
 
     json_value(const json_value&) = delete;
     json_value& operator=(const json_value&) = delete;
-
-    json_value(json_value&& other) noexcept
-        : resource_(other.resource_),
-          storage_(std::move(other.storage_)) {
-        other.storage_.assign_borrowed("null");
-    }
-
-    json_value& operator=(json_value&& other) {
-        if (this != &other) {
-            storage_.assign_from(std::move(other.storage_), resource_);
-            other.storage_.assign_borrowed("null");
-        }
-        return *this;
-    }
-
-    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
-        return storage_.view();
-    }
-    [[nodiscard]] std::string_view view() const&& = delete;
+    json_value(json_value&&) noexcept = default;
+    json_value& operator=(json_value&&) = default;
 
     [[nodiscard]] kind_type kind() const noexcept {
         auto input = view();
@@ -1379,10 +1448,6 @@ public:
         return kind() == kind_type::null;
     }
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-
     // get<T>() results may borrow this token's bytes, so rvalue tokens are
     // rejected rather than left to dangle.
     template <typename t_type>
@@ -1406,68 +1471,32 @@ public:
     template <typename visitor_type>
     [[nodiscard]] bool for_each_element(visitor_type&& visitor) const;
 
-    // The callback receives a field name and json_value borrowing this object's
-    // token; both are valid only for the duration of the callback.
-    template <typename visitor_type>
-    [[nodiscard]] bool for_each_field(visitor_type&& visitor) const;
-
-    // Compare retained token bytes exactly, ignoring allocator and JSON
-    // normalization, to preserve the zero-cost view semantics.
-    [[nodiscard]] bool operator==(const json_value& other) const noexcept {
-        return view() == other.view();
-    }
-
 private:
+    friend class json_object;
+    template <typename, fixed_string>
+    friend class detail::json_token_base;
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
-    friend class json_object;
     template <typename view_type>
     friend std::optional<view_type> detail::parse_json_view_value(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
-    json_value(resolved_pmr_resource_tag, std::string_view body,
-        std::pmr::memory_resource* resource) noexcept
-        : resource_(resource),
-          storage_(body) {}
-
-    json_value(resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
-        detail::model_text_storage&& storage) noexcept
-        : resource_(resource),
-          storage_(std::move(storage)) {}
-
-    void assign_owned(std::string_view value) {
-        storage_.assign_owned(value, resource_);
-    }
-
-    [[nodiscard]] json_value rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return json_value(resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
-    }
-
-    [[nodiscard]] json_value rebind_for_model(std::pmr::memory_resource* resource) && {
-        auto rebound = json_value(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
-        storage_.assign_borrowed("null");
-        return rebound;
-    }
-
-    std::pmr::memory_resource* resource_;
-    detail::model_text_storage storage_;
+    using base_type::base_type;
 };
 
 // Object-only dynamic token with the same borrowing, ownership and move
 // contract as json_value. Supplying a resource to parse() does not copy input.
 // Default construction represents an empty JSON object.
-class json_object final {
+class json_object final : public detail::json_token_base<json_object, "{}"> {
+    using base_type = detail::json_token_base<json_object, "{}">;
+
 public:
     explicit json_object(model_options options = {})
-        : json_object(resolved_pmr_resource_tag{}, "{}",
+        : base_type(resolved_pmr_resource_tag{}, "{}",
               pmr_resource_or_default(options.resource_)) {}
 
     [[nodiscard]] static json_object parse(std::string_view body, model_parse_options options = {}) {
-        if (!detail::is_complete_json_value(body, options, true)) {
-            throw std::invalid_argument("invalid JSON object");
-        }
-        return json_object(
-            resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
+        return parse_token(body, options, true, "invalid JSON object");
     }
 
     template <typename traits_type, typename allocator_type>
@@ -1480,40 +1509,8 @@ public:
 
     json_object(const json_object&) = delete;
     json_object& operator=(const json_object&) = delete;
-
-    json_object(json_object&& other) noexcept
-        : resource_(other.resource_),
-          storage_(std::move(other.storage_)) {
-        other.storage_.assign_borrowed("{}");
-    }
-
-    json_object& operator=(json_object&& other) {
-        if (this != &other) {
-            storage_.assign_from(std::move(other.storage_), resource_);
-            other.storage_.assign_borrowed("{}");
-        }
-        return *this;
-    }
-
-    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
-        return storage_.view();
-    }
-    [[nodiscard]] std::string_view view() const&& = delete;
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-
-    // The callback receives a field name and json_value borrowing this object's
-    // token; both are valid only for the duration of the callback.
-    template <typename visitor_type>
-    [[nodiscard]] bool for_each_field(visitor_type&& visitor) const;
-
-    // Compare retained token bytes exactly, ignoring allocator and JSON
-    // normalization, to preserve the zero-cost view semantics.
-    [[nodiscard]] bool operator==(const json_object& other) const noexcept {
-        return view() == other.view();
-    }
+    json_object(json_object&&) noexcept = default;
+    json_object& operator=(json_object&&) = default;
 
     // Looks up the one member whose decoded name equals `field`: absent when
     // no member has it, repeated when two or more do (no occurrence is chosen,
@@ -1529,38 +1526,15 @@ public:
 
 private:
     friend class json_value;
+    template <typename, fixed_string>
+    friend class detail::json_token_base;
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
     template <typename view_type>
     friend std::optional<view_type> detail::parse_json_view_value(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
-    json_object(resolved_pmr_resource_tag, std::string_view body,
-        std::pmr::memory_resource* resource) noexcept
-        : resource_(resource),
-          storage_(body) {}
-
-    json_object(resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
-        detail::model_text_storage&& storage) noexcept
-        : resource_(resource),
-          storage_(std::move(storage)) {}
-
-    void assign_owned(std::string_view value) {
-        storage_.assign_owned(value, resource_);
-    }
-
-    [[nodiscard]] json_object rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return json_object(resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
-    }
-
-    [[nodiscard]] json_object rebind_for_model(std::pmr::memory_resource* resource) && {
-        auto rebound = json_object(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
-        storage_.assign_borrowed("{}");
-        return rebound;
-    }
-
-    std::pmr::memory_resource* resource_;
-    detail::model_text_storage storage_;
+    using base_type::base_type;
 };
 
 template <typename visitor_type>
@@ -1584,25 +1558,26 @@ template <typename visitor_type>
     return input.empty();
 }
 
-template <typename visitor_type>
-[[nodiscard]] inline bool json_value::for_each_field(visitor_type&& visitor) const {
-    if (!is_object()) {
-        return false;
-    }
+namespace detail {
 
-    return detail::visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
+template <typename derived_type, fixed_string default_token>
+template <typename visitor_type>
+[[nodiscard]] inline bool json_token_base<derived_type, default_token>::for_each_field(
+    visitor_type&& visitor) const {
+    if constexpr (std::is_same_v<derived_type, json_value>) {
+        if (!static_cast<const json_value*>(this)->is_object()) {
+            return false;
+        }
+    }
+    return visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
                resource_, [&](std::string_view key, std::string_view value_view) {
-                   detail::skip_json_whitespace(value_view);
+                   skip_json_whitespace(value_view);
                    json_value value(resolved_pmr_resource_tag{}, value_view, resource_);
                    return static_cast<bool>(visitor(key, value));
-               }) == detail::json_object_visit_result::complete;
+               }) == json_object_visit_result::complete;
 }
 
-template <typename visitor_type>
-[[nodiscard]] inline bool json_object::for_each_field(visitor_type&& visitor) const {
-    json_value value(resolved_pmr_resource_tag{}, view(), resource_);
-    return value.for_each_field(std::forward<visitor_type>(visitor));
-}
+}  // namespace detail
 
 }  // namespace ruvia
 

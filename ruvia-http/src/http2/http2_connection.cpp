@@ -11,7 +11,6 @@
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_pmr_string.h"
 
-#include "http2/http2_advertisement_frames.h"
 #include "util/geometric_reserve.h"
 
 namespace ruvia::detail {

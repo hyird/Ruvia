@@ -2,18 +2,136 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/web/detail/json/json_escape.h"
-#include "ruvia/web/detail/model/model_options.h"
-#include "ruvia/web/detail/model/parse/field_assign.h"
+#include "ruvia/web/detail/model/rule/rule_support.h"
 
 namespace ruvia::detail::model {
+
+// Field options are type-level metadata, not per-model runtime objects.
+template <typename... option_types>
+class model_options final {
+    static_assert((is_model_option<option_types>() && ... && true),
+        "model field options must be RUVIA_DEFAULT, RUVIA_INITIAL, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
+    static_assert(((is_default_rule<option_types>() ? 1 : 0) + ... + 0) <= 1,
+        "a model field may have at most one RUVIA_DEFAULT");
+    static_assert(((is_initial_rule<option_types>() ? 1 : 0) + ... + 0) <= 1,
+        "a model field may have at most one RUVIA_INITIAL");
+
+public:
+    static constexpr bool nullable = (std::is_same_v<option_types, ::ruvia::detail::model::nullable> || ... || false);
+
+    [[nodiscard]] static constexpr bool emit_null() noexcept {
+        return contains_option<::ruvia::detail::model::emit_null>();
+    }
+
+    [[nodiscard]] static constexpr bool omit_empty() noexcept {
+        return contains_option<::ruvia::detail::model::omit_empty>();
+    }
+
+    static constexpr bool has_initial = (is_initial_rule<option_types>() || ... || false);
+    static constexpr bool has_default = (is_default_rule<option_types>() || ... || false);
+
+    // The field owns assignment, nullability and allocator normalization.
+    template <typename consumer_type>
+    static void apply_default(consumer_type&& consume) {
+        if constexpr (sizeof...(option_types) != 0) {
+            (apply_default_option<option_types>(consume), ...);
+        } else {
+            (void)consume;
+        }
+    }
+
+    template <typename consumer_type>
+    static void apply_initial(consumer_type&& consume) {
+        if constexpr (sizeof...(option_types) != 0) {
+            (apply_initial_option<option_types>(consume), ...);
+        } else {
+            (void)consume;
+        }
+    }
+
+private:
+    template <typename option_type>
+    [[nodiscard]] static constexpr bool contains_option() noexcept {
+        return (std::is_same_v<std::remove_cvref_t<option_types>, option_type> || ... || false);
+    }
+
+    template <typename option_type, typename consumer_type>
+    static void apply_initial_option(consumer_type& consume) {
+        if constexpr (is_initial_rule<option_type>()) {
+            consume(option_type::value());
+        } else {
+            (void)consume;
+        }
+    }
+
+    template <typename option_type, typename consumer_type>
+    static void apply_default_option(consumer_type& consume) {
+        if constexpr (is_default_rule<option_type>()) {
+            consume(option_type::value());
+        } else {
+            (void)consume;
+        }
+    }
+};
+
+template <typename field_type, typename value_type>
+void assign_field_value(
+    std::optional<field_type>& target, value_type&& value, std::pmr::memory_resource* resource) {
+    if constexpr (detail::is_ruvia_scalar<field_type>) {
+        // Validate narrowing before replacing an existing field value.
+        const auto field = [&] {
+            if constexpr (detail::is_ruvia_scalar<value_type>) {
+                return field_type(value.value_);
+            } else {
+                return field_type(std::forward<value_type>(value));
+            }
+        }();
+        target.emplace(field);
+    } else if constexpr (detail::is_ruvia_string<field_type> &&
+                         std::is_same_v<std::remove_cvref_t<value_type>, std::pmr::string> &&
+                         std::is_rvalue_reference_v<value_type&&>) {
+        field_type field(::ruvia::model_options{.resource_ = resource});
+        field.assign_owned(std::forward<value_type>(value));
+        target.emplace(std::move(field));
+    } else if constexpr (detail::is_ruvia_string<field_type> &&
+                         std::is_convertible_v<value_type&&, std::string_view> &&
+                         !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
+        field_type field(::ruvia::model_options{.resource_ = resource});
+        field.assign_owned(std::string_view(std::forward<value_type>(value)));
+        target.emplace(std::move(field));
+    } else if constexpr (detail::is_ruvia_bytes<field_type> &&
+                         !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
+        field_type field(::ruvia::model_options{.resource_ = resource});
+        if constexpr (std::is_same_v<std::remove_cvref_t<value_type>, std::pmr::vector<std::uint8_t>> &&
+                      std::is_rvalue_reference_v<value_type&&>) {
+            field.assign_owned(std::forward<value_type>(value));
+        } else {
+            field.assign_owned(std::span<const std::uint8_t>(std::forward<value_type>(value)));
+        }
+        target.emplace(std::move(field));
+    } else {
+        if constexpr (!std::is_lvalue_reference_v<value_type&&> &&
+                      !std::is_const_v<std::remove_reference_t<value_type>>) {
+            // Consuming a source that owns this field would destroy the destination.
+            if (model_value_rebind_access::owns(value, std::addressof(target))) {
+                throw_model_move_source_owns_destination();
+            }
+        }
+        target.emplace(detail::rebind_model_value(std::forward<value_type>(value), resource));
+    }
+}
 
 template <typename... descriptor_types>
 class model_storage;

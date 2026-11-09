@@ -8,6 +8,35 @@
 #include "util/pmr_owned_storage.h"
 
 namespace ruvia {
+namespace {
+
+template <typename target_type, typename source_type, typename first_member_type, typename second_member_type>
+target_type& assign_rebound_pair(
+    target_type& target, source_type&& source, first_member_type first, second_member_type second) {
+    if (&target != &source) {
+        target_type owned(std::forward<source_type>(source),
+            typename target_type::allocator_type((target.*first).get_allocator().resource()));
+        (target.*first).swap(owned.*first);
+        (target.*second).swap(owned.*second);
+    }
+    return target;
+}
+
+template <typename result_type, typename collection_type>
+result_type& move_assign_scan_result(
+    result_type& target, result_type& source, collection_type& target_items, collection_type& source_items,
+    std::optional<redis_scan_cursor>& target_cursor, std::optional<redis_scan_cursor>& source_cursor) {
+    if (&target != &source) {
+        auto owned = detail::rebind_owned_storage(source_items, target_items.get_allocator().resource());
+        target_items.swap(owned);
+        target_cursor = std::exchange(source_cursor, std::nullopt);
+        source_items.clear();
+    }
+    return target;
+}
+
+}  // namespace
+
 redis_error::redis_error(code_type code, std::string_view message)
     : std::runtime_error(std::string(message)),
       code_(code) {}
@@ -68,21 +97,11 @@ redis_key_value::redis_key_value(redis_key_value&& other, allocator_type allocat
 }
 
 redis_key_value& redis_key_value::operator=(const redis_key_value& other) {
-    if (this != &other) {
-        redis_key_value owned(other, allocator_type(key_.get_allocator().resource()));
-        key_.swap(owned.key_);
-        value_.swap(owned.value_);
-    }
-    return *this;
+    return assign_rebound_pair(*this, other, &redis_key_value::key_, &redis_key_value::value_);
 }
 
 redis_key_value& redis_key_value::operator=(redis_key_value&& other) {
-    if (this != &other) {
-        redis_key_value owned(std::move(other), allocator_type(key_.get_allocator().resource()));
-        key_.swap(owned.key_);
-        value_.swap(owned.value_);
-    }
-    return *this;
+    return assign_rebound_pair(*this, std::move(other), &redis_key_value::key_, &redis_key_value::value_);
 }
 
 redis_scored_value::redis_scored_value(const redis_scored_value& other, allocator_type allocator)
@@ -114,33 +133,15 @@ redis_scored_value& redis_scored_value::operator=(redis_scored_value&& other) {
     return *this;
 }
 redis_scan_result& redis_scan_result::operator=(redis_scan_result&& other) {
-    if (this != &other) {
-        auto owned = detail::rebind_owned_storage(other.values_, values_.get_allocator().resource());
-        values_.swap(owned);
-        next_cursor_ = std::exchange(other.next_cursor_, std::nullopt);
-        other.values_.clear();
-    }
-    return *this;
+    return move_assign_scan_result(*this, other, values_, other.values_, next_cursor_, other.next_cursor_);
 }
 
 redis_hash_scan_result& redis_hash_scan_result::operator=(redis_hash_scan_result&& other) {
-    if (this != &other) {
-        auto owned = detail::rebind_owned_storage(other.entries_, entries_.get_allocator().resource());
-        entries_.swap(owned);
-        next_cursor_ = std::exchange(other.next_cursor_, std::nullopt);
-        other.entries_.clear();
-    }
-    return *this;
+    return move_assign_scan_result(*this, other, entries_, other.entries_, next_cursor_, other.next_cursor_);
 }
 
 redis_z_scan_result& redis_z_scan_result::operator=(redis_z_scan_result&& other) {
-    if (this != &other) {
-        auto owned = detail::rebind_owned_storage(other.entries_, entries_.get_allocator().resource());
-        entries_.swap(owned);
-        next_cursor_ = std::exchange(other.next_cursor_, std::nullopt);
-        other.entries_.clear();
-    }
-    return *this;
+    return move_assign_scan_result(*this, other, entries_, other.entries_, next_cursor_, other.next_cursor_);
 }
 
 redis_stream_entry::redis_stream_entry(const redis_stream_entry& other, allocator_type allocator)
@@ -155,20 +156,10 @@ redis_stream_entry::redis_stream_entry(redis_stream_entry&& other, allocator_typ
 }
 
 redis_stream_entry& redis_stream_entry::operator=(const redis_stream_entry& other) {
-    if (this != &other) {
-        redis_stream_entry owned(other, allocator_type(id_.get_allocator().resource()));
-        id_.swap(owned.id_);
-        fields_.swap(owned.fields_);
-    }
-    return *this;
+    return assign_rebound_pair(*this, other, &redis_stream_entry::id_, &redis_stream_entry::fields_);
 }
 redis_stream_entry& redis_stream_entry::operator=(redis_stream_entry&& other) {
-    if (this != &other) {
-        redis_stream_entry owned(std::move(other), allocator_type(id_.get_allocator().resource()));
-        id_.swap(owned.id_);
-        fields_.swap(owned.fields_);
-    }
-    return *this;
+    return assign_rebound_pair(*this, std::move(other), &redis_stream_entry::id_, &redis_stream_entry::fields_);
 }
 
 redis_stream_read_result::redis_stream_read_result(const redis_stream_read_result& other, allocator_type allocator)
@@ -183,20 +174,11 @@ redis_stream_read_result::redis_stream_read_result(redis_stream_read_result&& ot
 }
 
 redis_stream_read_result& redis_stream_read_result::operator=(const redis_stream_read_result& other) {
-    if (this != &other) {
-        redis_stream_read_result owned(other, allocator_type(stream_.get_allocator().resource()));
-        stream_.swap(owned.stream_);
-        entries_.swap(owned.entries_);
-    }
-    return *this;
+    return assign_rebound_pair(*this, other, &redis_stream_read_result::stream_, &redis_stream_read_result::entries_);
 }
 redis_stream_read_result& redis_stream_read_result::operator=(redis_stream_read_result&& other) {
-    if (this != &other) {
-        redis_stream_read_result owned(std::move(other), allocator_type(stream_.get_allocator().resource()));
-        stream_.swap(owned.stream_);
-        entries_.swap(owned.entries_);
-    }
-    return *this;
+    return assign_rebound_pair(
+        *this, std::move(other), &redis_stream_read_result::stream_, &redis_stream_read_result::entries_);
 }
 
 redis_x_read_group_result& redis_x_read_group_result::operator=(redis_x_read_group_result&& other) {

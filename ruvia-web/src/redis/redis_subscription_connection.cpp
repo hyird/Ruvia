@@ -12,6 +12,7 @@
 
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_protocol.h"
 #include "redis/redis_reply_parsers.h"
@@ -364,3 +365,56 @@ void redis_subscription_set::unlink(redis_subscription_connection& connection) n
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope,
+    operation_options options)
+    : connection_(subscriptions.open(std::move(options))),
+      registration_(scope, this, &redis_subscription::expire_capability) {}
+
+redis_subscription::~redis_subscription() = default;
+
+void redis_subscription::expire_capability(void* target) noexcept {
+    static_cast<redis_subscription*>(target)->connection_->abort(detail::client_abort_reason::closing);
+}
+
+task<void> redis_subscription::send(
+    std::string_view command, std::span<const std::string_view> names, bool require_names) {
+    registration_.require_active();
+    if (require_names && names.empty()) {
+        throw std::invalid_argument("redis subscription requires at least one channel or pattern");
+    }
+    return make_scoped_operation(registration_.scope(),
+        connection_->send(detail::make_owned_redis_command(connection_->resource(), command, names)));
+}
+
+task<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {
+    return send("SUBSCRIBE", channels, true);
+}
+
+task<void> redis_subscription::psubscribe(std::span<const std::string_view> patterns) & {
+    return send("PSUBSCRIBE", patterns, true);
+}
+
+task<void> redis_subscription::unsubscribe(std::span<const std::string_view> channels) & {
+    return send("UNSUBSCRIBE", channels, false);
+}
+
+task<void> redis_subscription::punsubscribe(std::span<const std::string_view> patterns) & {
+    return send("PUNSUBSCRIBE", patterns, false);
+}
+
+task<std::optional<redis_pubsub_event>> redis_subscription::read() & {
+    registration_.require_active();
+    return make_scoped_operation(registration_.scope(), connection_->read());
+}
+
+void redis_subscription::abort() noexcept {
+    if (!connection_->worker().is_current()) {
+        std::terminate();
+    }
+    connection_->abort(detail::client_abort_reason::closing);
+}
+
+}  // namespace ruvia

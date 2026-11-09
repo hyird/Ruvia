@@ -423,74 +423,6 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
     return true;
 }
 
-struct http2_sans_io_session_engine::tunnel_upgrade_commit final {
-    using transport_type = http2_sans_io_tunnel_transport;
-
-    http2_sans_io_session_engine& engine_;
-    std::uint32_t stream_id_;
-    http2_sans_io_stream_runtime& stream_runtime_;
-    multiplexed_stream_signal& stream_signal_;
-    http_response_tail& tail_;
-
-    [[nodiscard]] static transport_type finish_commit(http2_sans_io_session_engine& engine_value,
-        std::uint32_t stream_id_value, http2_sans_io_stream_runtime& stream_runtime_value,
-        multiplexed_stream_signal& stream_signal_value, http_response_tail& tail_value,
-        http_status_code status, context& context_value) {
-        stream_runtime_value.mark_response_committed();
-        engine_value.set_inactivity_phase();
-        context_access::commit_upgrade(context_value);
-        engine_value.wake_writer();
-        tail_value.record_access(engine_value.session_.options().access_log_, status);
-        return transport_type(engine_value, engine_value.connection_, stream_id_value,
-            stream_runtime_value.body_queue(), stream_signal_value, engine_value.write_signal_,
-            engine_value.output_budget_);
-    }
-
-    [[nodiscard]] transport_type operator()(
-        context& context_value, const http_response& head_response) const {
-        if (engine_.connection_.submit_connect_response_head(stream_id_, head_response) !=
-                http2_submit_status::accepted ||
-            !engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
-            throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
-        }
-        return finish_commit(
-            engine_, stream_id_, stream_runtime_, stream_signal_, tail_, head_response.status(), context_value);
-    }
-};
-
-struct http2_sans_io_session_engine::websocket_upgrade_commit final {
-    using transport_type = http2_sans_io_tunnel_transport;
-
-    http2_sans_io_session_engine& engine_;
-    std::uint32_t stream_id_;
-    http2_sans_io_stream_runtime& stream_runtime_;
-    const http_request& request_;
-    const websocket_handshake_validation_result& handshake_validation_;
-    const websocket_route_endpoint& websocket_endpoint_;
-    multiplexed_stream_signal& stream_signal_;
-    http_response_tail& tail_;
-
-    [[nodiscard]] ruvia::detail::websocket_upgrade_commit<transport_type> operator()(
-        context& context_value, std::span<const http_header_view> response_headers_value) const {
-        const auto handshake_result = engine_.connection_.submit_websocket_handshake(stream_id_, request_,
-            handshake_validation_,
-            {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
-                .response_headers_ = response_headers_value,
-                .deflate_ = websocket_endpoint_.deflate()});
-        const auto* submitted_handshake = std::get_if<websocket_extended_connect_negotiation>(&handshake_result);
-        if (submitted_handshake == nullptr || !engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
-            // The handshake is not started, so stream dispatch still
-            // answers this pending CONNECT with an error response.
-            throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
-        }
-        return ruvia::detail::websocket_upgrade_commit<transport_type>(
-            tunnel_upgrade_commit::finish_commit(
-                engine_, stream_id_, stream_runtime_, stream_signal_, tail_,
-                http_status::ok, context_value),
-            submitted_handshake->compression(), submitted_handshake->subprotocol(), *context_value.pool());
-    }
-};
-
 task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
     struct stream_cleanup_guard final {
         http2_sans_io_session_engine& engine_;
@@ -601,6 +533,19 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             dispatch_services.bind_streaming_request_body(body_reader_storage->facade());
         }
 
+        const auto reset_dispatch_stream = [this, stream_id](bool cancelled) noexcept {
+            reset_stream_no_throw(stream_id, cancelled ? http2_error_code::cancel : http2_error_code::internal_error);
+        };
+        const auto finish_upgrade_commit = [this, stream_id, stream_runtime, stream_signal, &admission, &options](
+                                               http_status_code status, context& context_value) {
+            stream_runtime->mark_response_committed();
+            set_inactivity_phase();
+            context_access::commit_upgrade(context_value);
+            wake_writer();
+            admission.tail().record_access(options.access_log_, status);
+            return http2_sans_io_tunnel_transport(*this, connection_, stream_id,
+                stream_runtime->body_queue(), *stream_signal, write_signal_, output_budget_);
+        };
         bool body_failure_handled = false;
         if (const auto& body_failure = stream_runtime->body_failure();
             body_failure.has_value() &&
@@ -620,17 +565,19 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         reset_stream_no_throw(stream_id, http2_error_code::internal_error);
                         co_return;
                     }
+                    auto commit = [this, stream_id, &finish_upgrade_commit](
+                                      context& context_value, const http_response& head_response) {
+                        if (connection_.submit_connect_response_head(stream_id, head_response) !=
+                                http2_submit_status::accepted ||
+                            !stream_runtimes_.mark_tunnel(stream_id)) {
+                            throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
+                        }
+                        return finish_upgrade_commit(head_response.status(), context_value);
+                    };
                     auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(
                         routes_, request, *resolved, request_memory_value, dispatch_services, options,
                         session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(),
-                        std::string_view{},
-                        tunnel_upgrade_commit{
-                            .engine_ = *this,
-                            .stream_id_ = stream_id,
-                            .stream_runtime_ = *stream_runtime,
-                            .stream_signal_ = *stream_signal,
-                            .tail_ = admission.tail(),
-                        });
+                        std::string_view{}, commit);
                     if (!buffered) {
                         co_return;
                     }
@@ -656,19 +603,29 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         reset_stream_no_throw(stream_id, http2_error_code::internal_error);
                         co_return;
                     }
+                    auto commit = [this, stream_id, &request, &handshake_validation, &websocket_endpoint,
+                                      &finish_upgrade_commit](
+                                      context& context_value, std::span<const http_header_view> headers) {
+                        const auto handshake_result = connection_.submit_websocket_handshake(stream_id, request,
+                            handshake_validation,
+                            {.supported_subprotocols_ = websocket_endpoint.subprotocols(),
+                                .response_headers_ = headers,
+                                .deflate_ = websocket_endpoint.deflate()});
+                        const auto* submitted_handshake =
+                            std::get_if<websocket_extended_connect_negotiation>(&handshake_result);
+                        if (submitted_handshake == nullptr || !stream_runtimes_.mark_tunnel(stream_id)) {
+                            // The handshake is not started, so stream dispatch still
+                            // answers this pending CONNECT with an error response.
+                            throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
+                        }
+                        return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(
+                            finish_upgrade_commit(http_status::ok, context_value),
+                            submitted_handshake->compression(), submitted_handshake->subprotocol(),
+                            *context_value.pool());
+                    };
                     auto buffered = co_await execute_websocket_upgrade_session<http2_sans_io_tunnel_transport>(
                         routes_, request, *resolved, request_memory_value, dispatch_services, options,
-                        session_.scanner_entry(), inbound_buffers_, std::string_view{},
-                        websocket_upgrade_commit{
-                            .engine_ = *this,
-                            .stream_id_ = stream_id,
-                            .stream_runtime_ = *stream_runtime,
-                            .request_ = request,
-                            .handshake_validation_ = handshake_validation,
-                            .websocket_endpoint_ = websocket_endpoint,
-                            .stream_signal_ = *stream_signal,
-                            .tail_ = admission.tail(),
-                        });
+                        session_.scanner_entry(), inbound_buffers_, std::string_view{}, commit);
                     if (!buffered) {
                         co_return;
                     }
@@ -693,30 +650,10 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
                         request_memory_value, stream_services,
                         [this, stream_id]() noexcept { return connection_.stream_aborted(stream_id); });
-                    if (result_value.peer_aborted_before_commit() != nullptr) {
+                    if (complete_multiplexed_response_stream_dispatch(result_value,
+                            stream_runtime->body_failure().has_value(), options, remote_address_,
+                            admission.tail(), response, body_failure_handled, reset_dispatch_stream)) {
                         co_return;
-                    }
-                    if (const auto committed_status = result_value.committed_status()) {
-                        if (const auto* failed = result_value.failed_after_commit()) {
-                            const bool request_body_failed = stream_runtime->body_failure().has_value();
-                            reset_stream_no_throw(
-                                stream_id, request_body_failed ? http2_error_code::cancel : http2_error_code::internal_error);
-                            if (!request_body_failed) {
-                                options.connection_failure_.invoke(remote_address_, failed->exception());
-                            }
-                        } else if (stream_runtime->body_failure().has_value()) {
-                            reset_stream_no_throw(stream_id, http2_error_code::cancel);
-                        }
-                        admission.tail().record_access(options.access_log_, *committed_status);
-                        co_return;
-                    }
-                    if (auto* route_response = result_value.route_response()) {
-                        response = std::move(*route_response).take_response();
-                    } else if (auto* recovered = result_value.recovered_failure()) {
-                        body_failure_handled = stream_runtime->body_failure().has_value();
-                        response = std::move(*recovered).take_response();
-                    } else {
-                        throw std::logic_error("response stream dispatch returned no HTTP/2 terminal alternative");
                     }
                     break;
                 }
@@ -734,48 +671,9 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             }
         }
 
-        if (const auto& body_failure = stream_runtime->body_failure();
-            body_failure.has_value() && !body_failure_handled) {
-            body_failure_handled = true;
-            response = co_await respond_http_request_body_failure(
-                routes_, request, request_memory_value, *body_failure, request_services, admission.tail());
-        }
-
-        auto preparation = co_await admission.tail().prepare_or_finish(
-            response, options, routes_, request_memory_value, request_services);
-        if (const auto& body_failure = stream_runtime->body_failure();
-            body_failure.has_value() && !body_failure_handled) {
-            body_failure_handled = true;
-            response = co_await respond_http_request_body_failure(
-                routes_, request, request_memory_value, *body_failure, request_services, admission.tail());
-            preparation = co_await admission.tail().prepare_or_finish(
-                response, options, routes_, request_memory_value, request_services);
-        }
-        if (request_services.get_stop_token().stop_requested()) {
-            reset_stream_no_throw(stream_id, http2_error_code::cancel);
-            co_return;
-        }
-        auto written = co_await buffered_response_writer_.write(stream_id, response, preparation.write_plan_);
-        if (written.file_failure_ && !written.committed_status_) {
-            // Nothing of the response was sent: the stream gets the error
-            // response instead of a reset.
-            options.connection_failure_.invoke(remote_address_, written.file_failure_->fault());
-            admission.tail().disable_response_coding();
-            response = co_await routes_.handle_exception(
-                request, request_memory_value, written.file_failure_->response_error(), request_services);
-            preparation = co_await admission.tail().prepare_or_finish(
-                response, options, routes_, request_memory_value, request_services);
-            written = co_await buffered_response_writer_.write(stream_id, response, preparation.write_plan_);
-            if (written.file_failure_ && !written.committed_status_) {
-                reset_stream_no_throw(stream_id, http2_error_code::internal_error);
-            }
-        }
-        if (written.file_failure_) {
-            options.connection_failure_.invoke(remote_address_, written.file_failure_->fault());
-        }
-        if (written.committed_status_) {
-            admission.tail().record_access(options.access_log_, *written.committed_status_);
-        }
+        co_await finish_multiplexed_buffered_response(stream_id, stream_runtime->body_failure(),
+            body_failure_handled, response, request, routes_, request_memory_value, request_services,
+            options, remote_address_, admission.tail(), buffered_response_writer_, reset_dispatch_stream);
     } catch (...) {
         const auto failure = std::current_exception();
         if (!connection_.stream_aborted(stream_id)) {

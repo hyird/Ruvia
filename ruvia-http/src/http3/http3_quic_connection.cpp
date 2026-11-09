@@ -97,15 +97,40 @@ public:
         recv_stateless_reset_ = options.callbacks_.recv_stateless_reset2;
         early_data_rejected_ = options.callbacks_.tls_early_data_rejected;
         callbacks_.get_new_connection_id2 =
-            get_new_connection_id_ != nullptr ? get_new_connection_id_callback : nullptr;
+            get_new_connection_id_ != nullptr
+                ? +[](ngtcp2_conn* c, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t cidlen, void* u) noexcept {
+                      auto& v = self(u);
+                      return v.get_new_connection_id_(c, cid, token, cidlen, v.callback_user_data_);
+                  }
+                : nullptr;
         callbacks_.remove_connection_id =
-            remove_connection_id_ != nullptr ? remove_connection_id_callback : nullptr;
+            remove_connection_id_ != nullptr
+                ? +[](ngtcp2_conn* c, const ngtcp2_cid* cid, void* u) noexcept {
+                      auto& v = self(u);
+                      return v.remove_connection_id_(c, cid, v.callback_user_data_);
+                  }
+                : nullptr;
         callbacks_.handshake_completed =
-            handshake_completed_ != nullptr ? handshake_completed_callback : nullptr;
+            handshake_completed_ != nullptr
+                ? +[](ngtcp2_conn* c, void* u) noexcept {
+                      auto& v = self(u);
+                      return v.handshake_completed_(c, v.callback_user_data_);
+                  }
+                : nullptr;
         callbacks_.handshake_confirmed =
-            handshake_confirmed_ != nullptr ? handshake_confirmed_callback : nullptr;
+            handshake_confirmed_ != nullptr
+                ? +[](ngtcp2_conn* c, void* u) noexcept {
+                      auto& v = self(u);
+                      return v.handshake_confirmed_(c, v.callback_user_data_);
+                  }
+                : nullptr;
         callbacks_.recv_retry =
-            recv_retry_ != nullptr ? recv_retry_callback : nullptr;
+            recv_retry_ != nullptr
+                ? +[](ngtcp2_conn* c, const ngtcp2_pkt_hd* hd, void* u) noexcept {
+                      auto& v = self(u);
+                      return v.recv_retry_(c, hd, v.callback_user_data_);
+                  }
+                : nullptr;
         callbacks_.recv_stateless_reset = nullptr;
         callbacks_.recv_stateless_reset2 = recv_stateless_reset_callback;
         callbacks_.recv_stream_data = recv_stream_data_callback;
@@ -254,32 +279,14 @@ public:
     [[nodiscard]] static impl& self(void* user_data) noexcept {
         return *static_cast<impl*>(user_data);
     }
-    static int get_new_connection_id_callback(ngtcp2_conn* connection, ngtcp2_cid* cid,
-        ngtcp2_stateless_reset_token* token, std::size_t size, void* user_data) noexcept {
-        auto& value = self(user_data);
-        return value.get_new_connection_id_(connection, cid, token, size, value.callback_user_data_);
-    }
-
-    static int remove_connection_id_callback(
-        ngtcp2_conn* connection, const ngtcp2_cid* cid, void* user_data) noexcept {
-        auto& value = self(user_data);
-        return value.remove_connection_id_(connection, cid, value.callback_user_data_);
-    }
-
-    static int handshake_completed_callback(ngtcp2_conn* connection, void* user_data) noexcept {
-        auto& value = self(user_data);
-        return value.handshake_completed_(connection, value.callback_user_data_);
-    }
-
-    static int handshake_confirmed_callback(ngtcp2_conn* connection, void* user_data) noexcept {
-        auto& value = self(user_data);
-        return value.handshake_confirmed_(connection, value.callback_user_data_);
-    }
-
-    static int recv_retry_callback(
-        ngtcp2_conn* connection, const ngtcp2_pkt_hd* header, void* user_data) noexcept {
-        auto& value = self(user_data);
-        return value.recv_retry_(connection, header, value.callback_user_data_);
+    [[nodiscard]] std::optional<http3_quic_result> check_open() const noexcept {
+        if (state_ == close_state::close_pending) {
+            return error_result();
+        }
+        if (state_ != close_state::open) {
+            return closed_result();
+        }
+        return std::nullopt;
     }
 
     static int recv_stateless_reset_callback(
@@ -692,11 +699,8 @@ http3_quic_status http3_quic_connection::submit_datagram(
 http3_quic_result http3_quic_connection::receive_datagram(
     const ngtcp2_path& path, std::uint32_t ecn,
     std::span<const std::byte> bytes, ngtcp2_tstamp timestamp) {
-    if (impl_->state_ == impl::close_state::close_pending) {
-        return impl_->error_result();
-    }
-    if (impl_->state_ != impl::close_state::open) {
-        return impl_->closed_result();
+    if (const auto closed = impl_->check_open()) {
+        return *closed;
     }
     if (impl_->http3_.events_pending()) {
         return {http3_quic_status::invalid_state, 0};
@@ -763,6 +767,16 @@ http3_quic_result http3_quic_connection::next_datagram(
             return {http3_quic_status::accepted, impl_->connection_error_.value_or(0)};
         }
 
+        const auto fail_transport_pkt = [&](int error) noexcept {
+            output.bytes_.clear();
+            return impl_->fail_transport(error);
+        };
+        const auto fail_app_pkt = [&](std::optional<std::uint64_t> error = std::nullopt) noexcept {
+            output.bytes_.clear();
+            return impl_->fail_application(
+                error.value_or(impl_->http3_.connection_error().value_or(NGHTTP3_H3_INTERNAL_ERROR)));
+        };
+
         for (;;) {
             http3_stream_output stream_output;
             const auto pending = impl_->http3_started_
@@ -793,8 +807,7 @@ http3_quic_result http3_quic_connection::next_datagram(
                 impl_->datagram_turn_ = false;
                 impl_->rethrow_if_failed(written < 0 ? static_cast<int>(written) : 0);
                 if (written < 0) {
-                    output.bytes_.clear();
-                    return impl_->fail_transport(static_cast<int>(written));
+                    return fail_transport_pkt(static_cast<int>(written));
                 }
                 if (written > 0) {
                     ngtcp2_conn_update_pkt_tx_time(impl_->connection_, timestamp);
@@ -806,8 +819,7 @@ http3_quic_result http3_quic_connection::next_datagram(
             impl_->datagram_turn_ = true;
             if (pending.status_ == http3_status::accepted) {
                 std::array<ngtcp2_vec, 16> vectors{};
-                for (std::size_t index = 0; index < stream_output.buffer_count_;
-                    ++index) {
+                for (std::size_t index = 0; index < stream_output.buffer_count_; ++index) {
                     vectors[index] = {
                         const_cast<std::uint8_t*>(reinterpret_cast<const std::uint8_t*>(
                             stream_output.buffers_[index].data())),
@@ -826,38 +838,24 @@ http3_quic_result http3_quic_connection::next_datagram(
                     stream_output.buffer_count_, timestamp);
                 impl_->rethrow_if_failed(written < 0 ? static_cast<int>(written) : 0);
                 if (written == NGTCP2_ERR_STREAM_DATA_BLOCKED) {
-                    if (impl_->http3_.block_stream(stream_output.stream_id_) !=
-                        http3_status::accepted) {
-                        output.bytes_.clear();
-                        return impl_->fail_application(
-                            impl_->http3_.connection_error().value_or(
-                                NGHTTP3_H3_INTERNAL_ERROR));
+                    if (impl_->http3_.block_stream(stream_output.stream_id_) != http3_status::accepted) {
+                        return fail_app_pkt();
                     }
                     continue;
                 }
-                if (written == NGTCP2_ERR_STREAM_SHUT_WR ||
-                    written == NGTCP2_ERR_STREAM_NOT_FOUND) {
-                    if (impl_->http3_.shutdown_stream_write(
-                            stream_output.stream_id_) != http3_status::accepted) {
-                        output.bytes_.clear();
-                        return impl_->fail_application(
-                            impl_->http3_.connection_error().value_or(
-                                NGHTTP3_H3_INTERNAL_ERROR));
+                if (written == NGTCP2_ERR_STREAM_SHUT_WR || written == NGTCP2_ERR_STREAM_NOT_FOUND) {
+                    if (impl_->http3_.shutdown_stream_write(stream_output.stream_id_) != http3_status::accepted) {
+                        return fail_app_pkt();
                     }
                     continue;
                 }
                 if (written < 0) {
-                    output.bytes_.clear();
-                    return impl_->fail_transport(static_cast<int>(written));
+                    return fail_transport_pkt(static_cast<int>(written));
                 }
                 if (accepted >= 0 &&
-                    impl_->http3_.commit_output(stream_output.stream_id_,
-                        static_cast<std::size_t>(accepted)) !=
-                        http3_status::accepted) {
-                    output.bytes_.clear();
-                    return impl_->fail_application(
-                        impl_->http3_.connection_error().value_or(
-                            NGHTTP3_H3_INTERNAL_ERROR));
+                    impl_->http3_.commit_output(
+                        stream_output.stream_id_, static_cast<std::size_t>(accepted)) != http3_status::accepted) {
+                    return fail_app_pkt();
                 }
             } else if (pending.status_ == http3_status::would_block) {
                 written = ngtcp2_conn_write_pkt(impl_->connection_,
@@ -866,12 +864,10 @@ http3_quic_result http3_quic_connection::next_datagram(
                     output.bytes_.size(), timestamp);
                 impl_->rethrow_if_failed(written < 0 ? static_cast<int>(written) : 0);
                 if (written < 0) {
-                    output.bytes_.clear();
-                    return impl_->fail_transport(static_cast<int>(written));
+                    return fail_transport_pkt(static_cast<int>(written));
                 }
             } else {
-                output.bytes_.clear();
-                return impl_->fail_application(pending.error_code_);
+                return fail_app_pkt(pending.error_code_);
             }
 
             if (written == 0) {
@@ -891,11 +887,8 @@ http3_quic_result http3_quic_connection::next_datagram(
 
 http3_quic_result http3_quic_connection::handle_expiry(
     ngtcp2_tstamp timestamp) {
-    if (impl_->state_ == impl::close_state::close_pending) {
-        return impl_->error_result();
-    }
-    if (impl_->state_ != impl::close_state::open) {
-        return impl_->closed_result();
+    if (const auto closed = impl_->check_open()) {
+        return *closed;
     }
     const int result = ngtcp2_conn_handle_expiry(impl_->connection_, timestamp);
     impl_->rethrow_if_failed(result);

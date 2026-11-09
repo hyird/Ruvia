@@ -426,7 +426,7 @@ task<void> http_client_response::pipe_to(context& output) & {
 task<void> http_client_handle::migrate(std::string_view local_address, std::uint16_t port) const {
     registration_.require_active();
 #ifdef RUVIA_ENABLE_HTTP3
-    return make_scoped_operation(registration_.scope(), pool_->migrate_http3(local_address, port));
+    return make_scoped_operation(registration_.scope(), pool_->migrate_http3(std::string(local_address), port));
 #else
     (void)local_address;
     (void)port;

@@ -50,4 +50,11 @@ struct static_root_config_storage final {
 [[nodiscard]] static_root_config_storage store_validated_static_root_config(
     const static_root_options& source_value, std::pmr::memory_resource* resource);
 
+[[nodiscard]] bool is_valid_static_file_extension(std::string_view extension) noexcept;
+
+[[nodiscard]] bool file_type_allowed(
+    std::string_view extension, const static_root_config_storage& config);
+
+[[nodiscard]] std::pmr::string content_type_for(std::string_view extension,
+    const static_root_config_storage& config, std::pmr::memory_resource* resource);
 }  // namespace ruvia::detail

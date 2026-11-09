@@ -19,7 +19,6 @@
 #include "http/tls_tunnel_output.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
-#include "server/http1_upgrade_response_head.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"

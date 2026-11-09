@@ -4,8 +4,6 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 
-#include "request/http_request_trailer_field.h"
-
 namespace ruvia {
 namespace {
 

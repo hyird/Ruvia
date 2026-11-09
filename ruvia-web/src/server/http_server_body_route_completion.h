@@ -12,8 +12,8 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_response.h"
 
-#include "body/http_lazy_buffered_body.h"
 #include "body/http_request_body_facade.h"
+#include "body/http_stream_body_reader.h"
 #include "router/route_table.h"
 #include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"

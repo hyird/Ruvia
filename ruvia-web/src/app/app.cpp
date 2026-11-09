@@ -7,7 +7,6 @@
 
 #include "ruvia/core/worker_handle.h"
 
-#include "app/app_run_coordinator.h"
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
 

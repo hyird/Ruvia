@@ -1,13 +1,24 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_base64.h"
+
+namespace ruvia {
+class bytes;
+}  // namespace ruvia
 
 namespace ruvia::detail {
 
@@ -84,5 +95,37 @@ private:
 
     std::variant<std::string_view, std::pmr::string> value_;
 };
+
+template <typename bytes_type = ::ruvia::bytes>
+inline void append_model_binary(std::pmr::string& output, const bytes_type& value) {
+    const auto encoded_size = http_base64_encoded_size(value.size());
+    const auto start = output.size();
+    output.resize(start + encoded_size + 2);
+    output[start] = '"';
+    http_base64_encode(output.data() + start + 1, value.view());
+    output[start + encoded_size + 1] = '"';
+}
+
+template <typename bytes_type = ::ruvia::bytes>
+[[nodiscard]] inline std::optional<bytes_type> decode_model_binary(
+    std::string_view encoded, std::pmr::memory_resource* resource) {
+    auto* const output_resource = pmr_resource_or_default(resource);
+    if (encoded.empty()) {
+        return bytes_type({.resource_ = output_resource});
+    }
+    if (encoded.size() % 4 != 0) {
+        return std::nullopt;
+    }
+    std::pmr::vector<std::uint8_t> decoded(http_base64_decoded_size_bound(encoded.size()), output_resource);
+    const auto decoded_size = http_base64_decode(
+        encoded, decoded, http_base64_charset::standard, http_base64_padding::required);
+    if (!decoded_size) {
+        return std::nullopt;
+    }
+    decoded.resize(*decoded_size);
+    bytes_type result_value({.resource_ = output_resource});
+    result_value.assign_owned(std::move(decoded));
+    return result_value;
+}
 
 }  // namespace ruvia::detail

@@ -11,7 +11,7 @@
 #include "client/http1_client_request_headers.h"
 #include "field/http_connection_fields.h"
 #include "parser/http_header_descriptor_storage.h"
-#include "websocket/http_websocket_accept_key.h"
+#include "websocket/http_websocket_handshake_fields.h"
 
 namespace ruvia {
 namespace {

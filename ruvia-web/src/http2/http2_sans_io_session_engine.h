@@ -90,9 +90,6 @@ public:
     [[nodiscard]] std::pmr::memory_resource* worker_resource() const noexcept;
 
 private:
-    struct tunnel_upgrade_commit;
-    struct websocket_upgrade_commit;
-
     void reset_event_stream(std::uint32_t stream_id, http2_error_code error) noexcept;
     [[nodiscard]] http2_sans_io_stream_runtime* resolve_stream_route(const http2_request_head_event& message_head);
     void on_message_head(http2_request_head_event& message_head);

@@ -65,6 +65,106 @@ bool is_mariadb_bare_function_name(std::string_view name) noexcept {
     });
 }
 
+[[nodiscard]] bool same_db_value(const db_value& a, const db_value& b) noexcept {
+    if (db_value_access::type(a) != db_value_access::type(b)) {
+        return false;
+    }
+    switch (db_value_access::type(a)) {
+        case db_value_type::null:
+            return true;
+        case db_value_type::string:
+            return db_value_access::text(a) == db_value_access::text(b);
+        case db_value_type::signed_value:
+            return db_value_access::signed_value(a) == db_value_access::signed_value(b);
+        case db_value_type::unsigned_value:
+            return db_value_access::unsigned_value(a) == db_value_access::unsigned_value(b);
+        case db_value_type::double_value:
+            return db_value_access::get_double_value(a) == db_value_access::get_double_value(b);
+        case db_value_type::bool_value:
+            return db_value_access::get_bool_value(a) == db_value_access::get_bool_value(b);
+    }
+    return false;
+}
+
+struct date_part_sql_spec final {
+    std::string_view token_;
+    std::string_view pg_feature_{};
+};
+
+constexpr std::array<date_part_sql_spec, 11> date_part_sql_specs{{
+    {"EPOCH", "EXTRACT EPOCH"},
+    {"YEAR"},
+    {"MONTH"},
+    {"DAY"},
+    {"HOUR"},
+    {"MINUTE"},
+    {"SECOND"},
+    {"DOW", "EXTRACT DOW"},
+    {"DOY", "EXTRACT DOY"},
+    {"WEEK"},
+    {"QUARTER"},
+}};
+static_assert(static_cast<std::size_t>(db_date_part::quarter) + 1 == date_part_sql_specs.size());
+
+struct binary_operator_sql_spec final {
+    std::string_view pg_token_;
+    std::string_view maria_token_{};
+    std::string_view pg_feature_{};
+};
+
+constexpr std::string_view pg_extended_operator_feature = "PostgreSQL JSON, array, regex or network operator";
+
+constexpr std::array<binary_operator_sql_spec, 47> binary_operator_sql_specs{{
+    {"="},
+    {"<>"},
+    {"<"},
+    {"<="},
+    {">"},
+    {">="},
+    {"AND"},
+    {"OR"},
+    {"+"},
+    {"-"},
+    {"*"},
+    {"/"},
+    {"%"},
+    {"||"},
+    {"LIKE"},
+    {"NOT LIKE"},
+    {"ILIKE", {}, "ILIKE"},
+    {"NOT ILIKE", {}, "NOT ILIKE"},
+    {"IN"},
+    {"NOT IN"},
+    {"IS DISTINCT FROM", "<=>"},
+    {"IS NOT DISTINCT FROM", "<=>"},
+    {"&"},
+    {"|"},
+    {"#", "^"},
+    {"->", {}, pg_extended_operator_feature},
+    {"->>", {}, pg_extended_operator_feature},
+    {"#>", {}, pg_extended_operator_feature},
+    {"#>>", {}, pg_extended_operator_feature},
+    {"@>", {}, pg_extended_operator_feature},
+    {"<@", {}, pg_extended_operator_feature},
+    {"?", {}, pg_extended_operator_feature},
+    {"?|", {}, pg_extended_operator_feature},
+    {"?&", {}, pg_extended_operator_feature},
+    {"||", {}, pg_extended_operator_feature},
+    {"-", {}, pg_extended_operator_feature},
+    {"#-", {}, pg_extended_operator_feature},
+    {"@>", {}, pg_extended_operator_feature},
+    {"<@", {}, pg_extended_operator_feature},
+    {"&&", {}, pg_extended_operator_feature},
+    {"~", {}, pg_extended_operator_feature},
+    {"~*", {}, pg_extended_operator_feature},
+    {">>", {}, pg_extended_operator_feature},
+    {">>=", {}, pg_extended_operator_feature},
+    {"<<", {}, pg_extended_operator_feature},
+    {"<<=", {}, pg_extended_operator_feature},
+    {"&&", {}, pg_extended_operator_feature},
+}};
+static_assert(static_cast<std::size_t>(db_binary_operator::inet_overlap) + 1 == binary_operator_sql_specs.size());
+
 // How a bound PostgreSQL parameter is typed in compiled SQL. By default it is
 // sent untyped and PostgreSQL infers its type from the surrounding SQL: the
 // other operand, the target column, the parameter type of the selected
@@ -710,39 +810,8 @@ private:
                             a.frame_->end_.offset_ != b.frame_->end_.offset_)) {
             return false;
         }
-        if (a.kind_ == db_node_kind::value) {
-            if (db_value_access::type(a.value_) != db_value_access::type(b.value_)) {
-                return false;
-            }
-            switch (db_value_access::type(a.value_)) {
-                case db_value_type::null:
-                    break;
-                case db_value_type::string:
-                    if (db_value_access::text(a.value_) != db_value_access::text(b.value_)) {
-                        return false;
-                    }
-                    break;
-                case db_value_type::signed_value:
-                    if (db_value_access::signed_value(a.value_) != db_value_access::signed_value(b.value_)) {
-                        return false;
-                    }
-                    break;
-                case db_value_type::unsigned_value:
-                    if (db_value_access::unsigned_value(a.value_) != db_value_access::unsigned_value(b.value_)) {
-                        return false;
-                    }
-                    break;
-                case db_value_type::double_value:
-                    if (db_value_access::get_double_value(a.value_) != db_value_access::get_double_value(b.value_)) {
-                        return false;
-                    }
-                    break;
-                case db_value_type::bool_value:
-                    if (db_value_access::get_bool_value(a.value_) != db_value_access::get_bool_value(b.value_)) {
-                        return false;
-                    }
-                    break;
-            }
+        if (a.kind_ == db_node_kind::value && !same_db_value(a.value_, b.value_)) {
+            return false;
         }
         const auto same = [&](std::size_t x, std::size_t y) { return same_expression(s, x, y, depth + 1); };
         if (!same(a.left_, b.left_) || !same(a.right_, b.right_)) {
@@ -1114,45 +1183,12 @@ private:
                 output_.sql_ += ')';
                 break;
             case db_node_kind::extract: {
-                output_.sql_ += "EXTRACT(";
-                switch (n.date_part_) {
-                    case db_date_part::epoch:
-                        output_.require_pg("EXTRACT EPOCH");
-                        output_.sql_ += "EPOCH";
-                        break;
-                    case db_date_part::year:
-                        output_.sql_ += "YEAR";
-                        break;
-                    case db_date_part::month:
-                        output_.sql_ += "MONTH";
-                        break;
-                    case db_date_part::day:
-                        output_.sql_ += "DAY";
-                        break;
-                    case db_date_part::hour:
-                        output_.sql_ += "HOUR";
-                        break;
-                    case db_date_part::minute:
-                        output_.sql_ += "MINUTE";
-                        break;
-                    case db_date_part::second:
-                        output_.sql_ += "SECOND";
-                        break;
-                    case db_date_part::dow:
-                        output_.require_pg("EXTRACT DOW");
-                        output_.sql_ += "DOW";
-                        break;
-                    case db_date_part::doy:
-                        output_.require_pg("EXTRACT DOY");
-                        output_.sql_ += "DOY";
-                        break;
-                    case db_date_part::week:
-                        output_.sql_ += "WEEK";
-                        break;
-                    case db_date_part::quarter:
-                        output_.sql_ += "QUARTER";
-                        break;
+                const auto& spec = date_part_sql_specs.at(static_cast<std::size_t>(n.date_part_));
+                if (!spec.pg_feature_.empty()) {
+                    output_.require_pg(spec.pg_feature_);
                 }
+                output_.sql_ += "EXTRACT(";
+                output_.sql_ += spec.token_;
                 output_.sql_ += " FROM ";
                 child_value(n.left_);
                 output_.sql_ += ')';
@@ -1254,152 +1290,15 @@ private:
             }
         }
         expr(s, n.left_, depth, false, left_cast);
-        std::string_view token;
-        switch (n.binary_) {
-            case db_binary_operator::equal:
-                token = "=";
-                break;
-            case db_binary_operator::not_equal:
-                token = "<>";
-                break;
-            case db_binary_operator::less:
-                token = "<";
-                break;
-            case db_binary_operator::less_equal:
-                token = "<=";
-                break;
-            case db_binary_operator::greater:
-                token = ">";
-                break;
-            case db_binary_operator::greater_equal:
-                token = ">=";
-                break;
-            case db_binary_operator::and_value:
-                token = "AND";
-                break;
-            case db_binary_operator::or_value:
-                token = "OR";
-                break;
-            case db_binary_operator::add:
-                token = "+";
-                break;
-            case db_binary_operator::subtract:
-                token = "-";
-                break;
-            case db_binary_operator::multiply:
-                token = "*";
-                break;
-            case db_binary_operator::divide:
-                token = "/";
-                break;
-            case db_binary_operator::modulo:
-                token = "%";
-                break;
-            case db_binary_operator::concat:
-                token = "||";
-                break;
-            case db_binary_operator::like:
-                token = "LIKE";
-                break;
-            case db_binary_operator::not_like:
-                token = "NOT LIKE";
-                break;
-            case db_binary_operator::i_like:
-                output_.require_pg("ILIKE");
-                token = "ILIKE";
-                break;
-            case db_binary_operator::not_i_like:
-                output_.require_pg("NOT ILIKE");
-                token = "NOT ILIKE";
-                break;
-            case db_binary_operator::in:
-                token = "IN";
-                break;
-            case db_binary_operator::not_in:
-                token = "NOT IN";
-                break;
-            case db_binary_operator::is_distinct_from:
-                token = output_.pg() ? "IS DISTINCT FROM" : "<=>";
-                break;
-            case db_binary_operator::is_not_distinct_from:
-                token = output_.pg() ? "IS NOT DISTINCT FROM" : "<=>";
-                break;
-            case db_binary_operator::bit_and:
-                token = "&";
-                break;
-            case db_binary_operator::bit_or:
-                token = "|";
-                break;
-            case db_binary_operator::bit_xor:
-                token = output_.pg() ? "#" : "^";
-                break;
-            default:
-                output_.require_pg("PostgreSQL JSON, array, regex or network operator");
-                switch (n.binary_) {
-                    case db_binary_operator::json_get:
-                        token = "->";
-                        break;
-                    case db_binary_operator::json_get_text:
-                        token = "->>";
-                        break;
-                    case db_binary_operator::json_path:
-                        token = "#>";
-                        break;
-                    case db_binary_operator::json_path_text:
-                        token = "#>>";
-                        break;
-                    case db_binary_operator::json_contains:
-                    case db_binary_operator::array_contains:
-                        token = "@>";
-                        break;
-                    case db_binary_operator::json_contained_by:
-                    case db_binary_operator::array_contained_by:
-                        token = "<@";
-                        break;
-                    case db_binary_operator::json_has_key:
-                        token = "?";
-                        break;
-                    case db_binary_operator::json_has_any_key:
-                        token = "?|";
-                        break;
-                    case db_binary_operator::json_has_all_keys:
-                        token = "?&";
-                        break;
-                    case db_binary_operator::json_concat:
-                        token = "||";
-                        break;
-                    case db_binary_operator::json_delete:
-                        token = "-";
-                        break;
-                    case db_binary_operator::json_delete_path:
-                        token = "#-";
-                        break;
-                    case db_binary_operator::array_overlap:
-                    case db_binary_operator::inet_overlap:
-                        token = "&&";
-                        break;
-                    case db_binary_operator::regex:
-                        token = "~";
-                        break;
-                    case db_binary_operator::regex_insensitive:
-                        token = "~*";
-                        break;
-                    case db_binary_operator::inet_contains:
-                        token = ">>";
-                        break;
-                    case db_binary_operator::inet_contains_or_equal:
-                        token = ">>=";
-                        break;
-                    case db_binary_operator::inet_contained_by:
-                        token = "<<";
-                        break;
-                    case db_binary_operator::inet_contained_by_or_equal:
-                        token = "<<=";
-                        break;
-                    default:
-                        std::terminate();
-                }
+        const auto op_index = static_cast<std::size_t>(n.binary_);
+        if (op_index >= binary_operator_sql_specs.size()) {
+            std::terminate();
         }
+        const auto& op_spec = binary_operator_sql_specs[op_index];
+        if (!op_spec.pg_feature_.empty()) {
+            output_.require_pg(op_spec.pg_feature_);
+        }
+        const auto token = (!output_.pg() && !op_spec.maria_token_.empty()) ? op_spec.maria_token_ : op_spec.pg_token_;
         if ((n.binary_ == db_binary_operator::in || n.binary_ == db_binary_operator::not_in) && right.kind_ != db_node_kind::list && right.kind_ != db_node_kind::subquery) {
             throw std::invalid_argument("IN requires a list or a subquery");
         }

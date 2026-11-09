@@ -12,7 +12,6 @@
 #include "ruvia/http/http_request_content_semantics.h"
 
 #include "client/http1_client_request_headers.h"
-#include "client/http_origin_view.h"
 #include "field/http_connection_fields.h"
 #include "field/http_request_field_validation.h"
 #include "parser/http_header_descriptor_storage.h"
@@ -281,7 +280,7 @@ struct request_head_write_plan final {
     // Reuse each decimal token in measurement and emission. CONNECT uses the
     // same port token for both its authority target and generated Host field.
     std::array<char, http_max_unsigned_decimal_size> port_buffer;
-    const auto port_value = connect || !detail::http_origin_uses_default_port(origin)
+    const auto port_value = connect || origin.port() != (origin.scheme() == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80})
                                 ? http_format_unsigned(port_buffer, origin.port())
                                 : std::string_view{};
     const auto authority_bytes = origin.host().size() + (port_value.empty() ? 0 : 1 + port_value.size());

@@ -6,12 +6,19 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "app/env_state.h"
-
 namespace ruvia {
 namespace {
 
@@ -75,6 +82,46 @@ bool env::loaded() const noexcept {
 
 std::size_t env::size() const noexcept {
     return state_->variables_.size();
+}
+
+std::filesystem::path detail::dotenv_executable_directory() {
+#ifdef _WIN32
+    std::wstring buffer(260, L'\0');
+    for (;;) {
+        const auto length =
+            ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0) {
+            throw std::runtime_error("failed to resolve executable path");
+        }
+        if (length < buffer.size()) {
+            buffer.resize(length);
+            return std::filesystem::path(buffer).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+#else
+    std::pmr::vector<char> buffer(1024, process_resource());
+    for (;;) {
+        const auto length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
+        if (length < 0) {
+            throw std::runtime_error("failed to resolve executable path");
+        }
+        if (static_cast<std::size_t>(length) < buffer.size()) {
+            return std::filesystem::path(
+                std::string_view(buffer.data(), static_cast<std::size_t>(length)))
+                .parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+#endif
+}
+
+std::pmr::string detail::dotenv_path_message(std::string_view prefix, const std::filesystem::path& path) {
+    const auto name = path.string<char8_t, std::char_traits<char8_t>, std::pmr::polymorphic_allocator<char8_t>>(
+        std::pmr::polymorphic_allocator<char8_t>(process_resource()));
+    std::pmr::string result_value(prefix, process_resource());
+    result_value.append(reinterpret_cast<const char*>(name.data()), name.size());
+    return result_value;
 }
 
 void detail::load_env_from_executable_directory(env& env_value, dotenv_options options) {

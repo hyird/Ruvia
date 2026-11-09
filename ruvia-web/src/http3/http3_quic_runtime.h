@@ -9,6 +9,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <limits>
 #include <optional>
@@ -118,4 +119,14 @@ inline void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp
     };
 }
 
+[[nodiscard]] inline std::optional<asio::ip::udp::endpoint> http3_udp_endpoint(
+    const ngtcp2_addr& address) noexcept {
+    asio::ip::udp::endpoint endpoint;
+    if (address.addr == nullptr || address.addrlen == 0 || address.addrlen > endpoint.capacity()) {
+        return std::nullopt;
+    }
+    std::memcpy(endpoint.data(), address.addr, address.addrlen);
+    endpoint.resize(address.addrlen);
+    return endpoint;
+}
 }  // namespace ruvia::detail

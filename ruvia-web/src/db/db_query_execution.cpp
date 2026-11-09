@@ -9,7 +9,6 @@
 #include "db/db_pool.h"
 #include "integration/request_io_metrics.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "db/db_query_cache.h"
 #include "db/db_query_cache_state.h"
 #endif
 

@@ -1,18 +1,116 @@
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
+#include <utility>
+#include <variant>
 
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 
+#include "server/http_server_options.h"
 #include "server/http_server_options_validation.h"
+#include "server/inbound_transport_error.h"
 #include "tls/tls_random.h"
 #include "util/config_validation.h"
 
 namespace ruvia::detail {
+
+namespace {
+
+// Only the connection's own transport can end it normally. A handler or
+// upstream failure is a real fault even when it carries one of the codes
+// is_inbound_connection_end() accepts: an upstream request that timed out or
+// was reset says nothing about the inbound peer.
+[[nodiscard]] bool is_connection_end(const std::exception_ptr& exception) noexcept {
+    try {
+        std::rethrow_exception(exception);
+    } catch (const inbound_transport_error& error) {
+        return is_inbound_connection_end(error.code());
+    } catch (...) {
+        return false;
+    }
+}
+
+}  // namespace
+
+void connection_failure_sink::invoke(std::string_view remote_address, std::exception_ptr exception) const noexcept {
+    if (exception == nullptr || is_connection_end(exception)) {
+        return;
+    }
+    if (counter_ != nullptr) {
+        counter_->fetch_add(1, std::memory_order_relaxed);
+    }
+    if (callback_) {
+        callback_(connection_failure_record_access::make(remote_address, std::move(exception)));
+        return;
+    }
+    ruvia::report_unhandled_failure("web connection", exception);
+}
+
+void http_server_options::set_server(const server_config& config) {
+    validate_server_limits(config);
+    server_ = config;
+}
+
+void http_server_options::set_compression(compression_config config) {
+    ensure_positive_size(
+        config.min_bytes_, "compression minimum size must be greater than zero");
+    if (config.sync_bytes_ < config.min_bytes_) {
+        throw std::invalid_argument(
+            "compression synchronous size must not be smaller than the minimum size");
+    }
+    if (config.max_bytes_ < config.sync_bytes_) {
+        throw std::invalid_argument(
+            "compression maximum size must not be smaller than the synchronous size");
+    }
+    compression_ = std::move(config);
+}
+
+void http_server_options::set_cors(const cors_config& config) {
+    cors_ = make_cors_options(config, process_resource());
+}
+
+void http_server_options::set_rate_limit(const rate_limit_config& config) {
+    const auto& rule = config.rule_;
+    if (rule.max_requests_ == 0) {
+        throw std::invalid_argument("rate limit max requests must be greater than zero");
+    }
+    if (rule.window_.count() <= 0) {
+        throw std::invalid_argument("rate limit window must be greater than zero");
+    }
+    if (rule.overflow_policy_ != rate_limit_overflow_policy::deny &&
+        rule.overflow_policy_ != rate_limit_overflow_policy::allow) {
+        throw std::invalid_argument("rate limit overflow policy is invalid");
+    }
+    if (!std::has_single_bit(config.capacity_per_worker_)) {
+        throw std::invalid_argument(
+            "rate-limit capacity per worker must be a power of two");
+    }
+    default_rate_limit_per_worker_ = config.rule_;
+    rate_limit_capacity_per_worker_ = config.capacity_per_worker_;
+}
+
+void http_server_options::set_trusted_proxies(const trusted_proxy_config& config) {
+    trusted_proxy_set parsed(process_resource());
+    parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto_);
+    for (const auto& cidr : config.cidrs_) {
+        const auto block = parse_trusted_proxy_block(cidr);
+        if (!block) {
+            // A typo here would silently trust nothing and leave every
+            // client identified as the proxy, so it fails startup instead.
+            throw std::invalid_argument(
+                "trusted proxy must be an IP address or CIDR block");
+        }
+        parsed.add(*block);
+    }
+    trusted_proxies_ = std::move(parsed);
+}
 
 validated_http_server_configuration::validated_http_server_configuration(
     std::span<const http_server_listener_definition> listeners, http_server_options&& options)

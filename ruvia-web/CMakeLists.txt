@@ -23,7 +23,7 @@ endif()
 # The database query-result cache stores rows in Redis.
 if(NOT RUVIA_ENABLE_REDIS)
     list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/redis/")
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/db/db_query(_result)?_cache\\.cpp$")
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/db/db_query_cache\\.cpp$")
 endif()
 if(NOT RUVIA_ENABLE_JWT)
     list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/auth/jwt[^/]*\\.cpp$")

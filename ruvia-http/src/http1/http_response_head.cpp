@@ -12,7 +12,6 @@
 
 #include "coding/http_content_length.h"
 #include "field/http_connection_fields.h"
-#include "response/http1_status_line.h"
 #include "response/http_final_response_control_plan.h"
 #include "response/http_response_header_state.h"
 #include "response/http_response_header_storage.h"

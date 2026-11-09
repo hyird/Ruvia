@@ -4,10 +4,10 @@
 #include <limits>
 #include <stdexcept>
 
+#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http_field_section.h"
 
-#include "request/http_request_trailer_field.h"
 #include "util/http_wire_sink.h"
 
 namespace ruvia {

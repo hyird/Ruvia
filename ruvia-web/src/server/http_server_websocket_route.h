@@ -19,9 +19,6 @@
 #include "server/http_upgrade_route.h"
 #include "server/inbound_transport_error.h"
 #include "server/worker_codecs.h"
-#include "websocket/http_websocket_connection.h"
-#include "websocket/http_websocket_handshake.h"
-#include "websocket/http_websocket_session.h"
 
 namespace ruvia::detail {
 

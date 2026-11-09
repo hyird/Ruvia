@@ -999,7 +999,7 @@ public:
         const auto& target_query = active_query ? *active_query : query_;
         if constexpr (std::same_as<output_type, entity_type>) {
             if (relations_ && !relations_->empty()) {
-                auto prepared = relations_->template prepare<entity_type>(target_query, alias_, executor_.query_driver());
+                auto prepared = prepare_relation_query(target_query);
                 return executor_.template query_mapped<entity_rows<entity_type>>(prepared ? *prepared : target_query,
                     detail::db_map_related_entities<entity_type>{relations_->clone()});
             }
@@ -1017,7 +1017,7 @@ public:
         query.copy_cache(query_, detail::db_cache_shape::one);
         if constexpr (std::same_as<output_type, entity_type>) {
             if (relations_ && !relations_->empty()) {
-                auto prepared = relations_->template prepare<entity_type>(query, alias_, executor_.query_driver());
+                auto prepared = prepare_relation_query(query);
                 return executor_.template query_mapped<std::optional<entity_type>>(prepared ? *prepared : query,
                     detail::db_map_one_related_entity<entity_type>{relations_->clone()});
             }
@@ -1087,7 +1087,7 @@ public:
         auto count = count_query();
         if constexpr (std::same_as<output_type, entity_type>) {
             if (relations_ && !relations_->empty()) {
-                auto prepared = relations_->template prepare<entity_type>(target_query, alias_, executor_.query_driver());
+                auto prepared = prepare_relation_query(target_query);
                 return executor_.template query_mapped_and_count<entity_rows<entity_type>>(prepared ? *prepared : target_query, count,
                     detail::db_map_related_entities<entity_type>{relations_->clone()});
             }
@@ -1097,11 +1097,8 @@ public:
     [[nodiscard]] db_statement get_query_and_parameters() const {
         auto active_query = effective_query();
         const auto& target_query = active_query ? *active_query : query_;
-        if (relations_ && !relations_->empty()) {
-            auto prepared = relations_->template prepare<entity_type>(target_query, alias_, executor_.query_driver());
-            return (prepared ? *prepared : target_query).compile(executor_.query_driver(), query_.resource());
-        }
-        return target_query.compile(executor_.query_driver(), query_.resource());
+        auto prepared = prepare_relation_query(target_query);
+        return (prepared ? *prepared : target_query).compile(executor_.query_driver(), query_.resource());
     }
 
 private:
@@ -1149,6 +1146,12 @@ private:
                 filtered.and_where(filtered.unary(db_unary_operator::is_null, filtered.column(del_col, qualifier)));
                 return filtered;
             }
+        }
+        return std::nullopt;
+    }
+    [[nodiscard]] std::optional<db_query> prepare_relation_query(const db_query& target_query) const {
+        if (relations_ && !relations_->empty()) {
+            return relations_->template prepare<entity_type>(target_query, alias_, executor_.query_driver());
         }
         return std::nullopt;
     }
@@ -1477,53 +1480,28 @@ public:
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<entity_rows<output_type>> get_many() const {
-        validate();
-        if (!query_.returns_rows()) {
-            throw std::invalid_argument("get_many requires RETURNING");
-        }
-        if constexpr (!std::same_as<output_type, entity_type>) {
-            if (selected_.empty()) {
-                throw std::invalid_argument("DTO returning requires an explicit projection");
-            }
-        }
+        require_returning<output_type>("get_many requires RETURNING");
         return executor_.template query_mapped<entity_rows<output_type>>(query_, detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_));
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<std::optional<output_type>> get_one() const {
-        validate();
-        if (!query_.returns_rows()) {
-            throw std::invalid_argument("get_one requires RETURNING");
-        }
-        if constexpr (!std::same_as<output_type, entity_type>) {
-            if (selected_.empty()) {
-                throw std::invalid_argument("DTO returning requires an explicit projection");
-            }
-        }
+        require_returning<output_type>("get_one requires RETURNING");
         return executor_.template query_mapped<std::optional<output_type>>(query_,
             detail::db_map_one_projection<output_type>{detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_)});
     }
     [[nodiscard]] task<db_rows> get_raw_many() const {
-        validate();
-        if (!query_.returns_rows()) {
-            throw std::invalid_argument("get_raw_many requires RETURNING");
-        }
+        require_returning("get_raw_many requires RETURNING");
         return executor_.template query_mapped<db_rows>(query_, detail::db_map_raw_rows{});
     }
     // RETURNING uses the same owning value and NULL contract as read scalars.
     template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::optional<scalar_type>> get_scalar() const {
-        validate();
-        if (!query_.returns_rows()) {
-            throw std::invalid_argument("get_scalar requires RETURNING");
-        }
+        require_returning("get_scalar requires RETURNING");
         return executor_.template query_mapped<std::optional<scalar_type>>(query_, detail::db_map_scalar<scalar_type>{});
     }
     template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::pmr::vector<scalar_type>> get_scalars() const {
-        validate();
-        if (!query_.returns_rows()) {
-            throw std::invalid_argument("get_scalars requires RETURNING");
-        }
+        require_returning("get_scalars requires RETURNING");
         return executor_.template query_mapped<std::pmr::vector<scalar_type>>(query_, detail::db_map_scalars<scalar_type>{});
     }
     [[nodiscard]] db_statement get_query_and_parameters() const {
@@ -1601,6 +1579,18 @@ private:
     void validate() const {
         if (!inserting_ && !query_.has_where()) {
             throw std::invalid_argument("repository update/delete requires a condition");
+        }
+    }
+    template <typename output_type = entity_type>
+    void require_returning(const char* message) const {
+        validate();
+        if (!query_.returns_rows()) {
+            throw std::invalid_argument(message);
+        }
+        if constexpr (!std::same_as<output_type, entity_type>) {
+            if (selected_.empty()) {
+                throw std::invalid_argument("DTO returning requires an explicit projection");
+            }
         }
     }
     detail::db_repository_executor_type<executor_type> executor_;
@@ -1841,25 +1831,12 @@ private:
                 }
             }
             detail::require_uniform_set_columns<entity_type>(entities, {});
-            std::array<db_assignment, column_capacity> updates{};
-            std::size_t update_count = 0;
-            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-                if constexpr (detail::is_conflict_updatable_db_column<c_type>()) {
-                    constexpr auto name = c_type::name.view();
-                    if (std::ranges::find(columns, name) != columns.end()) {
-                        updates[update_count++] = db_assignment{name, db_expr(query.excluded(name), {}, true)};
-                    }
-                }
-            });
-            detail::stamp_conflict_lifecycle_columns<entity_type>(query, entity_type::table_name(), updates, update_count);
-            const bool do_nothing = update_count == 0 && driver == db_driver::postgresql;
-            const bool any_unique_key = driver != db_driver::postgresql;
-            query.on_conflict({
-                .columns_ = std::span<const borrowed_text>(conflict_columns.data(), conflict_count),
-                .update_ = std::span<const db_assignment>(updates.data(), update_count),
-                .do_nothing_ = do_nothing,
-                .any_unique_key_ = any_unique_key,
-            });
+            detail::apply_entity_upsert<entity_type>(query, columns,
+                db_upsert_options{
+                    .conflict_paths_ = std::span<const borrowed_text>(conflict_columns.data(), conflict_count),
+                    .any_unique_key_ = driver != db_driver::postgresql,
+                },
+                driver, entity_type::table_name());
             return query;
         }
     }

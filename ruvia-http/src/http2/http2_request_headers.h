@@ -25,20 +25,12 @@ struct http2_header_decode_context final {
     request_field_state request_fields_{request_field_framing::binary};
 };
 
-[[nodiscard]] inline bool http2_is_http_request_scheme(std::string_view scheme) noexcept {
-    return is_http_request_scheme(scheme);
-}
-
-[[nodiscard]] inline bool http2_regular_request_requires_authority(
-    std::string_view scheme, std::string_view path) noexcept {
-    return binary_regular_request_requires_authority(scheme, path);
-}
 // Cross-field constraints only. Decoded :path syntax is already checked;
 // senders combine this predicate with the origin-form grammar below.
 [[nodiscard]] inline bool http2_request_path_matches_method_and_scheme(
     http_known_method method, std::string_view scheme, std::string_view path) noexcept {
     if (path.empty()) {
-        return !http2_is_http_request_scheme(scheme);
+        return !is_http_request_scheme(scheme);
     }
     return path != "*" || method == http_known_method::options;
 }
@@ -53,11 +45,6 @@ struct http2_header_decode_context final {
     std::string_view scheme, std::string_view path) noexcept {
     return http2_request_path_matches_method_and_scheme(http_known_method::connect, scheme, path) &&
            (path.empty() || is_valid_origin_form_target(path));
-}
-
-[[nodiscard]] inline bool http2_is_valid_request_authority(
-    std::string_view scheme, std::string_view authority) noexcept {
-    return is_valid_binary_request_authority(scheme, authority);
 }
 
 // Call only after authority admission (or validated local push submission).
@@ -89,13 +76,13 @@ struct http2_header_decode_context final {
 }
 
 [[nodiscard]] inline bool http2_has_required_request_authority(const http2_stream_state& stream) noexcept {
-    if (!http2_regular_request_requires_authority(stream.request_scheme(), stream.request_path())) {
+    if (!binary_regular_request_requires_authority(stream.request_scheme(), stream.request_path())) {
         return true;
     }
     if (stream.has_authority()) {
         return true;
     }
-    return http2_is_valid_request_authority(stream.request_scheme(), http2_request_host_field(stream));
+    return is_valid_binary_request_authority(stream.request_scheme(), http2_request_host_field(stream));
 }
 
 [[nodiscard]] inline bool http2_accumulate_header_list_bytes(

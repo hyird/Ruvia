@@ -209,7 +209,7 @@ private:
     void restart_http2_stream_read(http2_stream& stream);
     // Arms timer_ for the earlier of the total and read deadlines.
     void schedule_http2_stream_timer(http2_stream& stream);
-    void expire_http2_stream_timer(std::uint64_t request_id) noexcept;
+    void arm_http2_write_timer(worker_timer_registration& write_timer, const http2_stream& stream);
 #endif
     void close_idle() noexcept;
 #ifdef RUVIA_ENABLE_HTTP2

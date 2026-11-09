@@ -18,7 +18,7 @@
 #include "ruvia/web/db/db.h"
 
 #include "client/client_host_resolver.h"
-#include "db/db_config_validation.h"
+#include "db/db_config_storage.h"
 #include "db/db_digest.h"
 #include "db/db_migration_validation.h"
 #include "db/db_registry.h"

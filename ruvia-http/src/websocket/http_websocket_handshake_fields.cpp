@@ -16,7 +16,6 @@
 #include "field/http_request_field_validation.h"
 #include "parser/http_parser_syntax.h"
 #include "request/http_request_access.h"
-#include "websocket/http_websocket_accept_key.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 #include "websocket/websocket_server_negotiation.h"
 

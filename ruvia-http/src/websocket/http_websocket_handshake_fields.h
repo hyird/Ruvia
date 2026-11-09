@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstddef>
 #include <span>
 #include <string_view>
@@ -13,6 +14,15 @@ namespace ruvia {
 class http_request;
 
 namespace detail {
+
+// The base64-encoded SHA-1 of the client key plus the RFC 6455 GUID, as it
+// appears in the Sec-websocket-Accept response field (always 28 bytes).
+using websocket_accept_key_type = std::array<char, 28>;
+
+// Throws std::length_error before inspecting the view when key + the RFC
+// GUID cannot be represented by the SHA-1 64-bit bit-length field or by the
+// size_t arithmetic used by the incremental implementation.
+void encode_websocket_accept(websocket_accept_key_type& output, std::string_view key);
 
 [[nodiscard]] bool append_websocket_extension_list(
     std::string_view value, bool& has_extension) noexcept;

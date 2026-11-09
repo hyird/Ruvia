@@ -71,21 +71,4 @@ private:
     std::uint32_t known_bits_{0};
 };
 
-// Version-neutral interim-message validation. RFC 9110 section 8.6 and RFC
-// 9112 section 6 forbid Content-Length and Transfer-Encoding on every 1xx;
-// an interim response also cannot have the trailer section advertised by
-// Trailer. Version-specific connection fields are checked by the HTTP/1 and
-// HTTP/2 writers after this common pass.
-[[nodiscard]] inline http_interim_response_header_validation_status validate_http_interim_response_headers(
-    const http_interim_response_head& response) noexcept {
-    http_interim_response_sender_validator validator;
-    for (const auto& header : response.headers()) {
-        const auto status = validator.validate(header.name(), header.value());
-        if (status != http_interim_response_header_validation_status::ok) {
-            return status;
-        }
-    }
-    return http_interim_response_header_validation_status::ok;
-}
-
 }  // namespace ruvia::detail

@@ -24,8 +24,8 @@
 
 #include "http/http_compressible_media_type.h"
 #include "http/static_file_metadata.h"
-#include "http/static_file_types.h"
 #include "http/static_path_normalization.h"
+#include "http/static_root_config_storage.h"
 #include "http/static_root_index.h"
 #include "http/static_root_options_validation.h"
 #include "server/http_native_file.h"

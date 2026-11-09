@@ -34,6 +34,7 @@
 #include "http/http_cors.h"
 #include "http/http_protocol_error_info.h"
 #include "server/http_request_admission.h"
+#include "server/http_response_stream_dispatch.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
@@ -599,6 +600,88 @@ inline request_memory& emplace_multiplexed_request_memory(
         http_request_rejection::error(
             copy_http_protocol_error_info(memory.resource(), http_request_body_protocol_error(failure))),
         services);
+}
+
+// Completes a multiplexed response-stream route result. Returns true when the
+// stream already terminated (peer abort before commit or committed head), or
+// false when `response` holds a buffered route/recovered response to finish.
+template <typename reset_type>
+[[nodiscard]] inline bool complete_multiplexed_response_stream_dispatch(
+    response_stream_dispatch_result& result_value, bool request_body_failed,
+    const http_server_options& options, std::string_view remote_address,
+    http_response_tail& tail, http_response& response, bool& body_failure_handled,
+    reset_type&& reset_stream) {
+    if (result_value.peer_aborted_before_commit() != nullptr) {
+        return true;
+    }
+    if (const auto committed_status = result_value.committed_status()) {
+        if (const auto* failed = result_value.failed_after_commit()) {
+            reset_stream(request_body_failed);
+            if (!request_body_failed) {
+                options.connection_failure_.invoke(remote_address, failed->exception());
+            }
+        } else if (request_body_failed) {
+            reset_stream(true);
+        }
+        tail.record_access(options.access_log_, *committed_status);
+        return true;
+    }
+    if (auto* route_response = result_value.route_response()) {
+        response = std::move(*route_response).take_response();
+    } else if (auto* recovered = result_value.recovered_failure()) {
+        body_failure_handled = request_body_failed;
+        response = std::move(*recovered).take_response();
+    } else {
+        throw std::logic_error("response stream dispatch returned no terminal alternative");
+    }
+    return false;
+}
+
+template <typename stream_id_type, typename writer_type, typename reset_type>
+[[nodiscard]] task<void> finish_multiplexed_buffered_response(stream_id_type stream_id,
+    const std::optional<http_request_body_failure>& body_failure, bool body_failure_handled,
+    http_response& response, const http_request& request, const route_table& routes,
+    request_memory& request_memory_value, const context_services& request_services,
+    const http_server_options& options, std::string_view remote_address,
+    http_response_tail& tail, writer_type& writer, reset_type reset_stream) {
+    if (body_failure.has_value() && !body_failure_handled) {
+        body_failure_handled = true;
+        response = co_await respond_http_request_body_failure(
+            routes, request, request_memory_value, *body_failure, request_services, tail);
+    }
+    auto preparation = co_await tail.prepare_or_finish(
+        response, options, routes, request_memory_value, request_services);
+    if (body_failure.has_value() && !body_failure_handled) {
+        response = co_await respond_http_request_body_failure(
+            routes, request, request_memory_value, *body_failure, request_services, tail);
+        preparation = co_await tail.prepare_or_finish(
+            response, options, routes, request_memory_value, request_services);
+    }
+    if (request_services.get_stop_token().stop_requested()) {
+        reset_stream(true);
+        co_return;
+    }
+    auto written = co_await writer.write(stream_id, response, preparation.write_plan_);
+    if (written.file_failure_ && !written.committed_status_) {
+        // Nothing of the response was sent: the stream gets the error
+        // response instead of a reset.
+        options.connection_failure_.invoke(remote_address, written.file_failure_->fault());
+        tail.disable_response_coding();
+        response = co_await routes.handle_exception(
+            request, request_memory_value, written.file_failure_->response_error(), request_services);
+        preparation = co_await tail.prepare_or_finish(
+            response, options, routes, request_memory_value, request_services);
+        written = co_await writer.write(stream_id, response, preparation.write_plan_);
+        if (written.file_failure_ && !written.committed_status_) {
+            reset_stream(false);
+        }
+    }
+    if (written.file_failure_) {
+        options.connection_failure_.invoke(remote_address, written.file_failure_->fault());
+    }
+    if (written.committed_status_) {
+        tail.record_access(options.access_log_, *written.committed_status_);
+    }
 }
 
 }  // namespace ruvia::detail

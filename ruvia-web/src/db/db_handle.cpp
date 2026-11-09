@@ -3,7 +3,6 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 
-#include "db/db_config_validation.h"
 #include "db/db_pool.h"
 #include "db/db_query_execution.h"
 #include "integration/request_io_metrics.h"

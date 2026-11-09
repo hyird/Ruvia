@@ -12,6 +12,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_tunnel.h"
@@ -57,41 +58,12 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
-std::string_view trim_ows(std::string_view text) noexcept {
-    while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
-        text.remove_prefix(1);
-    }
-    while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) {
-        text.remove_suffix(1);
-    }
-    return text;
-}
 // RFC 7838 field members: commas and semicolons inside quoted strings do not
 // delimit members. Unsupported ALPN identifiers are skipped, never downgraded.
 std::string_view take_component(std::string_view& text, char delimiter) noexcept {
-    bool quoted = false, escaped = false;
-    for (std::size_t index = 0; index < text.size(); ++index) {
-        const char value = text[index];
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (quoted && value == '\\') {
-            escaped = true;
-            continue;
-        }
-        if (value == '"') {
-            quoted = !quoted;
-            continue;
-        }
-        if (!quoted && value == delimiter) {
-            const auto result = text.substr(0, index);
-            text.remove_prefix(index + 1);
-            return trim_ows(result);
-        }
-    }
-    const auto result = trim_ows(text);
-    text = {};
+    const auto end = http_find_unquoted_delimiter(text, 0, delimiter);
+    const auto result = http_trim_ows(text.substr(0, end));
+    text.remove_prefix((std::min)(text.size(), end + 1));
     return result;
 }
 #endif
@@ -344,26 +316,32 @@ void http_client_pool::require_accepting() const {
 
 http_client_connection& http_client_pool::connection_for_request(std::size_t index) noexcept {
     auto& preferred = connection(index);
+    const auto find_connection = [this, index](auto predicate) noexcept -> http_client_connection* {
+        for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
+            auto& candidate = connection(index + offset);
+            if (predicate(candidate)) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    };
 #ifdef RUVIA_ENABLE_HTTP2
     if (preferred.protocol_ == http_client_connection::protocol_type::http2) {
         if (preferred.available_http2_request_streams() != 0) {
             return preferred;
         }
-        for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
-            auto& candidate = connection(index + offset);
-            if (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
-                candidate.available_http2_request_streams() != 0) {
-                return candidate;
-            }
+        if (auto* match = find_connection([](const http_client_connection& candidate) noexcept {
+                return candidate.protocol_ == http_client_connection::protocol_type::http2 &&
+                       candidate.available_http2_request_streams() != 0;
+            })) {
+            return *match;
         }
         // A full or draining session never blocks a request while another
         // slot can open a connection at once (Pingora: a shutting-down or
         // full HTTP/2 connection leads to a new connection).
-        for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
-            auto& candidate = connection(index + offset);
-            if (candidate.idle_unconnected()) {
-                return candidate;
-            }
+        if (auto* match = find_connection(
+                [](const http_client_connection& candidate) noexcept { return candidate.idle_unconnected(); })) {
+            return *match;
         }
         return preferred;
     }
@@ -371,25 +349,26 @@ http_client_connection& http_client_pool::connection_for_request(std::size_t ind
     if (preferred.http1_operations_ == 0) {
         return preferred;
     }
-    for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
-        auto& candidate = connection(index + offset);
-        if (candidate.connected_ && candidate.protocol_ == http_client_connection::protocol_type::http1 &&
-            candidate.http1_operations_ == 0) {
-            return candidate;
-        }
+    if (auto* match = find_connection([](const http_client_connection& candidate) noexcept {
+            if (candidate.connected_ && candidate.protocol_ == http_client_connection::protocol_type::http1 &&
+                candidate.http1_operations_ == 0) {
+                return true;
+            }
 #ifdef RUVIA_ENABLE_HTTP2
-        if (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
-            candidate.available_http2_request_streams() != 0) {
-            return candidate;
-        }
+            if (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
+                candidate.available_http2_request_streams() != 0) {
+                return true;
+            }
 #endif
+            return false;
+        })) {
+        return *match;
     }
-    for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
-        auto& candidate = connection(index + offset);
-        if (candidate.protocol_ != http_client_connection::protocol_type::http2 &&
-            candidate.http1_operations_ == 0) {
-            return candidate;
-        }
+    if (auto* match = find_connection([](const http_client_connection& candidate) noexcept {
+            return candidate.protocol_ != http_client_connection::protocol_type::http2 &&
+                   candidate.http1_operations_ == 0;
+        })) {
+        return *match;
     }
     return preferred;
 }
@@ -682,7 +661,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
             alternative_services_.clear();
             first = false;
         }
-        auto value = trim_ows(field.value());
+        auto value = http_trim_ows(field.value());
         if (value == "clear") {
             alternative_services_.clear();
             return;
@@ -691,10 +670,10 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
             auto member = take_component(value, ',');
             auto authority = take_component(member, ';');
             const auto equals = authority.find('=');
-            if (equals == std::string_view::npos || trim_ows(authority.substr(0, equals)) != "h3") {
+            if (equals == std::string_view::npos || http_trim_ows(authority.substr(0, equals)) != "h3") {
                 continue;
             }
-            authority = trim_ows(authority.substr(equals + 1));
+            authority = http_trim_ows(authority.substr(equals + 1));
             if (authority.size() < 4 || authority.front() != '"' || authority.back() != '"') {
                 continue;
             }
@@ -744,7 +723,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
                 if (separator == std::string_view::npos) {
                     continue;
                 }
-                if (!http_ascii_equals_ignore_case(trim_ows(parameter.substr(0, separator)), "ma")) {
+                if (!http_ascii_equals_ignore_case(http_trim_ows(parameter.substr(0, separator)), "ma")) {
                     continue;
                 }
                 if (age_seen) {
@@ -752,7 +731,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
                     break;
                 }
                 age_seen = true;
-                auto digits = trim_ows(parameter.substr(separator + 1));
+                auto digits = http_trim_ows(parameter.substr(separator + 1));
                 if (digits.size() >= 2 && digits.front() == '"' && digits.back() == '"') {
                     digits.remove_prefix(1);
                     digits.remove_suffix(1);
@@ -865,11 +844,7 @@ task<bool> http_client_pool::send_http3_datagram(http_client_response_state& sta
 }
 #endif
 
-task<void> http_client_pool::migrate_http3(std::string_view local_address, std::uint16_t port) {
-    return migrate_http3_owned(std::string(local_address), port);
-}
-
-task<void> http_client_pool::migrate_http3_owned(std::string local_address, std::uint16_t port) {
+task<void> http_client_pool::migrate_http3(std::string local_address, std::uint16_t port) {
 #ifdef RUVIA_ENABLE_HTTP3
     require_accepting();
     if (slots_.closing()) {

@@ -1,5 +1,3 @@
-#include "http2/http2_advertisement_frames.h"
-
 #include <algorithm>
 #include <cstring>
 #include <utility>
@@ -12,7 +10,7 @@
 #include "ruvia/http/http_request_target.h"
 
 #include "field/http_origin_payload.h"
-#include "http2/http2_local_settings.h"
+#include "http2/http2_connection.h"
 #include "util/geometric_reserve.h"
 
 namespace ruvia {
@@ -110,12 +108,13 @@ std::variant<http_origin_advertisement, error_type> decode_http_origin_advertise
 std::variant<std::pmr::vector<char>, error_type> encode_http2_origin_frame(std::span<const std::string_view> origins,
     std::uint32_t maximum, std::pmr::memory_resource* resource) {
     resource = detail::http_pmr_resource_or_default(resource);
-    const auto payload_size = detail::http2_origin_payload_size(origins, maximum);
+    const auto payload_size =
+        detail::http_origin_payload_size(origins, std::min(maximum, http2_max_frame_size));
     if (payload_size.index() != 0) {
         return std::get<1>(payload_size);
     }
     auto bytes_value = make_http2_frame(http2_frame_type::origin, 0, std::get<0>(payload_size), resource);
-    detail::http2_write_origin_payload(std::span(bytes_value).subspan(http2_frame_header_bytes), origins);
+    detail::write_http_origin_payload(std::span(bytes_value).subspan(http2_frame_header_bytes), origins);
     return bytes_value;
 }
 std::variant<http_alternative_service_advertisement, error_type> decode_http2_alternative_service(std::uint32_t stream_id,
@@ -160,13 +159,6 @@ std::variant<std::pmr::vector<char>, error_type> encode_http2_alternative_servic
     return bytes_value;
 }
 namespace detail {
-std::variant<std::size_t, error_type> http2_origin_payload_size(
-    std::span<const std::string_view> origins, std::uint32_t max_frame_size) {
-    return http_origin_payload_size(origins, std::min(max_frame_size, http2_max_frame_size));
-}
-void http2_write_origin_payload(std::span<char> payload, std::span<const std::string_view> origins) noexcept {
-    write_http_origin_payload(payload, origins);
-}
 std::variant<std::size_t, error_type> http2_alternative_service_payload_size(
     std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size) {
     if (!is_valid_alternative_service_stream(stream_id, !origin.empty())) {

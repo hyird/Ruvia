@@ -9,13 +9,12 @@
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_response_stream.h"
 
-#include "http2/http2_advertisement_frames.h"
+#include "field/http_origin_payload.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_websocket_handshake.h"
 #include "response/http_final_response_control_plan.h"
-#include "response/http_response_content_semantics.h"
 #include "response/http_response_header_state.h"
 namespace ruvia::detail {
 namespace {
@@ -449,6 +448,14 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
     return http2_submit_status::accepted;
 }
 
+http2_submit_status http2_connection::submit_extension_frame(
+    http2_frame_type type, std::uint32_t stream_id, http2_extension_payload& payload) {
+    check_nghttp2(nghttp2_submit_extension(session_.get(), static_cast<std::uint8_t>(type), NGHTTP2_FLAG_NONE,
+        static_cast<std::int32_t>(stream_id), &payload));
+    flush_session();
+    return http2_submit_status::accepted;
+}
+
 http2_submit_status http2_connection::submit_origin_advertisement(std::span<const std::string_view> origins) {
     if (role_ != http2_role::server) {
         return http2_submit_status::invalid_state;
@@ -459,22 +466,19 @@ http2_submit_status http2_connection::submit_origin_advertisement(std::span<cons
     if (!received_peer_settings_) {
         return http2_submit_status::invalid_state;
     }
-    const auto payload_size =
-        http2_origin_payload_size(origins, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
+    const auto payload_size = http_origin_payload_size(
+        origins, extension_payload_limit(peer_setting(NGHTTP2_SETTINGS_MAX_FRAME_SIZE)));
     if (payload_size.index() != 0) {
         return http2_submit_status::invalid_message;
     }
     http2_extension_payload payload{
         .size_ = std::get<0>(payload_size),
         .write_ = [](const http2_extension_payload& value, std::span<char> output) noexcept {
-            http2_write_origin_payload(output, value.origins_);
+            write_http_origin_payload(output, value.origins_);
         },
         .origins_ = origins,
     };
-    check_nghttp2(nghttp2_submit_extension(
-        session_.get(), static_cast<std::uint8_t>(http2_frame_type::origin), NGHTTP2_FLAG_NONE, 0, &payload));
-    flush_session();
-    return http2_submit_status::accepted;
+    return submit_extension_frame(http2_frame_type::origin, 0, payload);
 }
 
 http2_submit_status http2_connection::submit_alternative_service_advertisement(std::uint32_t stream_id,
@@ -506,10 +510,6 @@ http2_submit_status http2_connection::submit_alternative_service_advertisement(s
         .origin_ = origin,
         .field_value_ = field_value,
     };
-    check_nghttp2(nghttp2_submit_extension(session_.get(), static_cast<std::uint8_t>(http2_frame_type::alternative_service),
-        NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(stream_id), &payload));
-    flush_session();
-    return http2_submit_status::accepted;
+    return submit_extension_frame(http2_frame_type::alternative_service, stream_id, payload);
 }
-
 }  // namespace ruvia::detail

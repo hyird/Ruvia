@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/detail/model/model_options.h"
+#include "ruvia/web/detail/model/model_field.h"
 #include "ruvia/web/detail/model/model_schema.h"
 #include "ruvia/web/detail/model/model_storage.h"
 #include "ruvia/web/fixed_string.h"

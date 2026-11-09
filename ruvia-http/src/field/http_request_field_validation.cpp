@@ -2,6 +2,8 @@
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
@@ -9,7 +11,6 @@
 #include "ruvia/http/http_protocol_managed_fields.h"
 
 #include "coding/http_content_coding.h"
-#include "field/http_cors_fields.h"
 #include "field/http_media_type.h"
 #include "field/http_te_fields.h"
 #include "parser/http_parser_syntax.h"
@@ -17,6 +18,17 @@
 
 namespace ruvia::detail {
 namespace {
+
+[[nodiscard]] bool is_valid_http_cors_request_header_names(std::string_view value) noexcept {
+    http_field_name_list names(value);
+    bool saw_name = false;
+    while (names.next()) {
+        saw_name = true;
+    }
+    // Access-Control-Request-Headers requires at least one field name, unlike
+    // the general #field-name grammar.
+    return saw_name && names.valid();
+}
 
 // Host is a once-only field (RFC 9112 section 3.2) without a cached singleton
 // bit; its kind index is below 32 like every singleton kind.
@@ -215,5 +227,16 @@ std::optional<std::string_view> http_field_name_list::next() noexcept {
         return name;
     }
     return std::nullopt;
+}
+
+void http_request_expectations::parse_field(std::string_view value) noexcept {
+    detail::http_visit_comma_separated_quoted(value, [this](std::string_view member) noexcept {
+        if (http_ascii_equals_ignore_case(member, detail::http_continue_expectation_token)) {
+            flags_ |= continue_value;
+        } else {
+            flags_ |= unsupported;
+        }
+        return true;
+    });
 }
 }  // namespace ruvia

@@ -2,17 +2,125 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/http_field_syntax.h"
 
-#include "field/http_date.h"
+#include "server/http_date_cache.h"
+
+namespace ruvia::detail {
+
+// UTC calendar fields for an HTTP-date, or no value outside years 0000-9999
+// (the four-digit IMF-fixdate year). Civil conversion is independent of the C
+// runtime's date range and locale; in particular, Windows gmtime_s cannot
+// represent pre-1970 UTC timestamps. The range check runs before calendar
+// conversion so huge time_t values cannot overflow it.
+[[nodiscard]] std::optional<std::tm> http_utc_tm(std::time_t time) noexcept {
+    using namespace std::chrono;
+    constexpr auto first = duration_cast<seconds>(sys_days{year{0} / January / 1}.time_since_epoch()).count();
+    constexpr auto end = duration_cast<seconds>(sys_days{year{10000} / January / 1}.time_since_epoch()).count();
+    if (std::cmp_less(time, first) || std::cmp_greater_equal(time, end)) {
+        return std::nullopt;
+    }
+    const sys_seconds instant{seconds{static_cast<seconds::rep>(time)}};
+    const auto date = floor<days>(instant);
+    const year_month_day calendar{date};
+    const hh_mm_ss clock{instant - date};
+    std::tm utc{};
+    utc.tm_year = static_cast<int>(calendar.year()) - 1900;
+    utc.tm_mon = static_cast<int>(static_cast<unsigned>(calendar.month())) - 1;
+    utc.tm_mday = static_cast<int>(static_cast<unsigned>(calendar.day()));
+    utc.tm_wday = static_cast<int>(weekday{date}.c_encoding());
+    utc.tm_hour = static_cast<int>(clock.hours().count());
+    utc.tm_min = static_cast<int>(clock.minutes().count());
+    utc.tm_sec = static_cast<int>(clock.seconds().count());
+    return utc;
+}
+
+std::optional<std::time_t> http_civil_to_time_t(
+    int year, int month, int day, int hour, int minute, int second) noexcept {
+    if (year < static_cast<int>((std::chrono::year::min)()) || year > static_cast<int>((std::chrono::year::max)()) ||
+        month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
+        second < 0 || second > 60) {
+        return std::nullopt;
+    }
+    const std::chrono::year_month_day date{std::chrono::year{year}, std::chrono::month{static_cast<unsigned>(month)},
+        std::chrono::day{static_cast<unsigned>(day)}};
+    if (!date.ok()) {
+        return std::nullopt;
+    }
+    const auto days_since_epoch = static_cast<std::int64_t>(std::chrono::sys_days{date}.time_since_epoch().count());
+    const auto total = days_since_epoch * 86400 + static_cast<std::int64_t>(hour) * 3600 +
+                       static_cast<std::int64_t>(minute) * 60 + static_cast<std::int64_t>(second);
+    if (!std::in_range<std::time_t>(total)) {
+        return std::nullopt;
+    }
+    return static_cast<std::time_t>(total);
+}
+
+namespace {
+
+// "Date: <value>\r\n" -- the cache is the single owner of this wire format.
+// Both the full-line accessor (HTTP/1 text response) and the
+// value-only accessor (HPACK :date for HTTP/2) derive their views from these
+// constants, so the framing lives in exactly one place.
+inline constexpr std::string_view date_header_prefix = "Date: ";
+inline constexpr std::string_view date_header_suffix = "\r\n";
+
+struct date_cache final {
+    std::array<char, 64> line_{};
+    std::size_t size_{0};
+    std::time_t second_{};
+    bool initialized_{false};
+};
+
+[[nodiscard]] date_cache& worker_date_cache() noexcept {
+    thread_local date_cache cache;
+    return cache;
+}
+
+}  // namespace
+
+std::string_view cached_date_header() noexcept {
+    const auto now = std::time(nullptr);
+    auto& cache = worker_date_cache();
+    if (!cache.initialized_ || cache.second_ != now) {
+        cache.second_ = now;
+        cache.initialized_ = true;
+        cache.size_ = 0;
+        // RFC 9110 section 6.6.1: do not generate Date without a usable clock.
+        if (now != std::time_t{-1}) {
+            if (const auto date = format_http_date(now)) {
+                std::memcpy(cache.line_.data(), date_header_prefix.data(), date_header_prefix.size());
+                std::memcpy(cache.line_.data() + date_header_prefix.size(), date->data(), date->size());
+                cache.size_ = date_header_prefix.size() + date->size();
+                cache.line_[cache.size_++] = date_header_suffix[0];
+                cache.line_[cache.size_++] = date_header_suffix[1];
+            }
+        }
+    }
+    return std::string_view(cache.line_.data(), cache.size_);
+}
+
+std::string_view cached_date_value() noexcept {
+    const auto line = cached_date_header();
+    constexpr std::size_t framing = date_header_prefix.size() + date_header_suffix.size();
+    if (line.size() <= framing) {
+        return {};
+    }
+    return line.substr(date_header_prefix.size(), line.size() - framing);
+}
+
+}  // namespace ruvia::detail
 
 namespace ruvia {
-
 namespace {
 
 [[nodiscard]] int month_index(std::string_view value) noexcept {

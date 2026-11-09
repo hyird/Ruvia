@@ -8,7 +8,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/model/pattern/pattern_matcher.h"
+#include "ruvia/web/detail/model/pattern.h"
 #include "ruvia/web/detail/model/rule/rule_support.h"
 #include "ruvia/web/model.h"
 

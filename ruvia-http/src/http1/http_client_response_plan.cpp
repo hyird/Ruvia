@@ -7,7 +7,7 @@
 
 #include "client/http_client_response_head.h"
 #include "field/http_connection_fields.h"
-#include "response/http_response_content_semantics.h"
+#include "response/http_response_header_state.h"
 
 // Whether a parsed response head lets the exchange continue: may this 101 switch
 // protocols given what the request offered, does the body have a length, and

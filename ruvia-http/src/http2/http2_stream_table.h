@@ -10,12 +10,32 @@
 #include <vector>
 
 #include "ruvia/http/detail/util/http_pmr_object.h"
+#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http_limits.h"
 
-#include "http2/http2_local_settings.h"
 #include "http2/http2_stream_state.h"
 #include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
+
+// RFC 9113 §5.1.1: stream identifiers are 31-bit values.
+inline constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
+
+// One compile-time source of truth for every local receive constraint. These values
+// drive both the advertised SETTINGS and the matching session options and fixed
+// capacities; they are intentionally not runtime knobs that can diverge.
+struct http2_local_settings final {
+    static constexpr std::uint32_t header_table_size = 4096;
+    static constexpr std::uint32_t max_concurrent_streams = 128;
+    static constexpr std::uint32_t initial_window_size = 1024 * 1024;
+    static constexpr std::uint32_t max_frame_size = http2_default_max_frame_size;
+    static constexpr std::uint32_t max_header_list_size =
+        static_cast<std::uint32_t>(max_http_header_bytes);
+    static constexpr std::uint32_t enable_connect_protocol = 1;
+};
+
+static_assert(http2_local_settings::initial_window_size <=
+              static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()));
 
 class http2_stream_table final {
 public:

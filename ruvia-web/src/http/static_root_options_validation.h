@@ -9,7 +9,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/static_files.h"
 
-#include "http/static_file_types.h"
+#include "http/static_root_config_storage.h"
 
 namespace ruvia::detail {
 

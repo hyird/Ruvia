@@ -56,25 +56,25 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
 }
 
 void http_client_connection::schedule_http2_stream_timer(http2_stream& stream) {
-    stream.timer_.schedule(pool_.worker(), *stream.timeout_, [this, request_id = stream.request_id_]() noexcept {
-        expire_http2_stream_timer(request_id);
-    });
+    stream.timer_.schedule_with_retry(
+        pool_.worker(), stream.timeout_,
+        [this, request_id = stream.request_id_]() noexcept {
+            cancel_http2_stream(request_id, client_abort_reason::timeout);
+        },
+        [this, &stream](std::exception_ptr failure) noexcept {
+            fail_http2_stream(stream, std::move(failure), true);
+        });
 }
 
-void http_client_connection::expire_http2_stream_timer(std::uint64_t request_id) noexcept {
-    auto* stream = find_http2_request(request_id);
-    if (stream == nullptr) {
-        return;
-    }
-    stream->timer_.timer_at_.reset();
-    if (stream->timer_.expired(*stream->timeout_)) {
-        cancel_http2_stream(request_id, client_abort_reason::timeout);
-        return;
-    }
-    try {
-        schedule_http2_stream_timer(*stream);
-    } catch (...) {
-        fail_http2_stream(*stream, std::current_exception(), true);
+void http_client_connection::arm_http2_write_timer(
+    worker_timer_registration& write_timer, const http2_stream& stream) {
+    if (const auto deadline = stream.timeout_->constrained_by(pool_.config().write_timeout_).deadline()) {
+        (void)pool_.worker().schedule_timer(write_timer, *deadline,
+            [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired) {
+                    cancel_http2_stream(request_id, client_abort_reason::timeout);
+                }
+            });
     }
 }
 
@@ -717,14 +717,7 @@ task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
     // Flow-control waits are part of the write, even when no socket write
     // exists yet or the response receive half has already ended.
     worker_timer_registration write_timer;
-    if (const auto deadline = stream.timeout_->constrained_by(pool_.config().write_timeout_).deadline()) {
-        (void)pool_.worker().schedule_timer(write_timer, *deadline,
-            [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
-                    cancel_http2_stream(request_id, client_abort_reason::timeout);
-                }
-            });
-    }
+    arm_http2_write_timer(write_timer, stream);
     const auto stopped = [&stream, upload] {
         return stream.failed() || stream.retryable_ || (upload != nullptr && upload->stopped_);
     };
@@ -763,14 +756,7 @@ task<void> http_client_connection::stream_http2_upload(
         },
         [&]() -> task<bool> {
             worker_timer_registration write_timer;
-            if (const auto deadline = stream.timeout_->constrained_by(pool_.config().write_timeout_).deadline()) {
-                (void)pool_.worker().schedule_timer(write_timer, *deadline,
-                    [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
-                        if (outcome == worker_timer_outcome::expired) {
-                            cancel_http2_stream(request_id, client_abort_reason::timeout);
-                        }
-                    });
-            }
+            arm_http2_write_timer(write_timer, stream);
             http2_client_data_status finished{};
             if (request.is_tunnel()) {
                 finished = co_await http2_.send_data(stream.stream_id_, {}, http2_end_stream::end_stream, 0, stopped,

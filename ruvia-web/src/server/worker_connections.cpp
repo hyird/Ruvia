@@ -35,7 +35,7 @@
 #include "http2/http2_sans_io_session.h"
 #include "integration/worker_capabilities.h"
 #include "server/http_connection_close.h"
-#include "server/http_server_connection_guards.h"
+#include "server/http_connection_state.h"
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_contexts.h"
 #include "server/http_server_tls_handshake.h"

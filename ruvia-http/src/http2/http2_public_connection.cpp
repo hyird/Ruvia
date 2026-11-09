@@ -12,9 +12,8 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_header.h"
 
-#include "client/http_client_access.h"
+#include "client/http_client_response_head.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_request_builder.h"
 #include "http2/http2_websocket_handshake.h"
 #include "request/http_request_access.h"
 #include "websocket/websocket_server_negotiation.h"
@@ -252,7 +251,30 @@ http_request http2_request_head_event::build_request(
     if (stream == nullptr) {
         throw std::logic_error("missing HTTP/2 request stream");
     }
-    return detail::build_http2_request(*stream, resource, body);
+    const auto* pending = stream->tunnel().pending();
+    const detail::binary_request_materialization_spec spec{
+        .version_ = http_protocol_version::http2,
+        .target_form_ = http_request_target_form::http2,
+        .method_ = stream->request_method(),
+        .scheme_ = stream->request_scheme(),
+        .authority_ = stream->request_authority(),
+        .host_ = detail::http2_request_host_field(*stream),
+        .path_ = stream->request_path(),
+        .protocol_ = stream->request_protocol(),
+        .cookie_ = stream->request_cookie(),
+        .body_ = body,
+        .regular_header_count_ = stream->remote_header_count(),
+        .has_authority_ = stream->has_authority(),
+        .has_host_ = stream->has_host(),
+        .has_path_ = stream->has_path(),
+        .has_cookie_ = stream->has_cookie(),
+        .standard_connect_ = pending != nullptr && pending->form() == detail::http2_connect_form::standard,
+        .failure_message_ = "validated HTTP/2 request cannot be materialized",
+    };
+    return detail::materialize_binary_http_request(resource, spec, [stream](std::size_t index) noexcept {
+        const auto header_value = stream->remote_header_at(index);
+        return std::pair{http_header_view{header_value.name_, header_value.value_}, header_value.kind_};
+    });
 }
 void http2_connection::impl_deleter_type::operator()(detail::http2_connection_owner_endpoint* value) const noexcept {
     if (value != nullptr) {

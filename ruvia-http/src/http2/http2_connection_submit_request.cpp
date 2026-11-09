@@ -81,9 +81,9 @@ namespace {
     http_request_content_indication content_indication, std::string_view content_length_value,
     http_client_request_expectation expectation, http_request_field_source source) noexcept {
     if (!http2_is_valid_outbound_method(method, known_method) || !is_valid_uri_scheme(scheme) ||
-        (authority.has_value() && !http2_is_valid_request_authority(scheme, *authority)) ||
+        (authority.has_value() && !is_valid_binary_request_authority(scheme, *authority)) ||
         !http2_is_valid_regular_request_path(known_method, scheme, path) ||
-        (!authority.has_value() && http2_regular_request_requires_authority(scheme, path))) {
+        (!authority.has_value() && binary_regular_request_requires_authority(scheme, path))) {
         return false;
     }
     // An asterisk-form request target carries no authority information, so a direct
@@ -293,7 +293,7 @@ http2_connection::submit_extended_connect_request_head(
     http2_header_list_size section_size;
     request_field_state fields{request_field_framing::binary};
     if (!is_valid_http_header_name(protocol) || !is_valid_uri_scheme(scheme) ||
-        (websocket_value && default_port == 0) || !http2_is_valid_request_authority(scheme, authority) ||
+        (websocket_value && default_port == 0) || !is_valid_binary_request_authority(scheme, authority) ||
         !http2_is_valid_extended_connect_path(scheme, path) || !section_size.add(":method", "CONNECT") ||
         !section_size.add(":protocol", encoded_protocol) || !section_size.add(":scheme", scheme) ||
         !section_size.add(":authority", authority) || !section_size.add(":path", path) ||

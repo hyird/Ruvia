@@ -22,7 +22,6 @@
 #include "context/context_services.h"
 #include "http/static_file_variant.h"
 #include "router/compiled_route_plan.h"
-#include "router/route_entry.h"
 #include "router/route_resolution.h"
 #include "server/document_root_binding.h"
 

@@ -17,7 +17,7 @@
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/json/json_skip.h"
 #include "ruvia/web/detail/json/json_string.h"
-#include "ruvia/web/detail/model/model_binary.h"
+#include "ruvia/web/detail/model/model_text_storage.h"
 #include "ruvia/web/detail/model/parse/form_parser.h"
 #include "ruvia/web/detail/model/parse/json_writer.h"
 #include "ruvia/web/detail/model/rule/rules.h"

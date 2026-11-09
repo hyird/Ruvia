@@ -3,9 +3,11 @@
 #include <memory_resource>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http1_client_response_parser.h"
+#include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
@@ -20,6 +22,18 @@
 // body is framed and whether the connection survives.
 
 namespace ruvia::detail {
+
+struct http_client_response_head_access final {
+    [[nodiscard]] static http_client_response_head make(http_received_status status,
+        http_protocol_version protocol_version, std::pmr::memory_resource* resource) {
+        return http_client_response_head(status, protocol_version, resource);
+    }
+
+    [[nodiscard]] static std::pmr::vector<http_header>& headers(
+        http_client_response_head& head) noexcept {
+        return head.headers_;
+    }
+};
 
 struct http1_client_exchange_state_access final {
     [[nodiscard]] static constexpr http_known_method method(

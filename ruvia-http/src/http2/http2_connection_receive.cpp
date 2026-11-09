@@ -8,7 +8,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
-#include "client/http_client_access.h"
+#include "client/http_client_response_head.h"
 #include "coding/http_content_length.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_rules.h"
@@ -305,7 +305,7 @@ bool http2_connection::finish_request_head(http2_stream_state& stream) {
         if (!received_peer_settings_ ||
             stream.request_known_method() != http_known_method::connect || !stream.has_scheme() ||
             !stream.has_path() || !stream.has_authority() ||
-            !http2_is_valid_request_authority(stream.request_scheme(), stream.request_authority()) ||
+            !is_valid_binary_request_authority(stream.request_scheme(), stream.request_authority()) ||
             !http2_request_path_matches_method_and_scheme(
                 stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||
             !http2_connect_content_length_acceptable(stream)) {
@@ -331,7 +331,7 @@ bool http2_connection::finish_request_head(http2_stream_state& stream) {
             return false;
         }
     } else if (!stream.has_scheme() || !stream.has_path() ||
-               (stream.has_authority() && !http2_is_valid_request_authority(
+               (stream.has_authority() && !is_valid_binary_request_authority(
                                               stream.request_scheme(), stream.request_authority())) ||
                !http2_request_path_matches_method_and_scheme(
                    stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||

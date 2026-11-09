@@ -153,6 +153,31 @@ struct http_client_stream_timer final {
             timer_at_ = deadline;
         }
     }
+
+    template <typename timeout_source_type, typename expired_type, typename error_type>
+    void schedule_with_retry(const worker_handle& worker, const timeout_source_type& timeout_source,
+        expired_type on_expired, error_type on_error) {
+        const auto current_timeout = [&timeout_source]() noexcept -> const operation_timeout& {
+            if constexpr (std::is_pointer_v<timeout_source_type>) {
+                return *timeout_source;
+            } else {
+                return timeout_source;
+            }
+        };
+        schedule(worker, current_timeout(),
+            [this, &worker, &timeout_source, current_timeout, on_expired, on_error]() noexcept {
+                timer_at_.reset();
+                if (expired(current_timeout())) {
+                    on_expired();
+                    return;
+                }
+                try {
+                    schedule_with_retry(worker, timeout_source, on_expired, on_error);
+                } catch (...) {
+                    on_error(std::current_exception());
+                }
+            });
+    }
 };
 
 template <typename wake_fn_type, typename stop_predicate_type, typename release_fn_type,

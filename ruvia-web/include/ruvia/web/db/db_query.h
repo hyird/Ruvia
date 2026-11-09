@@ -340,8 +340,6 @@ public:
         db_binary_operator op, std::span<const t_type> values, const db_type_definition& array_type) {
         return make_array_op(lhs, op, values.size(), values.data(), [](const void* context, std::size_t index) -> db_value { return make_immediate_db_parameter(static_cast<const t_type*>(context)[index]); }, array_type);
     }
-    [[nodiscard]] static db_owned_expression make_json_keys_op(
-        const db_owned_expression& lhs, db_binary_operator op, std::span<const std::string_view> keys);
 
 private:
     using tree_deleter_type = pmr_object_deleter<db_expr_tree>;
@@ -351,6 +349,8 @@ private:
     [[nodiscard]] static db_owned_expression from_tree(tree_owner_type tree) noexcept;
     [[nodiscard]] static db_owned_expression make_variadic(
         db_node_kind kind, std::span<const db_expr> args, std::string_view function);
+    [[nodiscard]] static db_owned_expression make_two_operand_node(
+        db_node_kind kind, const db_owned_expression& lhs, const db_owned_expression& rhs);
     [[nodiscard]] std::size_t append_to_tree(db_expr_tree& target) const;
     leaf_kind kind_{leaf_kind::empty};
     bool aliased_{false};
@@ -756,49 +756,6 @@ public:
 private:
     template <typename, fixed_string>
     friend class db_field_reference;
-    friend db_expr operator+(const db_expr& lhs, const db_expr& rhs);
-    friend db_expr operator-(const db_expr& lhs, const db_expr& rhs);
-    friend db_expr operator*(const db_expr& lhs, const db_expr& rhs);
-    friend db_expr operator/(const db_expr& lhs, const db_expr& rhs);
-    friend db_expr operator%(const db_expr& lhs, const db_expr& rhs);
-    friend db_expr operator&(const db_expr& lhs, const db_expr& rhs);
-    friend db_expr operator|(const db_expr& lhs, const db_expr& rhs);
-    friend db_expr operator^(const db_expr& lhs, const db_expr& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator+(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator-(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator*(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator/(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator%(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator&(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator|(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_expr operator^(const db_expr& lhs, v_type&& rhs);
-    friend db_predicate operator==(const db_expr& lhs, const db_expr& rhs);
-    friend db_predicate operator!=(const db_expr& lhs, const db_expr& rhs);
-    friend db_predicate operator<(const db_expr& lhs, const db_expr& rhs);
-    friend db_predicate operator<=(const db_expr& lhs, const db_expr& rhs);
-    friend db_predicate operator>(const db_expr& lhs, const db_expr& rhs);
-    friend db_predicate operator>=(const db_expr& lhs, const db_expr& rhs);
-    template <detail::db_parameter v_type>
-    friend db_predicate operator==(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_predicate operator!=(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_predicate operator<(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_predicate operator<=(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_predicate operator>(const db_expr& lhs, v_type&& rhs);
-    template <detail::db_parameter v_type>
-    friend db_predicate operator>=(const db_expr& lhs, v_type&& rhs);
-
     [[nodiscard]] db_expr binary(db_binary_operator op, const db_expr& rhs) const {
         return db_expr(detail::db_owned_expression::make_binary(owned_, op, rhs.owned_));
     }
@@ -819,103 +776,102 @@ private:
 };
 
 [[nodiscard]] inline db_expr operator+(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::add, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::add, rhs.owned()));
 }
 [[nodiscard]] inline db_expr operator-(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::subtract, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::subtract, rhs.owned()));
 }
 [[nodiscard]] inline db_expr operator*(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::multiply, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::multiply, rhs.owned()));
 }
 [[nodiscard]] inline db_expr operator/(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::divide, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::divide, rhs.owned()));
 }
 [[nodiscard]] inline db_expr operator%(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::modulo, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::modulo, rhs.owned()));
 }
 [[nodiscard]] inline db_expr operator&(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::bit_and, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::bit_and, rhs.owned()));
 }
 [[nodiscard]] inline db_expr operator|(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::bit_or, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::bit_or, rhs.owned()));
 }
 [[nodiscard]] inline db_expr operator^(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.binary(db_binary_operator::bit_xor, rhs);
+    return db_expr(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::bit_xor, rhs.owned()));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator+(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::add, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs + db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator-(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::subtract, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs - db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator*(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::multiply, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs * db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator/(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::divide, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs / db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator%(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::modulo, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs % db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator&(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::bit_and, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs & db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator|(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::bit_or, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs | db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator^(const db_expr& lhs, v_type&& rhs) {
-    return lhs.binary(db_binary_operator::bit_xor, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs ^ db_expr::value(std::forward<v_type>(rhs));
 }
-
 [[nodiscard]] inline db_predicate operator==(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.compare_expr(db_binary_operator::equal, rhs);
+    return db_predicate(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::equal, rhs.owned()));
 }
 [[nodiscard]] inline db_predicate operator!=(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.compare_expr(db_binary_operator::not_equal, rhs);
+    return db_predicate(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::not_equal, rhs.owned()));
 }
 [[nodiscard]] inline db_predicate operator<(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.compare_expr(db_binary_operator::less, rhs);
+    return db_predicate(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::less, rhs.owned()));
 }
 [[nodiscard]] inline db_predicate operator<=(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.compare_expr(db_binary_operator::less_equal, rhs);
+    return db_predicate(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::less_equal, rhs.owned()));
 }
 [[nodiscard]] inline db_predicate operator>(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.compare_expr(db_binary_operator::greater, rhs);
+    return db_predicate(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::greater, rhs.owned()));
 }
 [[nodiscard]] inline db_predicate operator>=(const db_expr& lhs, const db_expr& rhs) {
-    return lhs.compare_expr(db_binary_operator::greater_equal, rhs);
+    return db_predicate(detail::db_owned_expression::make_binary(lhs.owned(), db_binary_operator::greater_equal, rhs.owned()));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_predicate operator==(const db_expr& lhs, v_type&& rhs) {
-    return lhs.compare_expr(db_binary_operator::equal, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs == db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_predicate operator!=(const db_expr& lhs, v_type&& rhs) {
-    return lhs.compare_expr(db_binary_operator::not_equal, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs != db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_predicate operator<(const db_expr& lhs, v_type&& rhs) {
-    return lhs.compare_expr(db_binary_operator::less, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs < db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_predicate operator<=(const db_expr& lhs, v_type&& rhs) {
-    return lhs.compare_expr(db_binary_operator::less_equal, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs <= db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_predicate operator>(const db_expr& lhs, v_type&& rhs) {
-    return lhs.compare_expr(db_binary_operator::greater, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs > db_expr::value(std::forward<v_type>(rhs));
 }
 template <detail::db_parameter v_type>
 [[nodiscard]] db_predicate operator>=(const db_expr& lhs, v_type&& rhs) {
-    return lhs.compare_expr(db_binary_operator::greater_equal, db_expr::value(std::forward<v_type>(rhs)));
+    return lhs >= db_expr::value(std::forward<v_type>(rhs));
 }
 
 struct db_order_term final {
@@ -1378,6 +1334,8 @@ private:
     [[nodiscard]] const detail::db_query_storage& storage() const;
     [[nodiscard]] std::size_t require_expression(db_expression expression) const;
     void require_select_query() const;
+    db_query& replace_expressions(std::pmr::vector<std::size_t>& target, std::span<const db_expression> expressions);
+    db_query& combine_clause_predicate(std::size_t& clause, db_binary_operator op, db_expression predicate);
     // Every expression builder constructs exactly its own node kind and
     // appends it here; the returned handle addresses the appended node.
     [[nodiscard]] detail::db_query_node make_node(detail::db_node_kind kind, std::span<const db_expression> args = {}) const;

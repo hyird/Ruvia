@@ -846,6 +846,9 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         const auto request_stop_token = request_stop.token();
         dispatch_services.bind_stop_token(request_stop_token);
 
+        const auto reset_dispatch_stream = [this, stream_id](bool cancelled) noexcept {
+            reset_stream(stream_id, cancelled ? http3_error_code::request_cancelled : http3_error_code::internal_error);
+        };
         bool body_failure_handled = false;
         if (reject_early_request(head)) {
             body_failure_handled = true;
@@ -940,30 +943,10 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         options.compression_ ? &*options.compression_ : nullptr, options.cors_ ? &*options.cors_ : nullptr);
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes, request, *resolved,
                         request_memory_value, dispatch_services, [stream]() noexcept { return stream->aborted(); });
-                    if (result_value.peer_aborted_before_commit() != nullptr) {
+                    if (complete_multiplexed_response_stream_dispatch(result_value,
+                            stream->body_failure().has_value(), options, remote_address_,
+                            admission.tail(), response, body_failure_handled, reset_dispatch_stream)) {
                         co_return;
-                    }
-                    if (const auto committed_status = result_value.committed_status()) {
-                        if (const auto* failed = result_value.failed_after_commit()) {
-                            const bool request_body_failed = stream->body_failure().has_value();
-                            reset_stream(stream_id, request_body_failed ? http3_error_code::request_cancelled
-                                                                        : http3_error_code::internal_error);
-                            if (!request_body_failed) {
-                                options.connection_failure_.invoke(remote_address_, failed->exception());
-                            }
-                        } else if (stream->body_failure().has_value()) {
-                            reset_stream(stream_id, http3_error_code::request_cancelled);
-                        }
-                        admission.tail().record_access(options.access_log_, *committed_status);
-                        co_return;
-                    }
-                    if (auto* route_response = result_value.route_response()) {
-                        response = std::move(*route_response).take_response();
-                    } else if (auto* recovered = result_value.recovered_failure()) {
-                        body_failure_handled = stream->body_failure().has_value();
-                        response = std::move(*recovered).take_response();
-                    } else {
-                        throw std::logic_error("response stream dispatch returned no HTTP/3 terminal alternative");
                     }
                     break;
                 }
@@ -981,44 +964,9 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             }
         }
 
-        if (const auto& body_failure = stream->body_failure(); body_failure.has_value() && !body_failure_handled) {
-            body_failure_handled = true;
-            response = co_await respond_http_request_body_failure(
-                routes, request, request_memory_value, *body_failure, request_services, admission.tail());
-        }
-        auto preparation = co_await admission.tail().prepare_or_finish(
-            response, options, routes, request_memory_value, request_services);
-        if (const auto& body_failure = stream->body_failure(); body_failure.has_value() && !body_failure_handled) {
-            response = co_await respond_http_request_body_failure(
-                routes, request, request_memory_value, *body_failure, request_services, admission.tail());
-            preparation = co_await admission.tail().prepare_or_finish(
-                response, options, routes, request_memory_value, request_services);
-        }
-        if (request_services.get_stop_token().stop_requested()) {
-            reset_stream(stream_id, http3_error_code::request_cancelled);
-            co_return;
-        }
-        auto written = co_await buffered_response_writer_.write(stream_id, response, preparation.write_plan_);
-        if (written.file_failure_ && !written.committed_status_) {
-            // Nothing of the response was sent: the stream gets the error
-            // response instead of a reset.
-            options.connection_failure_.invoke(remote_address_, written.file_failure_->fault());
-            admission.tail().disable_response_coding();
-            response = co_await routes.handle_exception(
-                request, request_memory_value, written.file_failure_->response_error(), request_services);
-            preparation = co_await admission.tail().prepare_or_finish(
-                response, options, routes, request_memory_value, request_services);
-            written = co_await buffered_response_writer_.write(stream_id, response, preparation.write_plan_);
-            if (written.file_failure_ && !written.committed_status_) {
-                reset_stream(stream_id, http3_error_code::internal_error);
-            }
-        }
-        if (written.file_failure_) {
-            options.connection_failure_.invoke(remote_address_, written.file_failure_->fault());
-        }
-        if (written.committed_status_) {
-            admission.tail().record_access(options.access_log_, *written.committed_status_);
-        }
+        co_await finish_multiplexed_buffered_response(stream_id, stream->body_failure(),
+            body_failure_handled, response, request, routes, request_memory_value, request_services,
+            options, remote_address_, admission.tail(), buffered_response_writer_, reset_dispatch_stream);
     } catch (...) {
         const auto failure = std::current_exception();
         auto* stream = find_stream(stream_id);
@@ -1087,20 +1035,17 @@ task<void> http3_session::flush() {
 
 task<void> http3_session::send_datagram() {
     // ngtcp2 names the path of every packet it writes.
-    asio::ip::udp::endpoint destination;
-    const auto& written_remote = datagram_.path_.path.remote;
-    if (written_remote.addr == nullptr || written_remote.addrlen == 0 || written_remote.addrlen > destination.capacity()) {
+    const auto destination = http3_udp_endpoint(datagram_.path_.path.remote);
+    if (!destination) {
         throw std::logic_error("QUIC output has no valid remote path");
     }
-    std::memcpy(destination.data(), written_remote.addr, written_remote.addrlen);
-    destination.resize(written_remote.addrlen);
 #if defined(_WIN32)
     // The acceptor sends it from the listener's socket; a datagram past its
     // bounded queue is lost, as UDP may lose any, and QUIC recovery resends.
-    (void)endpoint_.send(destination, datagram_.bytes_);
+    (void)endpoint_.send(*destination, datagram_.bytes_);
     co_return;
 #else
-    auto error = endpoint_.send(destination, datagram_.bytes_);
+    auto error = endpoint_.send(*destination, datagram_.bytes_);
     while (error == asio::error::would_block || error == asio::error::try_again) {
         // Only a full socket send buffer stalls the writer; the scanner's
         // write clock bounds it like a blocked TCP write.
@@ -1109,7 +1054,7 @@ task<void> http3_session::send_datagram() {
             // The socket closed: the datagram is lost, as UDP may lose any.
             co_return;
         }
-        error = endpoint_.send(destination, datagram_.bytes_);
+        error = endpoint_.send(*destination, datagram_.bytes_);
         if (!error) {
             scanner_entry_.note_write_progress();
         }
@@ -1201,12 +1146,8 @@ void http3_session::close_now() noexcept {
             http3_quic_datagram close_packet(worker_resource());
             const auto result = connection_->next_datagram(http3_max_datagram_bytes, now(), close_packet);
             if (result.status_ == http3_quic_status::accepted && !close_packet.bytes_.empty()) {
-                asio::ip::udp::endpoint destination;
-                const auto& address = close_packet.path_.path.remote;
-                if (address.addr != nullptr && address.addrlen != 0 && address.addrlen <= destination.capacity()) {
-                    std::memcpy(destination.data(), address.addr, address.addrlen);
-                    destination.resize(address.addrlen);
-                    (void)endpoint_.send(destination, close_packet.bytes_);
+                if (const auto destination = http3_udp_endpoint(close_packet.path_.path.remote)) {
+                    (void)endpoint_.send(*destination, close_packet.bytes_);
                 }
             }
         } catch (...) {

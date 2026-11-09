@@ -1,5 +1,3 @@
-#include "app/app_run_coordinator.h"
-
 #include <algorithm>
 #include <csignal>
 #include <exception>
@@ -18,7 +16,6 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/detail/controller/controller_runtime.h"
 
-#include "app/app_config_mutation.h"
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
 #include "http/static_root_index.h"

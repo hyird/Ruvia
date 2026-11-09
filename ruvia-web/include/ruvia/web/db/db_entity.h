@@ -562,28 +562,17 @@ struct db_entity_access final {
     }
     template <fixed_string name>
     static auto& emplace_relation(e_type& entity) {
-        auto& owner_value = storage(entity);
-        using owner_type = std::remove_reference_t<decltype(owner_value)>;
-        static_assert(owner_type::template is_relation<name>());
-        auto& slot = owner_value.template relation_slot<name>();
-        using relation_type = std::tuple_element_t<owner_type::template relation_index<name>(), typename e_type::relations_type>;
-        using target_type = typename relation_type::target_entity_type;
-        static_assert(!relation_type::is_collection, "emplace_relation is only valid for to-one relations");
-        std::pmr::polymorphic_allocator<target_type> allocator(entity.resource());
-        auto* value = allocator.template new_object<target_type>(entity.resource());
-        slot.value_.reset(value);
+        auto& slot = relation_slot<name, false>(entity);
+        using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
+        std::pmr::polymorphic_allocator<stored_type> allocator(entity.resource());
+        slot.value_.reset(allocator.template new_object<stored_type>(entity.resource()));
         slot.state_ = decltype(slot.state_)::value;
         return *slot.value_;
     }
 
     template <fixed_string name>
     static auto& ensure_relation_collection(e_type& entity) {
-        auto& owner_value = storage(entity);
-        using owner_type = std::remove_reference_t<decltype(owner_value)>;
-        static_assert(owner_type::template is_relation<name>());
-        auto& slot = owner_value.template relation_slot<name>();
-        using relation_type = std::tuple_element_t<owner_type::template relation_index<name>(), typename e_type::relations_type>;
-        static_assert(relation_type::is_collection, "ensure_relation_collection requires a collection relation");
+        auto& slot = relation_slot<name, true>(entity);
         if (slot.state_ != decltype(slot.state_)::value) {
             using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
             std::pmr::polymorphic_allocator<stored_type> allocator(entity.resource());
@@ -595,14 +584,24 @@ struct db_entity_access final {
 
     template <fixed_string name>
     static void set_relation_null(e_type& entity) {
+        auto& slot = relation_slot<name, false>(entity);
+        slot.reset();
+        slot.state_ = decltype(slot.state_)::null;
+    }
+
+private:
+    template <fixed_string name, bool expected_collection>
+    static auto& relation_slot(e_type& entity) noexcept {
         auto& owner_value = storage(entity);
         using owner_type = std::remove_reference_t<decltype(owner_value)>;
         static_assert(owner_type::template is_relation<name>());
         using relation_type = std::tuple_element_t<owner_type::template relation_index<name>(), typename e_type::relations_type>;
-        static_assert(!relation_type::is_collection, "a loaded collection can be empty but cannot be NULL");
-        auto& slot = owner_value.template relation_slot<name>();
-        slot.reset();
-        slot.state_ = decltype(slot.state_)::null;
+        if constexpr (expected_collection) {
+            static_assert(relation_type::is_collection, "ensure_relation_collection requires a collection relation");
+        } else {
+            static_assert(!relation_type::is_collection, "to-one relation operation is not valid on a collection relation");
+        }
+        return owner_value.template relation_slot<name>();
     }
 };
 
@@ -950,7 +949,7 @@ private:
         return to_expr().compare_expr(op, db_expr::value(json_text).cast(db_data_type::jsonb));
     }
     [[nodiscard]] db_predicate compare_json_keys(db_binary_operator op, std::span<const std::string_view> keys) const {
-        return db_predicate(detail::db_owned_expression::make_json_keys_op(to_expr().owned(), op, keys));
+        return db_predicate(detail::db_owned_expression::make_json_path_op(to_expr().owned(), op, keys));
     }
     template <typename t_type>
     db_predicate compare_array(db_binary_operator op, std::span<const t_type> values) const {

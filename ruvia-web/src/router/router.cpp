@@ -1,9 +1,14 @@
 #include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
 
@@ -178,6 +183,167 @@ detail::compiled_route_plan_ptr_type detail::compile_route_plan(std::pmr::memory
     routes_value.declare_controllers(registrars, controllers);
     configuration.apply(routes_value, resource);
     return routes_value.compile();
+}
+
+namespace {
+
+[[nodiscard]] bool same_route_pattern(std::string_view left, std::string_view right) noexcept {
+    const auto kind = [](std::string_view segment) noexcept {
+        if (segment == "*") {
+            return 2;
+        }
+        return !segment.empty() && segment.front() == ':' ? 1 : 0;
+    };
+    for (;;) {
+        std::string_view left_segment;
+        std::string_view left_rest;
+        std::string_view right_segment;
+        std::string_view right_rest;
+        const auto has_left = split_path_segment(left, left_segment, left_rest);
+        const auto has_right = split_path_segment(right, right_segment, right_rest);
+        if (!has_left || !has_right) {
+            return has_left == has_right;
+        }
+        if (kind(left_segment) != kind(right_segment) || !uri_paths_equivalent(left_segment, right_segment)) {
+            return false;
+        }
+        left = left_rest;
+        right = right_rest;
+    }
+}
+
+}  // namespace
+
+void detail::router::register_endpoint(http_known_method method, std::string_view method_token,
+    std::string_view path, route_endpoint endpoint, void* handler_target,
+    std::span<const controller_middleware_descriptor> controller_middlewares,
+    std::span<const controller_middleware_descriptor> route_middlewares) {
+    if (controller_target_ == nullptr) {
+        throw std::logic_error("routes are declared only while compiling the route plan");
+    }
+    if (handler_target != controller_target_) {
+        throw std::logic_error("route handler must be bound to the controller declaring it");
+    }
+    if (!method_token.empty()) {
+        if (!is_valid_http_method_token(method_token)) {
+            throw std::invalid_argument("extension route method must be a valid HTTP method token");
+        }
+        if (classify_http_method(method_token) != http_known_method::unknown) {
+            throw std::invalid_argument(
+                "extension route method is a known method; register it with its typed route macro");
+        }
+    }
+    validate_route_target(method, method_token, path, endpoint);
+
+    auto& routes = plan_->routes_;
+    const auto* tunnel = endpoint.tunnel();
+    auto hash = route_table::route_hash(
+        method, route_table::path_hash(tunnel == nullptr ? std::string_view(path) : tunnel->protocol()));
+    if (!method_token.empty()) {
+        hash ^= route_table::path_hash(method_token);
+    }
+    for (std::size_t i = 0; i < route_hashes_.size(); ++i) {
+        if (route_hashes_[i] != hash) {
+            continue;
+        }
+        const auto& registered = routes[i];
+        if (registered.method() != method || registered.method_token() != method_token) {
+            continue;
+        }
+        if (tunnel != nullptr) {
+            const auto* registered_tunnel = registered.endpoint().tunnel();
+            if (registered_tunnel != nullptr && registered_tunnel->protocol() == tunnel->protocol() &&
+                (tunnel->protocol().empty()
+                        ? registered.path() == path || http_authorities_equal(path, registered.path(), 0)
+                        : same_route_pattern(registered.path(), path))) {
+                throw std::invalid_argument("duplicate CONNECT route registration");
+            }
+        } else if (same_route_pattern(registered.path(), path)) {
+            throw std::invalid_argument("duplicate route registration");
+        }
+    }
+
+    const bool dynamic = (tunnel == nullptr || !tunnel->protocol().empty()) && is_dynamic_path(path);
+    const auto index = routes.size();
+    const auto max_request_body_bytes =
+        append_route_middlewares(controller_middlewares, route_middlewares);
+    routes.emplace_back(plan_->resource_,
+        route_entry::init_type{.index_ = index,
+            .controller_ = controller_slot_,
+            .method_ = method,
+            .method_token_ = method_token,
+            .path_ = path,
+            .endpoint_ = std::move(endpoint),
+            .dynamic_ = dynamic,
+            .max_request_body_bytes_ = max_request_body_bytes});
+    route_hashes_.push_back(hash);
+}
+
+void detail::router::build_static_index() {
+    auto& plan = *plan_;
+    const auto is_indexed = [](const route_entry& route) {
+        return !route.dynamic() && route_table::is_routable_method(route.method());
+    };
+    const auto route_count = static_cast<std::size_t>(std::ranges::count_if(plan.routes_, is_indexed));
+    if (route_count == 0) {
+        return;
+    }
+    if (route_count > plan.static_slots_.max_size() / 2) {
+        throw std::length_error("too many static routes");
+    }
+
+    plan.static_slots_.resize(std::bit_ceil(route_count * 2));
+    plan.static_slot_mask_ = plan.static_slots_.size() - 1;
+    for (const auto& route : plan.routes_) {
+        if (!is_indexed(route)) {
+            continue;
+        }
+        const auto hash = route_table::route_hash(route.method(), route_table::path_hash(route.path()));
+        auto slot_index = static_cast<std::size_t>(hash) & plan.static_slot_mask_;
+        while (plan.static_slots_[slot_index].route_index_ != compiled_route_plan::no_route_index) {
+            slot_index = (slot_index + 1) & plan.static_slot_mask_;
+        }
+        plan.static_slots_[slot_index] = {hash, route.index()};
+    }
+}
+
+void detail::router::build_static_method_mask() {
+    auto& plan = *plan_;
+    for (const auto& route : plan.routes_) {
+        if (route_table::is_routable_method(route.method()) && !route.dynamic()) {
+            plan.static_method_mask_ |= 1U << route_table::method_index(route.method());
+        }
+    }
+}
+
+void detail::router::build_extension_index() {
+    auto& plan = *plan_;
+    auto& indices = plan.extension_route_indices_;
+    std::ranges::sort(indices, [&plan](std::size_t left, std::size_t right) noexcept {
+        const auto order = compare_uri_paths(plan.routes_[left].path(), plan.routes_[right].path());
+        return order != 0 ? order < 0 : left < right;
+    });
+    plan.extension_methods_.reserve(indices.size());
+    for (std::size_t first = 0; first < indices.size();) {
+        const auto path = plan.routes_[indices[first]].path();
+        const auto offset = plan.extension_methods_.size();
+        auto last = first;
+        do {
+            plan.extension_methods_.push_back(plan.routes_[indices[last]].method_token());
+            ++last;
+        } while (last < indices.size() && uri_paths_equivalent(plan.routes_[indices[last]].path(), path));
+        plan.extension_paths_.push_back({.path_ = path,
+            .methods_ = std::span<const std::string_view>(plan.extension_methods_).subspan(offset)});
+        first = last;
+    }
+    std::ranges::sort(indices, [&plan](std::size_t left, std::size_t right) noexcept {
+        const auto& left_route = plan.routes_[left];
+        const auto& right_route = plan.routes_[right];
+        if (left_route.method_token() != right_route.method_token()) {
+            return left_route.method_token() < right_route.method_token();
+        }
+        return compare_uri_paths(left_route.path(), right_route.path()) < 0;
+    });
 }
 
 }  // namespace ruvia

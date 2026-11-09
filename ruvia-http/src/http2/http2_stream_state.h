@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -10,32 +13,713 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_priority.h"
+#include "ruvia/http/http_status.h"
 
-#include "http2/http2_local_content_state.h"
-#include "http2/http2_local_send_state.h"
-#include "http2/http2_remote_content_state.h"
-#include "http2/http2_remote_receive_state.h"
-#include "http2/http2_stream_request_fields.h"
-#include "http2/http2_stream_request_state.h"
+#include "field/http_request_field_validation.h"
+#include "http2/http2_header_list.h"
+#include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
+class http2_stream_state;
+
+// Local HTTP message content accounting is distinct from the peer-body accounting
+// stored on the same bidirectional stream. In particular, a server receives request
+// content while independently producing response content.
+class http2_local_content_known_length final {
+public:
+    [[nodiscard]] constexpr std::uint64_t declared_length() const noexcept {
+        return declared_length_;
+    }
+
+private:
+    friend class http2_local_content_state;
+
+    explicit constexpr http2_local_content_known_length(std::uint64_t declared_length) noexcept
+        : declared_length_(declared_length) {}
+
+    std::uint64_t declared_length_;
+};
+
+enum class http2_local_content_check : std::uint8_t {
+    accepted,
+    not_started,
+    forbidden,
+    length_exceeded,
+    length_incomplete
+};
+
+class http2_local_content_state final {
+    enum class phase_type : std::uint8_t { unset,
+        forbidden,
+        unbounded };
+
+public:
+    constexpr http2_local_content_state() noexcept = default;
+
+    void begin_forbidden() noexcept {
+        reset(content_type(phase_type::forbidden));
+    }
+
+    void begin_unbounded() noexcept {
+        reset(content_type(phase_type::unbounded));
+    }
+
+    void begin_known_length(std::uint64_t length) noexcept {
+        reset(content_type(http2_local_content_known_length(length)));
+    }
+
+    [[nodiscard]] constexpr const void* unset() const& noexcept {
+        return has_phase(phase_type::unset) ? this : nullptr;
+    }
+    const void* unset() const&& = delete;
+
+    [[nodiscard]] constexpr const void* forbidden() const& noexcept {
+        return has_phase(phase_type::forbidden) ? this : nullptr;
+    }
+    const void* forbidden() const&& = delete;
+
+    [[nodiscard]] constexpr const void* unbounded() const& noexcept {
+        return has_phase(phase_type::unbounded) ? this : nullptr;
+    }
+    const void* unbounded() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_local_content_known_length* known_length() const& noexcept {
+        return std::get_if<http2_local_content_known_length>(&content_);
+    }
+    const http2_local_content_known_length* known_length() const&& = delete;
+
+    // Transactional preflight for one submit_data input. No counters change here.
+    // A terminal known-length submission must complete the declared length exactly;
+    // callers can retry a rejected input with a corrected terminal flag or size.
+    [[nodiscard]] http2_local_content_check check_accept(
+        std::size_t bytes_value, bool terminal) const noexcept {
+        if (unset() != nullptr) {
+            return http2_local_content_check::not_started;
+        }
+        if (forbidden() != nullptr) {
+            return http2_local_content_check::forbidden;
+        }
+
+        const auto amount = static_cast<std::uint64_t>(bytes_value);
+        if (amount > std::numeric_limits<std::uint64_t>::max() - accepted_bytes_) {
+            return http2_local_content_check::length_exceeded;
+        }
+        const auto* known_length_content = known_length();
+        if (known_length_content == nullptr) {
+            return http2_local_content_check::accepted;
+        }
+        const auto declared_length = known_length_content->declared_length();
+        if (accepted_bytes_ > declared_length || amount > declared_length - accepted_bytes_) {
+            return http2_local_content_check::length_exceeded;
+        }
+        if (terminal && accepted_bytes_ + amount != declared_length) {
+            return http2_local_content_check::length_incomplete;
+        }
+        return http2_local_content_check::accepted;
+    }
+
+    void commit(std::size_t bytes_value) noexcept {
+        accepted_bytes_ += static_cast<std::uint64_t>(bytes_value);
+    }
+
+    [[nodiscard]] bool length_complete() const noexcept {
+        if (unset() != nullptr) {
+            return false;
+        }
+        const auto* known_length_content = known_length();
+        return known_length_content == nullptr ||
+               accepted_bytes_ == known_length_content->declared_length();
+    }
+
+private:
+    using content_type = std::variant<phase_type, http2_local_content_known_length>;
+
+    [[nodiscard]] constexpr bool has_phase(phase_type phase) const noexcept {
+        const auto* current = std::get_if<phase_type>(&content_);
+        return current != nullptr && *current == phase;
+    }
+
+    void reset(content_type content) noexcept {
+        content_ = content;
+        accepted_bytes_ = 0;
+    }
+
+    content_type content_{phase_type::unset};
+    std::uint64_t accepted_bytes_{0};
+};
+
+// Only abnormal whole-stream termination owns a close source. This covers a local
+// or peer RST_STREAM as well as a GOAWAY last-stream-id exclusion; GOAWAY is not a
+// reset, so naming this alternative after RST_STREAM would be protocol-inaccurate.
+// Open and normally ended states cannot expose a close source.
+class http2_stream_aborted final {
+public:
+    [[nodiscard]] constexpr http2_stream_close_source source() const noexcept {
+        return source_;
+    }
+
+private:
+    friend class http2_local_send_state;
+
+    explicit constexpr http2_stream_aborted(http2_stream_close_source source_value) noexcept
+        : source_(source_value) {}
+
+    http2_stream_close_source source_;
+};
+
+// Local frame permission is one exclusive protocol state. Request content,
+// response content and tunnel DATA are deliberately distinct, so a separate
+// message-kind enum cannot contradict the active phase.
+class http2_local_send_state final {
+    enum class phase_type : std::uint8_t {
+        head_pending,
+        request_content_open,
+        response_content_open,
+        connect_pending,
+        tunnel_open,
+        end_stream_committed,
+    };
+    friend class http2_stream_state;
+
+    constexpr http2_local_send_state() noexcept = default;
+
+    [[nodiscard]] bool begin_request_content() noexcept {
+        if (head_pending() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::request_content_open;
+        return true;
+    }
+
+    [[nodiscard]] bool begin_response_content() noexcept {
+        if (head_pending() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::response_content_open;
+        return true;
+    }
+
+    [[nodiscard]] bool begin_connect_request() noexcept {
+        if (head_pending() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::connect_pending;
+        return true;
+    }
+
+    // A client opens from connect-pending after a peer 2xx; a server opens from
+    // head-pending when it submits that 2xx. The owning stream validates the
+    // separate CONNECT semantic state before calling this transition.
+    [[nodiscard]] bool open_tunnel() noexcept {
+        if (head_pending() == nullptr && connect_pending() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::tunnel_open;
+        return true;
+    }
+
+    [[nodiscard]] bool commit_head_end_stream() noexcept {
+        if (head_pending() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::end_stream_committed;
+        return true;
+    }
+
+    [[nodiscard]] bool reject_connect() noexcept {
+        if (connect_pending() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::end_stream_committed;
+        return true;
+    }
+
+    [[nodiscard]] bool commit_end_stream() noexcept {
+        if (!content_open()) {
+            return false;
+        }
+        state_ = phase_type::end_stream_committed;
+        return true;
+    }
+
+    [[nodiscard]] bool abort(http2_stream_close_source source_value) noexcept {
+        if (!http2_is_valid_stream_close_source(source_value) || aborted() != nullptr) {
+            return false;
+        }
+        state_ = http2_stream_aborted(source_value);
+        return true;
+    }
+
+public:
+    [[nodiscard]] constexpr const void* head_pending() const& noexcept {
+        return has_phase(phase_type::head_pending) ? this : nullptr;
+    }
+    const void* head_pending() const&& = delete;
+
+    [[nodiscard]] constexpr const void* request_content_open() const& noexcept {
+        return has_phase(phase_type::request_content_open) ? this : nullptr;
+    }
+    const void* request_content_open() const&& = delete;
+
+    [[nodiscard]] constexpr const void* response_content_open() const& noexcept {
+        return has_phase(phase_type::response_content_open) ? this : nullptr;
+    }
+    const void* response_content_open() const&& = delete;
+
+    [[nodiscard]] constexpr const void* connect_pending() const& noexcept {
+        return has_phase(phase_type::connect_pending) ? this : nullptr;
+    }
+    const void* connect_pending() const&& = delete;
+
+    [[nodiscard]] constexpr const void* tunnel_open() const& noexcept {
+        return has_phase(phase_type::tunnel_open) ? this : nullptr;
+    }
+    const void* tunnel_open() const&& = delete;
+
+    [[nodiscard]] constexpr const void* end_stream_committed() const& noexcept {
+        return has_phase(phase_type::end_stream_committed) ? this : nullptr;
+    }
+    const void* end_stream_committed() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_stream_aborted* aborted() const& noexcept {
+        return std::get_if<http2_stream_aborted>(&state_);
+    }
+    const http2_stream_aborted* aborted() const&& = delete;
+
+private:
+    [[nodiscard]] constexpr bool has_phase(phase_type phase) const noexcept {
+        const auto* current = std::get_if<phase_type>(&state_);
+        return current != nullptr && *current == phase;
+    }
+
+    [[nodiscard]] bool content_open() const noexcept {
+        return request_content_open() != nullptr || response_content_open() != nullptr || tunnel_open() != nullptr;
+    }
+
+    std::variant<phase_type, http2_stream_aborted> state_{phase_type::head_pending};
+};
+
+class http2_remote_content_allowed_without_length final {
+public:
+    [[nodiscard]] constexpr std::size_t received_bytes() const noexcept {
+        return received_bytes_;
+    }
+
+private:
+    friend class http2_remote_content_state;
+
+    explicit constexpr http2_remote_content_allowed_without_length(
+        std::size_t received_bytes = 0) noexcept
+        : received_bytes_(received_bytes) {}
+
+    std::size_t received_bytes_{0};
+};
+
+class http2_remote_content_allowed_known_length final {
+public:
+    [[nodiscard]] constexpr std::size_t declared_length() const noexcept {
+        return declared_length_;
+    }
+
+    [[nodiscard]] constexpr std::size_t received_bytes() const noexcept {
+        return received_bytes_;
+    }
+
+private:
+    friend class http2_remote_content_state;
+
+    explicit constexpr http2_remote_content_allowed_known_length(
+        std::size_t declared_length, std::size_t received_bytes = 0) noexcept
+        : declared_length_(declared_length),
+          received_bytes_(received_bytes) {}
+
+    std::size_t declared_length_;
+    std::size_t received_bytes_{0};
+};
+
+class http2_remote_content_metadata_only_known_length final {
+public:
+    [[nodiscard]] constexpr std::size_t declared_length() const noexcept {
+        return declared_length_;
+    }
+
+private:
+    friend class http2_remote_content_state;
+
+    explicit constexpr http2_remote_content_metadata_only_known_length(
+        std::size_t declared_length) noexcept
+        : declared_length_(declared_length) {}
+
+    std::size_t declared_length_;
+};
+
+enum class http2_remote_content_accounting_result : std::uint8_t {
+    accepted,
+    counter_overflow,
+    declared_length_exceeded,
+    content_forbidden
+};
+
+// Content allowance, Content-Length ownership, and received-byte accounting are
+// one exclusive state. HEAD/204/304 responses retain representation length
+// metadata but cannot accidentally accept DATA as message content. account() is
+// the only byte mutation: a rejected input leaves the active alternative intact.
+class http2_remote_content_state final {
+public:
+    constexpr http2_remote_content_state() noexcept = default;
+
+    [[nodiscard]] bool declare_known_length(std::size_t length) noexcept {
+        if (const auto* known = allowed_known_length(); known != nullptr) {
+            return known->declared_length() == length;
+        }
+        if (const auto* known = metadata_only_known_length(); known != nullptr) {
+            return known->declared_length() == length;
+        }
+        if (const auto* allowed = allowed_without_length(); allowed != nullptr) {
+            if (allowed->received_bytes() != 0) {
+                return false;
+            }
+            state_ = http2_remote_content_allowed_known_length(length);
+            return true;
+        }
+        if (metadata_only_without_length() != nullptr) {
+            state_ = http2_remote_content_metadata_only_known_length(length);
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool select_metadata_only() noexcept {
+        if (metadata_only_without_length() != nullptr || metadata_only_known_length() != nullptr) {
+            return true;
+        }
+        if (const auto* allowed = allowed_without_length(); allowed != nullptr) {
+            if (allowed->received_bytes() != 0) {
+                return false;
+            }
+            state_ = std::monostate{};
+            return true;
+        }
+        if (const auto* allowed = allowed_known_length(); allowed != nullptr) {
+            if (allowed->received_bytes() != 0) {
+                return false;
+            }
+            state_ = http2_remote_content_metadata_only_known_length(allowed->declared_length());
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] http2_remote_content_accounting_result account(std::size_t bytes_value) noexcept {
+        if (auto* allowed = std::get_if<http2_remote_content_allowed_without_length>(&state_);
+            allowed != nullptr) {
+            if (bytes_value > std::numeric_limits<std::size_t>::max() - allowed->received_bytes_) {
+                return http2_remote_content_accounting_result::counter_overflow;
+            }
+            allowed->received_bytes_ += bytes_value;
+            return http2_remote_content_accounting_result::accepted;
+        }
+        if (auto* allowed = std::get_if<http2_remote_content_allowed_known_length>(&state_);
+            allowed != nullptr) {
+            if (bytes_value > std::numeric_limits<std::size_t>::max() - allowed->received_bytes_) {
+                return http2_remote_content_accounting_result::counter_overflow;
+            }
+            if (allowed->received_bytes_ > allowed->declared_length_ ||
+                bytes_value > allowed->declared_length_ - allowed->received_bytes_) {
+                return http2_remote_content_accounting_result::declared_length_exceeded;
+            }
+            allowed->received_bytes_ += bytes_value;
+            return http2_remote_content_accounting_result::accepted;
+        }
+        return bytes_value == 0 ? http2_remote_content_accounting_result::accepted
+                                : http2_remote_content_accounting_result::content_forbidden;
+    }
+
+    [[nodiscard]] constexpr const http2_remote_content_allowed_without_length* allowed_without_length()
+        const& noexcept {
+        return std::get_if<http2_remote_content_allowed_without_length>(&state_);
+    }
+    const http2_remote_content_allowed_without_length* allowed_without_length() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_remote_content_allowed_known_length* allowed_known_length()
+        const& noexcept {
+        return std::get_if<http2_remote_content_allowed_known_length>(&state_);
+    }
+    const http2_remote_content_allowed_known_length* allowed_known_length() const&& = delete;
+
+    [[nodiscard]] constexpr const void* metadata_only_without_length() const& noexcept {
+        return std::holds_alternative<std::monostate>(state_) ? this : nullptr;
+    }
+    const void* metadata_only_without_length() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_remote_content_metadata_only_known_length*
+    metadata_only_known_length() const& noexcept {
+        return std::get_if<http2_remote_content_metadata_only_known_length>(&state_);
+    }
+    const http2_remote_content_metadata_only_known_length* metadata_only_known_length() const&& = delete;
+
+    [[nodiscard]] bool terminal_length_valid() const noexcept {
+        const auto* known = allowed_known_length();
+        return known == nullptr || known->received_bytes() == known->declared_length();
+    }
+
+private:
+    std::variant<http2_remote_content_allowed_without_length, http2_remote_content_allowed_known_length,
+        std::monostate, http2_remote_content_metadata_only_known_length>
+        state_{http2_remote_content_allowed_without_length()};
+};
+
+// A server decoded CONNECT without END_STREAM and has not accepted or rejected it.
+// DATA is forbidden until that decision selects tunnel or rejection semantics.
+class http2_remote_connect_pending final {
+public:
+    [[nodiscard]] constexpr bool saw_tunnel_data() const noexcept {
+        return saw_tunnel_data_;
+    }
+
+private:
+    friend class http2_remote_receive_state;
+
+    constexpr http2_remote_connect_pending() noexcept = default;
+
+    constexpr void mark_tunnel_data() noexcept {
+        saw_tunnel_data_ = true;
+    }
+
+    bool saw_tunnel_data_{false};
+};
+
+// A server decoded CONNECT and then observed END_STREAM on its HEADERS or on a
+// DATA frame. The peer send half is closed while the application still owns the
+// accept/reject decision.
+class http2_remote_connect_pending_end_stream final {
+public:
+    [[nodiscard]] constexpr bool ended_without_tunnel_data() const noexcept {
+        return ended_without_tunnel_data_;
+    }
+
+private:
+    friend class http2_remote_receive_state;
+
+    explicit constexpr http2_remote_connect_pending_end_stream(bool ended_without_tunnel_data) noexcept
+        : ended_without_tunnel_data_(ended_without_tunnel_data) {}
+
+    bool ended_without_tunnel_data_{false};
+};
+
+// Remote frame permission and peer-half lifecycle are one exclusive protocol state.
+// In particular, HTTP CONNECT content completion is not conflated with END_STREAM:
+// an accepted tunnel can keep receiving DATA and replenishing its stream window, while
+// a pending/rejected CONNECT accepts empty framing DATA until the peer sends END_STREAM.
+class http2_remote_receive_state final {
+    enum class phase_type : std::uint8_t {
+        head_pending,
+        head_end_stream_pending,
+        content_open,
+        connect_rejected_awaiting_end_stream,
+        tunnel_open,
+        end_stream,
+        aborted,
+    };
+    friend class http2_stream_state;
+
+    constexpr http2_remote_receive_state() noexcept = default;
+
+    [[nodiscard]] bool record_head_end_stream() noexcept {
+        if (head_pending() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::head_end_stream_pending;
+        return true;
+    }
+
+    [[nodiscard]] bool finalize_content_head() noexcept {
+        if (head_pending() != nullptr) {
+            state_ = phase_type::content_open;
+            return true;
+        }
+        if (head_end_stream_pending() != nullptr) {
+            state_ = phase_type::end_stream;
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool finalize_connect_head() noexcept {
+        if (head_pending() != nullptr) {
+            state_ = http2_remote_connect_pending();
+            return true;
+        }
+        if (head_end_stream_pending() != nullptr) {
+            state_ = http2_remote_connect_pending_end_stream(true);
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool can_accept_connect() const noexcept {
+        return head_pending() != nullptr || head_end_stream_pending() != nullptr ||
+               connect_pending() != nullptr || connect_pending_end_stream() != nullptr;
+    }
+
+    [[nodiscard]] bool accept_connect() noexcept {
+        if (head_pending() != nullptr || connect_pending() != nullptr) {
+            state_ = phase_type::tunnel_open;
+            return true;
+        }
+        if (head_end_stream_pending() != nullptr || connect_pending_end_stream() != nullptr) {
+            state_ = phase_type::end_stream;
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool can_reject_connect() const noexcept {
+        return can_accept_connect();
+    }
+
+    [[nodiscard]] bool reject_connect() noexcept {
+        // Client role: a non-2xx CONNECT response resumes ordinary response-content
+        // semantics. Server role: a rejected CONNECT request has no content, but its
+        // peer send half can remain open until an empty DATA(END_STREAM) arrives.
+        if (head_pending() != nullptr) {
+            state_ = phase_type::content_open;
+            return true;
+        }
+        if (head_end_stream_pending() != nullptr || connect_pending_end_stream() != nullptr) {
+            state_ = phase_type::end_stream;
+            return true;
+        }
+        if (connect_pending() != nullptr) {
+            state_ = phase_type::connect_rejected_awaiting_end_stream;
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool finish_content() noexcept {
+        if (content_open() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::end_stream;
+        return true;
+    }
+
+    // RFC 8441 section 5 / RFC 6455 section 4.1: whether the peer half-closed
+    // without ever sending tunnel data depends on the whole pending phase, not
+    // on how the octets were split across DATA frames.
+    [[nodiscard]] bool mark_connect_tunnel_data() noexcept {
+        auto* pending = std::get_if<http2_remote_connect_pending>(&state_);
+        if (pending == nullptr) {
+            return false;
+        }
+        pending->mark_tunnel_data();
+        return true;
+    }
+
+    [[nodiscard]] bool finish_pending_connect() noexcept {
+        auto* pending = std::get_if<http2_remote_connect_pending>(&state_);
+        if (pending == nullptr) {
+            return false;
+        }
+        state_ = http2_remote_connect_pending_end_stream(!pending->saw_tunnel_data());
+        return true;
+    }
+
+    [[nodiscard]] bool finish_tunnel() noexcept {
+        if (tunnel_open() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::end_stream;
+        return true;
+    }
+
+    [[nodiscard]] bool finish_rejected_connect() noexcept {
+        if (connect_rejected_awaiting_end_stream() == nullptr) {
+            return false;
+        }
+        state_ = phase_type::end_stream;
+        return true;
+    }
+
+    [[nodiscard]] bool abort() noexcept {
+        if (aborted() != nullptr) {
+            return false;
+        }
+        state_ = phase_type::aborted;
+        return true;
+    }
+
+public:
+    [[nodiscard]] constexpr const void* head_pending() const& noexcept {
+        return has_phase(phase_type::head_pending) ? this : nullptr;
+    }
+    const void* head_pending() const&& = delete;
+
+    [[nodiscard]] constexpr const void* head_end_stream_pending() const& noexcept {
+        return has_phase(phase_type::head_end_stream_pending) ? this : nullptr;
+    }
+    const void* head_end_stream_pending() const&& = delete;
+
+    [[nodiscard]] constexpr const void* content_open() const& noexcept {
+        return has_phase(phase_type::content_open) ? this : nullptr;
+    }
+    const void* content_open() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_remote_connect_pending* connect_pending() const& noexcept {
+        return std::get_if<http2_remote_connect_pending>(&state_);
+    }
+    const http2_remote_connect_pending* connect_pending() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_remote_connect_pending_end_stream* connect_pending_end_stream()
+        const& noexcept {
+        return std::get_if<http2_remote_connect_pending_end_stream>(&state_);
+    }
+    const http2_remote_connect_pending_end_stream* connect_pending_end_stream() const&& = delete;
+
+    [[nodiscard]] constexpr const void* connect_rejected_awaiting_end_stream() const& noexcept {
+        return has_phase(phase_type::connect_rejected_awaiting_end_stream) ? this : nullptr;
+    }
+    const void* connect_rejected_awaiting_end_stream() const&& = delete;
+
+    [[nodiscard]] constexpr const void* tunnel_open() const& noexcept {
+        return has_phase(phase_type::tunnel_open) ? this : nullptr;
+    }
+    const void* tunnel_open() const&& = delete;
+
+    [[nodiscard]] constexpr const void* end_stream() const& noexcept {
+        return has_phase(phase_type::end_stream) ? this : nullptr;
+    }
+    const void* end_stream() const&& = delete;
+
+    [[nodiscard]] constexpr const void* aborted() const& noexcept {
+        return has_phase(phase_type::aborted) ? this : nullptr;
+    }
+    const void* aborted() const&& = delete;
+
+private:
+    [[nodiscard]] constexpr bool has_phase(phase_type phase) const noexcept {
+        const auto* current = std::get_if<phase_type>(&state_);
+        return current != nullptr && *current == phase;
+    }
+
+    std::variant<phase_type, http2_remote_connect_pending, http2_remote_connect_pending_end_stream>
+        state_{phase_type::head_pending};
+};
+
 enum class http2_connect_form : std::uint8_t { standard,
     extended };
-
-class http2_tunnel_state;
-
-class http2_not_connect final {
-private:
-    friend class http2_tunnel_state;
-
-    constexpr http2_not_connect() noexcept = default;
-};
 
 // The CONNECT form matters while validating/dispatching the request and choosing
 // its dedicated acceptance path. After a final response, :protocol on the retained
@@ -57,32 +741,21 @@ private:
     http2_connect_form form_;
 };
 
-class http2_tunnel_open final {
-private:
-    friend class http2_tunnel_state;
-
-    constexpr http2_tunnel_open() noexcept = default;
-};
-
-class http2_connect_rejected final {
-private:
-    friend class http2_tunnel_state;
-
-    constexpr http2_connect_rejected() noexcept = default;
-};
-
 // CONNECT is exactly one of four protocol phases.
 class http2_tunnel_state final {
+    enum class phase_type : std::uint8_t { not_connect,
+        open,
+        rejected };
+
 public:
-    constexpr http2_tunnel_state() noexcept
-        : state_(http2_not_connect()) {}
+    constexpr http2_tunnel_state() noexcept = default;
 
     [[nodiscard]] bool begin(http2_connect_form form) noexcept {
         if ((form != http2_connect_form::standard && form != http2_connect_form::extended) ||
             not_connect() == nullptr) {
             return false;
         }
-        state_ = state_type(http2_connect_pending(form));
+        state_ = http2_connect_pending(form);
         return true;
     }
 
@@ -90,7 +763,7 @@ public:
         if (pending() == nullptr) {
             return false;
         }
-        state_ = state_type(http2_tunnel_open());
+        state_ = phase_type::open;
         return true;
     }
 
@@ -98,36 +771,39 @@ public:
         if (pending() == nullptr) {
             return false;
         }
-        state_ = state_type(http2_connect_rejected());
+        state_ = phase_type::rejected;
         return true;
     }
 
-    [[nodiscard]] constexpr const http2_not_connect* not_connect() const& noexcept {
-        return std::get_if<http2_not_connect>(&state_);
+    [[nodiscard]] constexpr const void* not_connect() const& noexcept {
+        return has_phase(phase_type::not_connect) ? this : nullptr;
     }
-    [[nodiscard]] constexpr const http2_not_connect* not_connect() const&& = delete;
+    const void* not_connect() const&& = delete;
 
     [[nodiscard]] constexpr const http2_connect_pending* pending() const& noexcept {
         return std::get_if<http2_connect_pending>(&state_);
     }
-    [[nodiscard]] constexpr const http2_connect_pending* pending() const&& = delete;
+    const http2_connect_pending* pending() const&& = delete;
 
-    [[nodiscard]] constexpr const http2_tunnel_open* open() const& noexcept {
-        return std::get_if<http2_tunnel_open>(&state_);
+    [[nodiscard]] constexpr const void* open() const& noexcept {
+        return has_phase(phase_type::open) ? this : nullptr;
     }
-    [[nodiscard]] constexpr const http2_tunnel_open* open() const&& = delete;
+    const void* open() const&& = delete;
 
-    [[nodiscard]] constexpr const http2_connect_rejected* rejected() const& noexcept {
-        return std::get_if<http2_connect_rejected>(&state_);
+    [[nodiscard]] constexpr const void* rejected() const& noexcept {
+        return has_phase(phase_type::rejected) ? this : nullptr;
     }
-    [[nodiscard]] constexpr const http2_connect_rejected* rejected() const&& = delete;
+    const void* rejected() const&& = delete;
 
 private:
-    using state_type =
-        std::variant<http2_not_connect, http2_connect_pending, http2_tunnel_open, http2_connect_rejected>;
+    [[nodiscard]] constexpr bool has_phase(phase_type phase) const noexcept {
+        const auto* current = std::get_if<phase_type>(&state_);
+        return current != nullptr && *current == phase;
+    }
 
-    state_type state_;
+    std::variant<phase_type, http2_connect_pending> state_{phase_type::not_connect};
 };
+
 enum class http2_local_request_content_gate : std::uint8_t {
     open,
     awaiting_continue,
@@ -151,25 +827,55 @@ class http2_stream_state final {
     http2_remote_receive_state remote_receive_;
     bool peer_concurrency_slot_held_{false};
     http_request_expectations expectations_;
-    http2_stream_request_state request_state_;
+    std::array<http2_request_pseudo_header, 5> pseudo_header_order_{};
+    std::uint8_t pseudo_header_count_{0};
+    bool has_protocol_ : 1 {false};
+    bool has_scheme_ : 1 {false};
+    bool has_authority_ : 1 {false};
+    bool has_path_ : 1 {false};
+    bool has_host_ : 1 {false};
+    bool has_cookie_ : 1 {false};
+    bool regular_header_seen_ : 1 {false};
+    bool has_informational_response_ : 1 {false};
+    std::uint16_t scheme_default_port_{0};
+    std::uint16_t host_header_index_{0};
+    std::optional<http_received_status> response_status_;
+    std::optional<http_priority_fields> priority_update_;
     http2_tunnel_state tunnel_state_;
     // Received DATA bytes delivered to the owner and not yet acknowledged.
     std::uint32_t window_debt_{0};
-    http2_stream_request_fields message_data_;
+    std::pmr::string method_;
+    http_known_method known_method_{http_known_method::unknown};
+    std::pmr::string scheme_;
+    std::pmr::string authority_;
+    std::pmr::string path_;
+    std::pmr::string protocol_;
+    std::pmr::string cookie_;
+    http2_header_list headers_;
+    std::pmr::vector<http_header> trailers_;
     http2_local_request_content_gate local_request_content_gate_{http2_local_request_content_gate::open};
     bool pinned_{false};
     std::size_t pending_events_{0};
 
+    http2_stream_state(std::uint32_t stream_id, http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
+        : id_(stream_id),
+          method_("", resource),
+          scheme_("", resource),
+          authority_("", resource),
+          path_("", resource),
+          protocol_("", resource),
+          cookie_("", resource),
+          headers_(resource),
+          trailers_(0, http_header({}, {}, resource), resource) {}
+
 public:
     explicit http2_stream_state(std::uint32_t stream_id, std::pmr::memory_resource* resource)
-        : id_(stream_id),
-          message_data_(resource) {}
+        : http2_stream_state(stream_id, http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {}
 
     http2_stream_state(const http2_stream_state&) = delete;
     http2_stream_state& operator=(const http2_stream_state&) = delete;
     http2_stream_state(http2_stream_state&&) = delete;
     http2_stream_state& operator=(http2_stream_state&&) = delete;
-
     void reserve_push(http2_push_reservation reservation) noexcept {
         push_reservation_ = reservation;
     }
@@ -446,90 +1152,109 @@ public:
     }
 
     void record_request_pseudo_header(http2_request_pseudo_header header) noexcept {
-        request_state_.record_pseudo_header(header);
+        assert(pseudo_header_count_ < pseudo_header_order_.size());
+        pseudo_header_order_[pseudo_header_count_++] = header;
     }
 
     [[nodiscard]] std::span<const http2_request_pseudo_header> request_pseudo_header_order() const& noexcept {
-        return request_state_.pseudo_header_order();
+        return {pseudo_header_order_.data(), pseudo_header_count_};
     }
-    [[nodiscard]] std::span<const http2_request_pseudo_header> request_pseudo_header_order() const&& = delete;
+    std::span<const http2_request_pseudo_header> request_pseudo_header_order() const&& = delete;
 
     [[nodiscard]] std::string_view request_method() const& noexcept {
-        return message_data_.method();
+        return known_method_ != http_known_method::unknown
+                   ? known_http_method_token(known_method_)
+                   : std::string_view(method_);
     }
-    [[nodiscard]] std::string_view request_method() const&& = delete;
+    std::string_view request_method() const&& = delete;
 
     [[nodiscard]] http_known_method request_known_method() const noexcept {
-        return message_data_.known_method();
+        return known_method_;
     }
 
     void assign_request_method(std::string_view method) {
-        message_data_.assign_method(method);
+        const auto known = classify_http_method(method);
+        if (known != http_known_method::unknown) {
+            method_.clear();
+            known_method_ = known;
+            return;
+        }
+        method_.assign(method.data(), method.size());
+        known_method_ = http_known_method::unknown;
     }
 
     [[nodiscard]] std::string_view request_authority() const& noexcept {
-        return message_data_.authority();
+        return authority_;
     }
-    [[nodiscard]] std::string_view request_authority() const&& = delete;
+    std::string_view request_authority() const&& = delete;
 
     void assign_request_authority(std::string_view value) {
-        message_data_.assign_authority(value);
+        authority_.assign(value.data(), value.size());
     }
 
     [[nodiscard]] std::string_view request_path() const& noexcept {
-        return message_data_.path();
+        return path_;
     }
-    [[nodiscard]] std::string_view request_path() const&& = delete;
+    std::string_view request_path() const&& = delete;
 
     void assign_request_path(std::string_view value) {
-        message_data_.assign_path(value);
+        path_.assign(value.data(), value.size());
     }
 
     void take_request_target_from(http2_stream_state& other) noexcept {
-        message_data_.take_request_target_from(other.message_data_);
+        if (method_.get_allocator().resource() != other.method_.get_allocator().resource()) {
+            std::terminate();
+        }
+        method_.swap(other.method_);
+        using std::swap;
+        swap(known_method_, other.known_method_);
+        scheme_.swap(other.scheme_);
+        authority_.swap(other.authority_);
+        path_.swap(other.path_);
     }
 
     [[nodiscard]] std::string_view request_protocol() const& noexcept {
-        return message_data_.protocol();
+        return protocol_;
     }
-    [[nodiscard]] std::string_view request_protocol() const&& = delete;
+    std::string_view request_protocol() const&& = delete;
 
     [[nodiscard]] std::string_view request_cookie() const& noexcept {
-        return message_data_.cookie();
+        return cookie_;
     }
-    [[nodiscard]] std::string_view request_cookie() const&& = delete;
+    std::string_view request_cookie() const&& = delete;
 
     [[nodiscard]] bool append_request_cookie_header_value(
         std::string_view value, bool has_existing_cookie) {
-        return message_data_.append_cookie_header_value(value, has_existing_cookie);
+        return append_binary_cookie_crumb(cookie_, value, has_existing_cookie);
     }
 
     [[nodiscard]] std::size_t remote_header_count() const noexcept {
-        return message_data_.header_count();
+        return headers_.size();
     }
 
     [[nodiscard]] http2_stored_header_view remote_header_at(std::size_t index) const& noexcept {
-        return message_data_.header_at(index);
+        return headers_.at(index);
     }
-    [[nodiscard]] http2_stored_header_view remote_header_at(std::size_t) const&& = delete;
+    http2_stored_header_view remote_header_at(std::size_t) const&& = delete;
 
     [[nodiscard]] bool append_remote_header(
         std::string_view name, std::string_view value, request_header_kind kind) {
-        return message_data_.append_header(name, value, kind);
+        return headers_.append(name, value, kind);
     }
     [[nodiscard]] bool append_remote_trailer(std::string_view name, std::string_view value) {
-        return message_data_.append_trailer(name, value);
+        trailers_.emplace_back(name, value, method_.get_allocator().resource());
+        return true;
     }
     [[nodiscard]] std::pmr::vector<http_header> take_remote_trailers() & noexcept {
-        return message_data_.take_trailers();
+        return std::move(trailers_);
     }
 
     [[nodiscard]] bool has_method() const noexcept {
-        return message_data_.has_method();
+        return known_method_ != http_known_method::unknown || !method_.empty();
     }
 
     [[nodiscard]] bool has_protocol() const noexcept {
-        return request_state_.has_protocol();
+        return has_protocol_;
     }
 
     [[nodiscard]] bool protocol_is_websocket() const noexcept {
@@ -537,73 +1262,75 @@ public:
     }
 
     void set_protocol(std::string_view value) {
-        message_data_.assign_protocol(value);
-        request_state_.mark_protocol();
+        protocol_.assign(value.data(), value.size());
+        has_protocol_ = true;
     }
 
     [[nodiscard]] bool has_scheme() const noexcept {
-        return request_state_.has_scheme();
+        return has_scheme_;
     }
 
     [[nodiscard]] std::string_view request_scheme() const& noexcept {
-        return message_data_.scheme();
+        return scheme_;
     }
-    [[nodiscard]] std::string_view request_scheme() const&& = delete;
+    std::string_view request_scheme() const&& = delete;
 
     void assign_request_scheme(std::string_view value) {
-        message_data_.assign_scheme(value);
+        scheme_.assign(value.data(), value.size());
     }
 
     void mark_scheme(std::uint16_t default_port) noexcept {
-        request_state_.mark_scheme(default_port);
+        has_scheme_ = true;
+        scheme_default_port_ = default_port;
     }
 
     [[nodiscard]] std::uint16_t scheme_default_port() const noexcept {
-        return request_state_.scheme_default_port();
+        return scheme_default_port_;
     }
 
     [[nodiscard]] bool has_authority() const noexcept {
-        return request_state_.has_authority();
+        return has_authority_;
     }
 
     void mark_authority() noexcept {
-        request_state_.mark_authority();
+        has_authority_ = true;
     }
 
     [[nodiscard]] bool has_path() const noexcept {
-        return request_state_.has_path();
+        return has_path_;
     }
 
     void mark_path() noexcept {
-        request_state_.mark_path();
+        has_path_ = true;
     }
 
     [[nodiscard]] bool has_host() const noexcept {
-        return request_state_.has_host();
+        return has_host_;
     }
 
     void mark_host(std::size_t index) noexcept {
-        request_state_.mark_host(index);
+        has_host_ = true;
+        host_header_index_ = static_cast<std::uint16_t>(index);
     }
 
     [[nodiscard]] std::size_t host_header_index() const noexcept {
-        return request_state_.host_header_index();
+        return host_header_index_;
     }
 
     [[nodiscard]] bool has_cookie() const noexcept {
-        return request_state_.has_cookie();
+        return has_cookie_;
     }
 
     void mark_cookie() noexcept {
-        request_state_.mark_cookie();
+        has_cookie_ = true;
     }
 
     [[nodiscard]] bool regular_header_seen() const noexcept {
-        return request_state_.regular_header_seen();
+        return regular_header_seen_;
     }
 
     void mark_regular_header_seen() noexcept {
-        request_state_.mark_regular_header_seen();
+        regular_header_seen_ = true;
     }
 
     [[nodiscard]] bool begin_standard_connect() noexcept {
@@ -637,31 +1364,33 @@ public:
     [[nodiscard]] const http2_tunnel_state& tunnel() const& noexcept {
         return tunnel_state_;
     }
-    [[nodiscard]] const http2_tunnel_state& tunnel() const&& = delete;
-
     [[nodiscard]] const http_received_status* response_status() const& noexcept {
-        return request_state_.response_status();
+        return response_status_ ? &*response_status_ : nullptr;
     }
-    [[nodiscard]] const http_received_status* response_status() const&& = delete;
+    const http_received_status* response_status() const&& = delete;
 
     [[nodiscard]] bool set_response_status(http_received_status status) noexcept {
-        return request_state_.set_response_status(status);
+        if (response_status_) {
+            return false;
+        }
+        response_status_ = status;
+        return true;
     }
 
     [[nodiscard]] bool has_informational_response() const noexcept {
-        return request_state_.has_informational_response();
+        return has_informational_response_;
     }
 
     void mark_informational_response() noexcept {
-        request_state_.mark_informational_response();
+        has_informational_response_ = true;
     }
 
     [[nodiscard]] const std::optional<http_priority_fields>& priority_update() const& noexcept {
-        return request_state_.priority_update();
+        return priority_update_;
     }
 
     void set_priority_update(http_priority_fields fields) noexcept {
-        request_state_.set_priority_update(fields);
+        priority_update_ = fields;
     }
 };
 

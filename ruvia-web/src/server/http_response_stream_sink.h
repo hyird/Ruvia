@@ -28,7 +28,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/streaming.h"
 
-#include "body/http_lazy_buffered_body.h"
+#include "body/http_stream_body_reader.h"
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
 #include "http/http_cors.h"

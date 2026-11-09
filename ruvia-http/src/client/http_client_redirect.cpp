@@ -4,19 +4,45 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_client.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
 
-#include "client/http_origin_view.h"
 #include "parser/http_request_target.h"
 #include "parser/http_uri_grammar.h"
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] constexpr std::uint16_t http_scheme_default_port(http_scheme scheme) noexcept {
+    return scheme == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80};
+}
+
+[[nodiscard]] constexpr bool http_origin_uses_default_port(const http_origin_view& origin) noexcept {
+    return origin.port() == http_scheme_default_port(origin.scheme());
+}
+
+void validate_origin_host(std::string_view host) {
+    if (host.empty()) {
+        throw std::invalid_argument("HTTP origin host must not be empty");
+    }
+    if (!detail::is_valid_http_host(host)) {
+        throw std::invalid_argument("HTTP origin host is invalid");
+    }
+}
+
+std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options& options) noexcept {
+    if (options.port_.has_value()) {
+        return options.port_->value();
+    }
+    return http_scheme_default_port(scheme);
+}
 
 void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
     const auto slash = path.rfind('/');
@@ -170,7 +196,7 @@ struct http_client_redirect_authority final {
     if (!parsed_value) {
         return std::nullopt;
     }
-    const auto port = parsed_value->effective_port(detail::http_scheme_default_port(target_scheme));
+    const auto port = parsed_value->effective_port(http_scheme_default_port(target_scheme));
     return http_client_redirect_authority{
         .host_ = parsed_value->host(),
         .port_ = port,
@@ -180,6 +206,33 @@ struct http_client_redirect_authority final {
 }
 
 }  // namespace
+
+http_origin_view http_origin_view::http(http_origin_options options) {
+    const auto host = options.host_.view();
+    validate_origin_host(host);
+    return http_origin_view(http_scheme::http, host, resolved_origin_port(http_scheme::http, options));
+}
+
+http_origin_view http_origin_view::https(http_origin_options options) {
+    const auto host = options.host_.view();
+    validate_origin_host(host);
+    return http_origin_view(
+        http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
+}
+
+std::pmr::string make_http_origin_authority(const http_origin_view& origin,
+    std::pmr::memory_resource* resource) {
+    const auto host = origin.host();
+    const bool include_port = !http_origin_uses_default_port(origin);
+    std::pmr::string authority(detail::http_pmr_resource_or_default(resource));
+    authority.reserve(host.size() + (include_port ? 6 : 0));
+    authority.append(host);
+    if (include_port) {
+        authority.push_back(':');
+        http_append_unsigned(authority, origin.port());
+    }
+    return authority;
+}
 
 http_client_response_header_lookup lookup_unique_http_client_response_header(
     const http_client_response_head& head, std::string_view name) noexcept {

@@ -117,6 +117,41 @@ prepare_http1_request_head(
     return {asio::buffer(bytes)};
 }
 
+[[nodiscard]] std::span<const asio::const_buffer> coalesce_tls_write_parts(
+    bool secure, http_io_buffer& write_buffer, std::span<asio::const_buffer> parts) {
+    std::size_t non_empty = 0;
+    std::size_t total_bytes = 0;
+    for (const auto& part : parts) {
+        if (part.size() == 0) {
+            continue;
+        }
+        ++non_empty;
+        if (part.size() > http_retained_pmr_string_bytes - total_bytes) {
+            return parts;
+        }
+        total_bytes += part.size();
+    }
+    if (!secure || non_empty <= 1) {
+        return parts;
+    }
+    write_buffer.clear();
+    const auto first = parts.front();
+    const auto prepared = write_buffer.prepare(total_bytes);
+    if (static_cast<const char*>(first.data()) == prepared.data()) {
+        write_buffer.commit(first.size());
+    } else if (first.size() != 0) {
+        std::memcpy(prepared.data(), first.data(), first.size());
+        write_buffer.commit(first.size());
+    }
+    for (const auto& part : parts.subspan(1)) {
+        if (part.size() != 0) {
+            write_buffer.append(std::string_view(static_cast<const char*>(part.data()), part.size()));
+        }
+    }
+    parts[0] = asio::buffer(write_buffer.view());
+    return parts.first(1);
+}
+
 [[noreturn]] void throw_body_timeout() {
     throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
 }
@@ -236,18 +271,8 @@ task<void> http1_client_exchange::run(
     http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), response_resource);
     if (const auto* content = prepared->content_plan().immediate(); content && !content->bytes().empty()) {
         std::array<asio::const_buffer, 2> parts{
-            asio::buffer(prepared->head().data(), prepared->head().size()),
-            asio::buffer(content->bytes().data(), content->bytes().size())};
-        std::size_t part_count = 2;
-        if (connection_.transport_.secure() &&
-            prepared->head().size() <= http_retained_pmr_string_bytes &&
-            content->bytes().size() <= http_retained_pmr_string_bytes - prepared->head().size()) {
-            write_buffer.commit(prepared->head().size());
-            write_buffer.append(content->bytes());
-            parts[0] = asio::buffer(write_buffer.view().data(), write_buffer.view().size());
-            part_count = 1;
-        }
-        co_await write(std::span<const asio::const_buffer>(parts.data(), part_count), timeout);
+            asio::buffer(prepared->head()), asio::buffer(content->bytes())};
+        co_await write(coalesce_tls_write_parts(connection_.transport_.secure(), write_buffer, parts), timeout);
         if (parser.complete_request_content() != http1_client_request_content_completion_status::completed) {
             std::terminate();
         }
@@ -692,34 +717,10 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 // response reader keeps its read deadline.
                 std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix()),
                     asio::buffer(planned.payload()), asio::buffer(planned.suffix())};
-                std::size_t part_count = 3;
-                const auto total_chunk_bytes =
-                    planned.prefix().size() + planned.payload().size() + planned.suffix().size();
-                const bool coalesce_chunk = connection_.transport_.secure() &&
-                                            (!planned.prefix().empty() || !planned.suffix().empty()) &&
-                                            total_chunk_bytes <= http_retained_pmr_string_bytes;
-                if (coalesce_chunk) {
-                    auto& write_buffer = connection_.write_buffer_;
-                    write_buffer.clear();
-                    const auto coalesced = write_buffer.prepare(total_chunk_bytes);
-                    auto* cursor = coalesced.data();
-                    if (!planned.prefix().empty()) {
-                        std::memcpy(cursor, planned.prefix().data(), planned.prefix().size());
-                        cursor += planned.prefix().size();
-                    }
-                    if (!planned.payload().empty()) {
-                        std::memcpy(cursor, planned.payload().data(), planned.payload().size());
-                        cursor += planned.payload().size();
-                    }
-                    if (!planned.suffix().empty()) {
-                        std::memcpy(cursor, planned.suffix().data(), planned.suffix().size());
-                    }
-                    write_buffer.commit(total_chunk_bytes);
-                    parts[0] = asio::buffer(write_buffer.view().data(), write_buffer.view().size());
-                    part_count = 1;
-                }
-                co_await write(std::span<const asio::const_buffer>(parts.data(), part_count), timeout);
-                if (coalesce_chunk) {
+                const auto write_parts = coalesce_tls_write_parts(
+                    connection_.transport_.secure(), connection_.write_buffer_, parts);
+                co_await write(write_parts, timeout);
+                if (write_parts.size() == 1) {
                     connection_.write_buffer_.clear_retaining_small();
                 }
                 writer.commit_chunk();

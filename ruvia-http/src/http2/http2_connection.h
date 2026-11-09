@@ -19,9 +19,11 @@
 
 #include <nghttp2/nghttp2.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -36,6 +38,7 @@
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_response.h"
@@ -45,19 +48,250 @@
 
 #include "http2/http2_event.h"
 #include "http2/http2_field_list.h"
-#include "http2/http2_local_connection_state.h"
-#include "http2/http2_local_settings.h"
 #include "http2/http2_output_buffer.h"
 #include "http2/http2_request_headers.h"
-#include "http2/http2_stream_lease_ledger.h"
 #include "http2/http2_stream_state.h"
 #include "http2/http2_stream_table.h"
 #include "response/http_framed_response_head_plan.h"
-#include "response/http_response_content_semantics.h"
 #include "util/http_c_library_memory.h"
 #include "websocket/websocket_server_negotiation.h"
-
 namespace ruvia::detail {
+
+// The local SETTINGS frame of the connection preface. Only a client may
+// advertise ENABLE_PUSH=1 (RFC 9113 §6.5.2).
+[[nodiscard]] inline std::array<nghttp2_settings_entry, 8> http2_local_settings_entries(bool enable_push) noexcept {
+    return {{
+        {NGHTTP2_SETTINGS_HEADER_TABLE_SIZE, http2_local_settings::header_table_size},
+        {NGHTTP2_SETTINGS_ENABLE_PUSH, enable_push ? 1U : 0U},
+        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, http2_local_settings::max_concurrent_streams},
+        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, http2_local_settings::initial_window_size},
+        {NGHTTP2_SETTINGS_MAX_FRAME_SIZE, http2_local_settings::max_frame_size},
+        {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, http2_local_settings::max_header_list_size},
+        {NGHTTP2_SETTINGS_ENABLE_CONNECT_PROTOCOL, http2_local_settings::enable_connect_protocol},
+        {NGHTTP2_SETTINGS_NO_RFC7540_PRIORITIES, 1},
+    }};
+}
+
+// The ALTSVC (RFC 7838 §4) encoder. The size function validates the frame against
+// `max_frame_size` and returns its payload size; the write function fills
+// exactly that many bytes in the caller's destination.
+[[nodiscard]] std::variant<std::size_t, http_connection_advertisement_error> http2_alternative_service_payload_size(
+    std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size);
+void http2_write_alternative_service_payload(
+    std::span<char> payload, std::string_view origin, std::string_view field_value) noexcept;
+
+class http2_local_connection_open final {};
+
+// A server drains in two phases (RFC 9113 section 6.8). During the round trip the
+// advertised boundary is 2^31-1 and peer streams are still admitted up to
+// round_trip_stream_limit(); after the PING ACK (or that limit) the boundary is the
+// real last peer stream id and is final. A client drains in the final phase at once.
+class http2_local_connection_graceful_drain final {
+public:
+    [[nodiscard]] constexpr std::uint32_t last_stream_id() const noexcept {
+        return last_stream_id_;
+    }
+    [[nodiscard]] constexpr bool awaiting_round_trip() const noexcept {
+        return awaiting_round_trip_;
+    }
+    // Highest peer stream id still admitted while awaiting the round trip.
+    [[nodiscard]] constexpr std::uint32_t round_trip_stream_limit() const noexcept {
+        return round_trip_stream_limit_;
+    }
+
+private:
+    friend class http2_local_connection_state;
+
+    constexpr http2_local_connection_graceful_drain(std::uint32_t last_stream_id,
+        bool awaiting_round_trip, std::uint32_t round_trip_stream_limit) noexcept
+        : last_stream_id_(last_stream_id),
+          round_trip_stream_limit_(round_trip_stream_limit),
+          awaiting_round_trip_(awaiting_round_trip) {}
+
+    std::uint32_t last_stream_id_;
+    std::uint32_t round_trip_stream_limit_;
+    bool awaiting_round_trip_;
+};
+
+class http2_local_connection_fatal_failure final {
+public:
+    [[nodiscard]] constexpr http2_error_code error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class http2_local_connection_state;
+
+    explicit constexpr http2_local_connection_fatal_failure(http2_error_code error) noexcept
+        : error_(error) {}
+
+    http2_error_code error_;
+};
+
+// The locally initiated connection lifecycle owns its GOAWAY meaning. A graceful
+// drain alone carries the advertised stream boundary; a fatal protocol failure
+// alone carries an error code and atomically supersedes any earlier drain.
+// Peer GOAWAY and preface progress are directional/orthogonal state elsewhere.
+class http2_local_connection_state final {
+public:
+    [[nodiscard]] constexpr const http2_local_connection_open* open() const& noexcept {
+        return std::get_if<http2_local_connection_open>(&state_);
+    }
+    const http2_local_connection_open* open() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_local_connection_graceful_drain* graceful_drain()
+        const& noexcept {
+        return std::get_if<http2_local_connection_graceful_drain>(&state_);
+    }
+    const http2_local_connection_graceful_drain* graceful_drain() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_local_connection_fatal_failure* fatal_failure() const& noexcept {
+        return std::get_if<http2_local_connection_fatal_failure>(&state_);
+    }
+    const http2_local_connection_fatal_failure* fatal_failure() const&& = delete;
+
+    [[nodiscard]] bool begin_graceful_drain(std::uint32_t last_stream_id) noexcept {
+        if (open() == nullptr) {
+            return false;
+        }
+        state_ = state_type(http2_local_connection_graceful_drain(last_stream_id, false, last_stream_id));
+        return true;
+    }
+
+    [[nodiscard]] bool begin_round_trip_drain(
+        std::uint32_t advertised_stream_id, std::uint32_t round_trip_stream_limit) noexcept {
+        if (open() == nullptr) {
+            return false;
+        }
+        state_ = state_type(
+            http2_local_connection_graceful_drain(advertised_stream_id, true, round_trip_stream_limit));
+        return true;
+    }
+
+    [[nodiscard]] bool finish_round_trip_drain(std::uint32_t last_stream_id) noexcept {
+        const auto* drain = graceful_drain();
+        if (drain == nullptr || !drain->awaiting_round_trip()) {
+            return false;
+        }
+        state_ = state_type(http2_local_connection_graceful_drain(last_stream_id, false, last_stream_id));
+        return true;
+    }
+
+    void fail(http2_error_code error) noexcept {
+        state_ = state_type(http2_local_connection_fatal_failure(error));
+    }
+
+private:
+    using state_type = std::variant<http2_local_connection_open, http2_local_connection_graceful_drain,
+        http2_local_connection_fatal_failure>;
+
+    state_type state_;
+};
+
+// Owner-lease releases and DATA credits that could not be applied yet. A pinned
+// stream is released only after its delivered DATA credit and queued events are
+// gone; a release or credit whose application failed is retried later. Both sets
+// are bounded by the stream-table capacity, so they never allocate.
+class http2_stream_lease_ledger final {
+public:
+    enum class release_kind_type : std::uint8_t {
+        after_credits,
+        after_remote_end,
+        abandon,
+    };
+    struct release_type final {
+        std::uint32_t stream_id_;
+        release_kind_type kind_;
+    };
+    struct credit_type final {
+        std::uint32_t stream_id_;
+        std::uint32_t bytes_;
+    };
+
+    [[nodiscard]] const release_type* release(std::uint32_t stream_id) const noexcept {
+        for (std::size_t index = 0; index < release_count_; ++index) {
+            if (releases_[index].stream_id_ == stream_id) {
+                return &releases_[index];
+            }
+        }
+        return nullptr;
+    }
+
+    // abandon and after_remote_end override a pending release; after_credits only
+    // replaces abandon, whose reset has then been sent.
+    void defer_release(std::uint32_t stream_id, release_kind_type kind) noexcept {
+        for (std::size_t index = 0; index < release_count_; ++index) {
+            auto& existing = releases_[index];
+            if (existing.stream_id_ != stream_id) {
+                continue;
+            }
+            if (kind != release_kind_type::after_credits || existing.kind_ == release_kind_type::abandon) {
+                existing.kind_ = kind;
+            }
+            return;
+        }
+        if (release_count_ == releases_.size()) {
+            std::terminate();
+        }
+        releases_[release_count_++] = release_type{stream_id, kind};
+    }
+
+    void erase_release(std::uint32_t stream_id) noexcept {
+        for (std::size_t index = 0; index < release_count_; ++index) {
+            if (releases_[index].stream_id_ == stream_id) {
+                releases_[index] = releases_[--release_count_];
+                return;
+            }
+        }
+    }
+
+    [[nodiscard]] std::size_t release_count() const noexcept {
+        return release_count_;
+    }
+    [[nodiscard]] const release_type& release_at(std::size_t index) const noexcept {
+        return releases_[index];
+    }
+
+    void defer_credit(std::uint32_t stream_id, std::uint32_t bytes) noexcept {
+        for (std::size_t index = 0; index < credit_count_; ++index) {
+            auto& existing = credits_[index];
+            if (existing.stream_id_ != stream_id) {
+                continue;
+            }
+            if (bytes > (std::numeric_limits<std::uint32_t>::max)() - existing.bytes_) {
+                std::terminate();
+            }
+            existing.bytes_ += bytes;
+            return;
+        }
+        if (credit_count_ == credits_.size()) {
+            std::terminate();
+        }
+        credits_[credit_count_++] = credit_type{stream_id, bytes};
+    }
+
+    void erase_credit(std::uint32_t stream_id) noexcept {
+        for (std::size_t index = 0; index < credit_count_; ++index) {
+            if (credits_[index].stream_id_ == stream_id) {
+                credits_[index] = credits_[--credit_count_];
+                return;
+            }
+        }
+    }
+
+    [[nodiscard]] std::size_t credit_count() const noexcept {
+        return credit_count_;
+    }
+    [[nodiscard]] credit_type credit_at(std::size_t index) const noexcept {
+        return credits_[index];
+    }
+
+private:
+    std::array<release_type, http2_stream_table::max_streams> releases_;
+    std::size_t release_count_{0};
+    std::array<credit_type, http2_stream_table::max_streams> credits_;
+    std::size_t credit_count_{0};
+};
 
 // An ORIGIN or ALTSVC payload handed to nghttp2_submit_extension(). It lives on
 // the submitting call's stack; nghttp2 packs it while that call drains the
@@ -359,6 +593,8 @@ private:
     // Commits the local END_STREAM, then sends it as empty DATA or with the
     // staged trailer fields.
     void end_local_stream(http2_stream_state& stream, bool empty_data);
+    [[nodiscard]] http2_submit_status submit_extension_frame(
+        http2_frame_type type, std::uint32_t stream_id, http2_extension_payload& payload);
     // nghttp2 DATA source: copies the submitting call's bytes. A null source is
     // the empty END_STREAM a rejected client CONNECT owes, which may wait for
     // flow-control credit inside nghttp2.

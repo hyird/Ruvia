@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -68,5 +69,25 @@ struct app_state final {
     std::condition_variable lifecycle_changed_;
     app_lifecycle lifecycle_;
 };
+
+inline void ensure_app_not_running(bool running, const char* message) {
+    if (running) {
+        throw std::logic_error(message);
+    }
+}
+
+template <typename configure_type>
+application& mutate_stopped_app(
+    application& app, app_state& state_value, const char* running_message, configure_type&& configure) {
+    std::lock_guard lock(state_value.mutex_);
+    ensure_app_not_running(state_value.lifecycle_.active(), running_message);
+    std::forward<configure_type>(configure)(state_value);
+    return app;
+}
+
+void run_app(application& app, app_state& state_value);
+// The one stop chain for a published runtime: closes admission on the acceptor
+// and every worker. The caller holds state_value.mutex_; run_app owns retirement.
+void request_runtime_stop(app_state& state_value) noexcept;
 
 }  // namespace ruvia::detail

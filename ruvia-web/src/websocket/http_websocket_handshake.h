@@ -14,7 +14,6 @@
 
 #include "context/context_access.h"
 #include "http/inline_http_header_views.h"
-#include "server/http1_upgrade_response_head.h"
 
 namespace ruvia::detail {
 

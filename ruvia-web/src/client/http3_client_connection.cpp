@@ -97,6 +97,16 @@ void require_accepted(http3_status status) {
         throw http_client_error(error_code::protocol_error, "HTTP/3 stream operation rejected");
     }
 }
+[[nodiscard]] bool can_fallback_from_http3(std::exception_ptr failure, bool fallback, stop_token stop,
+    const http_client_response_state& response, const operation_timeout& timeout, bool retired) noexcept {
+    if (!fallback || retired || stop.stop_requested() || response.abandoned_ || timeout.expired()) {
+        return false;
+    }
+    const auto code = http_client_failure_code(std::move(failure));
+    return code == error_code::io_error || code == error_code::connect_failed ||
+           code == error_code::resolve_failed || code == error_code::tls_failed ||
+           code == error_code::protocol_unavailable || code == error_code::timeout;
+}
 }  // namespace
 
 struct http3_client_connection::tls_state final {
@@ -305,19 +315,42 @@ public:
         }
     }
     void schedule(stream& item) {
-        item.timer_.schedule(pool_.worker(), item.timeout_, [&item]() noexcept {
-            item.timer_.timer_at_.reset();
-            if (item.timer_.expired(item.timeout_)) {
-                item.owner_.cancel(item, error_code::timeout);
-            } else {
-                try {
-                    item.owner_.schedule(item);
-                } catch (...) {
-                    item.failure_ = std::current_exception();
-                    item.signal_.notify();
-                }
+        item.timer_.schedule_with_retry(
+            pool_.worker(), item.timeout_,
+            [&item]() noexcept { item.owner_.cancel(item, error_code::timeout); },
+            [&item](std::exception_ptr failure) noexcept {
+                item.failure_ = std::move(failure);
+                item.signal_.notify();
+            });
+    }
+    static void complete_websocket_tunnel(stream& item) noexcept {
+        auto& response = item.response_;
+        item.done_ = true;
+        response.complete_ = true;
+        response.tunnel_->output_.ended_ = true;
+        response.tunnel_->output_.notify_data();
+        response.tunnel_->output_.space_.notify();
+        response.data_signal_.notify();
+    }
+    static void fail_or_retry_closed_stream(stream& item, std::optional<std::uint64_t> application_error_code) noexcept {
+        auto& response = item.response_;
+        if (application_error_code == static_cast<std::uint64_t>(http3_error_code::request_rejected) &&
+            !response.head_ready_ && response.output() == nullptr) {
+            item.retry_ = true;
+            item.rejected_ = true;
+        } else {
+            item.error_ = error_code::io_error;
+            if (auto* output = response.output()) {
+                output->stop();
             }
-        });
+        }
+    }
+    void reset_transport() noexcept {
+        quic_.reset();
+        crypto_.reset();
+        tls_.reset();
+        old_socket_.reset();
+        socket_.reset();
     }
     void read_progress(stream& item) {
         if ((item.websocket_ && item.response_.head_ready_) ||
@@ -535,11 +568,7 @@ public:
                                 response.tunnel_->receive_ended_ = true;
                                 if (item->websocket_ && item->write_stopped_ &&
                                     item->stop_sending_error_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
-                                    item->done_ = true;
-                                    response.complete_ = true;
-                                    response.tunnel_->output_.ended_ = true;
-                                    response.tunnel_->output_.notify_data();
-                                    response.tunnel_->output_.space_.notify();
+                                    complete_websocket_tunnel(*item);
                                 } else if (response.tunnel_->output_.ended_ || response.tunnel_->output_.stopped_) {
                                     item->done_ = true;
                                 }
@@ -565,49 +594,19 @@ public:
                                 if (item->websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
                                     response.tunnel_->receive_ended_ &&
                                     value.application_error_code_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
-                                    item->done_ = true;
-                                    response.complete_ = true;
-                                    response.tunnel_->output_.ended_ = true;
-                                    response.tunnel_->output_.notify_data();
-                                    response.tunnel_->output_.space_.notify();
-                                    response.data_signal_.notify();
+                                    complete_websocket_tunnel(*item);
                                 } else if (auto* output = response.output()) {
                                     output->stop();
                                 }
                             } else if (!item->done_ && !item->retry_) {
-                                if (value.application_error_code_ ==
-                                        static_cast<std::uint64_t>(http3_error_code::request_rejected) &&
-                                    !response.head_ready_ && response.output() == nullptr) {
-                                    item->retry_ = true;
-                                    item->rejected_ = true;
-                                } else {
-                                    item->error_ = error_code::io_error;
-                                    if (auto* output = response.output()) {
-                                        output->stop();
-                                    }
-                                }
+                                fail_or_retry_closed_stream(*item, value.application_error_code_);
                             }
                         } else if constexpr (std::same_as<event_type, http3_stream_close_event>) {
                             if (item->websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
                                 response.tunnel_->receive_ended_ && !value.application_error_code_) {
-                                item->done_ = true;
-                                response.complete_ = true;
-                                response.tunnel_->output_.ended_ = true;
-                                response.tunnel_->output_.notify_data();
-                                response.tunnel_->output_.space_.notify();
-                                response.data_signal_.notify();
+                                complete_websocket_tunnel(*item);
                             } else if (!item->done_ && !item->retry_) {
-                                if (value.application_error_code_ ==
-                                        static_cast<std::uint64_t>(http3_error_code::request_rejected) &&
-                                    !response.head_ready_ && response.output() == nullptr) {
-                                    item->retry_ = true;
-                                    item->rejected_ = true;
-                                } else {
-                                    item->error_ = error_code::io_error;
-                                    if (auto* output = response.output()) {
-                                        output->stop();
-                                    }
-                                }
+                                fail_or_retry_closed_stream(*item, value.application_error_code_);
                             } else if (auto* output = response.output(); output && item->done_) {
                                 output->stop();
                             }
@@ -645,6 +644,14 @@ public:
             throw http_client_error(tls_ && SSL_get_verify_result(tls_.get()) != X509_V_OK ? error_code::tls_failed : error_code::io_error, "QUIC connection failed");
         }
     }
+    void step_quic(http3_quic_status status) {
+        consume_events();
+        if (status == http3_quic_status::transport_error ||
+            status == http3_quic_status::application_error) {
+            send_close_packet();
+        }
+        check_quic(status);
+    }
     void send_close_packet() noexcept {
         if (!quic_ || !socket_ || !socket_->is_open()) {
             return;
@@ -653,13 +660,9 @@ public:
             const auto close_result = quic_->next_datagram(
                 pool_.config().http3_.max_datagram_bytes_, http3_quic_now(), packet_);
             if (close_result.status_ == http3_quic_status::accepted && !packet_.bytes_.empty()) {
-                asio::ip::udp::endpoint remote;
-                const auto& address = packet_.path_.path.remote;
-                if (address.addr != nullptr && address.addrlen != 0 && address.addrlen <= remote.capacity()) {
-                    std::memcpy(remote.data(), address.addr, address.addrlen);
-                    remote.resize(address.addrlen);
+                if (const auto remote = http3_udp_endpoint(packet_.path_.path.remote)) {
                     std::error_code error;
-                    (void)socket_->send_to(asio::buffer(packet_.bytes_), remote, 0, error);
+                    (void)socket_->send_to(asio::buffer(packet_.bytes_), *remote, 0, error);
                     if (error) {
                         (void)socket_->send(asio::buffer(packet_.bytes_), 0, error);
                     }
@@ -687,12 +690,7 @@ public:
                 }
                 const auto received = quic_->receive_datagram(
                     path(local, remote), 0, std::span(bytes.data(), result.result()), http3_quic_now());
-                consume_events();
-                if (received.status_ == http3_quic_status::transport_error ||
-                    received.status_ == http3_quic_status::application_error) {
-                    send_close_packet();
-                }
-                check_quic(received.status_);
+                step_quic(received.status_);
                 writer_.notify();
                 for (auto* item : streams_) {
                     item->signal_.notify();
@@ -723,31 +721,19 @@ public:
             while (open_) {
                 if (quic_->expiry() <= http3_quic_now()) {
                     const auto expired = quic_->handle_expiry(http3_quic_now());
-                    consume_events();
-                    if (expired.status_ == http3_quic_status::transport_error ||
-                        expired.status_ == http3_quic_status::application_error) {
-                        send_close_packet();
-                    }
-                    check_quic(expired.status_);
+                    step_quic(expired.status_);
                 }
                 std::size_t burst = 0;
                 for (; open_ && burst != 32; ++burst) {
                     const auto result = quic_->next_datagram(pool_.config().http3_.max_datagram_bytes_, http3_quic_now(), packet_);
-                    consume_events();
-                    if (result.status_ == http3_quic_status::transport_error ||
-                        result.status_ == http3_quic_status::application_error) {
-                        send_close_packet();
-                    }
-                    check_quic(result.status_);
+                    step_quic(result.status_);
                     if (result.status_ == http3_quic_status::would_block) {
                         break;
                     }
-                    asio::ip::udp::endpoint remote;
-                    if (packet_.path_.path.remote.addrlen > remote.capacity()) {
+                    const auto remote = http3_udp_endpoint(packet_.path_.path.remote);
+                    if (!remote) {
                         throw http_client_error(error_code::protocol_error, "invalid QUIC output path");
                     }
-                    std::memcpy(remote.data(), packet_.path_.path.remote.addr, packet_.path_.path.remote.addrlen);
-                    remote.resize(packet_.path_.path.remote.addrlen);
                     auto* output = socket_.get();
                     if (packet_.path_.path.local.addrlen == old_local_.size() &&
                         std::memcmp(packet_.path_.path.local.addr, old_local_.data(), old_local_.size()) == 0) {
@@ -758,7 +744,7 @@ public:
                     }
                     sending_socket_ = output;
                     const auto sent = co_await async_asio<std::size_t>([&](auto handler) {
-                        output->async_send_to(asio::buffer(packet_.bytes_), remote,
+                        output->async_send_to(asio::buffer(packet_.bytes_), *remote,
                             asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(pool_.resource()), std::move(handler)));
                     });
                     sending_socket_ = nullptr;
@@ -862,11 +848,7 @@ public:
             co_await changed_.wait();
         }
         check(item);
-        quic_.reset();
-        crypto_.reset();
-        tls_.reset();
-        old_socket_.reset();
-        socket_.reset();
+        reset_transport();
         failure_ = nullptr;
         draining_ = false;
         early_started_ = false;
@@ -1250,11 +1232,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                 co_await race.changed_.wait();
             }
             session_->race_signal_ = nullptr;
-            session_->quic_.reset();
-            session_->crypto_.reset();
-            session_->tls_.reset();
-            session_->socket_.reset();
-            session_->old_socket_.reset();
+            session_->reset_transport();
             retained = std::move(session_);
         }
         if (race.reason_) {
@@ -1526,11 +1504,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     try {
         co_await select_endpoint(may_send_early, host, port, timeout, acquire_timeout, stop, response);
     } catch (...) {
-        const auto code = http_client_failure_code(std::current_exception());
-        const bool endpoint_failure = code == error_code::io_error || code == error_code::connect_failed ||
-                                      code == error_code::resolve_failed || code == error_code::tls_failed ||
-                                      code == error_code::protocol_unavailable || code == error_code::timeout;
-        if (fallback && endpoint_failure && !stop.stop_requested() && !response.abandoned_ && !timeout.expired() && !race_->retired_) {
+        if (can_fallback_from_http3(
+                std::current_exception(), fallback, stop, response, timeout, race_->retired_)) {
             co_return false;
         }
         throw;
@@ -1579,11 +1554,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     try {
         co_await self.connect(item, host, port, may_send_early, acquire_timeout, stop);
     } catch (...) {
-        const auto failure_code = http_client_failure_code(std::current_exception());
-        const bool endpoint_failure = failure_code == error_code::io_error || failure_code == error_code::tls_failed ||
-                                      failure_code == error_code::resolve_failed || failure_code == error_code::connect_failed ||
-                                      failure_code == error_code::protocol_unavailable || failure_code == error_code::timeout;
-        if (fallback && endpoint_failure && !stop.stop_requested() && !response.abandoned_ && !timeout.expired() && !self.retired_) {
+        if (can_fallback_from_http3(
+                std::current_exception(), fallback, stop, response, timeout, self.retired_)) {
             response.transport_ = http_client_response_transport::unassigned;
             co_return false;
         }

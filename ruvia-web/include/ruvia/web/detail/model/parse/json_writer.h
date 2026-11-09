@@ -11,8 +11,8 @@
 
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/json/json_escape.h"
-#include "ruvia/web/detail/model/model_binary.h"
 #include "ruvia/web/detail/model/model_schema.h"
+#include "ruvia/web/detail/model/model_text_storage.h"
 #include "ruvia/web/model.h"
 
 namespace ruvia::detail {
