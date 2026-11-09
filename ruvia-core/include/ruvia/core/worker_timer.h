@@ -153,6 +153,10 @@ template <typename target_type = std::chrono::steady_clock::duration, typename r
         if (std::isnan(count)) {
             return target_type::zero();
         }
+        // Unit conversion may underflow before ceil sees the positive input.
+        if (count == 0.0L && value.count() > 0) {
+            return target_type(1);
+        }
         const auto rounded = count > 0.0L ? std::ceil(count) : std::trunc(count);
         const auto maximum = static_cast<long double>(target_type::max().count());
         if (rounded >= maximum) {

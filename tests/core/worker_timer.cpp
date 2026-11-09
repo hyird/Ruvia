@@ -861,6 +861,20 @@ TEST(Ruvia, timer_fractional_duration_conversion_avoids_intermediate_overflow) {
     EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(unsigned_type::max()), target_type::max());
 }
 
+TEST(Ruvia, timer_floating_duration_underflow_keeps_positive_minimum_tick) {
+    using input_type = std::chrono::duration<long double, std::micro>;
+    using target_type = std::chrono::steady_clock::duration;
+    using fine_type = std::chrono::duration<long double, std::ratio_divide<target_type::period, std::kilo>>;
+    const auto tiny = (std::numeric_limits<long double>::denorm_min)();
+    ASSERT_GT(tiny, 0.0L);
+    EXPECT_EQ(ruvia::worker_timer_ceil_milliseconds(input_type(tiny)), std::chrono::milliseconds(1));
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast<std::chrono::milliseconds>(input_type(tiny)), std::chrono::milliseconds(1));
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(fine_type(tiny)), target_type(1));
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast<std::chrono::milliseconds>(input_type(-tiny)), std::chrono::milliseconds::zero());
+    EXPECT_EQ(ruvia::worker_timer_ceil_milliseconds(input_type(-tiny)), std::chrono::milliseconds::zero());
+    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast<std::chrono::milliseconds>(input_type::zero()), std::chrono::milliseconds::zero());
+}
+
 TEST(Ruvia, TimerImmediateShutdownWorks) {
     EXPECT_TRUE(timer_immediate_shutdown_works());
 }

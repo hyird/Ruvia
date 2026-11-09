@@ -35,7 +35,7 @@
 
 - **注册重入边界**：两种 `register_callback()` 入口均先固定取消状态，再内部移交回调或退役旧注册；后续不再读取 token 宿主，旧载荷析构可清空或销毁 token。
 - **取消目标借用**：`worker_cancellation_registration` 不保留目标的共享引用，只接受左值 `shared_ptr`、拒绝含 `const` 的右值；目标须由调用方持续持有，直至 `reset()` 等待回调结束并清除操作身份。
-- **时长转换**：`worker_timer_saturating_duration_cast<Target>()` 对不宽于 `uintmax_t` 的整数计数按有理周期精确换算；正小数 tick 向上取整，负数向零截断，越界饱和。目标默认 `steady_clock::duration`，`timeout_duration` 使用毫秒目标，不先窄化源计数。
+- **时长转换**：`worker_timer_saturating_duration_cast<Target>()` 对不宽于 `uintmax_t` 的整数计数按有理周期精确换算；正小数 tick 向上取整，负数向零截断，越界饱和。浮点换算下溢时仍为原始正值保留一个目标 tick。目标默认 `steady_clock::duration`，`timeout_duration` 使用毫秒目标，不先窄化源计数。
 - **输入与禁用**：超时配置直接接受整数 chrono 时长；显式整数构造按毫秒计。未配置仍为 `std::nullopt`；零或负值是否拒绝、立即结束由原入口策略决定，不能代替未配置。
 - **显式解包**：读取计数用 `.value().count()`（optional 用 `->value().count()`）；与经过时长比较前必须 `.value()`，禁止混合类型比较把经过时长先向上取整而提前触发超时。
 - **统一入口**：槽位租约、HTTP 客户端/服务器、WebSocket、数据库、Redis 的超时与探活使用同一类型；缓存 TTL、会话有效期与限流窗口不属于该契约。
