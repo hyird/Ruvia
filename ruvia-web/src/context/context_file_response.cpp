@@ -117,7 +117,7 @@ template <typename value_type>
             .invoke(context_value.conn().remote().address(), failure.fault());
         std::rethrow_exception(failure.response_error());
     }
-    return std::move(result).value();
+    return std::move(result).take_value();
 }
 
 // Names the response file by a borrowed native path that outlives

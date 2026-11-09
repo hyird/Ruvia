@@ -79,7 +79,7 @@ task<client_resolve_result> client_host_resolver::resolve_query(query input, ope
         *worker_, {.timeout_ = timeout.remaining(), .stop_token_ = stop_->token()}, std::move(input));
     switch (result.status()) {
         case blocking_status::completed:
-            co_return std::move(result).value();
+            co_return std::move(result).take_value();
         case blocking_status::timed_out:
             co_return client_resolve_result{.error_ = asio::error::timed_out};
         case blocking_status::queue_full:

@@ -69,14 +69,14 @@ private:
     // what it touches: the query value is copied into the lambda, never
     // borrowed from the request. The handler suspends and resumes on its own
     // worker, which kept serving other connections meanwhile. A saturated pool
-    // becomes a typed rejection; value() explicitly throws
+    // becomes a typed rejection; take_value() explicitly throws
     // blocking_operation_rejected, which the default error path answers with 503.
     ruvia::task<ruvia::http_response> offload(ruvia::context& c) {
         auto result_value = co_await c.run_blocking(
             [input = std::string(c.req().query("input").value_or("default"))] {
                 return slow_checksum(input);
             });
-        const auto checksum = std::move(result_value).value();
+        const auto checksum = std::move(result_value).take_value();
         std::pmr::string body(c.arena());
         body.append("checksum=");
         body.append(std::to_string(checksum));
@@ -97,7 +97,7 @@ private:
         }
         std::pmr::string body(c.arena());
         body.append("checksum=");
-        body.append(std::to_string(std::move(result_value).value()));
+        body.append(std::to_string(std::move(result_value).take_value()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }

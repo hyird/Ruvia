@@ -79,7 +79,7 @@ class file_failure_routes final {
             }
             return 0;
         });
-        static_cast<void>(std::move(held).value());
+        static_cast<void>(std::move(held).take_value());
         co_return c.text("released");
     }
 

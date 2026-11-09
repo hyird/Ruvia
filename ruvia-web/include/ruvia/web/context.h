@@ -592,7 +592,7 @@ public:
     // touches. Completion resumes on this worker; timeout or shutdown stops
     // the wait without joining a still-running foreign callable.
     // Rejection and callable exceptions are retained in blocking_result. Inspect
-    // status() for load shedding or use std::move(result).value() to throw.
+    // status() for load shedding or use std::move(result).take_value() to throw.
     // With application::blocking_pool(nullptr) the result reports
     // blocking_status::unavailable without submitting the callable.
     template <typename callable_type>

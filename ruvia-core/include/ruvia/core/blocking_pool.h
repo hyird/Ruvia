@@ -280,6 +280,7 @@ public:
         rethrow_if_not_completed();
     }
 
+    void value() && = delete;
     void value() const&& = delete;
 
     [[nodiscard]] decltype(auto) value() &
@@ -295,14 +296,14 @@ public:
         rethrow_if_not_completed();
     }
 
-    [[nodiscard]] t_type value() &&
+    [[nodiscard]] t_type take_value() &&
         requires(!std::is_void_v<t_type>)
     {
         rethrow_if_not_completed();
         return std::move(current_value());
     }
 
-    void value() &&
+    void take_value() &&
         requires(std::is_void_v<t_type>)
     {
         rethrow_if_not_completed();
@@ -479,7 +480,7 @@ template <typename fn_type>
 //
 // Never throws for a rejection; the status says what happened. A worker
 // without a pool, a stop token that is already stopped, or a timeout that is
-// not positive rejects without submitting `fn`. Use std::move(result).value()
+// not positive rejects without submitting `fn`. Use std::move(result).take_value()
 // to turn a rejection into an exception and to rethrow the callable's own
 // exception.
 template <typename fn_type>

@@ -57,7 +57,7 @@ public:
     // The callable owns its inputs and must not borrow worker state. Completion
     // resumes here; worker shutdown and timeout end the wait, not the callable.
     // Rejection and callable exceptions are retained in blocking_result; inspect
-    // status() or use std::move(result).value() to throw. The worker stop token
+    // status() or use std::move(result).take_value() to throw. The worker stop token
     // is bound automatically. With application::blocking_pool(nullptr) the
     // result reports blocking_status::unavailable.
     template <typename callable_type>

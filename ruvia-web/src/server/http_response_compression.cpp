@@ -246,7 +246,7 @@ task<http_response_compression_status> compress_response_offloaded(http_response
             // identity is acceptable; otherwise report 503 Service Unavailable.
             co_return http_response_compression_status::unavailable;
         }
-        co_return commit_compressed_body(response, coding, std::move(result_value).value());
+        co_return commit_compressed_body(response, coding, std::move(result_value).take_value());
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());
         // Failure to allocate/copy the request-owned input or create the

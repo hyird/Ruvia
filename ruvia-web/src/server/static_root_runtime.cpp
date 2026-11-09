@@ -116,7 +116,7 @@ task<void> document_root_publisher::refresh(
             }
             co_return;
         }
-        candidate = std::move(rebuilt).value();
+        candidate = std::move(rebuilt).take_value();
     } catch (...) {
         // The offload wrapper reports pool shutdown as a status, but creating
         // its one-shot channel or transporting a result can still throw.
@@ -144,7 +144,7 @@ task<void> document_root_publisher::refresh(
                 }
                 co_return;
             }
-            candidate = std::move(prepared).value();
+            candidate = std::move(prepared).take_value();
         } catch (...) {
             record_failure(std::current_exception());
             co_return;

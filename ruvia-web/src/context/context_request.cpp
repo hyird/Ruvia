@@ -204,7 +204,7 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
             });
         // A codec failure on the pool is rethrown here; pool saturation or
         // shutdown throws blocking_operation_rejected (mapped to 503).
-        auto result_value = std::move(offloaded).value();
+        auto result_value = std::move(offloaded).take_value();
         if (const auto* content = std::get_if<std::pmr::string>(&result_value)) {
             co_return std::pmr::string(*content, options.resource_);
         }

@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <future>
 #include <limits>
@@ -24,6 +25,22 @@
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::blocking_pool_tests {
+
+template <typename value_type>
+concept separated_blocking_result_access =
+    requires(blocking_result<value_type>& result, const blocking_result<value_type>& constant) {
+        { result.value() } -> std::same_as<std::add_lvalue_reference_t<value_type>>;
+        { constant.value() } -> std::same_as<std::conditional_t<std::is_void_v<value_type>, void, std::add_lvalue_reference_t<const value_type>>>;
+        { std::move(result).take_value() } -> std::same_as<value_type>;
+    } &&
+    (!requires(blocking_result<value_type>& result) { result.take_value(); }) &&
+    (!requires(blocking_result<value_type>& result) { std::move(result).value(); }) &&
+    (!requires(const blocking_result<value_type>& result) { std::move(result).value(); }) &&
+    (!requires(const blocking_result<value_type>& result) { std::move(result).take_value(); });
+
+static_assert(separated_blocking_result_access<int>);
+static_assert(separated_blocking_result_access<void>);
+static_assert(separated_blocking_result_access<std::unique_ptr<int>>);
 
 struct yielding_result final {
     explicit yielding_result(int value) noexcept
@@ -60,7 +77,7 @@ task<void> exercise_receiver_move_failure(worker_handle worker, bool& success) {
         co_return;
     }
     try {
-        static_cast<void>(std::move(result).value());
+        static_cast<void>(std::move(result).take_value());
     } catch (const std::runtime_error&) {
         success = true;
     }
@@ -71,7 +88,7 @@ task<void> exercise_completion_during_suspend(worker_handle worker, bool& succes
         auto result = co_await run_blocking(worker, [value] { return yielding_result(value); });
         const auto& const_result = result;
         if (!result.completed() || const_result.value().value_ != value ||
-            result.value().value_ != value || std::move(result).value().value_ != value) {
+            result.value().value_ != value || std::move(result).take_value().value_ != value) {
             co_return;
         }
     }
@@ -251,7 +268,7 @@ bool test_callable_move_can_stop_pool_before_publication() {
 
 task<void> exercise_results(worker_handle worker_value, bool& success) {
     auto value = co_await ruvia::run_blocking(worker_value, {}, [] { return 42; });
-    if (!value.completed() || std::move(value).value() != 42) {
+    if (!value.completed() || std::move(value).take_value() != 42) {
         co_return;
     }
 
@@ -266,7 +283,7 @@ task<void> exercise_results(worker_handle worker_value, bool& success) {
         }
         bool rethrown = false;
         try {
-            static_cast<void>(std::move(*outcome).value());
+            static_cast<void>(std::move(*outcome).take_value());
         } catch (const std::system_error& error) {
             rethrown = error.code() == std::errc::permission_denied;
         }
@@ -280,14 +297,14 @@ task<void> exercise_results(worker_handle worker_value, bool& success) {
     if (!empty.completed() || !ran.load()) {
         co_return;
     }
-    static_cast<void>(std::move(empty).value());
+    static_cast<void>(std::move(empty).take_value());
 
     // A moved-only result travels back by move, not by copy.
     auto owned = co_await ruvia::run_blocking(worker_value, {}, [] { return std::make_unique<int>(7); });
     if (!owned.completed()) {
         co_return;
     }
-    const auto pointer = std::move(owned).value();
+    const auto pointer = std::move(owned).take_value();
     if (pointer == nullptr || *pointer != 7) {
         co_return;
     }
@@ -313,7 +330,7 @@ task<void> exercise_cancellation(worker_handle worker_value, thread_gate& gate_v
         co_return;
     }
     try {
-        static_cast<void>(std::move(result_value).value());
+        static_cast<void>(std::move(result_value).take_value());
     } catch (const ruvia::blocking_operation_rejected& error) {
         success = error.status() == blocking_status::cancelled;
     }
@@ -336,7 +353,7 @@ task<void> exercise_timeout(
     }
     bool rejected = false;
     try {
-        static_cast<void>(std::move(timed_out).value());
+        static_cast<void>(std::move(timed_out).take_value());
     } catch (const ruvia::blocking_operation_rejected& error) {
         rejected = error.status() == blocking_status::timed_out;
     }
@@ -344,7 +361,7 @@ task<void> exercise_timeout(
 
     // A deadline that is not reached behaves exactly like the untimed wait.
     auto in_time = co_await ruvia::run_blocking(worker_value, {.timeout_ = std::chrono::seconds(30)}, [] { return 9; });
-    success = rejected && in_time.completed() && std::move(in_time).value() == 9;
+    success = rejected && in_time.completed() && std::move(in_time).take_value() == 9;
 }
 
 task<void> exercise_saturating_timeout(
@@ -365,7 +382,7 @@ task<void> exercise_saturating_timeout(
         [] { return 17; });
     completed.store(true, std::memory_order_relaxed);
     releaser.join();
-    success = result_value.completed() && std::move(result_value).value() == 17;
+    success = result_value.completed() && std::move(result_value).take_value() == 17;
 }
 
 task<void> count_on_worker(std::atomic_int& order, int& observed_value) {
@@ -420,7 +437,7 @@ task<void> exercise_stopped_pool(
     }
     bool rejected = false;
     try {
-        static_cast<void>(std::move(result_value).value());
+        static_cast<void>(std::move(result_value).take_value());
     } catch (const ruvia::blocking_operation_rejected& error) {
         rejected = error.status() == blocking_status::pool_stopped;
     }
@@ -499,7 +516,7 @@ task<void> exercise_worker_without_pool(worker_handle worker_value, std::atomic_
         co_return;
     }
     try {
-        static_cast<void>(std::move(result_value).value());
+        static_cast<void>(std::move(result_value).take_value());
     } catch (const ruvia::blocking_operation_rejected& error) {
         success = error.status() == blocking_status::unavailable;
     }

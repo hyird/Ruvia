@@ -375,7 +375,7 @@ if (!result.completed()) {
         .message_ = ruvia::describe_blocking_status(result.status()),
     });
 }
-auto digest = std::move(result).value();
+auto digest = std::move(result).take_value();
 ```
 
 ---

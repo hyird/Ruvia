@@ -188,7 +188,7 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
         failure_.emplace(response_file_failure::read_threw(result.error()));
         co_return false;
     }
-    state_ = std::move(result).value();
+    state_ = std::move(result).take_value();
     co_return settle_read();
 }
 

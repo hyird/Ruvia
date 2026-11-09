@@ -41,7 +41,7 @@ ruvia::task<void> hold_executor(ruvia::worker_handle worker, std::shared_ptr<hel
         ++held->finished_;
     });
     if (result.status() != ruvia::blocking_status::worker_stopping) {
-        std::move(result).value();
+        std::move(result).take_value();
     }
 }
 
