@@ -105,7 +105,7 @@ jobs:
             core.notice(`Retained current/newer/active workflow runs; deleted ${removed} older completed runs.`);
 
   resolve_toolchain:
-    name: Resolve latest LLVM musl toolchain and pinned vcpkg
+    name: Resolve latest LLVM musl toolchain and vcpkg
     runs-on: ubuntu-24.04
     outputs:
       release: ${{ steps.resolve.outputs.release }}
@@ -113,7 +113,7 @@ jobs:
       vcpkg_commit: ${{ steps.resolve.outputs.vcpkg_commit }}
     steps:
       - uses: actions/checkout@v6
-      - name: Resolve latest toolchain release, checksum, and vcpkg baseline
+      - name: Resolve latest toolchain release, checksum, and vcpkg commit
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
@@ -128,7 +128,7 @@ jobs:
           checksum="$(curl -fsSL "https://github.com/cross-tools/clang-cross/releases/download/$release/$asset.sha256")"
           read -r sha256 _ <<< "$checksum"
           [[ "$sha256" =~ ^[[:xdigit:]]{64}$ ]]
-          vcpkg_commit="$(jq -er '."builtin-baseline"' vcpkg.json)"
+          vcpkg_commit="$(gh api repos/microsoft/vcpkg/commits/HEAD --jq '.sha')"
           [[ "$vcpkg_commit" =~ ^[[:xdigit:]]{40}$ ]]
           printf 'release=%s\nsha256=%s\nvcpkg_commit=%s\n' "$release" "${sha256,,}" "${vcpkg_commit,,}" >> "$GITHUB_OUTPUT"
 
