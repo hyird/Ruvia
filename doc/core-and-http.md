@@ -105,6 +105,7 @@ pool.join();
 `worker_wait_result<T>` 的状态分类在构造后固定；当 `T` 支持时可复制或移动构造，但不可重新赋值。替换保存的结果时使用新局部变量或 `std::optional` 的 `emplace()`，不要给结果或其 `optional` 直接赋值。`value()` 仍可修改 payload，移动构造和 `take_value()` 不改变源结果的状态分类，payload 遵循自身移动语义；其构造或提取抛异常不会让已有结果失去可查询的状态。通道与单次交付仍支持可抛异常的 payload，不要求其移动为 `noexcept`。
 
 - **拒绝负载提取**：`worker_delivery_result::take_rejected()` 成功后清空负载；失败时不额外销毁负载，内容遵循 payload 自身移动语义，可检查后重试。两种情况下结果状态均不变。
+- **交付状态保活**：`one_shot_completion::complete()` 与 `channel_sender::send()` 在移动 payload 前固定状态所有权；同步重绑调用句柄不改变本次操作目标，原状态保留至提交或拒绝处理完成。
 
 `pool_lease_scheduler` 的空闲槽位仍同步获取；`release(slot)` 向排队者提交槽位归属后，通过后续 Worker 轮次恢复该协程，不在释放调用栈内执行下一位消费者，避免连续立即释放形成递归链。`close()` 同样先向全部排队者提交 `closed` 结果，再通过后续 Worker 轮次恢复它们，调用方的关闭序列在任何等待者观察到关闭前完成。提交后的取消或 `close()` 不撤销已交接槽位；尚未交接的等待者按原取消、超时和关闭规则完成。不得依赖 `release()` 或 `close()` 返回代表排队协程已经完成，销毁 scheduler 前仍须等待已启动的 acquire 完成。
 

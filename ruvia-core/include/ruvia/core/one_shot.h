@@ -165,7 +165,8 @@ public:
     // moves and destruction. Concurrent attempts report in_progress while the
     // first value is being constructed.
     [[nodiscard]] one_shot_complete_result<t_type> complete(t_type value) const {
-        auto* const state = state_.get();
+        // Payload code may synchronously rebind this handle while the call is active.
+        const auto state = state_;
         if (state == nullptr) {
             return one_shot_complete_result<t_type>::reject(
                 one_shot_complete_status::receiver_closed, std::move(value));

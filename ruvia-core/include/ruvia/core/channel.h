@@ -294,7 +294,8 @@ public:
     // moves and destruction. Concurrent sends are delivered in publication
     // order; closure during a payload move returns that value as rejected.
     [[nodiscard]] channel_send_result<t_type> send(t_type value) const {
-        auto* const state = state_.get();
+        // Payload code may synchronously rebind this handle while the call is active.
+        const auto state = state_;
         if (state == nullptr) {
             return channel_send_result<t_type>::reject(channel_send_status::closed, std::move(value));
         }

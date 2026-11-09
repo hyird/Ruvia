@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <semaphore>
 #include <stdexcept>
 #include <thread>
@@ -19,6 +20,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 
+#include "failing_memory_resource.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::one_shot_tests {
@@ -604,6 +606,47 @@ TEST(Ruvia, OneShotLifecycle) {
     EXPECT_TRUE(cross_thread_value);
     EXPECT_TRUE(cross_thread_completed);
     EXPECT_TRUE(cancellation_during_completion);
+}
+
+TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
+    using namespace ruvia::test::one_shot_tests;
+    for (const bool fail_move : {false, true}) {
+        SCOPED_TRACE(fail_move);
+        asio::io_context io;
+        auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
+        failing_memory_resource resource;
+        payload_state state;
+        auto [completion, receiver] = ruvia::make_one_shot<payload>(
+            attachment.loop().handle(), {.resource_ = &resource});
+        std::optional<ruvia::one_shot_receiver<payload>> owner(std::move(receiver));
+        owner->close();
+        const auto live_allocations = resource.live_allocations();
+        bool first_move = true;
+        bool state_pinned = false;
+        state.query_on_move_ = true;
+        state.throw_on_move_ = fail_move;
+        state.reenter_ = [&] {
+            if (std::exchange(first_move, false)) {
+                owner.reset();
+                completion = {};
+                state_pinned = resource.live_allocations() == live_allocations;
+            }
+        };
+
+        if (fail_move) {
+            EXPECT_THROW(static_cast<void>(completion.complete(payload(state))), std::runtime_error);
+        } else {
+            const auto result = completion.complete(payload(state));
+            EXPECT_EQ(result.status(), ruvia::one_shot_complete_status::receiver_closed);
+            ASSERT_NE(result.rejected(), nullptr);
+            ASSERT_NE(result.rejected()->value_, nullptr);
+            EXPECT_EQ(*result.rejected()->value_, 42);
+        }
+        EXPECT_TRUE(state_pinned);
+        EXPECT_FALSE(completion.valid());
+        EXPECT_EQ(state.destroyed_, 1);
+        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
 }
 
 TEST(Ruvia, OneShotCompletionMoveCanCloseReceiver) {

@@ -809,6 +809,44 @@ TEST(Ruvia, ChannelLifecycle) {
     EXPECT_TRUE(failed_receive_move_releases_slot);
 }
 
+TEST(Ruvia, ChannelSendPinsStateDuringReentrantRebinding) {
+    using namespace ruvia::test::channel_tests;
+    for (const bool fail_move : {false, true}) {
+        SCOPED_TRACE(fail_move);
+        asio::io_context io;
+        auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
+        failing_memory_resource resource;
+        auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(
+            attachment.loop().handle(), {.capacity_ = 1, .resource_ = &resource});
+        std::optional<ruvia::channel_receiver<reentrant_payload>> owner(std::move(receiver));
+        owner->close();
+        const auto live_allocations = resource.live_allocations();
+        bool state_pinned = false;
+        std::function<void()> on_move = [&] {
+            owner.reset();
+            sender = {};
+            state_pinned = resource.live_allocations() == live_allocations;
+            if (fail_move) {
+                throw std::runtime_error("requested move failure");
+            }
+        };
+        std::function<void()> on_destroy;
+
+        if (fail_move) {
+            EXPECT_THROW(static_cast<void>(sender.send(reentrant_payload(42, on_move, on_destroy))),
+                std::runtime_error);
+        } else {
+            const auto result = sender.send(reentrant_payload(42, on_move, on_destroy));
+            EXPECT_EQ(result.status(), ruvia::channel_send_status::closed);
+            ASSERT_NE(result.rejected(), nullptr);
+            EXPECT_EQ(result.rejected()->value_, 42);
+        }
+        EXPECT_TRUE(state_pinned);
+        EXPECT_FALSE(sender.valid());
+        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
+}
+
 TEST(Ruvia, ChannelRejectedPayloadMovesCanCloseChannel) {
     EXPECT_TRUE(ruvia::test::channel_tests::test_rejected_payload_moves_can_close_the_channel());
 }
