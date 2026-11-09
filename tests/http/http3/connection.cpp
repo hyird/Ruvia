@@ -19,6 +19,7 @@
 
 #include "failing_memory_resource.h"
 #include "http3_relay.h"
+#include "memory_resource_fixture.h"
 #include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
@@ -95,6 +96,13 @@ constexpr std::int64_t shutdown_notice_stream_id = (std::int64_t{1} << 62) - 4;
 // H3_REQUEST_CANCELLED, RFC 9114 §8.1.
 constexpr std::uint64_t request_cancelled = 0x10c;
 
+ruvia::http3_headers_event make_owned_headers_event(std::pmr::memory_resource* resource) {
+    ruvia::http3_headers_event event(4, std::pmr::vector<ruvia::http3_field>(resource), true, true, true);
+    event.fields_.emplace_back("x-first", "one", resource);
+    event.fields_.emplace_back("x-second", "two", resource);
+    return event;
+}
+
 }  // namespace
 
 TEST(Ruvia, http3_nghttp3_client_server_exchange_headers_and_stream_end) {
@@ -127,6 +135,212 @@ TEST(Ruvia, http3_nghttp3_client_server_exchange_headers_and_stream_end) {
     EXPECT_TRUE(response.headers_[0].field(":status") == std::string_view("204"));
     EXPECT_TRUE(response.ended(0));
     EXPECT_EQ(response.sequence_, std::string("HE"));
+}
+
+TEST(Ruvia, http3_owned_event_copies_inherit_source_resource) {
+    for (const bool empty : {false, true}) {
+        SCOPED_TRACE(empty);
+        failing_memory_resource resource;
+        {
+            auto source = make_owned_headers_event(&resource);
+            if (empty) {
+                source.fields_.clear();
+            }
+            const auto copied = source;
+            EXPECT_EQ(copied.fields_.get_allocator().resource(), &resource);
+            EXPECT_EQ(copied.stream_id_, 4);
+            EXPECT_TRUE(copied.stream_ended_);
+            EXPECT_TRUE(copied.trailers_);
+            EXPECT_TRUE(copied.early_data_);
+            ASSERT_EQ(copied.fields_.size(), empty ? std::size_t{0} : std::size_t{2});
+            if (!empty) {
+                source.fields_.clear();
+                EXPECT_EQ(copied.fields_[0].name(), "x-first");
+                EXPECT_EQ(copied.fields_[0].value(), "one");
+                EXPECT_EQ(copied.fields_[1].name(), "x-second");
+                EXPECT_EQ(copied.fields_[1].value(), "two");
+            }
+            const std::string payload(empty ? 0 : 128, 'd');
+            ruvia::http3_datagram_event datagram(8, std::pmr::string(payload, &resource));
+            const auto copied_datagram = datagram;
+            datagram.payload_.clear();
+            EXPECT_EQ(copied_datagram.payload_.get_allocator().resource(), &resource);
+            EXPECT_EQ(copied_datagram.stream_id_, 8);
+            EXPECT_EQ(copied_datagram.payload_, std::string_view(payload));
+        }
+        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, http3_headers_event_assignment_rebinds_equivalent_resources) {
+    for (const bool move : {false, true}) {
+        SCOPED_TRACE(move);
+        failing_memory_resource upstream;
+        ruvia::test::equivalent_tracking_resource source_resource(upstream);
+        ruvia::test::equivalent_tracking_resource target_resource(upstream);
+        {
+            ruvia::http3_headers_event target(8, std::pmr::vector<ruvia::http3_field>(&target_resource));
+            target.fields_.emplace_back("x-old", "before", &target_resource);
+            {
+                auto source = make_owned_headers_event(&source_resource);
+                if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+                    source_resource.reject_allocations_after(0);
+                }
+                if (move) {
+                    target = std::move(source);
+                } else {
+                    target = source;
+                }
+                source_resource.allow_allocations();
+            }
+            source_resource.retire();
+            EXPECT_EQ(target.fields_.get_allocator().resource(), &target_resource);
+            EXPECT_EQ(target.stream_id_, 4);
+            EXPECT_TRUE(target.stream_ended_);
+            EXPECT_TRUE(target.trailers_);
+            EXPECT_TRUE(target.early_data_);
+            ASSERT_EQ(target.fields_.size(), std::size_t{2});
+            EXPECT_EQ(target.fields_[0].name(), "x-first");
+            EXPECT_EQ(target.fields_[0].value(), "one");
+            EXPECT_EQ(target.fields_[1].name(), "x-second");
+            EXPECT_EQ(target.fields_[1].value(), "two");
+        }
+        EXPECT_EQ(source_resource.callbacks_after_retirement(), std::size_t{0});
+        EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, http3_headers_event_assignment_rolls_back_each_allocation_failure) {
+    for (const bool move : {false, true}) {
+        SCOPED_TRACE(move);
+        for (std::size_t fail_after = 0;; ++fail_after) {
+            SCOPED_TRACE(fail_after);
+            failing_memory_resource source_resource;
+            failing_memory_resource target_resource;
+            bool failed = false;
+            {
+                auto source = make_owned_headers_event(&source_resource);
+                ruvia::http3_headers_event target(8, std::pmr::vector<ruvia::http3_field>(&target_resource));
+                target.fields_.emplace_back("x-old", "before", &target_resource);
+                const auto* source_fields = source.fields_.data();
+                const auto* target_fields = target.fields_.data();
+                const auto source_live = source_resource.live_allocations();
+                const auto target_live = target_resource.live_allocations();
+                target_resource.fail_after_stl_operation(fail_after);
+                try {
+                    if (move) {
+                        target = std::move(source);
+                    } else {
+                        target = source;
+                    }
+                } catch (const std::bad_alloc&) {
+                    failed = true;
+                }
+                target_resource.allow_allocations();
+                if (failed) {
+                    EXPECT_EQ(source.stream_id_, 4);
+                    EXPECT_TRUE(source.stream_ended_);
+                    EXPECT_TRUE(source.trailers_);
+                    EXPECT_TRUE(source.early_data_);
+                    EXPECT_EQ(source.fields_.data(), source_fields);
+                    ASSERT_EQ(source.fields_.size(), std::size_t{2});
+                    EXPECT_EQ(source.fields_[0].value(), "one");
+                    EXPECT_EQ(source.fields_[1].value(), "two");
+                    EXPECT_EQ(target.stream_id_, 8);
+                    EXPECT_FALSE(target.stream_ended_);
+                    EXPECT_FALSE(target.trailers_);
+                    EXPECT_FALSE(target.early_data_);
+                    EXPECT_EQ(target.fields_.data(), target_fields);
+                    ASSERT_EQ(target.fields_.size(), std::size_t{1});
+                    EXPECT_EQ(target.fields_[0].name(), "x-old");
+                    EXPECT_EQ(target.fields_[0].value(), "before");
+                    EXPECT_EQ(source_resource.live_allocations(), source_live);
+                    EXPECT_EQ(target_resource.live_allocations(), target_live);
+                    if (move) {
+                        target = std::move(source);
+                    } else {
+                        target = source;
+                    }
+                }
+                EXPECT_EQ(target.stream_id_, 4);
+                EXPECT_TRUE(target.stream_ended_);
+                EXPECT_TRUE(target.trailers_);
+                EXPECT_TRUE(target.early_data_);
+                ASSERT_EQ(target.fields_.size(), std::size_t{2});
+                EXPECT_EQ(target.fields_[0].value(), "one");
+                EXPECT_EQ(target.fields_[1].value(), "two");
+            }
+            EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+            EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+            if (!failed) {
+                break;
+            }
+        }
+    }
+}
+
+TEST(Ruvia, http3_datagram_event_assignment_retains_resource_and_allows_retry) {
+    const std::string previous(64, 'p');
+    const std::string incoming(2048, 'n');
+    for (const bool move : {false, true}) {
+        SCOPED_TRACE(move);
+        failing_memory_resource source_resource;
+        failing_memory_resource target_resource;
+        {
+            ruvia::http3_datagram_event source(4, std::pmr::string(incoming, &source_resource));
+            ruvia::http3_datagram_event target(8, std::pmr::string(previous, &target_resource));
+            if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+                target_resource.fail_after(0);
+                if (move) {
+                    EXPECT_THROW(target = std::move(source), std::bad_alloc);
+                } else {
+                    EXPECT_THROW(target = source, std::bad_alloc);
+                }
+                EXPECT_EQ(source.stream_id_, 4);
+                EXPECT_EQ(source.payload_, std::string_view(incoming));
+                EXPECT_EQ(target.stream_id_, 8);
+                EXPECT_EQ(target.payload_, std::string_view(previous));
+            }
+            target_resource.allow_allocations();
+            if (move) {
+                target = std::move(source);
+            } else {
+                target = source;
+            }
+            EXPECT_EQ(target.stream_id_, 4);
+            EXPECT_EQ(target.payload_, std::string_view(incoming));
+            EXPECT_EQ(target.payload_.get_allocator().resource(), &target_resource);
+        }
+        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+        EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+    }
+}
+
+TEST(Ruvia, http3_owned_events_move_storage_within_one_resource) {
+    failing_memory_resource resource;
+    const std::string expected_payload(128, 'd');
+    {
+        auto source = make_owned_headers_event(&resource);
+        ruvia::http3_headers_event target(8, std::pmr::vector<ruvia::http3_field>(&resource));
+        target.fields_.emplace_back("x-old", "before", &resource);
+        ruvia::http3_datagram_event datagram(4, std::pmr::string(128, 'd', &resource));
+        ruvia::http3_datagram_event received(8, std::pmr::string(64, 'p', &resource));
+        const auto* fields = source.fields_.data();
+        const auto* payload = datagram.payload_.data();
+        resource.fail_after_stl_operation(0);
+        target = std::move(source);
+        received = std::move(datagram);
+        resource.allow_allocations();
+        EXPECT_EQ(target.stream_id_, 4);
+        EXPECT_EQ(target.fields_.data(), fields);
+        ASSERT_EQ(target.fields_.size(), std::size_t{2});
+        EXPECT_EQ(target.fields_[0].value(), "one");
+        EXPECT_EQ(target.fields_[1].value(), "two");
+        EXPECT_EQ(received.stream_id_, 4);
+        EXPECT_EQ(received.payload_.data(), payload);
+        EXPECT_EQ(received.payload_, std::string_view(expected_payload));
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, http3_data_event_borrows_or_copies_named_input) {

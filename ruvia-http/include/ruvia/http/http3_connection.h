@@ -90,7 +90,17 @@ private:
 
 // One decoded field section: the initial request or response head, or a
 // trailer section (trailers_) when the stream already carried one.
+// Copies inherit the source resource; assignment retains the destination
+// resource and prepares all nested fields before committing.
 struct http3_headers_event final {
+    http3_headers_event() = default;
+    http3_headers_event(std::int64_t stream_id, std::pmr::vector<http3_field> fields,
+        bool stream_ended = false, bool trailers = false, bool early_data = false) noexcept;
+    http3_headers_event(const http3_headers_event& other);
+    http3_headers_event(http3_headers_event&&) noexcept = default;
+    http3_headers_event& operator=(const http3_headers_event& other);
+    http3_headers_event& operator=(http3_headers_event&& other);
+
     std::int64_t stream_id_{-1};
     std::pmr::vector<http3_field> fields_;
     bool stream_ended_{false};
@@ -99,6 +109,10 @@ struct http3_headers_event final {
     // in 0-RTT packets before the handshake completed (RFC 9001 §4.6.1), so
     // the request may be a replay (RFC 8470 §5, RFC 9001 §9.2).
     bool early_data_{false};
+
+private:
+    http3_headers_event(const http3_headers_event& other, std::pmr::memory_resource* resource);
+    void swap(http3_headers_event& other) noexcept;
 };
 
 // DATA payload. The QUIC owner returns its flow-control credit only when the
@@ -159,7 +173,15 @@ struct http3_goaway_event final {
 
 // An HTTP/3 Datagram (RFC 9297 §2.1) for a request stream whose head this
 // codec decoded; payload_ follows the Quarter Stream ID.
+// Copy and assignment follow the resource rules of http3_headers_event.
 struct http3_datagram_event final {
+    http3_datagram_event() = default;
+    http3_datagram_event(std::int64_t stream_id, std::pmr::string payload) noexcept;
+    http3_datagram_event(const http3_datagram_event& other);
+    http3_datagram_event(http3_datagram_event&&) noexcept = default;
+    http3_datagram_event& operator=(const http3_datagram_event& other);
+    http3_datagram_event& operator=(http3_datagram_event&& other);
+
     std::int64_t stream_id_{-1};
     std::pmr::string payload_;
 };

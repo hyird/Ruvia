@@ -113,6 +113,83 @@ http3_field::http3_field(std::string_view name, std::string_view value,
     std::pmr::memory_resource* resource)
     : header_(name, value, detail::http_pmr_resource_or_default(resource)) {}
 
+http3_headers_event::http3_headers_event(std::int64_t stream_id,
+    std::pmr::vector<http3_field> fields, bool stream_ended, bool trailers, bool early_data) noexcept
+    : stream_id_(stream_id),
+      fields_(std::move(fields)),
+      stream_ended_(stream_ended),
+      trailers_(trailers),
+      early_data_(early_data) {}
+
+http3_headers_event::http3_headers_event(const http3_headers_event& other)
+    : http3_headers_event(other, other.fields_.get_allocator().resource()) {}
+
+http3_headers_event::http3_headers_event(
+    const http3_headers_event& other, std::pmr::memory_resource* resource)
+    : stream_id_(other.stream_id_),
+      fields_(resource),
+      stream_ended_(other.stream_ended_),
+      trailers_(other.trailers_),
+      early_data_(other.early_data_) {
+    fields_.reserve(other.fields_.size());
+    for (const auto& field : other.fields_) {
+        fields_.emplace_back(field.name(), field.value(), resource);
+    }
+}
+
+void http3_headers_event::swap(http3_headers_event& other) noexcept {
+    std::swap(stream_id_, other.stream_id_);
+    fields_.swap(other.fields_);
+    std::swap(stream_ended_, other.stream_ended_);
+    std::swap(trailers_, other.trailers_);
+    std::swap(early_data_, other.early_data_);
+}
+
+http3_headers_event& http3_headers_event::operator=(const http3_headers_event& other) {
+    if (this != &other) {
+        http3_headers_event candidate(other, fields_.get_allocator().resource());
+        swap(candidate);
+    }
+    return *this;
+}
+
+http3_headers_event& http3_headers_event::operator=(http3_headers_event&& other) {
+    if (this != &other) {
+        // Equivalent resource objects do not share a lifetime for nested fields.
+        if (fields_.get_allocator().resource() == other.fields_.get_allocator().resource()) {
+            http3_headers_event candidate(std::move(other));
+            swap(candidate);
+        } else {
+            *this = other;
+        }
+    }
+    return *this;
+}
+
+http3_datagram_event::http3_datagram_event(std::int64_t stream_id, std::pmr::string payload) noexcept
+    : stream_id_(stream_id),
+      payload_(std::move(payload)) {}
+
+http3_datagram_event::http3_datagram_event(const http3_datagram_event& other)
+    : stream_id_(other.stream_id_),
+      payload_(other.payload_, other.payload_.get_allocator()) {}
+
+http3_datagram_event& http3_datagram_event::operator=(const http3_datagram_event& other) {
+    if (this != &other) {
+        payload_ = other.payload_;
+        stream_id_ = other.stream_id_;
+    }
+    return *this;
+}
+
+http3_datagram_event& http3_datagram_event::operator=(http3_datagram_event&& other) {
+    if (this != &other) {
+        payload_ = std::move(other.payload_);
+        stream_id_ = other.stream_id_;
+    }
+    return *this;
+}
+
 http3_data_event::http3_data_event(std::int64_t stream_id,
     std::string_view bytes, std::pmr::memory_resource* resource,
     bool own_bytes)
@@ -464,8 +541,8 @@ public:
             if (result != 0) {
                 throw std::logic_error("failed to bind nghttp3 stream state");
             }
-            stream.building_headers_.emplace(http3_headers_event{
-                stream_id, std::pmr::vector<http3_field>(self.resource_), false, trailers, stream.early_data_});
+            stream.building_headers_.emplace(
+                stream_id, std::pmr::vector<http3_field>(self.resource_), false, trailers, stream.early_data_);
             stream.building_header_bytes_ = 0;
             ++self.active_header_blocks_;
         });
