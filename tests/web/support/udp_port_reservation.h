@@ -19,16 +19,13 @@ namespace ruvia::test {
 // Selects a free loopback UDP port and keeps other test fixtures off it until
 // every server using it has stopped.
 //
-// POSIX: selection binds without reuse, then the socket joins the port's
-// SO_REUSEPORT group so servers can bind the same port. A plain group member
-// would receive its hash share of client datagrams, so the reservation is
-// connected to a fixed peer that never sends (127.0.0.1:9, discard): Linux
-// scores a connected UDP socket only for datagrams from that exact peer and
-// otherwise delivers to the unconnected server sockets, keeping each client
-// 4-tuple on one server. Verified on Linux 6.12 with four reuseport servers
-// and 2000 datagrams from 500 client ports: the connected reservation
-// received none and every datagram reached a server, while an unconnected
-// reservation took about a fifth of them.
+// POSIX: selection binds the wildcard address (0.0.0.0) without reuse so no
+// other socket holds the port number, then joins 0.0.0.0's SO_REUSEPORT group
+// so loopback servers (127.0.0.1) can bind the same port. Keeping the
+// reservation on 0.0.0.0 rather than 127.0.0.1 leaves the loopback server's
+// SO_REUSEPORT socket group pure (indices 0..N-1 belong only to the server's
+// workers for SO_ATTACH_REUSEPORT_CBPF), while Linux's address specificity
+// preference delivers every loopback datagram to the 127.0.0.1 server sockets.
 //
 // Windows: SO_REUSEPORT does not exist and a server binds one UDP socket; a
 // second socket bound to the port would split its datagrams. The reservation
@@ -65,8 +62,8 @@ public:
             break;
         }
 #else
-        socket_.bind({asio::ip::address_v4::loopback(), 0});
-        endpoint_ = socket_.local_endpoint();
+        socket_.bind({asio::ip::address_v4::any(), 0});
+        endpoint_ = {asio::ip::address_v4::loopback(), socket_.local_endpoint().port()};
         socket_.set_option(asio::socket_base::reuse_address(true));
 #if defined(SO_REUSEPORT)
         const int enabled = 1;
@@ -76,7 +73,6 @@ public:
 #else
         throw std::system_error(asio::error::operation_not_supported, "UDP test reservations require SO_REUSEPORT");
 #endif
-        socket_.connect({asio::ip::address_v4::loopback(), 9});
 #endif
     }
 

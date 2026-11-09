@@ -12,14 +12,31 @@
 namespace ruvia::detail {
 namespace {
 
-// Only steers packets between workers: a forged tag merely sends a datagram
-// to a worker that does not know its connection and drops it, so a keyed
-// non-cryptographic hash suffices.
-[[nodiscard]] std::uint16_t connection_id_tag(const http3_secret& secret, const std::uint8_t* cid) noexcept {
-    auto hash = fnv1a_accumulate(fnv1a_offset_basis, std::string_view(reinterpret_cast<const char*>(secret.data()), secret.size()));
-    hash = fnv1a_accumulate(hash, std::string_view(reinterpret_cast<const char*>(cid), 2));
-    hash = fnv1a_accumulate(hash, std::string_view(reinterpret_cast<const char*>(cid + 4), http3_connection_id_length - 4));
-    return static_cast<std::uint16_t>(hash ^ (hash >> 16) ^ (hash >> 32) ^ (hash >> 48));
+// Computes the 32-bit keyed digest of the 16 random bytes `cid[4..19]`. The
+// high 16 bits mask the owner worker index in `cid[0..1]`; the full digest
+// and the unmasked worker index feed `connection_id_tag`. Executed identically
+// by the Linux SO_ATTACH_REUSEPORT_CBPF program.
+[[nodiscard]] std::uint32_t connection_id_digest(const http3_secret& secret, const std::uint8_t* cid) noexcept {
+    const auto k0 = read_http3_be32(secret.data());
+    const auto k1 = read_http3_be32(secret.data() + 4);
+    const auto k2 = read_http3_be32(secret.data() + 8);
+    const auto k3 = read_http3_be32(secret.data() + 12);
+    const auto w0 = read_http3_be32(cid + 4);
+    const auto w1 = read_http3_be32(cid + 8);
+    const auto w2 = read_http3_be32(cid + 12);
+    const auto w3 = read_http3_be32(cid + 16);
+    std::uint32_t acc = (w0 ^ k0) * http3_cid_mix_prime_1;
+    acc = (acc ^ w1 ^ k1) * http3_cid_mix_prime_2;
+    acc = (acc ^ w2 ^ k2) * http3_cid_mix_prime_1;
+    acc = (acc ^ w3 ^ k3) * http3_cid_mix_prime_2;
+    return acc ^ (acc >> 16);
+}
+
+[[nodiscard]] std::uint16_t connection_id_tag(
+    const http3_secret& secret, std::uint32_t digest, std::uint16_t worker_index) noexcept {
+    const auto k4 = read_http3_be32(secret.data() + 16);
+    const std::uint32_t mixed = (digest ^ k4 ^ static_cast<std::uint32_t>(worker_index)) * http3_cid_mix_prime_1;
+    return static_cast<std::uint16_t>(mixed ^ (mixed >> 16));
 }
 
 }  // namespace
@@ -36,9 +53,12 @@ bool make_http3_connection_id(const http3_secret& secret, std::size_t worker_ind
     if (!fill_random_bytes(std::span<unsigned char>(bytes.data() + 4, bytes.size() - 4))) {
         return false;
     }
-    bytes[0] = static_cast<std::uint8_t>(worker_index >> 8);
-    bytes[1] = static_cast<std::uint8_t>(worker_index);
-    const auto tag = connection_id_tag(secret, bytes.data());
+    const auto worker = static_cast<std::uint16_t>(worker_index);
+    const auto digest = connection_id_digest(secret, bytes.data());
+    const auto masked_worker = static_cast<std::uint16_t>(worker ^ static_cast<std::uint16_t>(digest >> 16));
+    const auto tag = connection_id_tag(secret, digest, worker);
+    bytes[0] = static_cast<std::uint8_t>(masked_worker >> 8);
+    bytes[1] = static_cast<std::uint8_t>(masked_worker);
     bytes[2] = static_cast<std::uint8_t>(tag >> 8);
     bytes[3] = static_cast<std::uint8_t>(tag);
     ngtcp2_cid_init(&cid, bytes.data(), bytes.size());
@@ -50,15 +70,15 @@ std::optional<std::size_t> http3_connection_id_owner(
     if (cid.size() != http3_connection_id_length) {
         return std::nullopt;
     }
-    const auto tag = static_cast<std::uint16_t>((cid[2] << 8) | cid[3]);
-    if (tag != connection_id_tag(secret, cid.data())) {
+    const auto digest = connection_id_digest(secret, cid.data());
+    const auto worker = static_cast<std::uint16_t>(read_http3_be16(cid.data()) ^ static_cast<std::uint16_t>(digest >> 16));
+    if (static_cast<std::size_t>(worker) >= worker_count) {
         return std::nullopt;
     }
-    const auto owner = static_cast<std::size_t>((cid[0] << 8) | cid[1]);
-    if (owner >= worker_count) {
+    if (read_http3_be16(cid.data() + 2) != connection_id_tag(secret, digest, worker)) {
         return std::nullopt;
     }
-    return owner;
+    return static_cast<std::size_t>(worker);
 }
 
 #if defined(_WIN32)

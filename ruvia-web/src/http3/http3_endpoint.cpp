@@ -1,5 +1,7 @@
 #include "http3/http3_endpoint.h"
 
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
+
 #include <array>
 #include <exception>
 #include <limits>
@@ -8,13 +10,6 @@
 #include <system_error>
 #include <utility>
 #include <vector>
-#if !defined(_WIN32)
-#include <sys/socket.h>
-
-#include <cerrno>
-#endif
-
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
 
 #include <asio/bind_allocator.hpp>
 #include <asio/buffer.hpp>
@@ -83,20 +78,8 @@ void http3_endpoint::open() {
     local_endpoint_ = configured_endpoint_;
 #else
     receive_buffer_.resize(http3_max_udp_payload_bytes);
-    socket_.open(configured_endpoint_.protocol());
-    socket_.set_option(asio::socket_base::reuse_address(true));
-#if defined(SO_REUSEPORT)
-    // Every worker binds the port; the kernel spreads datagrams by 4-tuple
-    // and connection IDs steer the rest (http3_connection_id.h).
-    const int enabled = 1;
-    if (::setsockopt(socket_.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
-        throw std::system_error(errno, asio::system_category(), "failed to enable HTTP/3 listener SO_REUSEPORT");
-    }
-#else
-    throw std::system_error(asio::error::operation_not_supported, "HTTP/3 worker listeners require SO_REUSEPORT");
-#endif
-    socket_.bind(configured_endpoint_);
-    socket_.non_blocking(true);
+    services_.placement_.directory_->open_listener_socket(
+        services_.placement_.worker_index_, listener_index_, configured_endpoint_, secret(), socket_);
     local_endpoint_ = socket_.local_endpoint();
 #endif
     open_ = true;

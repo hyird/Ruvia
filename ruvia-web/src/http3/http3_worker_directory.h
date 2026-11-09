@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <span>
 #include <utility>
 #include <vector>
@@ -13,6 +14,9 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_handle.h"
+
+#include "http3/http3_connection_id.h"
+
 namespace ruvia::detail {
 
 #if defined(_WIN32)
@@ -80,6 +84,7 @@ public:
 
     http3_worker_directory(std::size_t worker_count, std::pmr::memory_resource* resource);
     http3_worker_directory(const http3_worker_directory&) = delete;
+    ~http3_worker_directory();
     http3_worker_directory& operator=(const http3_worker_directory&) = delete;
 
     [[nodiscard]] std::size_t worker_count() const noexcept {
@@ -92,6 +97,14 @@ public:
     void attach(std::size_t index, void* target, receive_type receive) noexcept;
     void detach(std::size_t index) noexcept;
 
+#if !defined(_WIN32)
+    // Binds every worker's SO_REUSEPORT socket for `listener_index` in worker
+    // index order 0..N-1 (attaching SO_ATTACH_REUSEPORT_CBPF on Linux) and
+    // assigns `worker_index`'s socket to `socket`.
+    void open_listener_socket(std::size_t worker_index, std::size_t listener_index,
+        const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
+        asio::ip::udp::socket& socket);
+#endif
     // Any thread. False when the datagram was dropped.
     [[nodiscard]] bool hand_off(std::size_t owner, std::size_t listener_index,
         std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
@@ -107,6 +120,8 @@ private:
     };
 
     std::pmr::vector<std::unique_ptr<slot, pmr_object_deleter<slot>>> slots_;
+    std::mutex bind_mutex_;
+    std::pmr::vector<std::pmr::vector<int>> listener_sockets_;
 };
 
 // Where one worker's HTTP/3 endpoints sit among the application's workers:

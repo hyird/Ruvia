@@ -12,26 +12,45 @@
 
 #include "ruvia/http/http3_quic_connection.h"
 
-// Server-chosen QUIC connection IDs (RFC 9000 §5.1) that route themselves.
+// Server-chosen QUIC connection IDs (RFC 9000 §5.1) that route themselves
+// without exposing a linkable worker prefix on the wire (RFC 9000 §9.5).
 // Every worker of a POSIX HTTP/3 listener binds the UDP port with
-// SO_REUSEPORT, so the kernel spreads datagrams by 4-tuple, not by
-// connection; on Windows the acceptor receives every datagram. Each
-// connection ID this server issues therefore names the worker that owns the
-// connection, keyed by the listener's shared secret so that a client-chosen
-// ID only names one by chance (one in 2^16):
+// SO_REUSEPORT (on Linux steered in the kernel by SO_ATTACH_REUSEPORT_CBPF),
+// and on Windows the acceptor receives every datagram. Each connection ID
+// this server issues names the worker that owns the connection, masked and
+// authenticated by the listener's shared secret and the ID's random suffix so
+// that sibling IDs of one connection share no fixed bytes and a client-chosen
+// ID only passes the tag check by chance (one in 2^16):
 //
-//   bytes 0..1   owner worker index, big endian
-//   bytes 2..3   tag: keyed hash of the other 16 bytes
-//   bytes 4..19  random
+//   bytes 0..1   (owner worker index) ^ mask, big endian
+//   bytes 2..3   tag: keyed 16-bit authentication tag over worker index and random bytes
+//   bytes 4..19  random (16 CSPRNG bytes)
 //
-// A datagram whose destination ID names another worker is handed to it. Any
-// other unknown ID (a client's first Initial) belongs, on POSIX, to the worker
-// that received it, and on Windows to the worker http3_initial_worker picks.
+// A datagram whose destination ID names another worker is steered to it (by
+// the kernel cBPF filter on Linux, or handed through the worker directory).
+// Any other unknown ID (a client's first Initial) is hashed by its connection
+// ID and the listener secret.
 
 namespace ruvia::detail {
 
 inline constexpr std::size_t http3_connection_id_length = 20;
 using http3_secret = std::array<std::uint8_t, 32>;
+
+// 32-bit mixing primes shared with the Linux SO_ATTACH_REUSEPORT_CBPF program.
+inline constexpr std::uint32_t http3_cid_mix_prime_1 = 0x85ebca6bu;
+inline constexpr std::uint32_t http3_cid_mix_prime_2 = 0xc2b2ae35u;
+
+[[nodiscard]] constexpr std::uint16_t read_http3_be16(const std::uint8_t* bytes) noexcept {
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(bytes[0]) << 8) |
+                                      static_cast<std::uint16_t>(bytes[1]));
+}
+
+[[nodiscard]] constexpr std::uint32_t read_http3_be32(const std::uint8_t* bytes) noexcept {
+    return (static_cast<std::uint32_t>(bytes[0]) << 24) |
+           (static_cast<std::uint32_t>(bytes[1]) << 16) |
+           (static_cast<std::uint32_t>(bytes[2]) << 8) |
+           static_cast<std::uint32_t>(bytes[3]);
+}
 
 // A connection ID as a map key: up to NGTCP2_MAX_CIDLEN bytes.
 struct http3_cid_key final {

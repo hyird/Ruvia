@@ -1011,11 +1011,21 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_EQ(initial.status_, 200);
         EXPECT_TRUE(!initial.reset_error_);
         EXPECT_TRUE(!initial.body_.empty());
+        std::set<std::uint16_t> dcid_prefixes;
+        const auto record_dcid_prefix = [&] {
+            const auto* dcid = ngtcp2_conn_get_dcid2(connection);
+            ASSERT_NE(dcid, nullptr);
+            ASSERT_GE(dcid->datalen, std::size_t{2});
+            dcid_prefixes.insert(static_cast<std::uint16_t>(
+                (static_cast<std::uint16_t>(dcid->data[0]) << 8) | static_cast<std::uint16_t>(dcid->data[1])));
+        };
+        record_dcid_prefix();
         for (const bool active_migration : {true, false}) {
             for (int change = 0; change < 16; ++change) {
                 const auto previous_port = client.local_port();
                 if (active_migration) {
                     client.migrate();
+                    record_dcid_prefix();
                 } else {
                     client.rebind();
                 }
@@ -1031,6 +1041,9 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
                 previous_stream = stream;
             }
         }
+        // RFC 9000 §9.5: server-issued CIDs for the same worker mask the owner
+        // index per CID so path changes share no static wire prefix.
+        EXPECT_GT(dcid_prefixes.size(), std::size_t{1});
     }
 
     // nghttp3 treats a request it cannot frame (here a :path that is no
