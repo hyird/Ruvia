@@ -11,7 +11,7 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/web/detail/model/model_field.h"
-#include "ruvia/web/detail/model/rule/rule_validation.h"
+#include "ruvia/web/detail/model/rule/rule_support.h"
 #include "ruvia/web/model.h"
 
 namespace ruvia::detail::model {
@@ -65,29 +65,6 @@ struct model_field_descriptor final {
                       !(detail::is_ruvia_json_value<field_value_type> || detail::is_ruvia_json_object<field_value_type>),
         "json_value/json_object are dynamic content, not typed field validation schemas");
 };
-
-template <typename... descriptor_types>
-struct model_schema final {};
-
-struct empty_model_tag final {};
-
-struct model_access final {
-    template <typename model_type>
-    [[nodiscard]] static constexpr auto schema() noexcept {
-        return typename std::remove_cvref_t<model_type>::ruvia_model_schema_type{};
-    }
-
-    template <std::size_t index, typename model_type>
-    [[nodiscard]] static decltype(auto) slot(model_type& value) noexcept {
-        return value.fields_.template slot<index>();
-    }
-
-    template <typename model_type>
-    [[nodiscard]] static model_type empty(std::pmr::memory_resource* resource) {
-        return model_type(empty_model_tag{}, ::ruvia::model_options{.resource_ = resource});
-    }
-};
-
 template <typename... descriptor_types>
 consteval void validate_model_schema(model_schema<descriptor_types...>) {
     static_assert((detail::is_model_field<typename descriptor_types::value_type> && ...),
@@ -123,21 +100,6 @@ template <typename... descriptor_types>
         return http_ascii_equals_ignore_case(left, right);
     });
 }
-
-template <typename model_type, typename... descriptor_types, typename visitor_type, std::size_t... indices>
-constexpr void visit_model_fields_impl(model_type& model, model_schema<descriptor_types...>, visitor_type&& visitor,
-    std::index_sequence<indices...>) {
-    auto& visitor_ref = visitor;
-    (visitor_ref(descriptor_types{}, model_access::slot<indices>(model)), ...);
-}
-
-template <typename model_type, typename... descriptor_types, typename visitor_type>
-constexpr void visit_model_fields(
-    model_type& model, model_schema<descriptor_types...> schema, visitor_type&& visitor) {
-    visit_model_fields_impl(
-        model, schema, std::forward<visitor_type>(visitor), std::index_sequence_for<descriptor_types...>{});
-}
-
 template <std::size_t index, typename descriptor_type, typename... remaining_types, typename model_type,
     typename visitor_type>
 [[nodiscard]] bool visit_model_field_by_wire_name_impl(model_type& model,

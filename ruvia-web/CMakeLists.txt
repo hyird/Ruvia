@@ -17,7 +17,7 @@ else()
     endif()
     if(NOT RUVIA_ENABLE_POSTGRESQL)
         list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/db/(db_postgresql|postgresql_driver)\\.cpp$")
+            REGEX "/src/db/postgresql_driver\\.cpp$")
     endif()
 endif()
 # The database query-result cache stores rows in Redis.

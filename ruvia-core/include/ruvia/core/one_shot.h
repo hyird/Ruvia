@@ -66,6 +66,15 @@ struct one_shot_state final {
     [[nodiscard]] std::unique_lock<std::mutex> lock_state() {
         return std::unique_lock(mutex_);
     }
+    [[nodiscard]] t_type take_ready_value() {
+        struct ready_consumption final {
+            std::optional<t_type>& value_;
+            ~ready_consumption() {
+                value_.reset();
+            }
+        } consumption{ready_value_};
+        return std::move(*ready_value_);
+    }
 
     // First member: unlinks from the worker registry after every other member is gone.
     worker_shutdown_hook shutdown_hook_;
@@ -124,14 +133,7 @@ struct one_shot_awaiter final {
         if (!result.has_value()) {
             return worker_wait_result_access::outcome<t_type>(result.status());
         }
-        auto& value = wait_.state().ready_value_;
-        struct ready_consumption final {
-            std::optional<t_type>& value_;
-            ~ready_consumption() {
-                value_.reset();
-            }
-        } consumption{value};
-        return worker_wait_result_access::value(std::move(*value));
+        return worker_wait_result_access::value(wait_.state().take_ready_value());
     }
 
 private:
@@ -219,13 +221,7 @@ public:
             }
         }
         if (rejection) {
-            struct discard final {
-                std::optional<t_type>& value_;
-                ~discard() {
-                    value_.reset();
-                }
-            } discard_value{state->ready_value_};
-            return one_shot_complete_result<t_type>::reject(*rejection, std::move(*state->ready_value_));
+            return one_shot_complete_result<t_type>::reject(*rejection, state->take_ready_value());
         }
         return one_shot_complete_result<t_type>::accept();
     }

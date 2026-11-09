@@ -74,8 +74,8 @@ worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t c
 }
 
 worker_dispatcher::~worker_dispatcher() {
-    destroy_waiters(idle_waiters_.take_all());
-    destroy_waiters(shutdown_notification_waiters_.take_all());
+    notify_waiters(idle_waiters_.take_all(), false);
+    notify_waiters(shutdown_notification_waiters_.take_all(), false);
 }
 
 worker_shutdown_hook::~worker_shutdown_hook() {
@@ -193,6 +193,16 @@ void worker_dispatcher::release_abandoned_node(std::size_t index) noexcept {
     }
 }
 
+void worker_dispatcher::release_abandoned_chain(std::size_t index) noexcept {
+    // The spliced chain is exclusively owned here; each node stays pending
+    // until release_abandoned_node returns it.
+    while (index != no_node) {
+        const auto next = nodes_[index].next_;
+        release_abandoned_node(index);
+        index = next;
+    }
+}
+
 bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value) {
     if (!task_value) {
         throw std::invalid_argument("worker defer requires a callable task");
@@ -307,24 +317,19 @@ worker_dispatcher::waiter_node_type* worker_dispatcher::take_idle_callbacks_lock
     return nullptr;
 }
 
-void worker_dispatcher::notify_waiters(waiter_node_type* head) noexcept {
+void worker_dispatcher::notify_waiters(waiter_node_type* head, bool invoke) noexcept {
     while (head != nullptr) {
         std::unique_ptr<waiter_node_type, pmr_object_deleter<waiter_node_type>> current(
             head, pmr_object_deleter<waiter_node_type>{process_resource()});
         head = current->next_;
+        if (!invoke) {
+            continue;
+        }
         try {
             current->callback_();
         } catch (...) {
             std::terminate();
         }
-    }
-}
-
-void worker_dispatcher::destroy_waiters(waiter_node_type* head) noexcept {
-    while (head != nullptr) {
-        std::unique_ptr<waiter_node_type, pmr_object_deleter<waiter_node_type>> current(
-            head, pmr_object_deleter<waiter_node_type>{process_resource()});
-        head = current->next_;
     }
 }
 
@@ -529,13 +534,7 @@ void worker_dispatcher::abandon_queued() noexcept {
         ready_tail_ = no_node;
         ready_count_ = 0;
     }
-    // The spliced chain is exclusively owned here; each node stays pending
-    // until release_abandoned_node returns it.
-    while (index != no_node) {
-        const auto next = nodes_[index].next_;
-        release_abandoned_node(index);
-        index = next;
-    }
+    release_abandoned_chain(index);
 }
 
 bool worker_dispatcher::is_current() const noexcept {
@@ -616,11 +615,7 @@ void worker_dispatcher::drain() {
                 batch_active = begin_stopping_locked(true);
             }
             notify_stopping(batch_active);
-            for (auto remaining = next; remaining != no_node;) {
-                const auto following = nodes_[remaining].next_;
-                release_abandoned_node(remaining);
-                remaining = following;
-            }
+            release_abandoned_chain(next);
             abandon_queued();
             waiter_node_type* failure_callbacks = nullptr;
             {

@@ -8,12 +8,14 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -1212,10 +1214,317 @@ template <typename left_type, typename right_type>
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/json/json_skip.h"
-#include "ruvia/web/detail/model/macro/macros.h"
+#include "ruvia/web/detail/model/model_field.h"
+#include "ruvia/web/detail/model/model_schema.h"
 #include "ruvia/web/detail/model/parse/json_parser.h"
-#include "ruvia/web/detail/model/parse/json_writer.h"
-#include "ruvia/web/detail/model/rule/rules.h"
+#include "ruvia/web/detail/model/rule/rule_support.h"
+
+namespace ruvia::detail::model {
+
+template <typename... descriptor_types>
+class model_storage final {
+public:
+    static constexpr bool has_initial =
+        (descriptor_types::options_type::has_initial || ... || false);
+
+    explicit model_storage(::ruvia::model_options options = {}) noexcept
+        : resource_(pmr_resource_or_default(options.resource_)) {
+        static_assert(unique_model_field_names<descriptor_types...>(),
+            "Ruvia model source field names must be unique");
+        static_assert(
+            unique_model_wire_names<descriptor_types...>(), "Ruvia model JSON field names must be unique");
+    }
+
+    model_storage(const model_storage&) = delete;
+    model_storage& operator=(const model_storage&) = delete;
+
+    model_storage(model_storage&& other) noexcept
+        : resource_(other.resource_),
+          fields_(std::move(other.fields_)) {
+        reset_moved_fields(other.fields_);
+    }
+
+    friend bool operator==(const model_storage& left, const model_storage& right) {
+        return left.fields_ == right.fields_;
+    }
+
+    model_storage& operator=(model_storage&& other) {
+        if (this == &other) {
+            return *this;
+        }
+        // Consuming a source that owns this model would destroy the destination.
+        if (::ruvia::detail::model_address_within(this, std::addressof(other), sizeof(model_storage)) ||
+            other.owns(this)) {
+            ::ruvia::detail::throw_model_move_source_owns_destination();
+        }
+
+        auto rebound = rebind_fields(other.fields_, resource_);
+        reset_moved_fields(other.fields_);
+        replace_fields(fields_, std::move(rebound));
+        return *this;
+    }
+
+    template <fixed_string field>
+    [[nodiscard]] decltype(auto) get() const& RUVIA_LIFETIMEBOUND {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        using descriptor_type = std::tuple_element_t<index, std::tuple<descriptor_types...>>;
+        const auto& slot = std::get<index>(fields_);
+        if constexpr (descriptor_type::required && !descriptor_type::nullable) {
+            return slot.required_value();
+        } else {
+            return slot.value();
+        }
+    }
+
+    template <fixed_string field>
+    [[nodiscard]] decltype(auto) get() const&& = delete;
+
+    // Whether the original parsed input contained this field. Defaults and
+    // set/ensure/reset do not rewrite input provenance; unparsed models have
+    // no input presence. Use get()/is_null() for the current value state.
+    template <fixed_string field>
+    [[nodiscard]] bool is_present() const noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        return std::get<index>(fields_).is_present();
+    }
+
+    template <fixed_string field>
+    [[nodiscard]] bool is_null() const noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        return std::get<index>(fields_).is_null();
+    }
+
+    template <fixed_string field>
+    [[nodiscard]] bool has_value() const noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        return std::get<index>(fields_).has_value();
+    }
+
+    template <fixed_string field, typename value_type>
+    void set(value_type&& value) & {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        std::get<index>(fields_).assign(std::forward<value_type>(value), resource_);
+    }
+
+    template <fixed_string field>
+        requires(std::tuple_element_t<model_field_index<field, descriptor_types...>(),
+            std::tuple<descriptor_types...>>::nullable)
+    void set_null() & noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        std::get<index>(fields_).set_null();
+    }
+
+    template <fixed_string field>
+        requires requires(typename std::tuple_element_t<model_field_index<field, descriptor_types...>(),
+                              std::tuple<descriptor_types...>>::field_type& slot,
+            std::pmr::memory_resource* resource) {
+            slot.ensure(resource);
+        }
+    [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        return std::get<index>(fields_).ensure(resource_);
+    }
+
+    template <fixed_string field>
+        requires(!std::tuple_element_t<model_field_index<field, descriptor_types...>(),
+            std::tuple<descriptor_types...>>::required)
+    void reset() & noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        std::get<index>(fields_).reset();
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
+
+    template <std::size_t index>
+    [[nodiscard]] decltype(auto) slot() & noexcept {
+        return std::get<index>(fields_);
+    }
+
+    template <std::size_t index>
+    [[nodiscard]] decltype(auto) slot() const& noexcept {
+        return std::get<index>(fields_);
+    }
+
+    [[nodiscard]] model_storage rebind(std::pmr::memory_resource* resource) const& {
+        model_storage rebound(::ruvia::model_options{.resource_ = resource});
+        auto fields_value = rebind_fields(fields_, rebound.resource_);
+        replace_fields(rebound.fields_, std::move(fields_value));
+        return rebound;
+    }
+
+    [[nodiscard]] model_storage rebind(std::pmr::memory_resource* resource) && {
+        auto rebound = std::as_const(*this).rebind(resource);
+        reset_moved_fields(fields_);
+        return rebound;
+    }
+
+    // Whether `address` lies in storage owned by these fields beyond their
+    // inline tuple.
+    [[nodiscard]] bool owns(const void* address) const noexcept {
+        return std::apply(
+            [address](const auto&... field) { return (field.owns(address) || ... || false); }, fields_);
+    }
+
+private:
+    using field_tuple = std::tuple<typename descriptor_types::field_type...>;
+
+    template <std::size_t... indices>
+    [[nodiscard]] static field_tuple rebind_fields(const field_tuple& source_value,
+        std::pmr::memory_resource* resource, std::index_sequence<indices...>) {
+        return field_tuple{std::get<indices>(source_value).rebind(resource)...};
+    }
+
+    [[nodiscard]] static field_tuple rebind_fields(
+        const field_tuple& source_value, std::pmr::memory_resource* resource) {
+        return rebind_fields(source_value, resource, std::index_sequence_for<descriptor_types...>{});
+    }
+
+    static void replace_fields(field_tuple& destination, field_tuple&& source_value) noexcept {
+        static_assert(std::is_nothrow_move_constructible_v<field_tuple>);
+        std::destroy_at(std::addressof(destination));
+        std::construct_at(std::addressof(destination), std::move(source_value));
+    }
+
+    template <std::size_t... indices>
+    static void reset_moved_fields(field_tuple& fields_value, std::index_sequence<indices...>) noexcept {
+        (std::get<indices>(fields_value).reset_after_move(), ...);
+    }
+
+    static void reset_moved_fields(field_tuple& fields_value) noexcept {
+        reset_moved_fields(fields_value, std::index_sequence_for<descriptor_types...>{});
+    }
+
+    std::pmr::memory_resource* resource_;
+    field_tuple fields_;
+};
+
+}  // namespace ruvia::detail::model
+
+// The closure is a structural NTTP even when invoking its factory needs runtime
+// state. Let the compiler infer constexpr only for expressions that support it.
+#define RUVIA_DEFAULT(value) ::ruvia::detail::model::default_value<[]() { return value; }>
+#define RUVIA_INITIAL(value) ::ruvia::detail::model::initial<[]() { return value; }>
+#define RUVIA_NULLABLE ::ruvia::detail::model::nullable
+#define RUVIA_OMIT_EMPTY ::ruvia::detail::model::omit_empty
+#define RUVIA_EMIT_NULL ::ruvia::detail::model::emit_null
+
+#define RUVIA_REQUIRED_FIELD(field, type, ...)                                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{#field}, type, true __VA_OPT__(, ) __VA_ARGS__>
+
+#define RUVIA_REQUIRED_FIELD_NAME(wire_name, field, type, ...)                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{wire_name}, type, true __VA_OPT__(, ) __VA_ARGS__>
+
+#define RUVIA_OPTIONAL_FIELD(field, type, ...)                                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{#field}, type, false __VA_OPT__(, ) __VA_ARGS__>
+
+#define RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...)                    \
+    ::ruvia::detail::model::model_field_descriptor<::ruvia::fixed_string{#field}, \
+        ::ruvia::fixed_string{wire_name}, type, false __VA_OPT__(, ) __VA_ARGS__>
+
+// Field descriptors are forwarded directly into a C++ variadic template. No
+// preprocessor argument counter or FOR_EACH expansion participates in model
+// registration, so the framework does not impose a fixed field-count limit.
+// Each declaration is a nominal type, including forward-declared recursive
+// schemas. Its inline field owner does not know the enclosing model type.
+
+#define RUVIA_MODEL(t_type, ...)                                                                           \
+    struct t_type final {                                                                                  \
+    private:                                                                                               \
+        using storage_type = ::ruvia::detail::model::model_storage<__VA_ARGS__>;                           \
+                                                                                                           \
+    public:                                                                                                \
+        using ruvia_model_schema_type = ::ruvia::detail::model::model_schema<__VA_ARGS__>;                 \
+        template <typename model_type = t_type>                                                            \
+        explicit t_type(::ruvia::model_options options = {}) noexcept(!storage_type::has_initial)          \
+            : fields_(options) {                                                                           \
+            ::ruvia::detail::model::validate_model_schema(typename model_type::ruvia_model_schema_type{}); \
+            if constexpr (storage_type::has_initial) {                                                     \
+                ::ruvia::detail::model::initialize_model(*this);                                           \
+            }                                                                                              \
+        }                                                                                                  \
+        template <typename resource_owner_type>                                                            \
+            requires requires(resource_owner_type& owner) {                                                \
+                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;                   \
+            }                                                                                              \
+        explicit t_type(resource_owner_type& owner) noexcept(!storage_type::has_initial)                   \
+            : t_type(::ruvia::model_options{.resource_ = owner.resource()}) {}                             \
+        t_type(const t_type&) = delete;                                                                    \
+        t_type& operator=(const t_type&) = delete;                                                         \
+        t_type(t_type&&) noexcept = default;                                                               \
+        t_type& operator=(t_type&&) = default;                                                             \
+        [[maybe_unused]] friend bool operator==(const t_type&, const t_type&) = default;                   \
+        template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] decltype(auto) get() const& RUVIA_LIFETIMEBOUND {                                    \
+            return fields_.template get<field>();                                                          \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] decltype(auto) get() const&& = delete;                                               \
+        template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] bool is_present() const noexcept {                                                   \
+            return fields_.template is_present<field>();                                                   \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] bool is_null() const noexcept {                                                      \
+            return fields_.template is_null<field>();                                                      \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] bool has_value() const noexcept {                                                    \
+            return fields_.template has_value<field>();                                                    \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field, typename value_type>                                        \
+        t_type& set(value_type&& value) & {                                                                \
+            fields_.template set<field>(std::forward<value_type>(value));                                  \
+            return *this;                                                                                  \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field, typename value_type>                                        \
+        t_type& set(value_type&&) && = delete;                                                             \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template set_null<field>(); }               \
+        t_type& set_null() & noexcept {                                                                    \
+            fields_.template set_null<field>();                                                            \
+            return *this;                                                                                  \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template set_null<field>(); }               \
+        t_type& set_null() && = delete;                                                                    \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template ensure<field>(); }                 \
+        [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {                                      \
+            return fields_.template ensure<field>();                                                       \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template ensure<field>(); }                 \
+        [[nodiscard]] decltype(auto) ensure() && = delete;                                                 \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template reset<field>(); }                  \
+        t_type& reset() & noexcept {                                                                       \
+            fields_.template reset<field>();                                                               \
+            return *this;                                                                                  \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template reset<field>(); }                  \
+        t_type& reset() && = delete;                                                                       \
+        [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {                               \
+            return fields_.resource();                                                                     \
+        }                                                                                                  \
+                                                                                                           \
+    private:                                                                                               \
+        friend struct ::ruvia::detail::model::model_access;                                                \
+        friend struct ::ruvia::detail::model_value_rebind_access;                                          \
+        template <typename model_type = t_type>                                                            \
+        explicit t_type(::ruvia::detail::model::empty_model_tag, ::ruvia::model_options options) noexcept  \
+            : fields_(options) {                                                                           \
+            ::ruvia::detail::model::validate_model_schema(typename model_type::ruvia_model_schema_type{}); \
+        }                                                                                                  \
+        explicit t_type(storage_type&& fields) noexcept                                                    \
+            : fields_(std::move(fields)) {}                                                                \
+        storage_type fields_;                                                                              \
+    }
 
 namespace ruvia {
 

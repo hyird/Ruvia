@@ -15,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <variant>
 
@@ -23,6 +24,7 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http3_request_head.h"
@@ -30,15 +32,18 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/websocket_protocol.h"
+#include "ruvia/web/http_tunnel.h"
+#include "ruvia/web/streaming.h"
 
 #include "body/http_request_body_facade.h"
 #include "context/http_connection_advertisement_output.h"
 #include "context/http_interim_response_output.h"
 #include "http/http_protocol_error_info.h"
 #include "http3/http3_endpoint.h"
-#include "http3/http3_request_body_reader.h"
-#include "http3/http3_response_stream_sink.h"
-#include "http3/http3_tunnel_transport.h"
+#include "http3/http3_response_write.h"
+#include "http3/http3_stream.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_resolution.h"
 #include "router/route_table.h"
@@ -47,8 +52,11 @@
 #include "server/http_server_tls_contexts.h"
 #include "server/http_server_tls_handshake.h"
 #include "server/http_upgrade_route.h"
+#include "server/inbound_transport_error.h"
+#include "server/multiplexed_stream_signal.h"
 #include "server/peer_address.h"
 #include "tls/tls_random.h"
+#include "tls/tls_stream_end.h"
 
 namespace ruvia::detail {
 namespace {
@@ -81,6 +89,227 @@ struct interim_target final {
     std::int64_t stream_id_;
 };
 
+// Streaming request-body reader of one HTTP/3 request stream; the body_reader
+// facade wraps it for the handler. Each read hands out every byte queued
+// since the previous read and returns the previous chunk's receive
+// flow-control credit (RFC 9000 §4.1): the peer can send more only once the
+// handler has consumed what it sent.
+class http3_request_body_reader final : public multiplexed_request_body_reader_base<http3_request_body_reader> {
+public:
+    static constexpr const char* terminated_error_message = "HTTP/3 connection ended during body read";
+    static constexpr const char* reset_error_message = "HTTP/3 request stream reset during body read";
+
+    // continue_output is non-null when the request carries a pending
+    // 100-continue expectation: the first read sends it, as the HTTP/1 reader
+    // does, so content the handler never reads is never solicited.
+    http3_request_body_reader(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal,
+        http_interim_response_output* continue_output) noexcept
+        : multiplexed_request_body_reader_base(signal, continue_output),
+          session_(session),
+          stream_(stream) {}
+
+private:
+    friend class multiplexed_request_body_reader_base<http3_request_body_reader>;
+
+    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const noexcept {
+        return stream_.body_failure();
+    }
+
+    [[nodiscard]] bool stream_aborted() const noexcept {
+        return stream_.aborted();
+    }
+
+    [[nodiscard]] std::string_view pop_chunk() noexcept {
+        const auto [chunk, consumed] = stream_.pop();
+        if (consumed != 0) {
+            session_.consume_stream_data(stream_.id(), consumed);
+        }
+        return chunk;
+    }
+
+    [[nodiscard]] bool body_ended() const noexcept {
+        return stream_.request_ended();
+    }
+
+    http3_session& session_;
+    http3_stream& stream_;
+};
+
+// Streaming response sink of one HTTP/3 request stream, the method set
+// dispatch_response_stream_with drives: commit() submits the streaming final
+// head (an application Content-Length becomes the exact content total),
+// write() submits DATA within the stream's output budget, waiting for
+// acknowledgements when it is spent, and end() finishes the content or sends
+// the trailer section. The HTTP/3 core owns the field mapping and framing.
+class http3_response_stream_sink final
+    : public multiplexed_response_stream_sink_base<http3_response_stream_sink, http3_stream> {
+public:
+    http3_response_stream_sink(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal,
+        std::pmr::memory_resource* resource, http_known_method request_method, worker_codecs& codecs,
+        http_response_coding_selection response_coding, const compression_config* compression,
+        const cors_options* cors) noexcept
+        : multiplexed_response_stream_sink_base(
+              stream, signal, resource, request_method, codecs, response_coding, compression, cors),
+          session_(session) {}
+
+private:
+    friend class multiplexed_response_stream_sink_base<http3_response_stream_sink, http3_stream>;
+
+    static constexpr const char* terminated_error_message = "HTTP/3 connection ended during response stream";
+    static constexpr const char* sleep_terminated_error_message = "HTTP/3 connection ended during response stream";
+    static constexpr const char* reset_error_message = "HTTP/3 response stream reset";
+    static constexpr const char* sleep_reset_error_message = "HTTP/3 response stream reset during sleep";
+
+    [[nodiscard]] bool stream_aborted() const noexcept {
+        return stream_.aborted();
+    }
+
+    void wake_writer() noexcept {
+        session_.wake_writer();
+    }
+
+    [[nodiscard]] http_response_stream_commit_plan submit_streaming_head(
+        http_response&& response, http_response_trailer_intent trailer_intent) {
+        const auto head_result = session_.codec().submit_streaming_response_head(
+            stream_.id(), request_method_, std::move(response), trailer_intent);
+        const auto* submitted_head = std::get_if<http_response_stream_commit_plan>(&head_result);
+        if (submitted_head != nullptr) {
+            return *submitted_head;
+        }
+        if (std::get<http3_response_head_error>(head_result) == http3_response_head_error::closed) {
+            throw inbound_transport_error(
+                std::make_error_code(std::errc::connection_reset), reset_error_message);
+        }
+        throw std::logic_error("HTTP/3 streaming response head submission failed");
+    }
+
+    task<void> write_encoded_data(std::string_view chunk) {
+        const auto status = co_await write_http3_stream_data(session_, stream_.id(), signal_, chunk);
+        if (status == http3_data_write_status::completed) {
+            co_return;
+        }
+        if (status == http3_data_write_status::terminated) {
+            throw inbound_transport_error(signal_.terminal_error(), terminated_error_message);
+        }
+        throw inbound_transport_error(
+            std::make_error_code(std::errc::connection_reset), reset_error_message);
+    }
+
+    void finish_stream_response(const http_response_trailer_section& trailer_section) {
+        http3_status finished{};
+        try {
+            finished = session_.codec().finish_response(stream_.id(), trailer_section);
+        } catch (...) {
+            session_.wake_writer();
+            throw;
+        }
+        session_.wake_writer();
+        if (finished != http3_status::accepted) {
+            throw inbound_transport_error(
+                std::make_error_code(std::errc::connection_reset), reset_error_message);
+        }
+    }
+
+    http3_session& session_;
+};
+
+// One duplex HTTP/3 request stream. The session remains its sole QUIC reader
+// and writer; this adapter returns flow credit only after consuming DATA.
+class http3_tunnel_transport final : public multiplexed_tunnel_transport_base<http3_tunnel_transport> {
+public:
+    using multiplexed_tunnel_transport_base<http3_tunnel_transport>::write_bytes;
+
+    http3_tunnel_transport(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal) noexcept
+        : multiplexed_tunnel_transport_base(signal),
+          session_(session),
+          stream_(stream) {}
+
+    [[nodiscard]] task<std::optional<http_tunnel_input>> read_datagram() {
+        for (;;) {
+            require_live();
+            // Reliable input is not starved by a native datagram flood.
+            auto chunk = stream_.take_tunnel_bytes();
+            if (!chunk.empty()) {
+                session_.consume_stream_data(stream_.id(), chunk.size());
+                co_return http_tunnel_input{std::move(chunk), false};
+            }
+            if (auto payload = stream_.pop_datagram()) {
+                co_return http_tunnel_input{std::move(*payload), true};
+            }
+            if (stream_.request_ended()) {
+                co_return std::nullopt;
+            }
+            co_await signal_.wait();
+        }
+    }
+
+    [[nodiscard]] task<bool> write_datagram(std::string_view payload) {
+        // The QUIC owner checks the negotiated frame size and current path MTU;
+        // invalid_state selects reliable capsule fallback without consuming it.
+        multiplexed_stream_signal::output_wait_guard deadline(signal_);
+        for (;;) {
+            require_live();
+            const auto result = session_.submit_datagram(stream_.id(), std::as_bytes(std::span(payload.data(), payload.size())));
+            if (result == http3_quic_status::accepted) {
+                co_return true;
+            }
+            if (result == http3_quic_status::invalid_state) {
+                co_return false;
+            }
+            if (result != http3_quic_status::would_block) {
+                throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/3 datagram write");
+            }
+            co_await signal_.wait();
+        }
+    }
+
+    [[nodiscard]] task<std::error_code> write_bytes(std::string_view bytes, http_stream_end disposition) {
+        const auto result = co_await write_http3_stream_data(session_, stream_.id(), signal_, bytes);
+        if (result != http3_data_write_status::completed || signal_.stopped() || stream_.aborted()) {
+            co_return signal_.terminated() ? signal_.terminal_error() : std::make_error_code(std::errc::connection_reset);
+        }
+        if (disposition == http_stream_end::end && session_.codec().finish_stream(stream_.id()) != http3_status::accepted) {
+            co_return std::make_error_code(std::errc::protocol_error);
+        }
+        session_.wake_writer();
+        co_return std::error_code{};
+    }
+
+    void abort(bool malformed = false) noexcept {
+        session_.reset_stream(stream_.id(), malformed ? http3_error_code::message_error : http3_error_code::request_cancelled);
+    }
+
+private:
+    friend class multiplexed_tunnel_transport_base<http3_tunnel_transport>;
+
+    void require_live() const {
+        if (signal_.stopped() || stream_.aborted()) {
+            throw inbound_transport_error(signal_.terminated() ? signal_.terminal_error()
+                                                               : std::make_error_code(std::errc::connection_reset),
+                "HTTP/3 tunnel read");
+        }
+    }
+
+    template <typename buffer_type>
+    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
+        auto chunk = stream_.take_tunnel_bytes();
+        if (chunk.empty()) {
+            return false;
+        }
+        const auto consumed = chunk.size();
+        buffer.append(chunk);
+        std::pmr::string(chunk.get_allocator()).swap(chunk);
+        session_.consume_stream_data(stream_.id(), consumed);
+        return true;
+    }
+
+    [[nodiscard]] bool receive_ended() const noexcept {
+        return stream_.request_ended();
+    }
+
+    http3_session& session_;
+    http3_stream& stream_;
+};
 [[nodiscard]] std::uint64_t error_value(http3_error_code code) noexcept {
     return static_cast<std::uint64_t>(code);
 }
@@ -487,17 +716,10 @@ void http3_session::on_request_head(http3_headers_event& event) {
         reset_stream(stream_id, http3_error_code::message_error);
         return;
     }
-    const auto method = classify_http_method(head->method());
-    const auto target = head->path();
     const auto connect = head->connect();
-    const auto protocol = head->protocol();
-    auto resolution = services_.routes_.resolve(route_request_view{
-        method, head->method(), target.substr(0, target.find('?')), head->authority(), protocol});
-    auto body_mode = request_body_mode::buffered;
+    auto [resolution, body_mode] = resolve_multiplexed_stream_route(
+        services_.routes_, head->method(), head->path(), head->authority(), head->protocol());
     const auto* resolved = resolution.resolved();
-    if (resolved != nullptr) {
-        body_mode = resolved->route().endpoint().request_body_mode();
-    }
     if (connect) {
         body_mode = request_body_mode::stream;
     }

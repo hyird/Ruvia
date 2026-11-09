@@ -304,6 +304,17 @@ void worker_dispatcher::request_timer_cancellation(
     });
 }
 
+void worker_dispatcher::pop_stale_timer_top() noexcept {
+    while (!timers_.empty() &&
+           !has_live_timer_entry(timers_.front().slot_, timers_.front().generation_)) {
+        std::ranges::pop_heap(timers_, timer_entry_later{});
+        timers_.pop_back();
+        if (stale_timer_count_ != 0) {
+            --stale_timer_count_;
+        }
+    }
+}
+
 void worker_dispatcher::note_stale_timer() noexcept {
     ++stale_timer_count_;
     if (stale_timer_count_ == timers_.size()) {
@@ -318,12 +329,7 @@ void worker_dispatcher::note_stale_timer() noexcept {
             timer_->cancel();
         }
     } else {
-        while (!timers_.empty() &&
-               !has_live_timer_entry(timers_.front().slot_, timers_.front().generation_)) {
-            std::ranges::pop_heap(timers_, timer_entry_later{});
-            timers_.pop_back();
-            --stale_timer_count_;
-        }
+        pop_stale_timer_top();
         if (stale_timer_count_ >= 64 && stale_timer_count_ * 2 >= timers_.size()) {
             std::erase_if(timers_, [this](const timer_entry& entry_value) {
                 return !has_live_timer_entry(entry_value.slot_, entry_value.generation_);
@@ -403,14 +409,7 @@ void worker_dispatcher::arm_timer() {
         timer_->cancel();
         timer_armed_ = false;
     }
-    while (!timers_.empty() &&
-           !has_live_timer_entry(timers_.front().slot_, timers_.front().generation_)) {
-        std::ranges::pop_heap(timers_, timer_entry_later{});
-        timers_.pop_back();
-        if (stale_timer_count_ != 0) {
-            --stale_timer_count_;
-        }
-    }
+    pop_stale_timer_top();
     if (timers_stopping_.load(std::memory_order_acquire) || timers_.empty()) {
         release_drained_timer_heap();
         return;
@@ -439,17 +438,15 @@ void worker_dispatcher::fire_timers() {
     timer_round_deadline_ = now;
     const auto sequence_limit = next_timer_sequence_;
     try {
-        while (!timers_.empty() && timers_.front().deadline_ <= now &&
-               timers_.front().sequence_ < sequence_limit) {
+        for (;;) {
+            pop_stale_timer_top();
+            if (timers_.empty() || timers_.front().deadline_ > now ||
+                timers_.front().sequence_ >= sequence_limit) {
+                break;
+            }
             std::ranges::pop_heap(timers_, timer_entry_later{});
             auto entry_value = std::move(timers_.back());
             timers_.pop_back();
-            if (!has_live_timer_entry(entry_value.slot_, entry_value.generation_)) {
-                if (stale_timer_count_ != 0) {
-                    --stale_timer_count_;
-                }
-                continue;
-            }
             const bool active = has_timer(entry_value.slot_, entry_value.generation_);
             auto completion = release_timer_slot(entry_value.slot_);
             if (active && completion) {

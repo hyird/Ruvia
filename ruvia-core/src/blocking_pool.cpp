@@ -236,7 +236,7 @@ struct blocking_pool::impl_type final {
         }
         {
             std::unique_lock lock(mutex_);
-            if (!joining_threads.empty() || !joined_) {
+            if (joining_) {
                 joining_ = false;
                 joined_ = true;
                 condition_.notify_all();

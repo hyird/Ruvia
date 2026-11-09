@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include <asio/any_io_executor.hpp>
 #include <asio/ip/tcp.hpp>
@@ -17,8 +18,7 @@
 
 #include "http2/http2_buffered_response_write.h"
 #include "http2/http2_data_output_budget.h"
-#include "http2/http2_sans_io_session_context.h"
-#include "http2/http2_sans_io_session_lifecycle.h"
+#include "http2/http2_sans_io_session.h"
 #include "http2/http2_sans_io_stream_runtime.h"
 #include "server/http_request_admission.h"
 #include "server/inbound_buffer_resource.h"
@@ -32,6 +32,71 @@ namespace ruvia::detail {
 
 class route_table;
 
+// Same-executor session state. Writer submission is recorded before co_spawn
+// can invoke completion inline; completion remains true before reader stopping.
+class http2_sans_io_session_lifecycle final {
+public:
+    [[nodiscard]] bool write_failed() const noexcept {
+        return write_failed_;
+    }
+
+    [[nodiscard]] bool stopping() const noexcept {
+        return stopping_;
+    }
+
+    [[nodiscard]] bool writer_join_pending() const noexcept {
+        return writer_ == writer_state::submitted;
+    }
+
+    void mark_writer_submitted() noexcept {
+        if (writer_ != writer_state::not_submitted) {
+            std::terminate();
+        }
+        writer_ = writer_state::submitted;
+    }
+
+    void mark_writer_launch_failed() noexcept {
+        if (writer_ == writer_state::submitted) {
+            writer_ = writer_state::not_submitted;
+        }
+    }
+
+    void mark_write_failed() noexcept {
+        write_failed_ = true;
+    }
+
+    void begin_stopping() noexcept {
+        stopping_ = true;
+    }
+
+    void mark_writer_done() noexcept {
+        if (writer_ != writer_state::submitted) {
+            std::terminate();
+        }
+        writer_ = writer_state::completed;
+    }
+
+    void record_writer_failure(std::exception_ptr failure) noexcept {
+        if (writer_failure_ == nullptr) {
+            writer_failure_ = std::move(failure);
+        }
+    }
+
+    void rethrow_writer_failure() const {
+        if (writer_failure_ != nullptr) {
+            std::rethrow_exception(writer_failure_);
+        }
+    }
+
+private:
+    enum class writer_state : std::uint8_t { not_submitted,
+        submitted,
+        completed };
+    writer_state writer_{writer_state::not_submitted};
+    bool write_failed_{false};
+    bool stopping_{false};
+    std::exception_ptr writer_failure_;
+};
 // Transport-independent application driver for one HTTP/2 connection. The
 // transport wrapper owns only socket/TLS reads and writes; protocol event
 // dispatch, route execution, stream lifetime, and joins compile once.

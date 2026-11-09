@@ -26,7 +26,6 @@
 #include "context/context_access.h"
 #include "context/context_response_state.h"
 #include "context/context_services.h"
-#include "http/secure_token.h"
 #include "http/static_file_metadata.h"
 #include "http/static_file_variant.h"
 #include "http/static_root_index.h"
@@ -34,6 +33,7 @@
 #include "server/http_response_compression.h"
 #include "server/http_server_options.h"
 #include "server/response_file_source.h"
+#include "tls/tls_random.h"
 
 namespace ruvia {
 namespace {

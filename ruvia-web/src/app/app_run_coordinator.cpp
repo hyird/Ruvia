@@ -14,7 +14,7 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/detail/controller/controller_runtime.h"
+#include "ruvia/web/detail/controller/controller_descriptors.h"
 
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"

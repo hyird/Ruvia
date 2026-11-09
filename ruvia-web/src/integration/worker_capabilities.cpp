@@ -2,14 +2,29 @@
 
 #include <exception>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
 #include "ruvia/web/detail/integration/worker_state.h"
+#include "ruvia/web/http_client.h"
 
+#include "client/http_client_registry.h"
 #include "context/context_services.h"
 
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db_handle.h"
+
+#include "db/db_registry.h"
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis_handle.h"
+
+#include "redis/redis_registry.h"
+#endif
 namespace ruvia::detail {
 namespace {
 
@@ -27,6 +42,9 @@ namespace {
     return options;
 }
 
+[[nodiscard]] operation_options context_operation_options(const stop_token& stop_token_value) {
+    return operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value};
+}
 }  // namespace
 
 worker_capabilities::worker_capabilities(asio::io_context& io_context, const worker_handle& worker_value,
@@ -113,6 +131,65 @@ void* worker_context_capabilities::worker_state_instance(const void* type_key) c
             "worker state type is not registered: call application::use_worker_state<state_type>() before application::run()");
     }
     return instance;
+}
+
+#ifdef RUVIA_ENABLE_DATABASE
+db_handle worker_client_registry_view::db(::ruvia::operation_scope& operation_scope,
+    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
+    }
+    return databases_->get(operation_scope, io_metrics)
+        .with_options(context_operation_options(stop_token_value));
+}
+
+db_handle worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
+    }
+    return databases_->get(alias, operation_scope, io_metrics)
+        .with_options(context_operation_options(stop_token_value));
+}
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+redis_handle worker_client_registry_view::redis(::ruvia::operation_scope& operation_scope,
+    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+    }
+    return redis_->get(operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
+}
+
+redis_handle worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+    request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+    }
+    return redis_->get(alias, operation_scope, io_metrics)
+        .with_options(context_operation_options(stop_token_value));
+}
+#endif
+
+http_client_handle worker_client_registry_view::client(
+    ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw http_client_error(
+            http_client_error::code_type::not_configured, "http client is not configured");
+    }
+    return http_clients_->get(operation_scope)
+        .with_options(context_operation_options(stop_token_value));
+}
+
+http_client_handle worker_client_registry_view::client(std::string_view alias,
+    ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+    if (!attached()) {
+        throw http_client_error(
+            http_client_error::code_type::not_configured, "http client is not configured");
+    }
+    return http_clients_->get(alias, operation_scope)
+        .with_options(context_operation_options(stop_token_value));
 }
 
 }  // namespace ruvia::detail

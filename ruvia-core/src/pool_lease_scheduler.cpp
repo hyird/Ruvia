@@ -65,27 +65,20 @@ public:
             if (head_ == nullptr) {
                 return false;
             }
-            auto* waiter = head_;
-            waiter->cancel_registrations();
-            waiter->complete(detail::worker_wait_result_access::value(index));
-            continuation = waiter->take_continuation();
+            continuation = head_->resolve(detail::worker_wait_result_access::value(index));
             return true;
         }
 
-        [[nodiscard]] bool cancel(pool_lease_acquire& waiter) noexcept {
+        [[nodiscard]] bool cancel(std::uint64_t id) noexcept {
+            auto* waiter = find(id);
             std::coroutine_handle<> continuation;
-            if (!commit_cancellation(waiter, continuation)) {
+            if (waiter == nullptr || !commit_cancellation(*waiter, continuation)) {
                 return false;
             }
             if (continuation) {
                 continuation.resume();
             }
             return true;
-        }
-
-        [[nodiscard]] bool cancel(std::uint64_t id) noexcept {
-            auto* waiter = find(id);
-            return waiter != nullptr && cancel(*waiter);
         }
 
         // Commit cancellation while still inside a stop callback, but let the
@@ -96,9 +89,7 @@ public:
             if (!waiter.queued_) {
                 return false;
             }
-            waiter.cancel_registrations();
-            waiter.complete(worker_wait_status::cancelled);
-            continuation = waiter.take_continuation();
+            continuation = waiter.resolve(worker_wait_status::cancelled);
             return true;
         }
 
@@ -106,9 +97,9 @@ public:
             if (!waiter.queued_) {
                 return false;
             }
-            waiter.cancel_registrations();
-            waiter.complete(worker_wait_status::timed_out);
-            waiter.resume();
+            if (auto continuation = waiter.resolve(worker_wait_status::timed_out)) {
+                continuation.resume();
+            }
             return true;
         }
 
@@ -117,10 +108,7 @@ public:
         // teardown, which must finish before any waiter observes it.
         void close_all(const worker_handle& worker) noexcept {
             while (head_ != nullptr) {
-                auto* waiter = head_;
-                waiter->cancel_registrations();
-                waiter->complete(worker_wait_status::closed);
-                if (auto continuation = waiter->take_continuation()) {
+                if (auto continuation = head_->resolve(worker_wait_status::closed)) {
                     worker.defer_resume(continuation);
                 }
             }
@@ -305,18 +293,14 @@ void pool_lease_acquire::complete(worker_wait_result<std::size_t> result_value) 
     result_.emplace(result_value);
 }
 
-void pool_lease_acquire::complete(worker_wait_status status) noexcept {
-    complete(detail::worker_wait_result_access::outcome<std::size_t>(status));
-}
-
-void pool_lease_acquire::resume() noexcept {
-    if (auto handle = take_continuation()) {
-        handle.resume();
-    }
-}
-
-std::coroutine_handle<> pool_lease_acquire::take_continuation() noexcept {
+std::coroutine_handle<> pool_lease_acquire::resolve(worker_wait_result<std::size_t> result_value) noexcept {
+    cancel_registrations();
+    complete(result_value);
     return std::exchange(continuation_, {});
+}
+
+std::coroutine_handle<> pool_lease_acquire::resolve(worker_wait_status status) noexcept {
+    return resolve(detail::worker_wait_result_access::outcome<std::size_t>(status));
 }
 
 bool pool_lease_acquire::await_ready() {

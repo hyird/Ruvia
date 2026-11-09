@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <memory_resource>
 #include <new>
 #include <stdexcept>
@@ -26,8 +27,6 @@
 #include "ruvia/core/detail/task/task_promise.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_handle.h"
-
-#include "size_class_lifo_bins.h"
 
 namespace ruvia {
 
@@ -98,6 +97,82 @@ namespace detail {
 
 namespace {
 
+// LIFO free lists of cached blocks keyed by size class. Class N holds blocks of
+// exactly (N + 1) * granularity bytes, so any block in a bin serves every request
+// that rounds to it; each block's first word links it to the next. The owner
+// decides what is cacheable, allocates misses at the class ceiling and frees
+// what store() refuses or drain() hands back. The cached total never exceeds the
+// budget passed to store(). Unsynchronized: each owner is thread- or worker-affine.
+template <std::size_t t_granularity, std::size_t t_max_block_bytes>
+class size_class_lifo_bins final {
+public:
+    static_assert(t_granularity >= sizeof(void*) && (t_granularity & (t_granularity - 1)) == 0,
+        "size class granularity must be a power of two that holds the link word");
+    static_assert(t_max_block_bytes % t_granularity == 0, "the largest class must be a whole class");
+
+    static constexpr std::size_t granularity = t_granularity;
+    static constexpr std::size_t max_block_bytes = t_max_block_bytes;
+
+    // The class ceiling of 1..max_block_bytes bytes.
+    [[nodiscard]] static constexpr std::size_t class_bytes(std::size_t bytes_value) noexcept {
+        return (bytes_value + granularity - 1) & ~(granularity - 1);
+    }
+
+    [[nodiscard]] std::size_t cached_bytes() const noexcept {
+        return cached_bytes_;
+    }
+
+    [[nodiscard]] void* take(std::size_t block_bytes) noexcept {
+        void*& head = bins_[bin_index(block_bytes)];
+        void* const block = head;
+        if (block != nullptr) {
+            head = *static_cast<void**>(block);
+            cached_bytes_ -= block_bytes;
+        }
+        return block;
+    }
+
+    // Caches `block` of class `block_bytes` unless that would exceed
+    // `budget_bytes`; false leaves the block with the caller.
+    [[nodiscard]] bool store(void* block, std::size_t block_bytes, std::size_t budget_bytes) noexcept {
+        // cached_bytes_ never exceeds the budget, so the subtraction cannot wrap.
+        if (budget_bytes - cached_bytes_ < block_bytes) {
+            return false;
+        }
+        void*& head = bins_[bin_index(block_bytes)];
+        *static_cast<void**>(block) = head;
+        head = block;
+        cached_bytes_ += block_bytes;
+        return true;
+    }
+
+    // Hands every cached block to release(block, block_bytes). Each block is
+    // unlinked and accounted before the call, which may reenter these bins.
+    template <typename release_type>
+    void drain(release_type&& release) noexcept {
+        for (std::size_t index = 0; index != bin_count; ++index) {
+            const std::size_t block_bytes = (index + 1) * granularity;
+            void*& head = bins_[index];
+            while (head != nullptr) {
+                void* const block = head;
+                head = *static_cast<void**>(block);
+                cached_bytes_ -= block_bytes;
+                release(block, block_bytes);
+            }
+        }
+    }
+
+private:
+    static constexpr std::size_t bin_count = max_block_bytes / granularity;
+
+    [[nodiscard]] static constexpr std::size_t bin_index(std::size_t block_bytes) noexcept {
+        return block_bytes / granularity - 1;
+    }
+
+    std::array<void*, bin_count> bins_{};
+    std::size_t cached_bytes_{0};
+};
+
 // Coroutine frames come and go several times per request, always in a handful
 // of recurring sizes. A thread-local LIFO cache keyed by 128-byte size class
 // hands a just-freed frame straight to the next allocation of the same class,
@@ -109,11 +184,12 @@ using task_frame_bins = size_class_lifo_bins<128, 16 * 1024>;
 constexpr std::size_t task_frame_cache_budget_bytes = 512 * 1024;
 
 [[nodiscard]] constexpr std::size_t task_frame_class_bytes(std::size_t bytes_value) noexcept {
+    const std::size_t size = bytes_value == 0 ? 1 : bytes_value;
     // Large frames bypass the cache; rounding them could overflow.
-    if (bytes_value > task_frame_bins::max_block_bytes) {
-        return bytes_value;
+    if (size > task_frame_bins::max_block_bytes) {
+        return size;
     }
-    return task_frame_bins::class_bytes(bytes_value);
+    return task_frame_bins::class_bytes(size);
 }
 
 // True once this thread's cache has been destroyed. Coroutine frames can be
@@ -143,7 +219,7 @@ thread_local task_frame_cache frame_cache;
 }  // namespace
 
 void* task_frame_allocate(std::size_t bytes_value) {
-    const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
+    const std::size_t class_bytes = task_frame_class_bytes(bytes_value);
 #if !RUVIA_SANITIZER_ALLOCATOR
     if (!task_frame_cache_destroyed && class_bytes <= task_frame_bins::max_block_bytes) {
         if (void* cached = frame_cache.bins_.take(class_bytes)) {
@@ -156,7 +232,7 @@ void* task_frame_allocate(std::size_t bytes_value) {
 
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
 #if !RUVIA_SANITIZER_ALLOCATOR
-    const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
+    const std::size_t class_bytes = task_frame_class_bytes(bytes_value);
     if (!task_frame_cache_destroyed && class_bytes <= task_frame_bins::max_block_bytes &&
         frame_cache.bins_.store(pointer, class_bytes, task_frame_cache_budget_bytes)) {
         return;
@@ -225,22 +301,30 @@ private:
         return bytes_value <= bins_type::max_block_bytes && alignment <= block_alignment;
     }
 
+    template <typename bins_value_type>
+    [[nodiscard]] void* allocate_from_bins(bins_value_type& bins, std::size_t bytes_value) {
+        const std::size_t block_bytes = bins_value_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
+        if (void* const block = bins.take(block_bytes)) {
+            return block;
+        }
+        return upstream_->allocate(block_bytes, block_alignment);
+    }
+
+    template <typename bins_value_type>
+    void deallocate_to_bins(
+        bins_value_type& bins, void* block, std::size_t bytes_value, std::size_t other_cached_bytes) noexcept {
+        const std::size_t block_bytes = bins_value_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
+        if (!bins.store(block, block_bytes, retained_budget_bytes_ - other_cached_bytes)) {
+            upstream_->deallocate(block, block_bytes, block_alignment);
+        }
+    }
+
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         if (!cacheable(bytes_value, alignment)) {
             return upstream_->allocate(bytes_value, alignment);
         }
-        if (bytes_value <= small_block_bytes) {
-            const std::size_t block_bytes = small_bins_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
-            if (void* const block = small_bins_.take(block_bytes)) {
-                return block;
-            }
-            return upstream_->allocate(block_bytes, block_alignment);
-        }
-        const std::size_t block_bytes = bins_type::class_bytes(bytes_value);
-        if (void* const block = bins_.take(block_bytes)) {
-            return block;
-        }
-        return upstream_->allocate(block_bytes, block_alignment);
+        return bytes_value <= small_block_bytes ? allocate_from_bins(small_bins_, bytes_value)
+                                                : allocate_from_bins(bins_, bytes_value);
     }
 
     void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
@@ -249,15 +333,9 @@ private:
             return;
         }
         if (bytes_value <= small_block_bytes) {
-            const std::size_t block_bytes = small_bins_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
-            if (!small_bins_.store(block, block_bytes, retained_budget_bytes_ - bins_.cached_bytes())) {
-                upstream_->deallocate(block, block_bytes, block_alignment);
-            }
-            return;
-        }
-        const std::size_t block_bytes = bins_type::class_bytes(bytes_value);
-        if (!bins_.store(block, block_bytes, retained_budget_bytes_ - small_bins_.cached_bytes())) {
-            upstream_->deallocate(block, block_bytes, block_alignment);
+            deallocate_to_bins(small_bins_, block, bytes_value, bins_.cached_bytes());
+        } else {
+            deallocate_to_bins(bins_, block, bytes_value, small_bins_.cached_bytes());
         }
     }
 

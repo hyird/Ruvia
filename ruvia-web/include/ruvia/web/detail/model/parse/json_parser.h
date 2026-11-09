@@ -1,31 +1,146 @@
 #pragma once
 
+#include <array>
+#include <charconv>
+#include <cmath>
+#include <concepts>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_number_format.h"
+#include "ruvia/http/url_encoding.h"
+#include "ruvia/web/detail/decimal_number.h"
 #include "ruvia/web/detail/http/request/request_fields_access.h"
 #include "ruvia/web/detail/json/json_containers.h"
+#include "ruvia/web/detail/json/json_escape.h"
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_number.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/json/json_skip.h"
 #include "ruvia/web/detail/json/json_string.h"
+#include "ruvia/web/detail/model/model_schema.h"
 #include "ruvia/web/detail/model/model_text_storage.h"
-#include "ruvia/web/detail/model/parse/form_parser.h"
-#include "ruvia/web/detail/model/parse/json_writer.h"
-#include "ruvia/web/detail/model/rule/rules.h"
+#include "ruvia/web/detail/model/rule/rule_support.h"
+#include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"
 
-// Internal JSON value parser for RUVIA_MODEL.
+namespace ruvia {
+class request_name_value_list;
+}  // namespace ruvia
 
 namespace ruvia::detail {
+
+struct form_body_input final {
+    std::string_view body_;
+    model_string_storage string_storage_{model_string_storage::borrowed};
+};
+
+using model_input = std::variant<form_body_input, std::reference_wrapper<const request_name_value_list>>;
+
+template <typename visitor_type>
+    requires std::invocable<visitor_type&, std::string_view, std::string_view>
+void visit_form_body_fields(std::string_view body, std::pmr::memory_resource* resource, visitor_type&& visitor) {
+    auto& visitor_ref = visitor;
+    std::pmr::string decoded_name(resource);
+    (void)ruvia::visit_url_encoded_pairs(body, [&](std::string_view name, std::string_view value) {
+        visitor_ref(*ruvia::decode_url_component(name, decoded_name, url_decode_mode::form), value);
+    });
+}
+
+enum class form_value_encoding : std::uint8_t { url_encoded,
+    decoded };
+[[nodiscard]] inline std::optional<bool> parse_form_bool(std::string_view decoded) noexcept {
+    if (decoded == "true" || decoded == "1") {
+        return true;
+    }
+    if (decoded == "false" || decoded == "0") {
+        return false;
+    }
+    return std::nullopt;
+}
+
+template <typename number_type>
+[[nodiscard]] std::optional<number_type> parse_form_number(std::string_view decoded) {
+    if (decoded.empty()) {
+        return std::nullopt;
+    }
+    number_type parsed_value{};
+    if constexpr (std::is_floating_point_v<number_type>) {
+        const auto value = detail::parse_decimal_number<number_type>(decoded);
+        if (!value) {
+            return std::nullopt;
+        }
+        parsed_value = *value;
+        if (!std::isfinite(parsed_value)) {
+            return std::nullopt;
+        }
+    } else {
+        const auto integer = parse_integer<number_type>(decoded);
+        if ((integer.index() != 0)) {
+            return std::nullopt;
+        }
+        parsed_value = std::get<0>(integer);
+    }
+    return parsed_value;
+}
+
+[[nodiscard]] inline std::string_view decode_form_value(
+    std::string_view input, form_value_encoding encoding, std::pmr::string& storage) {
+    if (encoding == form_value_encoding::decoded) {
+        return input;
+    }
+    return *ruvia::decode_url_component(input, storage, url_decode_mode::form);
+}
+
+template <typename t_type>
+    requires is_form_field<t_type>
+[[nodiscard]] std::optional<t_type> parse_form_value(resolved_pmr_resource_tag, std::string_view input,
+    form_value_encoding encoding, std::pmr::memory_resource* resource, model_string_storage string_storage) {
+    using field_type = std::remove_cvref_t<t_type>;
+
+    if constexpr (is_ruvia_scalar<field_type>) {
+        std::array<std::byte, 128> stack_bytes;
+        std::pmr::monotonic_buffer_resource stack_resource(stack_bytes.data(), stack_bytes.size(), resource);
+        std::pmr::string decoded_storage(&stack_resource);
+        const auto decoded = decode_form_value(input, encoding, decoded_storage);
+        using scalar_type = model_scalar_value_type<field_type>;
+        if constexpr (std::is_same_v<scalar_type, bool>) {
+            const auto parsed_value = parse_form_bool(decoded);
+            if (!parsed_value.has_value()) {
+                return std::nullopt;
+            }
+            return field_type(*parsed_value);
+        } else {
+            const auto parsed_value = parse_form_number<scalar_type>(decoded);
+            if (!parsed_value.has_value()) {
+                return std::nullopt;
+            }
+            return field_type(*parsed_value);
+        }
+    } else {
+        std::pmr::string decoded_storage(resource);
+        if (decode_form_value(input, encoding, decoded_storage).data() != input.data()) {
+            field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
+            value.assign_owned(std::move(decoded_storage));
+            return value;
+        }
+        if (string_storage == model_string_storage::owned) {
+            return field_type(input, ::ruvia::model_options{.resource_ = resource});
+        }
+        return model_value_factory::make_string(input, resource);
+    }
+}
 
 // A parse-local, conservative representation budget. Charging cumulative growth
 // (rather than only live sizes) also bounds storage retained by monotonic arenas.
@@ -491,6 +606,178 @@ template <typename t_type>
     }
     skip_json_whitespace(body);
     return body.empty();
+}
+
+struct model_json_access final {
+    template <typename model_type>
+    [[nodiscard]] static std::size_t size_hint(const model_type& model);
+
+    template <typename model_type>
+    static void append(std::pmr::string& output, const model_type& model);
+};
+
+template <typename value_type>
+consteval std::size_t json_fixed_scalar_size_hint() noexcept {
+    using t_type = std::remove_cvref_t<value_type>;
+    if constexpr (is_ruvia_scalar<t_type>) {
+        return json_fixed_scalar_size_hint<decltype(std::declval<t_type>().value_)>();
+    } else if constexpr (std::is_same_v<t_type, bool>) {
+        return 5;
+    } else if constexpr (std::is_integral_v<t_type>) {
+        return static_cast<std::size_t>(std::numeric_limits<t_type>::digits10) + 3;
+    } else if constexpr (std::is_floating_point_v<t_type>) {
+        return 32;
+    } else {
+        return 0;
+    }
+}
+
+template <typename value_type>
+[[nodiscard]] std::size_t json_size_hint_value(const value_type& value) {
+    using t_type = std::remove_cvref_t<value_type>;
+    if constexpr (json_fixed_scalar_size_hint<t_type>() != 0) {
+        return json_fixed_scalar_size_hint<t_type>();
+    } else if constexpr (is_ruvia_bytes<t_type>) {
+        return http_base64_encoded_size(value.size()) + 2;
+    } else if constexpr (is_ruvia_string<t_type>) {
+        return json_string_size_hint(value.view());
+    } else if constexpr (is_model<t_type>) {
+        return model_json_access::size_hint(value);
+    } else if constexpr (is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type>) {
+        return value.view().size();
+    } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
+        constexpr std::size_t item_hint = [] {
+            if constexpr (is_ruvia_array<t_type>) {
+                return json_fixed_scalar_size_hint<typename t_type::value_type>();
+            } else {
+                return std::size_t{0};
+            }
+        }();
+        if constexpr (item_hint != 0) {
+            return value.empty() ? 2 : 2 + value.size() * item_hint + (value.size() - 1);
+        } else {
+            std::size_t size = 2;
+            bool first = true;
+            for (const auto& item : value) {
+                if (!first) {
+                    ++size;
+                }
+                first = false;
+                size += json_size_hint_value(item);
+            }
+            return size;
+        }
+    } else {
+        static_assert(
+            always_false<t_type>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
+    }
+}
+
+template <typename value_type>
+void append_json_value(std::pmr::string& output, const value_type& value);
+
+template <typename sequence_type>
+void append_json_sequence(std::pmr::string& output, const sequence_type& value) {
+    output.push_back('[');
+    bool first = true;
+    for (const auto& item : value) {
+        if (!first) {
+            output.push_back(',');
+        }
+        first = false;
+        append_json_value(output, item);
+    }
+    output.push_back(']');
+}
+
+template <typename value_type>
+void append_json_value(std::pmr::string& output, const value_type& value) {
+    using t_type = std::remove_cvref_t<value_type>;
+    if constexpr (is_ruvia_scalar<t_type>) {
+        append_json_value(output, value.value_);
+    } else if constexpr (std::is_same_v<t_type, bool>) {
+        output.append(value ? "true" : "false");
+    } else if constexpr (std::is_unsigned_v<t_type>) {
+        http_append_unsigned(output, value);
+    } else if constexpr (std::is_integral_v<t_type>) {
+        http_append_signed(output, value);
+    } else if constexpr (std::is_floating_point_v<t_type>) {
+        // JSON (RFC 8259) has no representation for infinity or NaN, and
+        // std::to_chars would emit the bare tokens "inf"/"nan" — invalid JSON.
+        // Serialize non-finite values as null, matching JSON.stringify.
+        if (!std::isfinite(value)) {
+            output.append("null");
+            return;
+        }
+        http_append_formatted_number(output, value, "JSON number cannot be formatted");
+    } else if constexpr (is_ruvia_bytes<t_type>) {
+        append_model_binary(output, value);
+    } else if constexpr (is_ruvia_string<t_type>) {
+        append_json_string(output, value.view());
+    } else if constexpr (is_model<t_type>) {
+        model_json_access::append(output, value);
+    } else if constexpr (is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type>) {
+        output.append(value.view());
+    } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
+        append_json_sequence(output, value);
+    } else {
+        static_assert(
+            always_false<t_type>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
+    }
+}
+
+namespace model {
+
+enum class serialized_field_kind { value,
+    null };
+
+// Both serialization passes share emission and comma decisions, with no
+// intermediate representation or runtime field lookup.
+template <typename model_type, typename visitor_type>
+void visit_serialized_fields(const model_type& value, visitor_type&& visitor) {
+    bool first = true;
+    visit_model_fields(value, model_access::schema<model_type>(),
+        [&](const auto&, const auto& slot) {
+            const auto& field_value = slot.value();
+            serialized_field_kind kind;
+            if (field_value && !(slot.omit_empty() && is_empty_value(*field_value))) {
+                kind = serialized_field_kind::value;
+            } else if (!field_value && (slot.is_null() || slot.emit_null())) {
+                kind = serialized_field_kind::null;
+            } else {
+                return;
+            }
+            visitor(slot, kind, !first);
+            first = false;
+        });
+}
+
+}  // namespace model
+
+template <typename model_type>
+std::size_t model_json_access::size_hint(const model_type& value) {
+    std::size_t size = 2;
+    model::visit_serialized_fields(value, [&size](const auto& slot, auto kind, bool comma) {
+        size += slot.json_member_key(comma).size();
+        size += kind == model::serialized_field_kind::value
+                    ? json_size_hint_value(*slot.value())
+                    : 4;
+    });
+    return size;
+}
+
+template <typename model_type>
+void model_json_access::append(std::pmr::string& output, const model_type& value) {
+    output.push_back('{');
+    model::visit_serialized_fields(value, [&output](const auto& slot, auto kind, bool comma) {
+        output.append(slot.json_member_key(comma));
+        if (kind == model::serialized_field_kind::value) {
+            append_json_value(output, *slot.value());
+        } else {
+            output.append("null");
+        }
+    });
+    output.push_back('}');
 }
 
 }  // namespace ruvia::detail

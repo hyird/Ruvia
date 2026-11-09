@@ -211,8 +211,7 @@ private:
         return current_worker_dispatcher() == this && attached();
     }
     [[nodiscard]] waiter_node_type* take_idle_callbacks_locked() noexcept;
-    static void notify_waiters(waiter_node_type* head) noexcept;
-    static void destroy_waiters(waiter_node_type* head) noexcept;
+    static void notify_waiters(waiter_node_type* head, bool invoke = true) noexcept;
     // Returns whether this call opened the (single) stopping batch.
     [[nodiscard]] bool begin_stopping(bool abandon_drain) noexcept;
     [[nodiscard]] bool begin_stopping_locked(bool abandon_drain) noexcept;
@@ -226,6 +225,7 @@ private:
     void push_ready_locked(std::size_t index) noexcept;
     void publish(std::size_t index);
     void release_abandoned_node(std::size_t index) noexcept;
+    void release_abandoned_chain(std::size_t index) noexcept;
     void drain();
     void arm_timer();
     void fire_timers();
@@ -234,6 +234,7 @@ private:
     [[nodiscard]] bool has_occupied_timer(std::size_t slot, std::uint64_t generation) const noexcept;
     [[nodiscard]] bool has_live_timer_entry(std::size_t slot, std::uint64_t generation) const noexcept;
     void note_stale_timer() noexcept;
+    void pop_stale_timer_top() noexcept;
     // Gives an empty heap's storage back when it outgrew the startup
     // reservation, so a timer burst is not retained for the worker's lifetime.
     void release_drained_timer_heap() noexcept;

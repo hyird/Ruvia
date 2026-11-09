@@ -7,7 +7,7 @@
 #include "ruvia/web/context.h"
 
 #include "context/context_session_state.h"
-#include "http/secure_token.h"
+#include "tls/tls_random.h"
 
 namespace ruvia::detail {
 

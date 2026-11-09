@@ -19,43 +19,549 @@
 
 #include <nghttp2/nghttp2.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/util/http_pmr_object.h"
+#include "ruvia/http/http2_event.h"
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_priority.h"
+#include "ruvia/http/http_push.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
 
-#include "http2/http2_event.h"
 #include "http2/http2_field_list.h"
-#include "http2/http2_output_buffer.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_stream_state.h"
-#include "http2/http2_stream_table.h"
 #include "response/http_framed_response_head_plan.h"
+#include "util/geometric_reserve.h"
 #include "util/http_c_library_memory.h"
 #include "websocket/websocket_server_negotiation.h"
 namespace ruvia::detail {
+
+// Queue records for the events whose public form the facade materializes from
+// stream storage or binds to its owner endpoint when the event is taken.
+struct http2_message_head_record final {
+    std::uint32_t stream_id_{0};
+    std::optional<http_client_request_content_signal> request_content_signal_;
+    // The HEADERS frame left the peer send half open. Server side: message
+    // content events follow this head (a pending CONNECT reads as closed).
+    // Client side: the final response head did not carry END_STREAM. Captured
+    // when the head is published; the same input batch may already have
+    // delivered later frames to the core.
+    bool body_open_{false};
+};
+
+// The bytes borrow the accepted feed() input until the next consuming feed().
+struct http2_message_data_record final {
+    std::uint32_t stream_id_{0};
+    std::string_view bytes_;
+    std::uint32_t flow_control_bytes_{0};
+};
+
+struct http2_tunnel_data_record final {
+    std::uint32_t stream_id_{0};
+    std::string_view bytes_;
+    std::uint32_t flow_control_bytes_{0};
+};
+
+struct http2_message_end_record final {
+    std::uint32_t stream_id_{0};
+};
+
+// One queued protocol event. Events that need no owner binding are stored in
+// their public form and moved out unchanged. There is deliberately no none
+// alternative: an empty queue is represented by peek_event() returning null.
+class http2_event final {
+public:
+    using value_type = std::variant<http2_informational_head_event, http2_message_head_record,
+        http2_message_data_record, http2_message_end_record, http2_tunnel_data_record, http2_tunnel_end_event,
+        http2_stream_closed_event, http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event,
+        http_priority_update, http_origin_advertisement, http_alternative_service_advertisement,
+        http2_received_settings, http2_received_window_update, http2_received_priority>;
+
+    template <typename event_type>
+        requires(!std::is_same_v<event_type, http2_event>)
+    explicit http2_event(event_type event) noexcept
+        : value_(std::move(event)) {}
+    http2_event(const http2_event&) = delete;
+    http2_event& operator=(const http2_event&) = delete;
+    http2_event(http2_event&&) noexcept = default;
+    http2_event& operator=(http2_event&&) = delete;
+
+    // Visits each stream id whose storage the owner may read when taking this event.
+    template <typename visitor_type>
+    void for_each_referenced_stream(visitor_type&& visitor) const noexcept {
+        std::visit(
+            [&visitor](const auto& event) noexcept {
+                using event_type = std::decay_t<decltype(event)>;
+                if constexpr (std::is_same_v<event_type, http2_push_promise_event>) {
+                    visitor(event.associated_stream_id_);
+                    visitor(event.promised_stream_id_);
+                } else if constexpr (requires { event.stream_id(); }) {
+                    visitor(event.stream_id());
+                } else if constexpr (std::is_same_v<event_type, http2_message_head_record> ||
+                                     std::is_same_v<event_type, http2_message_data_record> ||
+                                     std::is_same_v<event_type, http2_message_end_record> ||
+                                     std::is_same_v<event_type, http2_tunnel_data_record>) {
+                    visitor(event.stream_id_);
+                }
+            },
+            value_);
+    }
+
+    [[nodiscard]] value_type& value() & noexcept {
+        return value_;
+    }
+    value_type& value() && = delete;
+
+private:
+    value_type value_;
+};
+
+// Sole owner of HTTP/2 outbound bytes and their consumed prefix. nghttp2
+// serializes frames; the connection appends each frame it emits as one segment
+// so batches stay frame-aligned and DATA payload bytes stay attributable.
+class http2_output_buffer final {
+public:
+    struct segment_type final {
+        // DATA payload spans [begin + http2_frame_header_bytes, end). Raw byte
+        // segments have no DATA metadata.
+        std::size_t begin_;
+        std::size_t end_;
+        std::uint32_t stream_id_;
+        bool is_data_;
+    };
+    explicit http2_output_buffer(std::pmr::memory_resource* resource)
+        : bytes_(std::string_view{}, resource),
+          segments_(std::size_t{0}, resource) {}
+
+    [[nodiscard]] bool wants_write() const noexcept {
+        return consumed_ < bytes_.size();
+    }
+
+    // Appends one complete frame (or the client connection preface) as a
+    // segment; both reservations precede the copy, so a throwing resource
+    // leaves the pending output unchanged.
+    void append_segment(std::string_view bytes_value, std::uint32_t stream_id, bool is_data) {
+        if (bytes_value.empty()) {
+            return;
+        }
+        // Reclaim an amortizable prefix before new frames grow the live suffix.
+        compact_consumed_prefix();
+        reserve_segment();
+        if (bytes_value.size() > bytes_.max_size() - bytes_.size()) {
+            throw std::length_error("HTTP/2 output buffer size overflow");
+        }
+        reserve_geometric(bytes_, bytes_.size() + bytes_value.size());
+        const auto begin = bytes_.size();
+        bytes_.append(bytes_value.data(), bytes_value.size());
+        segments_.push_back(segment_type{begin, bytes_.size(), stream_id, is_data});
+    }
+
+    [[nodiscard]] http2_output_batch_result take_batch(std::size_t max_bytes, std::pmr::string& into,
+        http2_data_output_observer_type observer, void* observer_context) {
+        if (consumed_ == bytes_.size()) {
+            return {http2_output_batch_status::empty, 0};
+        }
+        // Every append records a segment, and the cursor only advances by whole
+        // segments, so the first pending segment always begins at consumed_.
+        std::size_t end = consumed_;
+        std::size_t segment_count = 0;
+        for (std::size_t index = segment_offset_; index < segments_.size(); ++index) {
+            const auto& segment = segments_[index];
+            if (segment_count != 0 && segment.end_ - consumed_ > max_bytes) {
+                break;
+            }
+            end = segment.end_;
+            ++segment_count;
+            if (end - consumed_ >= max_bytes) {
+                break;
+            }
+        }
+        // Only a storage handoff benefits from compacting this batch in place.
+        const auto batch_bytes = end - consumed_;
+        const bool complete_batch = end == bytes_.size();
+        const bool transferable = into.empty() && into.get_allocator() == bytes_.get_allocator();
+        if (complete_batch && transferable) {
+            compact_consumed_prefix();
+        }
+        const auto first_segment = segment_offset_;
+        const bool transfer_storage = consumed_ == 0 && complete_batch && transferable;
+        if (transfer_storage) {
+            into.swap(bytes_);
+        } else {
+            into.append(bytes_.data() + consumed_, batch_bytes);
+        }
+        if (observer != nullptr) {
+            ++observer_depth_;
+        }
+        struct observer_depth_guard final {
+            http2_output_buffer& buffer_;
+            bool active_;
+            ~observer_depth_guard() {
+                if (!active_) {
+                    return;
+                }
+                --buffer_.observer_depth_;
+                if (buffer_.observer_depth_ == 0 &&
+                    buffer_.segment_offset_ == buffer_.segments_.size()) {
+                    buffer_.segments_.clear();
+                    buffer_.segment_offset_ = 0;
+                }
+            }
+        } guard{*this, observer != nullptr};
+        if (transfer_storage) {
+            reset_after_drain();
+        } else {
+            consume_batch(batch_bytes, segment_count);
+        }
+        if (observer != nullptr) {
+            // A callback may append or drain more frames. Their vector may
+            // reallocate, so retain indices and snapshot each entry by value.
+            for (std::size_t i = 0; i < segment_count; ++i) {
+                const auto segment = segments_[first_segment + i];
+                if (segment.is_data_) {
+                    observer(observer_context, segment.stream_id_,
+                        segment.end_ - segment.begin_ - http2_frame_header_bytes);
+                }
+            }
+        }
+        return {http2_output_batch_status::taken, batch_bytes};
+    }
+
+    [[nodiscard]] std::size_t pending_data_bytes(std::uint32_t stream_id) const noexcept {
+        std::size_t total = 0;
+        for (std::size_t index = segment_offset_; index < segments_.size(); ++index) {
+            const auto& segment = segments_[index];
+            if (segment.is_data_ && segment.stream_id_ == stream_id) {
+                total += segment.end_ - segment.begin_ - http2_frame_header_bytes;
+            }
+        }
+        return total;
+    }
+
+private:
+    // Advances the cursor past whole segments; the cursor always stays on a
+    // segment boundary, so no partial-segment bookkeeping exists.
+    void consume_batch(std::size_t bytes_value, std::size_t segment_count) noexcept {
+        if (bytes_value == bytes_.size() - consumed_) {
+            reset_after_drain();
+            return;
+        }
+        consumed_ += bytes_value;
+        segment_offset_ += segment_count;
+    }
+
+    void reset_after_drain() noexcept {
+        bytes_.clear();
+        if (observer_depth_ == 0) {
+            segments_.clear();
+            segment_offset_ = 0;
+        } else {
+            segment_offset_ = segments_.size();
+        }
+        consumed_ = 0;
+    }
+
+    void compact_consumed_prefix() noexcept {
+        if (observer_depth_ != 0 || consumed_ < 64 * 1024 || consumed_ < bytes_.size() - consumed_) {
+            return;
+        }
+        const auto prefix = consumed_;
+        bytes_.erase(0, prefix);
+        for (std::size_t index = segment_offset_; index < segments_.size(); ++index) {
+            auto& segment = segments_[index];
+            segment.begin_ = segment.begin_ > prefix ? segment.begin_ - prefix : 0;
+            segment.end_ -= prefix;
+        }
+        segments_.erase(segments_.begin(),
+            segments_.begin() + static_cast<std::ptrdiff_t>(segment_offset_));
+        segment_offset_ = 0;
+        consumed_ = 0;
+    }
+
+    void reserve_segment() {
+        if (observer_depth_ == 0 && segment_offset_ >= 32 &&
+            segment_offset_ >= segments_.size() - segment_offset_) {
+            const auto remaining = segments_.size() - segment_offset_;
+            std::move(segments_.begin() + static_cast<std::ptrdiff_t>(segment_offset_),
+                segments_.end(), segments_.begin());
+            segments_.resize(remaining);
+            segment_offset_ = 0;
+        }
+        // A burst of frames shares one geometric growth policy.
+        reserve_geometric(segments_, segments_.size() + 1);
+    }
+
+    std::pmr::string bytes_;
+    std::pmr::vector<segment_type> segments_;
+    std::size_t segment_offset_{0};
+    std::size_t consumed_{0};
+    std::size_t observer_depth_{0};
+};
+
+// RFC 9113 §5.1.1: stream identifiers are 31-bit values.
+inline constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
+
+// One compile-time source of truth for every local receive constraint. These values
+// drive both the advertised SETTINGS and the matching session options and fixed
+// capacities; they are intentionally not runtime knobs that can diverge.
+struct http2_local_settings final {
+    static constexpr std::uint32_t header_table_size = 4096;
+    static constexpr std::uint32_t max_concurrent_streams = 128;
+    static constexpr std::uint32_t initial_window_size = 1024 * 1024;
+    static constexpr std::uint32_t max_frame_size = http2_default_max_frame_size;
+    static constexpr std::uint32_t max_header_list_size =
+        static_cast<std::uint32_t>(max_http_header_bytes);
+    static constexpr std::uint32_t enable_connect_protocol = 1;
+};
+
+static_assert(http2_local_settings::initial_window_size <=
+              static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()));
+
+class http2_stream_table final {
+public:
+    // Hard upper bound on live stream records. Reserved push promises do not hold a
+    // concurrency slot, so this can exceed SETTINGS_MAX_CONCURRENT_STREAMS.
+    static constexpr std::size_t max_streams =
+        static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4;
+    static constexpr std::size_t max_push_streams =
+        max_streams - static_cast<std::size_t>(http2_local_settings::max_concurrent_streams);
+
+    explicit http2_stream_table(std::pmr::memory_resource* resource)
+        : resource_(http_pmr_resource_or_default(resource)),
+          overflow_ids_(std::size_t{0}, resource_),
+          overflow_(std::size_t{0}, resource_) {}
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return size_;
+    }
+
+    [[nodiscard]] http2_stream_state* find(std::uint32_t stream_id) & noexcept {
+        if (stream_id == 0) {
+            return nullptr;
+        }
+        for (auto& slot : inline_) {
+            if (slot && slot->id() == stream_id) {
+                return &*slot;
+            }
+        }
+        const auto* const ids = overflow_ids_.data();
+        const auto count = overflow_ids_.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            if (ids[i] == stream_id) {
+                return overflow_[i].get();
+            }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] http2_stream_state* find(std::uint32_t) && = delete;
+
+    [[nodiscard]] const http2_stream_state* find(std::uint32_t stream_id) const& noexcept {
+        if (stream_id == 0) {
+            return nullptr;
+        }
+        for (const auto& slot : inline_) {
+            if (slot && slot->id() == stream_id) {
+                return &*slot;
+            }
+        }
+        const auto* const ids = overflow_ids_.data();
+        const auto count = overflow_ids_.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            if (ids[i] == stream_id) {
+                return overflow_[i].get();
+            }
+        }
+        return nullptr;
+    }
+    [[nodiscard]] const http2_stream_state* find(std::uint32_t) const&& = delete;
+
+    // NOTE on slot reuse: a closed stream's http2_stream_state is destroyed here (inline
+    // slot .reset() / overflow erase), freeing its per-stream pmr strings. We do NOT
+    // pool the storage and reset-in-place to retain capacity, deliberately. A correct
+    // reset_for_reuse would have to reinitialise ~85 fields across 8 sub-objects, and a
+    // single missed field would leak one request's decoded headers / routing / body
+    // into the next reused slot -- a cross-request data-disclosure risk not worth taking
+    // for a micro-optimisation off the measured hot path.
+    [[nodiscard]] http2_stream_state* create(std::uint32_t stream_id) & {
+        if (auto* existing = find(stream_id); existing != nullptr) {
+            return existing;
+        }
+        const bool is_push = (stream_id & 1U) == 0;
+        if (size_ >= max_streams || (is_push && push_size_ >= max_push_streams)) {
+            return nullptr;
+        }
+        for (auto& slot : inline_) {
+            if (!slot) {
+                slot.emplace(stream_id, resource_);
+                ++size_;
+                if (is_push) {
+                    ++push_size_;
+                }
+                return &*slot;
+            }
+        }
+        auto stream = make_http_pmr_object<http2_stream_state>(resource_, stream_id, resource_);
+        reserve_geometric(overflow_ids_, overflow_ids_.size() + 1);
+        reserve_geometric(overflow_, overflow_.size() + 1);
+        auto* result_value = stream.get();
+        overflow_ids_.push_back(stream_id);
+        overflow_.push_back(std::move(stream));
+        ++size_;
+        if (is_push) {
+            ++push_size_;
+        }
+        return result_value;
+    }
+    [[nodiscard]] http2_stream_state* create(std::uint32_t) && = delete;
+
+    bool remove(std::uint32_t stream_id) noexcept {
+        if (stream_id == 0) {
+            return false;
+        }
+        for (auto& slot : inline_) {
+            if (slot && slot->id() == stream_id) {
+                slot.reset();
+                --size_;
+                if ((stream_id & 1U) == 0) {
+                    --push_size_;
+                }
+                return true;
+            }
+        }
+        const auto* const ids = overflow_ids_.data();
+        const auto count = overflow_ids_.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            if (ids[i] == stream_id) {
+                erase_overflow_at(i);
+                --size_;
+                if ((stream_id & 1U) == 0) {
+                    --push_size_;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    template <typename callback>
+    void for_each(callback&& callback_value) {
+        snapshot_iteration_guard_type guard_value(*this);
+        for (auto& slot : inline_) {
+            if (slot) {
+                callback_value(*slot);
+            }
+        }
+        const auto overflow_end = overflow_.size();
+        for (std::size_t i = 0; i < overflow_end; ++i) {
+            auto& stream = overflow_[i];
+            if (stream != nullptr) {
+                callback_value(*stream);
+            }
+        }
+    }
+
+private:
+    // Two inline slots cover the typical request/response cadence without
+    // paying the full concurrent-stream budget up front: each slot embeds a
+    // ~1.3 KB http2_stream_state, and the table lives in the connection object
+    // for the connection's whole lifetime, so the two slots put ~2.6 KB into
+    // every connection. Deeper multiplexing spills to the pmr overflow path.
+    static constexpr std::size_t inline_capacity = 2;
+    using overflow_stream_type =
+        std::unique_ptr<http2_stream_state, http_pmr_object_deleter<http2_stream_state>>;
+
+    class snapshot_iteration_guard_type final {
+    public:
+        explicit snapshot_iteration_guard_type(http2_stream_table& table_value) noexcept
+            : table_(table_value) {
+            ++table_.snapshot_iteration_depth_;
+        }
+
+        snapshot_iteration_guard_type(const snapshot_iteration_guard_type&) = delete;
+        snapshot_iteration_guard_type& operator=(const snapshot_iteration_guard_type&) = delete;
+
+        ~snapshot_iteration_guard_type() {
+            --table_.snapshot_iteration_depth_;
+            table_.compact_overflow_if_idle();
+        }
+
+    private:
+        http2_stream_table& table_;
+    };
+
+    void erase_overflow_at(std::size_t index) noexcept {
+        if (snapshot_iteration_depth_ != 0) {
+            overflow_ids_[index] = 0;
+            overflow_[index].reset();
+            overflow_needs_compact_ = true;
+            return;
+        }
+        if (index + 1 != overflow_.size()) {
+            overflow_ids_[index] = overflow_ids_.back();
+            overflow_[index] = std::move(overflow_.back());
+        }
+        overflow_ids_.pop_back();
+        overflow_.pop_back();
+    }
+
+    void compact_overflow_if_idle() noexcept {
+        if (snapshot_iteration_depth_ != 0 || !overflow_needs_compact_) {
+            return;
+        }
+        for (std::size_t i = 0; i < overflow_.size();) {
+            if (overflow_[i] == nullptr) {
+                if (i + 1 != overflow_.size()) {
+                    overflow_ids_[i] = overflow_ids_.back();
+                    overflow_[i] = std::move(overflow_.back());
+                }
+                overflow_ids_.pop_back();
+                overflow_.pop_back();
+                continue;
+            }
+            ++i;
+        }
+        overflow_needs_compact_ = false;
+    }
+
+    std::pmr::memory_resource* resource_;
+    std::array<std::optional<http2_stream_state>, inline_capacity> inline_{};
+    std::pmr::vector<std::uint32_t> overflow_ids_;
+    std::pmr::vector<overflow_stream_type> overflow_;
+    std::size_t size_{0};
+    std::size_t push_size_{0};
+    std::size_t snapshot_iteration_depth_{0};
+    bool overflow_needs_compact_{false};
+};
 
 // The local SETTINGS frame of the connection preface. Only a client may
 // advertise ENABLE_PUSH=1 (RFC 9113 §6.5.2).

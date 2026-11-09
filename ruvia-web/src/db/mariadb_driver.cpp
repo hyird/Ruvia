@@ -176,9 +176,7 @@ void discard_unbuffered_result(void* result_value) noexcept {
 // statement may still be running server-side, which is exactly what a
 // client-side timeout means.
 struct mysql_wait final {
-    mariadb_pool& pool_;
-    mysql_wait_deadline_source deadline_source_;
-    mariadb_pool::slot_wait wait_;
+    db_driver_socket_wait<mariadb_driver> wait_;
 
     [[nodiscard]] bool await_ready() {
         return wait_.await_ready();
@@ -187,11 +185,8 @@ struct mysql_wait final {
         return wait_.await_suspend(handle);
     }
     [[nodiscard]] int await_resume() {
-        const auto wait_result = wait_.await_resume();
+        const auto wait_result = wait_.resume_raw();
         if (wait_result.expired_) {
-            if (deadline_source_ == mysql_wait_deadline_source::operation) {
-                throw pool_.timed_out();
-            }
             return MYSQL_WAIT_TIMEOUT;
         }
         if (wait_result.error_) {
@@ -244,7 +239,9 @@ struct mysql_wait final {
             throw db_error(
                 db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
         }
-        return mysql_wait{pool, selected_deadline.source_, pool.sleep(index, selected_deadline.deadline_, deadline_value)};
+        return mysql_wait{db_driver_socket_wait<mariadb_driver>{
+            pool, pool.sleep(index, selected_deadline.deadline_, deadline_value),
+            selected_deadline.source_ == mysql_wait_deadline_source::operation}};
     }
 
     const auto native = mysql_native_socket(connection);
@@ -256,8 +253,9 @@ struct mysql_wait final {
     // limit here, like the shared pipeline and PostgreSQL socket paths.
     const auto selected_deadline = select_mysql_wait_deadline(
         deadline_value.constrained_by(db_io_timeout(pool.config(), wanted)).deadline(), driver_deadline);
-    return mysql_wait{pool, selected_deadline.source_,
-        pool.wait_socket(index, native, wanted, selected_deadline.deadline_, deadline_value)};
+    return mysql_wait{db_driver_socket_wait<mariadb_driver>{
+        pool, pool.wait_socket(index, native, wanted, selected_deadline.deadline_, deadline_value),
+        selected_deadline.source_ == mysql_wait_deadline_source::operation}};
 }
 
 task<int> exec_mysql_query(

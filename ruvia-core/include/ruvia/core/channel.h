@@ -89,6 +89,16 @@ struct channel_state final {
         return std::unique_lock(mutex_);
     }
 
+    [[nodiscard]] std::optional<channel_send_status> check_open_locked() const noexcept {
+        if (std::holds_alternative<channel_closed>(lifecycle_)) {
+            return channel_send_status::closed;
+        }
+        if (std::holds_alternative<channel_worker_stopping>(lifecycle_) || !worker_.accepting()) {
+            return channel_send_status::worker_stopping;
+        }
+        return std::nullopt;
+    }
+
     // Called under mutex_. Reservations hold capacity until publication.
     [[nodiscard]] node* reserve_node() noexcept {
         if (queued_ + reserved_ == capacity_ || free_ == nullptr) {
@@ -300,12 +310,8 @@ public:
         std::optional<channel_send_status> rejection;
         {
             auto lock = state->lock_state();
-            if (std::holds_alternative<detail::channel_closed>(state->lifecycle_)) {
-                rejection = channel_send_status::closed;
-            } else if (std::holds_alternative<detail::channel_worker_stopping>(state->lifecycle_) ||
-                       !state->worker_.accepting()) {
-                rejection = channel_send_status::worker_stopping;
-            } else if ((slot = state->reserve_node()) == nullptr) {
+            rejection = state->check_open_locked();
+            if (!rejection && (slot = state->reserve_node()) == nullptr) {
                 rejection = channel_send_status::full;
             }
         }
@@ -326,17 +332,13 @@ public:
         {
             auto lock = state->lock_state();
             --state->reserved_;
-            if (std::holds_alternative<detail::channel_closed>(state->lifecycle_)) {
-                rejection = channel_send_status::closed;
-            } else if (std::holds_alternative<detail::channel_worker_stopping>(state->lifecycle_) ||
-                       !state->worker_.accepting()) {
-                rejection = channel_send_status::worker_stopping;
-            } else if (state->wait_slot_.occupied()) {
-                state->wait_slot_.complete(detail::worker_wait_result_access::value(slot));
-            } else {
-                state->enqueue(slot);
-            }
+            rejection = state->check_open_locked();
             if (!rejection) {
+                if (state->wait_slot_.occupied()) {
+                    state->wait_slot_.complete(detail::worker_wait_result_access::value(slot));
+                } else {
+                    state->enqueue(slot);
+                }
                 guard.release();
             }
         }

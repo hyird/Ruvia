@@ -70,6 +70,33 @@ inline void check_db_socket_wait(const db_socket_wait_result& result, db_driver 
     }
 }
 
+// One socket wait on a slot held exclusively by a driver operation, bounded by
+// the operation deadline and optional driver I/O timeout.
+template <typename driver_type>
+struct db_driver_socket_wait final {
+    using pool_type = db_pool<driver_type>;
+    pool_type& pool_;
+    typename pool_type::slot_wait wait_;
+    bool throw_on_expiry_{true};
+
+    [[nodiscard]] bool await_ready() {
+        return wait_.await_ready();
+    }
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
+        return wait_.await_suspend(handle);
+    }
+    [[nodiscard]] db_socket_wait_result resume_raw() {
+        const auto wait_result = wait_.await_resume();
+        if (wait_result.expired_ && throw_on_expiry_) {
+            throw pool_.timed_out();
+        }
+        return wait_result;
+    }
+    void await_resume() {
+        check_db_socket_wait(resume_raw(), driver_type::driver, driver_type::name);
+    }
+};
+
 template <typename io_type>
 db_pipeline_member<io_type>::db_pipeline_member(
     state_type& state, db_rows* rows, std::pmr::memory_resource* resource, const stop_token& stop_token_value)

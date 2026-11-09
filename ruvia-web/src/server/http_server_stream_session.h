@@ -24,25 +24,30 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
 
+#include "body/http_request_body_facade.h"
+#include "body/http_stream_body_reader.h"
 #include "context/context_services.h"
+#include "context/http_interim_response_output.h"
 #include "http/http_protocol_error_info.h"
+#include "http/http_socket_tunnel_transport.h"
+#include "http/http_tunnel_session.h"
+#include "http/tls_tunnel_output.h"
 #include "http2/http2_sans_io_session.h"
-#include "http2/http2_sans_io_session_context.h"
-#include "http2/http2_server_session_entry.h"
-#include "server/http1_interim_response_sink.h"
 #include "server/http1_request_sequence.h"
 #include "server/http1_response_output.h"
+#include "server/http1_route_dispatch.h"
+#include "server/http1_session_request_completion.h"
 #include "server/http_buffered_response.h"
 #include "server/http_connection_state.h"
 #include "server/http_request_admission.h"
+#include "server/http_response_stream_sink.h"
 #include "server/http_response_writer.h"
 #include "server/http_server_body_route_completion.h"
 #include "server/http_server_response_state.h"
-#include "server/http_server_response_stream_route.h"
-#include "server/http_server_stream_body_route.h"
-#include "server/http_server_tunnel_route.h"
-#include "server/http_server_websocket_route.h"
+#include "server/http_upgrade_route.h"
+#include "server/inbound_transport_error.h"
 #include "server/response_file_source.h"
+#include "server/worker_codecs.h"
 #include "server/worker_connections.h"
 
 // Member-template definitions for worker_connections, kept out of its header so the
@@ -50,6 +55,282 @@
 // included here.
 
 namespace ruvia::detail {
+// Reads more of a cleartext connection's first bytes, which so far match the
+// prior-knowledge client preface (RFC 9113 §3.4), under the request-header
+// deadlines. Returns false when the read ends the connection. Once the preface
+// is complete, the HTTP/1 connection hands its pending bytes to the HTTP/2
+// session and returns its working memory first.
+template <typename stream_type>
+task<bool> read_more_cleartext_http2_preface(
+    stream_type& stream, connection_scanner::entry& scanner_entry, connection_read_buffer& read_buffer) {
+    scanner_entry.read_request_head(connection_scanner::phase::reading_initial);
+    const auto space = read_buffer.prepare_read();
+    auto read_completion = co_await ruvia::async_asio<std::size_t>([&stream, space](auto handler) mutable {
+        stream.async_read_some(asio::buffer(space), std::move(handler));
+    });
+    if (read_completion.error_code()) {
+        co_return false;
+    }
+    read_buffer.commit_read(read_completion.result());
+    scanner_entry.touch();
+    co_return true;
+}
+
+template <typename stream_type>
+class http1_interim_response_sink final {
+public:
+    // `request` is the session's reused parse target; it is borrowed for every
+    // dispatch that can reach output(). Pipelined responses still held back in
+    // `pending` precede any interim head on the wire.
+    http1_interim_response_sink(stream_type& stream, const http_request& request, std::pmr::memory_resource* resource,
+        http1_response_output<stream_type>& pending, connection_scanner::entry& scanner_entry)
+        : stream_(stream),
+          request_(request),
+          resource_(resource),
+          pending_(pending),
+          scanner_entry_(scanner_entry),
+          output_(resource, this, write) {}
+    [[nodiscard]] http_interim_response_output& output() noexcept {
+        return output_;
+    }
+
+private:
+    static task<void> write(void* raw, const http_interim_response_head& response) {
+        auto& self = *static_cast<http1_interim_response_sink*>(raw);
+        // A typical interim head fits the head buffer's inline storage; a
+        // larger one is encoded again into heap storage of exactly its size.
+        http_response_head_buffer head(self.resource_);
+        auto encoded = prepare_http1_interim_response_head(
+            response, std::span<char>(head.stack_cursor(response_head_stack_bytes), response_head_stack_bytes));
+        if (const auto* too_small = std::get_if<http1_interim_response_buffer_too_small>(&encoded)) {
+            const auto head_bytes = too_small->required_head_bytes();
+            head.append_generated(head_bytes, [&](char* out) noexcept {
+                encoded = prepare_http1_interim_response_head(response, std::span<char>(out, head_bytes));
+            });
+        }
+        // Validation threw http1_response_head_error before any buffer was
+        // touched; an exactly sized buffer always holds the prepared head.
+        const auto* prepared = &std::get<prepared_http1_interim_response>(encoded);
+        if (prepared->connection_disposition() != http1_interim_connection_disposition::unchanged) {
+            throw std::invalid_argument("application interim response cannot close the exchange");
+        }
+        if (self.request_.protocol_version() == http_protocol_version::http10) {
+            // RFC 9110 §15.2: a server MUST NOT send a 1xx response to an
+            // HTTP/1.0 client, which would take it as the final response.
+            // Interim heads are advisory, so the exchange simply omits it.
+            co_return;
+        }
+        if (!self.pending_.empty()) {
+            if (const auto error = co_await self.pending_.flush()) {
+                throw inbound_transport_error(error, "failed to write HTTP/1 responses before an interim response");
+            }
+        }
+        const connection_scanner::entry::write_scope write_stall_clock(self.scanner_entry_);
+        const auto completion = co_await async_asio<std::size_t>([&self, bytes = prepared->head()](auto handler) {
+            asio::async_write(
+                self.stream_, asio::buffer(bytes), connection_write_progress(self.scanner_entry_), std::move(handler));
+        });
+        if (completion.error_code()) {
+            throw inbound_transport_error(completion.error_code(), "failed to write HTTP/1 interim response");
+        }
+    }
+    stream_type& stream_;
+    const http_request& request_;
+    std::pmr::memory_resource* resource_;
+    http1_response_output<stream_type>& pending_;
+    connection_scanner::entry& scanner_entry_;
+    http_interim_response_output output_;
+};
+
+template <typename stream_type>
+task<http1_session_request_completion> dispatch_http_stream_body_route(http1_route_dispatch<stream_type> d,
+    const http1_server_request_head_ready& request_head, const route_resolution& route_resolution_value,
+    protocol_byte_limit body_limit, std::string_view request_bytes, std::pmr::string& pipeline_stash) {
+    const auto body_and_pipeline = http_body_and_pipeline(request_head, request_bytes);
+
+    std::exception_ptr exception;
+    std::optional<body_reader_binding<stream_body_reader<stream_type>>> body_reader;
+    try {
+        // The reader's buffers are inbound memory: they count against the
+        // connection's and the worker's inbound budgets.
+        body_reader.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(&d.inbound_buffer_pool_),
+            body_and_pipeline, d.parsed_.body_plan_, body_limit, d.scanner_entry_,
+            *d.base_route_services_.interim_output());
+        auto services = d.base_route_services_;
+        services.bind_streaming_request_body(body_reader->facade());
+        services.bind_request_trailers(body_reader->reader().trailers());
+        co_await d.routes_.dispatch_buffered_response(d.parsed_.request_, route_resolution_value,
+            d.request_memory_, document_root_binding::none(), services,
+            static_file_selection_mode::identity_only, d.response_);
+    } catch (...) {
+        exception = std::current_exception();
+    }
+
+    if (exception != nullptr) {
+        auto exception_services = d.base_route_services_;
+        if (body_reader) {
+            exception_services.bind_streaming_request_body(body_reader->facade());
+            exception_services.bind_request_trailers(body_reader->reader().trailers());
+        }
+        co_return co_await complete_failed_http_route(d.scanner_entry_, exception, d.parsed_,
+            d.routes_, d.request_memory_, exception_services, d.response_);
+    }
+
+    co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
+        d.request_sequence_, request_bytes.size(), pipeline_stash, body_reader->reader());
+}
+
+// Admission already validated a CONNECT-UDP head (`udp`). HTTP/1 framing adds
+// one rule of its own: a CONNECT request cannot carry request content. A
+// successful handshake is access-logged through `tail` once its head reaches
+// the transport; a buffered answer is left to the session's ordinary tail.
+[[nodiscard]] inline http1_response_head_plan prepare_http1_tunnel_response_head_plan(
+    const http_response& head_response, http_protocol_version version, bool udp) {
+    if (!udp) {
+        return prepare_http1_connect_response_head(head_response, version);
+    }
+    return prepare_http1_connect_udp_response_head(head_response);
+}
+
+template <typename stream_type>
+struct http1_tunnel_upgrade_commit final {
+    using transport_type = http_socket_tunnel_transport<stream_type>;
+
+    http1_route_dispatch<stream_type>& dispatch_;
+    http_response_tail& tail_;
+    bool udp_;
+    std::optional<tls_tunnel_output>& tls_output_;
+
+    [[nodiscard]] task<transport_type> operator()(
+        context& context_value, const http_response& head_response) const {
+        const auto plan = prepare_http1_tunnel_response_head_plan(
+            head_response, dispatch_.parsed_.request_.protocol_version(), udp_);
+        http_response_head_buffer head(
+            std::pmr::polymorphic_allocator<char>(dispatch_.memory_.resource()));
+        append_http1_response_head(head_response, head, plan);
+        context_access::commit_upgrade(context_value);
+        if (const auto ec = co_await write_http1_upgrade_response_head(dispatch_.stream_,
+                dispatch_.parsed_.body_plan_.expectations(), head_response.status(), head.view(),
+                dispatch_.scanner_entry_);
+            ec) {
+            throw inbound_transport_error(ec, "CONNECT head write");
+        }
+        tail_.record_access(dispatch_.options_.access_log_, head_response.status());
+        if constexpr (requires { dispatch_.stream_.next_layer(); }) {
+            tls_output_.emplace(*dispatch_.stream_.native_handle(), dispatch_.stream_.lowest_layer(),
+                dispatch_.base_route_services_.worker(), *dispatch_.memory_.resource());
+            tls_output_->start();
+        }
+        co_return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, &dispatch_.scanner_entry_);
+    }
+};
+
+template <typename stream_type>
+[[nodiscard]] task<std::optional<http1_session_request_completion>> dispatch_http_tunnel_route(
+    http1_route_dispatch<stream_type> d, http_response_tail& tail, const resolved_route& resolved, bool udp,
+    std::string_view pending) {
+    if (d.parsed_.body_plan_.requires_consumption()) {
+        // A generated rejection does not inherit the negotiated coding promise.
+        tail.disable_response_coding();
+        d.response_ = co_await d.routes_.handle_error(d.parsed_.request_, d.request_memory_,
+            http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
+        co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
+    }
+    std::optional<tls_tunnel_output> tls_output;
+    // The TLS output pump must be stopped and joined on every exit, including
+    // a handler failure that execute_tunnel_upgrade_session surfaces.
+    std::optional<http_response> buffered;
+    std::exception_ptr failure;
+    try {
+        buffered = co_await execute_tunnel_upgrade_session<http_socket_tunnel_transport<stream_type>>(
+            d.routes_, d.parsed_.request_, resolved, d.request_memory_, d.base_route_services_,
+            d.options_, d.scanner_entry_, d.inbound_buffer_pool_, udp, pending,
+            http1_tunnel_upgrade_commit<stream_type>{
+                .dispatch_ = d,
+                .tail_ = tail,
+                .udp_ = udp,
+                .tls_output_ = tls_output,
+            });
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    if (tls_output) {
+        if (failure) {
+            tls_output->abort();
+        }
+        co_await tls_output->join();
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    if (buffered) {
+        d.response_ = std::move(*buffered);
+        co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);
+    }
+    co_return std::nullopt;
+}
+
+// A rejected upgrade returns the exact HTTP/1 request completion that the
+// session must write and clean up. A successful upgrade is access-logged
+// through `tail` once its handshake reaches the transport, then transfers
+// transport ownership to the websocket session, so no HTTP request completion
+// remains.
+template <typename stream_type>
+struct http1_websocket_upgrade_commit final {
+    http1_route_dispatch<stream_type>& dispatch_;
+    http_response_tail& tail_;
+    const websocket_route_endpoint& websocket_endpoint_;
+
+    [[nodiscard]] task<websocket_upgrade_commit<stream_type>> operator()(
+        context& context_value, std::span<const http_header_view> response_headers_value) const {
+        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request_,
+            {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
+                .response_headers_ = response_headers_value,
+                .deflate_ = websocket_endpoint_.deflate()},
+            dispatch_.memory_.resource());
+        context_access::commit_upgrade(context_value);
+        if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake,
+                dispatch_.parsed_.body_plan_.expectations(), *dispatch_.memory_.resource(), dispatch_.scanner_entry_);
+            ec) {
+            throw inbound_transport_error(ec, "WebSocket handshake write");
+        }
+        tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
+        co_return websocket_upgrade_commit<stream_type>(
+            dispatch_.stream_, handshake.compression(), handshake.subprotocol(), *dispatch_.memory_.resource());
+    }
+};
+
+template <typename stream_type>
+task<std::optional<http1_session_request_completion>> dispatch_http_websocket_route(
+    http1_route_dispatch<stream_type> d, http_response_tail& tail, const resolved_route& resolved,
+    std::string_view pending_frames) {
+    const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
+    const auto handshake_validation = validate_websocket_handshake(
+        d.parsed_.request_, d.parsed_.body_plan_, websocket_endpoint.handshake_validation());
+    if (const auto* failure = handshake_validation.failure()) {
+        // A generated rejection does not inherit the negotiated coding promise.
+        tail.disable_response_coding();
+        d.response_ = co_await d.routes_.handle_error(d.parsed_.request_, d.request_memory_,
+            copy_http_protocol_error_info(d.request_memory_.resource(), failure->protocol_error()),
+            d.base_route_services_);
+        failure->apply_required_response_headers(d.response_);
+        co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
+    }
+    auto buffered = co_await execute_websocket_upgrade_session<stream_type>(
+        d.routes_, d.parsed_.request_, resolved, d.request_memory_, d.base_route_services_,
+        d.options_, d.scanner_entry_, d.inbound_buffer_pool_, pending_frames,
+        http1_websocket_upgrade_commit<stream_type>{
+            .dispatch_ = d,
+            .tail_ = tail,
+            .websocket_endpoint_ = websocket_endpoint,
+        });
+    if (buffered) {
+        d.response_ = std::move(*buffered);
+        co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);
+    }
+    co_return std::nullopt;
+}
+
 // RFC 9112 §3.2.2: an absolute-form target's authority is the request's host,
 // and an HTTP/1.0 request may carry it without any Host field.
 [[nodiscard]] inline std::string_view auto_https_redirect_authority(const http_request& request) noexcept {

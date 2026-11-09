@@ -21,6 +21,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
@@ -581,6 +582,26 @@ private:
     }
 };
 
+[[nodiscard]] inline std::pair<route_resolution, request_body_mode> resolve_multiplexed_stream_route(
+    const route_table& routes, std::string_view method_token, std::string_view target_path,
+    std::string_view authority, std::string_view protocol) noexcept {
+    const auto method = classify_http_method(method_token);
+    const auto path = target_path.substr(0, target_path.find('?'));
+    const auto extended_protocol = http_ascii_equals_ignore_case(protocol, "websocket")
+                                       ? std::string_view("websocket")
+                                       : protocol;
+    auto resolution = routes.resolve(route_request_view{
+        method, method_token, path, authority, extended_protocol});
+    auto body_mode = request_body_mode::buffered;
+    if (const auto* resolved = resolution.resolved()) {
+        body_mode = resolved->route().endpoint().request_body_mode();
+        if ((method == http_known_method::connect && resolved->route().endpoint().websocket() != nullptr) ||
+            resolved->route().endpoint().tunnel() != nullptr) {
+            body_mode = request_body_mode::stream;
+        }
+    }
+    return {std::move(resolution), body_mode};
+}
 inline request_memory& emplace_multiplexed_request_memory(
     std::optional<request_memory>& storage, worker_memory& memory, std::span<std::byte> initial_buffer) {
     const auto initial_bytes = memory.request_initial_buffer_bytes();

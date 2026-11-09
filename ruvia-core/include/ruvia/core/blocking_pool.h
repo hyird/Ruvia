@@ -265,46 +265,28 @@ public:
 
     // Rethrows the stored error, or throws blocking_operation_rejected if the
     // operation was rejected.
-    [[nodiscard]] decltype(auto) value() const&
-        requires(!std::is_void_v<t_type>)
-    {
+    decltype(auto) value() const& {
         rethrow_if_not_completed();
-        return current_value();
-    }
-
-    void value() const&
-        requires(std::is_void_v<t_type>)
-    {
-        rethrow_if_not_completed();
+        if constexpr (!std::is_void_v<t_type>) {
+            return static_cast<const t_type&>(*payload_.value_);
+        }
     }
 
     void value() && = delete;
     void value() const&& = delete;
 
-    [[nodiscard]] decltype(auto) value() &
-        requires(!std::is_void_v<t_type>)
-    {
+    decltype(auto) value() & {
         rethrow_if_not_completed();
-        return current_value();
+        if constexpr (!std::is_void_v<t_type>) {
+            return static_cast<t_type&>(*payload_.value_);
+        }
     }
 
-    void value() &
-        requires(std::is_void_v<t_type>)
-    {
+    t_type take_value() && {
         rethrow_if_not_completed();
-    }
-
-    [[nodiscard]] t_type take_value() &&
-        requires(!std::is_void_v<t_type>)
-    {
-        rethrow_if_not_completed();
-        return std::move(current_value());
-    }
-
-    void take_value() &&
-        requires(std::is_void_v<t_type>)
-    {
-        rethrow_if_not_completed();
+        if constexpr (!std::is_void_v<t_type>) {
+            return std::move(*payload_.value_);
+        }
     }
 
 private:
@@ -325,24 +307,11 @@ private:
         if (payload_.status_ != blocking_status::completed) {
             throw blocking_operation_rejected(payload_.status_);
         }
-    }
-
-    [[nodiscard]] decltype(auto) current_value() const noexcept
-        requires(!std::is_void_v<t_type>)
-    {
-        if (!payload_.value_.has_value()) {
-            std::terminate();
+        if constexpr (!std::is_void_v<t_type>) {
+            if (!payload_.value_.has_value()) {
+                std::terminate();
+            }
         }
-        return static_cast<const t_type&>(*payload_.value_);
-    }
-
-    [[nodiscard]] decltype(auto) current_value() noexcept
-        requires(!std::is_void_v<t_type>)
-    {
-        if (!payload_.value_.has_value()) {
-            std::terminate();
-        }
-        return static_cast<t_type&>(*payload_.value_);
     }
 
     detail::blocking_payload<t_type> payload_;

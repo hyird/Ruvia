@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -199,5 +200,26 @@ private:
 // build seals this registry; loading a controller-bearing module afterwards is
 // a startup contract error instead of silently changing only later workers.
 [[nodiscard]] std::pmr::vector<controller_registrar> seal_controller_registrars();
+
+template <typename controller_type>
+void* create_controller(controller_store& controllers) {
+    return &controllers.emplace<controller_type>();
+}
+
+template <typename controller_type>
+void register_controller_routes(void* controller_value, router& router_value) {
+    controller_registration_access<controller_type>::register_routes(
+        *static_cast<controller_type*>(controller_value), router_value);
+}
+
+template <typename controller_type>
+[[nodiscard]] bool register_controller() {
+    static_assert(std::is_final_v<controller_type>, "controller must be final");
+    static_assert(
+        std::is_default_constructible_v<controller_type>, "controller must be default constructible");
+
+    return add_controller_registrar(
+        {.create_ = &create_controller<controller_type>, .register_routes_ = &register_controller_routes<controller_type>});
+}
 
 }  // namespace ruvia::detail

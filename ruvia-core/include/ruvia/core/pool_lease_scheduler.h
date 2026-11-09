@@ -88,9 +88,8 @@ private:
         std::optional<timeout_duration> timeout, stop_token stop_token_value) noexcept;
     void cancel_registrations() noexcept;
     void complete(worker_wait_result<std::size_t> result_value) noexcept;
-    void complete(worker_wait_status status) noexcept;
-    void resume() noexcept;
-    [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept;
+    [[nodiscard]] std::coroutine_handle<> resolve(worker_wait_result<std::size_t> result_value) noexcept;
+    [[nodiscard]] std::coroutine_handle<> resolve(worker_wait_status status) noexcept;
 
     pool_lease_scheduler::impl_type* owner_;
     std::optional<timeout_duration> timeout_;

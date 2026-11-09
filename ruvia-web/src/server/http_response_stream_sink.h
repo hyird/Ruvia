@@ -1,7 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -17,10 +21,14 @@
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http1_chunked_framing.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_io_buffer.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_server.h"
@@ -32,15 +40,173 @@
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
 #include "http/http_cors.h"
+#include "router/route_table.h"
 #include "server/connection_scanner.h"
-#include "server/http1_peer_eof_monitor.h"
+#include "server/http1_route_dispatch.h"
+#include "server/http1_session_request_completion.h"
+#include "server/http_connection_state.h"
+#include "server/http_response_stream_dispatch.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_response_writer.h"
+#include "server/http_server_body_route_completion.h"
+#include "server/http_server_response_state.h"
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
 #include "server/worker_codecs.h"
 
 namespace ruvia::detail {
+
+// HTTP/1 流式响应的读侧终止检测：请求体完整消费后由 route 自动启动（同 Go
+// net/http background read）。单独到达的请求遇对端 FIN/RST 请求当前请求的 stop。
+// pipeline 内（本请求排在前一请求之后到达，或其后已有后续请求字节）的干净结束
+// （TCP FIN、TLS close_notify）是请求方向半关闭：不取消当前响应，并经
+// request_input_ended() 交给连接，已收到的请求照常服务、不再读取；RST、TLS 截断
+// 与其他错误始终中止。route 负责 cancel/join 后再释放 transport。
+template <typename stream_type>
+class http1_peer_eof_monitor final {
+public:
+    // `request_stop` is the request's own source; it outlives the monitor.
+    // `request_pipelined`: the request itself arrived behind another one.
+    http1_peer_eof_monitor(stream_type& stream, const worker_handle& worker, std::pmr::memory_resource* resource,
+        stop_source& request_stop, bool request_pipelined, std::size_t existing_pipeline_bytes)
+        : stream_(stream),
+          request_stop_(request_stop),
+          tasks_(worker, {.resource_ = resource}),
+          input_(std::pmr::polymorphic_allocator<char>(resource)),
+          allowance_(max_http_header_bytes - std::min(max_http_header_bytes, existing_pipeline_bytes)),
+          pipelined_(request_pipelined || existing_pipeline_bytes != 0) {}
+    http1_peer_eof_monitor(stream_type&, worker_handle&&, std::pmr::memory_resource*,
+        stop_source&, bool, std::size_t) = delete;
+    void start() {
+        tasks_.spawn(read_peer());
+    }
+
+    [[nodiscard]] bool peer_aborted() const noexcept {
+        return peer_aborted_;
+    }
+
+    // The peer ended its request direction behind pipelined bytes. The
+    // transport holds no more input; reading it again would only report the
+    // same end. Final once join() has returned.
+    [[nodiscard]] bool request_input_ended() const noexcept {
+        return request_input_ended_;
+    }
+
+    [[nodiscard]] std::string_view pipeline() const noexcept {
+        return input_.view();
+    }
+
+    void ensure_writable() const {
+        if (failure_ != nullptr) {
+            std::rethrow_exception(failure_);
+        }
+        if (peer_aborted_) {
+            throw inbound_transport_error(asio::error::operation_aborted,
+                "HTTP response stream peer has disconnected");
+        }
+    }
+
+    // The sink requests the request stop itself on every write failure.
+    void write_failed(const std::error_code& error) noexcept {
+        peer_aborted_ = peer_aborted_ || is_inbound_connection_end(error);
+        cancel();
+    }
+
+    void cancel() noexcept {
+        // Set before emitting: an already-queued successful completion must
+        // retain its bytes but must not schedule another read after teardown.
+        closing_ = true;
+        cancellation_.emit(asio::cancellation_type::terminal);
+    }
+
+    task<void> join() {
+        if (!joined_) {
+            joined_ = true;
+            co_await tasks_.join();
+        }
+        if (failure_ != nullptr) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+private:
+    task<void> read_peer() {
+        try {
+            // Stop once this bounded look-ahead is full. No input is discarded;
+            // a reset behind that many pipelined bytes then surfaces only once
+            // the handler finishes and the session consumes those requests.
+            while (!closing_ && input_.size() < allowance_) {
+                // A quiet SSE needs no look-ahead allocation. After the first
+                // application byte, grow like the connection read buffer
+                // instead of reserving the full 64 KiB header allowance.
+                char first_byte;
+                const bool first_read = input_.capacity() == 0;
+                if (!first_read && input_.size() == input_.capacity()) {
+                    input_.reserve(std::min(
+                        allowance_, std::max(initial_read_buffer_bytes, input_.capacity() * 2)));
+                }
+                const auto space = first_read ? std::span<char>(&first_byte, 1) : input_.prepare_spare();
+                // Cancel this operation, not the socket's concurrent writer.
+                // Asio's SSL io_op feeds received encrypted input into its
+                // engine before honoring read cancellation; it remains there
+                // for the session's next read after this task has joined.
+                const auto completion = co_await async_asio<std::size_t>([this, space](auto handler) mutable {
+                    stream_.async_read_some(asio::buffer(space),
+                        asio::bind_cancellation_slot(cancellation_.slot(), std::move(handler)));
+                });
+                // A terminal cancellation can race a successful read. Preserve
+                // every returned byte before inspecting the shutdown state.
+                if (first_read) {
+                    if (completion.result() != 0) {
+                        input_.reserve(std::min(initial_read_buffer_bytes, allowance_));
+                        input_.append(std::string_view(&first_byte, completion.result()));
+                    }
+                } else {
+                    input_.commit(completion.result());
+                }
+                const auto error = completion.error_code();
+                if (error) {
+                    if (closing_ && error == asio::error::operation_aborted) {
+                        co_return;
+                    }
+                    if (is_inbound_connection_end(error)) {
+                        // RFC 9112 section 9.6: within a pipeline -- this request
+                        // arrived behind another, or more follow it -- a clean
+                        // end (TCP FIN, TLS close_notify) closes only the request
+                        // direction; every request received gets its response.
+                        // That no longer depends on when the FIN arrives. A
+                        // request that arrived alone, a reset, and a TLS stream
+                        // truncated without close_notify end the response.
+                        if (error == asio::error::eof && (pipelined_ || input_.size() != 0)) {
+                            request_input_ended_ = true;
+                            co_return;
+                        }
+                        peer_aborted_ = true;
+                        request_stop_.request_stop();
+                        co_return;
+                    }
+                    throw inbound_transport_error(error, "failed to monitor HTTP response stream peer");
+                }
+            }
+        } catch (...) {
+            failure_ = std::current_exception();
+            request_stop_.request_stop();
+        }
+    }
+
+    stream_type& stream_;
+    stop_source& request_stop_;
+    task_scope tasks_;
+    http_io_buffer input_;
+    asio::cancellation_signal cancellation_;
+    std::size_t allowance_;
+    std::exception_ptr failure_;
+    bool pipelined_;
+    bool closing_{};
+    bool peer_aborted_{};
+    bool request_input_ended_{};
+    bool joined_{};
+};
 
 // Writes a response stream to the connection. The handler runs in the
 // session's idle deadman phase (idle_timeout, like a buffered handler); only
@@ -434,5 +600,164 @@ private:
     std::optional<http1_peer_eof_monitor<stream_type>> peer_monitor_;
     bool peer_monitor_retired_{false};
 };
+
+// `request_bytes` is the connection's buffered input at dispatch, from the
+// start of this request, the suffix included; `pipeline_stash` is
+// request-scoped storage for a pipelined request the body reader over-read.
+template <typename stream_type>
+task<http1_session_request_completion> dispatch_http_response_stream_route(http1_route_dispatch<stream_type> d,
+    http_response_head_buffer& response_head, const http1_server_request_head_ready& request_head,
+    const resolved_route& resolved, std::string_view request_bytes, protocol_byte_limit body_limit_value,
+    std::pmr::string& pipeline_stash) {
+    const auto body_and_pipeline = http_body_and_pipeline(request_head, request_bytes);
+    http_lazy_buffered_body_route_state<stream_type> body_state;
+    const auto body_setup_failure =
+        try_prepare_http_lazy_buffered_body_route(body_state, d, body_limit_value, body_and_pipeline);
+    if (body_setup_failure != nullptr) {
+        co_return co_await complete_failed_http_route(d.scanner_entry_, body_setup_failure, d.parsed_,
+            d.routes_, d.request_memory_, d.base_route_services_, d.response_);
+    }
+    const auto close_policy = d.request_sequence_.next_response_close_policy();
+    // A body that arrived in full with the head does not cost the stream its
+    // reuse even if the handler never reads it: completion consumes it
+    // without I/O.
+    const auto unread_body_consumption =
+        buffered_request_body_bytes(d.parsed_.body_plan_, body_and_pipeline, body_limit_value)
+            ? http1_request_body_consumption::complete
+            : http1_request_body_consumption::incomplete;
+    const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy, unread_body_consumption);
+    using response_sink_type = response_stream_sink<stream_type>;
+    const auto& route = resolved.route();
+    const auto& endpoint = *route.endpoint().response_stream();
+    body_reader stream_body_facade = make_body_reader_facade(body_state.body_->loader().reader());
+    if (endpoint.request_body_mode() == request_body_mode::stream) {
+        d.base_route_services_.bind_streaming_request_body(stream_body_facade);
+        d.base_route_services_.bind_request_trailers(body_state.body().trailers());
+    } else {
+        d.base_route_services_ = body_state.with_loader(d.base_route_services_);
+    }
+    // The client closing the connection while the handler waits, or a failed
+    // write, stops the request: context::stop_token() combines it with the
+    // worker's stop, so every framework wait of the handler observes it.
+    stop_source peer_stop;
+    const stop_group request_stop(d.base_route_services_.get_stop_token(), peer_stop.token());
+    const auto request_stop_token = request_stop.token();
+    d.base_route_services_.bind_stop_token(request_stop_token);
+    response_sink_type response_sink(d.stream_, d.memory_, *d.options_.codecs_, response_head, d.scanner_entry_,
+        d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
+        stream_plan,
+        http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
+        body_state.body(), d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,
+        d.inbound_buffer_pool_, peer_stop, d.request_pipelined_);
+
+    // The handler stays in the session's idle deadman phase; the sink times
+    // its own writes.
+    std::optional<response_stream_dispatch_result> dispatched;
+    std::exception_ptr escaped_failure;
+    try {
+        // This request arrived before the peer ended its request direction:
+        // that end is no abandonment of it, and the transport has no input left.
+        if (d.request_sequence_.request_input_ended()) {
+            response_sink.retire_peer_monitor();
+        }
+        response_sink.arm_peer_monitor();
+        dispatched.emplace(co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
+            resolved, d.request_memory_, d.base_route_services_,
+            [&response_sink] { return response_sink.peer_aborted(); }));
+    } catch (...) {
+        escaped_failure = std::current_exception();
+    }
+    // Even error recovery can throw. Drain the reader before the body, sink,
+    // stream, or their borrowed request storage may be destroyed or reused.
+    response_sink.retire_peer_monitor();
+    if (response_sink.peer_eof_monitoring()) {
+        try {
+            co_await response_sink.finish_peer_monitor();
+        } catch (...) {
+            const auto monitor_failure = std::current_exception();
+            const auto* reported_failure = dispatched ? dispatched->failed_after_commit() : nullptr;
+            if (escaped_failure != nullptr || reported_failure != nullptr) {
+                const auto prior_failure = escaped_failure != nullptr
+                                               ? escaped_failure
+                                               : reported_failure->exception();
+                if (monitor_failure != prior_failure) {
+                    d.options_.connection_failure_.invoke(
+                        d.base_route_services_.get_conn_info().remote().address(), monitor_failure);
+                }
+            } else {
+                escaped_failure = monitor_failure;
+            }
+        }
+    }
+    if (response_sink.request_input_ended()) {
+        d.request_sequence_.mark_request_input_ended();
+    }
+    if (escaped_failure != nullptr) {
+        if (!response_sink.committed()) {
+            std::rethrow_exception(escaped_failure);
+        }
+        dispatched.emplace(response_stream_dispatch_result::make_failed_after_commit(
+            committed_response_stream_status(response_sink), escaped_failure));
+    }
+    auto& result_value = *dispatched;
+
+    if (const auto* failed = result_value.failed_after_commit()) {
+        d.options_.connection_failure_.invoke(
+            d.base_route_services_.get_conn_info().remote().address(), failed->exception());
+        co_return http1_session_request_completion::make_truncated_stream(
+            response_sink.connection_plan(), failed->status());
+    }
+    // The cancelled read can deliver a peer end after dispatch already
+    // returned. Classify only after joining, when its final result is known.
+    if (response_sink.peer_aborted()) {
+        if (!response_sink.committed()) {
+            throw inbound_transport_error(asio::error::eof, "HTTP response stream peer disconnected before commit");
+        }
+        co_return http1_session_request_completion::make_truncated_stream(
+            response_sink.connection_plan(), committed_response_stream_status(response_sink));
+    }
+
+    if (auto* recovered = result_value.recovered_failure()) {
+        d.response_ = std::move(*recovered).take_response();
+        d.scanner_entry_.touch();
+        co_return close_with_framework_response(d.response_, stream_plan.request_connection_plan());
+    }
+    auto& body_reader_value = body_state.body().reader();
+    body_reader_value.consume_buffered_body();
+    if (auto* route_response = result_value.route_response()) {
+        d.response_ = std::move(*route_response).take_response();
+        d.scanner_entry_.touch();
+        co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
+            d.request_sequence_, body_reader_value.consumption(), request_bytes.size(), pipeline_stash,
+            [&body_reader_value, &response_sink](std::pmr::string& stash) {
+                return body_reader_value.take_pipeline(stash, response_sink.monitored_pipeline());
+            });
+    }
+
+    // Only the completed committed alternative remains.
+    const auto committed_status = result_value.committed_status();
+
+    auto connection_plan = response_sink.connection_plan();
+    d.request_sequence_.complete_committed_response(connection_plan);
+    // A reusable head promised a body read in full or buffered in full; a
+    // read the handler failed after commit breaks that promise, so the
+    // connection closes after the stream instead.
+    if (body_reader_value.consumption() != http1_request_body_consumption::complete) {
+        connection_plan = connection_plan.require_close();
+    }
+    if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
+        co_return http1_session_request_completion::make_committed_stream(
+            connection_plan, *committed_status, request_head.header_bytes());
+    }
+    // What followed the body is the next request, in the read buffer or in
+    // the reader's own over-read.
+    const auto pipeline = body_reader_value.take_pipeline(pipeline_stash, response_sink.monitored_pipeline());
+    if (!pipeline.stashed_.empty()) {
+        co_return http1_session_request_completion::make_committed_stream_pipeline_restore(
+            connection_plan, *committed_status, pipeline.stashed_);
+    }
+    co_return http1_session_request_completion::make_committed_stream(
+        connection_plan, *committed_status, request_bytes.size() - pipeline.read_buffer_suffix_bytes_);
+}
 
 }  // namespace ruvia::detail

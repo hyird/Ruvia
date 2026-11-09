@@ -11,22 +11,30 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <variant>
 
 #include <asio/bind_allocator.hpp>
+#include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/error.hpp>
 #include <asio/recycling_allocator.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/websocket_protocol.h"
+#include "ruvia/web/streaming.h"
 
 #include "body/http_request_body_facade.h"
 #include "context/context_access.h"
@@ -36,15 +44,16 @@
 #include "http/http_protocol_error_info.h"
 #include "http/http_tunnel_session.h"
 #include "http2/http2_sans_io_request_body.h"
-#include "http2/http2_sans_io_request_body_reader.h"
-#include "http2/http2_sans_io_response_stream_sink.h"
-#include "http2/http2_sans_io_tunnel_transport.h"
+#include "http2/http2_sans_io_send_window.h"
 #include "router/route_resolution.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_request_admission.h"
 #include "server/http_response_stream_dispatch.h"
+#include "server/http_response_writer.h"
 #include "server/http_upgrade_route.h"
+#include "server/inbound_transport_error.h"
+#include "tls/tls_stream_end.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_session.h"
 
@@ -56,6 +65,274 @@ constexpr std::size_t http2_request_arena_stack_bytes = request_arena_initial_by
 // GOAWAY (a request cap or a connection timeout; a stop closes at once).
 constexpr std::chrono::milliseconds http2_drain_round_trip_bound{std::chrono::seconds(1)};
 
+// Streaming request-body reader for the sans-I/O session; the body_reader facade wraps
+// it for handler consumption. Chunk-for-chunk port of the coroutine read_body_chunk.
+// Admission always binds the runtime-owned signal before this facade can exist.
+class http2_sans_io_request_body_reader final
+    : public multiplexed_request_body_reader_base<http2_sans_io_request_body_reader> {
+public:
+    static constexpr const char* terminated_error_message = "HTTP/2 connection ended during body read";
+    static constexpr const char* reset_error_message = "HTTP/2 request stream reset during body read";
+
+    // continue_output is non-null when the request carries a pending
+    // 100-continue expectation: the first read sends it, as the HTTP/1 reader
+    // does, so an unread content never prompts the client to send it.
+    http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id,
+        http2_sans_io_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure,
+        multiplexed_stream_signal& signal, worker_signal& write_signal,
+        http_interim_response_output* continue_output) noexcept
+        : multiplexed_request_body_reader_base(signal, continue_output),
+          connection_(connection),
+          stream_id_(stream_id),
+          body_queue_(body_queue),
+          body_failure_(body_failure),
+          write_signal_(write_signal) {}
+
+private:
+    friend class multiplexed_request_body_reader_base<http2_sans_io_request_body_reader>;
+
+    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const noexcept {
+        return body_failure_;
+    }
+
+    [[nodiscard]] bool stream_aborted() const noexcept {
+        return connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed;
+    }
+
+    [[nodiscard]] std::string_view pop_chunk() noexcept {
+        const auto chunk = body_queue_.pop();
+        // pop() returns the previous chunk's receive-window credit; the
+        // resulting WINDOW_UPDATE must reach the socket even if this reader
+        // now suspends while the peer is blocked on that window.
+        if (connection_.wants_write()) {
+            write_signal_.notify();
+        }
+        return chunk;
+    }
+
+    [[nodiscard]] bool body_ended() const noexcept {
+        return body_queue_.ended();
+    }
+
+    ruvia::http2_connection& connection_;
+    std::uint32_t stream_id_;
+    http2_sans_io_body_queue& body_queue_;
+    const std::optional<http_request_body_failure>& body_failure_;
+    worker_signal& write_signal_;
+};
+
+class http2_sans_io_response_stream_sink final
+    : public multiplexed_response_stream_sink_base<http2_sans_io_response_stream_sink, http2_sans_io_stream_runtime> {
+public:
+    http2_sans_io_response_stream_sink(ruvia::http2_connection& connection, std::uint32_t stream_id,
+        http2_sans_io_stream_runtime& stream_runtime,
+        worker_signal& write_signal, multiplexed_stream_signal& stream_signal,
+        http2_data_output_budget& output_budget, std::pmr::memory_resource* resource,
+        http_known_method request_method, worker_codecs& codecs,
+        http_response_coding_selection response_coding,
+        const compression_config* compression, const cors_options* cors) noexcept
+        : multiplexed_response_stream_sink_base(
+              stream_runtime, stream_signal, resource, request_method, codecs, response_coding, compression, cors),
+          connection_(connection),
+          stream_id_(stream_id),
+          write_signal_(write_signal),
+          output_budget_(output_budget) {}
+
+private:
+    friend class multiplexed_response_stream_sink_base<http2_sans_io_response_stream_sink,
+        http2_sans_io_stream_runtime>;
+
+    static constexpr const char* terminated_error_message = "HTTP/2 connection ended during response stream";
+    static constexpr const char* sleep_terminated_error_message = "HTTP/2 connection ended during sleep";
+    static constexpr const char* reset_error_message = "HTTP/2 response stream reset";
+    static constexpr const char* sleep_reset_error_message = "HTTP/2 response stream reset during sleep";
+
+    [[nodiscard]] bool stream_aborted() const noexcept {
+        return connection_.stream_aborted(stream_id_);
+    }
+
+    void wake_writer() noexcept {
+        write_signal_.notify();
+    }
+
+    [[nodiscard]] http_response_stream_commit_plan submit_streaming_head(
+        http_response&& response, http_response_trailer_intent trailer_intent) {
+        const auto head_result =
+            connection_.submit_streaming_response_head(stream_id_, std::move(response), trailer_intent);
+        const auto* submitted_head = std::get_if<http_response_stream_commit_plan>(&head_result);
+        if (submitted_head != nullptr) {
+            return *submitted_head;
+        }
+        const auto head_error = std::get<ruvia::http2_response_head_submit_error>(head_result);
+        if (head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
+            // A promised push whose stream the client's concurrency limit
+            // cannot admit is cancelled; the connection is unaffected.
+            (void)connection_.submit_reset(stream_id_, ruvia::http2_error_code::cancel);
+            wake_writer();
+        }
+        if (head_error == ruvia::http2_response_head_submit_error::closed ||
+            head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
+            throw inbound_transport_error(
+                std::make_error_code(std::errc::connection_reset), reset_error_message);
+        }
+        throw std::logic_error("HTTP/2 streaming response head submission failed");
+    }
+
+    task<void> write_encoded_data(std::string_view chunk) {
+        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_,
+            write_signal_, output_budget_, chunk, http2_end_stream::keep_open);
+        switch (status) {
+            case http2_stream_data_write_status::completed:
+                co_return;
+            case http2_stream_data_write_status::session_terminated:
+                throw inbound_transport_error(signal_.terminal_error(), terminated_error_message);
+            case http2_stream_data_write_status::local_aborted:
+            case http2_stream_data_write_status::peer_closed:
+                throw inbound_transport_error(
+                    std::make_error_code(std::errc::connection_reset), reset_error_message);
+            case http2_stream_data_write_status::invalid_state:
+                throw std::logic_error("invalid HTTP/2 response stream DATA state");
+            case http2_stream_data_write_status::content_length_exceeded:
+                throw std::length_error("HTTP/2 response exceeds Content-Length");
+        }
+    }
+
+    task<void> finish_stream_response(const http_response_trailer_section& trailer_section) {
+        // An empty trailer section ends the stream with an empty DATA frame,
+        // which needs both send windows open (RFC 9113 §6.9).
+        for (;;) {
+            http2_finish_status result_value{};
+            try {
+                result_value = connection_.finish_response(stream_id_, trailer_section);
+            } catch (...) {
+                wake_writer();
+                throw;
+            }
+            wake_writer();
+            if (result_value == http2_finish_status::accepted) {
+                co_return;
+            }
+            if (result_value == http2_finish_status::backpressured &&
+                co_await await_http2_send_window(connection_, stream_id_, &signal_) ==
+                    http2_send_window_wait_status::ready) {
+                continue;
+            }
+            throw_if_terminated();
+            throw inbound_transport_error(
+                std::make_error_code(std::errc::connection_reset), reset_error_message);
+        }
+    }
+
+    ruvia::http2_connection& connection_;
+    std::uint32_t stream_id_;
+    worker_signal& write_signal_;
+    http2_data_output_budget& output_budget_;
+};
+
+// Duplex CONNECT transport driven by one HTTP/2 session reader and writer.
+// Queued input retains its receive-window credit until the application consumes it.
+class http2_sans_io_tunnel_transport final
+    : public multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport> {
+public:
+    using multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport>::write_bytes;
+
+    http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection,
+        std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, multiplexed_stream_signal& signal,
+        worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept
+        : multiplexed_tunnel_transport_base(signal),
+          engine_(&engine),
+          connection_(connection),
+          stream_id_(stream_id),
+          body_queue_(body_queue),
+          write_signal_(write_signal),
+          output_budget_(output_budget) {}
+
+    [[nodiscard]] task<std::error_code> write_bytes(
+        std::string_view bytes_value, http_stream_end disposition) {
+        const auto terminal = disposition == http_stream_end::end
+                                  ? http2_end_stream::end_stream
+                                  : http2_end_stream::keep_open;
+        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_,
+            write_signal_, output_budget_, bytes_value, terminal, &aborted_);
+        switch (status) {
+            case http2_stream_data_write_status::completed:
+                co_return std::error_code{};
+            case http2_stream_data_write_status::local_aborted:
+                co_return std::make_error_code(std::errc::operation_canceled);
+            case http2_stream_data_write_status::session_terminated:
+                co_return signal_.terminal_error();
+            case http2_stream_data_write_status::peer_closed:
+                co_return std::make_error_code(std::errc::connection_reset);
+            case http2_stream_data_write_status::invalid_state:
+            case http2_stream_data_write_status::content_length_exceeded:
+                co_return std::make_error_code(std::errc::protocol_error);
+        }
+        co_return std::make_error_code(std::errc::protocol_error);
+    }
+
+    // Malformed received data is a stream error of type PROTOCOL_ERROR
+    // (RFC 9113 section 8.1.1); any other abort cancels the stream.
+    void abort(bool malformed = false) noexcept {
+        if (aborted_) {
+            return;
+        }
+        aborted_ = true;
+        engine_->reset_stream_no_throw(
+            stream_id_, malformed ? http2_error_code::protocol_error : http2_error_code::cancel);
+        signal_.wake();
+    }
+
+private:
+    friend class multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport>;
+
+    void require_live() const {
+        if (aborted_ || signal_.terminated()) {
+            throw inbound_transport_error(
+                aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                         : signal_.terminal_error(),
+                "HTTP/2 tunnel read");
+        }
+        if (connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed) {
+            throw inbound_transport_error(
+                std::make_error_code(std::errc::connection_reset), "HTTP/2 tunnel read");
+        }
+    }
+
+    template <typename buffer_type>
+    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
+        const auto chunk = body_queue_.pop();
+        // pop() returns the previous chunk's receive-window credit; flush
+        // the WINDOW_UPDATE even if this reader suspends below.
+        if (connection_.wants_write()) {
+            wake_writer();
+        }
+        if (chunk.empty()) {
+            return false;
+        }
+        buffer.append(std::string_view(chunk.data(), chunk.size()));
+        body_queue_.release_active_credits();
+        if (connection_.wants_write()) {
+            wake_writer();
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool receive_ended() const noexcept {
+        return connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::ended;
+    }
+
+    void wake_writer() noexcept {
+        write_signal_.notify();
+    }
+
+    http2_sans_io_session_engine* engine_;
+    ruvia::http2_connection& connection_;
+    std::uint32_t stream_id_;
+    http2_sans_io_body_queue& body_queue_;
+    worker_signal& write_signal_;
+    http2_data_output_budget& output_budget_;
+    bool aborted_{false};
+};
 struct response_output_target final {
     ::ruvia::http2_connection& connection_;
     worker_signal& writer_;
@@ -70,24 +347,9 @@ struct push_target final {
 [[nodiscard]] http2_sans_io_stream_runtime* http2_select_stream_route(const route_table& routes_value,
     const http2_server_request_view& request, http2_sans_io_stream_runtime_table& stream_runtimes,
     std::uint32_t stream_id) {
-    const auto method = classify_http_method(request.method_);
-    const auto query = request.path_.find('?');
-    const auto path = request.path_.substr(0, query);
-    const auto extended_protocol = http_ascii_equals_ignore_case(request.protocol_, "websocket")
-                                       ? std::string_view("websocket")
-                                       : request.protocol_;
     auto& runtime = stream_runtimes.ensure_accepted(stream_id);
-    auto resolution = routes_value.resolve(route_request_view{
-        method, request.method_, path, request.authority_, extended_protocol});
-    auto body_mode = request_body_mode::buffered;
-    const auto* resolved = resolution.resolved();
-    if (resolved != nullptr) {
-        body_mode = resolved->route().endpoint().request_body_mode();
-    }
-    if (resolved != nullptr && ((method == http_known_method::connect && resolved->route().endpoint().websocket() != nullptr) ||
-                                   resolved->route().endpoint().tunnel() != nullptr)) {
-        body_mode = request_body_mode::stream;
-    }
+    auto [resolution, body_mode] = resolve_multiplexed_stream_route(
+        routes_value, request.method_, request.path_, request.authority_, request.protocol_);
     return runtime.select_route(std::move(resolution), body_mode) ? &runtime : nullptr;
 }
 
@@ -1023,6 +1285,160 @@ task<void> http2_sans_io_session_engine::finish() {
         co_await writer_finished_.wait();
     }
     lifecycle_.rethrow_writer_failure();
+}
+
+namespace {
+
+template <typename stream_type>
+task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_engine& engine) {
+    std::pmr::string write_scratch(engine.worker_resource());
+    for (;;) {
+        while (engine.wants_write()) {
+            engine.take_output(write_scratch);
+            if (engine.write_failed()) {
+                continue;
+            }
+
+            std::error_code write_error;
+            {
+                // The reader keeps the entry in its own phase (readiness,
+                // awaiting a stream, active streams, or long_lived for an
+                // RFC 8441 tunnel); this clock lets write_timeout close a peer
+                // that stopped reading regardless. Every transfer renews it.
+                const connection_scanner::entry::write_scope write_stall_clock(engine.scanner_entry());
+                const auto write_result = co_await connection_gather_write(
+                    stream, write_scratch, {}, engine.scanner_entry());
+                write_error = write_result.error_;
+            }
+            if (write_error) {
+                engine.writer_write_failed(write_error);
+                continue;
+            }
+            engine.output_write_completed();
+            // Leave room for the frame header and string capacity growth, but keep retention bounded.
+            http_clear_pmr_string_retaining_small(
+                write_scratch, http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096);
+        }
+        if (engine.writer_should_exit()) {
+            co_return;
+        }
+        co_await engine.wait_for_write();
+    }
+}
+
+template <typename stream_type>
+task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, asio::ip::tcp::socket& socket,
+    const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
+    std::string_view initial_bytes) {
+    auto executor = asio::any_io_executor(stream.get_executor());
+    http2_sans_io_session_engine engine(executor, socket, routes_value, worker_value, std::move(session_value));
+
+    engine.writer_submitting();
+    try {
+        asio::co_spawn(executor, ruvia::as_awaitable(run_http2_sans_io_writer(stream, engine)),
+            [&engine](
+                std::exception_ptr exception) noexcept { engine.writer_completed(exception); });
+    } catch (...) {
+        engine.writer_launch_failed();
+        engine.terminate(std::make_error_code(std::errc::operation_canceled));
+        throw;
+    }
+
+    std::error_code reader_terminal_error;
+    std::exception_ptr reader_failure;
+    try {
+        engine.drain_events();
+        if (!engine.connection_failed() && !initial_bytes.empty()) {
+            (void)engine.feed_and_drain(initial_bytes);
+        }
+        engine.wake_writer();
+
+        if (!engine.connection_failed() && !engine.terminated()) {
+            std::array<char, 4096> read_buffer;
+            for (;;) {
+                engine.set_inactivity_phase();
+                auto read_completion =
+                    co_await ruvia::async_asio<std::size_t>([&stream, &read_buffer](auto handler) mutable {
+                        stream.async_read_some(asio::buffer(read_buffer), std::move(handler));
+                    });
+                const auto error = read_completion.error_code();
+                const auto bytes_read = read_completion.result();
+                if (error || bytes_read == 0) {
+                    reader_terminal_error =
+                        error ? error
+                              : std::make_error_code(std::errc::connection_reset);
+                    if (reader_terminal_error == asio::error::eof) {
+                        engine.peer_input_ended();
+                    }
+                    break;
+                }
+                engine.touch_activity();
+                const auto result_value =
+                    engine.feed_and_drain(std::string_view(read_buffer.data(), bytes_read));
+                engine.wake_writer();
+                if (result_value == http2_feed_result::protocol_failure || engine.write_failed()) {
+                    if (result_value == http2_feed_result::protocol_failure) {
+                        reader_terminal_error = std::make_error_code(std::errc::protocol_error);
+                    }
+                    break;
+                }
+            }
+        }
+    } catch (...) {
+        reader_failure = std::current_exception();
+        reader_terminal_error = std::make_error_code(std::errc::operation_canceled);
+    }
+
+    if (!engine.terminated()) {
+        if (!reader_terminal_error) {
+            reader_terminal_error = engine.connection_failed() ? std::make_error_code(std::errc::protocol_error)
+                                                               : std::make_error_code(std::errc::connection_aborted);
+        }
+        engine.terminate(reader_terminal_error);
+    }
+
+    std::exception_ptr finish_failure;
+    try {
+        co_await engine.finish();
+    } catch (...) {
+        finish_failure = std::current_exception();
+    }
+    if (reader_failure != nullptr) {
+        std::rethrow_exception(reader_failure);
+    }
+    if (finish_failure != nullptr) {
+        std::rethrow_exception(finish_failure);
+    }
+    // A failed write leaves nothing to end gracefully. A clean peer end (FIN,
+    // or TLS close_notify) earns this side's final GOAWAY and close alert. A
+    // completed drain (request limit, or a timeout's drain at its
+    // bound) or a connection error ended the session with GOAWAY while peer
+    // frames may still arrive: close lingering (RFC 9113 §9.1, RFC 9112 §9.6).
+    // Transport errors close at once, and so does a stopping worker, whatever
+    // this mode.
+    if (engine.write_failed()) {
+        co_return http_connection_close::abort;
+    }
+    if (reader_terminal_error == asio::error::eof) {
+        co_return http_connection_close::notify;
+    }
+    co_return engine.drain_finished() || engine.connection_failed() ? http_connection_close::linger
+                                                                    : http_connection_close::abort;
+}
+
+}  // namespace
+
+task<http_connection_close> run_http2_sans_io_session(asio::ip::tcp::socket& stream, const route_table& routes_value,
+    worker_memory& worker_value, http2_sans_io_session_context session_value, std::string_view initial_bytes) {
+    return run_http2_sans_io_session_impl(
+        stream, stream, routes_value, worker_value, std::move(session_value), initial_bytes);
+}
+
+task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
+    const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
+    std::string_view initial_bytes) {
+    return run_http2_sans_io_session_impl(
+        stream, stream.lowest_layer(), routes_value, worker_value, std::move(session_value), initial_bytes);
 }
 
 }  // namespace ruvia::detail

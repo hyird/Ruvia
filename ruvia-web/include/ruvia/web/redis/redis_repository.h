@@ -61,26 +61,10 @@ public:
         return storage_ == nullptr;
     }
     redis_predicate& and_where(const redis_predicate& other) {
-        if (other.empty()) {
-            throw std::invalid_argument("cannot combine empty Redis predicates");
-        }
-        if (empty()) {
-            *this = other;
-        } else {
-            append(detail::redis_binary_operator::logical_and, other);
-        }
-        return *this;
+        return combine(detail::redis_binary_operator::logical_and, other);
     }
     redis_predicate& or_where(const redis_predicate& other) {
-        if (other.empty()) {
-            throw std::invalid_argument("cannot combine empty Redis predicates");
-        }
-        if (empty()) {
-            *this = other;
-        } else {
-            append(detail::redis_binary_operator::logical_or, other);
-        }
-        return *this;
+        return combine(detail::redis_binary_operator::logical_or, other);
     }
     friend redis_predicate operator&&(redis_predicate left, const redis_predicate& right) {
         left.append(detail::redis_binary_operator::logical_and, right);
@@ -111,6 +95,17 @@ private:
         auto* resource = process_resource();
         result.storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, resource, initial_capacity);
         return result;
+    }
+    redis_predicate& combine(detail::redis_binary_operator operation, const redis_predicate& other) {
+        if (other.empty()) {
+            throw std::invalid_argument("cannot combine empty Redis predicates");
+        }
+        if (empty()) {
+            *this = other;
+        } else {
+            append(operation, other);
+        }
+        return *this;
     }
     void append(detail::redis_binary_operator operation, const redis_predicate& right) {
         if (empty() || right.empty()) {

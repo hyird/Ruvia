@@ -8,12 +8,13 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "client/client_lifecycle.h"
 #include "client/client_tls.h"
 #include "redis/redis_client_runtime.h"
-
+#include "redis/redis_registry.h"
 namespace ruvia::detail {
 namespace {
 
@@ -25,7 +26,67 @@ namespace {
     return context_value;
 }
 
+[[nodiscard]] std::pmr::memory_resource* validated_redis_resource(
+    const worker_handle& worker_value, std::pmr::memory_resource* resource,
+    std::span<const redis_definition_type> redis) {
+    if (!worker_value.valid()) {
+        throw std::invalid_argument("redis registry requires a valid worker");
+    }
+    validate_capability_aliases(redis, "redis alias must not be empty", "duplicate redis alias");
+    return pmr_resource_or_default(resource);
+}
+
 }  // namespace
+
+redis_registry::redis_registry(asio::io_context& io_context, std::pmr::memory_resource* resource,
+    std::span<const redis_definition_type> redis, worker_handle worker_value)
+    : worker_(std::move(worker_value)),
+      resource_(validated_redis_resource(worker_, resource, redis)),
+      runtimes_(resource_),
+      alias_index_(resource_) {
+    alias_index_.build(redis);
+    runtimes_.reserve(redis.size());
+    for (const auto& definition : redis) {
+        runtimes_.push_back(make_pmr_object<redis_client_runtime>(resource_, io_context, worker_,
+            redis_config_storage(definition.config_, resource_), resource_));
+    }
+}
+
+redis_registry::~redis_registry() = default;
+
+task<void> redis_registry::connect() {
+    for (auto& entry : runtimes_) {
+        co_await entry->connect();
+    }
+    co_return;
+}
+
+void redis_registry::close_now() noexcept {
+    for (auto& entry : runtimes_) {
+        entry->close_now();
+    }
+}
+
+bool redis_registry::empty() const noexcept {
+    return runtimes_.empty();
+}
+
+redis_handle redis_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+    const auto default_pool_index = alias_index_.default_index();
+    if (!default_pool_index.has_value()) {
+        throw redis_error(redis_error::code_type::not_configured, "default redis is not configured");
+    }
+    return runtimes_[*default_pool_index]->handle(operation_scope, io_metrics);
+}
+
+redis_handle redis_registry::get(
+    std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+    const auto match = alias_index_.find(alias);
+    if (match.has_value()) {
+        return runtimes_[*match]->handle(operation_scope, io_metrics);
+    }
+    throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+}
 
 redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_handle& worker_value,
     redis_config_storage config, std::pmr::memory_resource* resource)
