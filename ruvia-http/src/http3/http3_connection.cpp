@@ -18,6 +18,7 @@
 #include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
+#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_number_format.h"
@@ -218,6 +219,14 @@ http3_data_event& http3_data_event::operator=(http3_data_event&& other) {
         return *this;
     }
     const auto borrowed_bytes = other.bytes_;
+    if (!other.owns_bytes_ && detail::http_text_aliases_string(borrowed_bytes, owned_bytes_)) {
+        std::pmr::string snapshot(borrowed_bytes, owned_bytes_.get_allocator());
+        owned_bytes_.swap(snapshot);
+        stream_id_ = other.stream_id_;
+        owns_bytes_ = true;
+        bytes_ = owned_bytes_;
+        return *this;
+    }
     owned_bytes_ = std::move(other.owned_bytes_);
     stream_id_ = other.stream_id_;
     owns_bytes_ = other.owns_bytes_;

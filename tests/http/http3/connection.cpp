@@ -20,6 +20,7 @@
 #include "failing_memory_resource.h"
 #include "http3_relay.h"
 #include "memory_resource_fixture.h"
+#include "request_header_memory_fixture.h"
 #include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
@@ -352,6 +353,91 @@ TEST(Ruvia, http3_data_event_borrows_or_copies_named_input) {
     input[0] = 'z';
     EXPECT_EQ(borrowed.bytes_, std::string_view("zbc"));
     EXPECT_EQ(owned.bytes_, std::string_view("abc"));
+}
+
+TEST(Ruvia, http3_data_event_move_assignment_preserves_self_aliased_body) {
+    for (const std::size_t length : {std::size_t{3}, std::size_t{256}}) {
+        for (const bool slice : {false, true}) {
+            SCOPED_TRACE(length);
+            SCOPED_TRACE(slice);
+            ruvia::test::header_memory resource;
+            bool retired = false;
+            {
+                const std::string original(length, 'x');
+                const auto expected = slice ? original.substr(1, length - 2) : original;
+                ruvia::http3_data_event target(4, original, &resource, true);
+                const auto old_address = reinterpret_cast<std::uintptr_t>(target.bytes_.data());
+                resource.deallocation_context_ = &retired;
+                resource.before_deallocate_ = [](void* context) noexcept {
+                    *static_cast<bool*>(context) = true;
+                };
+                {
+                    const auto bytes = slice ? target.bytes_.substr(1, length - 2) : target.bytes_;
+                    ruvia::http3_data_event source(8, bytes, &resource, false);
+                    target = std::move(source);
+                }
+                resource.before_deallocate_ = nullptr;
+                const auto address = reinterpret_cast<std::uintptr_t>(target.bytes_.data());
+                const bool expired = retired && address >= old_address && address - old_address < length;
+                EXPECT_FALSE(expired);
+                if (!expired) {
+                    EXPECT_EQ(target.stream_id_, 8);
+                    EXPECT_EQ(target.bytes_, std::string_view(expected));
+                }
+            }
+            EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+        }
+    }
+}
+
+TEST(Ruvia, http3_data_event_self_alias_snapshot_failure_preserves_both_events) {
+    failing_memory_resource resource;
+    {
+        const std::string original(256, 'x');
+        ruvia::http3_data_event target(4, original, &resource, true);
+        const auto bytes = target.bytes_;
+        ruvia::http3_data_event source(8, bytes, &resource, false);
+        if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+            const auto live = resource.live_allocations();
+            resource.fail_after(0);
+            bool failed = false;
+            try {
+                target = std::move(source);
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            ASSERT_TRUE(failed);
+            EXPECT_EQ(target.stream_id_, 4);
+            EXPECT_EQ(target.bytes_, std::string_view(original));
+            EXPECT_EQ(target.bytes_.data(), bytes.data());
+            EXPECT_EQ(source.stream_id_, 8);
+            EXPECT_EQ(source.bytes_, std::string_view(original));
+            EXPECT_EQ(source.bytes_.data(), bytes.data());
+            EXPECT_EQ(resource.live_allocations(), live);
+        }
+        resource.allow_allocations();
+        target = std::move(source);
+        EXPECT_EQ(target.stream_id_, 8);
+        EXPECT_EQ(target.bytes_, std::string_view(original));
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+TEST(Ruvia, http3_data_event_move_assignment_keeps_external_body_borrowed) {
+    failing_memory_resource resource;
+    const std::string external(256, 'e');
+    {
+        const std::string original(256, 'x');
+        ruvia::http3_data_event target(4, original, &resource, true);
+        ruvia::http3_data_event source(8, external, &resource, false);
+        resource.fail_after_stl_operation(0);
+        target = std::move(source);
+        resource.allow_allocations();
+        EXPECT_EQ(target.stream_id_, 8);
+        EXPECT_EQ(target.bytes_, std::string_view(external));
+        EXPECT_EQ(target.bytes_.data(), external.data());
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, http3_data_event_move_assignment_preserves_state_on_allocation_failure) {
