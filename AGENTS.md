@@ -187,11 +187,11 @@ sequenceDiagram
 
 | 验证维度 | 规范与门槛 |
 | :--- | :--- |
-| **本地构建与 E2E** | 复用根 `build/`，按影响范围并行构建（`cmake --build build --config Debug -j <cores>`）、运行单测并走通真实 E2E 改动路径 |
+| **本地构建与 E2E** | 复用根 `build/`，本地构建不开启 LTO，按影响范围并行构建（`cmake --build build --config Debug -j <cores>`）、运行单测并走通真实 E2E 改动路径 |
 | **临时验证产物** | 严禁占用 `/tmp`（防内存文件系统 OOM）；临时源码、smoke 程序、日志与中间产物统一置于根 `build/` 下，验证后立即清理 |
 | **单元测试边界** | 只经非 `detail` 公开 API 验证行为、边界、状态转换与错误语义；保持确定性与内存隔离，不测内部实现、源码文本、单纯转发或 mock 回声 |
 | **缺陷与数据后端** | 缺陷先复现后验证并补充公开 API 回归；生命周期改动覆盖成功、异常、取消与内存回收；SQL、迁移与 Redis 变更在真实后端验证（含回滚） |
-| **代码格式与 CI 门槛** | LF 行尾，C++ 源码经 `clang-format --dry-run --Werror` 检查；Linux Musl（`clang-cross`）与 Windows MSVC（`x64-windows-static`）均以 C++20、`Release`、`-DCMAKE_COMPILE_WARNING_AS_ERROR=ON` 全功能通过全部测试 |
+| **代码格式与 CI 门槛** | LF 行尾，C++ 源码经 `clang-format --dry-run --Werror` 检查；仅 CI 开启 LTO，Linux Musl（`clang-cross`）与 Windows MSVC（`x64-windows-static`）均以 C++20、`Release`、`-DCMAKE_COMPILE_WARNING_AS_ERROR=ON` 全功能通过全部测试 |
 | **纯文档与性能实测** | 纯文档改动只做文档校验；性能结论必须在专用主机同条件交错实测，微基准不代表端到端吞吐 |
 
 - **目录归档与环境隔离**：示例与测试按 target 和协议层级归档，`core` 单测平铺；无关改动导致失败时保留现场并如实报告。
