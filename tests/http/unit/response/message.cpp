@@ -16,6 +16,7 @@
 #include "ruvia/http/http_response.h"
 
 #include "failing_memory_resource.h"
+#include "request_header_memory_fixture.h"
 
 namespace {
 
@@ -91,6 +92,64 @@ TEST(Ruvia, response_move_assignment_transfers_body) {
     target = std::move(source_value);
 
     EXPECT_EQ(target.body_bytes(), std::string(4096, 's'));
+}
+
+TEST(Ruvia, response_body_replacement_commits_before_resource_retirement) {
+    enum class body_kind { copied,
+        owned,
+        static_view,
+        file_bytes,
+        head_metadata };
+    struct observation final {
+        http_response* response_;
+        body_kind expected_;
+        bool committed_{false};
+    };
+    for (const auto kind : {body_kind::copied, body_kind::owned, body_kind::static_view,
+             body_kind::file_bytes, body_kind::head_metadata}) {
+        SCOPED_TRACE(static_cast<int>(kind));
+        ruvia::test::header_memory resource;
+        {
+            http_response response(&resource);
+            response.body(std::string(256, 'x'));
+            observation observed{&response, kind};
+            resource.deallocation_context_ = &observed;
+            resource.before_deallocate_ = [](void* context) noexcept {
+                auto& observed = *static_cast<observation*>(context);
+                auto& response = *observed.response_;
+                observed.committed_ = observed.expected_ == body_kind::head_metadata
+                                          ? response.has_head_metadata_body()
+                                          : response.body_bytes() == "replacement" &&
+                                                response.has_file_representation() == (observed.expected_ == body_kind::file_bytes);
+                if (observed.committed_) {
+                    response.static_body("reentrant");
+                }
+            };
+            switch (kind) {
+                case body_kind::copied:
+                    response.body("replacement");
+                    break;
+                case body_kind::owned:
+                    response.owned_body(std::pmr::string("replacement", &resource));
+                    break;
+                case body_kind::static_view:
+                    response.static_body("replacement");
+                    break;
+                case body_kind::file_bytes:
+                    response.file_bytes_body(std::pmr::string("replacement", &resource));
+                    break;
+                case body_kind::head_metadata:
+                    response.head_metadata_body();
+                    break;
+            }
+            resource.before_deallocate_ = nullptr;
+            EXPECT_TRUE(observed.committed_);
+            EXPECT_EQ(response.body_bytes(), "reentrant");
+            EXPECT_FALSE(response.has_file_representation());
+            EXPECT_FALSE(response.has_head_metadata_body());
+        }
+        EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    }
 }
 
 TEST(Ruvia, response_status_code_range_validated) {

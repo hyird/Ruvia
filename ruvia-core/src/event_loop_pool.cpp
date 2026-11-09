@@ -74,12 +74,14 @@ struct event_loop_pool::impl_type final {
         if (!failure) {
             return;
         }
+        bool joined = false;
         {
             const std::lock_guard lock(failure_mutex_);
-            if (joined_) {
-                report_unhandled_failure("event loop failure after pool retirement", std::move(failure));
-                return;
-            }
+            joined = joined_;
+        }
+        if (joined) {
+            report_unhandled_failure("event loop failure after pool retirement", std::move(failure));
+            return;
         }
         if (!loop.owned_runtime().fail(failure)) {
             if (!equivalent_failures(failure, loop.recorded_failure())) {

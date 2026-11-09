@@ -269,12 +269,19 @@ private:
         http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
     static_assert(std::is_nothrow_move_constructible_v<value_type>);
 
+    template <typename body_type>
+    void replace(body_type&& body) noexcept {
+        // Publish the complete alternative before a resource callback can reenter.
+        value_type retired(std::move(value_));
+        value_.emplace<std::remove_cvref_t<body_type>>(std::forward<body_type>(body));
+    }
+
     void set_empty() noexcept {
-        value_.emplace<http_empty_response_body>(http_empty_response_body{});
+        replace(http_empty_response_body{});
     }
 
     void set_head_metadata_only() noexcept {
-        value_.emplace<http_empty_response_body>(http_empty_response_body(true));
+        replace(http_empty_response_body(true));
     }
 
     void set_copy(std::pmr::memory_resource* resource, std::string_view bytes_value) {
@@ -283,7 +290,7 @@ private:
             return;
         }
         http_owned_response_bytes body(resource, bytes_value);
-        value_.emplace<http_owned_response_bytes>(std::move(body));
+        replace(std::move(body));
     }
 
     void set_static(std::string_view bytes_value) noexcept {
@@ -291,7 +298,7 @@ private:
             set_empty();
             return;
         }
-        value_.emplace<http_static_response_bytes>(http_static_response_bytes(bytes_value));
+        replace(http_static_response_bytes(bytes_value));
     }
 
     void set_owned(std::pmr::memory_resource* resource, std::pmr::string&& bytes_value) {
@@ -300,20 +307,20 @@ private:
             return;
         }
         http_owned_response_bytes body(resource, std::move(bytes_value), false);
-        value_.emplace<http_owned_response_bytes>(std::move(body));
+        replace(std::move(body));
     }
 
     // Kept even when empty: an empty file is still a file representation.
     void set_file_bytes(std::pmr::memory_resource* resource, std::pmr::string&& bytes_value) {
         http_owned_response_bytes body(resource, std::move(bytes_value), true);
-        value_.emplace<http_owned_response_bytes>(std::move(body));
+        replace(std::move(body));
     }
 
     void set_owned_file(std::pmr::memory_resource* resource, http_native_path_view_type file,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
         http_response_file_identity identity, http_response_file_handle opened) {
         http_owned_response_file body(resource, file, size, offset, length, identity, std::move(opened));
-        value_.emplace<http_owned_response_file>(std::move(body));
+        replace(std::move(body));
     }
 
     void set_multipart(std::pmr::memory_resource* resource, http_native_path_view_type file,
@@ -321,7 +328,7 @@ private:
         http_multipart_byte_range_plan plan, http_response_file_handle opened) {
         http_multipart_response_body replacement(
             resource, file, size, identity, std::move(plan), std::move(opened));
-        value_.emplace<http_multipart_response_body>(std::move(replacement));
+        replace(std::move(replacement));
     }
 
     value_type value_;
