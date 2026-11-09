@@ -39,7 +39,7 @@ namespace ruvia::detail {
 class worker_notification_wait_resource final : public std::pmr::memory_resource {
 public:
     [[nodiscard]] bool allocated() const noexcept {
-        return allocated_;
+        return allocation_ != nullptr;
     }
 
 private:
@@ -50,8 +50,9 @@ private:
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) noexcept override;
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override;
 
-    alignas(max_alignment) std::array<std::byte, buffer_size> buffer_storage_{};
-    bool allocated_{false};
+    // Leave room to align the operation without over-aligning the resource or its owner.
+    std::array<std::byte, buffer_size + max_alignment - 1> buffer_storage_{};
+    void* allocation_{nullptr};
 };
 
 #ifdef _WIN32

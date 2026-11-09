@@ -27,19 +27,24 @@
 namespace ruvia::detail {
 
 void* worker_notification_wait_resource::do_allocate(std::size_t bytes_value, std::size_t alignment) {
-    if (allocated_ || bytes_value > buffer_size || alignment > max_alignment) {
+    if (allocated() || bytes_value > buffer_size || alignment > max_alignment) {
         throw std::bad_alloc();
     }
-    allocated_ = true;
-    return buffer_storage_.data();
+    void* pointer = buffer_storage_.data();
+    auto space = buffer_storage_.size();
+    allocation_ = std::align(alignment, bytes_value, pointer, space);
+    if (allocation_ == nullptr) {
+        throw std::bad_alloc();
+    }
+    return allocation_;
 }
 
 void worker_notification_wait_resource::do_deallocate(
     void* pointer, std::size_t, std::size_t) noexcept {
-    if (!allocated_ || pointer != buffer_storage_.data()) {
+    if (!allocated() || pointer != allocation_) {
         std::terminate();
     }
-    allocated_ = false;
+    allocation_ = nullptr;
 }
 
 bool worker_notification_wait_resource::do_is_equal(
