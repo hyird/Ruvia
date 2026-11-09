@@ -13,7 +13,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 
-#include "client/client_host.h"
+#include "client/client_tls.h"
 
 namespace ruvia::detail {
 namespace {

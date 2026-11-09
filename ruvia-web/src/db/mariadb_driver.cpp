@@ -20,7 +20,6 @@
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_pmr_string.h"
-#include "ruvia/web/detail/db/db_result_access.h"
 
 #include "db/db_pipeline_impl.h"
 #include "db/db_pool.h"
@@ -261,6 +260,17 @@ struct mysql_wait final {
         pool.wait_socket(index, native, wanted, selected_deadline.deadline_, deadline_value)};
 }
 
+task<int> exec_mysql_query(
+    mariadb_pool& pool, std::size_t index, std::string_view sql, const operation_timeout& deadline_value) {
+    auto& connection = *pool.slot(index).connection_;
+    int query_result = 0;
+    int status = mysql_real_query_start(&query_result, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
+    while (status != 0) {
+        status = mysql_real_query_cont(
+            &query_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
+    }
+    co_return query_result;
+}
 // The session's client character set, read for a string parameter whose
 // escape depends on it (mariadb_escape_needs_charset()).
 task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
@@ -291,13 +301,7 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
     if (classification.calls_routine_) {
         statements.routine_called();
     }
-    int query_result = 0;
-    int status = mysql_real_query_start(&query_result, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
-    while (status != 0) {
-        status = mysql_real_query_cont(
-            &query_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
-    }
-    if (query_result != 0) {
+    if (co_await exec_mysql_query(pool, index, sql, deadline_value) != 0) {
         throw mysql_statement_error(pool, index, "mysql_real_query",
             mysql_local_infile_refused(connection, classification.exclusive_));
     }
@@ -316,15 +320,7 @@ task<MYSQL_RES*> store_mysql_result(mariadb_pool& pool, std::size_t index, const
 
 task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
     mariadb_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
-    auto& connection = *pool.slot(index).connection_;
-    int query_result = 0;
-    int status = mysql_real_query_start(&query_result, &connection, mariadb_charset_query.data(),
-        static_cast<unsigned long>(mariadb_charset_query.size()));
-    while (status != 0) {
-        status = mysql_real_query_cont(
-            &query_result, &connection, co_await wait_for_mysql(pool, index, status, deadline_value));
-    }
-    if (query_result != 0) {
+    if (co_await exec_mysql_query(pool, index, mariadb_charset_query, deadline_value) != 0) {
         throw mysql_statement_error(pool, index, "reading the MariaDB session character set");
     }
     auto* result = co_await store_mysql_result(pool, index, deadline_value);
@@ -369,12 +365,9 @@ task<bool> finish_mysql_results(mariadb_pool& pool, std::size_t index, const ope
 void materialize_mysql_rows(db_rows& output, MYSQL_RES& raw_result, std::pmr::memory_resource* resource) {
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(&raw_result));
     const auto row_count = static_cast<std::size_t>(mysql_num_rows(&raw_result));
-    auto& result_rows = db_result_access::rows(output);
     auto& result_fields = db_result_access::fields(output);
     auto& result_column_names = db_result_access::column_names(output);
-    result_rows.reserve(row_count);
-    result_fields.reserve(row_count * field_count);
-    result_column_names.reserve(field_count);
+    db_result_access::reserve_result(output, row_count, field_count);
     const auto* fields_value = mysql_fetch_fields(&raw_result);
     for (std::size_t i = 0; i < field_count; ++i) {
         result_column_names.emplace_back(fields_value[i].name, static_cast<std::size_t>(fields_value[i].name_length));
@@ -389,8 +382,7 @@ void materialize_mysql_rows(db_rows& output, MYSQL_RES& raw_result, std::pmr::me
             }
             result_fields.push_back(db_result_access::borrowed_field(std::string_view(row[i], lengths[i]), resource));
         }
-        result_rows.push_back(db_result_access::borrowed_row(
-            result_fields.data() + row_start, field_count, result_column_names.data(), result_column_names.size()));
+        db_result_access::append_row(output, row_start, field_count);
     }
 }
 
@@ -432,6 +424,23 @@ void start_mysql_store(mariadb_pipeline_io::group_data& data, MYSQL& connection)
 void continue_mysql_head(mariadb_pipeline_io::state_type& state, std::size_t index,
     mariadb_pipeline_io::member_type& reader, MYSQL& connection);
 
+[[nodiscard]] constexpr db_exec_result make_mysql_exec_result(
+    std::uint64_t affected_rows, std::uint64_t insert_id) noexcept {
+    return db_result_access::make_exec_result(
+        affected_rows, insert_id == 0 ? std::nullopt : std::optional<std::uint64_t>(insert_id));
+}
+
+void populate_mysql_outcome(db_pipeline_outcome& outcome, const std::exception_ptr& failure, bool extra_row_set,
+    const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows, std::uint64_t affected_rows,
+    std::uint64_t insert_id) {
+    outcome.failure_ = mariadb_statement_failure(failure, extra_row_set, output_failure, returns_rows, returned_rows);
+    if (outcome.failure_ == nullptr && !returns_rows) {
+        outcome.affected_rows_ = affected_rows;
+        if (insert_id != 0) {
+            outcome.insert_id_ = insert_id;
+        }
+    }
+}
 // Hands the head statement's outcome on. Only its first result counts for
 // affected rows.
 void complete_mysql_head(
@@ -441,14 +450,8 @@ void complete_mysql_head(
     auto& head = group.records_[group.head_];
     db_pipeline_outcome outcome;
     if (head.member_ != nullptr) {
-        outcome.failure_ = mariadb_statement_failure(data.head_failure_, data.head_extra_row_set_,
-            data.head_output_failure_, head.returns_rows_, data.head_returned_rows_);
-        if (outcome.failure_ == nullptr && !head.returns_rows_) {
-            outcome.affected_rows_ = data.head_affected_rows_;
-            if (data.head_insert_id_ != 0) {
-                outcome.insert_id_ = data.head_insert_id_;
-            }
-        }
+        populate_mysql_outcome(outcome, data.head_failure_, data.head_extra_row_set_, data.head_output_failure_,
+            head.returns_rows_, data.head_returned_rows_, data.head_affected_rows_, data.head_insert_id_);
     }
     data.bytes_in_flight_ -= head.flight_.size_;
     --data.sent_;
@@ -475,14 +478,8 @@ void complete_mysql_prepared_head(mariadb_pipeline_io::state_type& state, std::s
         if (run.stale_ && head.member_->may_retry_ && (connection.server_status & SERVER_STATUS_IN_TRANS) == 0) {
             outcome.retry_ = true;
         } else {
-            outcome.failure_ = mariadb_statement_failure(
-                run.failure_, run.extra_row_set_, run.output_failure_, head.returns_rows_, run.returned_rows_);
-            if (outcome.failure_ == nullptr && !head.returns_rows_) {
-                outcome.affected_rows_ = run.affected_rows_;
-                if (run.insert_id_ != 0) {
-                    outcome.insert_id_ = run.insert_id_;
-                }
-            }
+            populate_mysql_outcome(outcome, run.failure_, run.extra_row_set_, run.output_failure_, head.returns_rows_,
+                run.returned_rows_, run.affected_rows_, run.insert_id_);
         }
     }
     --data.sent_;
@@ -1048,14 +1045,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     // refuses this, runs nothing prepared.
     bool tracked = false;
     if ((initialized.server_capabilities & CLIENT_SESSION_TRACKING) != 0) {
-        int query_result = 0;
-        status = mysql_real_query_start(&query_result, &initialized, mariadb_session_tracking_setup.data(),
-            static_cast<unsigned long>(mariadb_session_tracking_setup.size()));
-        while (status != 0) {
-            status = mysql_real_query_cont(
-                &query_result, &initialized, co_await wait_for_mysql(pool, index, status, deadline_value));
-        }
-        if (query_result == 0) {
+        if (co_await exec_mysql_query(pool, index, mariadb_session_tracking_setup, deadline_value) == 0) {
             tracked = mysql_field_count(&initialized) == 0;
         } else if (mariadb_connection_failure(mysql_errno(&initialized))) {
             throw mysql_error(initialized, "turning on MariaDB session tracking", db_error::code_type::connect_failed);
@@ -1123,8 +1113,7 @@ task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::str
         materialize_mysql_rows(output, *raw_result, resource);
         co_return output;
     } else {
-        co_return db_result_access::make_exec_result(
-            affected_rows, insert_id == 0 ? std::nullopt : std::optional<std::uint64_t>(insert_id));
+        co_return make_mysql_exec_result(affected_rows, insert_id);
     }
 }
 
@@ -1175,8 +1164,7 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
         if constexpr (returns_rows) {
             co_return output;
         } else {
-            co_return db_result_access::make_exec_result(
-                run.affected_rows_, run.insert_id_ == 0 ? std::nullopt : std::optional<std::uint64_t>(run.insert_id_));
+            co_return make_mysql_exec_result(run.affected_rows_, run.insert_id_);
         }
     }
     co_return co_await run_mysql_text<result_type>(pool, index, sql, classification, params, resource, deadline_value);
@@ -1280,16 +1268,10 @@ task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_
     }
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
     const auto* lengths = mysql_fetch_lengths(raw_result);
-    fields.clear();
-    fields.reserve(field_count);
-    for (std::size_t i = 0; i < field_count; ++i) {
-        if (row[i] == nullptr) {
-            fields.push_back(db_result_access::null_field(resource));
-            continue;
-        }
-        fields.push_back(db_result_access::owned_field(std::string_view(row[i], lengths[i]), resource));
-    }
-    co_return db_result_access::borrowed_row(fields.data(), fields.size(), column_names.data(), column_names.size());
+    co_return db_result_access::materialize_stream_row(
+        fields, column_names, field_count, resource, [&](std::size_t i) -> std::optional<std::string_view> {
+            return row[i] == nullptr ? std::nullopt : std::optional<std::string_view>(std::string_view(row[i], lengths[i]));
+        });
 }
 
 task<void> mariadb_driver::close_stream(

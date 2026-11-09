@@ -20,7 +20,6 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/web/detail/db/db_result_access.h"
 
 #include "db/mariadb_sql.h"
 #include "db/mariadb_text.h"
@@ -32,29 +31,15 @@ namespace {
 // been read, so a connection does not keep the size of its widest result.
 constexpr std::size_t mariadb_column_bytes_kept = 64 * 1024;
 
-// Storage a bound parameter points at for the length of an execution.
-union mariadb_param_value {
-    long long integer_;
-    double real_;
-    signed char flag_;
-};
+static_assert(std::is_same_v<my_bool, char>);
+static_assert(alignof(std::max_align_t) >= alignof(MYSQL_BIND));
+static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
 
-// Storage of one result column between mysql_stmt_fetch() and formatting.
-struct mariadb_column final {
-    std::pmr::vector<char> buffer_;
-    unsigned long length_{0};
-    my_bool null_{0};
-    my_bool error_{0};
-};
-
-// One cached statement: its handle once prepared, the placeholders its text
-// restricts (mariadb_statement_traits::integer_params_), and the hash of its
-// key, for refusing it.
-struct mariadb_statement final {
-    MYSQL_STMT* handle_{nullptr};
-    std::uint64_t integer_params_{0};
-    std::size_t key_hash_{0};
-};
+[[nodiscard]] MYSQL_BIND* reserve_binds(std::pmr::vector<std::max_align_t>& storage, std::size_t count) {
+    const std::size_t units = (count * sizeof(MYSQL_BIND) + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
+    storage.resize(units);
+    return reinterpret_cast<MYSQL_BIND*>(storage.data());
+}
 
 [[nodiscard]] db_error statement_error(MYSQL_STMT& statement, std::string_view operation,
     db_error::code_type code = db_error::code_type::statement_failed) {
@@ -174,264 +159,175 @@ struct mariadb_statement final {
 // Reads the tracked list back after a stored procedure may have changed it.
 constexpr std::string_view tracking_query = "SELECT @@session_track_system_variables";
 
+// libmariadb's status callback (MARIADB_OPT_STATUS_CALLBACK): each change
+// of the session the server reports in an OK packet, while libmariadb
+// reads it. It only records; the cache acts on the next find(), which no
+// prepared execution is in progress for. Only the schema and the
+// variables a statement depends on count: the server also reports others
+// it tracks regardless of the list, such as last_gtid after every commit
+// when binary logging is on. libmariadb declares the second parameter as
+// its C enum; C makes that enum compatible with its underlying integer
+// type, which is what this declares, since va_start() after a parameter
+// of enum type is undefined in C++.
+using status_type = std::underlying_type_t<enum_mariadb_status_info>;
+void hear_session_status(void* data, status_type type, ...) {
+    if (type != static_cast<status_type>(SESSION_TRACK_TYPE)) {
+        return;
+    }
+    auto& cache = *static_cast<mariadb_statement_cache*>(data);
+    std::va_list arguments;
+    va_start(arguments, type);
+    const auto track = static_cast<enum_session_state_type>(va_arg(arguments, int));
+    if (track == SESSION_TRACK_SCHEMA) {
+        cache.changed_ = true;
+    } else if (track == SESSION_TRACK_SYSTEM_VARIABLES) {
+        const auto name = session_text(va_arg(arguments, MARIADB_CONST_STRING*));
+        const auto value = session_text(va_arg(arguments, MARIADB_CONST_STRING*));
+        if (name == "session_track_system_variables") {
+            cache.all_variables_ = tracks_all(value);
+        } else if (name == "session_track_schema") {
+            cache.schema_tracked_ = value == "ON";
+        } else if (name == "character_set_client") {
+            cache.client_utf8mb4_ = value == "utf8mb4";
+        } else if (name == "character_set_connection") {
+            cache.connection_utf8mb4_ = value == "utf8mb4";
+        }
+        if (name == "collation_connection" || lists(mariadb_tracked_variables, name)) {
+            cache.changed_ = true;
+        }
+    }
+    va_end(arguments);
+}
+
 }  // namespace
 
-struct mariadb_statement_cache::state final {
-    explicit state(std::pmr::memory_resource* resource)
-        : statements_(resource),
-          retired_(resource),
-          types_(resource),
-          params_(resource),
-          values_(resource),
-          results_(resource),
-          columns_(resource) {}
-
-    ~state() {
-        free_all();
-    }
-
-    state(const state&) = delete;
-    state& operator=(const state&) = delete;
-
-    [[nodiscard]] mariadb_statement& entry(handle statement) {
-        auto* found = statements_.payload(statement);
-        if (found == nullptr) {
-            throw db_error(
-                db_error::code_type::protocol_error, db_driver::mariadb, "MariaDB statement left the cache");
-        }
-        return *found;
-    }
-
-    // Room to retire `count` more handles, made before anything changes, so
-    // that retiring them cannot fail.
-    void reserve_retired(std::size_t count = 1) {
-        retired_.reserve(retired_.size() + count);
-    }
-
-    // Moves a handle to those waiting to be closed on the server.
-    void retire(MYSQL_STMT* statement) noexcept {
-        if (statement != nullptr) {
-            retired_.push_back(statement);
-        }
-    }
-
-    // Remembers a statement that runs as text on this connection, without
-    // it taking a place among the prepared ones. A hash collision only runs
-    // another statement as text.
-    void refuse(std::size_t hash) noexcept {
-        refused_[next_refused_] = hash;
-        next_refused_ = (next_refused_ + 1) % refused_.size();
-    }
-
-    // Drops an entry for good, refusing its statement.
-    void refuse(handle statement, std::size_t hash) noexcept {
-        (void)statements_.forget(statement, false);
-        refuse(hash);
-    }
-
-    [[nodiscard]] bool refused(std::size_t hash) const noexcept {
-        return std::ranges::find(refused_, hash) != refused_.end();
-    }
-
-    // Every cached statement was parsed under a session state that is gone:
-    // each is closed on the server and prepared anew when used again.
-    void invalidate() {
-        std::size_t handles = 0;
-        statements_.for_each([&handles](mariadb_statement& statement) {
-            handles += statement.handle_ != nullptr ? 1 : 0;
-        });
-        reserve_retired(handles);
-        statements_.for_each([this](mariadb_statement& statement) { retire(std::exchange(statement.handle_, nullptr)); });
-        statements_.clear();
-        refused_.fill(0);
-        changed_ = false;
-    }
-
-    [[nodiscard]] bool usable() const noexcept {
-        return tracked_ && all_variables_ && schema_tracked_ && !untracked_ && client_utf8mb4_ && connection_utf8mb4_;
-    }
-
-    // The session may no longer report its changes: nothing runs prepared
-    // until the connection is replaced.
-    void lose_tracking() noexcept {
-        untracked_ = true;
-        changed_ = true;
-    }
-
-    // libmariadb's status callback (MARIADB_OPT_STATUS_CALLBACK): each change
-    // of the session the server reports in an OK packet, while libmariadb
-    // reads it. It only records; the cache acts on the next find(), which no
-    // prepared execution is in progress for. Only the schema and the
-    // variables a statement depends on count: the server also reports others
-    // it tracks regardless of the list, such as last_gtid after every commit
-    // when binary logging is on. libmariadb declares the second parameter as
-    // its C enum; C makes that enum compatible with its underlying integer
-    // type, which is what this declares, since va_start() after a parameter
-    // of enum type is undefined in C++.
-    using status_type = std::underlying_type_t<enum_mariadb_status_info>;
-    static void hear(void* data, status_type type, ...) {
-        if (type != static_cast<status_type>(SESSION_TRACK_TYPE)) {
-            return;
-        }
-        auto& cache = *static_cast<state*>(data);
-        std::va_list arguments;
-        va_start(arguments, type);
-        const auto track = static_cast<enum_session_state_type>(va_arg(arguments, int));
-        if (track == SESSION_TRACK_SCHEMA) {
-            cache.changed_ = true;
-        } else if (track == SESSION_TRACK_SYSTEM_VARIABLES) {
-            const auto name = session_text(va_arg(arguments, MARIADB_CONST_STRING*));
-            const auto value = session_text(va_arg(arguments, MARIADB_CONST_STRING*));
-            if (name == "session_track_system_variables") {
-                cache.all_variables_ = tracks_all(value);
-            } else if (name == "session_track_schema") {
-                cache.schema_tracked_ = value == "ON";
-            } else if (name == "character_set_client") {
-                cache.client_utf8mb4_ = value == "utf8mb4";
-            } else if (name == "character_set_connection") {
-                cache.connection_utf8mb4_ = value == "utf8mb4";
-            }
-            if (name == "collation_connection" || lists(mariadb_tracked_variables, name)) {
-                cache.changed_ = true;
-            }
-        }
-        va_end(arguments);
-    }
-
-    // Runs only once the connection is closed (connect() after close_slot(),
-    // or the slot's end after the pool closed it). A handle whose close was
-    // suspended has already left the connection's list, so mysql_close() did
-    // not detach it: detaching each one here keeps mysql_stmt_close() from
-    // reaching the freed connection.
-    void free_all() noexcept {
-        const auto release = [](MYSQL_STMT* statement) {
-            statement->mysql = nullptr;
-            (void)mysql_stmt_close(statement);
-        };
-        statements_.for_each([&release](mariadb_statement& statement) {
-            if (statement.handle_ != nullptr) {
-                release(std::exchange(statement.handle_, nullptr));
-            }
-        });
-        for (auto* retired : retired_) {
-            release(retired);
-        }
-        retired_.clear();
-        statements_.clear();
-        refused_.fill(0);
-        // A new connection opens with the utf8mb4 it asks for, and is
-        // untracked until it says otherwise.
-        tracked_ = false;
-        all_variables_ = false;
-        schema_tracked_ = false;
-        untracked_ = false;
-        client_utf8mb4_ = true;
-        connection_utf8mb4_ = true;
-        changed_ = false;
-        verify_ = false;
-    }
-
-    db_statement_cache<mariadb_statement> statements_;
-    std::pmr::vector<MYSQL_STMT*> retired_;
-    // Key hashes of statements that run as text on this connection; zero
-    // marks a free position.
-    std::array<std::size_t, db_statement_cache<mariadb_statement>::capacity> refused_{};
-    std::size_t next_refused_{0};
-    // What the session reported: whether it tracks every variable the cache
-    // relies on and the schema, and whether its client and connection
-    // character sets are still utf8mb4; and a change since the last find().
-    bool tracked_{false};
-    bool all_variables_{false};
-    bool schema_tracked_{false};
-    bool untracked_{false};
-    bool client_utf8mb4_{true};
-    bool connection_utf8mb4_{true};
-    bool changed_{false};
-    // A stored procedure ran since the tracked list was last read back.
-    bool verify_{false};
-    // Scratch of the one execution a connection runs at a time.
-    std::pmr::vector<unsigned int> types_;
-    std::pmr::vector<MYSQL_BIND> params_;
-    std::pmr::vector<mariadb_param_value> values_;
-    std::pmr::vector<MYSQL_BIND> results_;
-    std::pmr::vector<mariadb_column> columns_;
-    // The bytes the column buffers hold, and those the last result needed.
-    std::size_t column_bytes_{0};
-    std::size_t column_needed_{0};
-};
-
-mariadb_statement_cache::mariadb_statement_cache(std::pmr::memory_resource* resource) noexcept
-    : resource_(pmr_resource_or_default(resource)) {}
+mariadb_statement_cache::mariadb_statement_cache(std::pmr::memory_resource* resource)
+    : statements_(pmr_resource_or_default(resource)),
+      retired_(pmr_resource_or_default(resource)),
+      types_(pmr_resource_or_default(resource)),
+      binds_(pmr_resource_or_default(resource)),
+      values_(pmr_resource_or_default(resource)),
+      columns_(pmr_resource_or_default(resource)) {}
 
 mariadb_statement_cache::~mariadb_statement_cache() {
-    if (state_ != nullptr) {
-        std::pmr::polymorphic_allocator<state>(resource_).delete_object(state_);
+    clear();
+}
+
+mariadb_statement& mariadb_statement_cache::entry(handle statement) {
+    auto* found = statements_.payload(statement);
+    if (found == nullptr) {
+        throw db_error(
+            db_error::code_type::protocol_error, db_driver::mariadb, "MariaDB statement left the cache");
+    }
+    return *found;
+}
+
+void mariadb_statement_cache::reserve_retired(std::size_t count) {
+    retired_.reserve(retired_.size() + count);
+}
+
+void mariadb_statement_cache::retire(MYSQL_STMT* statement) noexcept {
+    if (statement != nullptr) {
+        retired_.push_back(statement);
     }
 }
 
-mariadb_statement_cache::mariadb_statement_cache(mariadb_statement_cache&& other) noexcept
-    : resource_(other.resource_),
-      state_(std::exchange(other.state_, nullptr)) {}
-
-mariadb_statement_cache& mariadb_statement_cache::operator=(mariadb_statement_cache&& other) noexcept {
-    std::swap(resource_, other.resource_);
-    std::swap(state_, other.state_);
-    return *this;
+void mariadb_statement_cache::refuse(std::size_t hash) noexcept {
+    refused_[next_refused_] = hash;
+    next_refused_ = (next_refused_ + 1) % refused_.size();
 }
 
-mariadb_statement_cache::state& mariadb_statement_cache::data() {
-    if (state_ == nullptr) {
-        state_ = std::pmr::polymorphic_allocator<state>(resource_).new_object<state>(resource_);
-    }
-    return *state_;
+void mariadb_statement_cache::refuse(handle statement, std::size_t hash) noexcept {
+    (void)statements_.forget(statement, false);
+    refuse(hash);
 }
 
+bool mariadb_statement_cache::refused(std::size_t hash) const noexcept {
+    return std::ranges::find(refused_, hash) != refused_.end();
+}
+
+void mariadb_statement_cache::invalidate() {
+    std::size_t handles = 0;
+    statements_.for_each([&handles](mariadb_statement& statement) {
+        handles += statement.handle_ != nullptr ? 1 : 0;
+    });
+    reserve_retired(handles);
+    statements_.for_each([this](mariadb_statement& statement) { retire(std::exchange(statement.handle_, nullptr)); });
+    statements_.clear();
+    refused_.fill(0);
+    changed_ = false;
+}
+
+bool mariadb_statement_cache::usable() const noexcept {
+    return tracked_ && all_variables_ && schema_tracked_ && !untracked_ && client_utf8mb4_ && connection_utf8mb4_;
+}
+
+void mariadb_statement_cache::lose_tracking() noexcept {
+    untracked_ = true;
+    changed_ = true;
+}
+
+// Runs only once the connection is closed (connect() after close_slot(),
+// or the slot's end after the pool closed it). A handle whose close was
+// suspended has already left the connection's list, so mysql_close() did
+// not detach it: detaching each one here keeps mysql_stmt_close() from
+// reaching the freed connection.
 void mariadb_statement_cache::clear() noexcept {
-    if (state_ != nullptr) {
-        state_->free_all();
+    const auto release = [](MYSQL_STMT* statement) {
+        statement->mysql = nullptr;
+        (void)mysql_stmt_close(statement);
+    };
+    statements_.for_each([&release](mariadb_statement& statement) {
+        if (statement.handle_ != nullptr) {
+            release(std::exchange(statement.handle_, nullptr));
+        }
+    });
+    for (auto* retired : retired_) {
+        release(retired);
     }
+    retired_.clear();
+    statements_.clear();
+    refused_.fill(0);
+    // A new connection opens with the utf8mb4 it asks for, and is
+    // untracked until it says otherwise.
+    tracked_ = false;
+    all_variables_ = false;
+    schema_tracked_ = false;
+    untracked_ = false;
+    client_utf8mb4_ = true;
+    connection_utf8mb4_ = true;
+    changed_ = false;
+    verify_ = false;
 }
 
 bool mariadb_statement_cache::observe(MYSQL& connection) {
     // libmariadb reads both arguments as void*.
-    return mysql_optionsv(&connection, MARIADB_OPT_STATUS_CALLBACK, reinterpret_cast<void*>(&state::hear),
-               static_cast<void*>(&data())) == 0;
+    return mysql_optionsv(&connection, MARIADB_OPT_STATUS_CALLBACK, reinterpret_cast<void*>(&hear_session_status),
+               static_cast<void*>(this)) == 0;
 }
 
 void mariadb_statement_cache::connected(bool tracked) noexcept {
-    auto* cache = state_;
-    if (cache == nullptr) {
-        return;
-    }
-    // The statement that turned tracking of the variables the cache relies
-    // on and of the schema on succeeded; the server's report of it says no
-    // more.
-    cache->tracked_ = tracked;
-    cache->all_variables_ = tracked;
-    cache->schema_tracked_ = tracked;
-    cache->changed_ = true;
+    tracked_ = tracked;
+    all_variables_ = tracked;
+    schema_tracked_ = tracked;
+    changed_ = true;
 }
 
 void mariadb_statement_cache::untrack() noexcept {
-    if (state_ != nullptr) {
-        state_->lose_tracking();
-    }
+    lose_tracking();
 }
 
 void mariadb_statement_cache::routine_called() noexcept {
-    if (state_ != nullptr) {
-        state_->verify_ = true;
-    }
+    verify_ = true;
 }
 
 bool mariadb_statement_cache::client_utf8mb4() const noexcept {
-    return state_ != nullptr && state_->tracked_ && state_->all_variables_ && !state_->untracked_ &&
-           !state_->verify_ && state_->client_utf8mb4_;
+    return tracked_ && all_variables_ && !untracked_ && !verify_ && client_utf8mb4_;
 }
 
 std::optional<mariadb_statement_cache::handle> mariadb_statement_cache::find(
     std::string_view sql, std::span<const db_value> params, bool may_prepare) {
-    auto& cache = data();
+    auto& cache = *this;
     if (cache.changed_) {
         cache.invalidate();
     }
@@ -517,7 +413,7 @@ void abandon_mariadb_prepared(mariadb_prepared_run& run) noexcept {
 namespace {
 
 using run_step = mariadb_prepared_run::step;
-using cache_state = mariadb_statement_cache::state;
+using cache_state = mariadb_statement_cache;
 
 // Binds the parameters find() accepted with the types it keyed them by.
 [[nodiscard]] std::exception_ptr bind_params(
@@ -525,12 +421,12 @@ using cache_state = mariadb_statement_cache::state;
     if (mysql_stmt_param_count(&statement) != params.size()) {
         return std::make_exception_ptr(std::invalid_argument("SQL parameter count does not match placeholders"));
     }
-    cache.params_.resize(params.size());
+    auto* binds = reserve_binds(cache.binds_, params.size());
     cache.values_.resize(params.size());
     for (std::size_t index = 0; index < params.size(); ++index) {
-        auto& bind = cache.params_[index];
-        auto& value = cache.values_[index];
+        auto& bind = binds[index];
         std::memset(&bind, 0, sizeof(bind));
+        auto& value = cache.values_[index];
         const auto& param = params[index];
         switch (db_value_access::type(param)) {
             case db_value_type::null:
@@ -566,7 +462,7 @@ using cache_state = mariadb_statement_cache::state;
                 break;
         }
     }
-    if (!params.empty() && mysql_stmt_bind_param(&statement, cache.params_.data()) != 0) {
+    if (!params.empty() && mysql_stmt_bind_param(&statement, binds) != 0) {
         return std::make_exception_ptr(statement_error(statement, "mysql_stmt_bind_param"));
     }
     return nullptr;
@@ -574,14 +470,14 @@ using cache_state = mariadb_statement_cache::state;
 
 // Binds each column to the C type its binary value arrives in; text-like
 // values go to a buffer as long as the longest one stored.
-void bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::size_t count) {
-    cache.results_.resize(count);
+MYSQL_BIND* bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::size_t count) {
+    auto* binds = reserve_binds(cache.binds_, count);
     while (cache.columns_.size() < count) {
         cache.columns_.emplace_back(mariadb_column{std::pmr::vector<char>(cache.columns_.get_allocator().resource())});
     }
     cache.column_needed_ = 0;
     for (std::size_t index = 0; index < count; ++index) {
-        auto& bind = cache.results_[index];
+        auto& bind = binds[index];
         auto& column = cache.columns_[index];
         const auto& field = fields[index];
         std::memset(&bind, 0, sizeof(bind));
@@ -634,6 +530,7 @@ void bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::size_t cou
     for (const auto& column : cache.columns_) {
         cache.column_bytes_ += column.buffer_.capacity();
     }
+    return binds;
 }
 
 // The text the text protocol sends for the column's fetched value.
@@ -696,17 +593,14 @@ void bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::size_t cou
 void materialize_rows(cache_state& cache, MYSQL_STMT& statement, db_rows& output, std::pmr::memory_resource* resource) {
     const auto field_count = static_cast<std::size_t>(statement.field_count);
     const auto* fields = statement.fields;
-    bind_results(cache, fields, field_count);
-    if (mysql_stmt_bind_result(&statement, cache.results_.data()) != 0) {
+    auto* binds = bind_results(cache, fields, field_count);
+    if (mysql_stmt_bind_result(&statement, binds) != 0) {
         throw statement_error(statement, "mysql_stmt_bind_result");
     }
     const auto row_count = static_cast<std::size_t>(mysql_stmt_num_rows(&statement));
-    auto& rows = db_result_access::rows(output);
     auto& values = db_result_access::fields(output);
     auto& names = db_result_access::column_names(output);
-    rows.reserve(row_count);
-    values.reserve(row_count * field_count);
-    names.reserve(field_count);
+    db_result_access::reserve_result(output, row_count, field_count);
     for (std::size_t index = 0; index < field_count; ++index) {
         names.emplace_back(fields[index].name, static_cast<std::size_t>(fields[index].name_length));
     }
@@ -726,11 +620,10 @@ void materialize_rows(cache_state& cache, MYSQL_STMT& statement, db_rows& output
                 values.push_back(db_result_access::null_field(resource));
                 continue;
             }
-            values.push_back(db_result_access::owned_field(
-                column_text(fields[index], cache.results_[index], column, buffer), resource));
+            values.push_back(
+                db_result_access::owned_field(column_text(fields[index], binds[index], column, buffer), resource));
         }
-        rows.push_back(
-            db_result_access::borrowed_row(values.data() + row_start, field_count, names.data(), names.size()));
+        db_result_access::append_row(output, row_start, field_count);
     }
 }
 
@@ -754,7 +647,7 @@ void start_draining(cache_state& cache, mariadb_prepared_run& run, mariadb_state
 }  // namespace
 
 void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output, std::pmr::memory_resource* resource) {
-    auto& cache = run.cache_->data();
+    auto& cache = *run.cache_;
     auto& entry = cache.entry(run.handle_);
     auto& statement = *entry.handle_;
     if (run.returned_rows_) {
@@ -777,7 +670,7 @@ void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output, std:
 }
 
 int resume_mariadb_prepared(MYSQL& connection, mariadb_prepared_run& run, int ready) {
-    auto& cache = run.cache_->data();
+    auto& cache = *run.cache_;
     for (;;) {
         switch (run.step_) {
             case run_step::verifying: {

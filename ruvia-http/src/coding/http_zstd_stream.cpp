@@ -26,7 +26,8 @@ inline constexpr int http_zstd_window_log_max = 23;
 
 zstd_decoder_stream::zstd_decoder_stream(std::pmr::memory_resource* resource)
     : allocation_(resource),
-      stream_(ZSTD_createDStream_advanced(ZSTD_customMem{&pmr_codec_allocate, &pmr_codec_free, &allocation_})) {
+      stream_(ZSTD_createDStream_advanced(ZSTD_customMem{
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
     if (stream_ != nullptr &&
         (ZSTD_isError(ZSTD_initDStream(stream_)) != 0 ||
             ZSTD_isError(ZSTD_DCtx_setParameter(stream_, ZSTD_d_windowLogMax, http_zstd_window_log_max)) != 0)) {
@@ -34,7 +35,7 @@ zstd_decoder_stream::zstd_decoder_stream(std::pmr::memory_resource* resource)
         stream_ = nullptr;
     }
     if (stream_ == nullptr) {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
 }
 
@@ -46,7 +47,8 @@ zstd_decoder_stream::~zstd_decoder_stream() {
 
 zstd_encoder_stream::zstd_encoder_stream(std::pmr::memory_resource* resource)
     : allocation_(resource),
-      context_(ZSTD_createCCtx_advanced(ZSTD_customMem{&pmr_codec_allocate, &pmr_codec_free, &allocation_})) {
+      context_(ZSTD_createCCtx_advanced(ZSTD_customMem{
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
     // The level picks its own window (and adapts it to a known source size).
     // RFC 9659's 8 MiB is only a ceiling; pinning it would also fix the
     // streaming input buffer at the window size for every pooled encoder.
@@ -61,7 +63,7 @@ zstd_encoder_stream::zstd_encoder_stream(std::pmr::memory_resource* resource)
         context_ = nullptr;
     }
     if (context_ == nullptr) {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
 }
 

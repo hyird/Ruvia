@@ -7,13 +7,10 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
-#include "field/http_expect_token.h"
 #include "field/http_lower_header_name.h"
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
-#include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_response_headers.h"
 #include "parser/http_request_target.h"

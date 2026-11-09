@@ -19,6 +19,7 @@
 #include "ruvia/core/worker_runtime_context.h"
 
 #include "first_failure.h"
+#include "worker_dispatcher_impl.h"
 #include "worker_stop_chain.h"
 
 namespace ruvia {
@@ -500,5 +501,48 @@ const worker_handle& worker_runtime::handle() const& noexcept {
 
 worker_runtime_context& worker_runtime::context() & noexcept {
     return impl_->context_;
+}
+
+worker_runtime_context::worker_runtime_context(
+    asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool)
+    : io_context_(&io_context),
+      dispatcher_(std::allocate_shared<detail::worker_dispatcher>(
+          std::pmr::polymorphic_allocator<detail::worker_dispatcher>(process_resource()),
+          io_context, queue_capacity, pool)),
+      handle_(detail::worker_handle_access::make(dispatcher_)) {}
+
+worker_runtime_context::~worker_runtime_context() {
+    detach();
+}
+
+asio::io_context& worker_runtime_context::io_context() const& noexcept {
+    return *io_context_;
+}
+
+const worker_handle& worker_runtime_context::handle() const& noexcept {
+    return handle_;
+}
+
+void worker_runtime_context::run() {
+    dispatcher_->run_context({}, {}, {});
+}
+
+void worker_runtime_context::run(move_only_function<void()> startup_handler,
+    move_only_function<void(std::exception_ptr)> failure_handler,
+    move_only_function<void()> shutdown_handler) {
+    dispatcher_->run_context(
+        std::move(startup_handler), std::move(failure_handler), std::move(shutdown_handler));
+}
+
+void worker_runtime_context::close() noexcept {
+    dispatcher_->close();
+}
+
+void worker_runtime_context::stop_timers() noexcept {
+    dispatcher_->stop_timers();
+}
+
+void worker_runtime_context::detach() noexcept {
+    dispatcher_->detach_context();
 }
 }  // namespace ruvia

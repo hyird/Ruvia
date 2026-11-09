@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <memory_resource>
 #include <new>
 #include <stdexcept>
 
@@ -27,7 +28,6 @@
 #include "ruvia/core/worker_handle.h"
 
 #include "size_class_lifo_bins.h"
-#include "worker_block_cache.h"
 
 namespace ruvia {
 
@@ -183,16 +183,96 @@ void task_frame_cache_release() noexcept {
 
 }  // namespace detail
 
-class worker_memory::impl_type final {
+// Worker-local exact-size cache. Small and large size classes share one
+// retention budget; only freed blocks count against it. Overflow returns
+// upstream immediately, and release_cached() never touches live allocations.
+// Blocks above 1 MiB or with alignment above 64 pass straight through.
+class worker_memory::impl_type final : public std::pmr::memory_resource {
 public:
-    impl_type(std::pmr::memory_resource& upstream, std::size_t retained_block_bytes)
-        : blocks_(upstream, retained_block_bytes) {}
+    static constexpr std::size_t small_block_bytes = std::size_t{16} * 1024;
+    static constexpr std::size_t block_alignment = 64;
 
-    detail::worker_block_cache blocks_;
+    impl_type(std::pmr::memory_resource& upstream, std::size_t retained_budget_bytes) noexcept
+        : upstream_(&upstream),
+          retained_budget_bytes_(retained_budget_bytes) {}
+
+    ~impl_type() override {
+        release_cached();
+    }
+
+    impl_type(const impl_type&) = delete;
+    impl_type& operator=(const impl_type&) = delete;
+
+    void release_cached() noexcept {
+        // The upstream may reenter this cache while releasing a block; drain
+        // publishes each removal before the call.
+        const auto release = [this](void* block, std::size_t block_bytes) noexcept {
+            upstream_->deallocate(block, block_bytes, block_alignment);
+        };
+        small_bins_.drain(release);
+        bins_.drain(release);
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* upstream_resource() const noexcept {
+        return upstream_;
+    }
+
+private:
+    using small_bins_type = detail::size_class_lifo_bins<alignof(std::max_align_t), small_block_bytes>;
+    using bins_type = detail::size_class_lifo_bins<std::size_t{4} * 1024, std::size_t{1024} * 1024>;
+
+    [[nodiscard]] static constexpr bool cacheable(std::size_t bytes_value, std::size_t alignment) noexcept {
+        return bytes_value <= bins_type::max_block_bytes && alignment <= block_alignment;
+    }
+
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (!cacheable(bytes_value, alignment)) {
+            return upstream_->allocate(bytes_value, alignment);
+        }
+        if (bytes_value <= small_block_bytes) {
+            const std::size_t block_bytes = small_bins_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
+            if (void* const block = small_bins_.take(block_bytes)) {
+                return block;
+            }
+            return upstream_->allocate(block_bytes, block_alignment);
+        }
+        const std::size_t block_bytes = bins_type::class_bytes(bytes_value);
+        if (void* const block = bins_.take(block_bytes)) {
+            return block;
+        }
+        return upstream_->allocate(block_bytes, block_alignment);
+    }
+
+    void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
+        if (!cacheable(bytes_value, alignment)) {
+            upstream_->deallocate(block, bytes_value, alignment);
+            return;
+        }
+        if (bytes_value <= small_block_bytes) {
+            const std::size_t block_bytes = small_bins_type::class_bytes(bytes_value == 0 ? 1 : bytes_value);
+            if (!small_bins_.store(block, block_bytes, retained_budget_bytes_ - bins_.cached_bytes())) {
+                upstream_->deallocate(block, block_bytes, block_alignment);
+            }
+            return;
+        }
+        const std::size_t block_bytes = bins_type::class_bytes(bytes_value);
+        if (!bins_.store(block, block_bytes, retained_budget_bytes_ - small_bins_.cached_bytes())) {
+            upstream_->deallocate(block, block_bytes, block_alignment);
+        }
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::pmr::memory_resource* upstream_;
+    std::size_t retained_budget_bytes_;
+    small_bins_type small_bins_;
+    bins_type bins_;
 };
 
 void worker_memory::impl_deleter_type::operator()(impl_type* impl) const noexcept {
-    auto* const upstream = impl->blocks_.upstream_resource();
+    auto* const upstream = impl->upstream_resource();
     destroy_pmr_object(impl, upstream);
 }
 
@@ -214,7 +294,7 @@ worker_memory::worker_memory(const memory_pool_config& config)
 worker_memory::worker_memory(std::pmr::memory_resource& upstream, const memory_pool_config& config)
     : impl_((validate_memory_pool_config(config),
           construct_pmr_object<impl_type>(&upstream, upstream, config.retained_block_bytes_))),
-      resource_(&impl_->blocks_),
+      resource_(impl_.get()),
       request_initial_buffer_bytes_(config.request_initial_buffer_bytes_) {}
 
 worker_memory::~worker_memory() = default;
@@ -225,7 +305,7 @@ void worker_memory::trim(const worker_handle& owner) {
         throw std::logic_error("worker memory trim must run on its owner worker");
     }
     owner_id_ = owner_id;
-    impl_->blocks_.release_cached();
+    impl_->release_cached();
     detail::task_frame_cache_release();
 }
 

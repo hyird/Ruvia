@@ -25,35 +25,6 @@
 #include "websocket/http_websocket_handshake_fields.h"
 
 namespace ruvia {
-namespace {
-
-[[nodiscard]] bool is_http_request_scheme(std::string_view scheme) noexcept {
-    return http_ascii_equals_ignore_case(scheme, "http") || http_ascii_equals_ignore_case(scheme, "https");
-}
-
-// RFC 9114 §4.2: field names are lowercase tokens.
-[[nodiscard]] bool is_valid_lowercase_field_name(std::string_view name) noexcept {
-    if (!is_valid_http_header_name(name)) {
-        return false;
-    }
-    for (const char byte : name) {
-        if (byte >= 'A' && byte <= 'Z') {
-            return false;
-        }
-    }
-    return true;
-}
-
-// http(s) target URIs carry a mandatory, non-empty authority with Host
-// syntax; other schemes may carry any RFC 3986 authority.
-[[nodiscard]] bool is_valid_request_authority(std::string_view scheme, std::string_view authority) noexcept {
-    if (is_http_request_scheme(scheme)) {
-        return !authority.empty() && detail::is_valid_host_header(authority);
-    }
-    return detail::is_valid_uri_authority(authority);
-}
-
-}  // namespace
 
 http3_request_head::http3_request_head(http3_headers_event event, std::pmr::memory_resource* resource)
     : fields_(std::move(event.fields_)),
@@ -107,14 +78,7 @@ websocket_handshake_validation_result validate_http3_websocket_handshake(
         (head.declared_content_length().has_value() && *head.declared_content_length() != 0)) {
         return websocket_handshake_validation_result::make_invalid_request();
     }
-    detail::websocket_request_header_validator validator(detail::http_field_list_role::recipient);
-    const auto headers = request.headers();
-    for (std::size_t index = 0; index < headers.size(); ++index) {
-        if (!validator.observe_header(detail::http_request_access::header_kind(request, index), headers[index].value())) {
-            return websocket_handshake_validation_result::make_invalid_request();
-        }
-    }
-    return validator.finish(options);
+    return detail::validate_extended_connect_websocket_headers(request, options);
 }
 
 bool http3_request_head::validate() {
@@ -159,7 +123,7 @@ bool http3_request_head::validate() {
             continue;
         }
         regular_seen = true;
-        if (!is_valid_lowercase_field_name(name) || !is_valid_http_header_value(value) ||
+        if (!detail::is_valid_binary_field_name(name) || !is_valid_http_header_value(value) ||
             detail::is_forbidden_http_binary_connection_field(name)) {
             return false;
         }
@@ -173,31 +137,19 @@ bool http3_request_head::validate() {
                 host_ = index;
                 break;
             case detail::request_header_kind::cookie: {
-                // RFC 9114 §4.2.1 joins split crumbs with "; ". An empty crumb
-                // is no cookie-pair (RFC 6265 §4.2.1) and contributes nothing.
                 if (value.empty()) {
                     continue;
                 }
-                if (value.size() > max_http_header_bytes) {
-                    return false;
-                }
-                // A single crumb already has stable ownership in fields_.
                 if (first_cookie_ == absent) {
+                    if (value.size() > max_http_header_bytes) {
+                        return false;
+                    }
                     first_cookie_ = index;
                     continue;
                 }
-                constexpr std::string_view cookie_separator = "; ";
-                const auto prefix_bytes = cookie_.empty() ? field_value(first_cookie_).size() : cookie_.size();
-                if (prefix_bytes > max_http_header_bytes - cookie_separator.size() ||
-                    value.size() > max_http_header_bytes - cookie_separator.size() - prefix_bytes) {
+                if (!detail::append_binary_cookie_crumb(cookie_, value, true, field_value(first_cookie_))) {
                     return false;
                 }
-                detail::reserve_geometric(cookie_, prefix_bytes + cookie_separator.size() + value.size());
-                if (cookie_.empty()) {
-                    cookie_.append(field_value(first_cookie_));
-                }
-                cookie_.append(cookie_separator);
-                cookie_.append(value);
                 continue;
             }
             case detail::request_header_kind::expect:
@@ -244,27 +196,16 @@ bool http3_request_head::validate() {
         }
         if (protocol_ != absent) {
             // RFC 9220 §3: only an extended CONNECT carries :protocol.
-            if (!connect_method || authority_ == absent || !detail::is_valid_origin_form_target(path_value)) {
+            if (!connect_method || authority_ == absent || !detail::is_valid_origin_form_target(path_value) ||
+                !detail::is_valid_extended_connect_scheme(protocol(), scheme_value)) {
                 return false;
             }
         } else if (!detail::is_valid_origin_or_asterisk_form_target(known_method, path_value)) {
             return false;
         }
-        if (is_http_request_scheme(scheme_value) && path_value != "*") {
-            // RFC 9114 §4.3.1: a scheme with a mandatory authority needs
-            // :authority or Host, and both name the same origin.
-            if (authority_ != absent) {
-                if (!is_valid_request_authority(scheme_value, authority())) {
-                    return false;
-                }
-            } else if (host_ == absent || !is_valid_request_authority(scheme_value, field_value(host_))) {
-                return false;
-            }
-        }
     }
-    if (authority_ != absent && host_ != absent &&
-        !detail::authority_matches_host(
-            authority(), field_value(host_), detail::http_uri_scheme_default_port(scheme_value))) {
+    if (!detail::validate_binary_request_authority_and_host(scheme_value, path_value,
+            authority_ != absent, authority(), host_ != absent, field_value(host_))) {
         return false;
     }
     if (content_length_seen) {
@@ -274,8 +215,8 @@ bool http3_request_head::validate() {
             return false;
         }
     }
-    const bool synthesize_host = host_ == absent && authority_ != absent &&
-                                 (is_http_request_scheme(scheme_value) || detail::is_valid_host_header(authority()));
+    const bool synthesize_host = detail::binary_request_synthesizes_host(
+        host_ != absent, authority_ != absent, scheme_value, authority());
     const bool has_cookie = first_cookie_ != absent;
     if (regular_.size() + static_cast<std::size_t>(synthesize_host) + static_cast<std::size_t>(has_cookie) >
         max_http_header_fields) {
@@ -285,58 +226,32 @@ bool http3_request_head::validate() {
 }
 
 http_request http3_request_head::build_request(std::pmr::memory_resource* resource, borrowed_text body) const& {
-    auto request = detail::http_request_access::make();
-    detail::http_request_access::set_resource(request, resource);
-    const auto method_value = method();
-    const bool standard_connect = connect() && protocol_ == absent;
-    const auto target = standard_connect ? authority() : path();
-    std::string_view request_path = target;
-    std::string_view query_string;
-    if (!standard_connect && target != "*") {
-        if (const auto query = target.find('?'); query != std::string_view::npos) {
-            request_path = target.substr(0, query);
-            query_string = target.substr(query + 1);
-        }
-    }
-    const auto host_value = field_value(host_);
-    const auto effective_authority = authority_ != absent ? authority() : host_value;
-
-    detail::http_request_access::set_method(request, method_value);
-    detail::http_request_access::set_protocol_version(request, http_protocol_version::http3);
-    detail::http_request_access::set_target(request, target);
-    detail::http_request_access::set_scheme(request, scheme());
-    detail::http_request_access::set_authority(request, effective_authority);
-    detail::http_request_access::set_protocol(request, protocol());
-    detail::http_request_access::set_target_form(request, http_request_target_form::http3);
-    detail::http_request_access::set_path(request, request_path);
-    detail::http_request_access::set_query_string(request, query_string);
-    detail::http_request_access::set_body(request, std::as_bytes(std::span(body.data(), body.size())));
-
-    // A non-HTTP target can carry an authority that is not legal Host syntax;
-    // never manufacture an invalid regular field from that distinct grammar.
-    const bool synthesize_host = host_ == absent && authority_ != absent &&
-                                 (is_http_request_scheme(scheme()) || detail::is_valid_host_header(authority()));
     const auto cookie_value = cookie_.empty() ? field_value(first_cookie_) : std::string_view(cookie_);
-    const bool has_cookie = !cookie_value.empty();
-    detail::http_request_access::reserve_headers(request,
-        regular_.size() + static_cast<std::size_t>(synthesize_host) + static_cast<std::size_t>(has_cookie));
-    for (const auto& field : regular_) {
-        if (!detail::http_request_access::add_header(request,
-                http_header_view{fields_[field.index_].name(), fields_[field.index_].value()}, field.kind_)) {
-            throw std::logic_error("validated HTTP/3 request cannot be materialized");
-        }
-    }
-    if (synthesize_host &&
-        !detail::http_request_access::add_header(
-            request, http_header_view{"host", authority()}, detail::request_header_kind::host)) {
-        throw std::logic_error("validated HTTP/3 request cannot be materialized");
-    }
-    if (has_cookie &&
-        !detail::http_request_access::add_header(
-            request, http_header_view{"cookie", cookie_value}, detail::request_header_kind::cookie)) {
-        throw std::logic_error("validated HTTP/3 request cannot be materialized");
-    }
-    return request;
+    const detail::binary_request_materialization_spec spec{
+        .version_ = http_protocol_version::http3,
+        .target_form_ = http_request_target_form::http3,
+        .method_ = method(),
+        .scheme_ = scheme(),
+        .authority_ = authority(),
+        .host_ = field_value(host_),
+        .path_ = path(),
+        .protocol_ = protocol(),
+        .cookie_ = cookie_value,
+        .body_ = body.view(),
+        .regular_header_count_ = regular_.size(),
+        .has_authority_ = authority_ != absent,
+        .has_host_ = host_ != absent,
+        .has_path_ = path_ != absent,
+        .has_cookie_ = !cookie_value.empty(),
+        .standard_connect_ = connect() && protocol_ == absent,
+        .failure_message_ = "validated HTTP/3 request cannot be materialized",
+    };
+    return detail::materialize_binary_http_request(resource, spec, [this](std::size_t index) noexcept {
+        const auto& field = regular_[index];
+        return std::pair{
+            http_header_view{fields_[field.index_].name(), fields_[field.index_].value()},
+            field.kind_};
+    });
 }
 
 std::optional<http_request_trailer_error> append_http3_request_trailers(
@@ -352,7 +267,7 @@ std::optional<http_request_trailer_error> append_http3_request_trailers(
     for (const auto& field : fields) {
         const auto name = field.name();
         const auto value = field.value();
-        if (name.empty() || name.front() == ':' || !is_valid_lowercase_field_name(name) ||
+        if (name.empty() || name.front() == ':' || !detail::is_valid_binary_field_name(name) ||
             !is_valid_http_header_value(value)) {
             return http_request_trailer_error::invalid_field;
         }

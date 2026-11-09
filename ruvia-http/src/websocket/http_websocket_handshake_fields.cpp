@@ -261,6 +261,18 @@ websocket_server_negotiation make_websocket_server_negotiation(
         websocket_negotiate_permessage_deflate(request, options.deflate_), options.response_headers_, resource);
 }
 
+websocket_handshake_validation_result validate_extended_connect_websocket_headers(
+    const http_request& request, websocket_handshake_validation_options options) noexcept {
+    websocket_request_header_validator validator(http_field_list_role::recipient);
+    const auto headers = request.headers();
+    for (std::size_t index = 0; index < headers.size(); ++index) {
+        if (!validator.observe_header(http_request_access::header_kind(request, index), headers[index].value())) {
+            return validator.finish(options);
+        }
+    }
+    return validator.finish(options);
+}
+
 }  // namespace ruvia::detail
 
 namespace ruvia {

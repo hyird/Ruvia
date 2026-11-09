@@ -4,7 +4,7 @@
 
 #include "context/context_request_storage.h"
 #include "context/context_services.h"
-#include "router/route_limits.h"
+#include "router/route_resolution.h"
 #include "server/forwarded_headers.h"
 
 #ifdef RUVIA_ENABLE_DATABASE

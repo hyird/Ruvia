@@ -12,7 +12,6 @@
 #include "ruvia/http/detail/util/http_pmr_object.h"
 
 #include "http2/http2_local_settings.h"
-#include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_stream_state.h"
 #include "util/geometric_reserve.h"
 

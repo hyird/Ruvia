@@ -17,7 +17,6 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/web/detail/redis/redis_owned_command.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "integration/slot_pool.h"

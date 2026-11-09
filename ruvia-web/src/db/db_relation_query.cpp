@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 
-#include "ruvia/web/detail/db/db_number_format.h"
+#include "ruvia/web/db/db_repository.h"
 
+#include "db/db_sql_format.h"
 #include "query_storage.h"
 
 namespace ruvia::detail {
@@ -212,6 +214,59 @@ std::pmr::string db_relation_plan::unique_projection(const db_query& query) {
 
 void db_relation_plan::conjunction(db_query& query, db_expression& predicate, db_expression term) {
     predicate = predicate.empty() ? term : query.binary(predicate, db_binary_operator::and_value, term);
+}
+
+db_projection apply_projection(db_query& query, std::span<const db_selection> selection,
+    std::string_view qualifier, bool returning, std::string_view root_table, const db_projection* previous) {
+    if (selection.empty()) {
+        throw std::invalid_argument("projection requires at least one field");
+    }
+    db_projection result(query.resource());
+    const auto named_count = static_cast<std::size_t>(std::ranges::count_if(selection, [](const auto& field) { return !field.is_wildcard(); }));
+    result.columns_.reserve((previous ? previous->columns_.size() : 0) + named_count);
+    if (previous) {
+        result.columns_ = previous->columns_;
+        result.wildcard_ = previous->wildcard_;
+    }
+    const auto alias = qualifier == root_table ? std::string_view{} : qualifier;
+    const auto import_field = [&](const db_selection& field) -> db_expression {
+        if (field.is_wildcard()) {
+            if (!field.column_.empty()) {
+                throw std::invalid_argument("wildcard projections cannot have a result alias");
+            }
+            result.wildcard_ = true;
+            return field.expression(query, root_table, alias);
+        }
+        if (field.column_.empty() || std::ranges::find(result.columns_, std::string_view(field.column_)) != result.columns_.end()) {
+            throw std::invalid_argument("projection requires unique nonempty field names");
+        }
+        result.columns_.emplace_back(field.column_);
+        auto expression = !field.has_expression()
+                              ? query.column(field.column_, qualifier)
+                              : field.expression(query, root_table, alias);
+        return query.alias(expression, field.column_);
+    };
+    const auto publish = [&](std::span<const db_expression> values) {
+        if (returning) {
+            query.returning(values);
+        } else if (previous) {
+            for (const auto value : values) {
+                query.add_select(value);
+            }
+        } else {
+            query.select(values);
+        }
+    };
+    import_db_expressions(query, selection, import_field, publish);
+    return result;
+}
+
+std::pmr::string format_truncate_table(std::string_view table, db_driver driver, std::pmr::memory_resource* resource) {
+    std::pmr::string sql(pmr_resource_or_default(resource));
+    sql.reserve(17U + table.size());
+    sql.append("TRUNCATE TABLE ");
+    append_db_qualified_identifier(sql, table, driver);
+    return sql;
 }
 
 }  // namespace ruvia::detail

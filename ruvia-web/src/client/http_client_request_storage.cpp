@@ -7,8 +7,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_base64.h"
 
-#include "client/http_client_tunnel_state.h"
-#include "client/http_client_upload_state.h"
+#include "client/http_client_response_state.h"
 #include "tls/tls_random.h"
 
 namespace ruvia::detail {

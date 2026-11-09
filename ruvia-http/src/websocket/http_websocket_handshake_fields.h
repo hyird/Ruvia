@@ -46,5 +46,8 @@ private:
     bool extensions_present_{false};
     bool has_extension_{false};
 };
+
+[[nodiscard]] websocket_handshake_validation_result validate_extended_connect_websocket_headers(
+    const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
 }  // namespace detail
 }  // namespace ruvia

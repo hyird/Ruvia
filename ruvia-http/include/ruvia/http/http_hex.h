@@ -9,9 +9,21 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
-
 namespace ruvia {
+namespace detail {
+
+[[nodiscard]] inline std::size_t http_forward_encoded_groups(
+    const void* output, const void* input, std::size_t groups) noexcept {
+    const auto output_address = reinterpret_cast<std::uintptr_t>(output);
+    const auto input_address = reinterpret_cast<std::uintptr_t>(input);
+    if (output_address >= input_address) {
+        return 0;
+    }
+    const auto distance = input_address - output_address;
+    return distance < groups ? static_cast<std::size_t>(distance) : groups;
+}
+
+}  // namespace detail
 
 // Decode one hex digit (either case); returns -1 for a non-hex character.
 [[nodiscard]] constexpr int http_decode_hex_nibble(char c) noexcept {

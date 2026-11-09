@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "client/client_host_resolver.h"
-#include "db/db_pool_dispatch.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache_state.h"
 #include "redis/redis_registry.h"

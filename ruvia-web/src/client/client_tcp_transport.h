@@ -21,7 +21,6 @@
 
 #include "client/client_host_resolver.h"
 #include "client/client_tls.h"
-#include "client/client_tls_config_storage.h"
 #include "client/client_tls_socket.h"
 #include "util/tcp_socket_policies.h"
 

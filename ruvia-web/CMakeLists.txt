@@ -4,7 +4,7 @@ if(NOT RUVIA_ENABLE_HTTP2)
 endif()
 if(NOT RUVIA_ENABLE_HTTP3)
     list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/http3/")
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/client/(http3_client_connection|http_client_http3_pool)\\.cpp$")
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/client/http3_client_connection\\.cpp$")
 endif()
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.

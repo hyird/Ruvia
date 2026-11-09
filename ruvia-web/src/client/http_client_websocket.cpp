@@ -21,7 +21,6 @@
 #include "util/operation_lane_lease.h"
 #include "util/pmr_owned_storage.h"
 #include "websocket/http_websocket_liveness.h"
-#include "websocket/websocket_lifecycle_validation.h"
 
 namespace ruvia::detail {
 
@@ -362,13 +361,7 @@ private:
     }
 
     void resume_pong_deadline() {
-        if (auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_);
-            pong && read_active_ && !write_lane_.write_in_progress()) {
-            const auto now = steady_now_ms();
-            if (now - pong->sent_at_ms() >= lifecycle_.heartbeat_.pong_timeout_->value().count()) {
-                liveness_ = websocket_awaiting_pong(now, pong->challenge());
-            }
-        }
+        resume_websocket_pong_deadline(lifecycle_, liveness_, read_active_ && !write_lane_.write_in_progress());
         refresh_heartbeat();
     }
 

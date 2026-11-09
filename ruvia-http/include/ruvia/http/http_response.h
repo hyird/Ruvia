@@ -364,6 +364,7 @@ private:
         std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept;
     [[nodiscard]] bool try_assign_owned_in_place(http_response_header& header, std::string_view name,
         std::string_view value, std::uint32_t known_bit) noexcept;
+    [[nodiscard]] bool borrows_owned_header(std::string_view name, std::string_view value) const noexcept;
     http_response_header& append_header(http_response_header header);
     http_response_header& add_stable_view(
         std::string_view name, std::string_view value, std::uint32_t known_bit);

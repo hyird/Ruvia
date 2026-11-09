@@ -21,13 +21,13 @@ voidpf zlib_allocate(voidpf opaque, uInt items, uInt size) noexcept {
     if (item_bytes > (std::numeric_limits<std::size_t>::max)() / size_bytes) {
         return nullptr;
     }
-    return pmr_codec_allocate(opaque, item_bytes * size_bytes);
+    return http_c_library_memory::allocate(item_bytes * size_bytes, opaque);
 }
 
-[[nodiscard]] z_stream make_zlib_stream(pmr_codec_allocation_context& allocation) noexcept {
+[[nodiscard]] z_stream make_zlib_stream(http_c_library_memory& allocation) noexcept {
     z_stream stream{};
     stream.zalloc = &zlib_allocate;
-    stream.zfree = &pmr_codec_free;
+    stream.zfree = &http_c_library_memory::deallocate_opaque_first;
     stream.opaque = &allocation;
     return stream;
 }
@@ -38,7 +38,7 @@ zlib_inflate_stream::zlib_inflate_stream(std::pmr::memory_resource* resource, in
     : allocation_(resource),
       stream_(make_zlib_stream(allocation_)) {
     if (inflateInit2(&stream_, window_bits) != Z_OK) {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
 }
 
@@ -58,7 +58,7 @@ zlib_deflate_stream::zlib_deflate_stream(
     : allocation_(resource),
       stream_(make_zlib_stream(allocation_)) {
     if (deflateInit2(&stream_, level, Z_DEFLATED, window_bits, mem_level, strategy) != Z_OK) {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
 }
 
@@ -109,7 +109,7 @@ bool zlib_deflate_stream::encode(std::string_view input, std::pmr::string& outpu
             return true;
         }
         if (status != Z_OK && status != Z_STREAM_END) {
-            allocation_.rethrow_allocation_failure();
+            allocation_.rethrow_if_failed();
             throw http_content_codec_error("zlib content encoding failed");
         }
         const auto produced = writable - stream_.avail_out;

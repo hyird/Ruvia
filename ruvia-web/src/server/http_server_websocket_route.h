@@ -22,7 +22,6 @@
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_handshake.h"
 #include "websocket/http_websocket_session.h"
-#include "websocket/websocket_response_headers.h"
 
 namespace ruvia::detail {
 

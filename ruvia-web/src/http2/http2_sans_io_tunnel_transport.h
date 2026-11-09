@@ -35,58 +35,21 @@ namespace ruvia::detail {
 
 // Duplex CONNECT transport driven by one HTTP/2 session reader and writer.
 // Queued input retains its receive-window credit until the application consumes it.
-class http2_sans_io_tunnel_transport final {
+class http2_sans_io_tunnel_transport final
+    : public multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport> {
 public:
+    using multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport>::write_bytes;
+
     http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection,
         std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, multiplexed_stream_signal& signal,
         worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept
-        : engine_(&engine),
+        : multiplexed_tunnel_transport_base(signal),
+          engine_(&engine),
           connection_(connection),
           stream_id_(stream_id),
           body_queue_(body_queue),
-          signal_(signal),
           write_signal_(write_signal),
           output_budget_(output_budget) {}
-    template <typename buffer_type>
-    [[nodiscard]] task<bool> read_more(buffer_type& buffer) {
-        for (;;) {
-            if (aborted_ || signal_.terminated()) {
-                throw inbound_transport_error(
-                    aborted_ ? std::make_error_code(std::errc::operation_canceled)
-                             : signal_.terminal_error(),
-                    "HTTP/2 tunnel read");
-            }
-            const auto receive_status = connection_.stream_receive_status(stream_id_);
-            if (receive_status == http2_stream_receive_status::closed) {
-                throw inbound_transport_error(
-                    std::make_error_code(std::errc::connection_reset), "HTTP/2 tunnel read");
-            }
-            const auto chunk = body_queue_.pop();
-            // pop() returns the previous chunk's receive-window credit; flush
-            // the WINDOW_UPDATE even if this reader suspends below.
-            if (connection_.wants_write()) {
-                wake_writer();
-            }
-            if (!chunk.empty()) {
-                buffer.append(std::string_view(chunk.data(), chunk.size()));
-                body_queue_.release_active_credits();
-                if (connection_.wants_write()) {
-                    wake_writer();
-                }
-                co_return true;
-            }
-            if (receive_status == http2_stream_receive_status::ended) {
-                co_return false;
-            }
-            if (aborted_ || signal_.terminated()) {
-                throw inbound_transport_error(
-                    aborted_ ? std::make_error_code(std::errc::operation_canceled)
-                             : signal_.terminal_error(),
-                    "HTTP/2 tunnel read");
-            }
-            co_await signal_.wait();
-        }
-    }
 
     [[nodiscard]] task<std::error_code> write_bytes(
         std::string_view bytes_value, http_stream_end disposition) {
@@ -111,13 +74,6 @@ public:
         co_return std::make_error_code(std::errc::protocol_error);
     }
 
-    [[nodiscard]] task<std::error_code> write_bytes(
-        std::string_view bytes_value, websocket_transport_disposition disposition) {
-        return write_bytes(bytes_value, disposition == websocket_transport_disposition::end_transport
-                                            ? http_stream_end::end
-                                            : http_stream_end::keep_open);
-    }
-
     // Malformed received data is a stream error of type PROTOCOL_ERROR
     // (RFC 9113 section 8.1.1); any other abort cancels the stream.
     void abort(bool malformed = false) noexcept {
@@ -131,6 +87,44 @@ public:
     }
 
 private:
+    friend class multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport>;
+
+    void require_live() const {
+        if (aborted_ || signal_.terminated()) {
+            throw inbound_transport_error(
+                aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                         : signal_.terminal_error(),
+                "HTTP/2 tunnel read");
+        }
+        if (connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed) {
+            throw inbound_transport_error(
+                std::make_error_code(std::errc::connection_reset), "HTTP/2 tunnel read");
+        }
+    }
+
+    template <typename buffer_type>
+    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
+        const auto chunk = body_queue_.pop();
+        // pop() returns the previous chunk's receive-window credit; flush
+        // the WINDOW_UPDATE even if this reader suspends below.
+        if (connection_.wants_write()) {
+            wake_writer();
+        }
+        if (chunk.empty()) {
+            return false;
+        }
+        buffer.append(std::string_view(chunk.data(), chunk.size()));
+        body_queue_.release_active_credits();
+        if (connection_.wants_write()) {
+            wake_writer();
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool receive_ended() const noexcept {
+        return connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::ended;
+    }
+
     void wake_writer() noexcept {
         write_signal_.notify();
     }
@@ -139,7 +133,6 @@ private:
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
     http2_sans_io_body_queue& body_queue_;
-    multiplexed_stream_signal& signal_;
     worker_signal& write_signal_;
     http2_data_output_budget& output_budget_;
     bool aborted_{false};

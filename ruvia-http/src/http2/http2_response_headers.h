@@ -18,7 +18,6 @@
 
 #include "field/http_interim_response_validation.h"
 #include "http2/http2_field_list.h"
-#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
 #include "response/http_final_response_control_plan.h"
@@ -31,54 +30,6 @@ namespace ruvia::detail {
 
 enum class http2_interim_response_header_encode_status : std::uint8_t { ok,
     invalid_header };
-
-[[nodiscard]] inline std::string_view get_http2_known_header_name(
-    std::uint32_t known_bit) noexcept {
-    switch (known_bit) {
-        case response_header_content_length:
-            return "content-length";
-        case response_header_content_encoding:
-            return "content-encoding";
-        case response_header_content_type:
-            return "content-type";
-        case response_header_vary:
-            return "vary";
-        case response_header_date:
-            return "date";
-        case response_header_server:
-            return "server";
-        case response_header_cache_control:
-            return "cache-control";
-        case response_header_allow:
-            return "allow";
-        case response_header_access_control_allow_origin:
-            return "access-control-allow-origin";
-        case response_header_access_control_allow_credentials:
-            return "access-control-allow-credentials";
-        case response_header_access_control_allow_methods:
-            return "access-control-allow-methods";
-        case response_header_access_control_allow_headers:
-            return "access-control-allow-headers";
-        case response_header_access_control_max_age:
-            return "access-control-max-age";
-        case response_header_access_control_expose_headers:
-            return "access-control-expose-headers";
-        case response_header_accept_ranges:
-            return "accept-ranges";
-        case response_header_content_range:
-            return "content-range";
-        case response_header_etag:
-            return "etag";
-        case response_header_last_modified:
-            return "last-modified";
-        case response_header_location:
-            return "location";
-        case response_header_set_cookie:
-            return "set-cookie";
-        default:
-            return {};
-    }
-}
 
 inline void append_http2_response_field(http2_field_list& fields, std::string_view name,
     std::string_view value, std::uint32_t known_bit) {

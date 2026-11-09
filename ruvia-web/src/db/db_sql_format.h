@@ -13,8 +13,6 @@
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_schema.h"
-#include "ruvia/web/detail/db/db_number_format.h"
-#include "ruvia/web/detail/db/db_value_access.h"
 
 namespace ruvia::detail {
 

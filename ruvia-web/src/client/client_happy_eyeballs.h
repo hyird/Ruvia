@@ -31,10 +31,24 @@ public:
         : addresses_(addresses),
           first_(addresses.begin()),
           other_(addresses.begin()),
-          first_is_v6_(!addresses.empty() && addresses.begin()->endpoint().address().is_v6()) {}
+          first_is_v6_(!addresses.empty() && addresses.begin()->endpoint().address().is_v6()),
+          pending_(advance()) {}
     client_address_sequence(results_type&&) = delete;
 
+    [[nodiscard]] bool has_next() const noexcept {
+        return pending_.has_value();
+    }
+
     [[nodiscard]] std::optional<endpoint_type> next() {
+        auto result = std::move(pending_);
+        if (result.has_value()) {
+            pending_ = advance();
+        }
+        return result;
+    }
+
+private:
+    [[nodiscard]] std::optional<endpoint_type> advance() {
         for (unsigned family = 0; family != 2; ++family) {
             auto& iterator = next_first_ ? first_ : other_;
             const bool is_v6 = next_first_ ? first_is_v6_ : !first_is_v6_;
@@ -60,12 +74,12 @@ public:
         return std::nullopt;
     }
 
-private:
     const results_type& addresses_;
     decltype(std::declval<const results_type&>().begin()) first_;
     decltype(std::declval<const results_type&>().begin()) other_;
     bool first_is_v6_;
     bool next_first_{true};
+    std::optional<endpoint_type> pending_;
 };
 
 struct client_happy_eyeballs_result final {

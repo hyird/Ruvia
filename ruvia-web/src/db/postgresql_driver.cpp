@@ -15,8 +15,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/db/db_result_access.h"
-
 #include "db/db_pipeline_impl.h"
 #include "db/db_pool.h"
 #include "db/db_postgresql.h"
@@ -70,12 +68,9 @@ private:
 void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::pmr::memory_resource* resource) {
     const auto row_count = static_cast<std::size_t>(PQntuples(&result_value));
     const auto field_count = static_cast<std::size_t>(PQnfields(&result_value));
-    auto& rows = db_result_access::rows(output);
     auto& fields_value = db_result_access::fields(output);
     auto& column_names = db_result_access::column_names(output);
-    rows.reserve(row_count);
-    fields_value.reserve(row_count * field_count);
-    column_names.reserve(field_count);
+    db_result_access::reserve_result(output, row_count, field_count);
     for (std::size_t field = 0; field < field_count; ++field) {
         column_names.emplace_back(PQfname(&result_value, static_cast<int>(field)));
     }
@@ -93,8 +88,7 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
                     static_cast<std::size_t>(PQgetlength(&result_value, row_index, field_index))),
                 resource));
         }
-        rows.push_back(db_result_access::borrowed_row(
-            fields_value.data() + row_start, field_count, column_names.data(), column_names.size()));
+        db_result_access::append_row(output, row_start, field_count);
     }
 }
 
@@ -108,21 +102,15 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
             column_names.emplace_back(PQfname(&result_value, static_cast<int>(field)));
         }
     }
-    fields_value.clear();
-    fields_value.reserve(field_count);
-    for (std::size_t field = 0; field < field_count; ++field) {
-        const auto field_index = static_cast<int>(field);
-        if (PQgetisnull(&result_value, 0, field_index) != 0) {
-            fields_value.push_back(db_result_access::null_field(resource));
-            continue;
-        }
-        fields_value.push_back(db_result_access::owned_field(
-            std::string_view(PQgetvalue(&result_value, 0, field_index),
-                static_cast<std::size_t>(PQgetlength(&result_value, 0, field_index))),
-            resource));
-    }
-    return db_result_access::borrowed_row(
-        fields_value.data(), fields_value.size(), column_names.data(), column_names.size());
+    return db_result_access::materialize_stream_row(
+        fields_value, column_names, field_count, resource, [&](std::size_t field) -> std::optional<std::string_view> {
+            const auto field_index = static_cast<int>(field);
+            if (PQgetisnull(&result_value, 0, field_index) != 0) {
+                return std::nullopt;
+            }
+            return std::string_view(PQgetvalue(&result_value, 0, field_index),
+                static_cast<std::size_t>(PQgetlength(&result_value, 0, field_index)));
+        });
 }
 
 [[nodiscard]] bool flush_postgresql(pg_conn& connection) {
@@ -231,8 +219,8 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 // which also discards its cache entries. The Close ahead of Parse lets a name
 // the server may still hold (a statement forgotten as stale) parse again.
 [[nodiscard]] postgresql_flight queue_cached_statement(pg_conn& connection,
-    postgresql_statement_cache& statements, const postgresql_statement_cache::lookup& lookup,
-    std::string_view sql, const postgresql_params& encoded) {
+    postgresql_statement_cache& statements, std::string_view sql, const postgresql_params& encoded) {
+    const auto lookup = statements.find(sql, encoded.type_span(), true, &make_postgresql_statement_name);
     const auto count = encoded.count();
     const auto* values = encoded.values();
     const auto* types = encoded.types();
@@ -439,11 +427,10 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
     auto* connection = pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
     for (bool may_retry = true;; may_retry = false) {
-        const auto lookup = statements.find(sql, encoded.type_span(), true, &make_postgresql_statement_name);
         if (PQenterPipelineMode(connection) == 0) {
             throw postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
         }
-        const auto flight = queue_cached_statement(*connection, statements, lookup, sql, encoded);
+        const auto flight = queue_cached_statement(*connection, statements, sql, encoded);
         if (flush_postgresql(*connection)) {
             co_await flush_output(pool, index, deadline_value);
         }
@@ -512,12 +499,10 @@ void postgresql_pipeline_io::open(state_type& state, std::size_t slot) {
 bool postgresql_pipeline_io::queue(
     state_type& state, std::size_t index, member_type&, statement_type& statement, flight_type& flight) {
     auto& slot = state.pool().slot(index);
-    auto& statements = slot.session_.statements_;
-    const auto lookup = statements.find(statement.sql_, statement.encoded_.type_span(), true, &make_postgresql_statement_name);
     auto* connection = slot.connection_;
     bool flush_pending = false;
     try {
-        flight = queue_cached_statement(*connection, statements, lookup, statement.sql_, statement.encoded_);
+        flight = queue_cached_statement(*connection, slot.session_.statements_, statement.sql_, statement.encoded_);
         flush_pending = flush_postgresql(*connection);
     } catch (...) {
         state.fail_group(index, std::current_exception());

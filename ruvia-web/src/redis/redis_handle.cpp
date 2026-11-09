@@ -1,10 +1,15 @@
+#include <array>
 #include <chrono>
 #include <memory_resource>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <vector>
 
-#include "ruvia/web/detail/redis/redis_repository_commands.h"
+#include "ruvia/http/http_number_format.h"
+#include "ruvia/web/detail/redis/redis_orm.h"
 #include "ruvia/web/redis/redis.h"
 
 #include "redis/redis_client_runtime.h"
@@ -12,9 +17,9 @@
 #include "redis/redis_command_routing.h"
 #include "redis/redis_pool.h"
 #include "redis/redis_reply_parsers.h"
+#include "redis/redis_types_access.h"
 
 namespace ruvia {
-
 namespace {
 
 template <typename duration_type>
@@ -22,6 +27,47 @@ void require_positive_redis_ttl(duration_type ttl, const char* message) {
     if (ttl.count() <= 0) {
         throw std::invalid_argument(message);
     }
+}
+
+[[nodiscard]] detail::redis_owned_command make_redis_scan_command(std::string_view command,
+    std::optional<std::string_view> key, const redis_scan_options& options,
+    std::pmr::memory_resource* resource) {
+    std::array<char, http_max_unsigned_decimal_size> cursor_scratch{};
+    std::array<char, http_max_unsigned_decimal_size> count_scratch{};
+    std::array<std::string_view, 7> args{};
+    std::size_t count = 0;
+    args[count++] = command;
+    if (key.has_value()) {
+        args[count++] = *key;
+    }
+    args[count++] = http_format_unsigned(
+        cursor_scratch, options.cursor_.has_value() ? detail::redis_types_access::cursor_value(*options.cursor_) : 0);
+    if (options.match_.has_value()) {
+        args[count++] = "MATCH";
+        args[count++] = *options.match_;
+    }
+    if (options.count_.has_value()) {
+        args[count++] = "COUNT";
+        args[count++] = http_format_unsigned(count_scratch, options.count_->value());
+    }
+    return detail::make_owned_redis_command(
+        resource, std::span<const std::string_view>(args.data(), count));
+}
+
+// The server-side wait starts when the command is written, so the reply
+// deadline is armed at write time: slot acquisition and a lazy connect must not
+// consume the block window. The grace covers the reply's network latency.
+[[nodiscard]] std::optional<timeout_duration> redis_block_reply_timeout(
+    const operation_options& options, redis_block_wait wait) {
+    if (const auto duration = wait.duration(); duration.has_value()) {
+        constexpr auto grace = std::chrono::seconds(1);
+        if (*duration > std::chrono::milliseconds::max() - grace) {
+            return std::chrono::milliseconds::max();
+        }
+        return *duration + grace;
+    }
+    detail::require_bounded_redis_wait(options, "infinite redis block requires a stop_token or finite operation timeout");
+    return std::nullopt;
 }
 
 }  // namespace
@@ -109,24 +155,22 @@ task<redis_value> redis_handle::script_owned(
 }
 
 task<void> redis_handle::ping() const {
-    registration_.require_active();
-    return execute_mapped<void>(pool(), detail::make_owned_redis_command(resource_, {"PING"}), detail::parse_redis_pong);
+    return mapped<void>({"PING"}, detail::parse_redis_pong);
 }
 
 task<std::pmr::string> redis_handle::ping(std::string_view message) const {
-    registration_.require_active();
-    return execute_mapped<std::pmr::string>(pool(), detail::make_owned_redis_command(resource_, {"PING", message}), detail::take_redis_string);
+    return mapped<std::pmr::string>({"PING", message}, detail::take_redis_string);
 }
 
 task<std::optional<std::pmr::string>> redis_handle::get(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::optional<std::pmr::string>>(pool(), detail::make_owned_redis_command(resource_, {"GET", key}), detail::parse_redis_optional_string);
+    return mapped<std::optional<std::pmr::string>>({"GET", key}, detail::parse_redis_optional_string);
 }
 
 task<std::pmr::vector<std::optional<std::pmr::string>>> redis_handle::mget(
     std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::pmr::vector<std::optional<std::pmr::string>>>(pool(), detail::redis_command_with_keys("MGET", keys, resource_), detail::parse_redis_optional_string_array);
+    return execute_mapped<std::pmr::vector<std::optional<std::pmr::string>>>(
+        pool(), detail::redis_command_with_keys("MGET", keys, resource_), detail::parse_redis_optional_string_array);
 }
 
 task<redis_set_result> redis_handle::set(
@@ -146,91 +190,86 @@ task<void> redis_handle::mset(
 }
 
 task<std::optional<std::pmr::string>> redis_handle::get_del(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::optional<std::pmr::string>>(pool(), detail::make_owned_redis_command(resource_, {"GETDEL", key}), detail::parse_redis_optional_string);
+    return mapped<std::optional<std::pmr::string>>({"GETDEL", key}, detail::parse_redis_optional_string);
 }
 
 task<std::int64_t> redis_handle::append(
     std::string_view key, std::string_view value) const {
-    registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_owned_redis_command(resource_, {"APPEND", key, value}), detail::parse_redis_integer);
+    return mapped<std::int64_t>({"APPEND", key, value}, detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::strlen(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_owned_redis_command(resource_, {"STRLEN", key}), detail::parse_redis_integer);
+    return mapped<std::int64_t>({"STRLEN", key}, detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::incr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_redis_integer_command("INCRBY", key, value, resource_), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(
+        pool(), detail::make_redis_integer_command("INCRBY", key, value, resource_), detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::decr(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_owned_redis_command(resource_, {"DECR", key}), detail::parse_redis_integer);
+    return mapped<std::int64_t>({"DECR", key}, detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::decr_by(std::string_view key, std::int64_t value) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_redis_integer_command("DECRBY", key, value, resource_), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(
+        pool(), detail::make_redis_integer_command("DECRBY", key, value, resource_), detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::del(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_owned_redis_command(resource_, {"DEL", key}), detail::parse_redis_integer);
+    return mapped<std::int64_t>({"DEL", key}, detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::del(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::redis_command_with_keys("DEL", keys, resource_), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(
+        pool(), detail::redis_command_with_keys("DEL", keys, resource_), detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::unlink(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_owned_redis_command(resource_, {"UNLINK", key}), detail::parse_redis_integer);
+    return mapped<std::int64_t>({"UNLINK", key}, detail::parse_redis_integer);
 }
 
 task<std::int64_t> redis_handle::unlink(std::span<const std::string_view> keys) const {
     registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::redis_command_with_keys("UNLINK", keys, resource_), detail::parse_redis_integer);
+    return execute_mapped<std::int64_t>(
+        pool(), detail::redis_command_with_keys("UNLINK", keys, resource_), detail::parse_redis_integer);
 }
 
 task<bool> redis_handle::exists(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<bool>(pool(), detail::make_owned_redis_command(resource_, {"EXISTS", key}), detail::parse_redis_integer_bool);
+    return mapped<bool>({"EXISTS", key}, detail::parse_redis_integer_bool);
 }
 
 task<bool> redis_handle::touch(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<bool>(pool(), detail::make_owned_redis_command(resource_, {"TOUCH", key}), detail::parse_redis_integer_bool);
+    return mapped<bool>({"TOUCH", key}, detail::parse_redis_integer_bool);
 }
 
 task<std::pmr::string> redis_handle::type(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::pmr::string>(pool(), detail::make_owned_redis_command(resource_, {"TYPE", key}), detail::take_redis_string);
+    return mapped<std::pmr::string>({"TYPE", key}, detail::take_redis_string);
 }
 
 task<void> redis_handle::rename(std::string_view key, std::string_view new_key) const {
-    registration_.require_active();
-    return execute_mapped<void>(pool(), detail::make_owned_redis_command(resource_, {"RENAME", key, new_key}), detail::parse_redis_ok);
+    return mapped<void>({"RENAME", key, new_key}, detail::parse_redis_ok);
 }
 
 task<bool> redis_handle::rename_nx(std::string_view key, std::string_view new_key) const {
-    registration_.require_active();
-    return execute_mapped<bool>(pool(), detail::make_owned_redis_command(resource_, {"RENAMENX", key, new_key}), detail::parse_redis_integer_bool);
+    return mapped<bool>({"RENAMENX", key, new_key}, detail::parse_redis_integer_bool);
 }
 
 task<bool> redis_handle::expire(std::string_view key, std::chrono::seconds ttl) const {
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis expire TTL must be greater than zero");
-    return execute_mapped<bool>(pool(), detail::make_redis_integer_command("EXPIRE", key, ttl.count(), resource_), detail::parse_redis_integer_bool);
+    return execute_mapped<bool>(
+        pool(), detail::make_redis_integer_command("EXPIRE", key, ttl.count(), resource_), detail::parse_redis_integer_bool);
 }
 
 task<bool> redis_handle::pexpire(std::string_view key, std::chrono::milliseconds ttl) const {
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis pexpire TTL must be greater than zero");
-    return execute_mapped<bool>(pool(), detail::make_redis_integer_command("PEXPIRE", key, ttl.count(), resource_), detail::parse_redis_integer_bool);
+    return execute_mapped<bool>(
+        pool(), detail::make_redis_integer_command("PEXPIRE", key, ttl.count(), resource_), detail::parse_redis_integer_bool);
 }
 
 task<bool> redis_handle::expire_at(
@@ -238,29 +277,350 @@ task<bool> redis_handle::expire_at(
     registration_.require_active();
     const auto expires_ms =
         std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()).count();
-    return execute_mapped<bool>(pool(), detail::make_redis_integer_command("PEXPIREAT", key, expires_ms, resource_), detail::parse_redis_integer_bool);
+    return execute_mapped<bool>(
+        pool(), detail::make_redis_integer_command("PEXPIREAT", key, expires_ms, resource_), detail::parse_redis_integer_bool);
 }
 
 task<bool> redis_handle::persist(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<bool>(pool(), detail::make_owned_redis_command(resource_, {"PERSIST", key}), detail::parse_redis_integer_bool);
+    return mapped<bool>({"PERSIST", key}, detail::parse_redis_integer_bool);
 }
 
 task<redis_ttl> redis_handle::ttl(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<redis_ttl>(pool(), detail::make_owned_redis_command(resource_, {"TTL", key}),
+    return mapped<redis_ttl>({"TTL", key},
         [](redis_value&& reply, std::pmr::memory_resource*) { return detail::parse_redis_ttl(std::move(reply), true); });
 }
 
 task<redis_ttl> redis_handle::pttl(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<redis_ttl>(pool(), detail::make_owned_redis_command(resource_, {"PTTL", key}),
+    return mapped<redis_ttl>({"PTTL", key},
         [](redis_value&& reply, std::pmr::memory_resource*) { return detail::parse_redis_ttl(std::move(reply), false); });
 }
 
 task<std::int64_t> redis_handle::incr(std::string_view key) const {
-    registration_.require_active();
-    return execute_mapped<std::int64_t>(pool(), detail::make_owned_redis_command(resource_, {"INCR", key}), detail::parse_redis_integer);
+    return mapped<std::int64_t>({"INCR", key}, detail::parse_redis_integer);
 }
 
+task<std::optional<std::pmr::string>> redis_handle::hget(
+    std::string_view key, std::string_view field) const {
+    return mapped<std::optional<std::pmr::string>>({"HGET", key, field}, detail::parse_redis_optional_string);
+}
+
+task<std::int64_t> redis_handle::hset(
+    std::string_view key, std::string_view field, std::string_view value) const {
+    return mapped<std::int64_t>({"HSET", key, field, value}, detail::parse_redis_integer);
+}
+
+task<std::int64_t> redis_handle::hset(std::string_view key,
+    std::span<const std::pair<std::string_view, std::string_view>> fields_value) const {
+    registration_.require_active();
+    return execute_mapped<std::int64_t>(
+        pool(), detail::redis_hset_fields_args(key, fields_value, resource_), detail::parse_redis_integer);
+}
+
+task<std::pmr::vector<std::optional<std::pmr::string>>> redis_handle::hmget(
+    std::string_view key, std::span<const std::string_view> fields_value) const {
+    registration_.require_active();
+    return execute_mapped<std::pmr::vector<std::optional<std::pmr::string>>>(
+        pool(), detail::redis_command_with_key_fields("HMGET", key, fields_value, resource_),
+        detail::parse_redis_optional_string_array);
+}
+
+task<std::pmr::vector<redis_key_value>> redis_handle::hget_all(std::string_view key) const {
+    return mapped<std::pmr::vector<redis_key_value>>({"HGETALL", key},
+        [](redis_value&& reply, std::pmr::memory_resource* resource) {
+            return detail::parse_redis_key_value_array(std::move(reply), resource, "unexpected redis hgetall reply");
+        });
+}
+
+task<std::int64_t> redis_handle::hdel(
+    std::string_view key, std::string_view field) const {
+    return mapped<std::int64_t>({"HDEL", key, field}, detail::parse_redis_integer);
+}
+
+task<bool> redis_handle::hexists(std::string_view key, std::string_view field) const {
+    return mapped<bool>({"HEXISTS", key, field}, detail::parse_redis_integer_bool);
+}
+
+task<std::int64_t> redis_handle::hlen(std::string_view key) const {
+    return mapped<std::int64_t>({"HLEN", key}, detail::parse_redis_integer);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::hkeys(std::string_view key) const {
+    return mapped<std::pmr::vector<std::pmr::string>>({"HKEYS", key}, detail::parse_redis_string_array);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::hvals(std::string_view key) const {
+    return mapped<std::pmr::vector<std::pmr::string>>({"HVALS", key}, detail::parse_redis_string_array);
+}
+
+task<std::int64_t> redis_handle::hincr_by(
+    std::string_view key, std::string_view field, std::int64_t value) const {
+    std::array<char, detail::redis_int_scratch_size> value_scratch{};
+    return mapped<std::int64_t>(
+        {"HINCRBY", key, field, detail::format_redis_int(value_scratch, value)}, detail::parse_redis_integer);
+}
+
+task<std::int64_t> redis_handle::lpush(
+    std::string_view key, std::string_view value) const {
+    return mapped<std::int64_t>({"LPUSH", key, value}, detail::parse_redis_integer);
+}
+
+task<std::int64_t> redis_handle::rpush(
+    std::string_view key, std::string_view value) const {
+    return mapped<std::int64_t>({"RPUSH", key, value}, detail::parse_redis_integer);
+}
+
+task<std::optional<std::pmr::string>> redis_handle::lpop(std::string_view key) const {
+    return mapped<std::optional<std::pmr::string>>({"LPOP", key}, detail::parse_redis_optional_string);
+}
+
+task<std::optional<std::pmr::string>> redis_handle::rpop(std::string_view key) const {
+    return mapped<std::optional<std::pmr::string>>({"RPOP", key}, detail::parse_redis_optional_string);
+}
+
+task<std::int64_t> redis_handle::llen(std::string_view key) const {
+    return mapped<std::int64_t>({"LLEN", key}, detail::parse_redis_integer);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::lrange(
+    std::string_view key, std::int64_t start, std::int64_t stop) const {
+    registration_.require_active();
+    return execute_mapped<std::pmr::vector<std::pmr::string>>(
+        pool(), detail::make_redis_range_command("LRANGE", key, start, stop, resource_), detail::parse_redis_string_array);
+}
+
+task<std::optional<std::pmr::string>> redis_handle::lindex(
+    std::string_view key, std::int64_t index) const {
+    registration_.require_active();
+    return execute_mapped<std::optional<std::pmr::string>>(
+        pool(), detail::make_redis_integer_command("LINDEX", key, index, resource_), detail::parse_redis_optional_string);
+}
+
+task<void> redis_handle::lset(
+    std::string_view key, std::int64_t index, std::string_view value) const {
+    std::array<char, detail::redis_int_scratch_size> index_scratch{};
+    return mapped<void>({"LSET", key, detail::format_redis_int(index_scratch, index), value}, detail::parse_redis_ok);
+}
+
+task<void> redis_handle::ltrim(
+    std::string_view key, std::int64_t start, std::int64_t stop) const {
+    registration_.require_active();
+    return execute_mapped<void>(
+        pool(), detail::make_redis_range_command("LTRIM", key, start, stop, resource_), detail::parse_redis_ok);
+}
+
+task<std::int64_t> redis_handle::lrem(
+    std::string_view key, std::int64_t count, std::string_view value) const {
+    std::array<char, detail::redis_int_scratch_size> count_scratch{};
+    return mapped<std::int64_t>(
+        {"LREM", key, detail::format_redis_int(count_scratch, count), value}, detail::parse_redis_integer);
+}
+
+task<std::int64_t> redis_handle::sadd(
+    std::string_view key, std::string_view member) const {
+    return mapped<std::int64_t>({"SADD", key, member}, detail::parse_redis_integer);
+}
+
+task<std::int64_t> redis_handle::srem(
+    std::string_view key, std::string_view member) const {
+    return mapped<std::int64_t>({"SREM", key, member}, detail::parse_redis_integer);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::smembers(
+    std::string_view key) const {
+    return mapped<std::pmr::vector<std::pmr::string>>({"SMEMBERS", key}, detail::parse_redis_string_array);
+}
+
+task<std::int64_t> redis_handle::scard(std::string_view key) const {
+    return mapped<std::int64_t>({"SCARD", key}, detail::parse_redis_integer);
+}
+
+task<bool> redis_handle::sismember(std::string_view key, std::string_view member) const {
+    return mapped<bool>({"SISMEMBER", key, member}, detail::parse_redis_integer_bool);
+}
+
+task<std::optional<std::pmr::string>> redis_handle::spop(std::string_view key) const {
+    return mapped<std::optional<std::pmr::string>>({"SPOP", key}, detail::parse_redis_optional_string);
+}
+
+task<std::optional<std::pmr::string>> redis_handle::srand_member(
+    std::string_view key) const {
+    return mapped<std::optional<std::pmr::string>>({"SRANDMEMBER", key}, detail::parse_redis_optional_string);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::sinter(
+    std::span<const std::string_view> keys) const {
+    registration_.require_active();
+    return execute_mapped<std::pmr::vector<std::pmr::string>>(
+        pool(), detail::redis_command_with_keys("SINTER", keys, resource_), detail::parse_redis_string_array);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::sunion(
+    std::span<const std::string_view> keys) const {
+    registration_.require_active();
+    return execute_mapped<std::pmr::vector<std::pmr::string>>(
+        pool(), detail::redis_command_with_keys("SUNION", keys, resource_), detail::parse_redis_string_array);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::sdiff(
+    std::span<const std::string_view> keys) const {
+    registration_.require_active();
+    return execute_mapped<std::pmr::vector<std::pmr::string>>(
+        pool(), detail::redis_command_with_keys("SDIFF", keys, resource_), detail::parse_redis_string_array);
+}
+
+task<std::int64_t> redis_handle::zadd(
+    std::string_view key, double score, std::string_view member) const {
+    registration_.require_active();
+    return execute_mapped<std::int64_t>(
+        pool(), detail::make_redis_zadd_command(key, score, member, resource_), detail::parse_redis_integer);
+}
+
+task<std::int64_t> redis_handle::zrem(
+    std::string_view key, std::string_view member) const {
+    return mapped<std::int64_t>({"ZREM", key, member}, detail::parse_redis_integer);
+}
+
+task<std::pmr::vector<std::pmr::string>> redis_handle::zrange(
+    std::string_view key, std::int64_t start, std::int64_t stop) const {
+    registration_.require_active();
+    return execute_mapped<std::pmr::vector<std::pmr::string>>(
+        pool(), detail::make_redis_range_command("ZRANGE", key, start, stop, resource_), detail::parse_redis_string_array);
+}
+
+task<std::pmr::vector<redis_scored_value>> redis_handle::zrange_with_scores(
+    std::string_view key, std::int64_t start, std::int64_t stop) const {
+    registration_.require_active();
+    auto command = detail::make_redis_range_command("ZRANGE", key, start, stop, resource_, true);
+    return execute_mapped<std::pmr::vector<redis_scored_value>>(pool(), std::move(command), detail::parse_redis_scored_array);
+}
+
+task<std::optional<double>> redis_handle::zscore(
+    std::string_view key, std::string_view member) const {
+    return mapped<std::optional<double>>({"ZSCORE", key, member},
+        [](redis_value&& reply, std::pmr::memory_resource*) {
+            return detail::parse_redis_optional_double(std::move(reply), "invalid redis zscore reply");
+        });
+}
+
+task<std::int64_t> redis_handle::zcard(std::string_view key) const {
+    return mapped<std::int64_t>({"ZCARD", key}, detail::parse_redis_integer);
+}
+
+task<std::int64_t> redis_handle::zcount(
+    std::string_view key, double min_value, double max_value) const {
+    registration_.require_active();
+    std::array<char, detail::redis_score_scratch_size> min_scratch{};
+    std::array<char, detail::redis_score_scratch_size> max_scratch{};
+    const std::string_view args[]{
+        "ZCOUNT",
+        key,
+        detail::format_redis_score(min_scratch, min_value),
+        detail::format_redis_score(max_scratch, max_value),
+    };
+    return execute_mapped<std::int64_t>(pool(), detail::make_owned_redis_command(resource_, args), detail::parse_redis_integer);
+}
+
+task<redis_scan_result> redis_handle::scan(redis_scan_options options) const {
+    registration_.require_active();
+    return execute_mapped<redis_scan_result>(
+        pool(), make_redis_scan_command("SCAN", std::nullopt, options, resource_), detail::parse_redis_scan_result);
+}
+
+task<redis_hash_scan_result> redis_handle::hscan(
+    std::string_view key, redis_scan_options options) const {
+    registration_.require_active();
+    return execute_mapped<redis_hash_scan_result>(
+        pool(), make_redis_scan_command("HSCAN", key, options, resource_), detail::parse_redis_hash_scan_result);
+}
+
+task<redis_scan_result> redis_handle::sscan(
+    std::string_view key, redis_scan_options options) const {
+    registration_.require_active();
+    return execute_mapped<redis_scan_result>(
+        pool(), make_redis_scan_command("SSCAN", key, options, resource_), detail::parse_redis_scan_result);
+}
+
+task<redis_z_scan_result> redis_handle::zscan(
+    std::string_view key, redis_scan_options options) const {
+    registration_.require_active();
+    return execute_mapped<redis_z_scan_result>(
+        pool(), make_redis_scan_command("ZSCAN", key, options, resource_), detail::parse_redis_z_scan_result);
+}
+
+task<redis_value> redis_handle::eval(std::string_view script,
+    std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
+    registration_.require_active();
+    return scoped(execute(pool(), detail::redis_eval_args("EVAL", script, keys, args, resource_)));
+}
+
+task<redis_value> redis_handle::eval_sha(std::string_view sha1,
+    std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
+    registration_.require_active();
+    return scoped(execute(pool(), detail::redis_eval_args("EVALSHA", sha1, keys, args, resource_)));
+}
+
+task<std::pmr::string> redis_handle::script_load(std::string_view script) const {
+    return mapped<std::pmr::string>({"SCRIPT", "LOAD", script}, detail::take_redis_string);
+}
+
+task<std::pmr::vector<bool>> redis_handle::script_exists(
+    std::span<const std::string_view> sha1s) const {
+    registration_.require_active();
+    return execute_mapped<std::pmr::vector<bool>>(
+        pool(), detail::redis_command_with_key_fields("SCRIPT", "EXISTS", sha1s, resource_), detail::parse_redis_bool_array);
+}
+
+task<std::optional<redis_key_value>> redis_handle::blpop(
+    std::span<const std::string_view> keys, redis_block_wait wait) const {
+    registration_.require_active();
+    const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
+    return execute_mapped<std::optional<redis_key_value>>(blocking_pool(),
+        detail::redis_blocking_pop_args("BLPOP", keys, wait, resource_), detail::parse_redis_blocking_pop_reply,
+        reply_timeout);
+}
+
+task<std::optional<redis_key_value>> redis_handle::brpop(
+    std::span<const std::string_view> keys, redis_block_wait wait) const {
+    registration_.require_active();
+    const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
+    return execute_mapped<std::optional<redis_key_value>>(blocking_pool(),
+        detail::redis_blocking_pop_args("BRPOP", keys, wait, resource_), detail::parse_redis_blocking_pop_reply,
+        reply_timeout);
+}
+
+task<std::optional<redis_x_read_group_result>> redis_handle::xread_group(
+    std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams,
+    redis_x_read_group_options options) const {
+    registration_.require_active();
+    auto args = detail::redis_x_read_group_args(group, consumer, streams, options, resource_);
+    auto* selected_pool = &pool();
+    std::optional<timeout_duration> reply_timeout;
+    if (options.block_.has_value()) {
+        selected_pool = &blocking_pool();
+        reply_timeout = redis_block_reply_timeout(operation_options_, *options.block_);
+    }
+    return execute_mapped<std::optional<redis_x_read_group_result>>(
+        *selected_pool, std::move(args), detail::parse_redis_x_read_group_reply, reply_timeout);
+}
+
+redis_pipeline redis_handle::pipeline() const {
+    registration_.require_active();
+    return redis_pipeline(pool(), operation_options_, resource_, registration_.scope(), io_metrics_);
+}
+
+redis_transaction redis_handle::transaction() const {
+    registration_.require_active();
+    return redis_transaction(pool(), operation_options_, resource_, registration_.scope(), io_metrics_);
+}
+
+task<std::int64_t> redis_handle::publish(std::string_view channel, std::string_view payload) const {
+    return mapped<std::int64_t>({"PUBLISH", channel, payload}, detail::parse_redis_integer);
+}
+
+redis_subscription redis_handle::subscription() const {
+    registration_.require_active();
+    detail::require_bounded_redis_wait(
+        operation_options_, "redis subscription requires a stop_token or finite operation timeout");
+    return redis_subscription(runtime_->subscriptions(), registration_.scope(), operation_options_);
+}
 }  // namespace ruvia

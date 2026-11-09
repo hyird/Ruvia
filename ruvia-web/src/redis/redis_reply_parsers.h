@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/web/detail/redis/redis_reply_access.h"
+#include "ruvia/web/detail/redis/redis_orm.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 namespace ruvia::detail {

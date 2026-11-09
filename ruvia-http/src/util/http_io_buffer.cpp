@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
+#include "util/http_address_overlap.h"
 
 namespace ruvia {
 namespace {

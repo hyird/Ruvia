@@ -11,8 +11,8 @@
 
 #include "ruvia/web/db/db_query.h"
 
+#include "db/db_query_execution.h"
 #include "db/db_sql_format.h"
-#include "db/db_value_clone.h"
 
 namespace ruvia::detail {
 
@@ -380,7 +380,5 @@ public:
         return kind_ == db_query_kind::select || kind_ == db_query_kind::values || !returning_.empty();
     }
 };
-
-void validate_query_shape(const db_query_storage& storage);
 
 }  // namespace ruvia::detail

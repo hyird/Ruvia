@@ -17,31 +17,14 @@ namespace ruvia::detail {
 
 // One duplex HTTP/3 request stream. The session remains its sole QUIC reader
 // and writer; this adapter returns flow credit only after consuming DATA.
-class http3_tunnel_transport final {
+class http3_tunnel_transport final : public multiplexed_tunnel_transport_base<http3_tunnel_transport> {
 public:
-    http3_tunnel_transport(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal) noexcept
-        : session_(session),
-          stream_(stream),
-          signal_(signal) {}
+    using multiplexed_tunnel_transport_base<http3_tunnel_transport>::write_bytes;
 
-    template <typename buffer_type>
-    [[nodiscard]] task<bool> read_more(buffer_type& buffer) {
-        for (;;) {
-            require_live();
-            auto chunk = stream_.take_tunnel_bytes();
-            if (!chunk.empty()) {
-                const auto consumed = chunk.size();
-                buffer.append(chunk);
-                std::pmr::string(chunk.get_allocator()).swap(chunk);
-                session_.consume_stream_data(stream_.id(), consumed);
-                co_return true;
-            }
-            if (stream_.request_ended()) {
-                co_return false;
-            }
-            co_await signal_.wait();
-        }
-    }
+    http3_tunnel_transport(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal) noexcept
+        : multiplexed_tunnel_transport_base(signal),
+          session_(session),
+          stream_(stream) {}
 
     [[nodiscard]] task<std::optional<http_tunnel_input>> read_datagram() {
         for (;;) {
@@ -65,7 +48,7 @@ public:
     [[nodiscard]] task<bool> write_datagram(std::string_view payload) {
         // The QUIC owner checks the negotiated frame size and current path MTU;
         // invalid_state selects reliable capsule fallback without consuming it.
-        output_deadline deadline(signal_);
+        multiplexed_stream_signal::output_wait_guard deadline(signal_);
         for (;;) {
             require_live();
             const auto result = session_.submit_datagram(stream_.id(), std::as_bytes(std::span(payload.data(), payload.size())));
@@ -94,27 +77,13 @@ public:
         co_return std::error_code{};
     }
 
-    [[nodiscard]] task<std::error_code> write_bytes(std::string_view bytes, websocket_transport_disposition disposition) {
-        return write_bytes(bytes, disposition == websocket_transport_disposition::end_transport
-                                      ? http_stream_end::end
-                                      : http_stream_end::keep_open);
-    }
-
     void abort(bool malformed = false) noexcept {
         session_.reset_stream(stream_.id(), malformed ? http3_error_code::message_error : http3_error_code::request_cancelled);
     }
 
 private:
-    struct output_deadline final {
-        multiplexed_stream_signal& signal_;
-        explicit output_deadline(multiplexed_stream_signal& signal)
-            : signal_(signal) {
-            signal_.set_waiting_output(true);
-        }
-        ~output_deadline() {
-            signal_.set_waiting_output(false);
-        }
-    };
+    friend class multiplexed_tunnel_transport_base<http3_tunnel_transport>;
+
     void require_live() const {
         if (signal_.stopped() || stream_.aborted()) {
             throw inbound_transport_error(signal_.terminated() ? signal_.terminal_error()
@@ -123,9 +92,25 @@ private:
         }
     }
 
+    template <typename buffer_type>
+    [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
+        auto chunk = stream_.take_tunnel_bytes();
+        if (chunk.empty()) {
+            return false;
+        }
+        const auto consumed = chunk.size();
+        buffer.append(chunk);
+        std::pmr::string(chunk.get_allocator()).swap(chunk);
+        session_.consume_stream_data(stream_.id(), consumed);
+        return true;
+    }
+
+    [[nodiscard]] bool receive_ended() const noexcept {
+        return stream_.request_ended();
+    }
+
     http3_session& session_;
     http3_stream& stream_;
-    multiplexed_stream_signal& signal_;
 };
 
 }  // namespace ruvia::detail

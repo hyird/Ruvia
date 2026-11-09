@@ -12,6 +12,7 @@
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
 
+#include "field/http_request_field_validation.h"
 #include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
@@ -158,5 +159,88 @@ struct http_request_access final {
         request.body_ = body;
     }
 };
+
+struct binary_request_materialization_spec final {
+    http_protocol_version version_{http_protocol_version::http2};
+    ::ruvia::http_request_target_form target_form_{::ruvia::http_request_target_form::http2};
+    std::string_view method_{};
+    std::string_view scheme_{};
+    std::string_view authority_{};
+    std::string_view host_{};
+    std::string_view path_{};
+    std::string_view protocol_{};
+    std::string_view cookie_{};
+    std::string_view body_{};
+    std::size_t regular_header_count_{0};
+    bool has_authority_{false};
+    bool has_host_{false};
+    bool has_path_{false};
+    bool has_cookie_{false};
+    bool standard_connect_{false};
+    const char* failure_message_{"validated binary HTTP request cannot be materialized"};
+};
+
+template <typename header_accessor_type>
+[[nodiscard]] inline http_request materialize_binary_http_request(
+    std::pmr::memory_resource* resource, const binary_request_materialization_spec& spec,
+    header_accessor_type&& header_at) {
+    auto request = http_request_access::make();
+    http_request_access::set_resource(request, resource);
+    if (spec.method_.empty()) {
+        throw std::logic_error(spec.failure_message_);
+    }
+    const auto target = spec.standard_connect_ ? spec.authority_ : spec.path_;
+    if (target.empty() && (spec.standard_connect_ || !spec.has_path_)) {
+        throw std::logic_error(spec.failure_message_);
+    }
+    std::string_view request_path = target;
+    std::string_view query_string;
+    if (!spec.standard_connect_ && target != "*") {
+        if (const auto query = target.find('?'); query != std::string_view::npos) {
+            request_path = target.substr(0, query);
+            query_string = target.substr(query + 1);
+        }
+    }
+    const auto effective_authority = spec.has_authority_ ? spec.authority_ : spec.host_;
+
+    http_request_access::set_method(request, spec.method_);
+    http_request_access::set_protocol_version(request, spec.version_);
+    http_request_access::set_target(request, target);
+    http_request_access::set_scheme(request, spec.scheme_);
+    http_request_access::set_authority(request, effective_authority);
+    http_request_access::set_protocol(request, spec.protocol_);
+    http_request_access::set_target_form(request, spec.target_form_);
+    http_request_access::set_path(request, request_path);
+    http_request_access::set_query_string(request, query_string);
+    http_request_access::set_body(request, std::as_bytes(std::span(spec.body_.data(), spec.body_.size())));
+
+    // A non-HTTP target can carry an authority that is not legal Host syntax;
+    // never manufacture an invalid regular field from that distinct grammar.
+    const bool synthesize_host = binary_request_synthesizes_host(
+        spec.has_host_, spec.has_authority_, spec.scheme_, spec.authority_);
+    const auto header_count = spec.regular_header_count_ + static_cast<std::size_t>(synthesize_host) +
+                              static_cast<std::size_t>(spec.has_cookie_);
+    if (header_count > (std::numeric_limits<std::uint16_t>::max)()) {
+        throw std::logic_error(spec.failure_message_);
+    }
+    http_request_access::reserve_headers(request, header_count);
+    for (std::size_t index = 0; index < spec.regular_header_count_; ++index) {
+        const auto [field, kind] = header_at(index);
+        if (!http_request_access::add_header(request, field, kind)) {
+            throw std::logic_error(spec.failure_message_);
+        }
+    }
+    if (synthesize_host &&
+        !http_request_access::add_header(
+            request, http_header_view{"host", spec.authority_}, request_header_kind::host)) {
+        throw std::logic_error(spec.failure_message_);
+    }
+    if (spec.has_cookie_ &&
+        !http_request_access::add_header(
+            request, http_header_view{"cookie", spec.cookie_}, request_header_kind::cookie)) {
+        throw std::logic_error(spec.failure_message_);
+    }
+    return request;
+}
 
 }  // namespace ruvia::detail

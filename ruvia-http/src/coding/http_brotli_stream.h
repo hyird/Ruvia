@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-#include "coding/pmr_codec_allocation.h"
+#include "util/http_c_library_memory.h"
 
 // Brotli (RFC 7932) state whose working memory comes from one PMR resource.
 // Brotli retains the allocator context as its opaque pointer, so these types are
@@ -39,14 +39,14 @@ public:
         return state_;
     }
     void rethrow_allocation_failure() const {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
     [[nodiscard]] bool native_budget_exceeded() const noexcept {
         return allocation_.budget_exceeded();
     }
 
 private:
-    pmr_codec_allocation_context allocation_;
+    http_c_library_memory allocation_;
     BrotliDecoderState* state_;
 };
 
@@ -74,7 +74,7 @@ public:
         BrotliEncoderOperation operation, std::size_t max_encoded_bytes);
 
 private:
-    pmr_codec_allocation_context allocation_;
+    http_c_library_memory allocation_;
     BrotliEncoderState* state_;
 };
 

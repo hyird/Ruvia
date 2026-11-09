@@ -2,13 +2,15 @@
 
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_response.h"
 
 #include "coding/http_content_length.h"
-#include "response/http_response_body_access.h"
+#include "response/http_response_header_bits.h"
 #include "response/http_response_header_state.h"
 
 // Content-Length planning for protocols whose frames delimit the content
@@ -18,6 +20,65 @@
 // the head encodes and the length the content accounting enforces.
 
 namespace ruvia::detail {
+
+// RFC 7541 §7.1.3 / RFC 9204 §4.2.1: credential-bearing fields use the
+// never-indexed literal so an intermediary never places them in a shared dynamic table.
+[[nodiscard]] inline bool hpack_header_name_is_sensitive(std::string_view name) noexcept {
+    return http_ascii_equals_ignore_case(name, "authorization") ||
+           http_ascii_equals_ignore_case(name, "proxy-authorization") ||
+           http_ascii_equals_ignore_case(name, "cookie") ||
+           http_ascii_equals_ignore_case(name, "set-cookie");
+}
+
+[[nodiscard]] inline std::string_view get_http2_known_header_name(
+    std::uint32_t known_bit) noexcept {
+    switch (known_bit) {
+        case response_header_content_length:
+            return "content-length";
+        case response_header_content_encoding:
+            return "content-encoding";
+        case response_header_content_type:
+            return "content-type";
+        case response_header_vary:
+            return "vary";
+        case response_header_date:
+            return "date";
+        case response_header_server:
+            return "server";
+        case response_header_cache_control:
+            return "cache-control";
+        case response_header_allow:
+            return "allow";
+        case response_header_access_control_allow_origin:
+            return "access-control-allow-origin";
+        case response_header_access_control_allow_credentials:
+            return "access-control-allow-credentials";
+        case response_header_access_control_allow_methods:
+            return "access-control-allow-methods";
+        case response_header_access_control_allow_headers:
+            return "access-control-allow-headers";
+        case response_header_access_control_max_age:
+            return "access-control-max-age";
+        case response_header_access_control_expose_headers:
+            return "access-control-expose-headers";
+        case response_header_accept_ranges:
+            return "accept-ranges";
+        case response_header_content_range:
+            return "content-range";
+        case response_header_etag:
+            return "etag";
+        case response_header_last_modified:
+            return "last-modified";
+        case response_header_location:
+            return "location";
+        case response_header_set_cookie:
+            return "set-cookie";
+        case response_header_trailer:
+            return "trailer";
+        default:
+            return {};
+    }
+}
 
 enum class http_framed_response_head_plan_error : std::uint8_t {
     invalid_content_length,

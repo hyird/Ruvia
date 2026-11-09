@@ -10,7 +10,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis_types.h"
 
-#include "client/client_tls_config_storage.h"
+#include "client/client_tls.h"
 #include "integration/named_capability.h"
 #include "redis/redis_config_validation.h"
 

@@ -46,7 +46,6 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/web/detail/db/db_result_access.h"
 
 #include "db/db_pipeline.h"
 #include "db/db_pool.h"

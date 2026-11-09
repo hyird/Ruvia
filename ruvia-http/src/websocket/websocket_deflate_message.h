@@ -9,11 +9,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
 
 #include "coding/http_zlib_stream.h"
+#include "util/http_address_overlap.h"
 
 // The one RFC 7692 whole-message deflate and inflate loop, shared by
 // per-connection codecs and the shared no-context-takeover codec set. Context

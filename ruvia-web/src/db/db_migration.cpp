@@ -16,7 +16,6 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/detail/db/db_number_format.h"
 
 #include "client/client_host_resolver.h"
 #include "db/db_config_validation.h"

@@ -11,9 +11,7 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http2/http2_field_list.h"
-#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
-#include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_stream_state.h"
 #include "parser/http_parser_syntax.h"
@@ -55,15 +53,7 @@ namespace ruvia::detail {
 
     // RFC 8441 section 5: :protocol supersedes the RFC 6455 key exchange, so
     // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
-    websocket_request_header_validator validator(http_field_list_role::recipient);
-    const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        const auto kind = http_request_access::header_kind(request, i);
-        if (!validator.observe_header(kind, headers[i].value())) {
-            return websocket_handshake_validation_result::make_invalid_request();
-        }
-    }
-    return validator.finish(options);
+    return validate_extended_connect_websocket_headers(request, options);
 }
 
 inline void http2_append_websocket_handshake_headers(

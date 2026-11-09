@@ -9,17 +9,25 @@
 
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/client_tls.h"
-#include "client/client_tls_config_storage.h"
-#include "client/client_user_agent.h"
 #include "util/config_validation.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
+
+// The configured User-Agent (RFC 9110 section 10.1.5) of the HTTP client and
+// both WebSocket client protocols: sent when a request or handshake carries no
+// User-Agent field of its own; empty sends none.
+inline void validate_client_user_agent(std::string_view user_agent) {
+    if (!user_agent.empty() && !is_valid_http_header_value(user_agent)) {
+        throw std::invalid_argument("client user agent is invalid");
+    }
+}
 
 [[nodiscard]] inline http_origin_view validate_http_client_config(const http_client_config& config) {
     auto url = config.base_url_.view();

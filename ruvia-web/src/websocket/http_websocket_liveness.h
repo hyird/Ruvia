@@ -8,6 +8,7 @@
 #include <exception>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -21,6 +22,35 @@
 #include "util/steady_clock.h"
 
 namespace ruvia::detail {
+
+// The one lifecycle check of server routes and clients.
+inline void validate_websocket_lifecycle_options(const websocket_lifecycle_options& options) {
+    if (options.close_handshake_timeout_.has_value() && options.close_handshake_timeout_->value().count() <= 0) {
+        throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
+    }
+    const auto& heartbeat = options.heartbeat_;
+    if (!heartbeat.ping_interval_.has_value()) {
+        if (heartbeat.pong_timeout_.has_value()) {
+            throw std::invalid_argument("websocket pong timeout requires a ping interval");
+        }
+        return;
+    }
+    if (heartbeat.ping_interval_->value().count() <= 0 ||
+        (heartbeat.pong_timeout_.has_value() && heartbeat.pong_timeout_->value().count() <= 0)) {
+        throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
+    }
+}
+
+// Validated options with an absent pong timeout defaulted to the ping interval.
+[[nodiscard]] inline websocket_lifecycle_options normalize_websocket_lifecycle_options(
+    websocket_lifecycle_options options) {
+    validate_websocket_lifecycle_options(options);
+    auto& heartbeat = options.heartbeat_;
+    if (heartbeat.ping_interval_.has_value() && !heartbeat.pong_timeout_.has_value()) {
+        heartbeat.pong_timeout_ = heartbeat.ping_interval_;
+    }
+    return options;
+}
 
 enum class websocket_liveness_decision : std::uint8_t {
     idle,
@@ -102,6 +132,28 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
     }
     const auto expected = websocket_heartbeat_payload(challenge);
     return payload_value == std::string_view(expected.data(), expected.size());
+}
+
+// The Pong wait is measured only while the reader can poll it. Restarting the
+// window when that becomes true (or at every tick while it is false) keeps a
+// Pong that was already buffered during a write from being timed out before
+// the reader's next poll gets to it.
+inline void restart_websocket_pong_window(
+    websocket_liveness_state_type& state_value, std::int64_t now) noexcept {
+    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value)) {
+        state_value = websocket_awaiting_pong(now, pong->challenge());
+    }
+}
+
+inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& options,
+    websocket_liveness_state_type& state_value, bool pong_observable) noexcept {
+    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value);
+        pong != nullptr && pong_observable && options.heartbeat_.pong_timeout_.has_value()) {
+        const auto now = steady_now_ms();
+        if (now - pong->sent_at_ms() >= options.heartbeat_.pong_timeout_->value().count()) {
+            state_value = websocket_awaiting_pong(now, pong->challenge());
+        }
+    }
 }
 
 // pong_observable: an application read is polling the core and no write holds

@@ -156,9 +156,7 @@ public:
         std::uint64_t cancellation_id_{};
         std::optional<error_code> error_;
         std::exception_ptr failure_;
-        std::optional<clock_type::time_point> read_deadline_;
-        std::optional<clock_type::time_point> write_deadline_;
-        std::optional<clock_type::time_point> timer_at_;
+        http_client_stream_timer timer_;
         std::string_view target_;
         http_client_websocket_handshake* websocket_{};
         bool origin_{true};
@@ -169,7 +167,6 @@ public:
         bool rejected_{};
         bool write_stopped_{};
         std::optional<std::uint64_t> stop_sending_error_;
-        worker_timer_registration timer_;
     };
     session(http_client_pool& pool, tls_state& shared_tls, std::size_t index)
         : pool_(pool),
@@ -308,25 +305,9 @@ public:
         }
     }
     void schedule(stream& item) {
-        auto deadline = item.timeout_.deadline();
-        for (const auto bound : {item.read_deadline_, item.write_deadline_}) {
-            if (bound && (!deadline || *bound < *deadline)) {
-                deadline = bound;
-            }
-        }
-        if (!deadline || (item.timer_at_ && *item.timer_at_ <= *deadline)) {
-            return;
-        }
-        item.timer_.cancel();
-        item.timer_at_ = deadline;
-        (void)pool_.worker().schedule_timer(item.timer_, *deadline, [&item](worker_timer_outcome outcome) noexcept {
-            item.timer_at_.reset();
-            if (outcome != worker_timer_outcome::expired) {
-                return;
-            }
-            const auto now = clock_type::now();
-            if (item.timeout_.expired() || (item.read_deadline_ && *item.read_deadline_ <= now) ||
-                (item.write_deadline_ && *item.write_deadline_ <= now)) {
+        item.timer_.schedule(pool_.worker(), item.timeout_, [&item]() noexcept {
+            item.timer_.timer_at_.reset();
+            if (item.timer_.expired(item.timeout_)) {
                 item.owner_.cancel(item, error_code::timeout);
             } else {
                 try {
@@ -341,15 +322,14 @@ public:
     void read_progress(stream& item) {
         if ((item.websocket_ && item.response_.head_ready_) ||
             (item.response_.tunnel_ && item.response_.tunnel_->accepted_)) {
-            item.read_deadline_.reset();
-            if (!item.write_deadline_ && !item.timeout_.deadline()) {
+            item.timer_.read_deadline_.reset();
+            if (!item.timer_.write_deadline_ && !item.timeout_.deadline()) {
                 item.timer_.cancel();
-                item.timer_at_.reset();
             }
             return;
         }
         if (pool_.config().read_timeout_ && !item.done_ && item.response_.http3_data_credit_ == 0) {
-            item.read_deadline_ = worker_timer_deadline_after(pool_.config().read_timeout_->value());
+            item.timer_.read_deadline_ = worker_timer_deadline_after(pool_.config().read_timeout_->value());
             schedule(item);
         }
     }
@@ -503,21 +483,9 @@ public:
                                     }
                                     response.headers_ = std::move(fields);
                                     if (item->websocket_) {
-                                        const auto status_code = http_status_code::from_value(status);
-                                        if (status >= 300) {
-                                            throw http_client_error(error_code::handshake_rejected, "HTTP/3 WebSocket CONNECT rejected", status_code);
-                                        }
-                                        if (value.stream_ended_) {
-                                            throw http_client_error(error_code::handshake_rejected, "WebSocket CONNECT response ended its stream", status_code);
-                                        }
-                                        const auto negotiated = item->websocket_->negotiation_.validate_fields(response.headers_);
-                                        if (const auto* error = std::get_if<websocket_client_handshake_error>(&negotiated)) {
-                                            (void)error;
-                                            throw http_client_error(error_code::handshake_rejected, "invalid HTTP/3 WebSocket negotiation", status_code);
-                                        }
-                                        const auto& selection = std::get<websocket_client_negotiation_result_view>(negotiated);
-                                        item->websocket_->selected_subprotocol_.assign(selection.selected_subprotocol_);
-                                        item->websocket_->compression_ = selection.compression_;
+                                        accept_extended_connect_websocket_response(*item->websocket_,
+                                            http_status_code::from_value(status), response.headers_,
+                                            value.stream_ended_, "invalid HTTP/3 WebSocket handshake response");
                                         item->timeout_ = operation_timeout(std::nullopt);
                                     }
                                     publish_http_client_final_head(response, pool_.policy(),
@@ -532,7 +500,7 @@ public:
                                         const auto settings = quic_->http3().peer_settings();
                                         response.http3_native_datagrams_ = settings && settings->h3_datagram_;
                                         item->timeout_ = operation_timeout(std::nullopt);
-                                        item->read_deadline_.reset();
+                                        item->timer_.read_deadline_.reset();
                                     }
                                 }
                             }
@@ -557,7 +525,7 @@ public:
                                 read_progress(*item);
                             } else {
                                 response.http3_data_credit_ += value.bytes_.size();
-                                item->read_deadline_.reset();
+                                item->timer_.read_deadline_.reset();
                             }
                         } else if constexpr (std::same_as<event_type, http3_stream_end_event>) {
                             if (item->retry_425_) {
@@ -588,7 +556,7 @@ public:
                                 }
                                 item->done_ = true;
                             }
-                            item->read_deadline_.reset();
+                            item->timer_.read_deadline_.reset();
                             response.data_signal_.notify();
                         } else if constexpr (std::same_as<event_type, http3_transport_action_event>) {
                             if (value.action_ == http3_transport_action::stop_sending) {
@@ -1041,7 +1009,7 @@ public:
         attempt.completed_ = true;
     }
     task<void> send_body(stream& item, std::string_view bytes) {
-        item.write_deadline_ = pool_.config().write_timeout_ ? std::optional(worker_timer_deadline_after(pool_.config().write_timeout_->value())) : std::nullopt;
+        item.timer_.write_deadline_ = pool_.config().write_timeout_ ? std::optional(worker_timer_deadline_after(pool_.config().write_timeout_->value())) : std::nullopt;
         schedule(item);
         while (!bytes.empty()) {
             check(item);
@@ -1055,7 +1023,7 @@ public:
             bytes.remove_prefix(sent.accepted_bytes_);
             pool_.wire_counters().sent_ += sent.accepted_bytes_;
             if (sent.accepted_bytes_ != 0 && pool_.config().write_timeout_) {
-                item.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
+                item.timer_.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
                 schedule(item);
             }
             writer_.notify();
@@ -1072,12 +1040,12 @@ public:
             co_await item.signal_.wait();
             const auto remaining = quic_->http3().pending_output_bytes(item.id_);
             if (remaining < outstanding && pool_.config().write_timeout_) {
-                item.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
+                item.timer_.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
                 schedule(item);
             }
             outstanding = remaining;
         }
-        item.write_deadline_.reset();
+        item.timer_.write_deadline_.reset();
     }
 
     http_client_pool& pool_;
@@ -1314,11 +1282,8 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
             remaining = 1;
             next.emplace(resolved.literal_->address(), resolved.literal_->port());
         } else {
+            remaining = resolved.addresses_.size();
             sequence.emplace(resolved.addresses_);
-            auto counter = *sequence;
-            while (counter.next()) {
-                ++remaining;
-            }
             if (const auto first = sequence->next()) {
                 next.emplace(first->address(), first->port());
             }
@@ -1350,6 +1315,9 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                     // A stagger is not a handshake timeout. Divide the fixed
                     // remaining deadline across remaining two-candidate waves;
                     // the last wave gets all remaining time.
+                    if (!sequence || !sequence->has_next()) {
+                        remaining = 1;
+                    }
                     std::size_t live = 0;
                     for (const auto& other : race.candidates_) {
                         live += other.running_;
@@ -1738,31 +1706,19 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                 }
                 self.read_progress(item);
                 if (auto* output = request.output()) {
-                    output->wake_target_ = &item.signal_;
-                    output->wake_ = [](void* target) noexcept { static_cast<worker_signal*>(target)->notify(); };
-                    worker_timer_registration continue_timer;
-                    if (request.upload() && !request.upload()->content_released_) {
-                        (void)self.pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(request.upload()->config_.continue_timeout_.value()),
-                            [&item, upload = request.upload()](worker_timer_outcome outcome) noexcept {
-                                if (outcome == worker_timer_outcome::expired) {
-                                    upload->content_released_ = true;
-                                    item.signal_.notify();
-                                }
-                            });
-                    }
-                    while (!output->ended_ && !output->stopped_) {
-                        self.check(item);
-                        if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
-                            co_await item.signal_.wait();
-                            continue;
-                        }
-                        continue_timer.cancel();
-                        if (output->chunk_ready_) {
-                            co_await self.send_body(item, output->chunk_);
-                            if (!output->stopped_) {
-                                output->acknowledge_chunk();
-                            }
-                        } else if (output->end_requested_) {
+                    co_await run_multiplexed_client_upload(
+                        self.pool_.worker(), request, *output, item.signal_,
+                        [&item]() noexcept { item.signal_.notify(); },
+                        [&] {
+                            self.check(item);
+                            return false;
+                        },
+                        []() noexcept { return true; },
+                        [&](std::string_view chunk) -> task<bool> {
+                            co_await self.send_body(item, chunk);
+                            co_return !output->stopped_;
+                        },
+                        [&]() -> task<bool> {
                             if (request.upload() && !request.upload()->trailers_.empty()) {
                                 std::pmr::vector<http3_field_view> trailers(self.pool_.resource());
                                 for (const auto& field : request.upload()->trailers_) {
@@ -1772,12 +1728,9 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                             } else {
                                 require_accepted(self.quic_->http3().finish_stream(item.id_));
                             }
-                            output->finish();
                             self.writer_.notify();
-                        } else {
-                            co_await item.signal_.wait();
-                        }
-                    }
+                            co_return true;
+                        });
                     if (response.tunnel_ && response.tunnel_->accepted_ && response.tunnel_->receive_ended_ &&
                         (output->ended_ || output->stopped_)) {
                         item.done_ = true;

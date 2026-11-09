@@ -21,6 +21,23 @@ namespace {
     }
 }
 
+[[nodiscard]] redis_owned_command encode_redis_pair_command(std::pmr::memory_resource* resource,
+    std::string_view command, std::optional<std::string_view> key,
+    std::span<const std::pair<std::string_view, std::string_view>> pairs, const char* empty_message) {
+    if (pairs.empty()) {
+        throw std::invalid_argument(empty_message);
+    }
+    return encode_redis_command(resource, [&](const auto& emit) {
+        emit(command);
+        if (key.has_value()) {
+            emit(*key);
+        }
+        for (const auto& [first, second] : pairs) {
+            emit(first);
+            emit(second);
+        }
+    });
+}
 }  // namespace
 
 redis_owned_command make_owned_redis_command(
@@ -92,16 +109,7 @@ redis_owned_command redis_command_with_keys(std::string_view command,
 redis_owned_command redis_mset_args(
     std::span<const std::pair<std::string_view, std::string_view>> items,
     std::pmr::memory_resource* resource) {
-    if (items.empty()) {
-        throw std::invalid_argument("redis mset requires at least one item");
-    }
-    return encode_redis_command(resource, [&](const auto& emit) {
-        emit("MSET");
-        for (const auto& [key, value] : items) {
-            emit(key);
-            emit(value);
-        }
-    });
+    return encode_redis_pair_command(resource, "MSET", std::nullopt, items, "redis mset requires at least one item");
 }
 
 redis_owned_command redis_set_args(std::string_view key, std::string_view value,
@@ -149,17 +157,8 @@ redis_owned_command redis_set_args(std::string_view key, std::string_view value,
 redis_owned_command redis_hset_fields_args(std::string_view key,
     std::span<const std::pair<std::string_view, std::string_view>> fields_value,
     std::pmr::memory_resource* resource) {
-    if (fields_value.empty()) {
-        throw std::invalid_argument("redis hset requires at least one field");
-    }
-    return encode_redis_command(resource, [&](const auto& emit) {
-        emit("HSET");
-        emit(key);
-        for (const auto& [field, value] : fields_value) {
-            emit(field);
-            emit(value);
-        }
-    });
+    return encode_redis_pair_command(
+        resource, "HSET", key, fields_value, "redis hset requires at least one field");
 }
 
 redis_owned_command redis_command_with_key_fields(std::string_view command,

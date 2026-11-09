@@ -12,7 +12,6 @@
 #include "context/context_access.h"
 #include "http/static_path_normalization.h"
 #include "http/static_root_index.h"
-#include "router/route_context.h"
 #include "router/route_table.h"
 
 // Choosing what answers a request: the matched route, a 405 with Allow, the

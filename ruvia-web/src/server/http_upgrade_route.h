@@ -26,8 +26,8 @@
 #include "server/http_server_options.h"
 #include "server/worker_codecs.h"
 #include "websocket/http_websocket_connection.h"
+#include "websocket/http_websocket_handshake.h"
 #include "websocket/http_websocket_session.h"
-#include "websocket/websocket_response_headers.h"
 
 // The shared shape of every upgrade-capable route (CONNECT / CONNECT-UDP
 // tunnels and WebSocket upgrades) across HTTP/1 and HTTP/2: run the

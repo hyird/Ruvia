@@ -47,7 +47,6 @@
 #include "http2/http2_field_list.h"
 #include "http2/http2_local_connection_state.h"
 #include "http2/http2_local_settings.h"
-#include "http2/http2_nghttp2_memory.h"
 #include "http2/http2_output_buffer.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_stream_lease_ledger.h"
@@ -55,6 +54,7 @@
 #include "http2/http2_stream_table.h"
 #include "response/http_framed_response_head_plan.h"
 #include "response/http_response_content_semantics.h"
+#include "util/http_c_library_memory.h"
 #include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
@@ -404,7 +404,8 @@ private:
     void submit_goaway(std::uint32_t last_stream_id);
 
     std::pmr::memory_resource* resource_;
-    http2_nghttp2_memory memory_;
+    http_c_library_memory memory_;
+    nghttp2_mem memory_table_;
     std::unique_ptr<nghttp2_session, session_deleter> session_;
     http2_output_buffer output_;
     http2_field_list fields_;

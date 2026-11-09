@@ -63,31 +63,20 @@ enum class http2_client_data_status : std::uint8_t {
     rejected,
 };
 
-// The handler owns stream semantics above the connection: it consumes every
-// application event and observes each generation's terminal failure. Payload
-// producers wait on state_signal(), also notified for SETTINGS/WINDOW_UPDATE;
-// request submitters wait on capacity_signal().
-template <typename handler_type>
-concept http2_client_session_handler = requires(handler_type& handler, http2_event& event,
-    const client_transport_result& transport, std::exception_ptr failure) {
-    handler.on_http2_event(event);
-    { handler.on_http2_failure(transport, failure) } noexcept;
-};
+class http_client_connection;
 
-// The one HTTP/2 client connection driver shared by the HTTP client pool and
-// the WebSocket client: preface, the sole socket reader and writer, event
-// drain, DATA submission under flow control, PING liveness and
+// The HTTP/2 client connection driver: preface, the sole socket reader and
+// writer, event drain, DATA submission under flow control, PING liveness and
 // generation-safe failure over a borrowed client_tcp_transport. The writer
 // transfers complete frame-bounded batches into its own storage, so a feed()
 // or submit during an in-flight write never invalidates the bytes being
 // written. Worker-affine and address-stable; the owner joins `tasks` before
 // retiring it.
-template <typename handler_type>
 class http2_client_session final {
 public:
     // `ping_interval` bounds silence: no received frame for one interval sends
     // a PING, and another silent interval fails the session with timeout.
-    http2_client_session(handler_type& handler, client_tcp_transport& transport, task_scope& tasks,
+    http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
         const worker_handle& worker_value, std::optional<timeout_duration> write_timeout,
         std::optional<timeout_duration> ping_interval, std::pmr::memory_resource* resource)
         : handler_(handler),
@@ -101,11 +90,8 @@ public:
           write_buffer_(resource),
           write_signal_(worker_value),
           state_signal_(worker_value),
-          capacity_signal_(worker_value) {
-        // Checked here: an owner composing its session is complete only in its body.
-        static_assert(http2_client_session_handler<handler_type>);
-    }
-    http2_client_session(handler_type&, client_tcp_transport&, task_scope&, worker_handle&&,
+          capacity_signal_(worker_value) {}
+    http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_handle&&,
         std::optional<timeout_duration>, std::optional<timeout_duration>,
         std::pmr::memory_resource*) = delete;
 
@@ -503,15 +489,7 @@ private:
         }
     }
 
-    void drain() {
-        while (auto event = connection_->next_event()) {
-            handler_.on_http2_event(*event);
-        }
-        if (connection_->wants_write()) {
-            write_signal_.notify();
-        }
-        publish_state();
-    }
+    void drain();
 
     // Every input batch and completed write may close streams or apply peer
     // SETTINGS; only a grown request capacity wakes capacity waiters.
@@ -525,20 +503,7 @@ private:
         request_capacity_ = capacity;
     }
 
-    void fail(std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept {
-        if (generation != generation_ || failed_) {
-            return;
-        }
-        failed_ = true;
-        draining_ = true;
-        ping_timer_.cancel();
-        close_timer_.cancel();
-        transport_.close();
-        handler_.on_http2_failure(transport, std::move(failure));
-        write_signal_.notify();
-        state_signal_.notify();
-        capacity_signal_.notify();
-    }
+    void fail(std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept;
 
     void finish_task(std::uint64_t generation) noexcept {
         if (generation != generation_ || session_tasks_ == 0) {
@@ -630,7 +595,7 @@ private:
         }
     }
 
-    handler_type& handler_;
+    http_client_connection& handler_;
     client_tcp_transport& transport_;
     task_scope& tasks_;
     const worker_handle& worker_;

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -12,6 +13,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -21,9 +23,6 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/web/detail/redis/redis_argument_pack.h"
-#include "ruvia/web/detail/redis/redis_mapped_command.h"
-#include "ruvia/web/detail/redis/redis_owned_command.h"
 #include "ruvia/web/redis/redis_types.h"
 
 namespace ruvia {
@@ -40,6 +39,54 @@ class redis_subscription_connection;
 class redis_subscription_set;
 struct redis_types_access;
 
+// One textual argument the variadic Redis entry points accept. A span of
+// string_view is not itself convertible to string_view, so a caller that already
+// holds a contiguous sequence still selects the span overload.
+//
+// Variadic entry points synchronously clone every view into operation- or
+// batch-owned storage, so owning-string temporaries remain alive long enough.
+// Explicit span/view APIs keep their existing caller-owned lifetime contract.
+template <typename arg_type>
+concept redis_argument = std::convertible_to<arg_type&&, std::string_view>;
+
+template <typename... args_type>
+concept redis_argument_pack = sizeof...(args_type) > 0 && (redis_argument<args_type> && ...);
+
+// Commands that take alternating name/value arguments (MSET, HSET). An odd
+// count would leave a trailing name with no value, which Redis rejects at the
+// wire level; requiring an even count turns that into a compile error.
+template <typename... args_type>
+concept redis_pair_argument_pack = redis_argument_pack<args_type...> && sizeof...(args_type) % 2 == 0;
+
+// One scoped operation owns the command and its decoding. Mappers must return
+// owning values in the handle's reclaimable worker memory domain.
+template <typename result_type, typename mapper_type>
+task<result_type> map_redis_command(task<redis_value> command, std::pmr::memory_resource* resource, mapper_type mapper) {
+    auto reply = co_await std::move(command);
+    if constexpr (std::is_void_v<result_type>) {
+        mapper(std::move(reply), resource);
+    } else {
+        co_return mapper(std::move(reply), resource);
+    }
+}
+
+struct redis_owned_command final {
+    std::pmr::string wire_;
+};
+
+[[nodiscard]] redis_owned_command make_owned_redis_command(
+    std::pmr::memory_resource* resource, std::span<const std::string_view> args);
+[[nodiscard]] redis_owned_command make_owned_redis_command(std::pmr::memory_resource* resource,
+    std::string_view first, std::span<const std::string_view> rest = {});
+
+// Shared typed command layouts for direct execution, pipelines and transactions.
+[[nodiscard]] redis_owned_command make_redis_integer_command(std::string_view command,
+    std::string_view key, std::int64_t value, std::pmr::memory_resource* resource);
+[[nodiscard]] redis_owned_command make_redis_range_command(std::string_view command,
+    std::string_view key, std::int64_t start, std::int64_t stop, std::pmr::memory_resource* resource,
+    bool with_scores = false);
+[[nodiscard]] redis_owned_command make_redis_zadd_command(std::string_view key, double score,
+    std::string_view member, std::pmr::memory_resource* resource);
 struct redis_command_payload final {
     std::reference_wrapper<redis_pool> pool_;
     operation_options options_;
@@ -815,6 +862,15 @@ private:
         mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const {
         return scoped(detail::map_redis_command<result_type>(
             execute(pool, std::move(command), reply_timeout), resource_, std::move(mapper)));
+    }
+
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] task<result_type> mapped(
+        std::initializer_list<std::string_view> args, mapper_type mapper) const {
+        registration_.require_active();
+        return execute_mapped<result_type>(pool(),
+            detail::make_owned_redis_command(resource_, std::span<const std::string_view>(args.begin(), args.size())),
+            std::move(mapper));
     }
 
     static void expire_capability(void* target) noexcept;

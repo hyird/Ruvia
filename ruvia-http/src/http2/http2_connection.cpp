@@ -12,7 +12,6 @@
 #include "ruvia/http/http_pmr_string.h"
 
 #include "http2/http2_advertisement_frames.h"
-#include "http2/http2_remote_receive_semantics.h"
 #include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
@@ -147,6 +146,7 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
     bool receive_origin_advertisements, bool receive_frame_metadata)
     : resource_(resource),
       memory_(resource),
+      memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)),
       output_(resource),
       fields_(resource),
       streams_(resource),
@@ -231,8 +231,8 @@ void http2_connection::create_session() {
 
     nghttp2_session* raw_session = nullptr;
     const int result = role_ == http2_role::client
-                           ? nghttp2_session_client_new3(&raw_session, callbacks.get(), this, option.get(), memory_.table())
-                           : nghttp2_session_server_new3(&raw_session, callbacks.get(), this, option.get(), memory_.table());
+                           ? nghttp2_session_client_new3(&raw_session, callbacks.get(), this, option.get(), &memory_table_)
+                           : nghttp2_session_server_new3(&raw_session, callbacks.get(), this, option.get(), &memory_table_);
     if (result == NGHTTP2_ERR_NOMEM) {
         memory_.rethrow_allocation_failure();
     }
@@ -919,4 +919,367 @@ std::int32_t http2_connection::connection_send_window() const noexcept {
     return nghttp2_session_get_remote_window_size(session_.get());
 }
 
+// --- flow control & send window -----------------------------------------------
+
+void http2_connection::consume_received(std::uint32_t stream_id, std::size_t bytes) {
+    if (bytes == 0 || local_connection_state_.fatal_failure() != nullptr) {
+        return;
+    }
+    check_nghttp2(nghttp2_session_consume(session_.get(), static_cast<std::int32_t>(stream_id), bytes));
+}
+
+void http2_connection::flush_window_debt(http2_stream_state& stream) {
+    const auto debt = stream.take_window_debt();
+    if (debt == 0 || local_connection_state_.fatal_failure() != nullptr) {
+        return;
+    }
+    check_nghttp2(nghttp2_session_consume_connection(session_.get(), debt));
+}
+
+bool http2_connection::release_received_data(std::uint32_t stream_id, std::uint32_t bytes_value) {
+    auto* stream = streams_.find(stream_id);
+    if (stream == nullptr || bytes_value == 0 || bytes_value > stream->window_debt()) {
+        return false;
+    }
+    consume_received(stream_id, bytes_value);
+    (void)stream->take_window_debt(bytes_value);
+    return true;
+}
+
+std::size_t http2_connection::pending_data_output_bytes(std::uint32_t stream_id) const noexcept {
+    return output_.pending_data_bytes(stream_id);
+}
+
+std::optional<http2_send_window_state> http2_connection::send_window_state(
+    std::uint32_t stream_id) const noexcept {
+    const auto* stream = streams_.find(stream_id);
+    if (stream == nullptr || http2_stream_is_closed(*stream)) {
+        return std::nullopt;
+    }
+    const auto stream_window =
+        nghttp2_session_get_stream_remote_window_size(session_.get(), static_cast<std::int32_t>(stream_id));
+    if (stream_window < 0 && nghttp2_session_find_stream(session_.get(), static_cast<std::int32_t>(stream_id)) == nullptr) {
+        return std::nullopt;
+    }
+    const auto connection_window = connection_send_window();
+    return http2_send_window_state{
+        .connection_window_ = connection_window,
+        .stream_window_ = stream_window,
+        .available_ = static_cast<std::uint32_t>((std::max)(0, (std::min)(connection_window, stream_window))),
+    };
+}
+
+bool http2_connection::can_send_empty_end_stream(std::uint32_t stream_id) const noexcept {
+    const auto window = send_window_state(stream_id);
+    return window.has_value() && window->connection_window_ > 0 && window->stream_window_ > 0;
+}
+
+bool http2_connection::stream_aborted(std::uint32_t stream_id) const noexcept {
+    const auto* stream = streams_.find(stream_id);
+    return stream == nullptr || stream->is_aborted();
+}
+
+// --- stream leases ------------------------------------------------------------
+
+void http2_connection::lease_submitted_request(
+    const std::variant<std::uint32_t, http2_request_head_submit_error>& result) noexcept {
+    const auto* submitted = std::get_if<std::uint32_t>(&result);
+    if (submitted == nullptr) {
+        return;
+    }
+    pin_stream(*submitted);
+}
+
+void http2_connection::release_stream_lease(std::uint32_t stream_id) {
+    const auto* stream = streams_.find(stream_id);
+    if (stream != nullptr && (stream->window_debt() != 0 || stream->has_pending_events())) {
+        leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::after_credits);
+        return;
+    }
+    unpin_stream(stream_id);
+    leases_.erase_release(stream_id);
+}
+
+void http2_connection::release_stream_lease_after_remote_end(std::uint32_t stream_id) noexcept {
+    leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::after_remote_end);
+}
+
+void http2_connection::abandon_stream_lease_checked(std::uint32_t stream_id) {
+    const auto* stream = streams_.find(stream_id);
+    if (stream == nullptr) {
+        leases_.erase_release(stream_id);
+        return;
+    }
+    if (!stream->is_aborted() && !http2_stream_is_closed(*stream)) {
+        const auto error = stream->local_send().end_stream_committed() != nullptr
+                               ? http2_error_code::no_error
+                               : http2_error_code::cancel;
+        (void)submit_reset(stream_id, error);
+    }
+    release_stream_lease(stream_id);
+}
+
+void http2_connection::abandon_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept {
+    try {
+        (void)release_received_data(stream_id, bytes);
+        retry_deferred_stream_lease(stream_id);
+    } catch (...) {
+        leases_.defer_credit(stream_id, bytes);
+    }
+    flush_output();
+}
+
+bool http2_connection::acknowledge_received_data(std::uint32_t stream_id, std::uint32_t bytes) {
+    bool released = false;
+    try {
+        released = release_received_data(stream_id, bytes);
+    } catch (...) {
+        leases_.defer_credit(stream_id, bytes);
+        throw;
+    }
+    if (!released) {
+        return false;
+    }
+    retry_deferred_stream_lease(stream_id);
+    flush_session();
+    return true;
+}
+
+void http2_connection::abandon_stream_lease(std::uint32_t stream_id) noexcept {
+    try {
+        abandon_stream_lease_checked(stream_id);
+    } catch (...) {
+        leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::abandon);
+    }
+    flush_output();
+}
+
+void http2_connection::flush_output() noexcept {
+    try {
+        flush_session();
+        // NOLINTNEXTLINE(bugprone-empty-catch)
+    } catch (...) {
+    }
+}
+
+void http2_connection::retry_deferred_stream_lease(std::uint32_t stream_id) noexcept {
+    const auto* pending = leases_.release(stream_id);
+    if (pending == nullptr) {
+        return;
+    }
+    using kind_type = http2_stream_lease_ledger::release_kind_type;
+    if (pending->kind_ == kind_type::abandon) {
+        try {
+            abandon_stream_lease_checked(stream_id);
+            // NOLINTNEXTLINE(bugprone-empty-catch)
+        } catch (...) {
+        }
+        return;
+    }
+    const auto* stream = streams_.find(stream_id);
+    if (stream != nullptr &&
+        (stream->window_debt() != 0 || stream->has_pending_events() ||
+            (pending->kind_ == kind_type::after_remote_end && !connection_error() &&
+                !http2_stream_is_closed(*stream)))) {
+        return;
+    }
+    try {
+        unpin_stream(stream_id);
+        leases_.erase_release(stream_id);
+        // NOLINTNEXTLINE(bugprone-empty-catch)
+    } catch (...) {
+    }
+}
+
+void http2_connection::retry_deferred_stream_leases() noexcept {
+    std::size_t index = 0;
+    while (index < leases_.credit_count()) {
+        const auto pending = leases_.credit_at(index);
+        try {
+            (void)release_received_data(pending.stream_id_, pending.bytes_);
+            leases_.erase_credit(pending.stream_id_);
+            retry_deferred_stream_lease(pending.stream_id_);
+        } catch (...) {
+            ++index;
+        }
+    }
+    index = 0;
+    while (index < leases_.release_count()) {
+        const auto release = leases_.release_at(index);
+        retry_deferred_stream_lease(release.stream_id_);
+        if (index < leases_.release_count() && leases_.release_at(index).stream_id_ == release.stream_id_) {
+            ++index;
+        }
+    }
+    flush_output();
+}
+
+// --- stream records & lifecycle -----------------------------------------------
+
+void http2_connection::pin_stream(std::uint32_t stream_id) noexcept {
+    if (auto* const stream = streams_.find(stream_id)) {
+        stream->set_pinned(true);
+    }
+}
+
+void http2_connection::unpin_stream(std::uint32_t stream_id) {
+    auto* stream = streams_.find(stream_id);
+    if (stream == nullptr) {
+        priorities_.erase(stream_id);
+        return;
+    }
+    if (stream->is_aborted()) {
+        flush_window_debt(*stream);
+        priorities_.erase(stream_id);
+        release_local_request_stream(*stream);
+        streams_.remove(stream_id);
+        return;
+    }
+    if (http2_stream_is_closed(*stream)) {
+        flush_window_debt(*stream);
+        ++completed_responses_;
+        release_local_request_stream_if_closed(*stream);
+        priorities_.erase(stream_id);
+        streams_.remove(stream_id);
+        return;
+    }
+    const auto error = stream->local_send().end_stream_committed() != nullptr
+                           ? http2_error_code::no_error
+                           : http2_error_code::cancel;
+    (void)submit_reset(stream_id, error);
+    if (auto* retained_stream = streams_.find(stream_id)) {
+        flush_window_debt(*retained_stream);
+        release_local_request_stream(*retained_stream);
+        streams_.remove(stream_id);
+    }
+}
+
+bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_close_source source_value,
+    http2_error_code error, close_notification_type notification) {
+    auto* stream = streams_.find(stream_id);
+    if (stream == nullptr || stream->is_aborted()) {
+        return false;
+    }
+    if (header_block_.has_value() && &header_block_->context_.stream_ == stream) {
+        header_block_.reset();
+    }
+    const bool pinned = stream->pinned();
+    release_local_request_stream(*stream);
+    priorities_.erase(stream_id);
+    (void)stream->abort(source_value);
+    if (notification == close_notification_type::emit_event) {
+        publish_event(http2_event(http2_stream_closed_event(stream_id, source_value, error)));
+    }
+    if (!pinned) {
+        flush_window_debt(*stream);
+        streams_.remove(stream_id);
+    }
+    return true;
+}
+
+bool http2_connection::close_stream(
+    std::uint32_t stream_id, http2_stream_close_source source_value, http2_error_code error) {
+    return close_stream_impl(stream_id, source_value, error, close_notification_type::emit_event);
+}
+
+void http2_connection::submit_owner_reset(std::uint32_t stream_id, http2_error_code error) {
+    if (nghttp2_session_find_stream(session_.get(), static_cast<std::int32_t>(stream_id)) == nullptr) {
+        return;
+    }
+    reserve_geometric(owner_resets_, owner_resets_.size() + 1);
+    owner_resets_.push_back(stream_id);
+    check_nghttp2(nghttp2_submit_rst_stream(
+        session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(stream_id), static_cast<std::uint32_t>(error)));
+}
+
+void http2_connection::reset_stream_for_peer_error(std::uint32_t stream_id, http2_error_code error) {
+    check_nghttp2(nghttp2_submit_rst_stream(
+        session_.get(), NGHTTP2_FLAG_NONE, static_cast<std::int32_t>(stream_id), static_cast<std::uint32_t>(error)));
+    (void)close_stream(stream_id, http2_stream_close_source::local, error);
+}
+
+http2_stream_state* http2_connection::find_outbound_stream(std::uint32_t stream_id) noexcept {
+    if (local_connection_state_.fatal_failure() != nullptr) {
+        return nullptr;
+    }
+    auto* stream = streams_.find(stream_id);
+    return stream != nullptr && !stream->is_aborted() ? stream : nullptr;
+}
+
+http2_stream_state* http2_connection::create_stream(std::uint32_t stream_id) {
+    return streams_.create(stream_id);
+}
+
+std::optional<http2_request_head_submit_error> http2_connection::local_request_admission_error()
+    const noexcept {
+    if (role_ != http2_role::client) {
+        return http2_request_head_submit_error::invalid_state;
+    }
+    if (!started_) {
+        std::terminate();
+    }
+    if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_.has_value() ||
+        nghttp2_session_get_next_stream_id(session_.get()) > http2_max_stream_id) {
+        return http2_request_head_submit_error::connection_unavailable;
+    }
+    if (active_local_request_streams_ >= peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)) {
+        return http2_request_head_submit_error::peer_stream_limit_reached;
+    }
+    return std::nullopt;
+}
+
+std::size_t http2_connection::available_local_request_streams(std::size_t local_limit) const noexcept {
+    if (draining() || local_request_admission_error().has_value()) {
+        return 0;
+    }
+    auto limit = (std::min)(local_limit, static_cast<std::size_t>(http2_local_settings::max_concurrent_streams));
+    limit = (std::min)(limit, static_cast<std::size_t>(peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)));
+    return limit > active_local_request_streams_ ? limit - active_local_request_streams_ : 0;
+}
+
+void http2_connection::release_local_request_stream(http2_stream_state& stream) noexcept {
+    if (stream.release_peer_concurrency_slot() && active_local_request_streams_ != 0) {
+        --active_local_request_streams_;
+    }
+}
+
+void http2_connection::release_local_request_stream_if_closed(http2_stream_state& stream) noexcept {
+    if (http2_stream_is_closed(stream)) {
+        release_local_request_stream(stream);
+    }
+}
+
+http2_stream_state* http2_connection::stream(std::uint32_t stream_id) & noexcept {
+    return streams_.find(stream_id);
+}
+
+http2_stream_receive_status http2_connection::stream_receive_status(
+    std::uint32_t stream_id) const noexcept {
+    const auto* current = streams_.find(stream_id);
+    if (current == nullptr || current->is_aborted()) {
+        return http2_stream_receive_status::closed;
+    }
+    return current->remote_receive().end_stream() != nullptr
+               ? http2_stream_receive_status::ended
+               : http2_stream_receive_status::open;
+}
+
+std::optional<http2_server_request_view> http2_connection::server_request_view(
+    std::uint32_t stream_id) const noexcept {
+    if (role_ != http2_role::server) {
+        return std::nullopt;
+    }
+    const auto* stream_state = streams_.find(stream_id);
+    if (stream_state == nullptr || stream_state->request_method().empty()) {
+        return std::nullopt;
+    }
+    return http2_server_request_view{
+        .method_ = stream_state->request_method(),
+        .scheme_ = stream_state->request_scheme(),
+        .path_ = stream_state->request_path(),
+        .authority_ = http2_effective_request_authority(*stream_state),
+        .protocol_ = stream_state->request_protocol(),
+        .pseudo_header_order_ = stream_state->request_pseudo_header_order(),
+    };
+}
 }  // namespace ruvia::detail

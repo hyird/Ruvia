@@ -7,7 +7,6 @@
 #include "context/context_access.h"
 #include "http/session_access.h"
 #include "http/streaming_access.h"
-#include "router/route_context.h"
 #include "router/route_table.h"
 
 // Running a route that streams its response: binding the writer to the context

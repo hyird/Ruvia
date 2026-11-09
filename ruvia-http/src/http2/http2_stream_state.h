@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -21,10 +22,112 @@
 #include "http2/http2_remote_receive_state.h"
 #include "http2/http2_stream_request_fields.h"
 #include "http2/http2_stream_request_state.h"
-#include "http2/http2_tunnel_state.h"
 
 namespace ruvia::detail {
 
+enum class http2_connect_form : std::uint8_t { standard,
+    extended };
+
+class http2_tunnel_state;
+
+class http2_not_connect final {
+private:
+    friend class http2_tunnel_state;
+
+    constexpr http2_not_connect() noexcept = default;
+};
+
+// The CONNECT form matters while validating/dispatching the request and choosing
+// its dedicated acceptance path. After a final response, :protocol on the retained
+// request state is the authoritative Extended CONNECT signal; rejected responses
+// resume ordinary HTTP response-body semantics. Consequently, only pending owns a
+// form payload.
+class http2_connect_pending final {
+public:
+    [[nodiscard]] constexpr http2_connect_form form() const noexcept {
+        return form_;
+    }
+
+private:
+    friend class http2_tunnel_state;
+
+    explicit constexpr http2_connect_pending(http2_connect_form form) noexcept
+        : form_(form) {}
+
+    http2_connect_form form_;
+};
+
+class http2_tunnel_open final {
+private:
+    friend class http2_tunnel_state;
+
+    constexpr http2_tunnel_open() noexcept = default;
+};
+
+class http2_connect_rejected final {
+private:
+    friend class http2_tunnel_state;
+
+    constexpr http2_connect_rejected() noexcept = default;
+};
+
+// CONNECT is exactly one of four protocol phases.
+class http2_tunnel_state final {
+public:
+    constexpr http2_tunnel_state() noexcept
+        : state_(http2_not_connect()) {}
+
+    [[nodiscard]] bool begin(http2_connect_form form) noexcept {
+        if ((form != http2_connect_form::standard && form != http2_connect_form::extended) ||
+            not_connect() == nullptr) {
+            return false;
+        }
+        state_ = state_type(http2_connect_pending(form));
+        return true;
+    }
+
+    [[nodiscard]] bool accept() noexcept {
+        if (pending() == nullptr) {
+            return false;
+        }
+        state_ = state_type(http2_tunnel_open());
+        return true;
+    }
+
+    [[nodiscard]] bool reject() noexcept {
+        if (pending() == nullptr) {
+            return false;
+        }
+        state_ = state_type(http2_connect_rejected());
+        return true;
+    }
+
+    [[nodiscard]] constexpr const http2_not_connect* not_connect() const& noexcept {
+        return std::get_if<http2_not_connect>(&state_);
+    }
+    [[nodiscard]] constexpr const http2_not_connect* not_connect() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_connect_pending* pending() const& noexcept {
+        return std::get_if<http2_connect_pending>(&state_);
+    }
+    [[nodiscard]] constexpr const http2_connect_pending* pending() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_tunnel_open* open() const& noexcept {
+        return std::get_if<http2_tunnel_open>(&state_);
+    }
+    [[nodiscard]] constexpr const http2_tunnel_open* open() const&& = delete;
+
+    [[nodiscard]] constexpr const http2_connect_rejected* rejected() const& noexcept {
+        return std::get_if<http2_connect_rejected>(&state_);
+    }
+    [[nodiscard]] constexpr const http2_connect_rejected* rejected() const&& = delete;
+
+private:
+    using state_type =
+        std::variant<http2_not_connect, http2_connect_pending, http2_tunnel_open, http2_connect_rejected>;
+
+    state_type state_;
+};
 enum class http2_local_request_content_gate : std::uint8_t {
     open,
     awaiting_continue,
@@ -561,5 +664,26 @@ public:
         request_state_.set_priority_update(fields);
     }
 };
+
+// Cross-phase queries over the exclusive remote-receive alternatives.
+[[nodiscard]] inline bool http2_remote_final_head_decoded(const http2_stream_state& stream) noexcept {
+    const auto& remote = stream.remote_receive();
+    return remote.head_pending() == nullptr && remote.head_end_stream_pending() == nullptr;
+}
+
+[[nodiscard]] inline bool http2_remote_peer_half_closed(const http2_stream_state& stream) noexcept {
+    const auto& remote = stream.remote_receive();
+    return remote.head_end_stream_pending() != nullptr ||
+           remote.connect_pending_end_stream() != nullptr || remote.end_stream() != nullptr ||
+           remote.aborted() != nullptr;
+}
+
+// Protocol closure is independent of whether request-view storage remains pinned.
+// A reset closes both halves immediately; otherwise both peer END_STREAM and a
+// committed local END_STREAM are required.
+[[nodiscard]] inline bool http2_stream_is_closed(const http2_stream_state& stream) noexcept {
+    return stream.is_aborted() || (http2_remote_peer_half_closed(stream) &&
+                                      stream.local_send().end_stream_committed() != nullptr);
+}
 
 }  // namespace ruvia::detail

@@ -7,9 +7,10 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_pmr_string.h"
+
+#include "util/http_address_overlap.h"
 
 namespace ruvia {
 

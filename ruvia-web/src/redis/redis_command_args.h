@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/web/detail/redis/redis_owned_command.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_protocol.h"

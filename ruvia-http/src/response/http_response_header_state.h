@@ -6,6 +6,18 @@
 
 namespace ruvia::detail {
 
+struct http_response_body_access final {
+    [[nodiscard]] static const http_response_body& body(const http_response& response) noexcept {
+        return response.body_;
+    }
+    [[nodiscard]] static const http_response_body& body(const http_response&& response) = delete;
+};
+
+[[nodiscard]] inline const http_response_body& response_body(const http_response& response) noexcept {
+    return http_response_body_access::body(response);
+}
+[[nodiscard]] const http_response_body& response_body(const http_response&& response) = delete;
+
 struct http_response_header_state_access final {
     [[nodiscard]] static std::uint32_t known_bits(const http_response_headers& headers) noexcept {
         return headers.known_header_bits_;

@@ -10,14 +10,13 @@
 
 #include "ruvia/web/detail/router/route_handlers.h"
 
-#include "router/route_limits.h"
-
 // Lightweight, self-contained route-resolution result types. A materialized
 // resolution is exactly one of resolved, method-not-allowed, not-found, or
 // rejected; the payload for another alternative is not observable.
 
 namespace ruvia::detail {
 
+inline constexpr std::size_t max_route_params = 16;
 class route_entry;
 
 class route_match final {

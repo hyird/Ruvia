@@ -10,7 +10,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
+#include "ruvia/http/http_hex.h"
 
 namespace ruvia {
 

@@ -39,9 +39,10 @@ inline constexpr std::size_t brotli_decoder_table_allowance = 3U * 1024U * 1024U
 
 brotli_decoder_stream::brotli_decoder_stream(std::pmr::memory_resource* resource, std::size_t max_decoded_bytes)
     : allocation_(resource, brotli_decoder_native_budget(max_decoded_bytes)),
-      state_(BrotliDecoderCreateInstance(&pmr_codec_allocate, &pmr_codec_free, &allocation_)) {
+      state_(BrotliDecoderCreateInstance(
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
     if (state_ == nullptr) {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
 }
 
@@ -53,7 +54,8 @@ brotli_decoder_stream::~brotli_decoder_stream() {
 
 brotli_encoder_stream::brotli_encoder_stream(std::pmr::memory_resource* resource, int window_bits)
     : allocation_(resource),
-      state_(BrotliEncoderCreateInstance(&pmr_codec_allocate, &pmr_codec_free, &allocation_)) {
+      state_(BrotliEncoderCreateInstance(
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
     if (state_ != nullptr &&
         (BrotliEncoderSetParameter(state_, BROTLI_PARAM_QUALITY, http_brotli_quality) != BROTLI_TRUE ||
             BrotliEncoderSetParameter(state_, BROTLI_PARAM_LGWIN, static_cast<std::uint32_t>(window_bits)) != BROTLI_TRUE)) {
@@ -61,7 +63,7 @@ brotli_encoder_stream::brotli_encoder_stream(std::pmr::memory_resource* resource
         state_ = nullptr;
     }
     if (state_ == nullptr) {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
 }
 
@@ -80,7 +82,7 @@ bool brotli_encoder_stream::encode(std::string_view input, std::pmr::string& out
         std::size_t available_output = 0;
         const auto compressed = BrotliEncoderCompressStream(state_, operation,
             &available_input, &next_input, &available_output, nullptr, nullptr);
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
         if (compressed != BROTLI_TRUE) {
             throw http_content_codec_error("brotli encoding failed");
         }

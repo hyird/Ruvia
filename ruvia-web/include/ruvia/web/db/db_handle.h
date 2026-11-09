@@ -4,10 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <span>
-#include <string>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -20,10 +21,8 @@
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
-#include "ruvia/web/detail/db/db_backend.h"
-#include "ruvia/web/detail/db/db_mapped_query.h"
-#include "ruvia/web/detail/db/db_parameter_pack.h"
-#include "ruvia/web/detail/db/db_sql_literal.h"
+#include "ruvia/web/detail/db/db_sql_scan.h"
+#include "ruvia/web/fixed_string.h"
 
 namespace ruvia {
 
@@ -45,6 +44,138 @@ class db_query_cache_state;
 struct db_query_backend;
 struct db_query_plan;
 struct request_io_metrics;
+
+// The outer scoped operation owns both the driver task and the mapped result.
+// Decoding finishes before db_rows releases its backend storage. Scalar and
+// column decoders enforce db_mapped_value and construct owning fields in the
+// same operation memory domain; raw mappers transfer db_rows itself.
+template <typename result_type, typename mapper_type>
+task<result_type> map_db_query(task<db_rows> query, std::pmr::memory_resource* resource, mapper_type mapper) {
+    auto rows = co_await std::move(query);
+    co_return mapper(std::move(rows), resource);
+}
+
+inline std::uint64_t db_count_value(const db_rows& rows) {
+    if (rows.size() != 1) {
+        throw db_conversion_error(
+            db_conversion_error::code_type::unexpected_row_count, "database count did not return exactly one row");
+    }
+    const auto count = rows.front()["count"].as<std::uint64_t>();
+    if (!count) {
+        throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "database count column is NULL");
+    }
+    return *count;
+}
+
+template <typename result_type, typename mapper_type>
+task<std::pair<result_type, std::uint64_t>> map_db_query_and_count(
+    task<std::pair<db_rows, db_rows>> query, std::pmr::memory_resource* resource, mapper_type mapper) {
+    auto rows = co_await std::move(query);
+    const auto count = db_count_value(rows.second);
+    co_return std::pair{mapper(std::move(rows.first), resource), count};
+}
+
+struct db_sql_parameter_count {
+    std::size_t count_{0};
+    bool valid_{true};
+};
+
+// Count MariaDB slots, or PostgreSQL's highest numbered parameter. Repeated
+// PostgreSQL references bind the same value; '?' remains a PostgreSQL operator.
+// This checks the binding contract, not SQL grammar or schema correctness.
+[[nodiscard]] constexpr db_sql_parameter_count count_db_sql_parameters(std::string_view sql, db_driver driver) noexcept {
+    db_sql_parameter_count result;
+    if (driver != db_driver::mariadb && driver != db_driver::postgresql) {
+        return {0, false};
+    }
+    for (std::size_t index = 0; index < sql.size();) {
+        if (sql[index] == '\0') {
+            return {0, false};
+        }
+        const auto next_value =
+            driver == db_driver::mariadb ? skip_sql_atom(sql, index, true) : skip_postgresql_sql_atom(sql, index);
+        if (next_value != index + 1) {
+            index = next_value;
+            continue;
+        }
+        if (driver == db_driver::mariadb) {
+            result.count_ += sql[index] == '?';
+            ++index;
+            continue;
+        }
+        if (sql[index] == '$' && index + 1 < sql.size() && sql[index + 1] >= '0' && sql[index + 1] <= '9') {
+            std::size_t number = 0;
+            ++index;
+            while (index < sql.size() && sql[index] >= '0' && sql[index] <= '9') {
+                const auto digit = static_cast<unsigned>(sql[index++] - '0');
+                if (number > ((std::numeric_limits<std::size_t>::max)() - digit) / 10) {
+                    return {0, false};
+                }
+                number = number * 10 + digit;
+            }
+            if (number == 0) {
+                return {0, false};
+            }
+            if (number > result.count_) {
+                result.count_ = number;
+            }
+            continue;
+        }
+        // Unquoted identifiers can contain '$'; account$1 is not a parameter.
+        if (is_postgresql_dollar_tag_start(sql[index]) || static_cast<unsigned char>(sql[index]) >= 0x80) {
+            do {
+                ++index;
+            } while (index < sql.size() && (is_postgresql_identifier_continue(sql[index]) || static_cast<unsigned char>(sql[index]) >= 0x80));
+        } else {
+            ++index;
+        }
+    }
+    return result;
+}
+
+template <fixed_string sql, db_driver driver, std::size_t parameter_count>
+void validate_db_sql_literal(db_driver actual_driver) {
+    static_assert(driver == db_driver::unspecified || driver == db_driver::mariadb || driver == db_driver::postgresql,
+        "SQL literal requires a valid database driver");
+    static_assert(sql.view().find('\0') == std::string_view::npos, "SQL literal must not contain NUL bytes");
+    if constexpr (driver == db_driver::unspecified) {
+        constexpr auto mariadb_result = count_db_sql_parameters(sql.view(), db_driver::mariadb);
+        constexpr auto postgresql_result = count_db_sql_parameters(sql.view(), db_driver::postgresql);
+        constexpr bool has_mariadb = mariadb_result.count_ > 0;
+        constexpr bool has_postgresql = postgresql_result.count_ > 0 || !postgresql_result.valid_;
+        static_assert(!(has_mariadb && has_postgresql),
+            "SQL literal with both '?' and '$n' requires an explicit database driver");
+        if constexpr (has_postgresql) {
+            static_assert(postgresql_result.valid_, "SQL literal contains an invalid parameter index");
+            static_assert(postgresql_result.count_ == parameter_count,
+                "SQL placeholder count does not match the number of arguments");
+            if (actual_driver != db_driver::postgresql) {
+                throw std::invalid_argument("SQL literal dialect does not match the database driver");
+            }
+        } else if constexpr (has_mariadb) {
+            static_assert(mariadb_result.valid_, "SQL literal contains an invalid parameter index");
+            static_assert(mariadb_result.count_ == parameter_count,
+                "SQL placeholder count does not match the number of arguments");
+            if (actual_driver != db_driver::mariadb) {
+                throw std::invalid_argument("SQL literal dialect does not match the database driver");
+            }
+        } else {
+            static_assert(parameter_count == 0,
+                "SQL placeholder count does not match the number of arguments");
+            if (actual_driver != db_driver::mariadb && actual_driver != db_driver::postgresql) {
+                throw std::invalid_argument("SQL literal dialect does not match the database driver");
+            }
+        }
+    } else {
+        constexpr auto result_value = count_db_sql_parameters(sql.view(), driver);
+        static_assert(result_value.valid_, "SQL literal contains an invalid parameter index");
+        static_assert(result_value.count_ == parameter_count,
+            "SQL placeholder count does not match the number of arguments");
+        if (actual_driver != driver) {
+            throw std::invalid_argument("SQL literal dialect does not match the database driver");
+        }
+    }
+}
 }  // namespace detail
 
 // Statement and completion operations are lazy. Inputs are owned before the
@@ -211,6 +342,7 @@ private:
     struct lease_type final {
         lease_type(detail::db_pool_ref_type client, std::size_t slot, std::pmr::memory_resource* resource,
             operation_options options) noexcept;
+        void abort() noexcept;
 
         detail::db_pool_ref_type client_;
         std::size_t slot_;
@@ -221,29 +353,23 @@ private:
     using operation_state_type = detail::db_operation_state<lease_type>;
     using operation_guard_type = detail::db_operation_guard<lease_type>;
 
-    class state_type;
-    using state_owner_type = std::unique_ptr<state_type, pmr_object_deleter<state_type>>;
+    using state_owner_type = std::unique_ptr<operation_state_type, pmr_object_deleter<operation_state_type>>;
 
     db_transaction(detail::db_pool_ref_type client, std::size_t slot, std::pmr::memory_resource* resource,
         operation_options options);
+    template <typename result_type, bool exec_statement>
+    task<result_type> run_statement(std::pmr::string sql, std::pmr::vector<db_value> params);
     // `io_metrics` is the request's counter block, or null outside a request.
-    static task<db_rows> query_prepared(std::pmr::string sql, std::pmr::vector<db_value> params,
+    template <typename result_type, bool exec_statement>
+    static task<result_type> statement_task(std::pmr::string sql, std::pmr::vector<db_value> params,
         detail::request_io_metrics* io_metrics, operation_guard_type operation);
-    static task<db_exec_result> execute_prepared(std::pmr::string sql, std::pmr::vector<db_value> params,
-        detail::request_io_metrics* io_metrics, operation_guard_type operation);
-    static task<void> commit_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
-    static task<void> rollback_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    template <bool commit_lease>
+    static task<void> finish_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
     // A command naming one identifier: SAVEPOINT, RELEASE, CLOSE and the like.
     task<void> run_identifier_command(std::string_view prefix, std::string_view name);
     void require_postgresql_transaction(std::string_view feature) const;
     task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params);
     task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params);
-    static task<void> query_void_task(std::pmr::string sql, std::pmr::vector<db_value> params,
-        detail::request_io_metrics* io_metrics, operation_guard_type operation);
-    static task<void> execute_void_task(std::pmr::string sql, std::pmr::vector<db_value> params,
-        detail::request_io_metrics* io_metrics, operation_guard_type operation);
-    static task<bool> query_bool_task(std::pmr::string sql, std::pmr::vector<db_value> params,
-        detail::request_io_metrics* io_metrics, operation_guard_type operation);
     void reset() noexcept;
     void bind_operation_scope(operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     static void expire_capability(void* target) noexcept;

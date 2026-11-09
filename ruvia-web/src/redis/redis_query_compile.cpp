@@ -1,5 +1,3 @@
-#include "ruvia/web/detail/redis/redis_query_compile.h"
-
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -11,7 +9,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/redis/redis_entity_key.h"
+#include "ruvia/web/detail/redis/redis_orm.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 namespace ruvia::detail {
@@ -581,8 +579,9 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
             throw std::invalid_argument("Redis entity column uses reserved __ruvia_ namespace");
         }
     }
+    resource = pmr_resource_or_default(resource);
     redis_mapping result_value{columns, entity_prefix, std::pmr::string(prefix, resource),
-        std::pmr::vector<redis_index_definition>(resource),
+        redis_entity_storage_prefix(prefix, resource), std::pmr::vector<redis_index_definition>(resource),
         std::pmr::vector<redis_index_kind>(columns.size(), redis_index_kind::none, resource)};
     result_value.indexes_.reserve(config.indexes_.size());
     for (const auto& index : config.indexes_) {
@@ -694,7 +693,7 @@ std::pmr::vector<std::pmr::string> compile_redis_index(
     args.emplace_back("HASH");
     args.emplace_back("PREFIX");
     args.emplace_back("1");
-    args.push_back(redis_entity_storage_prefix(mapping.prefix_, resource));
+    args.emplace_back(mapping.storage_prefix_);
     args.emplace_back("SCHEMA");
     for (const auto& definition : mapping.indexes_) {
         const std::string_view field = definition.column_;

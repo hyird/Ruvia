@@ -42,7 +42,7 @@ http_client_connection::http2_stream* http_client_connection::find_http2_request
 
 void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
     if (stream.websocket_ && stream.state_->head_ready_) {
-        stream.read_deadline_.reset();
+        stream.timer_.read_deadline_.reset();
         schedule_http2_stream_timer(stream);
         return;
     }
@@ -51,30 +51,14 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
         (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
         return;
     }
-    stream.read_deadline_ = worker_timer_deadline_after(read_timeout->value());
+    stream.timer_.read_deadline_ = worker_timer_deadline_after(read_timeout->value());
     schedule_http2_stream_timer(stream);
 }
 
 void http_client_connection::schedule_http2_stream_timer(http2_stream& stream) {
-    auto deadline = stream.timeout_->deadline();
-    if (stream.read_deadline_ && (!deadline || *stream.read_deadline_ < *deadline)) {
-        deadline = stream.read_deadline_;
-    }
-    // A pending earlier expiry rechecks both deadlines when it fires, so a
-    // read that only moves its deadline later costs no timer operation.
-    if (!deadline || (stream.timer_at_ && *stream.timer_at_ <= *deadline)) {
-        return;
-    }
-    stream.timer_.cancel();
-    stream.timer_at_.reset();
-    if (pool_.worker().schedule_timer(stream.timer_, *deadline,
-            [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
-                    expire_http2_stream_timer(request_id);
-                }
-            }) == worker_timer_schedule_status::scheduled) {
-        stream.timer_at_ = deadline;
-    }
+    stream.timer_.schedule(pool_.worker(), *stream.timeout_, [this, request_id = stream.request_id_]() noexcept {
+        expire_http2_stream_timer(request_id);
+    });
 }
 
 void http_client_connection::expire_http2_stream_timer(std::uint64_t request_id) noexcept {
@@ -82,9 +66,8 @@ void http_client_connection::expire_http2_stream_timer(std::uint64_t request_id)
     if (stream == nullptr) {
         return;
     }
-    stream->timer_at_.reset();
-    if (stream->timeout_->expired() ||
-        (stream->read_deadline_ && *stream->read_deadline_ <= std::chrono::steady_clock::now())) {
+    stream->timer_.timer_at_.reset();
+    if (stream->timer_.expired(*stream->timeout_)) {
         cancel_http2_stream(request_id, client_abort_reason::timeout);
         return;
     }
@@ -171,29 +154,22 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
     const auto request_content_signal = event.request_content_signal();
     const bool stream_ended = event.stream_ended();
     auto head = std::move(event).take_head();
-    if (auto* websocket = stream.websocket_) {
-        const auto negotiated = validate_http2_websocket_client_response(
-            websocket->negotiation_, head, !stream_ended);
-        const auto* selected = std::get_if<websocket_client_negotiation_result_view>(&negotiated);
-        if (selected == nullptr) {
-            throw http_client_error(http_client_error::code_type::handshake_rejected,
-                "invalid HTTP/2 WebSocket handshake response", head.status());
-        }
-        websocket->selected_subprotocol_ = selected->selected_subprotocol_;
-        websocket->compression_ = selected->compression_;
-        // HTTP request lifetime ends at the accepted handshake. WebSocket
-        // operations own their deadlines; the session itself has no total cap.
-        static const operation_timeout websocket_lifetime(std::nullopt);
-        stream.timeout_ = &websocket_lifetime;
-        // WebSocket receive operations own their active-read inactivity timer.
-        stream.read_deadline_.reset();
-        schedule_http2_stream_timer(stream);
-    }
     const auto headers = head.headers();
     state_value.headers_.clear();
     state_value.headers_.reserve(headers.size());
     for (const auto& header : headers) {
         state_value.headers_.emplace_back(header.name(), header.value(), state_value.resource_);
+    }
+    if (auto* websocket = stream.websocket_) {
+        accept_extended_connect_websocket_response(
+            *websocket, head.status(), state_value.headers_, stream_ended, "invalid HTTP/2 WebSocket handshake response");
+        // HTTP request lifetime ends at the accepted handshake. WebSocket
+        // operations own their deadlines; the session itself has no total cap.
+        static const operation_timeout websocket_lifetime(std::nullopt);
+        stream.timeout_ = &websocket_lifetime;
+        // WebSocket receive operations own their active-read inactivity timer.
+        stream.timer_.read_deadline_.reset();
+        schedule_http2_stream_timer(stream);
     }
     publish_http_client_final_head(state_value, pool_.policy(),
         {.status_ = head.received_status(),
@@ -240,7 +216,7 @@ void http_client_connection::consume_http2_data(
     }
     // The peer may now wait for this client's consumer to return the credit;
     // release_response_data() restarts the read.
-    stream->read_deadline_.reset();
+    stream->timer_.read_deadline_.reset();
 }
 
 void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end) {
@@ -263,7 +239,7 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
         finish_http_client_response_body(
             state_value, *stream->timeout_, content_semantics_present, pool_.config().max_response_bytes_);
         stream->complete_ = true;
-        stream->read_deadline_.reset();
+        stream->timer_.read_deadline_.reset();
         // Response EOF is independent of the request send half (RFC 9113 8.1).
         // A consumer can finish reading now and still write/end its upload.
         state_value.complete_ = true;
@@ -317,7 +293,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
                 state_value.tunnel_->receive_ended_ = true;
                 state_value.data_signal_.notify();
             }
-            stream->read_deadline_.reset();
+            stream->timer_.read_deadline_.reset();
             stream->signal_.notify();
         }
     } else if (auto* end = event.message_end()) {
@@ -770,49 +746,22 @@ task<void> http_client_connection::stream_http2_upload(
     const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload) {
     auto& connection = http2_.connection();
     auto& state_value = *stream.state_;
-    struct upload_wake_target final {
-        worker_signal& stream_signal_;
-        worker_signal& state_signal_;
-    } wake_target{stream.signal_, http2_.state_signal()};
-    upload.wake_target_ = &wake_target;
-    upload.wake_ = [](void* target) noexcept {
-        auto& wake_target_value = *static_cast<upload_wake_target*>(target);
-        wake_target_value.stream_signal_.notify();
-        wake_target_value.state_signal_.notify();
-    };
-    struct upload_wake_guard final {
-        http_client_output_queue& upload_;
-        ~upload_wake_guard() {
-            upload_.wake_ = nullptr;
-            upload_.wake_target_ = nullptr;
-        }
-    } wake_guard{upload};
-    worker_timer_registration continue_timer;
-    if (request.upload() != nullptr && !request.upload()->content_released_) {
-        (void)pool_.worker().schedule_timer(continue_timer,
-            worker_timer_deadline_after(request.upload()->config_.continue_timeout_.value()),
-            [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
-                    policy->content_released_ = true;
-                    upload.notify_data();
-                }
-            });
-    }
-    while (!upload.ended_ && !upload.stopped_ && !stream.failed() && !stream.retryable_) {
-        if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
-            co_await stream.signal_.wait();
-            continue;
-        }
-        continue_timer.cancel();
-        if (!request.is_tunnel() &&
-            connection.release_request_content(stream.stream_id_) == http2_request_content_release_status::closed) {
-            break;
-        }
-        if (upload.chunk_ready_) {
-            if (co_await send_http2_request_data(stream, upload.chunk_, http2_end_stream::keep_open, &upload)) {
-                upload.acknowledge_chunk();
-            }
-        } else if (upload.end_requested_) {
+    const auto stopped = [&stream, &upload] { return stream.failed() || stream.retryable_ || upload.stopped_; };
+    co_await run_multiplexed_client_upload(
+        pool_.worker(), request, upload, stream.signal_,
+        [&stream, &state_signal = http2_.state_signal()]() noexcept {
+            stream.signal_.notify();
+            state_signal.notify();
+        },
+        [&stream]() noexcept { return stream.failed() || stream.retryable_; },
+        [&]() noexcept {
+            return request.is_tunnel() ||
+                   connection.release_request_content(stream.stream_id_) != http2_request_content_release_status::closed;
+        },
+        [&](std::string_view chunk) {
+            return send_http2_request_data(stream, chunk, http2_end_stream::keep_open, &upload);
+        },
+        [&]() -> task<bool> {
             worker_timer_registration write_timer;
             if (const auto deadline = stream.timeout_->constrained_by(pool_.config().write_timeout_).deadline()) {
                 (void)pool_.worker().schedule_timer(write_timer, *deadline,
@@ -822,7 +771,6 @@ task<void> http_client_connection::stream_http2_upload(
                         }
                     });
             }
-            const auto stopped = [&stream, &upload] { return stream.failed() || stream.retryable_ || upload.stopped_; };
             http2_client_data_status finished{};
             if (request.is_tunnel()) {
                 finished = co_await http2_.send_data(stream.stream_id_, {}, http2_end_stream::end_stream, 0, stopped,
@@ -834,15 +782,10 @@ task<void> http_client_connection::stream_http2_upload(
             if (finished == http2_client_data_status::rejected) {
                 stream.error_ = http_client_error::code_type::invalid_request;
                 http2_.submit_reset(stream.stream_id_);
-                break;
+                co_return false;
             }
-            if (finished == http2_client_data_status::submitted && !stopped() && !upload.ended_) {
-                upload.finish();
-            }
-        } else {
-            co_await stream.signal_.wait();
-        }
-    }
+            co_return finished == http2_client_data_status::submitted && !stopped();
+        });
 }
 
 // --- server push: pool policy over a connection's stream registry ---------------

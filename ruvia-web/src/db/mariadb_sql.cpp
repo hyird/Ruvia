@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/web/detail/db/db_number_format.h"
 #include "ruvia/web/detail/db/db_sql_scan.h"
 
 #include "db/db_sql_format.h"

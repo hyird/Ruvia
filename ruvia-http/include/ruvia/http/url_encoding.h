@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/http_hex.h"
 
 namespace ruvia {
@@ -117,58 +116,8 @@ template <typename visitor_type>
 // keeps a '%' that does not start a valid escape as a literal byte. `input`
 // may alias `storage`. Keep its owner alive until the result is consumed;
 // owning-string temporaries are rejected regardless of their contents.
-[[nodiscard]] inline std::optional<std::string_view> decode_url_component(
-    borrowed_text text, std::pmr::string& storage, url_decode_mode mode = url_decode_mode::percent) {
-    const auto input = text.view();
-    std::pmr::string staged(storage.get_allocator());
-    std::pmr::string* target = nullptr;
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        char c = input[i];
-        std::size_t advance = 0;
-        bool transformed = false;
-        if (mode == url_decode_mode::form && c == '+') {
-            c = ' ';
-            transformed = true;
-        } else if (c == '%') {
-            if (const auto byte = http_try_decode_percent_byte(input, i)) {
-                c = static_cast<char>(*byte);
-                advance = 2;
-                transformed = true;
-            } else if (mode != url_decode_mode::form) {
-                if (target == &storage) {
-                    storage.clear();
-                }
-                return std::nullopt;
-            }
-        }
-        if (!transformed) {
-            if (target != nullptr) {
-                target->push_back(c);
-            }
-            continue;
-        }
-        if (target == nullptr) {
-            const bool can_write_in_place =
-                (mode == url_decode_mode::form || storage.empty()) &&
-                !detail::http_text_aliases_string(input, storage);
-            target = can_write_in_place ? &storage : &staged;
-            target->reserve(input.size() - advance);
-            target->clear();
-            if (i != 0) {
-                target->append(input.data(), i);
-            }
-        }
-        target->push_back(c);
-        i += advance;
-    }
-    if (target == nullptr) {
-        return input;
-    }
-    if (target == &staged) {
-        storage = std::move(staged);
-    }
-    return std::string_view(storage);
-}
+[[nodiscard]] std::optional<std::string_view> decode_url_component(
+    borrowed_text text, std::pmr::string& storage, url_decode_mode mode = url_decode_mode::percent);
 
 // Origin-form path identity, the one canonical form shared by route matching,
 // path-scoped middleware and fallbacks, and decoded route parameters. A path

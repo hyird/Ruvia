@@ -13,6 +13,7 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
 
+#include "field/http_request_field_validation.h"
 #include "http2/http2_header_list.h"
 #include "util/geometric_reserve.h"
 
@@ -111,23 +112,7 @@ public:
     [[nodiscard]] std::string_view cookie() const&& = delete;
 
     [[nodiscard]] bool append_cookie_header_value(std::string_view value, bool has_existing_cookie) {
-        constexpr std::string_view cookie_separator = "; ";
-        const auto separator_bytes = has_existing_cookie ? cookie_separator.size() : 0;
-        if (value.size() > max_http_header_bytes ||
-            cookie_.size() > max_http_header_bytes - separator_bytes ||
-            cookie_.size() + separator_bytes > max_http_header_bytes - value.size()) {
-            return false;
-        }
-
-        // Reserve the whole crumb first so its separator cannot trigger a smaller growth.
-        reserve_geometric(cookie_, cookie_.size() + separator_bytes + value.size());
-        if (has_existing_cookie) {
-            cookie_.append(cookie_separator.data(), cookie_separator.size());
-        }
-        if (!value.empty()) {
-            cookie_.append(value.data(), value.size());
-        }
-        return true;
+        return append_binary_cookie_crumb(cookie_, value, has_existing_cookie);
     }
 
     [[nodiscard]] std::size_t header_count() const noexcept {

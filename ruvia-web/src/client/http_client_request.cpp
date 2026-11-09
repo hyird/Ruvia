@@ -14,6 +14,7 @@
 #include "client/http_client_pool.h"
 #include "client/http_client_registry.h"
 #include "client/http_client_response_state.h"
+#include "http/inline_http_header_views.h"
 
 namespace ruvia {
 namespace {
@@ -168,12 +169,17 @@ http_client_request& http_client_request::query(std::string_view name, std::stri
     if (target_ == "*") {
         throw std::invalid_argument("asterisk target cannot contain query parameters");
     }
-    std::pmr::string suffix(target_.get_allocator().resource());
-    suffix.push_back(target_.find('?') == std::string_view::npos ? '?' : '&');
-    append_query_component(suffix, name);
-    suffix.push_back('=');
-    append_query_component(suffix, value);
-    target_.append(suffix);
+    const auto old_size = target_.size();
+    const char separator = target_.find('?') == std::string_view::npos ? '?' : '&';
+    try {
+        target_.push_back(separator);
+        append_query_component(target_, name);
+        target_.push_back('=');
+        append_query_component(target_, value);
+    } catch (...) {
+        target_.resize(old_size);
+        throw;
+    }
     return *this;
 }
 http_client_request& http_client_request::body(std::string_view value) {
@@ -220,11 +226,12 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
         }
         std::optional<task<http_client_response>> dispatched;
         {
-            auto fields = request.field_views();
+            const detail::inline_http_header_views<16> fields(
+                request.headers_, request.headers_.get_allocator().resource());
             const http_client_request_view view{
                 .method_ = request.method_,
                 .target_ = request.target_,
-                .headers_ = fields,
+                .headers_ = fields.view(),
                 .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
                                               : http_client_request_content_view::none()};
             dispatched.emplace(request.client_.dispatch(view));
@@ -307,8 +314,8 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
     if (has_body_) {
         throw std::invalid_argument("streamed upload cannot also have a buffered body");
     }
-    const auto fields = field_views();
-    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields}, config);
+    const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
+    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields.view()}, config);
     consumed_ = true;
     std::pmr::string(method_.get_allocator()).swap(method_);
     std::pmr::string(target_.get_allocator()).swap(target_);
@@ -376,15 +383,11 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
     if (consumed_) {
         throw std::logic_error("CONNECT builder was consumed");
     }
-    std::pmr::vector<http_header_view> fields(headers_.get_allocator().resource());
-    fields.reserve(headers_.size());
-    for (const auto& field : headers_) {
-        fields.emplace_back(field.name(), field.value());
-    }
+    const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
     auto dispatched = udp_
-                          ? client_.dispatch_udp({.target_ = target_, .headers_ = fields}, config)
+                          ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config)
                           : client_.dispatch_connect(
-                                {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields}, config);
+                                {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config);
     consumed_ = true;
     std::pmr::string(authority_.get_allocator()).swap(authority_);
     std::pmr::string(protocol_.get_allocator()).swap(protocol_);

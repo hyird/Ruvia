@@ -9,12 +9,12 @@
 #include <new>
 #include <stdexcept>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "http2/http2_header_rules.h"
-#include "http2/http2_nghttp2_memory.h"
+#include "util/http_address_overlap.h"
+#include "util/http_c_library_memory.h"
 
 namespace ruvia {
 namespace detail {
@@ -22,8 +22,9 @@ namespace detail {
 class hpack_decoder final {
 public:
     explicit hpack_decoder(std::pmr::memory_resource* resource)
-        : memory_(resource) {
-        const int result = nghttp2_hd_inflate_new2(&inflater_, memory_.table());
+        : memory_(resource),
+          memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)) {
+        const int result = nghttp2_hd_inflate_new2(&inflater_, &memory_table_);
         if (result == NGHTTP2_ERR_NOMEM) {
             memory_.rethrow_allocation_failure();
         }
@@ -107,7 +108,8 @@ public:
     }
 
 private:
-    http2_nghttp2_memory memory_;
+    http_c_library_memory memory_;
+    nghttp2_mem memory_table_;
     nghttp2_hd_inflater* inflater_{nullptr};
     bool decoding_{false};
     bool poisoned_{false};
@@ -121,8 +123,9 @@ class hpack_field_deflater final {
 public:
     explicit hpack_field_deflater(std::pmr::memory_resource* resource)
         : inline_resource_(inline_storage_.data(), inline_storage_.size(), resource),
-          memory_(&inline_resource_) {
-        const int result = nghttp2_hd_deflate_new2(&deflater_, 0, memory_.table());
+          memory_(&inline_resource_),
+          memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)) {
+        const int result = nghttp2_hd_deflate_new2(&deflater_, 0, &memory_table_);
         if (result == NGHTTP2_ERR_NOMEM) {
             memory_.rethrow_allocation_failure();
         }
@@ -173,7 +176,8 @@ public:
 private:
     alignas(std::max_align_t) std::array<std::byte, 512> inline_storage_;
     std::pmr::monotonic_buffer_resource inline_resource_;
-    http2_nghttp2_memory memory_;
+    http_c_library_memory memory_;
+    nghttp2_mem memory_table_;
     nghttp2_hd_deflater* deflater_{nullptr};
 };
 }  // namespace

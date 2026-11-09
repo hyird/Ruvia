@@ -18,16 +18,30 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 
+#include "context/context_access.h"
 #include "context/context_services.h"
 #include "http/static_file_variant.h"
 #include "router/compiled_route_plan.h"
-#include "router/middleware_chain.h"
 #include "router/route_entry.h"
 #include "router/route_resolution.h"
 #include "server/document_root_binding.h"
 
 namespace ruvia::detail {
 
+class route_table;
+
+struct middleware_chain final {
+    using terminal_type = callback_ref<task<void>(context&)>;
+    using failure_type = task<void> (*)(const route_table&, context&, std::exception_ptr);
+
+    const route_table* table_{nullptr};
+    std::span<const route_middleware> frames_;
+    std::span<const std::string_view> scopes_;
+    terminal_type terminal_;
+    failure_type failure_{nullptr};
+};
+
+[[nodiscard]] task<void> run_chain(const middleware_chain& chain, context& context_value);
 struct route_request_view final {
     http_known_method known_method_{http_known_method::unknown};
     std::string_view method_{};
@@ -222,3 +236,15 @@ private:
 };
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+[[nodiscard]] inline context make_route_context(request_memory& memory, const http_request& request,
+    const detail::resolved_route& resolved, const detail::context_services& services) {
+    const auto& route = resolved.route();
+    const auto values = resolved.match().values();
+    return detail::context_access::make(memory, request, route.path(), route.param_names().data(),
+        values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route), services);
+}
+
+}  // namespace ruvia

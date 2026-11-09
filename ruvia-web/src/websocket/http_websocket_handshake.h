@@ -10,10 +10,20 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/websocket_handshake.h"
+#include "ruvia/web/context.h"
 
+#include "context/context_access.h"
+#include "http/inline_http_header_views.h"
 #include "server/http1_upgrade_response_head.h"
 
 namespace ruvia::detail {
+
+// The context retains header storage through handshake construction. The
+// protocol plan copies the views before this temporary pointer table is freed.
+[[nodiscard]] inline inline_http_header_views<> websocket_response_headers(context& context_value) {
+    return inline_http_header_views<>(
+        context_access::handshake_headers(context_value), context_value.pool());
+}
 
 // Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
 // not recomputed and no compression bool is returned through a side channel.

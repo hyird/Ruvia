@@ -14,7 +14,6 @@
 #include <unordered_map>
 #include <utility>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_number_format.h"
@@ -28,9 +27,9 @@
 #include "parser/http_header_descriptor_storage.h"
 #include "response/http_final_response_control_plan.h"
 #include "response/http_framed_response_head_plan.h"
-#include "response/http_response_body_access.h"
 #include "response/http_response_header_state.h"
 #include "server/http_date_cache.h"
+#include "util/http_address_overlap.h"
 #include "util/http_c_library_memory.h"
 #include "util/quic_varint.h"
 #include "websocket/websocket_server_negotiation.h"
@@ -74,8 +73,18 @@ public:
     outbound_field_section(outbound_field_section&&) = delete;
     outbound_field_section& operator=(outbound_field_section&&) = delete;
 
+    [[nodiscard]] bool has_name_budget() const noexcept {
+        return name_bytes_ != 0;
+    }
+
+    void reserve_names(std::size_t name_bytes) noexcept {
+        if (names_.empty() && name_bytes > name_bytes_) {
+            name_bytes_ = name_bytes;
+        }
+    }
+
     void add_literal(std::string_view name, std::string_view value) {
-        fields_.append(make_nv(name, value));
+        fields_.append(make_nv(name, value, detail::hpack_header_name_is_sensitive(name)));
     }
 
     void add_lowercased(std::string_view name, std::string_view value) {
@@ -90,9 +99,8 @@ public:
             names_.resize(offset + size);
             return names_.data() + offset;
         });
-        fields_.append(make_nv(lower, value));
+        fields_.append(make_nv(lower, value, detail::hpack_header_name_is_sensitive(lower)));
     }
-
     [[nodiscard]] const nghttp3_nv* data() const& noexcept RUVIA_LIFETIMEBOUND {
         return fields_.view().data();
     }
@@ -103,7 +111,7 @@ public:
     }
 
 private:
-    const std::size_t name_bytes_;
+    std::size_t name_bytes_;
     std::pmr::string names_;
     detail::http_header_descriptor_storage<nghttp3_nv> fields_;
 };
@@ -278,13 +286,7 @@ class http3_connection::impl final {
     };
 
 public:
-    struct control_frame_chunk final {
-        explicit control_frame_chunk(std::pmr::memory_resource* resource)
-            : bytes_(resource) {}
-        std::pmr::vector<std::byte> bytes_;
-        std::size_t written_{0};
-        std::size_t acknowledged_{0};
-    };
+    // Control extension frames (dynamic ORIGIN) share one contiguous buffer.
     struct control_output_segment final {
         bool nghttp3_{true};
         std::size_t bytes_{0};
@@ -297,13 +299,7 @@ public:
         : role_(role),
           resource_(detail::http_pmr_resource_or_default(options.resource_)),
           memory_(resource_),
-          memory_table_{
-              .user_data = &memory_,
-              .malloc = detail::http_c_library_memory::allocate,
-              .free = detail::http_c_library_memory::deallocate,
-              .calloc = detail::http_c_library_memory::allocate_zeroed,
-              .realloc = detail::http_c_library_memory::reallocate,
-          },
+          memory_table_(detail::make_c_library_mem_table<nghttp3_mem>(memory_)),
           max_field_section_size_(options.max_field_section_size_),
           max_stream_output_bytes_(options.max_stream_output_bytes_),
           own_data_events_(options.own_data_events_),
@@ -311,7 +307,7 @@ public:
           events_(resource_),
           streams_(resource_),
           initial_origin_payload_(resource_),
-          control_extension_frames_(resource_),
+          control_extension_bytes_(resource_),
           control_segments_(resource_) {
         if (options.max_concurrent_streams_ == 0 ||
             options.max_stream_output_bytes_ == 0 ||
@@ -879,23 +875,31 @@ public:
             content_length_value = http_format_unsigned(content_length_bytes, *planned_length);
         }
 
-        std::size_t name_bytes = 0;
-        std::size_t field_count = 1 + static_cast<std::size_t>(!generated_date.empty()) +
-                                  static_cast<std::size_t>(!content_length_value.empty());
-        for (const auto& header : response.headers()) {
-            if ((detail::http_response_header_access::known_bit(header) & writer_framed_bits) != 0) {
-                continue;
-            }
-            name_bytes += header.name().size();
-            ++field_count;
-        }
-        outbound_field_section section(resource_, name_bytes, field_count);
+        const auto& headers = response.headers();
+        outbound_field_section section(resource_, 0,
+            headers.size() + 1 + static_cast<std::size_t>(!generated_date.empty()) +
+                static_cast<std::size_t>(!content_length_value.empty()));
         section.add_literal(":status", detail::http_status_code_token_view(status_token));
-        for (const auto& header : response.headers()) {
-            if ((detail::http_response_header_access::known_bit(header) & writer_framed_bits) != 0) {
+        for (auto it = headers.begin(); it != headers.end(); ++it) {
+            const auto known_bit = detail::http_response_header_access::known_bit(*it);
+            if ((known_bit & writer_framed_bits) != 0) {
                 continue;
             }
-            section.add_lowercased(header.name(), header.value());
+            const auto known_name = detail::get_http2_known_header_name(known_bit);
+            if (!known_name.empty()) {
+                section.add_literal(known_name, it->value());
+                continue;
+            }
+            if (!section.has_name_budget()) {
+                std::size_t unknown_name_bytes = 0;
+                for (auto rest = it; rest != headers.end(); ++rest) {
+                    if (detail::get_http2_known_header_name(detail::http_response_header_access::known_bit(*rest)).empty()) {
+                        unknown_name_bytes += rest->name().size();
+                    }
+                }
+                section.reserve_names(unknown_name_bytes);
+            }
+            section.add_lowercased(it->name(), it->value());
         }
         if (!generated_date.empty()) {
             section.add_literal("date", generated_date);
@@ -952,9 +956,10 @@ public:
     std::pmr::vector<char> initial_origin_payload_;
     nghttp3_vec initial_origin_vec_{};
     std::optional<std::int64_t> control_stream_id_;
-    std::pmr::deque<control_frame_chunk> control_extension_frames_;
+    std::pmr::vector<std::byte> control_extension_bytes_;
+    std::size_t control_extension_written_{0};
+    std::size_t control_extension_acknowledged_{0};
     std::pmr::deque<control_output_segment> control_segments_;
-    std::size_t control_extension_pending_bytes_{0};
     std::optional<http_origin_advertisement> building_origins_;
     std::uint64_t building_origin_bytes_{0};
     std::size_t active_header_blocks_{0};
@@ -964,6 +969,7 @@ public:
     bool control_stream_blocked_{false};
     bool control_stream_shutdown_{false};
     bool peeked_control_extension_{false};
+    bool control_extension_frame_in_progress_{false};
     bool packet_input_{false};
     bool suppress_transport_callbacks_{false};
     bool drain_final_{false};
@@ -1070,26 +1076,21 @@ http3_result http3_connection::peek_output(
     output.fin_ = false;
     impl_->peeked_control_extension_ = false;
     if (impl_->control_stream_id_.has_value() && !impl_->control_stream_blocked_ &&
-        !impl_->control_stream_shutdown_) {
-        for (auto& frame : impl_->control_extension_frames_) {
-            if (frame.written_ == frame.bytes_.size()) {
-                continue;
-            }
-            if (frame.written_ == 0 &&
-                nghttp3_conn_is_stream_flushed(impl_->connection_, *impl_->control_stream_id_) == 0) {
-                break;
-            }
-            if (max_bytes == 0) {
-                return {http3_status::would_block, 0};
-            }
-            const auto offered = (std::min)(frame.bytes_.size() - frame.written_, max_bytes);
-            output.stream_id_ = *impl_->control_stream_id_;
-            output.buffers_[0] = {frame.bytes_.data() + frame.written_, offered};
-            output.buffer_count_ = 1;
-            output.fin_ = false;
-            impl_->peeked_control_extension_ = true;
-            return {http3_status::accepted, 0};
+        !impl_->control_stream_shutdown_ &&
+        impl_->control_extension_written_ < impl_->control_extension_bytes_.size() &&
+        (impl_->control_extension_frame_in_progress_ ||
+            nghttp3_conn_is_stream_flushed(impl_->connection_, *impl_->control_stream_id_) != 0)) {
+        if (max_bytes == 0) {
+            return {http3_status::would_block, 0};
         }
+        const auto offered = (std::min)(impl_->control_extension_bytes_.size() - impl_->control_extension_written_, max_bytes);
+        output.stream_id_ = *impl_->control_stream_id_;
+        output.buffers_[0] = {
+            impl_->control_extension_bytes_.data() + impl_->control_extension_written_, offered};
+        output.buffer_count_ = 1;
+        output.fin_ = false;
+        impl_->peeked_control_extension_ = true;
+        return {http3_status::accepted, 0};
     }
 
     std::array<nghttp3_vec, 16> vectors;
@@ -1142,16 +1143,7 @@ http3_status http3_connection::commit_output(
         const bool from_nghttp3 = !impl_->peeked_control_extension_;
         impl_->peeked_control_extension_ = false;
         if (!from_nghttp3) {
-            std::size_t available = 0;
-            for (const auto& frame : impl_->control_extension_frames_) {
-                const auto unwritten = frame.bytes_.size() - frame.written_;
-                if (unwritten >= bytes - available) {
-                    available = bytes;
-                    break;
-                }
-                available += unwritten;
-            }
-            if (available < bytes) {
+            if (bytes > impl_->control_extension_bytes_.size() - impl_->control_extension_written_) {
                 return http3_status::invalid_state;
             }
             if (bytes != 0) {
@@ -1167,18 +1159,9 @@ http3_status http3_connection::commit_output(
                     }
                 }
             }
-            std::size_t remaining = bytes;
-            for (auto& frame : impl_->control_extension_frames_) {
-                if (frame.written_ == frame.bytes_.size()) {
-                    continue;
-                }
-                const auto step = (std::min)(remaining, frame.bytes_.size() - frame.written_);
-                frame.written_ += step;
-                remaining -= step;
-                if (remaining == 0) {
-                    break;
-                }
-            }
+            impl_->control_extension_written_ += bytes;
+            impl_->control_extension_frame_in_progress_ =
+                impl_->control_extension_written_ != impl_->control_extension_bytes_.size();
             return http3_status::accepted;
         }
         const bool extend_last = bytes != 0 && !impl_->control_segments_.empty() &&
@@ -1224,18 +1207,13 @@ http3_status http3_connection::acknowledge_output(
                     return impl_->status_from(result);
                 }
             } else {
-                std::size_t remaining = step;
-                while (remaining != 0 && !impl_->control_extension_frames_.empty()) {
-                    auto& frame = impl_->control_extension_frames_.front();
-                    const auto consumed = (std::min)(remaining, frame.written_ - frame.acknowledged_);
-                    frame.acknowledged_ += consumed;
-                    impl_->control_extension_pending_bytes_ -= consumed;
-                    remaining -= consumed;
-                    if (frame.acknowledged_ == frame.bytes_.size()) {
-                        impl_->control_extension_frames_.pop_front();
-                    } else {
-                        break;
-                    }
+                const auto unacknowledged =
+                    impl_->control_extension_written_ - impl_->control_extension_acknowledged_;
+                impl_->control_extension_acknowledged_ += (std::min)(step, unacknowledged);
+                if (impl_->control_extension_acknowledged_ == impl_->control_extension_bytes_.size()) {
+                    impl_->control_extension_bytes_.clear();
+                    impl_->control_extension_written_ = 0;
+                    impl_->control_extension_acknowledged_ = 0;
                 }
             }
             segment.bytes_ -= step;
@@ -1636,19 +1614,25 @@ http3_status http3_connection::submit_origin_advertisement(
     const auto length = std::get<0>(payload_size);
     const auto length_varint_bytes = detail::quic_varint_size(length);
     const auto total_bytes = 1 + length_varint_bytes + length;
+    const auto pending_bytes =
+        impl_->control_extension_bytes_.size() - impl_->control_extension_acknowledged_;
     if (total_bytes > impl_->max_stream_output_bytes_ -
-                          (std::min)(impl_->max_stream_output_bytes_, impl_->control_extension_pending_bytes_)) {
+                          (std::min)(impl_->max_stream_output_bytes_, pending_bytes)) {
         return http3_status::would_block;
     }
-    impl::control_frame_chunk chunk(impl_->resource_);
-    chunk.bytes_.resize(total_bytes);
-    chunk.bytes_[0] = std::byte{0x0c};
+    if (impl_->control_extension_acknowledged_ == impl_->control_extension_bytes_.size()) {
+        impl_->control_extension_bytes_.clear();
+        impl_->control_extension_written_ = 0;
+        impl_->control_extension_acknowledged_ = 0;
+    }
+    const auto offset = impl_->control_extension_bytes_.size();
+    impl_->control_extension_bytes_.resize(offset + total_bytes);
+    auto* const dst = impl_->control_extension_bytes_.data() + offset;
+    dst[0] = std::byte{0x0c};
     (void)detail::encode_quic_varint(
-        {reinterpret_cast<char*>(chunk.bytes_.data() + 1), length_varint_bytes}, length);
+        {reinterpret_cast<char*>(dst + 1), length_varint_bytes}, length);
     detail::write_http_origin_payload(
-        {reinterpret_cast<char*>(chunk.bytes_.data() + 1 + length_varint_bytes), length}, origins);
-    impl_->control_extension_frames_.push_back(std::move(chunk));
-    impl_->control_extension_pending_bytes_ += total_bytes;
+        {reinterpret_cast<char*>(dst + 1 + length_varint_bytes), length}, origins);
     return http3_status::accepted;
 }
 
@@ -1847,8 +1831,10 @@ http3_status http3_connection::shutdown_stream_write(
     }
     if (impl_->control_stream_id_.has_value() && stream_id == *impl_->control_stream_id_) {
         impl_->control_stream_shutdown_ = true;
-        impl_->control_extension_frames_.clear();
-        impl_->control_extension_pending_bytes_ = 0;
+        impl_->control_extension_bytes_.clear();
+        impl_->control_extension_written_ = 0;
+        impl_->control_extension_acknowledged_ = 0;
+        impl_->control_extension_frame_in_progress_ = false;
     }
     if (auto* stream = impl_->find_stream(stream_id)) {
         stream->write_aborted_ = true;

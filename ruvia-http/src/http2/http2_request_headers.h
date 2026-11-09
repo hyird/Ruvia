@@ -9,7 +9,6 @@
 #include "coding/http_content_length.h"
 #include "field/http_request_field_validation.h"
 #include "field/http_te_fields.h"
-#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
 #include "parser/http_parser_syntax.h"
@@ -27,21 +26,13 @@ struct http2_header_decode_context final {
 };
 
 [[nodiscard]] inline bool http2_is_http_request_scheme(std::string_view scheme) noexcept {
-    return http_ascii_equals_ignore_case(scheme, "http") || http_ascii_equals_ignore_case(scheme, "https");
+    return is_http_request_scheme(scheme);
 }
 
-// RFC 9110 defines both http-URI and https-URI with a mandatory authority.
-// Asterisk-form OPTIONS is server-wide: the request target itself contains no
-// authority information (RFC 9113 section 8.3.1). A translated HTTP/1.1
-// origin-form request MUST omit :authority and carry Host instead; a direct
-// HTTP/2 sender SHOULD send :authority. The target-URI authority may therefore
-// be either field. When :authority is present, callers validate it with
-// http2_is_valid_request_authority().
 [[nodiscard]] inline bool http2_regular_request_requires_authority(
     std::string_view scheme, std::string_view path) noexcept {
-    return path != "*" && http2_is_http_request_scheme(scheme);
+    return binary_regular_request_requires_authority(scheme, path);
 }
-
 // Cross-field constraints only. Decoded :path syntax is already checked;
 // senders combine this predicate with the origin-form grammar below.
 [[nodiscard]] inline bool http2_request_path_matches_method_and_scheme(
@@ -66,20 +57,14 @@ struct http2_header_decode_context final {
 
 [[nodiscard]] inline bool http2_is_valid_request_authority(
     std::string_view scheme, std::string_view authority) noexcept {
-    if (http2_is_http_request_scheme(scheme)) {
-        // HTTP(S) URI authority is mandatory even though an empty Host field is
-        // valid HTTP/1 wire syntax for target URIs of other schemes.
-        return !authority.empty() && is_valid_host_header(authority);
-    }
-    return is_valid_uri_authority(authority);
+    return is_valid_binary_request_authority(scheme, authority);
 }
 
 // Call only after authority admission (or validated local push submission).
 // HTTP(S) already uses Host syntax; other schemes can contain URI userinfo.
 [[nodiscard]] inline bool http2_request_synthesizes_host(const http2_stream_state& stream) noexcept {
-    return !stream.has_host() && stream.has_authority() &&
-           (http2_is_http_request_scheme(stream.request_scheme()) ||
-               is_valid_host_header(stream.request_authority()));
+    return binary_request_synthesizes_host(
+        stream.has_host(), stream.has_authority(), stream.request_scheme(), stream.request_authority());
 }
 
 [[nodiscard]] inline std::string_view http2_request_host_field(const http2_stream_state& stream) noexcept {

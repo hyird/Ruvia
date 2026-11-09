@@ -2,8 +2,7 @@
 
 #include "ruvia/web/db/db_types.h"
 
-#include "client/client_host.h"
-#include "client/client_tls_config_storage.h"
+#include "client/client_tls.h"
 #include "util/config_validation.h"
 
 namespace ruvia::detail {

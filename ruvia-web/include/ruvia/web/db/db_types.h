@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -16,6 +17,7 @@
 
 #include "ruvia/core/operation_options.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/detail/text_scalar.h"
 #include "ruvia/web/model.h"
@@ -151,6 +153,31 @@ struct db_cache_options final {
 using db_cache_setting_type = std::variant<std::monostate, bool, std::chrono::milliseconds, db_cache_options>;
 
 namespace detail {
+
+struct mariadb_driver;
+struct postgresql_driver;
+template <typename driver_type>
+class db_pool;
+
+// Closed, allocation-free reference to one concrete database pool. Database
+// operations cross exactly one explicit branch; there is no virtual dispatch,
+// shared ownership, or request-path allocation.
+using db_pool_ref_type = std::variant<std::monostate, db_pool<mariadb_driver>*, db_pool<postgresql_driver>*>;
+
+inline void append_db_number(std::pmr::string& output, std::int64_t value) {
+    http_append_signed(output, value);
+}
+
+inline void append_db_number(std::pmr::string& output, std::uint64_t value) {
+    http_append_unsigned(output, value);
+}
+
+template <std::floating_point number_type>
+inline void append_db_number(std::pmr::string& output, number_type value) {
+    // SQL numeric literals cannot contain the inf/nan spellings of to_chars.
+    http_append_formatted_finite_number(output, value, "database floating-point value must be finite",
+        "database floating-point value cannot be formatted");
+}
 
 // The result shapes a repository builder derives from one query. An id-keyed
 // cache entry ignores the SQL, so its key holds the caller's cache id and the
@@ -368,6 +395,81 @@ private:
     storage_type storage_;
 };
 
+namespace detail {
+
+struct db_value_access final {
+    [[nodiscard]] static db_value owned_string(std::pmr::string value) {
+        return db_value(std::in_place_type<std::pmr::string>, std::move(value));
+    }
+
+    [[nodiscard]] static db_value_type type(const db_value& value) noexcept {
+        return value.type();
+    }
+
+    [[nodiscard]] static std::string_view text(const db_value& value) noexcept {
+        return value.text();
+    }
+
+    // Prepared statement parameters own their text. Requiring that alternative
+    // gives native text protocols a checked, NUL-terminated borrowing boundary.
+    [[nodiscard]] static const std::pmr::string& owned_text(const db_value& value) {
+        return std::get<std::pmr::string>(value.storage_);
+    }
+    static const std::pmr::string& owned_text(const db_value&&) = delete;
+
+    [[nodiscard]] static std::int64_t signed_value(const db_value& value) noexcept {
+        return value.signed_value();
+    }
+
+    [[nodiscard]] static std::uint64_t unsigned_value(const db_value& value) noexcept {
+        return value.unsigned_value();
+    }
+
+    [[nodiscard]] static double get_double_value(const db_value& value) noexcept {
+        return value.get_double_value();
+    }
+
+    [[nodiscard]] static bool get_bool_value(const db_value& value) noexcept {
+        return value.get_bool_value();
+    }
+};
+
+template <typename t_type>
+inline constexpr bool db_owning_char_string = false;
+
+template <typename traits_type, typename allocator_type>
+inline constexpr bool db_owning_char_string<std::basic_string<char, traits_type, allocator_type>> = true;
+
+// One value the variadic query()/execute() overloads accept. A type that
+// already denotes a whole parameter sequence -- std::span, std::array, or a
+// vector of db_value -- cannot construct a db_value, so it fails this concept and
+// the span overload keeps winning without needing an explicit exclusion.
+template <typename param_type>
+concept db_parameter =
+    std::constructible_from<db_value, param_type&&> || db_owning_char_string<std::remove_cvref_t<param_type>>;
+
+template <typename... params_type>
+concept db_parameter_pack = sizeof...(params_type) > 0 && (db_parameter<params_type> && ...);
+
+// DB entry points clone each value into their own storage before returning.
+// Borrow owned db_value text and owning-string temporaries only across that
+// synchronous boundary; db_value itself still rejects retained string temporaries.
+template <typename param_type>
+    requires db_parameter<param_type>
+[[nodiscard]] db_value make_immediate_db_parameter(param_type&& param) {
+    if constexpr (std::same_as<std::remove_cvref_t<param_type>, db_value>) {
+        if (db_value_access::type(param) == db_value_type::string) {
+            return db_value(db_value_access::text(param));
+        }
+        return db_value(std::forward<param_type>(param));
+    } else if constexpr (db_owning_char_string<std::remove_cvref_t<param_type>>) {
+        return db_value(std::string_view(param));
+    } else {
+        return db_value(std::forward<param_type>(param));
+    }
+}
+
+}  // namespace detail
 class db_field final {
 private:
     using storage_type = std::variant<std::monostate, std::pmr::string, borrowed_text>;

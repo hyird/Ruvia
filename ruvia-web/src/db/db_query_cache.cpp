@@ -9,8 +9,6 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
-#include "ruvia/web/detail/db/db_result_access.h"
-#include "ruvia/web/detail/db/db_value_access.h"
 
 #include "db/db_config_storage.h"
 #include "db/db_digest.h"

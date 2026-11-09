@@ -2,7 +2,6 @@
 
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/detail/db/db_backend.h"
 
 #include "db/db_config_storage.h"
 

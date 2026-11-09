@@ -9,12 +9,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/util/http_address_overlap.h"
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_utf8.h"
 
+#include "util/http_address_overlap.h"
 #include "websocket/http_websocket_frame_reader.h"
 #include "websocket/http_websocket_inbound_assembler.h"
 #include "websocket/http_websocket_permessage_deflate.h"

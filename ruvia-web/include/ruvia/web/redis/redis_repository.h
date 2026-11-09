@@ -20,13 +20,7 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/entity/value_storage.h"
-#include "ruvia/web/detail/redis/redis_entity_codec.h"
-#include "ruvia/web/detail/redis/redis_entity_key.h"
-#include "ruvia/web/detail/redis/redis_entity_traits.h"
-#include "ruvia/web/detail/redis/redis_predicate_storage.h"
-#include "ruvia/web/detail/redis/redis_query_compile.h"
-#include "ruvia/web/detail/redis/redis_repository_commands.h"
-#include "ruvia/web/detail/redis/redis_repository_mapping.h"
+#include "ruvia/web/detail/redis/redis_orm.h"
 #include "ruvia/web/entity_rows.h"
 #include "ruvia/web/fixed_string.h"
 #include "ruvia/web/redis/redis_handle.h"
@@ -447,7 +441,7 @@ public:
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         auto args = detail::compile_redis_find(mapping(), options, memory);
-        detail::redis_map_many<entity_type> mapper{{std::pmr::string(mapping().prefix_, memory)},
+        detail::redis_map_many<entity_type> mapper{{mapping().storage_prefix_},
             options.take_.has_value()
                 ? std::nullopt
                 : std::optional<std::uint64_t>(options.skip_ ? options.skip_->value() : 0U)};
@@ -465,19 +459,19 @@ public:
         if (plain) {
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
-                auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
+                auto key = detail::redis_entity_key(mapping().storage_prefix_, *id, memory);
                 detail::redis_orm_arguments_type args(memory);
                 args.reserve(2);
                 args.emplace_back("HGETALL");
                 args.emplace_back(key);
                 detail::redis_map_one<entity_type> mapper{
-                    std::move(key), std::pmr::string(mapping().prefix_, memory)};
+                    std::move(key), mapping().storage_prefix_.size()};
                 return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
             }
         }
         const auto take = options.take_.has_value() ? (std::min)(options.take_->value(), std::uint64_t{1}) : std::uint64_t{1};
         auto args = detail::compile_redis_find(mapping(), options, memory, false, take);
-        detail::redis_map_first<entity_type> mapper{{std::pmr::string(mapping().prefix_, memory)}};
+        detail::redis_map_first<entity_type> mapper{{mapping().storage_prefix_}};
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
 
@@ -489,7 +483,7 @@ public:
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         auto args = detail::compile_redis_find(mapping(), options, memory);
-        detail::redis_map_search<entity_type> mapper{std::pmr::string(mapping().prefix_, memory)};
+        detail::redis_map_search<entity_type> mapper{mapping().storage_prefix_};
         return handle_.template command_mapped<std::pair<entity_rows<entity_type>, std::uint64_t>>(
             std::move(args), std::move(mapper));
     }
@@ -498,7 +492,7 @@ public:
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         return handle_.template command_mapped<std::uint64_t>(
-            detail::compile_redis_find(mapping(), options, memory, true), detail::redis_map_count{});
+            detail::compile_redis_find(mapping(), options, memory, true), detail::redis_orm_count_result);
     }
 
     template <std::same_as<redis_predicate> predicate_type>
@@ -512,13 +506,13 @@ public:
         if (!options.order_.has_value() && !options.skip_ && !options.take_) {
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
-                const auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
+                const auto key = detail::redis_entity_key(mapping().storage_prefix_, *id, memory);
                 return handle_.exists(key);
             }
         }
         return handle_.template command_mapped<bool>(
             detail::compile_redis_find(mapping(), options, memory, true),
-            detail::redis_map_exists{});
+            detail::redis_orm_exists_result);
     }
 
     template <std::same_as<redis_predicate> predicate_type>
@@ -545,7 +539,7 @@ public:
         auto* memory = resource();
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
-        const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
+        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id, memory);
         return handle_.expire(key, ttl);
     }
 
@@ -553,7 +547,7 @@ public:
         auto* memory = resource();
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
-        const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
+        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id, memory);
         return handle_.pttl(key);
     }
 
@@ -613,7 +607,7 @@ private:
     [[nodiscard]] task<redis_write_result> delete_by_id(
         std::string_view id, std::pmr::memory_resource* memory) const {
         return handle_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(),
-            detail::redis_orm_delete_arguments(mapping().prefix_, id, memory), detail::redis_orm_delete_result);
+            detail::redis_orm_delete_arguments(mapping().storage_prefix_, id, memory), detail::redis_orm_delete_result);
     }
 
     enum class write_mode : std::uint8_t {
@@ -659,7 +653,7 @@ private:
             return count;
         }();
         auto args = detail::redis_orm_write_arguments(
-            mapping().prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments, memory);
+            mapping().storage_prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments, memory);
         detail::redis_scalar_scratch_type scalar_scratch;
         args.emplace_back(detail::encode_redis_scalar(required, scalar_scratch));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {

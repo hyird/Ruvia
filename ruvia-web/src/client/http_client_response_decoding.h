@@ -2,9 +2,11 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string_view>
 
 #include "ruvia/http/http_client_response_head.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
 
@@ -16,6 +18,7 @@ namespace ruvia::detail {
 
 class client_request_policy;
 class http_client_response_state;
+struct http_client_websocket_handshake;
 
 // One received final response head, after its protocol driver stored the
 // response fields in the state's headers_.
@@ -37,6 +40,12 @@ struct http_client_final_head final {
 // selects collection of an encoded body, then wakes the head consumer.
 void publish_http_client_final_head(
     http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head);
+
+// Validates an RFC 8441 Extended CONNECT WebSocket response head (HTTP/2 or
+// HTTP/3) and records the negotiated subprotocol and compression on `websocket`.
+void accept_extended_connect_websocket_response(http_client_websocket_handshake& websocket,
+    http_status_code status, std::span<const http_header> headers, bool stream_ended,
+    std::string_view error_message);
 
 // Ends a received body: decodes a collected Content-Encoding within the
 // response byte limit, failing with timeout when `timeout` expired before or

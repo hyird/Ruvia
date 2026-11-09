@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -15,8 +16,11 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
+#include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/core/worker_timer.h"
 #ifdef RUVIA_ENABLE_HTTP2
 #include "ruvia/http/http2_connection.h"
 #endif
@@ -31,9 +35,8 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
-#include "client/http_client_response_handoff.h"
-#include "client/http_client_tunnel_state.h"
-#include "client/http_client_upload_state.h"
+#include "client/http_client_output_queue.h"
+#include "client/http_client_request_storage.h"
 
 namespace ruvia {
 class response_stream_writer;
@@ -43,6 +46,166 @@ namespace ruvia::detail {
 
 class http_client_pool;
 class http_client_response_memory_domain;
+
+// Transfers the response of an exchange or a push to its consumer once, after
+// the final head arrived. Embedded in the address-stable response state; one
+// started receive runs at a time, and the owner retiring closes the cold ones.
+class http_client_response_handoff final {
+public:
+    [[nodiscard]] bool taken() const noexcept {
+        return taken_;
+    }
+    [[nodiscard]] bool has_pending_receive() const noexcept {
+        return scope_.has_pending_operations();
+    }
+    // A cold receive of `pin`'s response, bound to this handoff's scope;
+    // `head_message` (static text) reports a failure before the head.
+    [[nodiscard]] task<http_client_response> receive(http_client_response pin, std::string_view head_message);
+    // The owner retires: its pending receives close, and once the response was
+    // transferred the owner's handle no longer consumes it.
+    void release(http_client_response& owner) noexcept;
+
+private:
+    [[nodiscard]] task<http_client_response> receive_owned(http_client_response pin, std::string_view head_message);
+
+    ::ruvia::operation_scope scope_;
+    bool taken_{false};
+    bool active_{false};
+};
+
+class http_client_tunnel_state final {
+public:
+    http_client_tunnel_state(const worker_handle& worker_value, std::pmr::memory_resource* resource, http_client_tunnel_config config)
+        : output_(worker_value, resource),
+          config_(config) {}
+    http_client_output_queue output_;
+    http_client_tunnel_config config_;
+    bool udp_{};
+    bool accepted_{};
+    bool receive_ended_{};
+};
+
+class http_client_upload_state final {
+public:
+    http_client_upload_state(const worker_handle& worker_value, std::pmr::memory_resource* resource, http_client_upload_config config)
+        : output_(worker_value, resource),
+          config_(config),
+          trailers_(resource) {}
+    http_client_upload_state(worker_handle&&, std::pmr::memory_resource*, http_client_upload_config) = delete;
+    http_client_output_queue output_;
+    http_client_upload_config config_;
+    std::pmr::vector<http_header> trailers_;
+    // An HTTP/1 peer can stop accepting an in-flight upload while still
+    // delivering a complete response. The upload operation reports this
+    // independently so it cannot poison that response before framing proves
+    // whether the response completed.
+    std::exception_ptr failure_;
+    bool content_released_{};
+    http_client_response_handoff response_;
+};
+
+// Composite per-stream deadline timer shared by HTTP/2 and HTTP/3 client
+// streams: combines the operation timeout with active read/write inactivity
+// deadlines and reschedules lazily when a deadline only moves later.
+struct http_client_stream_timer final {
+    using time_point = std::chrono::steady_clock::time_point;
+
+    std::optional<time_point> read_deadline_;
+    std::optional<time_point> write_deadline_;
+    std::optional<time_point> timer_at_;
+    worker_timer_registration timer_;
+
+    void cancel() noexcept {
+        timer_.cancel();
+        timer_at_.reset();
+    }
+
+    [[nodiscard]] std::optional<time_point> earliest_deadline(const operation_timeout& timeout) const noexcept {
+        auto deadline = timeout.deadline();
+        for (const auto bound : {read_deadline_, write_deadline_}) {
+            if (bound && (!deadline || *bound < *deadline)) {
+                deadline = bound;
+            }
+        }
+        return deadline;
+    }
+
+    [[nodiscard]] bool expired(const operation_timeout& timeout,
+        time_point now = std::chrono::steady_clock::now()) const noexcept {
+        return timeout.expired() || (read_deadline_ && *read_deadline_ <= now) ||
+               (write_deadline_ && *write_deadline_ <= now);
+    }
+
+    template <typename callback_type>
+    void schedule(const worker_handle& worker, const operation_timeout& timeout, callback_type&& on_expired) {
+        const auto deadline = earliest_deadline(timeout);
+        if (!deadline || (timer_at_ && *timer_at_ <= *deadline)) {
+            return;
+        }
+        timer_.cancel();
+        timer_at_.reset();
+        if (worker.schedule_timer(timer_, *deadline,
+                [on_expired = std::forward<callback_type>(on_expired)](worker_timer_outcome outcome) mutable noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        on_expired();
+                    }
+                }) == worker_timer_schedule_status::scheduled) {
+            timer_at_ = deadline;
+        }
+    }
+};
+
+template <typename wake_fn_type, typename stop_predicate_type, typename release_fn_type,
+    typename send_chunk_fn_type, typename finish_fn_type>
+[[nodiscard]] task<void> run_multiplexed_client_upload(const worker_handle& worker,
+    const http_client_request_storage& request, http_client_output_queue& upload, worker_signal& stream_signal,
+    wake_fn_type&& wake_fn, stop_predicate_type&& stop_predicate, release_fn_type&& release_content,
+    send_chunk_fn_type&& send_chunk, finish_fn_type&& finish_upload) {
+    upload.wake_target_ = &wake_fn;
+    upload.wake_ = [](void* target) noexcept { (*static_cast<std::remove_reference_t<wake_fn_type>*>(target))(); };
+    struct upload_wake_guard final {
+        http_client_output_queue& upload_;
+        ~upload_wake_guard() {
+            upload_.wake_ = nullptr;
+            upload_.wake_target_ = nullptr;
+        }
+    } wake_guard{upload};
+    worker_timer_registration continue_timer;
+    if (request.upload() != nullptr && !request.upload()->content_released_) {
+        (void)worker.schedule_timer(continue_timer,
+            worker_timer_deadline_after(request.upload()->config_.continue_timeout_.value()),
+            [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
+                    policy->content_released_ = true;
+                    upload.notify_data();
+                }
+            });
+    }
+    while (!upload.ended_ && !upload.stopped_ && !stop_predicate()) {
+        if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
+            co_await stream_signal.wait();
+            continue;
+        }
+        continue_timer.cancel();
+        if (!release_content()) {
+            break;
+        }
+        if (upload.chunk_ready_) {
+            if (co_await send_chunk(std::string_view(upload.chunk_))) {
+                upload.acknowledge_chunk();
+            }
+        } else if (upload.end_requested_) {
+            if (!(co_await finish_upload())) {
+                break;
+            }
+            if (!stop_predicate() && !upload.stopped_ && !upload.ended_) {
+                upload.finish();
+            }
+        } else {
+            co_await stream_signal.wait();
+        }
+    }
+}
 
 enum class http_client_response_transport : std::uint8_t {
     unassigned,

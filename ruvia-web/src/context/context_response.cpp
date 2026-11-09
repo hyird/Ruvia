@@ -5,10 +5,14 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/cookies.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_status.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/session.h"
 
+#include "auth/cookie_signature.h"
 #include "context/context_access.h"
 #include "context/context_response_state.h"
 #include "context/context_services.h"
@@ -16,7 +20,7 @@
 #include "http/session_access.h"
 #include "router/route_table.h"
 #include "server/http_alternative_service.h"
-
+#include "util/inline_text_concat.h"
 namespace ruvia {
 
 namespace {
@@ -255,4 +259,92 @@ void context::apply_response_state(
     }
 }
 
+namespace {
+
+void write_cookie(http_response& response, std::string_view name, std::string_view value,
+    const cookie_options& options) {
+    const set_cookie_plan plan(name, value, options);
+    response.set_cookie(plan);
+}
+
+[[nodiscard]] bool redirect_location_contains_line_break(std::string_view location) noexcept {
+    for (const char ch : location) {
+        if (ch == '\r' || ch == '\n') {
+            return true;
+        }
+    }
+    return false;
+}
+
+// RFC 3986 section 3.2 authority of an absolute or network-path reference:
+// it follows "//" and ends at the first "/", "?" or "#". Browsers treat "\" as
+// a path separator for http(s) (WHATWG URL), so a percent-encoded "\" inside
+// the authority would move the host the browser contacts, e.g.
+// "http://good.example\@evil.example/".
+[[nodiscard]] bool redirect_authority_contains_backslash(std::string_view location) noexcept {
+    std::size_t start = 0;
+    if (!location.starts_with("//")) {
+        const auto colon = location.find(':');
+        if (colon == std::string_view::npos || colon == 0 || location.substr(colon + 1, 2) != "//") {
+            return false;
+        }
+        for (std::size_t index = 0; index < colon; ++index) {
+            const char ch = location[index];
+            const bool alpha = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+            if (!alpha && (index == 0 || !((ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.'))) {
+                return false;
+            }
+        }
+        start = colon + 1;
+    }
+    const auto authority = location.substr(start + 2);
+    return authority.substr(0, authority.find_first_of("/?#")).find('\\') != std::string_view::npos;
+}
+
+}  // namespace
+
+void context_response_editor::set_cookie(set_cookie_options options) {
+    write_cookie(target(), options.name_.view(), options.value_.view(), options.attributes_);
+}
+
+void context_response_editor::set_signed_cookie(set_signed_cookie_options options) {
+    const auto name = options.name_.view();
+    const auto value = options.value_.view();
+    const auto secret = options.secret_.view();
+    const auto prefix = options.attributes_.prefix_
+                            ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_))
+                            : std::string_view{};
+    const detail::inline_text_concat<128> wire_name({prefix, name}, owner_->pool());
+    char signature[detail::cookie_signature_size];
+    detail::write_cookie_signature(signature, secret, wire_name.view(), value, owner_->pool());
+    const detail::inline_text_concat<256> signed_value(
+        {value, ".", std::string_view(signature, sizeof(signature))}, owner_->pool());
+    write_cookie(target(), name, signed_value.view(), options.attributes_);
+}
+
+void context_response_editor::delete_cookie(delete_cookie_options options) {
+    options.attributes_.max_age_.reset();
+    options.attributes_.expires_ = cookie_deletion_expires;
+    write_cookie(target(), options.name_.view(), "", options.attributes_);
+}
+
+http_response context::redirect(redirect_response_options options) {
+    const auto location = options.location_.view();
+    const auto status_code = options.status_;
+    if (!is_http_redirect_status(status_code)) {
+        throw std::invalid_argument("redirect status must be 301, 302, 303, 307, or 308");
+    }
+    if (redirect_location_contains_line_break(location)) {
+        throw std::invalid_argument("redirect location must not contain CR or LF");
+    }
+    if (redirect_authority_contains_backslash(location)) {
+        throw std::invalid_argument("redirect location authority must not contain a backslash");
+    }
+    http_response response(arena());
+    apply_response_state(response, status_code);
+    std::pmr::string encoded_location(pool());
+    response.header("Location", percent_encode_uri_reference(location, encoded_location));
+    response_state().reset_draft();
+    return response;
+}
 }  // namespace ruvia

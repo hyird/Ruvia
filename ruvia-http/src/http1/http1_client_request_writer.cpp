@@ -14,7 +14,7 @@
 #include "client/http1_client_request_headers.h"
 #include "client/http_origin_view.h"
 #include "field/http_connection_fields.h"
-#include "field/http_expect_token.h"
+#include "field/http_request_field_validation.h"
 #include "parser/http_header_descriptor_storage.h"
 #include "parser/http_parser_syntax.h"
 #include "parser/http_request_target.h"

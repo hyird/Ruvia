@@ -12,7 +12,6 @@
 #include "coding/http_content_length.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_rules.h"
-#include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_response_headers.h"
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field
@@ -314,9 +313,7 @@ bool http2_connection::finish_request_head(http2_stream_state& stream) {
         }
         // RFC 8441 defines websocket extended CONNECT only for HTTP(S) URI
         // schemes. Other extended protocols retain the full RFC 3986 space.
-        if (stream.protocol_is_websocket() &&
-            !http_ascii_equals_ignore_case(stream.request_scheme(), "http") &&
-            !http_ascii_equals_ignore_case(stream.request_scheme(), "https")) {
+        if (!is_valid_extended_connect_scheme(stream.request_protocol(), stream.request_scheme())) {
             return false;
         }
         if (!stream.begin_extended_connect()) {

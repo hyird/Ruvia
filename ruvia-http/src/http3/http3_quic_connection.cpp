@@ -59,13 +59,7 @@ public:
           max_udp_payload_size_(options.max_udp_payload_size_),
           max_pending_datagram_bytes_(options.max_pending_datagram_bytes_),
           memory_(detail::http_pmr_resource_or_default(options.resource_)),
-          memory_table_{
-              .user_data = &memory_,
-              .malloc = detail::http_c_library_memory::allocate,
-              .free = detail::http_c_library_memory::deallocate,
-              .calloc = detail::http_c_library_memory::allocate_zeroed,
-              .realloc = detail::http_c_library_memory::reallocate,
-          },
+          memory_table_(detail::make_c_library_mem_table<ngtcp2_mem>(memory_)),
           http3_options_(resolve_http3_options(options)),
           http3_(role == http3_role::client ? http3_connection::client(http3_options_) : http3_connection::server(http3_options_)) {
         ngtcp2_ccerr_default(&close_error_);

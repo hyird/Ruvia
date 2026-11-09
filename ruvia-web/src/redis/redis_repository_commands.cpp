@@ -1,5 +1,3 @@
-#include "ruvia/web/detail/redis/redis_repository_commands.h"
-
 #include <array>
 #include <stdexcept>
 #include <utility>
@@ -8,7 +6,7 @@
 
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/redis/redis_entity_key.h"
+#include "ruvia/web/detail/redis/redis_orm.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "integration/request_io_metrics.h"
@@ -102,7 +100,7 @@ const redis_orm_script& redis_orm_delete_script() {
     return digest.script();
 }
 
-redis_orm_arguments_type redis_orm_write_arguments(std::string_view prefix, std::string_view id,
+redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id,
     std::string_view mode, redis_write_options options, std::size_t extra_arguments,
     std::pmr::memory_resource* resource) {
     if (options.ttl_ && (options.persist_ || options.ttl_->count() <= 0 || options.ttl_->count() > 9007199254740991LL)) {
@@ -111,7 +109,7 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view prefix, std:
     redis_orm_arguments_type args(resource);
     args.reserve(7 + extra_arguments);
     append_redis_orm_script_call(args, redis_orm_write_script());
-    args.push_back(redis_entity_key(prefix, id, resource));
+    args.push_back(redis_entity_key(storage_prefix, id, resource));
     args.emplace_back(mode);
     args.emplace_back(options.ttl_ ? "expire" : options.persist_ ? "persist"
                                                                  : "keep");
@@ -124,11 +122,11 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view prefix, std:
 }
 
 redis_orm_arguments_type redis_orm_delete_arguments(
-    std::string_view prefix, std::string_view id, std::pmr::memory_resource* resource) {
+    std::string_view storage_prefix, std::string_view id, std::pmr::memory_resource* resource) {
     redis_orm_arguments_type args(resource);
     args.reserve(4);
     append_redis_orm_script_call(args, redis_orm_delete_script());
-    args.push_back(redis_entity_key(prefix, id, resource));
+    args.push_back(redis_entity_key(storage_prefix, id, resource));
     return args;
 }
 
@@ -187,6 +185,18 @@ std::uint64_t redis_orm_count(const redis_value& reply) {
         throw redis_error(redis_error::code_type::protocol_error, "negative entity result count");
     }
     return static_cast<std::uint64_t>(count);
+}
+
+std::uint64_t redis_orm_count_result(redis_value&& reply, std::pmr::memory_resource*) {
+    const auto values = redis_value_array(reply);
+    if (values.size() != 1) {
+        throw redis_error(redis_error::code_type::protocol_error, "invalid entity count reply");
+    }
+    return redis_orm_count(values.front());
+}
+
+bool redis_orm_exists_result(redis_value&& reply, std::pmr::memory_resource*) {
+    return redis_orm_count_result(std::move(reply), nullptr) != 0;
 }
 
 }  // namespace ruvia::detail

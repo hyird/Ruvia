@@ -14,7 +14,6 @@
 #include "ruvia/web/detail/json/json_escape.h"
 
 #include "auth/hmac.h"
-#include "auth/jwt_date.h"
 #include "auth/jwt_primitives.h"
 #include "util/constant_time.h"
 #include "util/pmr_owned_storage.h"

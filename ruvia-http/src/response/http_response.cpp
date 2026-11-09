@@ -17,9 +17,9 @@
 
 #include "field/http_entity_tag.h"
 #include "field/response_field_validation.h"
-#include "response/http_response_body_access.h"
 #include "response/http_response_content_semantics.h"
 #include "response/http_response_header_bits.h"
+#include "response/http_response_header_state.h"
 #include "response/http_response_header_storage.h"
 
 namespace ruvia {

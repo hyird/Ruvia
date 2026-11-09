@@ -133,6 +133,21 @@ void decode_http_client_response_body(http_client_response_state& state_value,
 
 }  // namespace
 
+void accept_extended_connect_websocket_response(http_client_websocket_handshake& websocket,
+    http_status_code status, std::span<const http_header> headers, bool stream_ended,
+    std::string_view error_message) {
+    if (!status.is_successful() || stream_ended) {
+        throw http_client_error(http_client_error::code_type::handshake_rejected, error_message, status);
+    }
+    const auto negotiated = websocket.negotiation_.validate_fields(headers);
+    const auto* selected = std::get_if<websocket_client_negotiation_result_view>(&negotiated);
+    if (selected == nullptr) {
+        throw http_client_error(http_client_error::code_type::handshake_rejected, error_message, status);
+    }
+    websocket.selected_subprotocol_.assign(selected->selected_subprotocol_);
+    websocket.compression_ = selected->compression_;
+}
+
 void publish_http_client_final_head(
     http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head) {
     if (state_value.upload_ && !state_value.upload_->output_.ended_ &&

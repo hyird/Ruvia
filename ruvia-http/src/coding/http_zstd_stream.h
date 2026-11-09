@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "coding/pmr_codec_allocation.h"
+#include "util/http_c_library_memory.h"
 
 // zstd (RFC 8878) state whose working memory comes from one PMR resource and
 // whose window never exceeds the 8 MiB HTTP limit of RFC 9659. zstd
@@ -34,11 +34,11 @@ public:
         return stream_;
     }
     void rethrow_allocation_failure() const {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
 
 private:
-    pmr_codec_allocation_context allocation_;
+    http_c_library_memory allocation_;
     ZSTD_DStream* stream_;
 };
 
@@ -57,7 +57,7 @@ public:
         return context_ != nullptr;
     }
     void rethrow_allocation_failure() const {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
     [[nodiscard]] bool reset() noexcept;
     // The single zstd encode loop, shared by whole-buffer and streaming
@@ -69,7 +69,7 @@ public:
         ZSTD_EndDirective operation, std::size_t max_encoded_bytes);
 
 private:
-    pmr_codec_allocation_context allocation_;
+    http_c_library_memory allocation_;
     ZSTD_CCtx* context_;
 };
 

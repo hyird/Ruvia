@@ -11,7 +11,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_types.h"
 
-#include "client/client_tls_config_storage.h"
+#include "client/client_tls.h"
 #include "db/db_config_validation.h"
 #include "integration/named_capability.h"
 

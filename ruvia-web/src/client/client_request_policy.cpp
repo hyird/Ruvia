@@ -18,7 +18,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_set_cookie.h"
 
-#include "client/client_host.h"
+#include "client/client_tls.h"
 #include "client/http_client_config_storage.h"
 #include "client/http_client_request_storage.h"
 

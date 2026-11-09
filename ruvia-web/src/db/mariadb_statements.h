@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -7,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
@@ -17,6 +19,30 @@ struct st_mysql;
 struct st_mysql_stmt;
 
 namespace ruvia::detail {
+
+// Storage a bound parameter points at for the length of an execution.
+union mariadb_param_value {
+    long long integer_;
+    double real_;
+    signed char flag_;
+};
+
+// Storage of one result column between mysql_stmt_fetch() and formatting.
+struct mariadb_column final {
+    std::pmr::vector<char> buffer_;
+    unsigned long length_{0};
+    char null_{0};
+    char error_{0};
+};
+
+// One cached statement: its handle once prepared, the placeholders its text
+// restricts (mariadb_statement_traits::integer_params_), and the hash of its
+// key, for refusing it.
+struct mariadb_statement final {
+    st_mysql_stmt* handle_{nullptr};
+    std::uint64_t integer_params_{0};
+    std::size_t key_hash_{0};
+};
 
 // Server-side prepared statements of one MariaDB connection, so a repeated
 // statement skips the server's parse and travels in the binary protocol
@@ -58,11 +84,9 @@ class mariadb_statement_cache final {
 public:
     using handle = db_statement_handle;
 
-    explicit mariadb_statement_cache(std::pmr::memory_resource* resource) noexcept;
+    explicit mariadb_statement_cache(std::pmr::memory_resource* resource);
     ~mariadb_statement_cache();
 
-    mariadb_statement_cache(mariadb_statement_cache&& other) noexcept;
-    mariadb_statement_cache& operator=(mariadb_statement_cache&& other) noexcept;
     mariadb_statement_cache(const mariadb_statement_cache&) = delete;
     mariadb_statement_cache& operator=(const mariadb_statement_cache&) = delete;
 
@@ -91,13 +115,42 @@ public:
     // tracked, and so current once every response before has been read.
     [[nodiscard]] bool client_utf8mb4() const noexcept;
 
-    // Services for mariadb_prepared_run.
-    struct state;
-    [[nodiscard]] state& data();
+    [[nodiscard]] mariadb_statement& entry(handle statement);
+    void reserve_retired(std::size_t count = 1);
+    void retire(st_mysql_stmt* statement) noexcept;
+    void refuse(std::size_t hash) noexcept;
+    void refuse(handle statement, std::size_t hash) noexcept;
+    [[nodiscard]] bool refused(std::size_t hash) const noexcept;
+    void invalidate();
+    [[nodiscard]] bool usable() const noexcept;
+    void lose_tracking() noexcept;
 
-private:
-    std::pmr::memory_resource* resource_;
-    state* state_{nullptr};
+    db_statement_cache<mariadb_statement> statements_;
+    std::pmr::vector<st_mysql_stmt*> retired_;
+    // Key hashes of statements that run as text on this connection; zero
+    // marks a free position.
+    std::array<std::size_t, db_statement_cache<mariadb_statement>::capacity> refused_{};
+    std::size_t next_refused_{0};
+    // What the session reported: whether it tracks every variable the cache
+    // relies on and the schema, and whether its client and connection
+    // character sets are still utf8mb4; and a change since the last find().
+    bool tracked_{false};
+    bool all_variables_{false};
+    bool schema_tracked_{false};
+    bool untracked_{false};
+    bool client_utf8mb4_{true};
+    bool connection_utf8mb4_{true};
+    bool changed_{false};
+    // A stored procedure ran since the tracked list was last read back.
+    bool verify_{false};
+    // Scratch of the one execution a connection runs at a time.
+    std::pmr::vector<unsigned int> types_;
+    std::pmr::vector<std::max_align_t> binds_;
+    std::pmr::vector<mariadb_param_value> values_;
+    std::pmr::vector<mariadb_column> columns_;
+    // The bytes the column buffers hold, and those the last result needed.
+    std::size_t column_bytes_{0};
+    std::size_t column_needed_{0};
 };
 
 // The system variables a statement's parse or result depends on, as

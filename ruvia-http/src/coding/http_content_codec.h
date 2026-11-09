@@ -4,7 +4,9 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
 
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 
 // One compression library binding per coding, behind a uniform signature: decode
@@ -30,6 +32,30 @@ class zstd_encoder_stream;
     }
     output.append(bytes_value, size);
     return true;
+}
+
+template <typename stream_type, typename operation_type>
+[[nodiscard]] inline std::optional<std::pmr::string> encode_whole_content_with_stream(
+    stream_type& encoder, operation_type finish_operation, std::string_view input,
+    std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
+    std::pmr::string output("", http_pmr_resource_or_default(output_resource));
+    if (!encoder.encode(input, output, finish_operation, max_encoded_bytes)) {
+        return std::nullopt;
+    }
+    return output;
+}
+
+template <typename stream_type, typename operation_type, typename... arg_types>
+[[nodiscard]] inline std::optional<std::pmr::string> encode_whole_content(
+    const char* init_error, operation_type finish_operation, std::string_view input,
+    std::size_t max_encoded_bytes, std::pmr::memory_resource* resource, arg_types&&... args) {
+    auto* const state_resource = http_pmr_resource_or_default(resource);
+    stream_type encoder(state_resource, std::forward<arg_types>(args)...);
+    if (!encoder.initialized()) {
+        throw http_content_codec_error(init_error);
+    }
+    return encode_whole_content_with_stream(
+        encoder, finish_operation, input, max_encoded_bytes, state_resource);
 }
 
 [[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_gzip_content(

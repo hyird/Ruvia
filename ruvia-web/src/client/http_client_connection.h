@@ -24,6 +24,7 @@
 #include "ruvia/web/http_client_types.h"
 
 #include "client/client_tcp_transport.h"
+#include "client/http_client_response_state.h"
 #ifdef RUVIA_ENABLE_HTTP2
 #include "http2/http2_client_session.h"
 #endif
@@ -67,13 +68,7 @@ public:
         // Borrowed from the request or push driver while registered.
         const operation_timeout* timeout_{nullptr};
         std::string_view request_target_;
-        // Read inactivity deadline while the stream waits for peer input. Unset
-        // before the request head is submitted, once the response completed and
-        // while this client's consumer holds the stream's receive credit.
-        std::optional<std::chrono::steady_clock::time_point> read_deadline_;
-        // When timer_ fires. An earlier deadline reschedules it; a later one is
-        // rechecked when it fires.
-        std::optional<std::chrono::steady_clock::time_point> timer_at_;
+        http_client_stream_timer timer_;
         bool complete_{false};
         // Caller-owned buffered suffix or its socket output is still pending.
         bool request_body_pending_{false};
@@ -87,9 +82,6 @@ public:
         // The request addresses the fixed origin, whose jar retains the
         // response's Set-Cookie fields.
         bool addresses_origin_{true};
-        // Read inactivity and total deadline; its completion finds the stream
-        // by request_id_ through the registry.
-        worker_timer_registration timer_;
 
         [[nodiscard]] bool failed() const noexcept {
             return error_.has_value() || failure_ != nullptr;
@@ -185,7 +177,7 @@ public:
     http_io_buffer read_buffer_;
     http_io_buffer write_buffer_;
 #ifdef RUVIA_ENABLE_HTTP2
-    http2_client_session<http_client_connection> http2_;
+    http2_client_session http2_;
 #endif
     pool_lease_scheduler connect_scheduler_;
     pool_lease_scheduler http1_scheduler_;
@@ -265,5 +257,32 @@ private:
     // Last: destroyed first, so its completion never sees a retiring connection.
     worker_timer_registration idle_timer_;
 };
+#ifdef RUVIA_ENABLE_HTTP2
+inline void http2_client_session::drain() {
+    while (auto event = connection_->next_event()) {
+        handler_.on_http2_event(*event);
+    }
+    if (connection_->wants_write()) {
+        write_signal_.notify();
+    }
+    publish_state();
+}
+
+inline void http2_client_session::fail(
+    std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept {
+    if (generation != generation_ || failed_) {
+        return;
+    }
+    failed_ = true;
+    draining_ = true;
+    ping_timer_.cancel();
+    close_timer_.cancel();
+    transport_.close();
+    handler_.on_http2_failure(transport, std::move(failure));
+    write_signal_.notify();
+    state_signal_.notify();
+    capacity_signal_.notify();
+}
+#endif
 
 }  // namespace ruvia::detail

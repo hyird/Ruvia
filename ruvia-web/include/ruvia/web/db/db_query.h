@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "ruvia/web/db/db_types.h"
-#include "ruvia/web/detail/db/db_parameter_pack.h"
 #include "ruvia/web/entity_rows.h"
 
 namespace ruvia {

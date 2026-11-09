@@ -4,25 +4,78 @@
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
-#include "ruvia/web/detail/db/db_backend.h"
-
 // Execution of compiled db_query statements: one deadline and one chain for a
 // query, or a query and its count, run directly or through the result cache.
 
 namespace ruvia {
 class db_query;
+
+// A statement copied into the worker's memory resource so it outlives the
+// caller's arguments: a suspended query keeps borrowing its SQL and parameters
+// long after the expression that produced them has ended.
+struct prepared_db_statement final {
+    std::pmr::string sql_;
+    std::pmr::vector<db_value> params_;
+};
+
+// Raw SQL is checked once, where the caller hands it over: it must hold a
+// statement, and no NUL byte, since both client libraries read SQL as a C
+// string. Compiled SQL is built that way; parameters are checked where they
+// are encoded for the client library.
+void validate_db_sql_text(std::string_view sql);
+
+[[nodiscard]] prepared_db_statement prepare_db_statement(
+    std::string_view sql, std::span<const db_value> params, std::pmr::memory_resource* resource);
+
+// PostgreSQL NOTIFY as a pg_notify() call, so channel and payload travel as
+// bound parameters rather than as SQL text.
+[[nodiscard]] prepared_db_statement prepare_db_notify(
+    std::string_view channel, std::string_view payload, std::pmr::memory_resource* resource);
+
+namespace detail {
+
+[[nodiscard]] inline db_value clone_db_value_for_resource(
+    const db_value& value, std::pmr::memory_resource* resolved_resource) {
+    switch (db_value_access::type(value)) {
+        case db_value_type::null:
+            return db_value(nullptr);
+        case db_value_type::string:
+            return db_value_access::owned_string(
+                std::pmr::string(db_value_access::text(value), resolved_resource));
+        case db_value_type::signed_value:
+            return db_value(db_value_access::signed_value(value));
+        case db_value_type::unsigned_value:
+            return db_value(db_value_access::unsigned_value(value));
+        case db_value_type::double_value:
+            return db_value(db_value_access::get_double_value(value));
+        case db_value_type::bool_value:
+            return db_value(db_value_access::get_bool_value(value));
+    }
+    return db_value(nullptr);
 }
 
-namespace ruvia::detail {
+[[nodiscard]] inline std::pmr::vector<db_value> clone_db_values(
+    std::span<const db_value> values, std::pmr::memory_resource* resource) {
+    auto* resolved = pmr_resource_or_default(resource);
+    std::pmr::vector<db_value> output(resolved);
+    output.reserve(values.size());
+    for (const auto& value : values) {
+        output.push_back(clone_db_value_for_resource(value, resolved));
+    }
+    return output;
+}
 
 struct request_io_metrics;
 
@@ -87,4 +140,5 @@ template <bool with_count>
     return result_value;
 }
 
-}  // namespace ruvia::detail
+}  // namespace detail
+}  // namespace ruvia

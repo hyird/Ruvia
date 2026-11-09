@@ -5,6 +5,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/web/detail/integration/worker_context_capabilities.h"
+#include "ruvia/web/detail/integration/worker_state.h"
+
 #include "context/context_services.h"
 
 namespace ruvia::detail {
@@ -101,6 +104,15 @@ worker_client_registry_view worker_capabilities::client_registries() noexcept {
 
 const worker_state_registry& worker_capabilities::worker_states() const noexcept {
     return worker_states_;
+}
+
+void* worker_context_capabilities::worker_state_instance(const void* type_key) const {
+    auto* instance = worker_states_ == nullptr ? nullptr : worker_states_->instance(type_key);
+    if (instance == nullptr) {
+        throw std::logic_error(
+            "worker state type is not registered: call application::use_worker_state<state_type>() before application::run()");
+    }
+    return instance;
 }
 
 }  // namespace ruvia::detail

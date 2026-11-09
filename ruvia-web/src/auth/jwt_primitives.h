@@ -4,11 +4,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -119,6 +122,19 @@ void jwt_append_json_numeric_date(
     jwt_json_buffer& out, bool& first, std::string_view name, std::string_view value);
 void jwt_validate_jose_header(std::string_view json,
     std::optional<std::string_view> expected_algorithm, std::pmr::memory_resource* resource);
+
+// 输入为去除两端空白后的完整 JSON number；不以机器浮点范围限制 NumericDate。
+[[nodiscard]] bool jwt_is_numeric_date(std::string_view text) noexcept;
+
+// 精确比较 date 与 now + offset，不先收窄到宿主时钟或浮点表示。
+// date 必须已通过 jwt_is_numeric_date；offset 可正可负。
+[[nodiscard]] std::strong_ordering jwt_compare_numeric_date(std::string_view date,
+    std::chrono::system_clock::time_point now, std::chrono::seconds offset) noexcept;
+
+// offset 为已经校验的非负签发时长；0 向下取整，正值向上取整到整秒。
+// 不把相加结果收窄回宿主时钟；返回值借用 output。
+[[nodiscard]] std::string_view jwt_signing_date(std::span<char, 21> output,
+    std::chrono::system_clock::time_point now, std::chrono::seconds offset) noexcept;
 
 struct jwt_payload_access final {
     [[nodiscard]] static jwt_claim claim(std::pmr::string name, std::pmr::string value) noexcept {

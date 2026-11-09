@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-#include "coding/pmr_codec_allocation.h"
+#include "util/http_c_library_memory.h"
 
 // zlib inflate/deflate state whose working memory, including the LZ77 window,
 // comes from one PMR resource. zlib keeps back-pointers to both the z_stream and
@@ -87,12 +87,12 @@ public:
         return stream_;
     }
     void rethrow_allocation_failure() const {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
     [[nodiscard]] bool reset() noexcept;
 
 private:
-    pmr_codec_allocation_context allocation_;
+    http_c_library_memory allocation_;
     z_stream stream_;
 };
 
@@ -113,7 +113,7 @@ public:
         return stream_;
     }
     void rethrow_allocation_failure() const {
-        allocation_.rethrow_allocation_failure();
+        allocation_.rethrow_if_failed();
     }
     [[nodiscard]] bool reset() noexcept;
     // The single content-coding deflate loop, shared by whole-buffer and
@@ -125,7 +125,7 @@ public:
         std::size_t max_encoded_bytes);
 
 private:
-    pmr_codec_allocation_context allocation_;
+    http_c_library_memory allocation_;
     z_stream stream_;
 };
 

@@ -17,7 +17,6 @@
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_entity_codec.h"
 #include "ruvia/web/detail/db/db_relation_query.h"
-#include "ruvia/web/detail/db/db_result_access.h"
 
 namespace ruvia {
 

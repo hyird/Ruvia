@@ -29,22 +29,31 @@ constexpr std::size_t allocation_prefix_bytes =
 
 }  // namespace
 
-http_c_library_memory::http_c_library_memory(std::pmr::memory_resource* resource) noexcept
-    : resource_(http_pmr_resource_or_default(resource)) {}
+http_c_library_memory::http_c_library_memory(
+    std::pmr::memory_resource* resource, std::size_t native_budget) noexcept
+    : resource_(http_pmr_resource_or_default(resource)),
+      native_budget_(native_budget) {}
 
-void http_c_library_memory::rethrow_if_failed() {
+void http_c_library_memory::rethrow_if_failed() const {
     if (auto failure = std::exchange(failure_, nullptr)) {
         std::rethrow_exception(failure);
     }
 }
 
-void http_c_library_memory::rethrow_allocation_failure() {
+void http_c_library_memory::rethrow_allocation_failure() const {
     rethrow_if_failed();
     throw std::bad_alloc();
 }
 
 void* http_c_library_memory::allocate(std::size_t size, void* context) noexcept {
+    if (context == nullptr) {
+        return nullptr;
+    }
     auto& self = *static_cast<http_c_library_memory*>(context);
+    if (size > self.native_budget_ - self.live_bytes_) {
+        self.budget_exceeded_ = true;
+        return nullptr;
+    }
     if (size > (std::numeric_limits<std::size_t>::max)() - allocation_prefix_bytes) {
         return nullptr;
     }
@@ -52,6 +61,7 @@ void* http_c_library_memory::allocate(std::size_t size, void* context) noexcept 
     try {
         auto* base = static_cast<std::byte*>(self.resource_->allocate(total, allocation_alignment));
         std::memcpy(base, &total, sizeof(total));
+        self.live_bytes_ += size;
         return base + allocation_prefix_bytes;
     } catch (...) {
         if (!self.failure_) {
@@ -69,6 +79,7 @@ void http_c_library_memory::deallocate(void* pointer, void* context) noexcept {
     std::size_t total = 0;
     std::memcpy(&total, allocation_base(pointer), sizeof(total));
     self.resource_->deallocate(allocation_base(pointer), total, allocation_alignment);
+    self.live_bytes_ -= total - allocation_prefix_bytes;
 }
 
 void* http_c_library_memory::allocate_zeroed(std::size_t count, std::size_t size, void* context) noexcept {

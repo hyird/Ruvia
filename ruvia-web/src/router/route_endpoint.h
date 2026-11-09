@@ -19,7 +19,7 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
-#include "websocket/websocket_lifecycle_validation.h"
+#include "websocket/http_websocket_liveness.h"
 
 // What a registered route runs, as one closed set of alternatives. Each
 // alternative carries the handler's invoke thunk together with the route

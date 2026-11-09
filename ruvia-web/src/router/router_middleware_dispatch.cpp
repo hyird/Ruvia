@@ -11,7 +11,6 @@
 
 #include "context/context_access.h"
 #include "http/http_error_response.h"
-#include "router/middleware_chain.h"
 #include "router/route_table.h"
 
 namespace ruvia {
