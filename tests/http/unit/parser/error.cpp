@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -14,6 +15,22 @@ using ruvia::http_parse_error;
 using ruvia::http_parse_protocol_error;
 using ruvia::http_protocol_error;
 using ruvia::http_reason_phrase;
+
+template <typename value_type>
+constexpr bool can_construct_received_status = requires(value_type value) {
+    ruvia::http_received_status::try_from_value(value);
+};
+
+enum received_status_enum : unsigned { received_ok = 200 };
+
+static_assert(can_construct_received_status<std::int64_t>);
+static_assert(can_construct_received_status<std::uint64_t>);
+static_assert(can_construct_received_status<char>);
+static_assert(can_construct_received_status<bool>);
+static_assert(!can_construct_received_status<float>);
+static_assert(!can_construct_received_status<double>);
+static_assert(!can_construct_received_status<long double>);
+static_assert(!can_construct_received_status<received_status_enum>);
 
 }  // namespace
 
@@ -55,6 +72,34 @@ TEST(Ruvia, http_status_code_rejects_original_integers_before_wire_narrowing) {
                 ruvia::http_status::continue_value);
     EXPECT_TRUE(ruvia::http_status_code::try_from_value(std::uint64_t{599}) ==
                 ruvia::http_status_code::from_value(599));
+}
+
+TEST(Ruvia, http_received_status_rejects_original_integers_before_wire_narrowing) {
+    for (const auto value : {std::int64_t{-1}, std::int64_t{-65336},
+             std::int64_t{1000}, std::int64_t{65736}, std::int64_t{4'294'967'496},
+             (std::numeric_limits<std::int64_t>::min)(), (std::numeric_limits<std::int64_t>::max)()}) {
+        SCOPED_TRACE(value);
+        EXPECT_FALSE(ruvia::http_received_status::try_from_value(value).has_value());
+    }
+    for (const auto value : {std::uint64_t{1000}, std::uint64_t{65736},
+             std::uint64_t{4'294'967'496}, (std::numeric_limits<std::uint64_t>::max)() - 65'335,
+             (std::numeric_limits<std::uint64_t>::max)()}) {
+        SCOPED_TRACE(value);
+        EXPECT_FALSE(ruvia::http_received_status::try_from_value(value).has_value());
+    }
+}
+
+TEST(Ruvia, http_received_status_preserves_every_three_digit_value_and_its_semantics) {
+    for (std::uint64_t value = 0; value <= 999; ++value) {
+        SCOPED_TRACE(value);
+        const auto received = ruvia::http_received_status::try_from_value(value);
+        ASSERT_TRUE(received.has_value());
+        EXPECT_EQ(received->value(), value);
+        const auto expected = value >= 100 && value <= 599
+                                  ? ruvia::http_status_code::from_value(value)
+                                  : ruvia::http_status::internal_server_error;
+        EXPECT_EQ(received->status(), expected);
+    }
 }
 
 TEST(Ruvia, http_reason_phrase_is_conventional_http1_presentation) {

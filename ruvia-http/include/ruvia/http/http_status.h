@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace ruvia {
 
@@ -187,16 +188,18 @@ inline constexpr auto network_authentication_required = http_status_code::from_v
 // received; for 100..599 both agree.
 class http_received_status final {
 public:
-    // Accepts every three-digit code 000..999; anything else is malformed.
+    // Validate the original integer before narrowing the three-digit code.
+    template <std::integral integer_type>
     [[nodiscard]] static constexpr std::optional<http_received_status> try_from_value(
-        std::uint16_t value) noexcept {
-        if (const auto status = http_status_code::try_from_value(value)) {
-            return http_received_status(*status, value);
+        integer_type value) noexcept {
+        if (std::cmp_less(+value, 0) || std::cmp_greater(+value, 999)) {
+            return std::nullopt;
         }
-        if (value <= 999) {
-            return http_received_status(http_status::internal_server_error, value);
+        const auto wire_value = static_cast<std::uint16_t>(value);
+        if (const auto status = http_status_code::try_from_value(wire_value)) {
+            return http_received_status(*status, wire_value);
         }
-        return std::nullopt;
+        return http_received_status(http_status::internal_server_error, wire_value);
     }
 
     // Parses the received status-code = 3DIGIT of an HTTP/1 status line or an
