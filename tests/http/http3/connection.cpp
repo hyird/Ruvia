@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,6 +19,7 @@
 
 #include "failing_memory_resource.h"
 #include "http3_relay.h"
+#include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -136,6 +138,45 @@ TEST(Ruvia, http3_data_event_borrows_or_copies_named_input) {
     input[0] = 'z';
     EXPECT_EQ(borrowed.bytes_, std::string_view("zbc"));
     EXPECT_EQ(owned.bytes_, std::string_view("abc"));
+}
+
+TEST(Ruvia, http3_data_event_move_assignment_preserves_state_on_allocation_failure) {
+    const std::string previous(64, 'p');
+    const std::string incoming(2048, 'n');
+    for (const bool owned_target : {false, true}) {
+        SCOPED_TRACE(owned_target);
+        failing_memory_resource source_resource;
+        failing_memory_resource target_resource;
+        {
+            ruvia::http3_data_event target(4, previous, &target_resource, owned_target);
+            {
+                ruvia::http3_data_event source(8, incoming, &source_resource, true);
+                if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+                    const auto source_bytes = source.bytes_;
+                    const auto target_bytes = target.bytes_;
+                    const auto source_live = source_resource.live_allocations();
+                    const auto target_live = target_resource.live_allocations();
+                    target_resource.fail_after(0);
+                    EXPECT_THROW(target = std::move(source), std::bad_alloc);
+                    EXPECT_EQ(target.stream_id_, 4);
+                    EXPECT_EQ(target.bytes_, std::string_view(previous));
+                    EXPECT_EQ(target.bytes_.data(), target_bytes.data());
+                    EXPECT_EQ(source.stream_id_, 8);
+                    EXPECT_EQ(source.bytes_, std::string_view(incoming));
+                    EXPECT_EQ(source.bytes_.data(), source_bytes.data());
+                    EXPECT_EQ(source_resource.live_allocations(), source_live);
+                    EXPECT_EQ(target_resource.live_allocations(), target_live);
+                }
+                target_resource.allow_allocations();
+                target = std::move(source);
+            }
+            EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+            EXPECT_EQ(target.stream_id_, 8);
+            EXPECT_EQ(target.bytes_, std::string_view(incoming));
+        }
+        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
+        EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+    }
 }
 
 TEST(Ruvia, http3_nghttp3_streaming_body_is_owned_until_acknowledged) {

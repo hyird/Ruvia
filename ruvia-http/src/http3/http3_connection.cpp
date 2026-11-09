@@ -141,8 +141,8 @@ http3_data_event& http3_data_event::operator=(http3_data_event&& other) {
         return *this;
     }
     const auto borrowed_bytes = other.bytes_;
-    stream_id_ = other.stream_id_;
     owned_bytes_ = std::move(other.owned_bytes_);
+    stream_id_ = other.stream_id_;
     owns_bytes_ = other.owns_bytes_;
     bytes_ = owns_bytes_ ? std::string_view(owned_bytes_) : borrowed_bytes;
     return *this;

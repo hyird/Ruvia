@@ -329,6 +329,7 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 `http3_connection` 用 `nghttp3` 封装请求流、控制流与 QPACK，提供 `read_stream()`、`peek_output()` / `commit_output()` / `acknowledge_output()`、请求/响应/正文/Trailer 提交、RFC 9412 `ORIGIN` 帧（`http3_connection_options::origins_` 与 `submit_origin_advertisement()`）以及 RFC 9218 优先级（`submit_priority_update()`、`stream_priority()`、`set_server_stream_priority()`）接口。`peek_output()` 返回借用向量，不复制待发送正文；QUIC 接受前缀后必须以实际字节数调用 `commit_output()`，收到确认后再调用 `acknowledge_output()`，底层正文块才可回收。
 
 - **留存输入借用**：`http3_data_event` 和 `read_stream()` 在编译期拒绝直接传入临时拥有型字符串或连续容器，后者也拒绝 `std::initializer_list`；命名输入及显式借用视图仍可使用。借用模式下，底层存储须覆盖对应事件的消费；显式构造 view/span 不延长 owner 寿命。
+- **DATA 赋值回滚**：`http3_data_event` 跨资源移动赋值保留目标资源，分配失败时双方的流 ID、正文与借用视图保持不变；恢复资源后可重试。
 - **出站地址稳定**：名称拥有缓冲首次使用时按整节字节上界预留，后续增长不重分配；字段视图只借用至 `nghttp3` 完成提交。
 - **出站字段计数**：按实际发送数量预留描述符，扣除被过滤的分帧字段并计入生成字段。
 - **请求投影 `http3_request_head`**：普通字段索引首次使用时按剩余字段上界一次预留；仅含伪首部与 Cookie 的请求不分配该索引。
