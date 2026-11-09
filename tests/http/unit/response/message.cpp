@@ -17,6 +17,7 @@
 
 #include "failing_memory_resource.h"
 #include "request_header_memory_fixture.h"
+#include "stl_allocation_fixture.h"
 
 namespace {
 
@@ -57,6 +58,76 @@ TEST(Ruvia, response_header_append_preserves_multiplicity_across_table_spill) {
     response.header("X-Repeated", "replacement");
     EXPECT_EQ(response.headers().size(), std::size_t{8});
     EXPECT_EQ(response.header("X-Repeated"), std::string_view("replacement"));
+}
+
+TEST(Ruvia, response_header_reserve_publishes_storage_before_retirement) {
+    ruvia::test::header_memory resource;
+    {
+        http_response response(&resource);
+        for (int index = 0; index != 9; ++index) {
+            response.header("X-Field-" + std::to_string(index), "value");
+        }
+        auto headers = response.headers().clone();
+        std::array<std::string_view, 9> values;
+        for (std::size_t index = 0; index != values.size(); ++index) {
+            values[index] = headers.begin()[index].value();
+        }
+        struct observation final {
+            ruvia::http_response_headers* headers_;
+            const ruvia::http_response_header* previous_;
+            ruvia::test::header_memory* resource_;
+            bool committed_{false};
+        } observed{&headers, headers.begin(), &resource};
+        resource.deallocation_context_ = &observed;
+        resource.before_deallocate_ = [](void* context) noexcept {
+            auto& observed = *static_cast<observation*>(context);
+            observed.committed_ = observed.headers_->begin() != observed.previous_;
+            if (observed.committed_) {
+                observed.resource_->reject_ = true;
+                observed.headers_->content_type(ruvia::http_content_type::application_json);
+            }
+        };
+        headers.reserve(64);
+        resource.before_deallocate_ = nullptr;
+        EXPECT_TRUE(observed.committed_);
+        EXPECT_EQ(headers.header("Content-Type"), std::string_view("application/json"));
+        ASSERT_EQ(headers.size(), std::size_t{10});
+        for (std::size_t index = 0; index != values.size(); ++index) {
+            EXPECT_EQ(headers.begin()[index].value(), values[index]);
+            EXPECT_EQ(headers.begin()[index].value().data(), values[index].data());
+        }
+        headers.reserve(64);
+        resource.reject_ = false;
+    }
+    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+}
+
+TEST(Ruvia, response_header_reserve_failure_preserves_fields_for_retry) {
+    failing_memory_resource resource;
+    {
+        http_response response(&resource);
+        for (int index = 0; index != 9; ++index) {
+            response.header("X-Field-" + std::to_string(index), "value");
+        }
+        auto headers = response.headers().clone();
+        const auto* const previous = headers.begin();
+        const auto live = resource.live_allocations();
+        if (ruvia::test::stl_allocation_failure_injection_enabled()) {
+            resource.fail_after(0);
+            EXPECT_THROW(headers.reserve(64), std::bad_alloc);
+            EXPECT_EQ(headers.begin(), previous);
+            EXPECT_EQ(headers.size(), std::size_t{9});
+            EXPECT_EQ(resource.live_allocations(), live);
+        }
+        resource.allow_allocations();
+        headers.reserve(64);
+        EXPECT_EQ(headers.size(), std::size_t{9});
+        EXPECT_EQ(resource.live_allocations(), live);
+        for (int index = 0; index != 9; ++index) {
+            EXPECT_EQ(headers.header("X-Field-" + std::to_string(index)), std::string_view("value"));
+        }
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, response_status_is_version_neutral_code_only) {

@@ -33,7 +33,14 @@ void http_response_headers::reserve(std::size_t count) {
         spill(count);
         return;
     }
-    heap_.reserve(count);
+    if (count <= heap_.capacity()) {
+        return;
+    }
+    // Only descriptors move; field bytes retain their existing ownership.
+    std::pmr::vector<http_response_header> replacement(resource_);
+    replacement.reserve(count);
+    replacement.insert(replacement.end(), heap_.begin(), heap_.end());
+    heap_.swap(replacement);
 }
 
 http_response_header& http_response_headers::append_prepared_header(http_response_header header_value) noexcept {
