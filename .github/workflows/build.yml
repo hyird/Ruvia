@@ -10,10 +10,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 env:
   BUILD_TYPE: Release
   VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -22,19 +18,25 @@ env:
 jobs:
   style:
     name: clang-format
-    needs: resolve_toolchain
+    needs: [resolve_toolchain, ubuntu_build, windows_build]
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
     steps:
       - name: Checkout Ruvia
         uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Setup mise
+        if: needs.resolve_toolchain.result == 'success'
         uses: jdx/mise-action@v5.2.1
         with:
           install: false
           cache: false
       - name: Restore LLVM toolchain cache
+        if: needs.resolve_toolchain.result == 'success'
         uses: actions/cache/restore@v6.1.0
         with:
           path: ~/.local/share/mise/installs
@@ -43,6 +45,7 @@ jobs:
             mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ needs.resolve_toolchain.outputs.release }}-
             mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-
       - name: Install resolved LLVM clang-format
+        if: needs.resolve_toolchain.result == 'success'
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
           TOOLCHAIN_RELEASE: ${{ needs.resolve_toolchain.outputs.release }}
@@ -54,11 +57,52 @@ jobs:
           mise use --global "github:cross-tools/clang-cross[asset_pattern=x86_64-unknown-linux-musl.tar.xz,strip_components=0,bin_path=x86_64-unknown-linux-musl/bin,checksum=sha256:$TOOLCHAIN_SHA256]@$TOOLCHAIN_RELEASE"
           echo "$(mise where github:cross-tools/clang-cross)/x86_64-unknown-linux-musl/bin" >> "$GITHUB_PATH"
       - name: Check formatting
+        if: needs.resolve_toolchain.result == 'success'
         run: |
           set -euo pipefail
           clang-format --version
           mapfile -t files < <(git ls-files '*.h' '*.hpp' '*.inl' '*.cpp')
           printf '%s\0' "${files[@]}" | xargs -0 -n 80 clang-format --dry-run --Werror
+
+      - name: Clean old CI history
+        if: ${{ always() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const {data: current} = await github.rest.actions.getWorkflowRun({
+              ...context.repo,
+              run_id: context.runId,
+            });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              ...context.repo,
+              workflow_id: current.workflow_id,
+              per_page: 100,
+            });
+            const older = runs.filter(run => run.status === 'completed' &&
+              run.id !== context.runId && run.run_number < current.run_number);
+            let removed = 0;
+            for (const run of older) {
+              try {
+                const {data: latest} = await github.rest.actions.getWorkflowRun({
+                  ...context.repo,
+                  run_id: run.id,
+                });
+                if (latest.status !== 'completed' || latest.run_attempt !== run.run_attempt) {
+                  continue;
+                }
+                await github.rest.actions.deleteWorkflowRun({
+                  ...context.repo,
+                  run_id: run.id,
+                });
+                ++removed;
+              } catch (error) {
+                // Another finishing job may delete the run, or a rerun may make it active.
+                if (error.status !== 404 && error.status !== 409) {
+                  throw error;
+                }
+              }
+            }
+            core.notice(`Retained current/newer/active workflow runs; deleted ${removed} older completed runs.`);
 
   resolve_toolchain:
     name: Resolve latest LLVM musl toolchain and pinned vcpkg
@@ -239,40 +283,3 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure --no-tests=error --build-config $env:BUILD_TYPE
-
-  ci_history_cleanup:
-    name: CI history cleanup
-    needs: [style, ubuntu_build, windows_build]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Keep the current verified build
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          CURRENT_RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          runs="$(gh api --paginate --slurp "repos/$GH_REPO/actions/runs?per_page=100")"
-          completed="$(jq -r --argjson current "$CURRENT_RUN_ID" '
-            [.[].workflow_runs[] | select(.status == "completed" and .id != $current)]
-            | sort_by([(.conclusion == "success"), .updated_at])
-            | map([(.id | tostring), (.run_attempt | tostring)] | @tsv)
-            | join("\n")
-          ' <<< "$runs")"
-          removed=0
-          while IFS=$'\t' read -r run_id attempt; do
-            [[ -n "$run_id" ]] || continue
-            [[ "$run_id" =~ ^[0-9]+$ && "$attempt" =~ ^[0-9]+$ ]]
-            current="$(gh api "repos/$GH_REPO/actions/runs/$run_id")"
-            if ! jq -e --argjson attempt "$attempt" \
-              '.status == "completed" and .run_attempt == $attempt' <<< "$current" > /dev/null; then
-              continue
-            fi
-            gh api --method DELETE "repos/$GH_REPO/actions/runs/$run_id"
-            ((removed += 1))
-          done <<< "$completed"
-          echo "::notice::Retained verified Build $CURRENT_RUN_ID; deleted $removed completed runs. Active runs were untouched."

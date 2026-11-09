@@ -95,6 +95,13 @@ target_link_libraries(my_service PRIVATE ruvia::web)
 ruvia_link_controllers(my_service user_controllers)
 ```
 
+### 2.3 持续集成与执行记录
+
+- **并发构建**：Build 工作流不设置 `concurrency` 组，Musl 与 Windows MSVC 构建并行执行。
+- **结束清理**：现有 `style` job 等待工具链解析与两个平台构建结束；旧记录清理位于最后一步，前序失败也会进入收尾，不设置独立清理 job。
+- **删除范围**：仅 `main` 的 `push` / `workflow_dispatch` 清理同一工作流中运行编号更小且已完成的记录；保留当前、较新与未完成的执行，Pull Request 不清理。
+- **并发保护**：删除前复查执行状态与重跑轮次；已被删除或重跑冲突的记录跳过，权限等其他错误仍使清理失败。
+
 ---
 
 ## 3. 核心架构与生命周期准则
