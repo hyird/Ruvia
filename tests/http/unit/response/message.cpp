@@ -411,6 +411,54 @@ TEST(Ruvia, response_header_append_failure_preserves_existing_header_for_retry) 
     EXPECT_EQ(response.headers().size(), std::size_t{2});
 }
 
+TEST(Ruvia, response_header_removal_commits_before_retiring_match_key) {
+    for (const bool known : {false, true}) {
+        for (const int filler_count : {0, 8}) {
+            SCOPED_TRACE(known);
+            SCOPED_TRACE(filler_count);
+            ruvia::test::header_memory resource;
+            {
+                http_response response(&resource);
+                const std::string_view key = known ? "Content-Type" : "X-Delete";
+                const std::string_view restored = known ? "application/json" : "retained";
+                response.header(key, known ? "text/plain; charset=us-ascii" : "before");
+                response.header("X-Stay", "untouched");
+                for (int index = 0; index != filler_count; ++index) {
+                    response.header("X-Filler-" + std::to_string(index), "value");
+                }
+                struct observation final {
+                    http_response* response_;
+                    std::string_view key_;
+                    std::string_view restored_;
+                    std::size_t size_;
+                    bool committed_{false};
+                } observed{&response, key, restored, response.headers().size() - 1};
+                resource.deallocation_context_ = &observed;
+                resource.before_deallocate_ = [](void* context) noexcept {
+                    auto& observed = *static_cast<observation*>(context);
+                    auto& response = *observed.response_;
+                    observed.committed_ = response.headers().size() == observed.size_ &&
+                                          !response.header(observed.key_) &&
+                                          response.header("X-Stay") == "untouched";
+                    if (observed.committed_) {
+                        response.header(observed.key_, observed.restored_);
+                    }
+                };
+                response.remove_header(response.headers().begin()->name());
+                resource.before_deallocate_ = nullptr;
+                EXPECT_TRUE(observed.committed_);
+                EXPECT_EQ(response.header(key), restored);
+                EXPECT_EQ(response.header("X-Stay"), std::string_view("untouched"));
+                EXPECT_EQ(response.headers().size(), observed.size_ + 1);
+                for (int index = 0; index != filler_count; ++index) {
+                    EXPECT_EQ(response.header("X-Filler-" + std::to_string(index)), std::string_view("value"));
+                }
+            }
+            EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+        }
+    }
+}
+
 TEST(Ruvia, response_header_removal_preserves_unrelated_fields) {
     for (const int filler_count : {0, 8}) {
         http_response response;

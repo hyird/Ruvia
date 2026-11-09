@@ -197,6 +197,7 @@ pool.join();
 
 - **首部转移模式**：`http_response_headers::transfer_from()` 与 `http_response::transfer_headers_from()` 仅接受 `merge` / `assign` / `apply`；非法值在变更前抛出 `std::invalid_argument`，空源也不例外。
 - **响应首部预留**：`http_response_headers::reserve()` 扩容先切换描述符表，再释放旧表，保留退役回调中的首部修改；不复制字段字节，分配失败保留原表，容量足够时不分配。
+- **首部移除键退役**：`remove_header()` 保留匹配键存储至描述符表截短与已知字段索引重建完成；该存储释放回调中重新添加的首部保留。
 - **Multipart 流式缓冲**：`multipart_parser` 复用 `http_io_buffer`，增长时只复制未消费字节。
 - **Multipart 借用重试**：`feed()` 可接收最新分片的正文视图；分配失败后，该视图仍可用于原样重试。
 - **Multipart 值赋值**：`multipart_part` 先准备全部元数据再提交；复制或跨资源移动失败时保留两端原值，同资源移动不分配。

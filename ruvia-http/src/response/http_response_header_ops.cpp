@@ -473,9 +473,9 @@ bool http_response_headers::remove_header_validated(std::string_view key, std::u
         return false;
     }
 
-    release_header(retired_key_header);
     truncate(write);
     rebuild_known_header_index();
+    release_header(retired_key_header);
     return true;
 }
 
