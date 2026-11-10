@@ -248,6 +248,67 @@ TEST(Ruvia, response_vary_token_ignores_surrounding_whitespace) {
     EXPECT_EQ(existing.header("Vary").value_or(""), "Origin, Accept");
 }
 
+TEST(Ruvia, response_vary_merge_preserves_borrowed_token_and_fields_on_failure) {
+    failing_memory_resource resource;
+    {
+        ruvia::http_response response(&resource);
+        const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
+        const std::string long_value = std::string(300, 'x') + ",\tOrigin";
+        response.header("X-Before", "before");
+        response.header("Vary", long_value, append);
+        response.header("X-Between", "between");
+        response.header("vary", "", append);
+        response.header("Vary", "Accept", append);
+        response.header("X-After", "after");
+        const auto borrowed_value = response.headers().begin()[1].value();
+        const auto token = borrowed_value.substr(0, 8);
+        const auto live = resource.live_allocations();
+
+        resource.fail_after(0);
+        EXPECT_THROW(response.add_vary_token(token), std::bad_alloc);
+        EXPECT_EQ(resource.live_allocations(), live);
+        EXPECT_EQ(response.headers().size(), std::size_t{6});
+        EXPECT_EQ(borrowed_value, long_value);
+        EXPECT_EQ(token, "xxxxxxxx");
+        EXPECT_EQ(response.headers().begin()[4].value(), "Accept");
+
+        resource.allow_allocations();
+        response.add_vary_token(token);
+        ASSERT_EQ(response.headers().size(), std::size_t{4});
+        EXPECT_EQ(response.headers().begin()[0].name(), "X-Before");
+        EXPECT_EQ(response.headers().begin()[1].name(), "Vary");
+        EXPECT_EQ(response.headers().begin()[1].value(), long_value + ", Accept, xxxxxxxx");
+        EXPECT_EQ(response.headers().begin()[2].name(), "X-Between");
+        EXPECT_EQ(response.headers().begin()[2].value(), "between");
+        EXPECT_EQ(response.headers().begin()[3].name(), "X-After");
+        EXPECT_EQ(response.headers().begin()[3].value(), "after");
+    }
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+TEST(Ruvia, response_vary_later_membership_and_wildcards_need_no_temporary_storage) {
+    const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
+    const std::string long_value(300, 'x');
+    for (const auto tail : {"aCcEpT", "*"}) {
+        failing_memory_resource resource;
+        ruvia::http_response response(&resource);
+        response.header_stable_view("Vary", long_value);
+        response.header("vary", tail, append);
+        resource.fail_after_stl_operation(0);
+        response.add_vary_token("Accept");
+        ASSERT_EQ(response.headers().size(), std::size_t{2});
+        EXPECT_EQ(response.headers().begin()[0].value(), long_value);
+        EXPECT_EQ(response.headers().begin()[1].value(), tail);
+        response.add_vary_token("*");
+        if (tail == std::string_view("*")) {
+            EXPECT_EQ(response.headers().size(), std::size_t{2});
+        } else {
+            ASSERT_EQ(response.headers().size(), std::size_t{1});
+            EXPECT_EQ(response.header("Vary").value_or(""), "*");
+        }
+    }
+}
+
 TEST(Ruvia, response_header_transfer_appends_disjoint_fields_with_their_rules) {
     auto* const resource = std::pmr::new_delete_resource();
     const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};

@@ -1,4 +1,3 @@
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -680,23 +679,9 @@ void http_response_headers::add_vary_token(std::string_view token) {
         throw std::invalid_argument("invalid HTTP Vary header token");
     }
 
-    // The existing non-empty lines comma-joined in wire order, collected while
-    // checking membership. Short lists stay on the stack; the PMR string takes
-    // over once they outgrow it.
-    std::array<char, 256> inline_joined;
-    std::size_t inline_size = 0;
-    std::pmr::string spilled_joined(resource_);
-    const auto append_joined = [&](std::string_view piece) {
-        if (spilled_joined.empty() && piece.size() <= inline_joined.size() - inline_size) {
-            std::memcpy(inline_joined.data() + inline_size, piece.data(), piece.size());
-            inline_size += piece.size();
-            return;
-        }
-        if (spilled_joined.empty()) {
-            spilled_joined.assign(inline_joined.data(), inline_size);
-        }
-        spilled_joined.append(piece);
-    };
+    std::size_t value_size = token.size();
+    constexpr auto max_value_size = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()) - 4;
+    detail::validate_response_header_storage_size(4, value_size);
     if ((known_header_bits_ & detail::response_header_vary) != 0) {
         for (const auto& header_value : *this) {
             if (detail::http_response_header_access::known_bit(header_value) != detail::response_header_vary) {
@@ -706,9 +691,12 @@ void http_response_headers::add_vary_token(std::string_view token) {
             if (detail::http_has_token(value, "*") || (!wildcard_token && detail::http_has_token(value, token))) {
                 return;
             }
-            if (!http_trim_ows(value).empty()) {
-                append_joined(value);
-                append_joined(", ");
+            if (!wildcard_token && !http_trim_ows(value).empty()) {
+                if (value.size() > max_value_size - value_size ||
+                    max_value_size - value_size - value.size() < 2) {
+                    throw std::length_error("HTTP response header is too large");
+                }
+                value_size += value.size() + 2;
             }
         }
     }
@@ -717,9 +705,29 @@ void http_response_headers::add_vary_token(std::string_view token) {
         header("Vary", "*");
         return;
     }
-    append_joined(token);
-    header("Vary", spilled_joined.empty() ? std::string_view(inline_joined.data(), inline_size)
-                                          : std::string_view(spilled_joined));
+    if (value_size == token.size()) {
+        header("Vary", token);
+        return;
+    }
+
+    // Build independently: token may borrow a field that publication retires.
+    auto prepared = make_uninitialized_header("Vary", value_size, detail::response_header_vary);
+    auto* output = detail::http_response_header_access::value_begin(prepared);
+    for (const auto& header_value : *this) {
+        if (detail::http_response_header_access::known_bit(header_value) != detail::response_header_vary) {
+            continue;
+        }
+        const auto value = header_value.value();
+        if (!http_trim_ows(value).empty()) {
+            std::memcpy(output, value.data(), value.size());
+            output += value.size();
+            *output++ = ',';
+            *output++ = ' ';
+        }
+    }
+    std::memcpy(output, token.data(), token.size());
+    // Existing lines and token are validated; comma-joining preserves validity.
+    publish_header(prepared);
 }
 
 }  // namespace ruvia
