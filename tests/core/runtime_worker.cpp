@@ -403,38 +403,50 @@ bool test_worker_handle_callable_lifetime() {
     }
 
     struct throw_on_copy final {
-        explicit throw_on_copy(std::pmr::memory_resource* resource_value)
-            : bytes_(resource_value) {
+        explicit throw_on_copy(std::pmr::memory_resource* resource_value, const std::atomic<bool>& fail)
+            : bytes_(resource_value),
+              fail_(fail) {
             bytes_.resize(4096, 'c');
         }
         throw_on_copy(const throw_on_copy& other)
-            : bytes_(other.bytes_, other.bytes_.get_allocator().resource()) {
-            throw std::runtime_error("copy failed");
+            : bytes_(other.bytes_, other.bytes_.get_allocator().resource()),
+              fail_(other.fail_) {
+            if (fail_.load(std::memory_order_relaxed)) {
+                throw std::runtime_error("copy failed");
+            }
         }
         throw_on_copy(throw_on_copy&&) noexcept = default;
         void operator()() const {}
         std::pmr::vector<char> bytes_;
+        const std::atomic<bool>& fail_;
     };
     struct throw_on_move final {
-        explicit throw_on_move(std::pmr::memory_resource* resource_value)
-            : bytes_(resource_value) {
+        explicit throw_on_move(std::pmr::memory_resource* resource_value, const std::atomic<bool>& fail)
+            : bytes_(resource_value),
+              fail_(fail) {
             bytes_.resize(4096, 'm');
         }
         throw_on_move(throw_on_move&& other)
-            : bytes_(std::move(other.bytes_)) {
-            throw std::runtime_error("move failed");
+            : bytes_(std::move(other.bytes_)),
+              fail_(other.fail_) {
+            if (fail_.load(std::memory_order_relaxed)) {
+                throw std::runtime_error("move failed");
+            }
         }
         void operator()() const {}
         std::pmr::vector<char> bytes_;
+        const std::atomic<bool>& fail_;
     };
 
     asio::io_context exception_context;
     auto exception_attachment = ruvia::attach_event_loop(exception_context, {.queue_capacity_ = 1});
     const auto exception_handle = exception_attachment.loop().handle();
     counting_resource exception_resource;
+    // Keep failure injection observable at runtime, including under whole-program optimization.
+    std::atomic<bool> fail_construction{true};
     {
-        throw_on_copy copy_input(&exception_resource);
-        throw_on_move move_input(&exception_resource);
+        throw_on_copy copy_input(&exception_resource, fail_construction);
+        throw_on_move move_input(&exception_resource, fail_construction);
         bool copy_threw = false;
         bool move_threw = false;
         try {
@@ -447,7 +459,9 @@ bool test_worker_handle_callable_lifetime() {
         } catch (const std::runtime_error&) {
             move_threw = true;
         }
-        const auto after_exception = exception_handle.post([] {});
+        fail_construction.store(false, std::memory_order_relaxed);
+        const auto after_exception = exception_handle.post(copy_input);
+        exception_context.poll();
         if (!copy_threw || !move_threw || !exception_handle.valid() || !exception_handle.accepting() ||
             after_exception != ruvia::post_status::accepted) {
             return false;
