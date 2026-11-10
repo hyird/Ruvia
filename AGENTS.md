@@ -31,7 +31,7 @@ flowchart TB
     end
     subgraph core ["ruvia-core (ruvia::core) — 独立运行时底座"]
         c_rt["协程 task / standalone Asio 事件循环 / 定时器最小堆 / stop_token"]
-        c_pool["有界通道 / pool_lease_scheduler / blocking_pool / 两级 PMR 内存池"]
+        c_pool["有界通道 / pool_lease_scheduler / blocking_pool / mimalloc PMR 资源"]
     end
     subgraph http ["ruvia-http (ruvia::http) — 纯 Sans-I/O 协议引擎"]
         h_proto["HTTP/1.x / HTTP/2 / HTTP/3 / HPACK / QPACK / QUIC / 内容编码 / Multipart / Range / Cookie / WebSocket / Capsule"]
@@ -72,23 +72,25 @@ flowchart TB
 
 ---
 
-## 4. 两级内存池与资源预算
+## 4. 内存资源与预算
 
 ```mermaid
 flowchart BT
     subgraph req ["请求级借用 (Context — 不设独立池层)"]
         arena["c.arena() : request_memory<br/>monotonic_buffer_resource (初始块默认 4 KiB，支持 fork())"]
-        pool_ref["c.pool() : std::pmr::memory_resource*<br/>直通所属 Worker 线程级池"]
+        pool_ref["c.pool() : std::pmr::memory_resource*<br/>直通所属 Worker 原生堆"]
     end
-    worker["第 2 层：线程级池 (worker_memory)<br/>Worker 独占无锁可回收池 (统一受 retained_block_bytes_ 预算约束，空闲期 trim 归还)"]
-    process["第 1 层：进程级池 (process_resource())<br/>mimalloc 线程安全底座 (跨线程共享状态 / 跨请求谓词 / 线程级池上游)"]
+    worker["worker_memory<br/>Worker 独占 mi_heap_t 的薄 PMR 适配"]
+    process["process_resource()<br/>进程寿命、线程安全 PMR（跨线程共享状态 / 跨请求谓词）"]
+    allocator["mimalloc<br/>尺寸类 / 页管理 / 空闲块复用 / purge"]
 
     arena -->|"溢出分配 / 请求结束整批归还"| worker
     pool_ref -.->|"中途可立即 deallocate 回收复用"| worker
-    worker -->|"上游分配 / 超预算与 trim 归还"| process
+    worker --> allocator
+    process --> allocator
 ```
 
-- **两级内存池架构**：仅设进程级 `process_resource()` 与线程级 `worker_memory` 两层池，不篡改全局默认 PMR，禁用隐式 `thread_local` 业务池。
+- **原生内存资源**：`worker_memory` 与 `process_resource()` 直接适配 mimalloc，不自建尺寸类、空闲块或协程帧缓存；不篡改全局默认 PMR，不设隐式 `thread_local` 业务池。
 - **请求级借用分工**：`c.arena()` 供随请求销毁的一次性分配；`c.pool()` 直通所属 `worker_memory`，供中途需立即释放复用、循环扩容或与数据库/Redis 结果零拷贝 `swap` 的数据。
 - **PMR 资源传递与异常提升**：PMR 对象构造继承源资源、赋值保留目标资源（同资源 `swap`，跨资源递归重绑定后 `swap`）；异常抛出时将动态诊断负载提升至 `process_resource()`。
 - **最短内存生命周期**：异步入口返回前完成输入拥有化，构造冷任务后、进入 I/O 挂起前立即释放临时源容器；空结果或零长消息不分配数据块、不占配额。

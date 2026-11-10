@@ -410,8 +410,7 @@ TEST(Ruvia, response_stream_completed_head_preserves_transfer_coded_request_cons
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io,
         {.worker_count_ = 1,
-            .connection_scan_interval_ = std::chrono::milliseconds(5),
-            .memory_pool_ = {.retained_block_bytes_ = 0}});
+            .connection_scan_interval_ = std::chrono::milliseconds(5)});
 
     asio::ip::tcp::socket sock(io);
     sock.connect(server.endpoint());

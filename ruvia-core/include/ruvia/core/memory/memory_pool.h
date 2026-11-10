@@ -1,13 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <memory>
 #include <memory_resource>
 #include <span>
 
 #include "ruvia/core/worker_handle.h"
+
+struct mi_heap_s;
 
 namespace ruvia {
 
@@ -18,73 +17,48 @@ namespace ruvia {
 // heap allocation at the cost of that much storage per active connection.
 inline constexpr std::size_t request_arena_initial_bytes = std::size_t{4} * 1024;
 
-// Default upper bound on freed blocks one worker_memory keeps for reuse.
-inline constexpr std::size_t default_retained_block_bytes = std::size_t{8} * 1024 * 1024;
-// Largest accepted retained_block_bytes_: no address space can hold more.
-inline constexpr std::size_t max_retained_block_bytes =
-    static_cast<std::size_t>((std::numeric_limits<std::ptrdiff_t>::max)());
-
 // request_initial_buffer_bytes_ must be greater than zero: it is the initial
 // block size of every request arena.
-// retained_block_bytes_ bounds all freed blocks a worker keeps for reuse.
-// Blocks freed beyond it are returned immediately. Zero disables retention;
-// values above max_retained_block_bytes are rejected.
 struct memory_pool_config final {
     std::size_t request_initial_buffer_bytes_{request_arena_initial_bytes};
-    std::size_t retained_block_bytes_{default_retained_block_bytes};
 };
 
 // The single validation used by worker_memory construction and by integrations
 // that check startup configuration early. Throws std::invalid_argument.
 void validate_memory_pool_config(const memory_pool_config& config);
 
-// Explicit worker-local owner, not thread_local storage. All allocations and
-// deallocations are worker-affine; this pool has no internal synchronization.
-//
-// Small and large blocks share one bounded cache. Sizes up to 16 KiB round
-// to alignof(std::max_align_t), larger sizes to 4 KiB. Freed blocks up to
-// 1 MiB (alignment up to 64) are retained within retained_block_bytes_;
-// excess blocks return upstream immediately, and trim() returns every cached
-// block. Larger or over-aligned blocks pass straight through. Whether returned
-// memory reaches the OS is up to the C allocator. The pool must outlive every
-// object using it.
-// Construction propagates allocation failures and returns all storage acquired
-// during the failed construction to its upstream.
-class worker_memory final {
+// Worker-owned mimalloc heap; construction and destruction may run on a
+// different thread from the worker. The resource must outlive all borrowers,
+// and destruction requires that no thread is still using the heap.
+class worker_memory final : private std::pmr::memory_resource {
 public:
-    // Uses the process-lifetime mimalloc resource directly, never the global
-    // PMR default. The upstream has no shared pooling layer.
+    // Owns a native heap without replacing either allocator's default resource.
     explicit worker_memory(const memory_pool_config& config = {});
-    // Bind an upstream once at construction (for custom allocation/accounting).
-    // It must outlive this pool and all of its borrowers, and receives every
-    // block, including the pool object's own storage.
-    explicit worker_memory(std::pmr::memory_resource& upstream,
-        const memory_pool_config& config = {});
-    ~worker_memory();
+    ~worker_memory() override;
 
     worker_memory(const worker_memory&) = delete;
     worker_memory& operator=(const worker_memory&) = delete;
 
-    // Returns all cached blocks upstream and drains the calling thread's
-    // coroutine frame cache; live allocations are untouched.
-    // Blocks newly cached by a reentrant upstream call may remain.
+    // Collects the calling thread's default heap and this worker heap through
+    // mimalloc, with one final forced arena purge. Live allocations are untouched.
     // Owner thread only: the first call binds `owner` as the worker this memory
     // serves, and every call throws std::logic_error unless it runs on that worker.
     void trim(const worker_handle& owner);
 
     template <typename t_type = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() const& noexcept {
-        return std::pmr::polymorphic_allocator<t_type>(resource_);
+        return std::pmr::polymorphic_allocator<t_type>(resource());
     }
 
     template <typename t_type = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() const&& = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() & noexcept {
-        return resource_;
+        return this;
     }
     [[nodiscard]] std::pmr::memory_resource* resource() const& noexcept {
-        return resource_;
+        // Allocation mutates the owned heap, not the resource object.
+        return const_cast<worker_memory*>(this);
     }
     [[nodiscard]] std::pmr::memory_resource* resource() && = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const&& = delete;
@@ -93,13 +67,11 @@ public:
     }
 
 private:
-    class impl_type;
-    struct impl_deleter_type {
-        void operator()(impl_type* impl) const noexcept;
-    };
-    std::unique_ptr<impl_type, impl_deleter_type> impl_;
-    // Cache the resource borrow and configuration without a hot-path Impl lookup.
-    std::pmr::memory_resource* resource_;
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override;
+    void do_deallocate(void* block, std::size_t, std::size_t) noexcept override;
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override;
+
+    mi_heap_s* heap_{nullptr};
     std::size_t request_initial_buffer_bytes_;
     // Bound by the first trim(); 0 until then.
     worker_id_type owner_id_{0};

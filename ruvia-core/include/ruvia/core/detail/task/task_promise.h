@@ -67,10 +67,8 @@ private:
 };
 
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value);
-void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept;
+void task_frame_deallocate(void* pointer) noexcept;
 [[nodiscard]] void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment);
-void task_frame_deallocate_aligned(void* pointer) noexcept;
-void task_frame_cache_release() noexcept;
 
 template <std::size_t t_alignment>
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value) {
@@ -78,15 +76,6 @@ template <std::size_t t_alignment>
         return task_frame_allocate_aligned(bytes_value, t_alignment);
     } else {
         return task_frame_allocate(bytes_value);
-    }
-}
-
-template <std::size_t t_alignment>
-void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
-    if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
-        task_frame_deallocate_aligned(pointer);
-    } else {
-        task_frame_deallocate_sized(pointer, bytes_value);
     }
 }
 
@@ -255,8 +244,8 @@ public:
     static void* operator new(std::size_t size) {
         return task_frame_allocate<alignof(task_promise)>(size);
     }
-    static void operator delete(void* pointer, std::size_t size) noexcept {
-        task_frame_deallocate_sized<alignof(task_promise)>(pointer, size);
+    static void operator delete(void* pointer, std::size_t) noexcept {
+        task_frame_deallocate(pointer);
     }
 
     [[nodiscard]] task<t_type> get_return_object() noexcept;

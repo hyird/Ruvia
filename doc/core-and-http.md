@@ -96,7 +96,7 @@ pool.join();
 | `"ruvia/core/worker_signal.h"` | `class worker_signal final`、`worker_signal::wait_operation` | 同 Worker 内部闩锁合并通知；`wait()` 返回可丢弃、仅启动前可移动的单次冷等待器，不是 `task<void>`。创建和启动须在所属 Worker，启动后必须等待完成；支持多个等待者，直接挂入调用方协程帧 |
 | `"ruvia/core/worker_notification.h"` | `class worker_notification final` | 跨线程闩锁合并通知原语（任意线程无锁 `notify()`，所属 Worker 上 `co_await notification.wait()`）。从 `event_loop` 构造时仅接受左值、拒绝含 `const` 的右值；借用的 loop 须保持地址稳定并覆盖通知对象的寿命 |
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消） |
-| `"ruvia/core/memory/memory_pool.h"` | `class worker_memory final`、`class request_memory final`、`struct memory_pool_config` | Worker 级可回收内存池与单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`、`trim(owner)`） |
+| `"ruvia/core/memory/memory_pool.h"` | `class worker_memory final`、`class request_memory final`、`struct memory_pool_config` | Worker 独占 mimalloc heap 的 PMR 适配与单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`、`trim(owner)`） |
 | `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_object` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
 | `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；移动赋值与赋空共用退役路径：先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；旧目标析构时的重入赋值最终生效 |
 | `"ruvia/core/local_ring_queue.h"` | `class local_ring_queue<T>` | 预分配容量的单线程零分配环形队列 |
@@ -112,11 +112,13 @@ pool.join();
 
 `pool_lease_scheduler` 的空闲槽位仍同步获取；`release(slot)` 向排队者提交槽位归属后，通过后续 Worker 轮次恢复该协程，不在释放调用栈内执行下一位消费者，避免连续立即释放形成递归链。`close()` 同样先向全部排队者提交 `closed` 结果，再通过后续 Worker 轮次恢复它们，调用方的关闭序列在任何等待者观察到关闭前完成。提交后的取消或 `close()` 不撤销已交接槽位；尚未交接的等待者按原取消、超时和关闭规则完成。不得依赖 `release()` 或 `close()` 返回代表排队协程已经完成，销毁 scheduler 前仍须等待已启动的 acquire 完成。
 
-框架默认内存由 mimalloc 承载：`process_resource()` 是存活至进程结束的线程安全 PMR 适配器，不叠加进程级共享 pool；默认 Worker 内存、停止状态与协程帧使用该资源。接受显式 PMR 的 API 始终优先使用调用方资源，调用方仍须保证资源覆盖所分配对象的生命周期。
+框架默认内存由 mimalloc 承载：`process_resource()` 是存活至进程结束的线程安全 PMR 适配器，供跨线程共享状态与停止状态使用；协程帧直接使用 mimalloc。接受显式 PMR 的 API 优先使用调用方资源，调用方须保证资源覆盖所分配对象的生命周期。
 
-- **统一保留预算**：`worker_memory` 的大小空闲块共用 `retained_block_bytes_`，超额立即归还上游；设为零时不保留空闲块。
-- **空闲修剪**：`trim(owner)` 归还大小空闲块并清理调用线程的协程帧缓存，不影响在用对象；上游重入期间新缓存的块可留待下次修剪。
-- **构造失败回滚**：分配失败以异常传给调用方，本次构造已取得的存储全部归还上游；资源恢复后可重新构造。
+- **原生 Worker 堆**：`worker_memory` 独占 `mi_heap_t`，直接适配对齐分配与释放；不叠加尺寸类缓存、对象头或协程帧缓存，不接受自定义上游。
+- **生命周期**：允许启动线程构造、业务 Worker 使用、Join 后析构；销毁前必须结束所有借用，堆删除不替代 C++ 对象析构。
+- **请求 Arena**：`memory_pool_config` 仅配置正数 `request_initial_buffer_bytes_`；`request_memory` 按请求批量释放，`fork()` 只共享 Worker 资源，不借用父 Arena 的存储。
+- **原生回收**：初始化设置 `mi_option_purge_delay=10`；这是延迟参数，不是 RSS 归还期限或保留内存上限。`trim(owner)` 限所属 Worker 调用，先收集默认堆，再强制收集 Worker 堆及共享 arena 的待回收范围，不影响存活分配；Web 在完整空闲扫描周期后触发一次。
+- **失败与检测**：分配失败抛 `std::bad_alloc`；sanitizer 构建使用系统分配器，不保留自建缓存。
 
 非 Windows 构建启用 mimalloc 普通 `override`，在最终链接中保留静态库，对标准 `malloc` / `free` 与全局 `new` / `delete` 使用 mimalloc；不得叠加另一套全局 allocator replacement。Windows 保持原静态 CRT 与普通 mimalloc 依赖，仅通过显式 API 承载框架资源和协程帧，不替换宿主标准分配接口。两种接入都不替换 `std::pmr::get_default_resource()` 对象，也不改变显式 PMR 的优先级。独立 `ruvia::http` 不依赖 core 或 mimalloc，未显式指定 PMR 时仍遵循调用方的标准 PMR 默认资源。
 

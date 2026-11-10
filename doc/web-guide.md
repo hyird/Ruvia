@@ -88,7 +88,7 @@ int main() {
 | `max_inbound_buffer_bytes_per_connection_` | `std::size_t`（默认 `64 MiB`） | 单连接入站缓冲字节上限 |
 | `max_stream_body_bytes_` | `std::optional<std::size_t>`（默认无上限） | 流式路由请求体总字节上限 |
 | `max_websocket_message_bytes_` | `std::size_t`（默认 `default_max_websocket_message_bytes`） | WebSocket 单条消息最大字节数 |
-| `memory_pool_` | `memory_pool_config` | 请求 Arena 初始字节数（`request_initial_buffer_bytes_`）与 worker 保留块上限（`retained_block_bytes_`） |
+| `memory_pool_` | `memory_pool_config` | 请求 Arena 初始字节数（`request_initial_buffer_bytes_`）；内存归属与回收见 [core 内存资源契约](core-and-http.md#4-跨线程通道单次交付信号与内存池) |
 
 连接关闭遵循 [RFC 9112 §9.6/§9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)：
 
