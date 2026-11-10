@@ -177,10 +177,11 @@ template <typename fn_type>
     return output;
 }
 
-// Fresh connections let the OS distribute requests. Observe a successful new
-// version from every identified worker, not merely whichever one accepts first.
+// Observe distinct workers rather than whichever one accepts first. Windows
+// routes fresh connections away from a worker that holds a long-lived request.
 [[nodiscard]] bool eventually_serves(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view body) {
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view body,
+    std::size_t required_workers = worker_count) {
     std::set<std::string> observed_workers;
     return retry_until_deadline([&] {
         const auto response = exchange(io, endpoint, "/version.txt");
@@ -198,7 +199,7 @@ template <typename fn_type>
             return false;
         }
         observed_workers.emplace(response.substr(label, end - label));
-        return observed_workers.size() == worker_count;
+        return observed_workers.size() >= required_workers;
     });
 }
 
@@ -246,9 +247,9 @@ TEST(Ruvia, document_root_refresh_keeps_old_requests_across_multiple_publication
     }));
 
     EXPECT_TRUE(write_version("new snapshot with a request still held"));
-    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "new snapshot with a request still held"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "new snapshot with a request still held", worker_count - 1));
     EXPECT_TRUE(write_version("another publication before the old request finishes"));
-    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "another publication before the old request finishes"));
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "another publication before the old request finishes", worker_count - 1));
 
     release_held_request.store(true, std::memory_order_release);
     std::string response;
@@ -257,6 +258,7 @@ TEST(Ruvia, document_root_refresh_keeps_old_requests_across_multiple_publication
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200"));
     EXPECT_TRUE(response.ends_with("old leased snapshot"));
     held.close();
+    EXPECT_TRUE(eventually_serves(io, server.endpoint(), "another publication before the old request finishes"));
     server.finish();
 }
 
