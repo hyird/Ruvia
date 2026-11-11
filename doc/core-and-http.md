@@ -117,7 +117,7 @@ pool.join();
 - **原生 Worker 堆**：`worker_memory` 独占 `mi_heap_t`，直接适配对齐分配与释放；不叠加尺寸类缓存、对象头或协程帧缓存，不接受自定义上游。
 - **生命周期**：允许启动线程构造、业务 Worker 使用、Join 后析构；销毁前必须结束所有借用，堆删除不替代 C++ 对象析构。
 - **请求 Arena**：`memory_pool_config` 仅配置正数 `request_initial_buffer_bytes_`；`request_memory` 按请求批量释放，`fork()` 只共享 Worker 资源，不借用父 Arena 的存储。
-- **原生回收**：初始化设置 `mi_option_purge_delay=10`；这是延迟参数，不是 RSS 归还期限或保留内存上限。`trim(owner)` 限所属 Worker 调用，先收集默认堆，再强制收集 Worker 堆及共享 arena 的待回收范围，不影响存活分配；Web 在完整空闲扫描周期后触发一次。
+- **原生回收**：不覆盖 mimalloc 的原生回收默认值；回收延迟不是 RSS 归还期限或保留内存上限。`trim(owner)` 限所属 Worker 调用，先收集默认堆，再强制收集 Worker 堆及共享 arena 的待回收范围，不影响存活分配；Web 在完整空闲扫描周期后触发一次。
 - **失败与检测**：分配失败抛 `std::bad_alloc`；sanitizer 构建使用系统分配器，不保留自建缓存。
 
 非 Windows 构建启用 mimalloc 普通 `override`，在最终链接中保留静态库，对标准 `malloc` / `free` 与全局 `new` / `delete` 使用 mimalloc；不得叠加另一套全局 allocator replacement。Windows 保持原静态 CRT 与普通 mimalloc 依赖，仅通过显式 API 承载框架资源和协程帧，不替换宿主标准分配接口。两种接入都不替换 `std::pmr::get_default_resource()` 对象，也不改变显式 PMR 的优先级。独立 `ruvia::http` 不依赖 core 或 mimalloc，未显式指定 PMR 时仍遵循调用方的标准 PMR 默认资源。

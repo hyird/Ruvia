@@ -34,11 +34,6 @@ namespace ruvia {
 
 namespace {
 
-#if !RUVIA_SANITIZER_ALLOCATOR
-// Configure at library initialization, not on allocation hot paths.
-[[maybe_unused]] const bool mimalloc_configured = (mi_option_set(mi_option_purge_delay, 10), true);
-#endif
-
 [[nodiscard]] void* allocate_mimalloc(std::size_t bytes_value, std::size_t alignment) {
     const std::size_t size = bytes_value == 0 ? 1 : bytes_value;
 #if RUVIA_SANITIZER_ALLOCATOR
