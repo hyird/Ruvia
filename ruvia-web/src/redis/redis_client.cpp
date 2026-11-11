@@ -38,14 +38,13 @@ void validate_redis_registry(
 
 redis_registry::redis_registry(asio::io_context& io_context,
     std::span<const redis_definition_type> redis, worker_handle worker_value)
-    : worker_(std::move(worker_value)),
-      runtimes_(process_resource()),
+    : runtimes_(process_resource()),
       alias_index_(process_resource()) {
-    validate_redis_registry(worker_, redis);
+    validate_redis_registry(worker_value, redis);
     alias_index_.build(redis);
     runtimes_.reserve(redis.size());
     for (const auto& definition : redis) {
-        runtimes_.push_back(make_pmr_object<redis_client_runtime>(process_resource(), io_context, worker_,
+        runtimes_.push_back(make_pmr_object<redis_client_runtime>(process_resource(), io_context, worker_value,
             redis_config_storage(definition.config_, process_resource())));
     }
 }

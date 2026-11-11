@@ -1,10 +1,5 @@
-ruvia_collect_cpp_sources(ruvia_http_sources src)
-if(NOT RUVIA_ENABLE_HTTP2)
-    list(FILTER ruvia_http_sources EXCLUDE REGEX "/src/http2/")
-endif()
-if(NOT RUVIA_ENABLE_HTTP3)
-    list(FILTER ruvia_http_sources EXCLUDE REGEX "/src/http3/")
-endif()
+ruvia_collect_cpp_sources(ruvia_http_sources src
+    EXCLUDE_REGEX "${_ruvia_disabled_protocol_regex}")
 add_library(ruvia-http STATIC ${ruvia_http_sources})
 
 ruvia_configure_library(ruvia-http http)
@@ -28,23 +23,6 @@ endif()
 
 ruvia_install_component(ruvia-http http)
 
-set(_ruvia_http_excluded_headers)
-if(NOT RUVIA_ENABLE_HTTP2)
-    list(APPEND _ruvia_http_excluded_headers
-        include/ruvia/http/hpack.h
-        include/ruvia/http/http2_connection.h
-        include/ruvia/http/http2_event.h
-        include/ruvia/http/http2_framing.h
-        include/ruvia/http/http2_request_content.h
-        include/ruvia/http/http2_types.h)
-endif()
-if(NOT RUVIA_ENABLE_HTTP3)
-    list(APPEND _ruvia_http_excluded_headers
-        include/ruvia/http/http3_connection.h
-        include/ruvia/http/http3_quic_connection.h
-        include/ruvia/http/http3_request_head.h)
-endif()
-
 ruvia_install_public_header_closure(http include/ruvia/http
-    EXCLUDE_FILES ${_ruvia_http_excluded_headers})
+    EXCLUDE_REGEX "${_ruvia_disabled_protocol_regex}")
 

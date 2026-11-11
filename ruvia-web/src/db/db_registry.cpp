@@ -29,14 +29,6 @@ namespace {
         owner_value);
 }
 
-task<void> connect_pool(detail::db_pool_ref_type pool) {
-    return detail::visit_db_pool(pool, [](auto& client) { return client.connect(); });
-}
-
-void close_pool(detail::db_pool_ref_type pool) noexcept {
-    detail::visit_db_pool_if_present(pool, [](auto& client) noexcept { client.close_now(); });
-}
-
 #ifdef RUVIA_ENABLE_REDIS
 [[nodiscard]] const detail::db_config_storage& pool_config(
     const detail::db_registry::pool_owner_type& owner_value) noexcept {
@@ -136,7 +128,7 @@ void detail::db_registry::add(
 
 task<void> detail::db_registry::connect() {
     for (auto& entry : entries_) {
-        co_await connect_pool(pool_ref(entry.pool_));
+        co_await visit_db_pool(pool_ref(entry.pool_), [](auto& pool) { return pool.connect(); });
     }
 }
 
@@ -147,7 +139,7 @@ void detail::db_registry::close_now() noexcept {
             entry.cache_->close_now();
         }
 #endif
-        close_pool(pool_ref(entry.pool_));
+        visit_db_pool_if_present(pool_ref(entry.pool_), [](auto& pool) noexcept { pool.close_now(); });
     }
 }
 

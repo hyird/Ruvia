@@ -1,6 +1,5 @@
 #include "http3/http3_response_write.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <stdexcept>
@@ -105,7 +104,7 @@ task<multiplexed_buffered_response_write_result> http3_buffered_response_writer:
             if (budget == 0) {
                 continue;
             }
-            max_bytes = (std::min)(max_bytes, budget);
+            max_bytes = budget;
         }
         const auto chunk = co_await source.next(max_bytes);
         if (chunk.kind() == response_body_chunk::kind_type::failed) {

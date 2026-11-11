@@ -74,7 +74,6 @@ public:
 private:
     using entry_type = std::unique_ptr<redis_client_runtime, pmr_object_deleter<redis_client_runtime>>;
 
-    worker_handle worker_;
     std::pmr::vector<entry_type> runtimes_;
     named_capability_index alias_index_;
 };

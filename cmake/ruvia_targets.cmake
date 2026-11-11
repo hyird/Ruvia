@@ -3,9 +3,23 @@
 # CMAKE_CURRENT_SOURCE_DIR at call time, so a component invoking these resolves
 # paths against its own directory.
 
+# Protocol directories and prefixed headers share one feature-ownership rule.
+set(_ruvia_disabled_protocol_patterns)
+if(NOT RUVIA_ENABLE_HTTP2)
+    list(APPEND _ruvia_disabled_protocol_patterns "/(http2|hpack)(/|_|\\.)")
+endif()
+if(NOT RUVIA_ENABLE_HTTP3)
+    list(APPEND _ruvia_disabled_protocol_patterns "/http3(/|_|\\.)")
+endif()
+list(JOIN _ruvia_disabled_protocol_patterns "|" _ruvia_disabled_protocol_regex)
+
 function(ruvia_collect_cpp_sources out relative_dir)
+    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_collect "" "EXCLUDE_REGEX" "")
     file(GLOB_RECURSE _ruvia_sources CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.cpp")
+    if(_ruvia_collect_EXCLUDE_REGEX)
+        list(FILTER _ruvia_sources EXCLUDE REGEX "${_ruvia_collect_EXCLUDE_REGEX}")
+    endif()
     list(SORT _ruvia_sources)
     set(${out} ${_ruvia_sources} PARENT_SCOPE)
 endfunction()
@@ -86,8 +100,7 @@ endfunction()
 # headers that surface includes transitively. Source-only implementation headers
 # stay build-private without requiring a second hand-maintained header list.
 function(ruvia_install_public_header_closure component relative_dir)
-    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" ""
-        "EXCLUDE_DIRECTORIES;EXCLUDE_FILES")
+    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" "EXCLUDE_REGEX" "")
 
     file(GLOB_RECURSE _ruvia_closure_candidates CONFIGURE_DEPENDS
         RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -100,18 +113,8 @@ function(ruvia_install_public_header_closure component relative_dir)
     set(_ruvia_closure_headers)
     while(_ruvia_closure_queue)
         list(POP_FRONT _ruvia_closure_queue _ruvia_header)
-        if(_ruvia_header IN_LIST _ruvia_closure_EXCLUDE_FILES)
-            continue()
-        endif()
-        string(REPLACE "/" ";" _ruvia_header_components "${_ruvia_header}")
-        set(_ruvia_header_excluded FALSE)
-        foreach(_ruvia_excluded_dir IN LISTS _ruvia_closure_EXCLUDE_DIRECTORIES)
-            if(_ruvia_excluded_dir IN_LIST _ruvia_header_components)
-                set(_ruvia_header_excluded TRUE)
-                break()
-            endif()
-        endforeach()
-        if(_ruvia_header_excluded)
+        if(_ruvia_closure_EXCLUDE_REGEX AND
+           _ruvia_header MATCHES "${_ruvia_closure_EXCLUDE_REGEX}")
             continue()
         endif()
         if(_ruvia_header IN_LIST _ruvia_closure_headers)

@@ -17,24 +17,6 @@ namespace ruvia {
 
 namespace {
 
-task<db_stream_result> stream_pool(detail::db_pool_ref_type pool, std::pmr::string sql,
-    std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
-    operation_options options) {
-    return detail::visit_db_pool(pool, [&](auto& client) {
-        return client.stream(std::move(sql), std::move(params), resource, std::move(options));
-    });
-}
-
-task<db_transaction> begin_pool_transaction(
-    detail::db_pool_ref_type pool, std::pmr::memory_resource* resource,
-    operation_options operation_options_value, db_transaction_options transaction_options) {
-    return detail::visit_db_pool(pool,
-        [&](auto& client) {
-            return client.begin_transaction(
-                resource, std::move(operation_options_value), std::move(transaction_options));
-        });
-}
-
 task<void> discard_rows_task(task<db_rows> rows_task) {
     (void)co_await std::move(rows_task);
 }
@@ -188,8 +170,9 @@ task<db_stream_result> db_handle::query_stream_prepared(detail::db_pool_ref_type
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
     ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
-    auto result_value = co_await stream_pool(
-        client, std::move(sql), std::move(params), resource, std::move(options));
+    auto result_value = co_await detail::visit_db_pool(client, [&](auto& pool) {
+        return pool.stream(std::move(sql), std::move(params), resource, std::move(options));
+    });
     result_value.bind_operation_scope(operation_scope, io_metrics);
     co_return result_value;
 }
@@ -205,8 +188,10 @@ task<db_transaction> db_handle::begin_transaction_prepared(detail::db_query_back
     ::ruvia::operation_scope& operation_scope, operation_options operation_options_value,
     db_transaction_options transaction_options) {
     detail::scoped_request_io_timer timer(backend.io_metrics_, detail::request_io_kind::db);
-    auto transaction = co_await begin_pool_transaction(
-        backend.pool_, backend.resource_, std::move(operation_options_value), std::move(transaction_options));
+    auto transaction = co_await detail::visit_db_pool(backend.pool_, [&](auto& pool) {
+        return pool.begin_transaction(
+            backend.resource_, std::move(operation_options_value), std::move(transaction_options));
+    });
     transaction.bind_operation_scope(operation_scope, backend.io_metrics_);
     co_return transaction;
 }

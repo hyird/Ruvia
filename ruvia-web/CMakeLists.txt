@@ -1,11 +1,5 @@
-ruvia_collect_cpp_sources(ruvia_web_sources src)
-if(NOT RUVIA_ENABLE_HTTP2)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/http2/")
-endif()
-if(NOT RUVIA_ENABLE_HTTP3)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/http3/")
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/client/http3_client_connection\\.cpp$")
-endif()
+ruvia_collect_cpp_sources(ruvia_web_sources src
+    EXCLUDE_REGEX "${_ruvia_disabled_protocol_regex}")
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
@@ -57,17 +51,18 @@ endif()
 
 ruvia_install_component(ruvia-web web)
 
-set(_ruvia_web_excluded_header_directories)
+set(_ruvia_web_excluded_header_patterns)
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
-    list(APPEND _ruvia_web_excluded_header_directories db)
+    list(APPEND _ruvia_web_excluded_header_patterns "/db/")
 endif()
 if(NOT RUVIA_ENABLE_REDIS)
-    list(APPEND _ruvia_web_excluded_header_directories redis)
+    list(APPEND _ruvia_web_excluded_header_patterns "/redis/")
 endif()
 if(NOT RUVIA_ENABLE_JWT)
-    list(APPEND _ruvia_web_excluded_header_directories auth)
+    list(APPEND _ruvia_web_excluded_header_patterns "/auth/")
 endif()
+list(JOIN _ruvia_web_excluded_header_patterns "|" _ruvia_web_excluded_header_regex)
 
 ruvia_install_public_header_closure(web include/ruvia/web
-    EXCLUDE_DIRECTORIES ${_ruvia_web_excluded_header_directories})
+    EXCLUDE_REGEX "${_ruvia_web_excluded_header_regex}")
 

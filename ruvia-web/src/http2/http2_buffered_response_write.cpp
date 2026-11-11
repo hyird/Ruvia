@@ -1,6 +1,5 @@
 #include "http2/http2_buffered_response_write.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -96,7 +95,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
                 // slot: give the slot back and wait again.
                 continue;
             }
-            max_bytes = std::min<std::size_t>(max_bytes, window->available_);
+            max_bytes = window->available_;
         }
         const auto chunk = co_await source.next(max_bytes);
         if (chunk.kind() == response_body_chunk::kind_type::failed) {
