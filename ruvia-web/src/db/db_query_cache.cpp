@@ -431,16 +431,15 @@ task<void> clear_keys(
 }  // namespace
 
 db_query_cache_state::db_query_cache_state(const redis_handle& redis, const db_cache_config_storage& config,
-    std::pmr::string prefix, std::pmr::memory_resource* resource)
-    : resource_(resource),
-      worker_(redis.worker()),
+    std::pmr::string prefix)
+    : worker_(redis.worker()),
       duration_(config.duration_),
       always_enabled_(config.always_enabled_),
       ignore_errors_(config.ignore_errors_),
       max_entry_reply_bytes_(redis_client_runtime::handle_config(redis).max_reply_bytes_),
       prefix_(std::move(prefix)),
       redis_(redis.with_options({})),
-      fills_(resource) {}
+      fills_(process_resource()) {}
 
 db_query_cache_state::~db_query_cache_state() = default;
 
@@ -508,7 +507,7 @@ std::optional<std::pmr::string> db_query_cache_state::key(
         return std::nullopt;
     }
     return db_cache_key(prefix_, query.cache_id(), query.cache_shape(), statement.sql(), statement.params(), driver,
-        resource_);
+        process_resource());
 }
 
 task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds> duration, std::pmr::string key,
@@ -540,7 +539,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
             rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
         }
         if (bytes_value.has_value()) {
-            if (auto rows = decode_cached_rows(std::move(*bytes_value), resource_, deadline, ignore_errors_)) {
+            if (auto rows = decode_cached_rows(std::move(*bytes_value), process_resource(), deadline, ignore_errors_)) {
                 co_return std::move(*rows);
             }
         }
@@ -561,7 +560,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
             throw db_error(db_error::code_type::cancelled, std::nullopt, "database query cache operation cancelled");
         }
         if (joined->result_.has_value()) {
-            if (auto rows = decode_cached_rows(std::pmr::string(*joined->result_, resource_), resource_, deadline,
+            if (auto rows = decode_cached_rows(std::pmr::string(*joined->result_, process_resource()), process_resource(), deadline,
                     ignore_errors_)) {
                 co_return std::move(*rows);
             }
@@ -575,7 +574,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
         }
     }
 
-    auto listed = std::allocate_shared<fill>(std::pmr::polymorphic_allocator<fill>(resource_), key, resource_);
+    auto listed = std::allocate_shared<fill>(std::pmr::polymorphic_allocator<fill>(process_resource()), key);
     fills_.emplace(std::string_view(listed->key_), listed);
     fill_lead lead(*this, std::move(listed));
     if (deadline.expired()) {
@@ -592,7 +591,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
     if (!store && !filled.awaited_) {
         co_return rows;
     }
-    auto encoded_bytes = encode_db_cache_rows(rows, resource_);
+    auto encoded_bytes = encode_db_cache_rows(rows, process_resource());
     // An entry whose GET reply would exceed the store's reply limit would fail
     // every hit and cost a Redis connection each time; like Pingora's
     // ResponseTooLarge, the result stays valid but is not cached.
@@ -638,7 +637,7 @@ task<void> db_query_cache_state::remove(
             throw std::invalid_argument("cache identifier must not be empty");
         }
     }
-    std::pmr::vector<std::pmr::string> keys(resource_);
+    std::pmr::vector<std::pmr::string> keys(process_resource());
     keys.reserve(ids.size() * db_cache_shapes.size());
     for (const auto id : ids) {
         append_db_cache_id_keys(keys, prefix_, id);
@@ -649,7 +648,7 @@ task<void> db_query_cache_state::remove(
 
 task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation_options options) {
     require_open();
-    std::pmr::string pattern(resource_);
+    std::pmr::string pattern(process_resource());
     pattern.reserve(prefix_.size() + 1);
     pattern.append(prefix_);
     pattern.push_back('*');

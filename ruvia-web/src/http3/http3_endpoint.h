@@ -15,7 +15,6 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -41,7 +40,6 @@ class worker_capabilities;
 struct http3_worker_services final {
     asio::io_context& io_;
     const worker_handle& worker_;
-    worker_memory& memory_;
     const route_table& routes_;
     worker_capabilities& capabilities_;
     http_server_options& options_;

@@ -12,6 +12,7 @@
 #include <asio/signal_set.hpp>
 
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/detail/controller/controller_descriptors.h"
@@ -106,8 +107,7 @@ class app_run_coordinator final {
 public:
     app_run_coordinator(application& owner_value, detail::app_state& state_value)
         : owner_(owner_value),
-          state_(state_value),
-          runtime_resource_(process_resource()) {}
+          state_(state_value) {}
 
     void run() {
         begin_run();
@@ -203,8 +203,7 @@ private:
 
     void build_and_publish_runtime() {
         const auto controller_registrars = detail::seal_controller_registrars();
-        auto runtime =
-            make_pmr_object<detail::app_runtime_graph>(runtime_resource_, runtime_resource_);
+        auto runtime = make_pmr_object<detail::app_runtime_graph>(process_resource());
         auto prepared_options = state_.options_;
         prepared_options.env_ = &state_.env_;
         prepared_options.failure_ = detail::worker_failure_sink{
@@ -226,7 +225,7 @@ private:
             const auto precompression = prepared_options.compression_.has_value()
                                             ? document_root.precompression_
                                             : detail::static_root_precompression_options{};
-            runtime->document_root_ = make_pmr_object<detail::document_root_publisher>(runtime_resource_,
+            runtime->document_root_ = make_pmr_object<detail::document_root_publisher>(process_resource(),
                 http_make_path_from_native_path(document_root.root_), document_root.static_options_,
                 document_root.refresh_interval_, precompression, document_root.resident_,
                 state_.options_.server_.worker_count_);
@@ -235,7 +234,7 @@ private:
         }
         if (state_.blocking_pool_.has_value()) {
             runtime->blocking_pool_ =
-                make_pmr_object<blocking_pool>(runtime_resource_, *state_.blocking_pool_);
+                make_pmr_object<blocking_pool>(process_resource(), *state_.blocking_pool_);
         }
 
         const auto validated_configuration =
@@ -245,28 +244,28 @@ private:
         // controller instances; every worker only binds its own instances.
         detail::controller_store first_controllers(controller_registrars);
         runtime->route_plan_ = detail::compile_route_plan(
-            runtime_resource_, controller_registrars, first_controllers, state_.configuration_);
+            controller_registrars, first_controllers, state_.configuration_);
 #if defined(RUVIA_ENABLE_HTTP3)
         if (std::ranges::any_of(validated_configuration.listeners(),
                 [](const auto& listener) { return listener.http3_.has_value(); })) {
             runtime->http3_directory_ = make_pmr_object<detail::http3_worker_directory>(
-                runtime_resource_, state_.options_.server_.worker_count_, runtime_resource_);
+                process_resource(), state_.options_.server_.worker_count_);
         }
 #endif
 #if defined(_WIN32)
-        runtime->acceptor_ = make_pmr_object<detail::windows_acceptor>(runtime_resource_,
+        runtime->acceptor_ = make_pmr_object<detail::windows_acceptor>(process_resource(),
             validated_configuration.listeners(), state_.options_.server_.worker_count_,
 #if defined(RUVIA_ENABLE_HTTP3)
             runtime->http3_directory_.get(),
 #endif
-            validated_configuration.options().failure_, runtime_resource_);
+            validated_configuration.options().failure_);
 #endif
         runtime->workers_.reserve(state_.options_.server_.worker_count_);
         for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
             auto controllers =
                 i == 0 ? std::move(first_controllers) : detail::controller_store(controller_registrars);
             auto routes_value = make_pmr_object<detail::route_table>(
-                runtime_resource_, runtime_resource_, *runtime->route_plan_, controllers);
+                process_resource(), *runtime->route_plan_, controllers);
             const detail::worker_capability_definitions capabilities{
 #ifdef RUVIA_ENABLE_DATABASE
                 .databases_ = std::span<const detail::db_definition>(state_.databases_),
@@ -278,7 +277,7 @@ private:
                 .http_clients_ = std::span<const detail::http_client_definition_type>(state_.http_clients_),
             };
 #if defined(RUVIA_ENABLE_HTTP3)
-            auto worker_value = make_pmr_object<detail::web_worker_runtime>(runtime_resource_,
+            auto worker_value = make_pmr_object<detail::web_worker_runtime>(process_resource(),
                 validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(),
                 detail::http3_worker_placement{
                     .directory_ = runtime->http3_directory_.get(),
@@ -292,7 +291,7 @@ private:
             }
 #else
             auto worker_value = make_pmr_object<detail::web_worker_runtime>(
-                runtime_resource_, validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get());
+                process_resource(), validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get());
 #endif
 #if defined(_WIN32)
             runtime->acceptor_->bind_worker(i, worker_value->acceptor_target());
@@ -361,7 +360,7 @@ private:
 
     void retire_runtime() noexcept {
         std::unique_ptr<detail::app_runtime_graph, pmr_object_deleter<detail::app_runtime_graph>>
-            retired(nullptr, pmr_object_deleter<detail::app_runtime_graph>{runtime_resource_});
+            retired(nullptr, pmr_object_deleter<detail::app_runtime_graph>{process_resource()});
         {
             std::lock_guard lock(state_.mutex_);
             retired = std::move(state_.runtime_);
@@ -375,7 +374,6 @@ private:
 
     application& owner_;
     detail::app_state& state_;
-    std::pmr::memory_resource* runtime_resource_;
     // Constructed only for process_signal_handler_policy::install.
     std::optional<process_signal_handling> signals_;
 };

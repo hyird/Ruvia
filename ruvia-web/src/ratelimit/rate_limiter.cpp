@@ -279,9 +279,9 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
 }  // namespace
 
 rate_limiter::rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker,
-    route_rate_limit_presence route_rules, std::size_t capacity_value, std::pmr::memory_resource* resource)
+    route_rate_limit_presence route_rules, std::size_t capacity_value)
     : default_rule_per_worker_(default_rule_per_worker),
-      slots_(pmr_resource_or_default(resource)) {
+      slots_(process_resource()) {
     // http_server_options::set_rate_limit, the only writer of the rule and the
     // capacity, validated both; the capacity is a power of two for the mask.
     if (default_rule_per_worker_.has_value() || route_rules == route_rate_limit_presence::present) {

@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <memory_resource>
 #include <utility>
 
 #include "ruvia/http/http_content_codec.h"
@@ -51,7 +50,7 @@ private:
 };
 
 // The web worker's reusable codec state. Everything is created on first use
-// from the worker resource and lives until the worker is destroyed, so codec
+// from the process resource and lives until the worker is destroyed, so codec
 // memory is sized per worker rather than per request or connection. Only
 // synchronous work on the owning worker thread may borrow it: inline response
 // compression takes one encoder per content coding (each coding has one fixed
@@ -61,7 +60,7 @@ private:
 // codec.
 class worker_codecs final {
 public:
-    explicit worker_codecs(std::pmr::memory_resource* resource) noexcept;
+    worker_codecs() noexcept;
     ~worker_codecs();
     worker_codecs(const worker_codecs&) = delete;
     worker_codecs& operator=(const worker_codecs&) = delete;
@@ -73,7 +72,7 @@ public:
 
     // A fresh incremental encoder for `coding` (a compressing coding; identity
     // throws std::logic_error): a pooled one when the worker holds any, else a
-    // new one from the worker resource. Each coding keeps a bounded free list;
+    // new one from the process resource. Each coding keeps a bounded free list;
     // a returned encoder past that bound, a discarded one, or one whose reset
     // fails, is freed.
     [[nodiscard]] stream_encoder_lease acquire_stream_encoder(http_content_coding coding);
@@ -100,7 +99,6 @@ private:
     void release_stream_encoder(http_content_encoder& encoder) noexcept;
     void destroy_stream_encoder(http_content_encoder& encoder) noexcept;
 
-    std::pmr::memory_resource* resource_;
     http_content_encode_context gzip_;
     http_content_encode_context deflate_;
     http_content_encode_context brotli_;

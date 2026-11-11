@@ -42,7 +42,7 @@ struct postgresql_params final {
     static constexpr std::size_t inline_capacity = 8;
     static constexpr std::size_t numeric_slot_size = 32;
 
-    postgresql_params(std::span<const db_value> params, std::pmr::memory_resource* resource);
+    explicit postgresql_params(std::span<const db_value> params);
     postgresql_params(const postgresql_params&) = delete;
     postgresql_params& operator=(const postgresql_params&) = delete;
     postgresql_params(postgresql_params&&) = delete;
@@ -96,7 +96,7 @@ using postgresql_statement_name = std::array<char, 39>;
 using postgresql_statement_cache = db_statement_cache<postgresql_statement_name>;
 
 [[nodiscard]] postgresql_statement_name make_postgresql_statement_name(
-    std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource* resource);
+    std::string_view sql, std::span<const unsigned int> types);
 
 template <typename driver_type>
 class db_pool;
@@ -144,8 +144,6 @@ struct postgresql_pipeline_io final {
     using flight_type = postgresql_flight;
 
     struct group_data final {
-        explicit group_data(std::pmr::memory_resource*) noexcept {}
-
         postgresql_flight_results head_results_{};
         // libpq holds output the socket has not accepted yet.
         bool flush_pending_{false};
@@ -158,15 +156,15 @@ struct postgresql_pipeline_io final {
 
     // The statement text, kept by its caller, and its encoded parameters.
     struct statement_type final {
-        statement_type(std::string_view sql, std::span<const db_value> params, std::pmr::memory_resource* resource)
+        statement_type(std::string_view sql, std::span<const db_value> params)
             : sql_(sql),
-              encoded_(params, resource) {}
+              encoded_(params) {}
 
         std::string_view sql_;
         postgresql_params encoded_;
     };
 
-    [[nodiscard]] static statement_type prepare(pool_type& pool, std::string_view sql, std::span<const db_value> params);
+    [[nodiscard]] static statement_type prepare(std::string_view sql, std::span<const db_value> params);
     // The connection's socket for a wait; throws when it has none.
     [[nodiscard]] static db_slot_socket::native_socket_type socket(pool_type& pool, std::size_t slot);
     static void open(state_type& state, std::size_t slot);
@@ -180,10 +178,6 @@ struct postgresql_pipeline_io final {
 
 // Per connection: cached statements and the pipeline group sharing it.
 struct postgresql_session final {
-    explicit postgresql_session(std::pmr::memory_resource* resource)
-        : statements_(resource),
-          pipeline_(resource) {}
-
     // Cleared by connect(): a new connection holds no server statements.
     postgresql_statement_cache statements_;
     db_pipeline_group<postgresql_pipeline_io> pipeline_;

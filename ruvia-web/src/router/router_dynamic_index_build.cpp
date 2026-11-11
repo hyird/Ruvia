@@ -83,7 +83,7 @@ void detail::router::build_dynamic_routes() {
             auto found = std::ranges::find(
                 plan.connect_protocols_, protocol, &compiled_route_plan::connect_protocol_index_type::protocol_);
             if (found == plan.connect_protocols_.end()) {
-                found = plan.connect_protocols_.emplace(plan.connect_protocols_.end(), plan.resource_, protocol);
+                found = plan.connect_protocols_.emplace(plan.connect_protocols_.end(), protocol);
             }
             insert_dynamic(found->root_, route);
         } else {
@@ -155,7 +155,7 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
             }
             append_dynamic_param_name(route, segment.substr(1));
             if (!node_value->param_child_) {
-                plan.dynamic_node_arena_.emplace_back(plan.resource_);
+                plan.dynamic_node_arena_.emplace_back();
                 node_value->param_child_ = &plan.dynamic_node_arena_.back();
             }
             node_value = node_value->param_child_;
@@ -168,7 +168,7 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
                 }
             }
             if (child_node == nullptr) {
-                plan.dynamic_node_arena_.emplace_back(plan.resource_);
+                plan.dynamic_node_arena_.emplace_back();
                 child_node = &plan.dynamic_node_arena_.back();
                 node_value->static_children_.push_back(
                     compiled_route_plan::dynamic_static_child_type{segment, child_node});

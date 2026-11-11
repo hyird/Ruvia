@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_handle.h"
 
 #include "client/client_lifecycle.h"
@@ -51,7 +51,6 @@ private:
 
     event_loop loop_;
     worker_handle worker_;
-    worker_memory memory_;
     db_registry databases_;
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<db_client_state> lifecycle_;
@@ -59,8 +58,7 @@ private:
 db_client_state::db_client_state(event_loop loop, const db_config& config)
     : loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
-      memory_(),
-      databases_(loop_.io_context(), worker_, memory_.resource(), config),
+      databases_(loop_.io_context(), worker_, config),
       lifecycle_(*this, loop_, worker_) {}
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -68,8 +66,7 @@ db_client_state::db_client_state(event_loop loop, const db_config& config,
     const redis_handle& cache_store, const db_cache_config& cache_policy)
     : loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
-      memory_(),
-      databases_(loop_.io_context(), worker_, memory_.resource(), config, cache_store, cache_policy),
+      databases_(loop_.io_context(), worker_, config, cache_store, cache_policy),
       lifecycle_(*this, loop_, worker_) {}
 #endif
 

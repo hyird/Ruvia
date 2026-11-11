@@ -78,9 +78,9 @@ void configure_listener_address(asio::ip::tcp::acceptor& socket) {
 }
 #endif
 
-// The scanner also trims the worker's memory after an idle interval.
+// The scanner also collects the worker's thread heap after an idle interval.
 [[nodiscard]] connection_scanner_options make_connection_scanner_options(
-    const http_server_options& options, worker_memory& memory) noexcept {
+    const http_server_options& options) noexcept {
     const auto& server = options.server_;
     return connection_scanner_options{.scan_interval_ = server.connection_scan_interval_,
         .idle_timeout_ = server.idle_timeout_,
@@ -88,8 +88,7 @@ void configure_listener_address(asio::ip::tcp::acceptor& socket) {
         .payload_read_timeout_ = server.request_body_timeout_,
         .write_timeout_ = server.write_timeout_,
         .initial_read_completion_timeout_ = server.header_completion_timeout_,
-        .payload_read_completion_timeout_ = server.body_completion_timeout_,
-        .trim_when_idle_ = &memory};
+        .payload_read_completion_timeout_ = server.body_completion_timeout_};
 }
 
 // Names the peer for the session's services and its failure report. Both stay
@@ -105,7 +104,7 @@ void name_remote_endpoint(
 }  // namespace
 
 worker_connections::worker_connections(asio::io_context& io, const worker_handle& worker_value,
-    worker_memory& memory, const route_table& routes_value, worker_capabilities& capabilities,
+    const route_table& routes_value, worker_capabilities& capabilities,
     http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value,
     task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_runtime& runtime
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -115,7 +114,6 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
     )
     : io_(io),
       worker_(worker_value),
-      memory_(memory),
       routes_(routes_value),
       capabilities_(capabilities),
       options_(options),
@@ -123,14 +121,13 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
       state_(state_value),
       tasks_(tasks),
       runtime_(runtime),
-      listeners_(memory.resource()),
-      scanner_(worker_value, make_connection_scanner_options(options, memory))
+      listeners_(process_resource()),
+      scanner_(worker_value, make_connection_scanner_options(options))
 #if defined(RUVIA_ENABLE_HTTP3)
       ,
       http3_placement_(http3_placement),
       http3_services_{.io_ = io,
           .worker_ = worker_value,
-          .memory_ = memory,
           .routes_ = routes_value,
           .capabilities_ = capabilities,
           .options_ = options,
@@ -141,19 +138,19 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
           .state_ = state_value,
           .refused_ = refused_,
           .placement_ = http3_placement},
-      http3_endpoints_(memory.resource())
+      http3_endpoints_(process_resource())
 #endif
 {
     listeners_.reserve(listeners.size());
     for (const auto& configured : listeners) {
-        listeners_.push_back(make_pmr_object<listener>(memory.resource(), io, configured, memory.resource()));
+        listeners_.push_back(make_pmr_object<listener>(process_resource(), io, configured, process_resource()));
     }
 #if defined(RUVIA_ENABLE_HTTP3)
     // Every worker (and the Windows acceptor) numbers the HTTP/3 listeners
     // alike, so a handed-over datagram names its endpoint by index.
     for (auto& configured : listeners_) {
         if (configured->session_.http3_.has_value()) {
-            http3_endpoints_.push_back(make_pmr_object<http3_endpoint>(memory.resource(), http3_services_,
+            http3_endpoints_.push_back(make_pmr_object<http3_endpoint>(process_resource(), http3_services_,
                 configured->session_,
                 asio::ip::udp::endpoint(configured->endpoint_.address(), configured->session_.http3_->port_),
                 http3_endpoints_.size()));
@@ -342,8 +339,8 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
             // The accepted socket is born on this worker and never changes
             // executor. Only the long-lived listener task wraps acceptance.
             tcp_socket_type socket(io_);
-            const auto completion = co_await ruvia::async_asio([this, &configured, &socket](auto handler) {
-                configured.socket_.async_accept(socket, asio::bind_allocator(memory_.allocator(), std::move(handler)));
+            const auto completion = co_await ruvia::async_asio([&configured, &socket](auto handler) {
+                configured.socket_.async_accept(socket, asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
             });
             if (!http_server_worker_running(state_) || !configured.socket_.is_open()) {
                 co_return;
@@ -395,7 +392,7 @@ void worker_connections::report_accept_failure(std::exception_ptr failure, bool 
 task<void> worker_connections::run_session(http_server_session_config& listener_value,
     accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote) {
     auto& socket = connection.socket();
-    std::pmr::string remote_address(memory_.allocator<char>());
+    std::pmr::string remote_address(process_resource());
     std::uint16_t remote_port = 0;
     try {
         name_remote_endpoint(remote, remote_address, remote_port);
@@ -416,7 +413,7 @@ task<void> worker_connections::run_session(http_server_session_config& listener_
 task<void> worker_connections::run_tls_session(http_server_session_config& listener_value,
     accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote) {
     auto& socket = connection.socket();
-    std::pmr::string remote_address(memory_.allocator<char>());
+    std::pmr::string remote_address(process_resource());
     std::uint16_t remote_port = 0;
     try {
         name_remote_endpoint(remote, remote_address, remote_port);
@@ -445,7 +442,7 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
                 co_return;
             }
         }
-        std::pmr::string client_certificate(memory_.allocator<char>());
+        std::pmr::string client_certificate(process_resource());
         std::optional<std::string_view> client_subject;
         if (listener_value.tls()->client_certificates_.has_value()) {
             client_subject = extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
@@ -479,7 +476,7 @@ task<http_connection_close> worker_connections::run_http2(stream_type& stream, t
     connection_scanner::entry scanner_entry;
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
     co_return co_await run_http2_sans_io_session(
-        stream, routes_, memory_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
+        stream, routes_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
 }
 #endif
 
@@ -530,7 +527,7 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
                                                      : run_session(listener_value, std::move(connection), remote));
     } catch (...) {
         auto failure = std::current_exception();
-        std::pmr::string remote_address(memory_.allocator<char>());
+        std::pmr::string remote_address(process_resource());
         std::uint16_t remote_port = 0;
         try {
             name_remote_endpoint(remote, remote_address, remote_port);

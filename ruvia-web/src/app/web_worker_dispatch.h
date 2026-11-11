@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <memory>
-#include <memory_resource>
 
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_runtime.h"
@@ -28,7 +27,7 @@ class web_worker_dispatch final {
 public:
     using job_type = move_only_function<ruvia::task<void>(web_worker_context&)>;
 
-    web_worker_dispatch(ruvia::worker_runtime& runtime, std::pmr::memory_resource* resource,
+    web_worker_dispatch(ruvia::worker_runtime& runtime,
         worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value);
 
     web_worker_dispatch(const web_worker_dispatch&) = delete;
@@ -53,7 +52,6 @@ private:
     // A stable copy: queries stay valid after the server's runtime is gone.
     worker_handle worker_;
     ruvia::worker_runtime& runtime_;
-    std::pmr::memory_resource* resource_;
     worker_client_registry_view client_registries_;
     const worker_state_registry& worker_states_;
     task_scope& jobs_;

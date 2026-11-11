@@ -203,7 +203,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 [[nodiscard]] bool send_stream_query(
     postgresql_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params) {
     auto* connection = pool.slot(index).connection_;
-    const postgresql_params encoded(params, pool.resource());
+    const postgresql_params encoded(params);
     if (PQenterPipelineMode(connection) == 0) {
         throw postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
     }
@@ -430,7 +430,7 @@ template <typename result_type>
 task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
-    const postgresql_params encoded(params, pool.resource());
+    const postgresql_params encoded(params);
     auto* connection = pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
     for (bool may_retry = true;; may_retry = false) {
@@ -478,7 +478,7 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
 // The digest covers the SQL, a NUL that SQL never contains, and every type
 // OID as four big-endian bytes, so no two keys share an encoding.
 postgresql_statement_name make_postgresql_statement_name(
-    std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource*) {
+    std::string_view sql, std::span<const unsigned int> types) {
     db_sha256 key;
     key.update(sql);
     key.update(std::string_view("\0", 1));
@@ -543,12 +543,11 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
         constraint == nullptr ? std::string_view{} : std::string_view(constraint));
 }
 
-postgresql_params::postgresql_params(
-    std::span<const db_value> params, std::pmr::memory_resource* resource)
+postgresql_params::postgresql_params(std::span<const db_value> params)
     : count_(params.size()),
-      heap_encoded_(pmr_resource_or_default(resource)),
-      heap_values_(pmr_resource_or_default(resource)),
-      heap_types_(pmr_resource_or_default(resource)) {
+      heap_encoded_(process_resource()),
+      heap_values_(process_resource()),
+      heap_types_(process_resource()) {
     // libpq counts parameters in an int.
     if (!std::in_range<int>(params.size())) {
         throw std::invalid_argument("too many PostgreSQL query parameters");
@@ -642,8 +641,8 @@ std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept {
 }
 
 postgresql_pipeline_io::statement_type postgresql_pipeline_io::prepare(
-    pool_type& pool, std::string_view sql, std::span<const db_value> params) {
-    return {sql, params, pool.resource()};
+    std::string_view sql, std::span<const db_value> params) {
+    return {sql, params};
 }
 
 db_slot_socket::native_socket_type postgresql_pipeline_io::socket(pool_type& pool, std::size_t slot) {
@@ -763,7 +762,7 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
         !use_tls ? "" : (config.tls_.ca_file_.has_value() ? tls_file_name_c_str(*config.tls_.ca_file_) : "system");
     {
         const auto resolved_hosts = make_postgresql_resolved_host_list(
-            tls_host, co_await pool.resolve_host(index, deadline_value), pool.resource());
+            tls_host, co_await pool.resolve_host(index, deadline_value), process_resource());
         const auto port = format_db_port(config.port_);
         const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname",
             "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version",

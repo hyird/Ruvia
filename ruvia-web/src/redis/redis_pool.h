@@ -35,18 +35,15 @@ public:
     // pool of the alias; it is configured only when TLS is enabled.
     redis_pool(asio::io_context& io_context, const redis_config_storage& config, asio::ssl::context& tls_context,
         std::optional<timeout_duration> command_timeout, std::size_t pool_size,
-        const worker_handle& worker_value, std::pmr::memory_resource* resource = nullptr);
+        const worker_handle& worker_value);
     redis_pool(asio::io_context&, redis_config_storage&&, asio::ssl::context&, std::optional<timeout_duration>,
-        std::size_t, const worker_handle&, std::pmr::memory_resource* = nullptr) = delete;
+        std::size_t, const worker_handle&) = delete;
     redis_pool(asio::io_context&, const redis_config_storage&&, asio::ssl::context&,
-        std::optional<timeout_duration>, std::size_t, const worker_handle&,
-        std::pmr::memory_resource* = nullptr) = delete;
+        std::optional<timeout_duration>, std::size_t, const worker_handle&) = delete;
     redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&,
-        std::optional<timeout_duration>, std::size_t, worker_handle&&,
-        std::pmr::memory_resource* = nullptr) = delete;
+        std::optional<timeout_duration>, std::size_t, worker_handle&&) = delete;
     redis_pool(asio::io_context&, const redis_config_storage&, asio::ssl::context&,
-        std::optional<timeout_duration>, std::size_t, const worker_handle&&,
-        std::pmr::memory_resource* = nullptr) = delete;
+        std::optional<timeout_duration>, std::size_t, const worker_handle&&) = delete;
     ~redis_pool();
 
     redis_pool(const redis_pool&) = delete;
@@ -96,7 +93,6 @@ private:
 
     const redis_config_storage& config_;
     std::optional<timeout_duration> command_timeout_;
-    std::pmr::memory_resource* resource_;
     client_wire_counters wire_counters_;
     slot_pool_type slots_;
     // Declared after the slot pool, whose worker every transport borrows.

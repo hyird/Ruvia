@@ -6,6 +6,8 @@
 #include <new>
 #include <stdexcept>
 
+#include "ruvia/core/memory/pmr_object.h"
+
 namespace ruvia::detail {
 
 class inbound_buffer_limit_error final : public std::bad_alloc {
@@ -16,13 +18,12 @@ public:
 };
 
 // A worker's live inbound buffer bytes, shared by the inbound_buffer_resource of
-// each of its connections. Worker-affine, no synchronization. The upstream
-// resource and this owner must outlive every connection resource.
+// each of its connections. Worker-affine, no synchronization. This owner must
+// outlive every connection resource.
 class inbound_buffer_budget final {
 public:
-    inbound_buffer_budget(std::pmr::memory_resource& upstream, std::size_t limit)
-        : upstream_(upstream),
-          limit_(limit) {
+    explicit inbound_buffer_budget(std::size_t limit)
+        : limit_(limit) {
         if (limit_ == 0) {
             throw std::invalid_argument("inbound buffer budget requires a positive limit");
         }
@@ -37,17 +38,16 @@ public:
 
 private:
     friend class inbound_buffer_resource;
-    std::pmr::memory_resource& upstream_;
     const std::size_t limit_;
     std::size_t used_{};
 };
 
 // One connection's inbound buffers. Each allocation is checked against the
 // connection's limit and its worker's budget, both charged together, and then
-// taken straight from the worker's upstream: one wrapper between a buffer and
-// the worker pool. Counts live allocations: pool-cached memory is excluded,
-// while container capacity and transient reallocation overlap count. Every
-// allocation must be returned before this owner is destroyed.
+// taken straight from process_resource(): one wrapper between a buffer and
+// mimalloc. Counts live allocations: container capacity and transient
+// reallocation overlap count. Every allocation must be returned before this
+// owner is destroyed.
 class inbound_buffer_resource final : public std::pmr::memory_resource {
 public:
     inbound_buffer_resource(inbound_buffer_budget& worker, std::size_t limit)
@@ -70,7 +70,7 @@ private:
         if (bytes_value > limit_ - used_ || bytes_value > worker_.limit_ - worker_.used_) {
             throw inbound_buffer_limit_error();
         }
-        auto* allocation = worker_.upstream_.allocate(bytes_value, alignment);
+        auto* allocation = process_resource()->allocate(bytes_value, alignment);
         used_ += bytes_value;
         worker_.used_ += bytes_value;
         return allocation;
@@ -79,7 +79,7 @@ private:
         if (bytes_value > used_ || bytes_value > worker_.used_) {
             std::terminate();
         }
-        worker_.upstream_.deallocate(allocation, bytes_value, alignment);
+        process_resource()->deallocate(allocation, bytes_value, alignment);
         used_ -= bytes_value;
         worker_.used_ -= bytes_value;
     }

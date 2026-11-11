@@ -74,8 +74,7 @@ class route_table final {
 public:
     // The plan and the controllers must outlive the table. Middleware
     // instances are created here and destroyed with the table.
-    route_table(std::pmr::memory_resource* resource, const compiled_route_plan& plan,
-        const controller_store& controllers);
+    route_table(const compiled_route_plan& plan, const controller_store& controllers);
     ~route_table();
     route_table(const route_table&) = delete;
     route_table& operator=(const route_table&) = delete;
@@ -224,7 +223,6 @@ private:
 
     [[nodiscard]] http_error_handler_ref error_handler_for(std::string_view path) const noexcept;
 
-    std::pmr::memory_resource* resource_;
     const compiled_route_plan* plan_;
     // Worker-bound, indexed like the plan: the controller instance behind each
     // route, the middleware instances this table owns, and each frame bound to

@@ -5,7 +5,7 @@
 // statements through it (run_pipelined).
 //
 // The io_type hooks, all static, each on a connected, leased slot of a group:
-//   statement_type prepare(pool_type&, std::string_view sql, std::span<const db_value>)
+//   statement_type prepare(std::string_view sql, std::span<const db_value>)
 //       Validates and prepares what queue() needs, before admission.
 //   void open(state_type&, std::size_t slot)
 //       Readies a connection for a new group; a failure closes it.
@@ -877,7 +877,7 @@ task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& 
     using member_type = db_pipeline_member<io_type>;
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     scoped_request_io_timer timer(io_metrics, request_io_kind::db);
-    auto statement = io_type::prepare(pool, sql, std::span<const db_value>(params));
+    auto statement = io_type::prepare(sql, std::span<const db_value>(params));
     const operation_timeout timeout(options.timeout_);
     auto& pipeline = pool.state();
     auto output = db_result_access::make_result(resource);

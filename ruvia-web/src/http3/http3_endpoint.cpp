@@ -59,9 +59,9 @@ http3_endpoint::http3_endpoint(
       listener_index_(listener_index),
 #if !defined(_WIN32)
       socket_(services.io_),
-      receive_buffer_(services.memory_.resource()),
+      receive_buffer_(process_resource()),
 #endif
-      connections_(services.memory_.resource()) {
+      connections_(process_resource()) {
     if (!session_.http3_.has_value() || session_.http3_->secret_ == nullptr) {
         throw std::logic_error("HTTP/3 endpoint requires a validated HTTP/3 service");
     }
@@ -119,7 +119,7 @@ std::error_code http3_endpoint::send(const asio::ip::udp::endpoint& remote, std:
 task<std::error_code> http3_endpoint::wait_writable() {
     const auto completion = co_await ruvia::async_asio([this](auto handler) {
         socket_.async_wait(asio::socket_base::wait_write,
-            asio::bind_allocator(services_.memory_.allocator(), std::move(handler)));
+            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
     });
     co_return completion.error_code();
 }
@@ -140,7 +140,7 @@ task<void> http3_endpoint::run_receive_loop() {
             asio::ip::udp::endpoint remote;
             const auto completion = co_await ruvia::async_asio<std::size_t>([this, &remote](auto handler) {
                 socket_.async_receive_from(asio::buffer(receive_buffer_.data(), receive_buffer_.size()), remote,
-                    asio::bind_allocator(services_.memory_.allocator(), std::move(handler)));
+                    asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
             });
             if (!socket_.is_open()) {
                 co_return;
@@ -286,13 +286,13 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
         return;
     }
     try {
-        auto session = make_pmr_object<http3_session>(services_.memory_.resource(), *this,
+        auto session = make_pmr_object<http3_session>(process_resource(), *this,
             connection_slot(services_.connection_count_), header, remote, original_dcid, retry_scid, retry_token);
         session->receive(bytes, remote);
         services_.tasks_.spawn(serve(std::move(session)));
     } catch (...) {
         auto failure = std::current_exception();
-        std::pmr::string address(services_.memory_.resource());
+        std::pmr::string address(process_resource());
         try {
             assign_peer_address(address, remote.address());
         } catch (...) {

@@ -150,25 +150,24 @@ void http1_deferred_access_log::reset() noexcept {
     http_clear_pmr_string_retaining_small(text_);
 }
 
-connection_work_set::connection_work_set(worker_memory& memory, std::span<std::byte> arena_block)
-    : read_buffer_(memory.allocator<char>()),
-      response_head_(memory.allocator<char>()),
-      deferred_access_(memory.allocator<char>()),
+connection_work_set::connection_work_set(std::span<std::byte> arena_block)
+    : read_buffer_(std::pmr::polymorphic_allocator<char>(process_resource())),
+      response_head_(std::pmr::polymorphic_allocator<char>(process_resource())),
+      deferred_access_(std::pmr::polymorphic_allocator<char>(process_resource())),
       arena_block_(arena_block) {}
 
 std::unique_ptr<connection_work_set, connection_work_set_deleter>
-make_connection_work_set(worker_memory& memory) {
-    const auto arena_bytes = memory.request_initial_buffer_bytes();
+make_connection_work_set(std::size_t arena_bytes) {
     if (arena_bytes > std::numeric_limits<std::size_t>::max() - sizeof(connection_work_set)) {
         throw std::bad_alloc();
     }
     const auto allocation_bytes = sizeof(connection_work_set) + arena_bytes;
-    auto* const resource = memory.resource();
+    auto* const resource = process_resource();
     auto* const storage = static_cast<std::byte*>(resource->allocate(allocation_bytes, alignof(connection_work_set)));
     try {
         auto* work_set = ::new (static_cast<void*>(storage))
-            connection_work_set(memory, std::span<std::byte>(storage + sizeof(connection_work_set), arena_bytes));
-        return {work_set, connection_work_set_deleter{resource}};
+            connection_work_set(std::span<std::byte>(storage + sizeof(connection_work_set), arena_bytes));
+        return std::unique_ptr<connection_work_set, connection_work_set_deleter>(work_set);
     } catch (...) {
         resource->deallocate(storage, allocation_bytes, alignof(connection_work_set));
         throw;
@@ -178,7 +177,7 @@ make_connection_work_set(worker_memory& memory) {
 void connection_work_set_deleter::operator()(connection_work_set* work_set) const noexcept {
     const auto allocation_bytes = sizeof(connection_work_set) + work_set->arena_block_.size();
     work_set->~connection_work_set();
-    resource_->deallocate(work_set, allocation_bytes, alignof(connection_work_set));
+    process_resource()->deallocate(work_set, allocation_bytes, alignof(connection_work_set));
 }
 
 }  // namespace ruvia::detail

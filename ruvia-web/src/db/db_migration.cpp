@@ -378,7 +378,7 @@ public:
             detail::db_definition{std::pmr::string(detail::default_capability_alias.data(),
                                       detail::default_capability_alias.size(), resolved),
                 std::move(config)}};
-        detail::db_registry registry(io_context, worker_value, resolved, databases);
+        detail::db_registry registry(io_context, worker_value, databases);
         co_await registry.connect();
         ::ruvia::operation_scope operation_scope;
         auto handle = registry.get(operation_scope, nullptr);

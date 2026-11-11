@@ -1,4 +1,4 @@
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 #define RUVIA_SANITIZER_ALLOCATOR 1
@@ -28,7 +28,6 @@
 
 #include "ruvia/core/detail/task/task_promise.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/worker_handle.h"
 
 namespace ruvia {
 
@@ -111,75 +110,35 @@ void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment
 
 }  // namespace detail
 
-void validate_memory_pool_config(const memory_pool_config& config) {
-    if (config.request_initial_buffer_bytes_ == 0) {
-        throw std::invalid_argument("memory pool request initial buffer size must be greater than zero");
-    }
-}
-
-worker_memory::worker_memory(const memory_pool_config& config)
-    : request_initial_buffer_bytes_(config.request_initial_buffer_bytes_) {
-    validate_memory_pool_config(config);
+void collect_thread_heap() noexcept {
 #if !RUVIA_SANITIZER_ALLOCATOR
-    heap_ = mi_heap_new();
-    if (heap_ == nullptr) {
-        throw std::bad_alloc();
+    // mi_collect() serves the calling thread's heap; forcing also purges the
+    // shared arenas.
+    mi_collect(true);
+#endif
+}
+
+namespace {
+
+[[nodiscard]] std::size_t validated_request_initial_bytes(std::size_t initial_bytes) {
+    if (initial_bytes == 0) {
+        throw std::invalid_argument("request arena initial buffer size must be greater than zero");
     }
-#endif
+    return initial_bytes;
 }
 
-worker_memory::~worker_memory() {
-#if !RUVIA_SANITIZER_ALLOCATOR
-    mi_heap_delete(heap_);
-#endif
-}
+}  // namespace
 
-void* worker_memory::do_allocate(std::size_t bytes_value, std::size_t alignment) {
-#if RUVIA_SANITIZER_ALLOCATOR
-    return allocate_mimalloc(bytes_value, alignment);
-#else
-    if (void* block = mi_heap_malloc_aligned(heap_, bytes_value == 0 ? 1 : bytes_value, alignment)) {
-        return block;
-    }
-    throw std::bad_alloc();
-#endif
-}
-
-void worker_memory::do_deallocate(void* block, std::size_t, std::size_t) noexcept {
-    free_mimalloc(block);
-}
-
-bool worker_memory::do_is_equal(const std::pmr::memory_resource& other) const noexcept {
-    return this == &other;
-}
-
-void worker_memory::trim(const worker_handle& owner) {
-    const auto owner_id = owner.id();
-    if (owner_id == 0 || !owner.is_current() || (owner_id_ != 0 && owner_id != owner_id_)) {
-        throw std::logic_error("worker memory trim must run on its owner worker");
-    }
-    owner_id_ = owner_id;
-#if !RUVIA_SANITIZER_ALLOCATOR
-    // Default-heap frames follow mimalloc's normal page retirement policy.
-    // Only the final worker collection forces the shared arenas to purge.
-    mi_collect(false);
-    mi_heap_collect(heap_, true);
-#endif
-}
-
-request_memory::request_memory(worker_memory& worker_value)
-    : request_memory(worker_value.request_initial_buffer_bytes(), worker_value.resource()) {}
-
-request_memory::request_memory(worker_memory& worker_value, std::span<std::byte> initial_buffer)
-    : arena_(initial_buffer.data(), initial_buffer.size(), worker_value.resource()),
-      initial_bytes_(worker_value.request_initial_buffer_bytes()) {}
-
-request_memory::request_memory(std::size_t initial_bytes, std::pmr::memory_resource* upstream)
-    : arena_(initial_bytes, upstream),
+request_memory::request_memory(std::size_t initial_bytes)
+    : arena_(validated_request_initial_bytes(initial_bytes), process_resource()),
       initial_bytes_(initial_bytes) {}
 
+request_memory::request_memory(std::size_t initial_bytes, std::span<std::byte> initial_buffer)
+    : arena_(initial_buffer.data(), initial_buffer.size(), process_resource()),
+      initial_bytes_(validated_request_initial_bytes(initial_bytes)) {}
+
 request_memory request_memory::fork() const& {
-    return request_memory(initial_bytes_, arena_.upstream_resource());
+    return request_memory(initial_bytes_);
 }
 
 std::pmr::memory_resource* request_memory::resource() & noexcept {
@@ -188,14 +147,6 @@ std::pmr::memory_resource* request_memory::resource() & noexcept {
 
 std::pmr::memory_resource* request_memory::resource() const& noexcept {
     return &arena_;
-}
-
-std::pmr::memory_resource* request_memory::upstream_resource() & noexcept {
-    return arena_.upstream_resource();
-}
-
-std::pmr::memory_resource* request_memory::upstream_resource() const& noexcept {
-    return arena_.upstream_resource();
 }
 
 }  // namespace ruvia

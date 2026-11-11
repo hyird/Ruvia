@@ -13,7 +13,7 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_io_buffer.h"
@@ -128,7 +128,7 @@ private:
 // A pipelined burst reuses it; idle connections retain only their session frame.
 // The work set and its configured initial arena block share one allocation.
 struct connection_work_set final {
-    connection_work_set(worker_memory& memory, std::span<std::byte> arena_block);
+    explicit connection_work_set(std::span<std::byte> arena_block);
 
     connection_read_buffer read_buffer_;
     // Serialized response output not yet written: the current response's head
@@ -143,13 +143,11 @@ struct connection_work_set final {
 };
 
 struct connection_work_set_deleter final {
-    std::pmr::memory_resource* resource_;
-
     void operator()(connection_work_set* work_set) const noexcept;
 };
 
 [[nodiscard]] std::unique_ptr<connection_work_set, connection_work_set_deleter>
-make_connection_work_set(worker_memory& memory);
+make_connection_work_set(std::size_t arena_bytes);
 
 // Owns one admitted socket and its connection_slot as one linear value. The
 // slot is acquired only after socket configuration succeeds, then moves into

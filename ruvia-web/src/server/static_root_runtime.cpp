@@ -162,21 +162,20 @@ task<void> document_root_publisher::refresh(
 }
 
 static_root_runtime::static_root_runtime(http_server_options& options, const worker_handle& worker_value,
-    const http_server_worker_state& state_value, std::pmr::memory_resource* resource)
+    const http_server_worker_state& state_value)
     : options_(options),
       publisher_(options.document_root_.publisher()),
       mailbox_(publisher_ == nullptr ? nullptr : &publisher_->register_worker()),
       worker_(worker_value),
       state_(state_value),
-      resource_(resource),
       pending_(nullptr, pmr_object_deleter<document_root_snapshot>{process_resource()}),
-      current_(nullptr, pmr_object_deleter<document_root_generation>{resource}),
-      retired_(resource),
+      current_(nullptr, pmr_object_deleter<document_root_generation>{process_resource()}),
+      retired_(process_resource()),
       refreshes_(publisher_ != nullptr && publisher_->claim_refresh()) {
     if (publisher_ != nullptr) {
         // Worker construction is serialized before startup; no publisher can
         // replace this shared_ptr while its initial reference is copied.
-        current_ = make_pmr_object<document_root_generation>(resource_, publisher_->current_);
+        current_ = make_pmr_object<document_root_generation>(process_resource(), publisher_->current_);
         options_.document_root_.publish(*current_);
     }
 }
@@ -193,7 +192,7 @@ void static_root_runtime::adopt_published() {
     }
     // The exchanged node is exclusively ours, so copying its shared_ptr cannot
     // race the publisher reclaiming or replacing the source object.
-    auto next = make_pmr_object<document_root_generation>(resource_, *pending_);
+    auto next = make_pmr_object<document_root_generation>(process_resource(), *pending_);
     if (current_->leased()) {
         // If vector growth fails both current_ and pending_ remain owned here;
         // adoption retries next interval, or skips to a newer mailbox node.

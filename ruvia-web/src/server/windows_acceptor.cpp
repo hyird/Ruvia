@@ -24,7 +24,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 
 #include "server/connection_count.h"
@@ -143,20 +143,19 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
 #if defined(RUVIA_ENABLE_HTTP3)
     http3_worker_directory* directory,
 #endif
-    worker_failure_sink failure, std::pmr::memory_resource* resource)
+    worker_failure_sink failure)
     : runtime_({.queue_capacity_ = acceptor_queue_capacity(worker_count),
           .io_policy_ = worker_io_policy::single_owner}),
       io_(runtime_.io_context()),
-      resource_(resource),
       failure_sink_(failure),
       finalize_signal_(runtime_.handle()),
-      tasks_(runtime_.handle(), {.resource_ = resource}),
-      workers_(resource),
-      tcp_listeners_(resource)
+      tasks_(runtime_.handle(), {.resource_ = process_resource()}),
+      workers_(process_resource()),
+      tcp_listeners_(process_resource())
 #if defined(RUVIA_ENABLE_HTTP3)
       ,
       directory_(directory),
-      udp_listeners_(resource)
+      udp_listeners_(process_resource())
 #endif
 {
     if (worker_count == 0) {
@@ -164,18 +163,18 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
     }
     workers_.reserve(worker_count);
     for (std::size_t index = 0; index < worker_count; ++index) {
-        workers_.push_back(make_pmr_object<worker_slot>(resource));
+        workers_.push_back(make_pmr_object<worker_slot>(process_resource()));
     }
     tcp_listeners_.reserve(listeners.size());
     for (std::size_t index = 0; index < listeners.size(); ++index) {
         const auto& definition = listeners[index];
-        tcp_listeners_.push_back(make_pmr_object<tcp_listener>(resource, io_, definition.endpoint_, index));
+        tcp_listeners_.push_back(make_pmr_object<tcp_listener>(process_resource(), io_, definition.endpoint_, index));
 #if defined(RUVIA_ENABLE_HTTP3)
         if (definition.http3_.has_value()) {
             if (directory_ == nullptr || definition.http3_->secret_ == nullptr) {
                 throw std::logic_error("Windows HTTP/3 acceptor requires the worker directory and a secret");
             }
-            udp_listeners_.push_back(make_pmr_object<udp_listener>(resource, io_,
+            udp_listeners_.push_back(make_pmr_object<udp_listener>(process_resource(), io_,
                 asio::ip::udp::endpoint(definition.endpoint_.address(), definition.http3_->port_),
                 definition.http3_->secret_, udp_listeners_.size()));
         }
@@ -183,7 +182,7 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
     }
     runtime_.configure({
         .startup_ = [this] { asio::co_spawn(io_, ruvia::as_awaitable(run()),
-                                 asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(resource_),
+                                 asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()),
                                      [this](std::exception_ptr failure) noexcept {
                                          if (failure) {
                                              (void)runtime_.fail(failure);
@@ -432,13 +431,13 @@ std::size_t windows_acceptor::select_worker() noexcept {
 
 #if defined(RUVIA_ENABLE_HTTP3)
 task<void> windows_acceptor::run_receives(udp_listener& listener) {
-    std::pmr::vector<std::byte> buffer(http3_max_udp_payload_bytes, resource_);
+    std::pmr::vector<std::byte> buffer(http3_max_udp_payload_bytes, process_resource());
     try {
         while (admitting_) {
             asio::ip::udp::endpoint remote;
             const auto completion = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 listener.socket_.async_receive_from(asio::buffer(buffer.data(), buffer.size()), remote,
-                    asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(resource_), std::move(handler)));
+                    asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
             });
             if (!admitting_) {
                 co_return;

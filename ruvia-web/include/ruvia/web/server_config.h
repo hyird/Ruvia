@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_known_method.h"
@@ -136,9 +136,10 @@ struct server_config final {
     std::size_t max_inbound_buffer_bytes_per_connection_{64 * 1024 * 1024};
     std::optional<std::size_t> max_stream_body_bytes_{};
     std::size_t max_websocket_message_bytes_{default_max_websocket_message_bytes};
-    // Request arena sizing. Each worker owns a mimalloc heap; the connection
-    // scanner asks mimalloc to collect after a whole quiet scan interval.
-    memory_pool_config memory_pool_{};
+    // Request arena sizing. Worker allocations use mimalloc's own thread
+    // heap; the connection scanner asks mimalloc to collect it after a whole
+    // quiet scan interval.
+    std::size_t request_arena_initial_bytes_{request_arena_initial_bytes};
     // Shared by all registered outbound HTTP client aliases on each worker.
     http_client_result_budget_config http_client_result_budget_{};
 };

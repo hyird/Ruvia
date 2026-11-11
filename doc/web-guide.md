@@ -29,7 +29,7 @@ int main() {
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限与内存池参数 |
+| `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限与请求 Arena 参数 |
 | `application& listen(listen_config config)` | 注册监听端点（支持可多次调用监听多个地址/端口，重复端点会报错拒绝；TLS 证书在调用时立即加载校验） |
 | `template <middleware M, typename... Args> application& use(Args&&... args)` | 注册全局中间件（每个 worker 独立构造一份实例） |
 | `template <middleware M, typename... Args> application& use_at(middleware_scope_options options, Args&&... args)` | 注册路径前缀作用域中间件（如 `{.prefix_ = "/api"}`，按完整路径段匹配；前缀 `"/"` 抛出 `std::invalid_argument`，全局请用 `use`） |
@@ -88,7 +88,7 @@ int main() {
 | `max_inbound_buffer_bytes_per_connection_` | `std::size_t`（默认 `64 MiB`） | 单连接入站缓冲字节上限 |
 | `max_stream_body_bytes_` | `std::optional<std::size_t>`（默认无上限） | 流式路由请求体总字节上限 |
 | `max_websocket_message_bytes_` | `std::size_t`（默认 `default_max_websocket_message_bytes`） | WebSocket 单条消息最大字节数 |
-| `memory_pool_` | `memory_pool_config` | 请求 Arena 初始字节数（`request_initial_buffer_bytes_`）；内存归属与回收见 [core 内存资源契约](core-and-http.md#4-跨线程通道单次交付信号与内存池) |
+| `request_arena_initial_bytes_` | `std::size_t`（默认 4 KiB） | 请求 Arena 初始字节数，须大于零；内存归属与回收见 [core 内存资源契约](core-and-http.md#4-跨线程通道单次交付信号与内存资源) |
 
 连接关闭遵循 [RFC 9112 §9.6/§9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)：
 
@@ -298,7 +298,7 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接借用连接缓冲并同步完成该读取步骤，不创建额外的正文 I/O 协程；返回的视图仍只在当前请求内有效。
 
 - **Cookie 缓存**：首次枚举时单遍解析全部 `Cookie` 首部；后续读取复用完整结果，分配失败不发布部分列表。
-- **Cookie 借用**：描述符使用 `c.pool()` 并随 Context 销毁；名称和值借用请求首部，不得逃逸请求生命周期。
+- **Cookie 借用**：描述符使用 `process_resource()` 并随 Context 销毁；名称和值借用请求首部，不得逃逸请求生命周期。
 
 ### 3.2 构造响应与设置响应元数据
 

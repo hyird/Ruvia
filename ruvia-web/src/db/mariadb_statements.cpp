@@ -466,13 +466,12 @@ void hear_session_status(void* data, status_type type, ...) {
 
 }  // namespace
 
-mariadb_statement_cache::mariadb_statement_cache(std::pmr::memory_resource* resource)
-    : statements_(pmr_resource_or_default(resource)),
-      retired_(pmr_resource_or_default(resource)),
-      types_(pmr_resource_or_default(resource)),
-      binds_(pmr_resource_or_default(resource)),
-      values_(pmr_resource_or_default(resource)),
-      columns_(pmr_resource_or_default(resource)) {}
+mariadb_statement_cache::mariadb_statement_cache()
+    : retired_(process_resource()),
+      types_(process_resource()),
+      binds_(process_resource()),
+      values_(process_resource()),
+      columns_(process_resource()) {}
 
 mariadb_statement_cache::~mariadb_statement_cache() {
     clear();
@@ -612,7 +611,7 @@ std::optional<mariadb_statement_cache::handle> mariadb_statement_cache::find(
     // A statement that may not run prepared is refused inside make() before it
     // could take the place of one that may.
     const auto make = [&cache](std::string_view candidate_sql, std::span<const unsigned int>,
-                          std::size_t hash, std::pmr::memory_resource*) -> std::optional<mariadb_statement> {
+                          std::size_t hash) -> std::optional<mariadb_statement> {
         if (cache.refused(hash)) {
             return std::nullopt;
         }
@@ -738,7 +737,7 @@ using cache_state = mariadb_statement_cache;
 MYSQL_BIND* bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::size_t count) {
     auto* binds = reserve_binds(cache.binds_, count);
     while (cache.columns_.size() < count) {
-        cache.columns_.emplace_back(mariadb_column{std::pmr::vector<char>(cache.columns_.get_allocator().resource())});
+        cache.columns_.emplace_back(mariadb_column{std::pmr::vector<char>(process_resource())});
     }
     cache.column_needed_ = 0;
     for (std::size_t index = 0; index < count; ++index) {

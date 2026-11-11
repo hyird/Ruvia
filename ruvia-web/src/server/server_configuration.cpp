@@ -166,7 +166,7 @@ void validate_server_limits(const server_config& config) {
     detail::ensure_positive_duration(
         config.connection_scan_interval_, "connection scan interval must be greater than 0");
     validate_worker_queue_capacity(config.worker_queue_capacity_);
-    ruvia::validate_memory_pool_config(config.memory_pool_);
+    detail::ensure_positive_size(config.request_arena_initial_bytes_, "request arena initial buffer size must be greater than zero");
     detail::ensure_positive_size(config.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
     detail::ensure_positive_optional_size(
         config.max_stream_body_bytes_, "configured stream body limit must be greater than zero");

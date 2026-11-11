@@ -180,9 +180,6 @@ private:
 
 int main() {
     try {
-        ruvia::memory_pool_config memory;
-        memory.request_initial_buffer_bytes_ = 4096;
-
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8080})
             .server({
@@ -194,7 +191,7 @@ int main() {
                 .write_timeout_ = std::chrono::seconds(60),
                 .max_connections_per_worker_ = 10000,
                 .max_requests_per_connection_ = 1000,
-                .memory_pool_ = memory,
+                .request_arena_initial_bytes_ = 4096,
             })
             .on_error(&example_error_handler)
             .on_error({.prefix_ = "/api", .handler_ = &api_error})

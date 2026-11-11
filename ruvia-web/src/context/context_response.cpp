@@ -315,11 +315,11 @@ void context_response_editor::set_signed_cookie(set_signed_cookie_options option
     const auto prefix = options.attributes_.prefix_
                             ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_))
                             : std::string_view{};
-    const detail::inline_text_concat<128> wire_name({prefix, name}, owner_->pool());
+    const detail::inline_text_concat<128> wire_name({prefix, name}, ruvia::process_resource());
     char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, wire_name.view(), value, owner_->pool());
+    detail::write_cookie_signature(signature, secret, wire_name.view(), value, ruvia::process_resource());
     const detail::inline_text_concat<256> signed_value(
-        {value, ".", std::string_view(signature, sizeof(signature))}, owner_->pool());
+        {value, ".", std::string_view(signature, sizeof(signature))}, ruvia::process_resource());
     write_cookie(target(), name, signed_value.view(), options.attributes_);
 }
 
@@ -343,7 +343,7 @@ http_response context::redirect(redirect_response_options options) {
     }
     http_response response(arena());
     apply_response_state(response, status_code);
-    std::pmr::string encoded_location(pool());
+    std::pmr::string encoded_location(ruvia::process_resource());
     response.header("Location", percent_encode_uri_reference(location, encoded_location));
     response_state().reset_draft();
     return response;

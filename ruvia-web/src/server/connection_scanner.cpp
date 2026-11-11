@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/socket.h"
 
 #include "util/steady_clock.h"
@@ -391,11 +391,12 @@ void connection_scanner::impl_type::schedule() {
                 destroy_after_lock = scanner;
             } else {
                 // Never during an exchange or a burst: only after a whole interval
-                // without either, once per such quiet period. The timer runs on the
-                // worker that owns the memory.
+                // in which no entry carried a request exchange and none had activity
+                // (I/O, registration or retirement), once per such quiet period. The
+                // timer runs on the worker, whose thread heap this collects.
                 if (idle && scanner->retired_activity_ms_ < interval_start) {
                     if (!scanner->quiet_trimmed_) {
-                        scanner->options_.trim_when_idle_->trim(scanner->worker_);
+                        collect_thread_heap();
                         scanner->quiet_trimmed_ = true;
                     }
                 } else {

@@ -82,7 +82,7 @@ class http3_worker_directory final {
 public:
     using receive_type = void (*)(void* target, std::size_t listener_index, http3_handoff_datagram& datagram) noexcept;
 
-    http3_worker_directory(std::size_t worker_count, std::pmr::memory_resource* resource);
+    explicit http3_worker_directory(std::size_t worker_count);
     http3_worker_directory(const http3_worker_directory&) = delete;
     ~http3_worker_directory();
     http3_worker_directory& operator=(const http3_worker_directory&) = delete;

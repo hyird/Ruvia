@@ -13,6 +13,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -64,7 +65,7 @@ private:
     }
     ruvia::task<ruvia::http_response> create(ruvia::context& c) {
         const auto& request = c.req().validated<create_cached_user>();
-        cached_user user_value(c.pool());
+        cached_user user_value(ruvia::process_resource());
         user_value.set<"id">(request.get<"id">().view());
         user_value.set<"name">(request.get<"name">().view());
         user_value.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));

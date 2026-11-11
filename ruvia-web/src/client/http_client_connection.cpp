@@ -5,6 +5,7 @@
 #include <system_error>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_cancellation.h"
 
 #include "client/http_client_pool.h"
@@ -52,19 +53,19 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
 
 http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index)
     : transport_(pool.io_context(), pool.tls_context(), pool.worker(), http_client_endpoint(pool.config()),
-          pool.wire_counters(), pool.resource()),
-      read_buffer_(pool.resource()),
-      write_buffer_(pool.resource()),
+          pool.wire_counters()),
+      read_buffer_(process_resource()),
+      write_buffer_(process_resource()),
 #ifdef RUVIA_ENABLE_HTTP2
       http2_(*this, transport_, pool.tasks(), pool.worker(), pool.config().write_timeout_,
-          pool.config().http2_ping_interval_, pool.resource()),
+          pool.config().http2_ping_interval_),
 #endif
-      connect_scheduler_(1, pool.worker(), pool.resource()),
-      http1_scheduler_(1, pool.worker(), pool.resource()),
+      connect_scheduler_(1, pool.worker(), process_resource()),
+      http1_scheduler_(1, pool.worker(), process_resource()),
       pool_(pool),
       index_(index),
 #ifdef RUVIA_ENABLE_HTTP2
-      http2_streams_(pool.resource()),
+      http2_streams_(process_resource()),
 #endif
       idle_watch_signal_(pool.worker()) {
 }

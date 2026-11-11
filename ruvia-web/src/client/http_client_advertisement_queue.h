@@ -12,13 +12,11 @@ namespace ruvia::detail {
 class http_client_advertisement_memory;
 
 // The pool owns this bounded queue. Returned owners retain their separate
-// worker memory domain, not the client pool or its transport lifecycle.
+// retained-bytes accounting, not the client pool or its transport lifecycle.
 class http_client_advertisement_queue final {
 public:
-    http_client_advertisement_queue(const worker_handle& worker_value, http_client_advertisement_config config,
-        std::pmr::memory_resource* resource);
-    http_client_advertisement_queue(worker_handle&&, http_client_advertisement_config,
-        std::pmr::memory_resource*) = delete;
+    http_client_advertisement_queue(const worker_handle& worker_value, http_client_advertisement_config config);
+    http_client_advertisement_queue(worker_handle&&, http_client_advertisement_config) = delete;
     ~http_client_advertisement_queue();
     http_client_advertisement_queue(const http_client_advertisement_queue&) = delete;
     http_client_advertisement_queue& operator=(const http_client_advertisement_queue&) = delete;

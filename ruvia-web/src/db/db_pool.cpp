@@ -11,6 +11,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_number_format.h"
 
 #include "db/db_pipeline_impl.h"
@@ -244,20 +245,19 @@ void db_pool<driver_type>::slot_policy::cancel_slot(db_pool& pool, std::size_t i
 
 template <typename driver_type>
 db_pool<driver_type>::db_pool(asio::io_context& io_context, const worker_handle& worker_value,
-    db_config_storage config, std::pmr::memory_resource* resource)
+    db_config_storage config)
     : io_context_(io_context),
       config_(std::move(config)),
-      resource_(pmr_resource_or_default(resource)),
       worker_(require_db_worker(worker_value)),
-      slots_(resource_),
-      leases_(*this, config_.pool_size_per_worker_, worker_, resource_),
+      slots_(process_resource()),
+      leases_(*this, config_.pool_size_per_worker_, worker_),
       state_(*this, worker_) {
     if (config_.driver_ != driver_type::driver) {
         throw std::invalid_argument(std::string(driver_type::name).append(" pool requires its own driver"));
     }
     slots_.reserve(config_.pool_size_per_worker_);
     for (std::size_t index = 0; index < config_.pool_size_per_worker_; ++index) {
-        slots_.push_back(make_pmr_object<slot_type>(resource_, io_context_, worker_, resource_));
+        slots_.push_back(make_pmr_object<slot_type>(process_resource(), io_context_, worker_));
     }
 }
 
@@ -537,7 +537,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
                 std::string("resolving ").append(driver_type::name).append(" host failed: ").append(error_code_text(resolve_error)),
                 resolve_error.value());
         }
-        co_return collect_db_resolved_addresses(completion, driver_type::driver, resource_);
+        co_return collect_db_resolved_addresses(completion, driver_type::driver, process_resource());
     } catch (...) {
         (void)leases_.clear_deadline(index);
         throw;

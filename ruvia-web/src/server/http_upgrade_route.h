@@ -18,7 +18,8 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_expectations.h"
@@ -79,7 +80,7 @@ template <typename stream_type>
 // protocol plan copies the views before this temporary pointer table is freed.
 [[nodiscard]] inline inline_http_header_views<> websocket_response_headers(context& context_value) {
     return inline_http_header_views<>(
-        context_access::handshake_headers(context_value), context_value.pool());
+        context_access::handshake_headers(context_value), process_resource());
 }
 
 // Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
@@ -218,7 +219,7 @@ struct tunnel_upgrade_session_operation final {
             transport.emplace(commit_upgrade_(context_value, head_response));
         }
         try {
-            session_.emplace(std::move(*transport), services_.worker(), *context_value.pool(), inbound_,
+            session_.emplace(std::move(*transport), services_.worker(), *process_resource(), inbound_,
                 endpoint_.config().datagrams_, pending_);
         } catch (...) {
             transport->abort();

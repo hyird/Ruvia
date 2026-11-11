@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
@@ -712,7 +712,7 @@ task<http_client_websocket> http_client_websocket_request::connect() {
 task<http_client_websocket> http_client_websocket_request::connect_owned(http_client_websocket_request request) {
     request.client_.registration_.require_active();
     auto& pool = *request.client_.pool_;
-    auto* resource = pool.resource();
+    auto* resource = process_resource();
     std::shared_ptr<detail::http_client_websocket_handshake> handshake;
     std::optional<detail::http_client_request_storage> stored;
     {

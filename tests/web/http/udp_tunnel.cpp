@@ -16,6 +16,7 @@
 
 #include <asio.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_datagram.h"
@@ -167,7 +168,7 @@ class udp_tunnel_routes final {
             }
             auto first_read = original.read();
             auto last_read = original.read();
-            auto first_write = original.send(std::pmr::string("ready", c.pool()));
+            auto first_write = original.send(std::pmr::string("ready", ruvia::process_resource()));
             auto last_write = original.send("second-ready");
             auto finish = original.finish();
             auto tunnel = std::move(original);

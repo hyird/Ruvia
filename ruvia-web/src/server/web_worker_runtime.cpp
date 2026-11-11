@@ -4,9 +4,7 @@
 #include <memory>
 #include <utility>
 
-#include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
-#include <asio/recycling_allocator.hpp>
 
 #include "ruvia/core/async.h"
 
@@ -45,13 +43,11 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
       io_context_(runtime_.io_context()),
       finalize_signal_(runtime_.handle()),
       routes_(routes_value),
-      memory_(validated_options.server_.memory_pool_),
-      inbound_budget_(*memory_.resource(), validated_options.server_.max_inbound_buffer_bytes_per_worker_),
-      codecs_(memory_.resource()),
-      background_tasks_(runtime_.handle(), {.resource_ = memory_.resource()}),
+      inbound_budget_(validated_options.server_.max_inbound_buffer_bytes_per_worker_),
+      background_tasks_(runtime_.handle(), {.resource_ = process_resource()}),
       options_(std::move(validated_options)),
-      static_roots_(options_, runtime_.handle(), worker_state_, memory_.resource()),
-      capabilities_(io_context_, runtime_.handle(), memory_.resource(), capabilities,
+      static_roots_(options_, runtime_.handle(), worker_state_),
+      capabilities_(io_context_, runtime_.handle(), capabilities,
           worker_capability_options{
               .default_rate_limit_ = options_.default_rate_limit_per_worker_,
               .route_rate_limits_ = routes_.has_route_rate_limit() ? route_rate_limit_presence::present
@@ -66,7 +62,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .file_io_timeout_ = options_.server_.write_timeout_,
               .connection_failure_ = &options_.connection_failure_,
           }),
-      connections_(io_context_, runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_
+      connections_(io_context_, runtime_.handle(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_
 #if defined(RUVIA_ENABLE_HTTP3)
           ,
           http3_placement
@@ -74,19 +70,18 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
           ),
       web_worker_dispatch_(std::allocate_shared<web_worker_dispatch>(
           std::pmr::polymorphic_allocator<web_worker_dispatch>(process_resource()), runtime_,
-          memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
+          capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_budget_ = &inbound_budget_;
     options_.codecs_ = &codecs_;
     runtime_.configure({
         .startup_ = [this] {
             worker_state_ = http_server_worker_state::running;
             asio::co_spawn(io_context_, ruvia::as_awaitable(run_worker()),
-                asio::bind_allocator(asio::recycling_allocator<void>(),
-                    [this](std::exception_ptr failure) noexcept {
-                        if (failure) {
-                            (void)runtime_.fail(failure);
-                        }
-                    })); },
+                [this](std::exception_ptr failure) noexcept {
+                    if (failure) {
+                        (void)runtime_.fail(failure);
+                    }
+                }); },
         .serve_ = [this] { serve_on_context(); },
         .stop_admission_ = [this] { stop_admission_on_context(); },
         .finalize_ = [this] { finalize_on_context(); },

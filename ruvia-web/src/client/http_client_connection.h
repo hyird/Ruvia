@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
@@ -92,22 +93,20 @@ public:
     // a PING, and another silent interval fails the session with timeout.
     http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
         const worker_handle& worker_value, std::optional<timeout_duration> write_timeout,
-        std::optional<timeout_duration> ping_interval, std::pmr::memory_resource* resource)
+        std::optional<timeout_duration> ping_interval)
         : handler_(handler),
           transport_(transport),
           tasks_(tasks),
           worker_(worker_value),
           write_timeout_(write_timeout),
           ping_interval_(ping_interval),
-          resource_(resource),
-          read_buffer_(resource),
-          write_buffer_(resource),
+          read_buffer_(process_resource()),
+          write_buffer_(process_resource()),
           write_signal_(worker_value),
           state_signal_(worker_value),
           capacity_signal_(worker_value) {}
     http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_handle&&,
-        std::optional<timeout_duration>, std::optional<timeout_duration>,
-        std::pmr::memory_resource*) = delete;
+        std::optional<timeout_duration>, std::optional<timeout_duration>) = delete;
 
     http2_client_session(const http2_client_session&) = delete;
     http2_client_session& operator=(const http2_client_session&) = delete;
@@ -121,7 +120,7 @@ public:
         if (session_tasks_ != 0) {
             std::terminate();
         }
-        options.resource_ = resource_;
+        options.resource_ = process_resource();
         connection_.emplace(::ruvia::http2_connection::client(options));
         generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
         failed_ = false;
@@ -424,7 +423,7 @@ public:
         if (session_tasks_ == 0) {
             connection_.reset();
             read_buffer_.clear();
-            std::pmr::string(resource_).swap(write_buffer_);
+            std::pmr::string(process_resource()).swap(write_buffer_);
         }
     }
 
@@ -615,7 +614,6 @@ private:
     const worker_handle& worker_;
     std::optional<timeout_duration> write_timeout_;
     std::optional<timeout_duration> ping_interval_;
-    std::pmr::memory_resource* resource_;
     std::optional<::ruvia::http2_connection> connection_;
     http_io_buffer read_buffer_;
     std::pmr::string write_buffer_;

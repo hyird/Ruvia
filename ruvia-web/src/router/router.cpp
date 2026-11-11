@@ -41,8 +41,8 @@ void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<co
 
 }  // namespace
 
-detail::router::router(std::pmr::memory_resource* plan_resource)
-    : plan_(make_pmr_object<compiled_route_plan>(plan_resource, plan_resource)),
+detail::router::router()
+    : plan_(make_pmr_object<compiled_route_plan>(process_resource())),
       route_hashes_(process_resource()),
       route_middleware_descriptors_(process_resource()),
       route_middleware_ranges_(process_resource()),
@@ -176,12 +176,12 @@ detail::compiled_route_plan_ptr_type detail::router::compile() {
     return std::move(plan_);
 }
 
-detail::compiled_route_plan_ptr_type detail::compile_route_plan(std::pmr::memory_resource* resource,
+detail::compiled_route_plan_ptr_type detail::compile_route_plan(
     std::span<const controller_registrar> registrars, const controller_store& controllers,
     const app_configuration& configuration) {
-    router routes_value(resource);
+    router routes_value;
     routes_value.declare_controllers(registrars, controllers);
-    configuration.apply(routes_value, resource);
+    configuration.apply(routes_value);
     return routes_value.compile();
 }
 
@@ -267,7 +267,7 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
     const auto index = routes.size();
     const auto max_request_body_bytes =
         append_route_middlewares(controller_middlewares, route_middlewares);
-    routes.emplace_back(plan_->resource_,
+    routes.emplace_back(process_resource(),
         route_entry::init_type{.index_ = index,
             .controller_ = controller_slot_,
             .method_ = method,

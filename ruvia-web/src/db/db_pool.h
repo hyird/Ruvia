@@ -198,10 +198,9 @@ struct postgresql_driver final {
 // continuations and pipeline records address the slot, so it never moves.
 template <typename driver_type>
 struct db_slot final {
-    db_slot(asio::io_context& io_context, const worker_handle& worker, std::pmr::memory_resource* resource)
+    db_slot(asio::io_context& io_context, const worker_handle& worker)
         : resolver_(worker),
-          wait_socket_(io_context),
-          session_(resource) {}
+          wait_socket_(io_context) {}
 
     ~db_slot() {
         if (wait_active_) {
@@ -278,9 +277,8 @@ public:
     };
     using leases_type = slot_pool<slot_policy>;
 
-    db_pool(asio::io_context& io_context, const worker_handle& worker_value, db_config_storage config,
-        std::pmr::memory_resource* resource);
-    db_pool(asio::io_context&, worker_handle&&, db_config_storage, std::pmr::memory_resource*) = delete;
+    db_pool(asio::io_context& io_context, const worker_handle& worker_value, db_config_storage config);
+    db_pool(asio::io_context&, worker_handle&&, db_config_storage) = delete;
     ~db_pool();
 
     db_pool(const db_pool&) = delete;
@@ -329,9 +327,6 @@ public:
     // Services for driver hooks.
     [[nodiscard]] const db_config_storage& config() const noexcept {
         return config_;
-    }
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
     }
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
@@ -529,7 +524,6 @@ private:
 
     asio::io_context& io_context_;
     db_config_storage config_;
-    std::pmr::memory_resource* resource_;
     const worker_handle& worker_;
     // Declared before the lease pool: pending deadline timers address slots.
     // Each slot is allocated once and stays put while the pool lives.

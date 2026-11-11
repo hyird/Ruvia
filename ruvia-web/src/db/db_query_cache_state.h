@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -83,8 +84,7 @@ private:
 class db_query_cache_state final {
 public:
     // `prefix` is the alias's db_cache_prefix().
-    db_query_cache_state(const redis_handle& redis, const db_cache_config_storage& config, std::pmr::string prefix,
-        std::pmr::memory_resource* resource);
+    db_query_cache_state(const redis_handle& redis, const db_cache_config_storage& config, std::pmr::string prefix);
     ~db_query_cache_state();
     void close_now() noexcept;
     [[nodiscard]] std::optional<std::pmr::string> key(
@@ -103,8 +103,8 @@ private:
     // its encoded result, or for its end without one, and then look again.
     // Shared, so a waiter still reads it after the leader's frame is gone.
     struct fill final {
-        fill(std::string_view key, std::pmr::memory_resource* resource)
-            : key_(key, resource) {}
+        explicit fill(std::string_view key)
+            : key_(key, process_resource()) {}
 
         std::pmr::string key_;
         // Requested once the fill ends, with or without a result.
@@ -129,7 +129,6 @@ private:
 
     bool closed_{false};
     stop_source stop_;
-    std::pmr::memory_resource* resource_;
     const worker_handle& worker_;
     std::chrono::milliseconds duration_;
     bool always_enabled_;

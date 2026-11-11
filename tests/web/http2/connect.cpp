@@ -24,6 +24,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/hpack.h"
@@ -158,7 +159,7 @@ ruvia::task<void> connect_routes::echo(ruvia::context& context_value) {
             observation_value.received_.append(*chunk);
         }
         if (!retained) {
-            retained.emplace(*chunk, context_value.pool());
+            retained.emplace(*chunk, ruvia::process_resource());
         }
         auto output = tunnel.write(std::string_view(*chunk));
         chunk->assign("changed-input");
@@ -199,7 +200,7 @@ ruvia::task<ruvia::http_response> connect_routes::slow_upload(ruvia::context& co
     while (auto chunk = co_await reader.text()) {
         total += chunk->size();
     }
-    std::pmr::string body(context_value.pool());
+    std::pmr::string body(ruvia::process_resource());
     body = std::to_string(total);
     co_return context_value.text(std::move(body));
 }

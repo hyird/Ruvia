@@ -67,7 +67,7 @@ enum class http1_serve_handoff : std::uint8_t {
 class worker_connections final {
 public:
     worker_connections(asio::io_context& io, const worker_handle& worker_value,
-        worker_memory& memory, const route_table& routes_value, worker_capabilities& capabilities,
+        const route_table& routes_value, worker_capabilities& capabilities,
         http_server_options& options, const stop_token& stop_token_value,
         http_server_worker_state& state_value, task_scope& tasks,
         std::span<const http_server_listener_definition> listeners, worker_runtime& runtime
@@ -143,7 +143,6 @@ private:
         http1_connection_session<stream_type>& session, connection_work_set& work_set);
     asio::io_context& io_;
     const worker_handle& worker_;
-    worker_memory& memory_;
     const route_table& routes_;
     worker_capabilities& capabilities_;
     http_server_options& options_;

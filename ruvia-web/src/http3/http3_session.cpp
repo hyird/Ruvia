@@ -25,7 +25,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_accept_encoding.h"
@@ -334,16 +334,16 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
       local_(endpoint.local_endpoint()),
       remote_(remote),
       path_remote_(remote),
-      remote_address_(services_.memory_.resource()),
-      connection_ids_(services_.memory_.resource()),
-      datagram_(services_.memory_.resource()),
-      client_certificate_(services_.memory_.resource()),
+      remote_address_(process_resource()),
+      connection_ids_(process_resource()),
+      datagram_(process_resource()),
+      client_certificate_(process_resource()),
       inbound_buffers_(*services_.options_.inbound_budget_,
           services_.options_.server_.max_inbound_buffer_bytes_per_connection_),
       admission_policy_(http_request_admission_policy::server(services_.options_)),
       write_signal_(services_.worker_),
       handler_finished_(services_.worker_),
-      streams_(services_.memory_.resource()),
+      streams_(process_resource()),
       buffered_response_writer_(*this,
           response_file_io{.worker_ = services_.worker_,
               .stop_ = services_.stop_token_,
@@ -380,7 +380,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     const auto handshake_timeout = http3_quic_duration(
         server.header_completion_timeout_.has_value() ? server.header_completion_timeout_ : server.request_header_timeout_);
     const http3_connection_options http3_options{
-        .resource_ = services_.memory_.resource(),
+        .resource_ = process_resource(),
         .max_concurrent_streams_ = static_cast<std::size_t>(http3_max_concurrent_requests),
         .max_stream_output_bytes_ = http3_stream_output_bytes,
         .enable_connect_protocol_ = true,
@@ -407,7 +407,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .initial_max_streams_bidi_ = http3_max_concurrent_requests,
         .max_udp_payload_size_ = http3_max_datagram_bytes,
         .callback_user_data_ = this,
-        .resource_ = services_.memory_.resource(),
+        .resource_ = process_resource(),
         .http3_ = http3_options,
     }));
     connection_->set_tls_native_handle(crypto_.get());
@@ -515,10 +515,6 @@ int http3_session::remove_connection_id(ngtcp2_conn*, const ngtcp2_cid* cid, voi
 
 const worker_handle& http3_session::worker() const noexcept {
     return services_.worker_;
-}
-
-std::pmr::memory_resource* http3_session::worker_resource() const noexcept {
-    return services_.memory_.resource();
 }
 
 http3_stream* http3_session::find_stream(std::int64_t stream_id) noexcept {
@@ -709,7 +705,7 @@ void http3_session::on_request_head(http3_headers_event& event) {
         accepted_request_heads_ >= *server.max_requests_per_connection_) {
         begin_drain();
     }
-    auto head = http3_request_head::parse(std::move(event), worker_resource());
+    auto head = http3_request_head::parse(std::move(event), process_resource());
     if (!head.has_value()) {
         // RFC 9114 §4.1.2: a malformed request is a stream error of type
         // H3_MESSAGE_ERROR.
@@ -727,8 +723,8 @@ void http3_session::on_request_head(http3_headers_event& event) {
     const auto expectation_plan = head->expectation_plan(http_unsupported_expectation_policy::reject);
     const auto declared_length = head->declared_content_length();
     const bool ended = head->stream_ended();
-    auto stream_value = make_pmr_object<http3_stream>(worker_resource(), std::move(*head), std::move(resolution),
-        body_mode, worker_resource(), static_cast<std::pmr::memory_resource*>(&inbound_buffers_));
+    auto stream_value = make_pmr_object<http3_stream>(process_resource(), std::move(*head), std::move(resolution),
+        body_mode, process_resource(), static_cast<std::pmr::memory_resource*>(&inbound_buffers_));
     auto& stream = *stream_value;
     stream.set_priority(codec().stream_priority(stream_id));
     streams_.emplace(stream_id, std::move(stream_value));
@@ -968,7 +964,7 @@ bool http3_session::admit_stream(std::int64_t stream_id) {
         ++active_handler_tasks_;
         counted = true;
         asio::co_spawn(services_.io_.get_executor(), ruvia::as_awaitable(dispatch_one(stream_id)),
-            asio::bind_allocator(services_.memory_.allocator(), [this, stream_id](std::exception_ptr exception) noexcept {
+            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), [this, stream_id](std::exception_ptr exception) noexcept {
                 if (exception != nullptr) {
                     services_.options_.connection_failure_.invoke(remote_address_, std::move(exception));
                 }
@@ -1001,7 +997,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         std::array<std::byte, http3_request_arena_stack_bytes> arena_block;
         std::optional<request_memory> request_memory_storage;
         auto& request_memory_value =
-            emplace_multiplexed_request_memory(request_memory_storage, services_.memory_, std::span<std::byte>(arena_block));
+            emplace_multiplexed_request_memory(request_memory_storage, services_.options_.server_.request_arena_initial_bytes_, std::span<std::byte>(arena_block));
         auto* stream = find_stream(stream_id);
         auto* signal = stream != nullptr ? stream->signal() : nullptr;
         if (signal == nullptr) {
@@ -1013,7 +1009,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
         http_response response(request_memory_value.resource());
         interim_target target{*this, stream_id};
         http_interim_response_output interim_output(
-            worker_resource(), &target, [](void* raw, const http_interim_response_head& interim) -> task<void> {
+            process_resource(), &target, [](void* raw, const http_interim_response_head& interim) -> task<void> {
                 auto& output = *static_cast<interim_target*>(raw);
                 // RFC 9114 §4.1: any number of 1xx heads may precede the final one.
                 if (output.session_.codec().submit_interim_response_head(output.stream_id_, interim) !=
@@ -1145,7 +1141,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         admission.tail().record_access(options.access_log_, http_status::ok);
                         return websocket_upgrade_commit<http3_tunnel_transport>(
                             http3_tunnel_transport(*this, *stream, *signal), handshake->compression(),
-                            handshake->subprotocol(), *context_value.pool());
+                            handshake->subprotocol(), *ruvia::process_resource());
                     };
                     auto buffered = co_await execute_websocket_upgrade_session<http3_tunnel_transport>(
                         routes, request, *resolved, request_memory_value, dispatch_services, options,
@@ -1160,7 +1156,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                     // A stream reset or the connection ending stops the
                     // request: context::stop_token() combines it with the
                     // worker's stop.
-                    http3_response_stream_sink sink_value(*this, *stream, *signal, worker_resource(),
+                    http3_response_stream_sink sink_value(*this, *stream, *signal, process_resource(),
                         request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
                         options.compression_ ? &*options.compression_ : nullptr, options.cors_ ? &*options.cors_ : nullptr);
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes, request, *resolved,
@@ -1365,7 +1361,7 @@ void http3_session::close_now() noexcept {
         // Written at once: a stopping worker closes the socket before the
         // writer would run again.
         try {
-            http3_quic_datagram close_packet(worker_resource());
+            http3_quic_datagram close_packet(process_resource());
             const auto result = connection_->next_datagram(http3_max_datagram_bytes, now(), close_packet);
             if (result.status_ == http3_quic_status::accepted && !close_packet.bytes_.empty()) {
                 if (const auto destination = http3_udp_endpoint(close_packet.path_.path.remote)) {

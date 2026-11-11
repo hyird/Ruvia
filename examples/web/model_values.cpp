@@ -27,8 +27,8 @@ RUVIA_MODEL(import_record,
 int main() {
     try {
         // Every model/result using this allocator must die before the pool.
-        // In a handler, use c.arena() for request data and c.pool() for reusable
-        // temporary storage instead of creating another allocator per request.
+        // In a handler, use c.arena() for request data and process_resource()
+        // for individually reclaimable storage.
         std::pmr::unsynchronized_pool_resource memory;
         std::string input = R"({"name":"sample","count":7,"ratio":1.25,"enabled":true,"labels":["a","b"],"metadata":{"revision":2}})";
         auto owned = ruvia::from_json<import_record>(input, {.resource_ = &memory});

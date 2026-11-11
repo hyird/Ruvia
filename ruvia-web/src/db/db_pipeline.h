@@ -192,9 +192,6 @@ struct db_pipeline_record final {
 // results are read next.
 template <typename io_type>
 struct db_pipeline_group final {
-    explicit db_pipeline_group(std::pmr::memory_resource* resource)
-        : io_(resource) {}
-
     [[nodiscard]] db_pipeline_record<io_type>& record(std::size_t offset) noexcept {
         return records_[(head_ + offset) % db_pipeline_depth];
     }
@@ -210,7 +207,7 @@ struct db_pipeline_group final {
 
     std::array<db_pipeline_record<io_type>, db_pipeline_depth> records_{};
     // The driver's protocol state of the connection's flights.
-    typename io_type::group_data io_;
+    typename io_type::group_data io_{};
     // Why the connection failed, once closing_.
     std::exception_ptr failure_{};
     // When the reader's current socket wait ends at the latest.

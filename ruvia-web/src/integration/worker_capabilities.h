@@ -63,9 +63,9 @@ struct worker_capability_options final {
 class worker_capabilities final {
 public:
     worker_capabilities(asio::io_context& io_context, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource, worker_capability_definitions definitions,
+        worker_capability_definitions definitions,
         worker_capability_options options);
-    worker_capabilities(asio::io_context&, worker_handle&&, std::pmr::memory_resource*,
+    worker_capabilities(asio::io_context&, worker_handle&&,
         worker_capability_definitions, worker_capability_options) = delete;
 
     worker_capabilities(const worker_capabilities&) = delete;

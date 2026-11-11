@@ -17,10 +17,6 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 
-namespace ruvia {
-class worker_memory;
-}
-
 namespace ruvia::detail {
 
 // Worker-owned connection activity tracking options, copied from the server
@@ -37,11 +33,6 @@ struct connection_scanner_options final {
     // Absolute phase deadlines, independent of successful I/O progress.
     std::optional<timeout_duration> initial_read_completion_timeout_{};
     std::optional<timeout_duration> payload_read_completion_timeout_{};
-    // The first tick after a whole scan interval in which no entry carried a
-    // request exchange and none had activity (I/O, registration or retirement)
-    // trims this memory on the worker, once per such quiet period. Must belong
-    // to the worker.
-    worker_memory* trim_when_idle_;
 };
 
 // Product limit: a connection that a timeout asked to end through its drain

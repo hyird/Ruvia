@@ -56,9 +56,9 @@ enum class redis_request_content : bool { ordinary,
 class redis_connection final {
 public:
     redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context, const worker_handle& worker_value,
-        const redis_config_storage& config, client_wire_counters& counters, std::pmr::memory_resource* resource);
+        const redis_config_storage& config, client_wire_counters& counters);
     redis_connection(asio::io_context&, asio::ssl::context&, worker_handle&&, const redis_config_storage&,
-        client_wire_counters&, std::pmr::memory_resource*) = delete;
+        client_wire_counters&) = delete;
     ~redis_connection();
 
     redis_connection(const redis_connection&) = delete;
@@ -106,7 +106,6 @@ private:
         std::span<const std::string_view> args, operation_timeout deadline, redis_request_content content);
 
     const redis_config_storage& config_;
-    std::pmr::memory_resource* resource_;
     client_tcp_transport transport_;
     std::pmr::string write_buffer_;
     std::array<char, redis_read_buffer_bytes> read_buffer_;

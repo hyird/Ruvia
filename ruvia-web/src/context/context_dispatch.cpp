@@ -9,6 +9,7 @@
 
 #include <asio/error.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
@@ -87,14 +88,14 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     // The operation is lazy and the options borrow caller storage: take owned
     // copies now. The subrequest is built directly as a parsed request; it
     // never round-trips through a wire format.
-    std::pmr::string method(options.method_.view(), pool());
-    std::pmr::string target(options.target_.view(), pool());
-    std::pmr::string body(options.body_.view(), pool());
-    std::pmr::vector<http_header> headers(pool());
+    std::pmr::string method(options.method_.view(), ruvia::process_resource());
+    std::pmr::string target(options.target_.view(), ruvia::process_resource());
+    std::pmr::string body(options.body_.view(), ruvia::process_resource());
+    std::pmr::vector<http_header> headers(ruvia::process_resource());
     if (!options.headers_.empty()) {
         headers.reserve(options.headers_.size());
         for (const auto& header : options.headers_) {
-            headers.emplace_back(header.name(), header.value(), pool());
+            headers.emplace_back(header.name(), header.value(), ruvia::process_resource());
         }
     }
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -170,7 +171,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr
         const auto discarded_body = std::move(body_storage);
         const auto discarded_headers = std::move(headers);
     }
-    dispatch_response result(pool());
+    dispatch_response result(ruvia::process_resource());
     result.copy_head_from(response);
     // As on the wire: HEAD and content-forbidden statuses carry no body.
     if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {

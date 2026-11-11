@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_client.h"
@@ -24,25 +23,22 @@ namespace {
 // This runs in the first member initializer so invalid input is rejected before
 // even implementation-specific PMR container bookkeeping can touch owner memory.
 [[nodiscard]] std::pmr::memory_resource* validated_http_client_resource(
-    std::pmr::memory_resource* resource, std::span<const http_client_definition_type> definitions) {
+    std::span<const http_client_definition_type> definitions) {
     validate_capability_aliases(definitions, "HTTP client alias must not be empty", "duplicate HTTP client alias");
-    return pmr_resource_or_default(resource);
+    return process_resource();
 }
 
 }  // namespace
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
-    std::pmr::memory_resource* resource, http_client_response_storage response_storage,
     std::span<const http_client_definition_type> definitions,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
-    : resource_(validated_http_client_resource(resource, definitions)),
-      response_storage_(response_storage),
-      pools_(resource_),
-      alias_index_(resource_) {
+    : pools_(validated_http_client_resource(definitions)),
+      alias_index_(process_resource()) {
     alias_index_.build(definitions);
     pools_.reserve(definitions.size());
     for (const auto& definition : definitions) {
-        add(io_context, worker_value, http_client_config_storage(definition.config_, resource_), result_budget_domain);
+        add(io_context, worker_value, http_client_config_storage(definition.config_, process_resource()), result_budget_domain);
     }
 }
 
@@ -50,8 +46,8 @@ http_client_registry::~http_client_registry() = default;
 
 void http_client_registry::add(asio::io_context& io_context, const worker_handle& worker_value,
     http_client_config_storage config, const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    auto pool = make_pmr_object<http_client_pool>(resource_, io_context, worker_value, std::move(config),
-        result_budget_domain, resource_, response_storage_);
+    auto pool = make_pmr_object<http_client_pool>(process_resource(), io_context, worker_value, std::move(config),
+        result_budget_domain);
     pools_.push_back(std::move(pool));
 }
 
@@ -94,7 +90,7 @@ http_client_pool& http_client_registry::default_pool() const {
 }
 
 http_client_handle http_client_registry::get(::ruvia::operation_scope& scope) const {
-    http_client_handle result(default_pool(), resource_, scope);
+    http_client_handle result(default_pool(), process_resource(), scope);
     result.registry_ = this;
     return result;
 }
@@ -107,7 +103,7 @@ http_client_handle http_client_registry::get(std::string_view alias, ::ruvia::op
     if (!found.has_value()) {
         throw http_client_error(http_client_error::code_type::not_configured, "named HTTP client is not configured");
     }
-    http_client_handle result(*pools_[*found], resource_, scope);
+    http_client_handle result(*pools_[*found], process_resource(), scope);
     result.registry_ = this;
     return result;
 }
@@ -159,7 +155,6 @@ private:
 
     event_loop loop_;
     worker_handle worker_;
-    worker_memory memory_;
     http_client_pool pool_;
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<http_client_state> lifecycle_;
@@ -169,12 +164,10 @@ http_client_state::http_client_state(event_loop loop, const http_client_config& 
     http_client_result_budget_config result_budget)
     : loop_(client_lifecycle<http_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
-      memory_(),
-      // Responses may outlive this client and its memory_; they own theirs.
-      pool_(loop_.io_context(), worker_, http_client_config_storage(config, memory_.resource()),
+      // Responses may outlive this client: the process resource backs them.
+      pool_(loop_.io_context(), worker_, http_client_config_storage(config, process_resource()),
           std::allocate_shared<http_client_result_budget_domain>(
-              std::pmr::polymorphic_allocator<http_client_result_budget_domain>(process_resource()), result_budget),
-          memory_.resource(), http_client_response_storage::response_owned),
+              std::pmr::polymorphic_allocator<http_client_result_budget_domain>(process_resource()), result_budget)),
       lifecycle_(*this, loop_, worker_, client_phase::connected) {}
 
 void http_client_state::throw_not_ready() {
@@ -184,7 +177,7 @@ void http_client_state::throw_not_ready() {
 http_client_handle http_client_state::handle(operation_options options) {
     lifecycle_.require_ready();
     validate_operation_options(options);
-    return http_client_handle(pool_, memory_.resource(), lifecycle_.operation_scope(),
+    return http_client_handle(pool_, process_resource(), lifecycle_.operation_scope(),
         std::move(options));
 }
 }  // namespace ruvia::detail

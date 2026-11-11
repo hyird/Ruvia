@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "integration/request_io_metrics.h"
 #include "redis/redis_protocol.h"
@@ -81,16 +82,15 @@ void encode_and_release_redis_source(
 
 redis_pool::redis_pool(asio::io_context& io_context, const redis_config_storage& config,
     asio::ssl::context& tls_context, std::optional<timeout_duration> command_timeout,
-    std::size_t pool_size, const worker_handle& worker_value, std::pmr::memory_resource* resource)
+    std::size_t pool_size, const worker_handle& worker_value)
     : config_(config),
       command_timeout_(command_timeout),
-      resource_(pmr_resource_or_default(resource)),
-      slots_(*this, pool_size, require_redis_worker(worker_value), resource_),
-      connections_(resource_) {
+      slots_(*this, pool_size, require_redis_worker(worker_value)),
+      connections_(process_resource()) {
     connections_.reserve(pool_size);
     for (std::size_t i = 0; i < pool_size; ++i) {
         connections_.push_back(make_pmr_object<redis_connection>(
-            resource_, io_context, tls_context, slots_.worker(), config_, wire_counters_, resource_));
+            process_resource(), io_context, tls_context, slots_.worker(), config_, wire_counters_));
     }
 }
 

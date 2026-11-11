@@ -56,8 +56,8 @@ public:
         bool repeated_{false};
     };
 
-    explicit db_statement_cache(std::pmr::memory_resource* resource)
-        : entries_(pmr_resource_or_default(resource)) {}
+    db_statement_cache()
+        : entries_(process_resource()) {}
 
     // Counts a use of the statement. A cached one is returned. One used
     // before is inserted when the caller `may_insert` it now, with the payload
@@ -97,13 +97,13 @@ public:
         std::pmr::vector<unsigned int> key_types(types.begin(), types.end(), resource);
         std::optional<payload_type> created_payload;
         if constexpr (std::is_invocable_v<factory_type, std::string_view, std::span<const unsigned int>,
-                          std::size_t, std::pmr::memory_resource*>) {
-            created_payload = make(sql, types, hash, resource);
+                          std::size_t>) {
+            created_payload = make(sql, types, hash);
             if (!created_payload.has_value()) {
                 return {std::nullopt, false, std::nullopt, hash, true};
             }
         } else {
-            created_payload.emplace(make(sql, types, resource));
+            created_payload.emplace(make(sql, types));
         }
         // Nothing below allocates: the key was copied above, `entries_` has
         // room, and every string and vector shares one resource, so swaps and

@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/timer.h"
@@ -603,12 +603,11 @@ private:
     return {std::move(resolution), body_mode};
 }
 inline request_memory& emplace_multiplexed_request_memory(
-    std::optional<request_memory>& storage, worker_memory& memory, std::span<std::byte> initial_buffer) {
-    const auto initial_bytes = memory.request_initial_buffer_bytes();
+    std::optional<request_memory>& storage, std::size_t initial_bytes, std::span<std::byte> initial_buffer) {
     if (initial_bytes <= initial_buffer.size()) {
-        storage.emplace(memory, initial_buffer.first(initial_bytes));
+        storage.emplace(initial_bytes, initial_buffer.first(initial_bytes));
     } else {
-        storage.emplace(memory);
+        storage.emplace(initial_bytes);
     }
     return *storage;
 }

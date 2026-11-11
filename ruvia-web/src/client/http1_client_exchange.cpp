@@ -17,6 +17,7 @@
 #include <asio/ssl/error.hpp>
 
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
@@ -72,7 +73,7 @@ prepare_http1_request_head(
 [[nodiscard]] auto prepare_client_head(http_client_pool& pool, const http_client_request_storage& request,
     const http_client_upload_state* upload, std::pmr::memory_resource* response_resource,
     http_io_buffer& write_buffer) {
-    client_prepared_request_scratch scratch(pool.resource());
+    client_prepared_request_scratch scratch(process_resource());
     auto source = pool.policy().prepare_request(request, scratch);
     const auto headers = static_cast<std::span<const http_header_view>>(source.headers_);
     auto origin = pool.origin();
@@ -286,7 +287,7 @@ task<void> http1_client_exchange::run(
         co_await receive(request, timeout, state_value, parser);
         co_return;
     }
-    task_scope writers(pool_.worker(), {.resource_ = pool_.resource()});
+    task_scope writers(pool_.worker(), {.resource_ = process_resource()});
     std::exception_ptr writer_failure;
     writers.spawn(write_upload(state_value, timeout,
         http1_request_content_writer(*prepared->content_plan().streaming()), parser, writer_failure));
@@ -395,7 +396,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         ((plan.chunked() != nullptr && !plan.chunked()->transfer_codings().empty()) ||
             (plan.close_delimited() != nullptr && !plan.close_delimited()->transfer_codings().empty()));
     std::array<char, 1> empty_output{};
-    http_io_buffer output_storage(pool_.resource());
+    http_io_buffer output_storage(process_resource());
     const auto transfer_output = needs_transfer_scratch ? output_storage.prepare(http_body_buffer_bytes)
                                                         : std::span<char>{};
     bool eof = false;
@@ -594,11 +595,11 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     // Everything that can throw after the TLS writer starts runs inside the
     // receive try below, so the started writer is always joined before `tls`
     // is destroyed; the scope and timer slots are allocated first.
-    task_scope writers(pool_.worker(), {.resource_ = pool_.resource()});
+    task_scope writers(pool_.worker(), {.resource_ = process_resource()});
     worker_timer_registration lifetime_timer;
     std::optional<tls_tunnel_output> tls;
     if (secure) {
-        tls.emplace(*stream.native_handle(), stream.next_layer().socket(), pool_.worker(), *pool_.resource());
+        tls.emplace(*stream.native_handle(), stream.next_layer().socket(), pool_.worker(), *process_resource());
         tls->start();
     }
     std::exception_ptr writer_failure;

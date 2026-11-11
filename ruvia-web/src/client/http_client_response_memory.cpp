@@ -21,7 +21,7 @@ void* http_client_response_memory_domain::receive_resource::do_allocate(
             "HTTP client in-flight response memory budget is exhausted");
     }
     try {
-        return upstream_.allocate(bytes_value, alignment);
+        return process_resource()->allocate(bytes_value, alignment);
     } catch (...) {
         budget_.release_in_flight(bytes_value);
         throw;
@@ -30,17 +30,15 @@ void* http_client_response_memory_domain::receive_resource::do_allocate(
 
 void http_client_response_memory_domain::receive_resource::do_deallocate(
     void* allocation, std::size_t bytes_value, std::size_t alignment) {
-    upstream_.deallocate(allocation, bytes_value, alignment);
+    process_resource()->deallocate(allocation, bytes_value, alignment);
     budget_.release_in_flight(bytes_value);
 }
 
 http_client_response_memory_domain::http_client_response_memory_domain(const worker_handle& worker_value,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain,
-    std::pmr::memory_resource* worker_resource, std::pmr::memory_resource& storage)
-    : storage_(storage),
-      worker_(worker_value),
+    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
+    : worker_(worker_value),
       result_budget_domain_(result_budget_domain),
-      receive_resource_(response_upstream(owned_memory_, worker_resource), *result_budget_domain_) {
+      receive_resource_(*result_budget_domain_) {
     if (!worker_.valid()) {
         throw std::invalid_argument("HTTP client response memory requires a worker");
     }
@@ -55,48 +53,25 @@ http_client_response_memory_domain::~http_client_response_memory_domain() {
     }
 }
 
-std::pmr::memory_resource& http_client_response_memory_domain::response_upstream(
-    std::optional<worker_memory>& owned_memory, std::pmr::memory_resource* worker_resource) {
-    if (worker_resource != nullptr) {
-        return *worker_resource;
-    }
-    return *owned_memory.emplace().resource();
-}
-
 http_client_response_memory_domain::owner http_client_response_memory_domain::create(
     const worker_handle& worker_value,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain,
-    std::pmr::memory_resource& worker_resource) {
-    return allocate(worker_value, result_budget_domain, &worker_resource, worker_resource);
-}
-
-http_client_response_memory_domain::owner http_client_response_memory_domain::create_response_owned(
-    const worker_handle& worker_value,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    return allocate(worker_value, result_budget_domain, nullptr, *process_resource());
-}
-
-http_client_response_memory_domain::owner http_client_response_memory_domain::allocate(
-    const worker_handle& worker_value,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain,
-    std::pmr::memory_resource* worker_resource, std::pmr::memory_resource& storage) {
-    auto* const object = storage.allocate(sizeof(http_client_response_memory_domain),
+    auto* const object = process_resource()->allocate(sizeof(http_client_response_memory_domain),
         alignof(http_client_response_memory_domain));
     try {
         return owner(::new (object) http_client_response_memory_domain(
-                         worker_value, result_budget_domain, worker_resource, storage),
+                         worker_value, result_budget_domain),
             deleter_type{});
     } catch (...) {
-        storage.deallocate(object, sizeof(http_client_response_memory_domain),
+        process_resource()->deallocate(object, sizeof(http_client_response_memory_domain),
             alignof(http_client_response_memory_domain));
         throw;
     }
 }
 
 void http_client_response_memory_domain::destroy() noexcept {
-    auto& storage = storage_;
     this->~http_client_response_memory_domain();
-    storage.deallocate(this, sizeof(http_client_response_memory_domain),
+    process_resource()->deallocate(this, sizeof(http_client_response_memory_domain),
         alignof(http_client_response_memory_domain));
 }
 

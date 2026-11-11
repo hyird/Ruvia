@@ -22,14 +22,14 @@ class app_configuration;
 // `controllers` (one per registrar, registrar order) declares its routes, then
 // `configuration` applies the app-wide fallbacks and middleware. Route
 // conflicts and invalid registrations throw here, before any worker starts.
-[[nodiscard]] compiled_route_plan_ptr_type compile_route_plan(std::pmr::memory_resource* resource,
+[[nodiscard]] compiled_route_plan_ptr_type compile_route_plan(
     std::span<const controller_registrar> registrars, const controller_store& controllers,
     const app_configuration& configuration);
 
 // The plan under construction. Lives only inside compile_route_plan().
 class router final {
 public:
-    explicit router(std::pmr::memory_resource* plan_resource);
+    router();
     ~router();
 
     router(const router&) = delete;
@@ -47,11 +47,6 @@ public:
     // Application-wide middleware, prepended to every route's chain. Each
     // descriptor becomes exactly one instance per worker, serving all routes.
     void set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors);
-
-    // Owns endpoint text (tunnel protocol, websocket subprotocols).
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return plan_->resource_;
-    }
 
     // Runs every registrar against its controller instance, in slot order.
     void declare_controllers(

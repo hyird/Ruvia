@@ -11,11 +11,10 @@ namespace ruvia::detail {
 
 client_happy_eyeballs::client_happy_eyeballs(const worker_handle& worker,
     const asio::ip::tcp::socket::executor_type& executor,
-    const asio::ip::tcp::resolver::results_type& addresses,
-    std::pmr::memory_resource* resource)
+    const asio::ip::tcp::resolver::results_type& addresses)
     : worker_(worker),
       changed_(worker),
-      attempts_(pmr_resource_or_default(resource)) {
+      attempts_(process_resource()) {
     if (addresses.empty()) {
         return;
     }

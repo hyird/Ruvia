@@ -471,7 +471,7 @@ task<void> session_middleware::handle(context& c, next& next_value) {
     if (cookie && detail::is_valid_session_id(*cookie)) {
         detail::session_access::observe_presented_id(c, *cookie);
         auto get_task = [&] {
-            const session_key key({key_prefix_, *cookie}, c.pool());
+            const session_key key({key_prefix_, *cookie}, ruvia::process_resource());
             return c.redis(redis_alias_).get(key.view());
         }();
         if (auto stored = co_await std::move(get_task)) {
@@ -503,7 +503,7 @@ task<void> session_middleware::commit(context& c) const {
         detail::append_expired_session_cookie_header(staged, cookie_name_, secure);
         if (cleared->old_id_.has_value()) {
             auto del_task = [&] {
-                const session_key key({key_prefix_, *cleared->old_id_}, c.pool());
+                const session_key key({key_prefix_, *cleared->old_id_}, ruvia::process_resource());
                 return c.redis(redis_alias_).del(key.view());
             }();
             (void)(co_await std::move(del_task));
@@ -525,11 +525,11 @@ task<void> session_middleware::commit(context& c) const {
     const auto new_id = detail::generate_secure_token(id_buffer);
     detail::append_session_cookie_header(staged, cookie_name_, new_id, secure);
 
-    const session_key key({key_prefix_, new_id}, c.pool());
+    const session_key key({key_prefix_, new_id}, ruvia::process_resource());
     bool applied = false;
     if (!old_id.empty()) {
         auto eval_task = [&] {
-            const session_key old_key({key_prefix_, old_id}, c.pool());
+            const session_key old_key({key_prefix_, old_id}, ruvia::process_resource());
             // session_middleware::validate requires a positive TTL.
             std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
             const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));

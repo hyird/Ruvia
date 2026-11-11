@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_pmr_string.h"
 
 #include "db/db_pipeline_impl.h"
@@ -677,11 +678,11 @@ void mariadb_pipeline_io::group_data::reset() noexcept {
 }
 
 mariadb_pipeline_io::statement_type mariadb_pipeline_io::prepare(
-    pool_type& pool, std::string_view sql, std::span<const db_value> params) {
+    std::string_view sql, std::span<const db_value> params) {
     const auto classification = classify_mariadb_statement(sql);
     const auto param_traits = params.empty() ? mariadb_parameter_traits{} : inspect_mariadb_parameters(params);
     const bool deferred = !params.empty() && (classification.has_backslash_ || param_traits.has_backslash_);
-    return {sql, params, std::pmr::string(pool.resource()), classification, deferred,
+    return {sql, params, std::pmr::string(process_resource()), classification, deferred,
         param_traits.has_ambiguous_backslash_};
 }
 
@@ -933,7 +934,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
     auto resolved_hosts =
-        make_mariadb_resolved_host_list(co_await pool.resolve_host(index, deadline_value), pool.resource());
+        make_mariadb_resolved_host_list(co_await pool.resolve_host(index, deadline_value), process_resource());
 
     ensure_mysql_thread_initialized();
     slot.connection_ = mysql_init(nullptr);

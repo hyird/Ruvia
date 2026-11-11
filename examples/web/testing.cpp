@@ -59,7 +59,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
-        std::pmr::string body(c.arena());
+        std::pmr::string body(c.pool());
         body.append("stored=");
         body.append(std::to_string(c.worker_state<note_counter>().stored_));
         co_return c.text(std::move(body));

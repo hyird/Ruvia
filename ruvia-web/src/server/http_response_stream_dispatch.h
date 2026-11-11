@@ -9,6 +9,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
@@ -274,7 +275,7 @@ template <typename sink, typename peer_aborted_type = response_stream_no_peer_ab
 task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_value, const route_table& routes_value,
     const http_request& request, const resolved_route& route, request_memory& request_memory_value,
     const context_services& services, peer_aborted_type peer_aborted = {}) {
-    auto response_stream = make_response_stream_writer(sink_value, *request_memory_value.upstream_resource());
+    auto response_stream = make_response_stream_writer(sink_value, *process_resource());
 
     std::exception_ptr exception;
     try {

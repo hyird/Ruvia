@@ -87,32 +87,28 @@ void http_client_slot_policy::throw_aborted(const http_client_pool&, pool_slot_a
 }
 
 http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
-    http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain,
-    std::pmr::memory_resource* resource, http_client_response_storage response_storage)
+    http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain)
     : io_context_(io_context),
       worker_(worker_value),
-      resource_(pmr_resource_or_default(resource)),
       config_(std::move(config)),
       origin_(config_.origin()),
-      policy_(config_, resource_),
-      advertisements_(worker_, config_.advertisements_, resource_),
-      pushes_(resource_),
+      policy_(config_),
+      advertisements_(worker_, config_.advertisements_),
+      pushes_(process_resource()),
       result_budget_domain_(std::move(result_budget_domain)),
       tls_context_(asio::ssl::context::tls_client),
-      slots_(*this, http_client_scheduler_slots(config_), worker_, resource_),
+      slots_(*this, http_client_scheduler_slots(config_), worker_),
       cancellation_target_(make_worker_cancellation_target(*this, worker_)),
-      background_tasks_(worker_, {.resource_ = resource_}),
-      connections_(resource_) {
+      background_tasks_(worker_, {.resource_ = process_resource()}),
+      connections_(process_resource()) {
     if (config_.scheme_ == http_scheme::https) {
         configure_client_tls_context(*tls_context_.native_handle(), config_.tls_);
     }
     connections_.reserve(config_.connection_count_);
     for (std::size_t index = 0; index < config_.connection_count_; ++index) {
-        connections_.push_back(make_pmr_object<http_client_connection>(resource_, *this, index));
+        connections_.push_back(make_pmr_object<http_client_connection>(process_resource(), *this, index));
     }
-    response_memory_ = response_storage == http_client_response_storage::worker_resource
-                           ? http_client_response_memory_domain::create(worker_, result_budget_domain_, *resource_)
-                           : http_client_response_memory_domain::create_response_owned(worker_, result_budget_domain_);
+    response_memory_ = http_client_response_memory_domain::create(worker_, result_budget_domain_);
 }
 
 http_client_pool::~http_client_pool() {
@@ -752,7 +748,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
             const auto now = std::chrono::steady_clock::now();
             const auto maximum = std::chrono::duration_cast<std::chrono::seconds>((std::chrono::steady_clock::time_point::max)() - now).count();
             const auto seconds = (std::min)(age, static_cast<std::uint64_t>(maximum));
-            alternative_services_.push_back({std::pmr::string(host, resource_), port, now + std::chrono::seconds(seconds)});
+            alternative_services_.push_back({std::pmr::string(host, process_resource()), port, now + std::chrono::seconds(seconds)});
         }
     }
 #else
@@ -779,7 +775,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     // Another response can replace the cache while DNS or the handshake waits.
     // The selected endpoint is therefore owned across suspension; TLS always
     // verifies config_.host_, never this advertised transport name.
-    std::pmr::string host(required ? std::string_view(config_.host_) : std::string_view(alternative_services_.front().host_), resource_);
+    std::pmr::string host(required ? std::string_view(config_.host_) : std::string_view(alternative_services_.front().host_), process_resource());
     const auto port = required ? config_.port_ : alternative_services_.front().port_;
     if (http3_connections_.empty()) {
         http3_connections_.resize(config_.connection_count_);
@@ -794,7 +790,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
         }
     }
     if (!http3_connections_[selected]) {
-        http3_connections_[selected] = make_pmr_object<http3_client_connection>(resource_, *this, selected);
+        http3_connections_[selected] = make_pmr_object<http3_client_connection>(process_resource(), *this, selected);
     }
     const auto used = co_await http3_connections_[selected]->execute(request, host, port, !required, timeout, acquire_timeout, stop, state);
     if (!used) {

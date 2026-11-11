@@ -69,14 +69,11 @@ struct http_client_slot_policy final {
 // and http1_client_exchange.
 class http_client_pool final {
 public:
-    // `resource` is the owner's worker resource for all pool storage;
-    // `response_storage` states whether it also outlives every response.
+    // Process-lifetime storage backs the pool and its retained responses.
     http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
-        http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain,
-        std::pmr::memory_resource* resource, http_client_response_storage response_storage);
+        http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain);
     http_client_pool(asio::io_context&, worker_handle&&, http_client_config_storage,
-        std::shared_ptr<http_client_result_budget_domain>, std::pmr::memory_resource*,
-        http_client_response_storage) = delete;
+        std::shared_ptr<http_client_result_budget_domain>) = delete;
     ~http_client_pool();
     http_client_pool(const http_client_pool&) = delete;
     http_client_pool& operator=(const http_client_pool&) = delete;
@@ -128,9 +125,6 @@ public:
     }
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
-    }
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
     }
     [[nodiscard]] const http_client_config_storage& config() const noexcept {
         return config_;
@@ -219,7 +213,6 @@ private:
 #endif
     asio::io_context& io_context_;
     const worker_handle& worker_;
-    std::pmr::memory_resource* resource_;
     http_client_config_storage config_;
     // Borrows config_.uri_host_; the pool is address-stable and never moved.
     http_origin_view origin_;
@@ -238,8 +231,8 @@ private:
     task_scope background_tasks_;
     std::pmr::vector<connection_owner_type> connections_;
 #ifdef RUVIA_ENABLE_HTTP3
-    std::pmr::vector<alternative_service> alternative_services_{resource_};
-    std::pmr::vector<std::unique_ptr<http3_client_connection, pmr_object_deleter<http3_client_connection>>> http3_connections_{resource_};
+    std::pmr::vector<alternative_service> alternative_services_{process_resource()};
+    std::pmr::vector<std::unique_ptr<http3_client_connection, pmr_object_deleter<http3_client_connection>>> http3_connections_{process_resource()};
 #endif
     std::size_t requests_buffered_{0};
     std::size_t requests_in_flight_{0};

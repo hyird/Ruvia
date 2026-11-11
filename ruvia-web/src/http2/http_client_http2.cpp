@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_framing.h"
@@ -516,7 +517,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
     http_client_response_state& state_value) {
     const auto& config = pool_.config();
-    auto* const resource = pool_.resource();
+    auto* const resource = process_resource();
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
     const auto content = request.upload() != nullptr
                              ? ::ruvia::http2_request_content::streaming(request.upload()->config_.content_length_)
@@ -835,7 +836,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
             request.headers_.emplace_back(field.name(), field.value(), state_value.resource_);
         }
         auto driver = make_pmr_object<http2_push_driver>(
-            resource_, *this, connection, http_client_response(response.state_), state_value);
+            process_resource(), *this, connection, http_client_response(response.state_), state_value);
         driver->stream_.timeout_ = &driver->timeout_;
         driver->stream_.request_target_ = request.path_;
         driver->stream_.request_id_ = state_value.request_id_;

@@ -117,7 +117,7 @@ struct http3_client_connection::tls_state final {
     };
     explicit tls_state(http_client_pool& pool)
         : context_(asio::ssl::context::tls_client),
-          ticket_host_(pool.resource()) {
+          ticket_host_(process_resource()) {
         initialize_quic_crypto();
         configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
         if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
@@ -182,15 +182,15 @@ public:
         : pool_(pool),
           tls_state_(shared_tls),
           index_(index),
-          connect_slots_(1, pool.worker(), pool.resource()),
+          connect_slots_(1, pool.worker(), process_resource()),
           changed_(pool.worker()),
           writer_(pool.worker()),
-          streams_(pool.resource()),
-          endpoint_host_(pool.resource()),
-          receive_buffers_{std::pmr::vector<std::byte>(pool.resource()), std::pmr::vector<std::byte>(pool.resource())},
-          socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{pool.resource()}),
-          old_socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{pool.resource()}),
-          packet_(pool.resource()) {
+          streams_(process_resource()),
+          endpoint_host_(process_resource()),
+          receive_buffers_{std::pmr::vector<std::byte>(process_resource()), std::pmr::vector<std::byte>(process_resource())},
+          socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{process_resource()}),
+          old_socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{process_resource()}),
+          packet_(process_resource()) {
         SSL_CTX_sess_set_new_cb(tls_state_.context_.native_handle(), save_ticket);
         streams_.reserve(pool.config().http3_.max_concurrent_streams_);
     }
@@ -677,7 +677,7 @@ public:
                 asio::ip::udp::endpoint remote;
                 const auto result = co_await async_asio<std::size_t>([&](auto handler) {
                     socket.async_receive_from(asio::buffer(bytes), remote,
-                        asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(pool_.resource()), std::move(handler)));
+                        asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
                 });
                 if (!open_ || !socket.is_open()) {
                     break;
@@ -745,7 +745,7 @@ public:
                     sending_socket_ = output;
                     const auto sent = co_await async_asio<std::size_t>([&](auto handler) {
                         output->async_send_to(asio::buffer(packet_.bytes_), *remote,
-                            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(pool_.resource()), std::move(handler)));
+                            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
                     });
                     sending_socket_ = nullptr;
                     changed_.notify();
@@ -875,7 +875,7 @@ public:
             throw std::logic_error("HTTP/3 connect requires a selected resolver endpoint");
         }
         remote_ = *connect_endpoint_;
-        socket_ = make_pmr_object<asio::ip::udp::socket>(pool_.resource(), pool_.io_context());
+        socket_ = make_pmr_object<asio::ip::udp::socket>(process_resource(), pool_.io_context());
         socket_->open(remote_.protocol());
         socket_->connect(remote_);
         local_ = socket_->local_endpoint();
@@ -937,7 +937,7 @@ public:
             owner.changed_.notify();
             return 0;
         };
-        quic_.emplace(http3_quic_connection::client({.callbacks_ = callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = http3_quic_now(), .handshake_timeout_ = http3_quic_duration(config.connect_timeout_), .idle_timeout_ = 0, .initial_max_data_ = (std::max)(std::uint64_t{64 * 1024}, (std::min)(std::uint64_t{16 * 1024 * 1024}, static_cast<std::uint64_t>(config.max_response_bytes_))), .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_user_data_ = this, .resource_ = pool_.resource(), .http3_ = {.resource_ = pool_.resource(), .max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}}));
+        quic_.emplace(http3_quic_connection::client({.callbacks_ = callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = http3_quic_now(), .handshake_timeout_ = http3_quic_duration(config.connect_timeout_), .idle_timeout_ = 0, .initial_max_data_ = (std::max)(std::uint64_t{64 * 1024}, (std::min)(std::uint64_t{16 * 1024 * 1024}, static_cast<std::uint64_t>(config.max_response_bytes_))), .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_user_data_ = this, .resource_ = process_resource(), .http3_ = {.resource_ = process_resource(), .max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}}));
         quic_->set_tls_native_handle(crypto_.get());
         if (allow_early && config.http3_.enable_early_data_ && tls_state_.ticket_ &&
             tls_state_.ticket_params_size_ && tls_state_.ticket_settings_valid_ &&
@@ -1072,7 +1072,7 @@ public:
           tls_state_(shared_tls),
           index_(index),
           resolver_(pool.worker()),
-          selection_(1, pool.worker(), pool.resource()),
+          selection_(1, pool.worker(), process_resource()),
           changed_(pool.worker()) {}
 
     void cancel(error_code reason) noexcept {
@@ -1212,7 +1212,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
             [&race](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { race.cancel(error_code::timeout); } });
     }
     std::unique_ptr<session, pmr_object_deleter<session>> retained{
-        nullptr, pmr_object_deleter<session>{race.pool_.resource()}};
+        nullptr, pmr_object_deleter<session>{process_resource()}};
     std::exception_ptr failure;
     try {
         if (session_) {
@@ -1286,7 +1286,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                         entry.connection_ = std::move(retained);
                     } else {
                         entry.connection_ = make_pmr_object<session>(
-                            race.pool_.resource(), race.pool_, race.tls_state_, race.index_);
+                            process_resource(), race.pool_, race.tls_state_, race.index_);
                     }
                     entry.connection_->connect_endpoint_ = *next;
                     entry.connection_->race_signal_ = &race.changed_;
@@ -1414,9 +1414,9 @@ bool http3_client_connection::active() const noexcept {
 }
 
 http3_client_connection::http3_client_connection(http_client_pool& pool, std::size_t index)
-    : tls_(make_pmr_object<tls_state>(pool.resource(), pool)),
-      session_(make_pmr_object<session>(pool.resource(), pool, *tls_, index)),
-      race_(make_pmr_object<address_race>(pool.resource(), pool, *tls_, index)) {}
+    : tls_(make_pmr_object<tls_state>(process_resource(), pool)),
+      session_(make_pmr_object<session>(process_resource(), pool, *tls_, index)),
+      race_(make_pmr_object<address_race>(process_resource(), pool, *tls_, index)) {}
 http3_client_connection::~http3_client_connection() = default;
 void http3_client_connection::close() noexcept {
     race_->cancel(error_code::io_error);
@@ -1625,9 +1625,9 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         if (!item.retry_) {
             response.stream_id_ = static_cast<std::uint64_t>(item.id_);
             item.early_ = !self.quic_->handshake_completed();
-            client_prepared_request_scratch scratch(self.pool_.resource());
+            client_prepared_request_scratch scratch(process_resource());
             const auto prepared = self.pool_.policy().prepare_request(request, scratch);
-            std::pmr::vector<http3_field_view> fields(self.pool_.resource());
+            std::pmr::vector<http3_field_view> fields(process_resource());
             fields.reserve(static_cast<std::span<const http_header_view>>(prepared.headers_).size() + 12);
             fields.push_back({":method", request.is_tunnel() ? std::string_view("CONNECT") : request.method()});
             fields.push_back({":authority", request.is_tunnel() ? request.tunnel_authority() : std::string_view(self.pool_.config().authority_)});
@@ -1692,7 +1692,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                         },
                         [&]() -> task<bool> {
                             if (request.upload() && !request.upload()->trailers_.empty()) {
-                                std::pmr::vector<http3_field_view> trailers(self.pool_.resource());
+                                std::pmr::vector<http3_field_view> trailers(process_resource());
                                 for (const auto& field : request.upload()->trailers_) {
                                     trailers.push_back({field.name(), field.value()});
                                 }
@@ -1782,7 +1782,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
             flag_ = false;
         }
     } guard{self.migrating_};
-    auto replacement = make_pmr_object<asio::ip::udp::socket>(self.pool_.resource(), self.pool_.io_context());
+    auto replacement = make_pmr_object<asio::ip::udp::socket>(process_resource(), self.pool_.io_context());
     asio::ip::udp::endpoint local;
     try {
         const asio::ip::udp::endpoint requested(asio::ip::make_address(local_address), port);

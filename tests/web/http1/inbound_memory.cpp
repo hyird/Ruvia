@@ -18,6 +18,7 @@
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -60,7 +61,7 @@ class inbound_memory_routes final {
         while (const auto chunk = co_await reader.read()) {
             received += chunk->size();
         }
-        co_return context_value.text(std::pmr::string(std::to_string(received), context_value.pool()));
+        co_return context_value.text(std::pmr::string(std::to_string(received), ruvia::process_resource()));
     }
 
     // Keeps every chunk until the peer ends, acknowledging each, and reports

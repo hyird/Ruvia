@@ -50,16 +50,14 @@ public:
     using deadline_kind_type = typename policy_type::deadline_kind_type;
     using cancellation_target_type = worker_cancellation_target<slot_pool>;
 
-    slot_pool(owner_type& owner_value, std::size_t slot_count, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource)
+    slot_pool(owner_type& owner_value, std::size_t slot_count, const worker_handle& worker_value)
         : owner_(owner_value),
           worker_(worker_value),
-          resource_(pmr_resource_or_default(resource)),
-          slots_(slot_count, resource_),
-          scheduler_(slot_count, worker_, resource_),
+          slots_(slot_count),
+          scheduler_(slot_count, worker_, process_resource()),
           cancellation_target_(make_worker_cancellation_target(*this, worker_)) {}
 
-    slot_pool(owner_type&, std::size_t, worker_handle&&, std::pmr::memory_resource*) = delete;
+    slot_pool(owner_type&, std::size_t, worker_handle&&) = delete;
 
     ~slot_pool() {
         cancellation_target_->detach(*this);
@@ -306,9 +304,8 @@ private:
     // nor copyable, and pending timers address their slot by index.
     class slot_array final {
     public:
-        slot_array(std::size_t slot_count, std::pmr::memory_resource* resource)
-            : resource_(resource),
-              data_(std::pmr::polymorphic_allocator<slot_state>(resource_).allocate(slot_count)),
+        explicit slot_array(std::size_t slot_count)
+            : data_(std::pmr::polymorphic_allocator<slot_state>(process_resource()).allocate(slot_count)),
               size_(slot_count) {
             for (std::size_t index = 0; index < size_; ++index) {
                 std::construct_at(data_ + index);
@@ -318,7 +315,7 @@ private:
         slot_array& operator=(const slot_array&) = delete;
         ~slot_array() {
             std::destroy(data_, data_ + size_);
-            std::pmr::polymorphic_allocator<slot_state>(resource_).deallocate(data_, size_);
+            std::pmr::polymorphic_allocator<slot_state>(process_resource()).deallocate(data_, size_);
         }
 
         [[nodiscard]] std::size_t size() const noexcept {
@@ -338,14 +335,12 @@ private:
         }
 
     private:
-        std::pmr::memory_resource* resource_;
         slot_state* data_;
         std::size_t size_;
     };
 
     owner_type& owner_;
     const worker_handle& worker_;
-    std::pmr::memory_resource* resource_;
     slot_array slots_;
     pool_lease_scheduler scheduler_;
     std::shared_ptr<cancellation_target_type> cancellation_target_;

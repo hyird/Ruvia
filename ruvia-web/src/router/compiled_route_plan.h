@@ -400,26 +400,22 @@ class router;
 // middleware instances to it (route_table), by route and frame index.
 class compiled_route_plan final {
 public:
-    explicit compiled_route_plan(std::pmr::memory_resource* resource)
-        : resource_(pmr_resource_or_default(resource)),
-          routes_(resource_),
-          middleware_instances_(resource_),
-          middleware_frame_instances_(resource_),
-          middleware_scopes_(resource_),
-          param_names_(resource_),
-          extension_route_indices_(resource_),
-          extension_paths_(resource_),
-          extension_methods_(resource_),
-          connect_route_indices_(resource_),
-          connect_protocols_(resource_),
-          static_slots_(resource_),
-          dynamic_roots_{dynamic_node_type(resource_), dynamic_node_type(resource_), dynamic_node_type(resource_),
-              dynamic_node_type(resource_), dynamic_node_type(resource_), dynamic_node_type(resource_),
-              dynamic_node_type(resource_)},
-          dynamic_node_arena_(resource_),
-          url_patterns_(resource_),
-          prefix_error_handlers_(resource_),
-          prefix_not_found_handlers_(resource_) {}
+    compiled_route_plan()
+        : routes_(process_resource()),
+          middleware_instances_(process_resource()),
+          middleware_frame_instances_(process_resource()),
+          middleware_scopes_(process_resource()),
+          param_names_(process_resource()),
+          extension_route_indices_(process_resource()),
+          extension_paths_(process_resource()),
+          extension_methods_(process_resource()),
+          connect_route_indices_(process_resource()),
+          connect_protocols_(process_resource()),
+          static_slots_(process_resource()),
+          dynamic_node_arena_(process_resource()),
+          url_patterns_(process_resource()),
+          prefix_error_handlers_(process_resource()),
+          prefix_not_found_handlers_(process_resource()) {}
 
     compiled_route_plan(const compiled_route_plan&) = delete;
     compiled_route_plan& operator=(const compiled_route_plan&) = delete;
@@ -451,8 +447,8 @@ private:
     };
 
     struct dynamic_node_type final {
-        explicit dynamic_node_type(std::pmr::memory_resource* resource)
-            : static_children_(resource) {}
+        dynamic_node_type()
+            : static_children_(process_resource()) {}
 
         std::pmr::vector<dynamic_static_child_type> static_children_;
         dynamic_node_type* param_child_{nullptr};
@@ -461,9 +457,8 @@ private:
     };
 
     struct connect_protocol_index_type final {
-        connect_protocol_index_type(std::pmr::memory_resource* resource, std::string_view value)
-            : protocol_(value, resource),
-              root_(resource) {}
+        explicit connect_protocol_index_type(std::string_view value)
+            : protocol_(value, process_resource()) {}
         std::pmr::string protocol_;
         dynamic_node_type root_;
     };
@@ -480,7 +475,6 @@ private:
         handler_type handler_{nullptr};
     };
 
-    std::pmr::memory_resource* resource_;
     std::pmr::vector<route_entry> routes_;
     // One descriptor per middleware instance a worker materializes. Frames
     // name their instance by index, so an app-wide middleware is one instance

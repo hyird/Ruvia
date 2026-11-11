@@ -90,12 +90,11 @@ enum class middleware_scope_coverage : std::uint8_t {
 }  // namespace
 
 detail::route_table::route_table(
-    std::pmr::memory_resource* resource, const compiled_route_plan& plan, const controller_store& controllers)
-    : resource_(pmr_resource_or_default(resource)),
-      plan_(&plan),
-      handler_targets_(resource_),
-      middleware_instances_(resource_),
-      middleware_frames_(resource_) {
+    const compiled_route_plan& plan, const controller_store& controllers)
+    : plan_(&plan),
+      handler_targets_(process_resource()),
+      middleware_instances_(process_resource()),
+      middleware_frames_(process_resource()) {
     handler_targets_.reserve(plan.routes_.size());
     for (const auto& route : plan.routes_) {
         handler_targets_.push_back(controllers.instance(route.controller()));

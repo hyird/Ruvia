@@ -59,7 +59,6 @@ public:
     task<std::optional<redis_pubsub_event>> read();
     void abort(client_abort_reason reason) noexcept;
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] const worker_handle& worker() const noexcept;
     [[nodiscard]] bool has_active_operations() const noexcept {
         return read_active_ || write_active_;
@@ -134,9 +133,8 @@ private:
 class redis_subscription_set final {
 public:
     redis_subscription_set(asio::io_context& io_context, asio::ssl::context& tls_context,
-        const redis_config_storage& config, const worker_handle& worker_value, std::pmr::memory_resource* resource);
-    redis_subscription_set(asio::io_context&, asio::ssl::context&, const redis_config_storage&, worker_handle&&,
-        std::pmr::memory_resource*) = delete;
+        const redis_config_storage& config, const worker_handle& worker_value);
+    redis_subscription_set(asio::io_context&, asio::ssl::context&, const redis_config_storage&, worker_handle&&) = delete;
     ~redis_subscription_set();
 
     redis_subscription_set(const redis_subscription_set&) = delete;
@@ -166,7 +164,6 @@ private:
     asio::ssl::context& tls_context_;
     const redis_config_storage& config_;
     worker_handle worker_;
-    std::pmr::memory_resource* resource_;
     client_wire_counters wire_counters_;
     std::shared_ptr<worker_cancellation_target<redis_subscription_set>> cancellation_target_;
     redis_subscription_connection* head_{nullptr};

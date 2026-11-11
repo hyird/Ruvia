@@ -20,7 +20,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 
 | 库目录 | CMake Target | 头文件前缀 | 职责与边界 |
 | --- | --- | --- | --- |
-| `ruvia-core` | `ruvia::core` | `"ruvia/core/..."` | 协程任务（`task<T>` / `root_task<T>`）、事件循环（`event_loop` / `event_loop_pool` / `event_loop_attachment`）、有界通道（`channel` / `one_shot`）、阻塞卸载池（`blocking_pool`）与 PMR 内存池；仅公开依赖 standalone Asio 与 `Threads::Threads` |
+| `ruvia-core` | `ruvia::core` | `"ruvia/core/..."` | 协程任务（`task<T>` / `root_task<T>`）、事件循环（`event_loop` / `event_loop_pool` / `event_loop_attachment`）、有界通道（`channel` / `one_shot`）、阻塞卸载池（`blocking_pool`）与 PMR 内存资源；仅公开依赖 standalone Asio 与 `Threads::Threads` |
 | `ruvia-http` | `ruvia::http` | `"ruvia/http/..."` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；HTTP/2 使用 nghttp2，HTTP/3 使用 nghttp3 与 ngtcp2 core，不依赖 `ruvia::core`、Asio、socket I/O 或 OpenSSL |
 | `ruvia-web` | `ruvia::web` | `"ruvia/web/..."` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、出站 HTTP 客户端、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
 
@@ -108,7 +108,7 @@ ruvia_link_controllers(my_service user_controllers)
 
 ### 3.1 Shared-Nothing Worker 线程模型
 
-- **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `server_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例、PMR 内存池以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
+- **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `server_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
 - **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`stop()` 直接断开全部连接，不设排空阶段。
 - **跨线程调度与卸载**：
   - 跨 worker 通信通过 `web_worker_handle::post`、`event_loop::post` 或有界通道 `make_channel` / `make_one_shot` 进行。
@@ -124,7 +124,7 @@ ruvia_link_controllers(my_service user_controllers)
 
 - **`c.arena()` 与 `c.pool()`**：
   - `c.arena()` 返回单次请求专属的单调缓冲区（`std::pmr::memory_resource*`），适合分配与请求同寿命的模型、字符串和容器（如 `c.allocator<char>()`），在请求结束时一次性回收。
-  - `c.pool()` 返回当前 worker 的可回收内存池，适合在单次请求内部反复申请和释放的较大临时块（必须在请求结束前析构归还）。
+  - `c.pool()` 返回 `ruvia::process_resource()`，适合反复申请和释放的临时块及跨请求拥有的数据；不另设 Worker 内存池。
 - **借用视图与防悬垂保护**：
   - `c.req().header(...)`、`c.req().query(...)`、`c.req().param(...)`、`c.req().text()` 等返回的 `std::string_view` / `std::span` 均借用自当前请求缓冲，仅在当前请求（或流式读取的下一次 `read()` 之前）有效。
   - 公开 API 参数广泛使用 `ruvia::borrowed_text`，并在返回借用视图的成员函数上标注 `RUVIA_LIFETIMEBOUND` 且 `= delete` 右值重载，在编译期阻止绑定临时 `std::string` 右值导致的悬垂引用。
@@ -157,7 +157,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [http_features.cpp](../examples/web/http_features.cpp) | `ruvia_example_http_features` | 默认 | `103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告与请求/响应 Trailer |
 | [websocket.cpp](../examples/web/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
 | [tunnels.cpp](../examples/web/tunnels.cpp) | `ruvia_example_tunnels` | 默认 | HTTP/1.1 & HTTP/2 `CONNECT` 字节流隧道与 RFC 9298 `CONNECT-UDP` 数据报隧道 |
-| [runtime_config.cpp](../examples/web/runtime_config.cpp) | `ruvia_example_runtime_config` | 默认 | `.env` 加载、全局与前缀中间件、内存池与连接限制、协商压缩、CORS、TLS / mTLS / SNI 与 HTTP 自动跳转 HTTPS |
+| [runtime_config.cpp](../examples/web/runtime_config.cpp) | `ruvia_example_runtime_config` | 默认 | `.env` 加载、全局与前缀中间件、请求 Arena 与连接限制、协商压缩、CORS、TLS / mTLS / SNI 与 HTTP 自动跳转 HTTPS |
 | [ops.cpp](../examples/web/ops.cpp) | `ruvia_example_ops` | 默认 | `security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`http_stats()`、生命周期与日志钩子 |
 | [workers_blocking.cpp](../examples/web/workers_blocking.cpp) | `ruvia_example_workers_blocking` | 默认 | Worker 局部状态 `use_worker_state<T>()`、跨 Worker 任务投递 `worker.post(...)` 与 `c.run_blocking(...)` 阻塞池卸载 |
 | [testing.cpp](../examples/web/testing.cpp) | `ruvia_example_testing` | 默认 | 使用 `test_app`、`test_request`、`dispatch_response` 在内存内无 Socket 测试完整路由与中间件管线 |

@@ -35,11 +35,27 @@ public:
         return worker_client_registry_view(nullptr);
     }
 
-    constexpr worker_client_registry_view(
-        db_registry& databases, redis_registry& redis, http_client_registry& http_clients) noexcept
-        : databases_(&databases),
-          redis_(&redis),
-          http_clients_(&http_clients) {}
+    constexpr worker_client_registry_view(http_client_registry& http_clients
+#ifdef RUVIA_ENABLE_DATABASE
+        ,
+        db_registry& databases
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+        ,
+        redis_registry& redis
+#endif
+        ) noexcept
+        : http_clients_(&http_clients)
+#ifdef RUVIA_ENABLE_DATABASE
+          ,
+          databases_(&databases)
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+          ,
+          redis_(&redis)
+#endif
+    {
+    }
 
     [[nodiscard]] constexpr bool attached() const noexcept {
         return http_clients_ != nullptr;
@@ -68,9 +84,13 @@ public:
 private:
     explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
 
-    db_registry* databases_{nullptr};
-    redis_registry* redis_{nullptr};
     http_client_registry* http_clients_{nullptr};
+#ifdef RUVIA_ENABLE_DATABASE
+    db_registry* databases_{nullptr};
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+    redis_registry* redis_{nullptr};
+#endif
 };
 
 }  // namespace detail

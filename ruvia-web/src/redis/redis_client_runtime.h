@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <memory_resource>
 
 #include <asio/fwd.hpp>
 #include <asio/ssl/context.hpp>
@@ -24,9 +23,8 @@ namespace ruvia::detail {
 class redis_client_runtime final {
 public:
     redis_client_runtime(asio::io_context& io_context, const worker_handle& worker_value,
-        redis_config_storage config, std::pmr::memory_resource* resource);
-    redis_client_runtime(asio::io_context&, worker_handle&&, redis_config_storage,
-        std::pmr::memory_resource*) = delete;
+        redis_config_storage config);
+    redis_client_runtime(asio::io_context&, worker_handle&&, redis_config_storage) = delete;
     ~redis_client_runtime();
 
     redis_client_runtime(const redis_client_runtime&) = delete;
@@ -63,7 +61,6 @@ public:
 
 private:
     redis_config_storage config_;
-    std::pmr::memory_resource* resource_;
     worker_handle worker_;
     // One client TLS context per alias, borrowed by every connection of both
     // pools and every subscription; configured only when TLS is enabled.

@@ -69,7 +69,7 @@ const ruvia::env& context::env() const noexcept {
 std::pmr::string& context::decoded_body() const {
     auto& storage = request_storage();
     if (!storage.decoded_body_) {
-        storage.decoded_body_.emplace(services().inbound_buffer_pool() != nullptr ? services().inbound_buffer_pool() : pool());
+        storage.decoded_body_.emplace(services().inbound_buffer_pool() != nullptr ? services().inbound_buffer_pool() : ruvia::process_resource());
     }
     return *storage.decoded_body_;
 }

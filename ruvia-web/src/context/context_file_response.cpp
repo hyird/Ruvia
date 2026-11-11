@@ -618,7 +618,7 @@ task<http_response> context::file(file_response_options options) {
     if (!assign_native_file_path(options.path_, native_path)) {
         throw file_not_found_error();
     }
-    return serve_file(*this, std::move(native_path), std::pmr::string(options.content_type_.view(), pool()));
+    return serve_file(*this, std::move(native_path), std::pmr::string(options.content_type_.view(), ruvia::process_resource()));
 }
 
 // Not a coroutine: the path is resolved and the content type owned before the
@@ -630,7 +630,7 @@ task<http_response> context::static_file(const static_root& root, static_file_re
     // scope ever saw. normalize_static_relative_path rejects "." and ".."
     // segments, absolute paths and NUL, and the lookup is a byte-exact
     // index compare that never joins the path onto the filesystem.
-    std::pmr::string relative_storage(pool());
+    std::pmr::string relative_storage(ruvia::process_resource());
     auto relative = options.relative_path_.view();
     const auto entry_value = detail::static_root_access::resolve(root, relative, relative_storage);
     if (!entry_value.has_value()) {
@@ -655,16 +655,16 @@ task<http_response> detail::context_access::static_file_resolved(
             return static_file_representation(base_entry, http_content_coding::identity);
         }
         if (const auto* admitted = context_value.services().response_coding()) {
-            return select_static_file_representation(root, relative, *admitted, context_value.pool(), base_entry);
+            return select_static_file_representation(root, relative, *admitted, ruvia::process_resource(), base_entry);
         }
         return select_static_file_representation(
-            root, relative, http_response_coding_selection_for(context_value.request_), context_value.pool(), base_entry);
+            root, relative, http_response_coding_selection_for(context_value.request_), ruvia::process_resource(), base_entry);
     }();
     if (!served.has_value()) {
         throw http_error(detail::http_not_acceptable_coding_error());
     }
     return serve_static_file(
-        context_value, root, *served, base_entry, std::pmr::string(content_type_value, context_value.pool()));
+        context_value, root, *served, base_entry, std::pmr::string(content_type_value, ruvia::process_resource()));
 }
 
 }  // namespace ruvia

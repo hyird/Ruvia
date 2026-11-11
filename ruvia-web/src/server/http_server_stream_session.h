@@ -205,8 +205,7 @@ struct http1_tunnel_upgrade_commit final {
         context& context_value, const http_response& head_response) const {
         const auto plan = prepare_http1_tunnel_response_head_plan(
             head_response, dispatch_.parsed_.request_.protocol_version(), udp_);
-        http_response_head_buffer head(
-            std::pmr::polymorphic_allocator<char>(dispatch_.memory_.resource()));
+        http_response_head_buffer head(std::pmr::polymorphic_allocator<char>{process_resource()});
         append_http1_response_head(head_response, head, plan);
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_http1_upgrade_response_head(dispatch_.stream_,
@@ -218,7 +217,7 @@ struct http1_tunnel_upgrade_commit final {
         tail_.record_access(dispatch_.options_.access_log_, head_response.status());
         if constexpr (requires { dispatch_.stream_.next_layer(); }) {
             tls_output_.emplace(*dispatch_.stream_.native_handle(), dispatch_.stream_.lowest_layer(),
-                dispatch_.base_route_services_.worker(), *dispatch_.memory_.resource());
+                dispatch_.base_route_services_.worker(), *process_resource());
             tls_output_->start();
         }
         co_return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, &dispatch_.scanner_entry_);
@@ -287,16 +286,16 @@ struct http1_websocket_upgrade_commit final {
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
                 .response_headers_ = response_headers_value,
                 .deflate_ = websocket_endpoint_.deflate()},
-            dispatch_.memory_.resource());
+            process_resource());
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake,
-                dispatch_.parsed_.body_plan_.expectations(), *dispatch_.memory_.resource(), dispatch_.scanner_entry_);
+                dispatch_.parsed_.body_plan_.expectations(), *process_resource(), dispatch_.scanner_entry_);
             ec) {
             throw inbound_transport_error(ec, "WebSocket handshake write");
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
         co_return websocket_upgrade_commit<stream_type>(
-            dispatch_.stream_, handshake.compression(), handshake.subprotocol(), *dispatch_.memory_.resource());
+            dispatch_.stream_, handshake.compression(), handshake.subprotocol(), *process_resource());
     }
 };
 
@@ -543,7 +542,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         if (idle_ec) {
             co_return http1_request_head_read_close(idle_ec, scanner_entry);
         }
-        auto work_set = make_connection_work_set(memory_);
+        auto work_set = make_connection_work_set(options_.server_.request_arena_initial_bytes_);
         static_assert(idle_resident_read_bytes <= initial_read_buffer_bytes);
         work_set->read_buffer_.assign(std::string_view(idle_read_buffer.data(), idle_bytes));
         if (idle_bytes == idle_read_buffer.size()) {
@@ -585,12 +584,12 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
             // The session consumes the buffered input in its first feed, before
             // it suspends, and reads into its own buffer afterwards: the HTTP/1
             // working memory is released before entering the HTTP/2 session.
-            const std::pmr::string pending_input(work_set->read_buffer_.pending(), memory_.resource());
+            const std::pmr::string pending_input(work_set->read_buffer_.pending(), process_resource());
             work_set.reset();
             // The HTTP/1 request channels pointed into serve_requests' frame.
             auto http2_services = base_route_services;
             http2_services.bind_request_channels({});
-            co_return co_await run_http2_sans_io_session(stream, routes_, memory_,
+            co_return co_await run_http2_sans_io_session(stream, routes_,
                 http2_sans_io_session_context(std::move(http2_services), options_, scanner_entry), pending_input);
         }
 #endif
@@ -629,7 +628,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         http1_response_output<stream_type> response_output(
             stream, response_head, work_set.deferred_access_, options_.access_log_, remote_address, scanner_entry);
 
-        request_memory request_memory_value(memory_, work_set.arena_block_);
+        request_memory request_memory_value(options_.server_.request_arena_initial_bytes_, work_set.arena_block_);
         // Work-set storage outlives this arena. Release its descriptor block
         // on every exit (including exceptions/cancellation) before the arena dies.
         struct request_header_lifetime final {
@@ -645,7 +644,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         // it; a suffix still in the read buffer is compacted in place instead.
         std::pmr::string pipeline_stash(request_memory_value.resource());
         http1_interim_response_sink interim_sink(
-            stream, parsed_value.request_, memory_.resource(), response_output, scanner_entry);
+            stream, parsed_value.request_, process_resource(), response_output, scanner_entry);
         base_route_services.bind_interim_output(interim_sink.output());
         std::optional<http_request_admission> admission;
         std::optional<http1_session_request_completion> request_completion;
@@ -775,7 +774,6 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 // this session; each dispatcher adds only its own arguments.
                 const http1_route_dispatch<stream_type> route_dispatch{
                     .stream_ = stream,
-                    .memory_ = memory_,
                     .scanner_entry_ = scanner_entry,
                     .parsed_ = parsed_value,
                     .response_coding_ = *admission->tail().coding_policy().selection(),

@@ -15,15 +15,13 @@
 #include <utility>
 #include <variant>
 
-#include <asio/bind_allocator.hpp>
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
-#include <asio/recycling_allocator.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
@@ -355,24 +353,23 @@ struct push_target final {
 
 }  // namespace
 http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor executor,
-    asio::ip::tcp::socket& socket, const route_table& routes_value, worker_memory& worker_value,
+    asio::ip::tcp::socket& socket, const route_table& routes_value,
     http2_sans_io_session_context session_value)
     : executor_(std::move(executor)),
       socket_(socket),
       routes_(routes_value),
-      worker_(worker_value),
       session_(std::move(session_value)),
       inbound_buffers_(*session_.options().inbound_budget_,
           session_.options().server_.max_inbound_buffer_bytes_per_connection_),
       base_services_(session_.services().with_inbound_buffer_pool(inbound_buffers_)),
       remote_address_(session_.services().get_conn_info().remote().address()),
-      connection_(ruvia::http2_connection::server({.resource_ = worker_value.resource()})),
+      connection_(ruvia::http2_connection::server({.resource_ = process_resource()})),
       write_signal_(session_.services().worker()),
       output_budget_(session_.services().worker()),
       handler_finished_(session_.services().worker()),
       writer_finished_(session_.services().worker()),
       admission_policy_(http_request_admission_policy::server(session_.options())),
-      stream_runtimes_(worker_value.resource(), termination_, &inbound_buffers_),
+      stream_runtimes_(process_resource(), termination_, &inbound_buffers_),
       buffered_response_writer_(*this, connection_, stream_runtimes_, write_signal_, output_budget_,
           response_file_io{.worker_ = session_.services().worker(),
               .stop_ = session_.services().get_stop_token(),
@@ -639,10 +636,6 @@ void http2_sans_io_session_engine::reset_stream_no_throw(
     wake_writer();
 }
 
-std::pmr::memory_resource* http2_sans_io_session_engine::worker_resource() const noexcept {
-    return worker_.resource();
-}
-
 bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_id, http_push_request_view request) {
     auto* parent_value = stream_runtimes_.find(associated_stream_id);
     const auto* head = parent_value != nullptr ? parent_value->request_head() : nullptr;
@@ -714,7 +707,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         std::array<std::byte, http2_request_arena_stack_bytes> arena_block;
         std::optional<request_memory> request_memory_storage;
         request_memory& request_memory_value =
-            emplace_multiplexed_request_memory(request_memory_storage, worker_, std::span<std::byte>(arena_block));
+            emplace_multiplexed_request_memory(request_memory_storage, session_.options().server_.request_arena_initial_bytes_, std::span<std::byte>(arena_block));
         auto* stream_runtime = stream_runtimes_.find(stream_id);
         auto* request_head = stream_runtime != nullptr ? stream_runtime->request_head() : nullptr;
         if (request_head == nullptr) {
@@ -734,7 +727,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             streaming_body ? std::string_view{} : stream_runtime->buffered_body());
         http_response response(request_memory_value.resource());
         response_output_target output_target{connection_, write_signal_, stream_id};
-        http_interim_response_output interim_output(worker_resource(), &output_target, [](void* raw, const http_interim_response_head& head) -> task<void> {
+        http_interim_response_output interim_output(process_resource(), &output_target, [](void* raw, const http_interim_response_head& head) -> task<void> {
             auto& target = *static_cast<response_output_target*>(raw);
             const auto status = target.connection_.submit_interim_response_head(target.stream_id_, head);
             if (status != http2_submit_status::accepted) {
@@ -883,7 +876,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(
                             finish_upgrade_commit(http_status::ok, context_value),
                             submitted_handshake->compression(), submitted_handshake->subprotocol(),
-                            *context_value.pool());
+                            *ruvia::process_resource());
                     };
                     auto buffered = co_await execute_websocket_upgrade_session<http2_sans_io_tunnel_transport>(
                         routes_, request, *resolved, request_memory_value, dispatch_services, options,
@@ -907,7 +900,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     stream_services.bind_stop_token(request_stop_token);
                     http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
                         *stream_runtime, write_signal_, *stream_signal, output_budget_,
-                        worker_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
+                        process_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
                         options.compression_ ? &*options.compression_ : nullptr, options.cors_ ? &*options.cors_ : nullptr);
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
                         request_memory_value, stream_services,
@@ -955,20 +948,19 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
         ++active_handler_tasks_;
         counted = true;
         asio::co_spawn(executor_, ruvia::as_awaitable(dispatch_one(stream_id)),
-            asio::bind_allocator(
-                asio::recycling_allocator<void>(), [this](std::exception_ptr exception) noexcept {
-                    if (exception != nullptr) {
-                        session_.options().connection_failure_.invoke(remote_address_, std::move(exception));
-                        terminate(std::make_error_code(std::errc::operation_canceled));
-                    }
-                    --active_handler_tasks_;
-                    set_inactivity_phase();
-                    finish_drain_if_ready();
-                    if (active_handler_tasks_ == 0) {
-                        handler_finished_.notify();
-                    }
-                    wake_writer();
-                }));
+            [this](std::exception_ptr exception) noexcept {
+                if (exception != nullptr) {
+                    session_.options().connection_failure_.invoke(remote_address_, std::move(exception));
+                    terminate(std::make_error_code(std::errc::operation_canceled));
+                }
+                --active_handler_tasks_;
+                set_inactivity_phase();
+                finish_drain_if_ready();
+                if (active_handler_tasks_ == 0) {
+                    handler_finished_.notify();
+                }
+                wake_writer();
+            });
     } catch (...) {
         if (counted) {
             --active_handler_tasks_;
@@ -1291,7 +1283,7 @@ namespace {
 
 template <typename stream_type>
 task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_engine& engine) {
-    std::pmr::string write_scratch(engine.worker_resource());
+    std::pmr::string write_scratch(process_resource());
     for (;;) {
         while (engine.wants_write()) {
             engine.take_output(write_scratch);
@@ -1328,10 +1320,10 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
 
 template <typename stream_type>
 task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, asio::ip::tcp::socket& socket,
-    const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
+    const route_table& routes_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes) {
     auto executor = asio::any_io_executor(stream.get_executor());
-    http2_sans_io_session_engine engine(executor, socket, routes_value, worker_value, std::move(session_value));
+    http2_sans_io_session_engine engine(executor, socket, routes_value, std::move(session_value));
 
     engine.writer_submitting();
     try {
@@ -1429,16 +1421,16 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
 }  // namespace
 
 task<http_connection_close> run_http2_sans_io_session(asio::ip::tcp::socket& stream, const route_table& routes_value,
-    worker_memory& worker_value, http2_sans_io_session_context session_value, std::string_view initial_bytes) {
+    http2_sans_io_session_context session_value, std::string_view initial_bytes) {
     return run_http2_sans_io_session_impl(
-        stream, stream, routes_value, worker_value, std::move(session_value), initial_bytes);
+        stream, stream, routes_value, std::move(session_value), initial_bytes);
 }
 
 task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
-    const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
+    const route_table& routes_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes) {
     return run_http2_sans_io_session_impl(
-        stream, stream.lowest_layer(), routes_value, worker_value, std::move(session_value), initial_bytes);
+        stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
 }
 
 }  // namespace ruvia::detail

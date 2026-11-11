@@ -24,15 +24,14 @@ namespace ruvia::detail {
 class http_client_pool;
 
 // Every pool of one owner shares the owner's result budget domain: one per
-// standalone client, one per application worker. `response_storage` states
-// whether `resource` outlives every response the pools return.
+// standalone client, one per application worker. Process-lifetime storage
+// backs the pools and their retained responses.
 class http_client_registry final {
 public:
     http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource, http_client_response_storage response_storage,
         std::span<const http_client_definition_type> definitions,
         const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
-    http_client_registry(asio::io_context&, worker_handle&&, std::pmr::memory_resource*, http_client_response_storage,
+    http_client_registry(asio::io_context&, worker_handle&&,
         std::span<const http_client_definition_type>,
         const std::shared_ptr<http_client_result_budget_domain>&) = delete;
     ~http_client_registry();
@@ -51,8 +50,6 @@ private:
     [[nodiscard]] http_client_pool& default_pool() const;
     void add(asio::io_context& io_context, const worker_handle& worker, http_client_config_storage config,
         const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
-    std::pmr::memory_resource* resource_;
-    http_client_response_storage response_storage_;
     std::pmr::vector<pool_owner_type> pools_;
     named_capability_index alias_index_;
     bool closing_{false};

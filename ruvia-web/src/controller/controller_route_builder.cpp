@@ -163,13 +163,13 @@ void detail::controller_route_builder::register_tunnel_route(std::string_view pr
     std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const {
     if (protocol.empty()) {
         router_.register_endpoint(http_known_method::connect, {}, target,
-            route_endpoint::tunnel(router_.resource(), callback_access::invoke(handler), protocol, config),
+            route_endpoint::tunnel(process_resource(), callback_access::invoke(handler), protocol, config),
             callback_access::target(handler), middlewares_, middlewares);
         return;
     }
     const scoped_controller_path joined(prefix_, target);
     router_.register_endpoint(http_known_method::connect, {}, joined.view_,
-        route_endpoint::tunnel(router_.resource(), callback_access::invoke(handler), protocol, config),
+        route_endpoint::tunnel(process_resource(), callback_access::invoke(handler), protocol, config),
         callback_access::target(handler), middlewares_, middlewares);
 }
 
@@ -179,7 +179,7 @@ void detail::controller_route_builder::register_websocket_route(http_known_metho
     websocket_route_config websocket_config) const {
     const scoped_controller_path joined(prefix_, path);
     router_.register_endpoint(method, {}, joined.view_,
-        route_endpoint::websocket(router_.resource(), callback_access::invoke(handler), std::move(websocket_config)),
+        route_endpoint::websocket(process_resource(), callback_access::invoke(handler), std::move(websocket_config)),
         callback_access::target(handler), middlewares_, middlewares);
 }
 detail::controller_route_builder detail::controller_route_builder::create_scope(

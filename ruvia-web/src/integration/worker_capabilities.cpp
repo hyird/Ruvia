@@ -48,20 +48,18 @@ namespace {
 }  // namespace
 
 worker_capabilities::worker_capabilities(asio::io_context& io_context, const worker_handle& worker_value,
-    std::pmr::memory_resource* resource, worker_capability_definitions definitions,
+    worker_capability_definitions definitions,
     worker_capability_options options)
     : worker_(require_worker_capabilities_worker(worker_value)),
-      redis_(io_context, resource, definitions.redis_, worker_),
-      databases_(io_context, worker_, resource, definitions.databases_, &redis_),
+      redis_(io_context, definitions.redis_, worker_),
+      databases_(io_context, worker_, definitions.databases_, &redis_),
       http_client_result_budget_domain_(
           std::make_shared<http_client_result_budget_domain>(options.http_client_result_budget_)),
-      // The worker resource outlives every request and worker state, so it
-      // backs client responses directly.
-      http_clients_(io_context, worker_, resource, http_client_response_storage::worker_resource,
+      http_clients_(io_context, worker_,
           definitions.http_clients_, http_client_result_budget_domain_),
-      worker_states_(resource, definitions.worker_states_),
+      worker_states_(definitions.worker_states_),
       rate_limiter_(
-          options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_, resource),
+          options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_),
       options_(require_worker_capability_options(std::move(options))),
       worker_services_{
           .worker_ = worker_,
@@ -117,7 +115,16 @@ context_services worker_capabilities::make_context_services(const stop_token& st
 }
 
 worker_client_registry_view worker_capabilities::client_registries() noexcept {
-    return worker_client_registry_view(databases_, redis_, http_clients_);
+    return worker_client_registry_view(http_clients_
+#ifdef RUVIA_ENABLE_DATABASE
+        ,
+        databases_
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+        ,
+        redis_
+#endif
+    );
 }
 
 const worker_state_registry& worker_capabilities::worker_states() const noexcept {

@@ -104,7 +104,6 @@ public:
     // consumed (RFC 9000 §4.1).
     void consume_stream_data(std::int64_t stream_id, std::size_t bytes) noexcept;
     [[nodiscard]] const worker_handle& worker() const noexcept;
-    [[nodiscard]] std::pmr::memory_resource* worker_resource() const noexcept;
     [[nodiscard]] std::string_view remote_address() const& noexcept RUVIA_LIFETIMEBOUND {
         return remote_address_;
     }

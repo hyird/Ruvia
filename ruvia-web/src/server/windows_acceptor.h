@@ -101,7 +101,7 @@ public:
 #if defined(RUVIA_ENABLE_HTTP3)
         http3_worker_directory* directory,
 #endif
-        worker_failure_sink failure, std::pmr::memory_resource* resource);
+        worker_failure_sink failure);
     ~windows_acceptor();
 
     windows_acceptor(const windows_acceptor&) = delete;
@@ -162,7 +162,6 @@ private:
     // Declared first: every socket below belongs to its io_context.
     worker_runtime runtime_;
     asio::io_context& io_;
-    std::pmr::memory_resource* resource_;
     worker_failure_sink failure_sink_;
     worker_signal finalize_signal_;
     task_scope tasks_;

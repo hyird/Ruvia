@@ -16,6 +16,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
@@ -59,7 +60,7 @@ class http1_tunnel_routes final {
                 observed_value.bytes_.append(*bytes);
             }
             if (!retained) {
-                retained.emplace(*bytes, context_value.pool());
+                retained.emplace(*bytes, ruvia::process_resource());
             }
             if (!observed_value.finish_first_) {
                 auto output = tunnel_value.write(std::string_view(*bytes));

@@ -109,7 +109,7 @@ private:
 class static_root_runtime final {
 public:
     static_root_runtime(http_server_options& options, const worker_handle& worker_value,
-        const http_server_worker_state& state_value, std::pmr::memory_resource* resource);
+        const http_server_worker_state& state_value);
     ~static_root_runtime();
     static_root_runtime(const static_root_runtime&) = delete;
     static_root_runtime& operator=(const static_root_runtime&) = delete;
@@ -134,7 +134,6 @@ private:
     document_root_publisher::mailbox* mailbox_;
     const worker_handle& worker_;
     const http_server_worker_state& state_;
-    std::pmr::memory_resource* resource_;
     // Retained locally if preparing a worker generation fails; a later
     // publication supersedes it instead of accumulating missed snapshots.
     document_root_publisher::publication_owner pending_;

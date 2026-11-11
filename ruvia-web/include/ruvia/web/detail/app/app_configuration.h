@@ -43,7 +43,7 @@ template <typename state_type>
 // borrow this immovable owner until its routers have retired.
 class app_configuration final {
 public:
-    explicit app_configuration(std::pmr::memory_resource* resource);
+    app_configuration();
 
     app_configuration(const app_configuration&) = delete;
     app_configuration& operator=(const app_configuration&) = delete;
@@ -64,7 +64,7 @@ public:
         return worker_states_;
     }
 
-    void apply(router& routes, std::pmr::memory_resource* temporary_resource) const;
+    void apply(router& routes) const;
 
 private:
     http_error_handler error_handler_{nullptr};

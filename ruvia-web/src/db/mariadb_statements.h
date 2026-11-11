@@ -84,7 +84,7 @@ class mariadb_statement_cache final {
 public:
     using handle = db_statement_handle;
 
-    explicit mariadb_statement_cache(std::pmr::memory_resource* resource);
+    mariadb_statement_cache();
     ~mariadb_statement_cache();
 
     mariadb_statement_cache(const mariadb_statement_cache&) = delete;

@@ -13,6 +13,7 @@
 #include <openssl/crypto.h>
 
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_pmr_string.h"
 
@@ -80,12 +81,10 @@ void redis_reader_deleter::operator()(redisReader* reader_value) const noexcept 
 }
 
 redis_connection::redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context,
-    const worker_handle& worker_value, const redis_config_storage& config, client_wire_counters& counters,
-    std::pmr::memory_resource* resource)
+    const worker_handle& worker_value, const redis_config_storage& config, client_wire_counters& counters)
     : config_(config),
-      resource_(pmr_resource_or_default(resource)),
-      transport_(io_context, tls_context, worker_value, redis_endpoint(config), counters, resource_),
-      write_buffer_(resource_) {}
+      transport_(io_context, tls_context, worker_value, redis_endpoint(config), counters),
+      write_buffer_(process_resource()) {}
 
 redis_connection::~redis_connection() = default;
 
@@ -114,7 +113,7 @@ void redis_connection::throw_if_aborted() const {
 void redis_connection::ensure_reader() {
     if (reply_builder_ == nullptr) {
         reply_builder_ =
-            make_pmr_object<redis_reply_builder>(resource_, config_.max_reply_bytes_, config_.max_array_depth_);
+            make_pmr_object<redis_reply_builder>(process_resource(), config_.max_reply_bytes_, config_.max_array_depth_);
     }
     if (reader_ == nullptr) {
         reader_.reset(reply_builder_->create_reader());
@@ -284,7 +283,7 @@ task<redis_value> redis_connection::exchange_control_command(
     write_buffer_.clear();
     append_resp_command(write_buffer_, args);
     co_await write_request(deadline, content);
-    co_return co_await read_reply(deadline, resource_);
+    co_return co_await read_reply(deadline, process_resource());
 }
 
 }  // namespace ruvia::detail

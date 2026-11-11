@@ -78,21 +78,19 @@ flowchart TB
 flowchart BT
     subgraph req ["请求级借用 (Context — 不设独立池层)"]
         arena["c.arena() : request_memory<br/>monotonic_buffer_resource (初始块默认 4 KiB，支持 fork())"]
-        pool_ref["c.pool() : std::pmr::memory_resource*<br/>直通所属 Worker 原生堆"]
+        temporary["c.pool() : process_resource()<br/>可单独释放的临时对象"]
     end
-    worker["worker_memory<br/>Worker 独占 mi_heap_t 的薄 PMR 适配"]
-    process["process_resource()<br/>进程寿命、线程安全 PMR（跨线程共享状态 / 跨请求谓词）"]
-    allocator["mimalloc<br/>尺寸类 / 页管理 / 空闲块复用 / purge"]
+    process["process_resource()<br/>进程寿命、线程安全的 mimalloc 薄 PMR 适配（分配落在调用线程的线程堆）"]
+    allocator["mimalloc<br/>线程堆 / 尺寸类 / 页管理 / 空闲块复用 / purge"]
 
-    arena -->|"溢出分配 / 请求结束整批归还"| worker
-    pool_ref -.->|"中途可立即 deallocate 回收复用"| worker
-    worker --> allocator
+    arena -->|"溢出分配 / 请求结束整批归还"| process
+    temporary -.->|"逐块分配 / deallocate 回收复用"| process
     process --> allocator
 ```
 
-- **原生内存资源**：`worker_memory` 与 `process_resource()` 直接适配 mimalloc，不自建尺寸类、空闲块或协程帧缓存；不篡改全局默认 PMR，不设隐式 `thread_local` 业务池。
-- **原生分配器策略**：分配器行为优先用 mimalloc 的默认值和构建选项表达，不在进程中重复实现等价系统调用或运行期覆盖；完全空闲时仅触发原生收集，不自建回收器。
-- **请求级借用分工**：`c.arena()` 供随请求销毁的一次性分配；`c.pool()` 直通所属 `worker_memory`，供中途需立即释放复用、循环扩容或与数据库/Redis 结果零拷贝 `swap` 的数据。
+- **原生内存资源**：`process_resource()` 是唯一的 mimalloc PMR 适配，Worker 分配直接落在 mimalloc 自带的线程堆；不另建 `mi_heap_t`、Worker 级资源、尺寸类、空闲块或协程帧缓存，不篡改全局默认 PMR，不设隐式 `thread_local` 业务池；Asio 的小块与 awaitable 帧回收缓存统一关闭。
+- **原生分配器策略**：分配器行为优先用 mimalloc 的默认值和构建选项表达，不在进程中重复实现等价系统调用或运行期覆盖；完全空闲时仅触发原生收集（`collect_thread_heap()`），不自建回收器。
+- **请求级借用分工**：`c.arena()` 供随请求销毁的一次性分配；`c.pool()` 直接返回 `process_resource()`，供中途需立即释放复用、循环扩容或与数据库/Redis 结果零拷贝 `swap` 的数据。
 - **PMR 资源传递与异常提升**：PMR 对象构造继承源资源、赋值保留目标资源（同资源 `swap`，跨资源递归重绑定后 `swap`）；异常抛出时将动态诊断负载提升至 `process_resource()`。
 - **最短内存生命周期**：异步入口返回前完成输入拥有化，构造冷任务后、进入 I/O 挂起前立即释放临时源容器；空结果或零长消息不分配数据块、不占配额。
 - **栈上 SBO 与缓冲水位线**：高频短数据与小回调采用栈上 SBO；长连接缓冲按水位线保留小容量、超限归还大块并在空闲周期触发 `trim`；流式缓冲 `consume()` 仅推游标，待已消费前缀覆盖存活后缀时才 $O(1)$ 摊销前移压缩。
@@ -149,7 +147,7 @@ sequenceDiagram
     C->>IO: 原始字节流 (TLS 1.2/1.3 SAN 强校验)
     IO->>P: 借用输入视图单遍解析
     P-->>IO: 纯值解析结果与协议计划 (歧义 Fail-Closed / 421 / 414 / 431)
-    IO->>M: 构造 Context (借用 c.arena() & c.pool())
+    IO->>M: 构造 Context (借用请求 Arena)
     M->>H: 前缀段匹配 (use_at) & 路由分发
     H-->>M: 填充三层响应元数据 (draft -> edit_response -> policy)
     M-->>IO: 响应完成 (Session 轮换 ID / 流式 output_committed 异常必重抛关连)

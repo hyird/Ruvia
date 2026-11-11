@@ -8,18 +8,17 @@
 
 namespace ruvia::detail {
 
-worker_codecs::worker_codecs(std::pmr::memory_resource* resource) noexcept
-    : resource_(pmr_resource_or_default(resource)),
-      gzip_(http_content_coding::gzip, resource),
-      deflate_(http_content_coding::deflate, resource),
-      brotli_(http_content_coding::brotli, resource),
-      zstd_(http_content_coding::zstd, resource),
-      websocket_deflate_(resource) {}
+worker_codecs::worker_codecs() noexcept
+    : gzip_(http_content_coding::gzip, process_resource()),
+      deflate_(http_content_coding::deflate, process_resource()),
+      brotli_(http_content_coding::brotli, process_resource()),
+      zstd_(http_content_coding::zstd, process_resource()),
+      websocket_deflate_(process_resource()) {}
 
 worker_codecs::~worker_codecs() {
     for (auto* pool : {&stream_gzip_, &stream_deflate_, &stream_brotli_, &stream_zstd_}) {
         for (std::size_t i = 0; i < pool->count_; ++i) {
-            destroy_pmr_object(resolved_pmr_resource_tag{}, pool->free_[i], resource_);
+            destroy_pmr_object(resolved_pmr_resource_tag{}, pool->free_[i], process_resource());
         }
         pool->count_ = 0;
     }
@@ -63,7 +62,8 @@ stream_encoder_lease worker_codecs::acquire_stream_encoder(http_content_coding c
         return stream_encoder_lease(*this, *pool.free_[--pool.count_]);
     }
     return stream_encoder_lease(
-        *this, *construct_pmr_object<http_content_encoder>(resolved_pmr_resource_tag{}, resource_, coding, resource_));
+        *this, *construct_pmr_object<http_content_encoder>(
+                   resolved_pmr_resource_tag{}, process_resource(), coding, process_resource()));
 }
 
 void worker_codecs::release_stream_encoder(http_content_encoder& encoder) noexcept {
@@ -83,7 +83,7 @@ void worker_codecs::release_stream_encoder(http_content_encoder& encoder) noexce
 }
 
 void worker_codecs::destroy_stream_encoder(http_content_encoder& encoder) noexcept {
-    destroy_pmr_object(resolved_pmr_resource_tag{}, &encoder, resource_);
+    destroy_pmr_object(resolved_pmr_resource_tag{}, &encoder, process_resource());
 }
 
 }  // namespace ruvia::detail

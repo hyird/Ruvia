@@ -944,7 +944,6 @@ TEST(Ruvia, redis_set_result_assignment_retains_destination_resource_across_abse
         const auto empty_nil = co_await destination_redis.set("key", "replacement", return_previous);
         const auto value = co_await source_redis.set("key", "replacement", return_previous);
         const auto empty_text = co_await source_redis.set("key", "replacement", return_previous);
-        EXPECT_NE(value.previous()->get_allocator().resource(), owner);
         ruvia::test::rejecting_memory_resource unrelated;
         unrelated.reject_allocations();
         const auto check_previous = [&](const ruvia::redis_set_result& result, std::string_view expected) {

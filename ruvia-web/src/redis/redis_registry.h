@@ -8,7 +8,6 @@
 
 #ifndef RUVIA_ENABLE_REDIS
 
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 
@@ -18,8 +17,7 @@ namespace ruvia::detail {
 
 class redis_registry final {
 public:
-    redis_registry(asio::io_context&, std::pmr::memory_resource*, std::span<const redis_definition_type>,
-        worker_handle worker_value) {
+    redis_registry(asio::io_context&, std::span<const redis_definition_type>, worker_handle worker_value) {
         if (!worker_value.valid()) {
             throw std::invalid_argument("redis registry requires a valid worker");
         }
@@ -57,7 +55,7 @@ namespace ruvia::detail {
 
 class redis_registry final {
 public:
-    redis_registry(asio::io_context& io_context, std::pmr::memory_resource* resource,
+    redis_registry(asio::io_context& io_context,
         std::span<const redis_definition_type> redis, worker_handle worker_value);
     ~redis_registry();
 
@@ -77,7 +75,6 @@ private:
     using entry_type = std::unique_ptr<redis_client_runtime, pmr_object_deleter<redis_client_runtime>>;
 
     worker_handle worker_;
-    std::pmr::memory_resource* resource_;
     std::pmr::vector<entry_type> runtimes_;
     named_capability_index alias_index_;
 };

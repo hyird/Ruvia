@@ -132,7 +132,7 @@ struct app_state final {
     connection_failure_callback connection_failure_callback_;
     http_server_options options_{};
     std::optional<app_document_root_config> document_root_config_;
-    app_configuration configuration_{process_resource()};
+    app_configuration configuration_;
     std::optional<blocking_pool_options> blocking_pool_{std::in_place};
     std::pmr::vector<app_hook> on_start_hooks_{process_resource()};
     std::pmr::vector<app_hook> on_stop_hooks_{process_resource()};

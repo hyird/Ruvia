@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_pipeline.h"
@@ -115,8 +116,8 @@ struct mariadb_pipeline_io final {
     using flight_type = mariadb_flight;
 
     struct group_data final {
-        explicit group_data(std::pmr::memory_resource* resource)
-            : send_buffer_(resource) {}
+        group_data()
+            : send_buffer_(process_resource()) {}
 
         // Frees a stored result nobody took; called whenever the group's
         // flights clear, which every group does before its slot goes away.
@@ -162,7 +163,7 @@ struct mariadb_pipeline_io final {
         bool ambiguous_backslash_{false};
     };
 
-    [[nodiscard]] static statement_type prepare(pool_type& pool, std::string_view sql, std::span<const db_value> params);
+    [[nodiscard]] static statement_type prepare(std::string_view sql, std::span<const db_value> params);
     [[nodiscard]] static db_slot_socket::native_socket_type socket(pool_type& pool, std::size_t slot);
     static void open(state_type& state, std::size_t slot);
     [[nodiscard]] static bool queue(
@@ -176,10 +177,6 @@ struct mariadb_pipeline_io final {
 // Per connection: cached prepared statements and the pipeline group sharing
 // it.
 struct mariadb_session final {
-    explicit mariadb_session(std::pmr::memory_resource* resource)
-        : statements_(resource),
-          pipeline_(resource) {}
-
     // Cleared by connect(): a new connection holds no server statements.
     mariadb_statement_cache statements_;
     db_pipeline_group<mariadb_pipeline_io> pipeline_;

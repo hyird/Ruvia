@@ -24,10 +24,6 @@
 #include "server/inbound_buffer_resource.h"
 #include "server/multiplexed_stream_signal.h"
 
-namespace ruvia {
-class worker_memory;
-}
-
 namespace ruvia::detail {
 
 class route_table;
@@ -103,7 +99,7 @@ private:
 class http2_sans_io_session_engine final {
 public:
     http2_sans_io_session_engine(asio::any_io_executor executor, asio::ip::tcp::socket& socket,
-        const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value);
+        const route_table& routes_value, http2_sans_io_session_context session_value);
 
     http2_sans_io_session_engine(const http2_sans_io_session_engine&) = delete;
     http2_sans_io_session_engine& operator=(const http2_sans_io_session_engine&) = delete;
@@ -152,8 +148,6 @@ public:
     void reset_stream_no_throw(std::uint32_t stream_id, http2_error_code error) noexcept;
     [[nodiscard]] task<void> finish();
 
-    [[nodiscard]] std::pmr::memory_resource* worker_resource() const noexcept;
-
 private:
     void reset_event_stream(std::uint32_t stream_id, http2_error_code error) noexcept;
     [[nodiscard]] http2_sans_io_stream_runtime* resolve_stream_route(const http2_request_head_event& message_head);
@@ -180,7 +174,6 @@ private:
     asio::any_io_executor executor_;
     asio::ip::tcp::socket& socket_;
     const route_table& routes_;
-    worker_memory& worker_;
     http2_sans_io_session_context session_;
     inbound_buffer_resource inbound_buffers_;
     context_services base_services_;

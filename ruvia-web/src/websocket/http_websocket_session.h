@@ -3,6 +3,7 @@
 #include <exception>
 #include <memory_resource>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/detail/router/route_handlers.h"
@@ -62,7 +63,7 @@ template <typename stream_type>
 task<void> invoke_websocket_handler(server_websocket_connection<stream_type>& connection,
     connection_scanner::entry& scanner_entry, const route_stream_handler& handler,
     context& context_value) {
-    auto websocket_value = make_websocket_facade(connection, *context_value.pool());
+    auto websocket_value = make_websocket_facade(connection, *process_resource());
     context_websocket_binding websocket_binding(context_value, websocket_value);
 
     scanner_entry.enter_long_lived();

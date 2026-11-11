@@ -6,7 +6,6 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_runtime.h"
@@ -83,11 +82,10 @@ private:
     stop_source stop_source_;
     stop_token stop_token_{stop_source_.token()};
     const route_table& routes_;
-    worker_memory memory_;
     // Every connection's inbound buffers charge this worker-wide budget.
     inbound_buffer_budget inbound_budget_;
-    // Allocates from memory_ and is borrowed through options_.codecs_ by
-    // requests and connections, which all end before it is destroyed.
+    // Borrowed through options_.codecs_ by requests and connections, which
+    // all end before it is destroyed.
     worker_codecs codecs_;
     task_scope background_tasks_;
     http_server_worker_state worker_state_{http_server_worker_state::fresh};

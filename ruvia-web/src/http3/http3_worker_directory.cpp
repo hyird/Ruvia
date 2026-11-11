@@ -18,7 +18,7 @@
 
 #include <asio/error.hpp>
 
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 #if !defined(_WIN32)
@@ -234,12 +234,12 @@ void attach_reuseport_cbpf(int fd, const http3_secret& secret, std::size_t worke
 }  // namespace
 #endif
 
-http3_worker_directory::http3_worker_directory(std::size_t worker_count, std::pmr::memory_resource* resource)
-    : slots_(resource),
-      listener_sockets_(resource) {
+http3_worker_directory::http3_worker_directory(std::size_t worker_count)
+    : slots_(process_resource()),
+      listener_sockets_(process_resource()) {
     slots_.reserve(worker_count);
     for (std::size_t index = 0; index < worker_count; ++index) {
-        slots_.push_back(make_pmr_object<slot>(resource));
+        slots_.push_back(make_pmr_object<slot>(process_resource()));
     }
 }
 
@@ -287,10 +287,9 @@ void http3_worker_directory::open_listener_socket(std::size_t worker_index, std:
         while (listener_sockets_.size() <= listener_index) {
             listener_sockets_.emplace_back();
         }
-        auto* resource = listener_sockets_.get_allocator().resource();
         auto& group = listener_sockets_[listener_index];
         if (group.empty()) {
-            std::pmr::vector<unique_udp_fd> opened(resource);
+            std::pmr::vector<unique_udp_fd> opened(process_resource());
             opened.reserve(slots_.size());
             asio::ip::udp::endpoint bound_endpoint = configured_endpoint;
             for (std::size_t index = 0; index < slots_.size(); ++index) {

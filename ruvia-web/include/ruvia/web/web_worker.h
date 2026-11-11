@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -42,11 +41,6 @@ public:
 
     [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
-    // Same worker-reclaimable pool as context::pool(). Posted jobs have no
-    // request arena; allocate temporary and result storage here. Destroy that
-    // storage on this worker within the job's scope. Pool caching does not
-    // extend the lifetime of objects or borrowed views.
-    [[nodiscard]] std::pmr::memory_resource* pool() const noexcept;
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
 
     template <typename state_type>
@@ -85,21 +79,20 @@ public:
 private:
     friend class detail::web_worker_dispatch;
 
-    web_worker_context(const worker_handle& worker_value, std::pmr::memory_resource* resource,
+    web_worker_context(const worker_handle& worker_value,
         const detail::worker_client_registry_view& client_registries,
         const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept;
-    web_worker_context(worker_handle&&, std::pmr::memory_resource*, const detail::worker_client_registry_view&,
+    web_worker_context(worker_handle&&, const detail::worker_client_registry_view&,
         const detail::worker_state_registry*, const ::ruvia::stop_token&) = delete;
-    web_worker_context(const worker_handle&, std::pmr::memory_resource*, const detail::worker_client_registry_view&,
+    web_worker_context(const worker_handle&, const detail::worker_client_registry_view&,
         const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
-    web_worker_context(worker_handle&&, std::pmr::memory_resource*, const detail::worker_client_registry_view&,
+    web_worker_context(worker_handle&&, const detail::worker_client_registry_view&,
         const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
 
     // The server worker owns these values and joins every posted job before
     // retiring them. Contexts borrow them so starting a job does not copy
     // endpoint or cancellation-state ownership on the worker thread.
     detail::worker_context_capabilities capabilities_;
-    std::pmr::memory_resource* resource_;
     const detail::worker_client_registry_view& client_registries_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.

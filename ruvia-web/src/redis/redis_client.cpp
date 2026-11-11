@@ -7,7 +7,7 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_handle.h"
 
@@ -26,29 +26,27 @@ namespace {
     return context_value;
 }
 
-[[nodiscard]] std::pmr::memory_resource* validated_redis_resource(
-    const worker_handle& worker_value, std::pmr::memory_resource* resource,
-    std::span<const redis_definition_type> redis) {
+void validate_redis_registry(
+    const worker_handle& worker_value, std::span<const redis_definition_type> redis) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("redis registry requires a valid worker");
     }
     validate_capability_aliases(redis, "redis alias must not be empty", "duplicate redis alias");
-    return pmr_resource_or_default(resource);
 }
 
 }  // namespace
 
-redis_registry::redis_registry(asio::io_context& io_context, std::pmr::memory_resource* resource,
+redis_registry::redis_registry(asio::io_context& io_context,
     std::span<const redis_definition_type> redis, worker_handle worker_value)
     : worker_(std::move(worker_value)),
-      resource_(validated_redis_resource(worker_, resource, redis)),
-      runtimes_(resource_),
-      alias_index_(resource_) {
+      runtimes_(process_resource()),
+      alias_index_(process_resource()) {
+    validate_redis_registry(worker_, redis);
     alias_index_.build(redis);
     runtimes_.reserve(redis.size());
     for (const auto& definition : redis) {
-        runtimes_.push_back(make_pmr_object<redis_client_runtime>(resource_, io_context, worker_,
-            redis_config_storage(definition.config_, resource_), resource_));
+        runtimes_.push_back(make_pmr_object<redis_client_runtime>(process_resource(), io_context, worker_,
+            redis_config_storage(definition.config_, process_resource())));
     }
 }
 
@@ -89,18 +87,17 @@ redis_handle redis_registry::get(
 }
 
 redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_handle& worker_value,
-    redis_config_storage config, std::pmr::memory_resource* resource)
+    redis_config_storage config)
     : config_(std::move(config)),
-      resource_(resource),
       worker_(worker_value),
       tls_context_(make_redis_tls_context(config_.tls_)),
       general_(io_context, config_, tls_context_, config_.command_timeout_,
-          config_.pool_size_per_worker_, worker_, resource_),
+          config_.pool_size_per_worker_, worker_),
       // Blocking waits have their own deadlines; ordinary command timeouts
       // must not interrupt a finite long wait or an explicitly cancelled wait.
       blocking_(io_context, config_, tls_context_, std::nullopt,
-          config_.blocking_pool_size_per_worker_, worker_, resource_),
-      subscriptions_(io_context, tls_context_, config_, worker_, resource_) {}
+          config_.blocking_pool_size_per_worker_, worker_),
+      subscriptions_(io_context, tls_context_, config_, worker_) {}
 
 redis_client_runtime::~redis_client_runtime() = default;
 
@@ -117,12 +114,12 @@ void redis_client_runtime::close_now() noexcept {
 }
 
 redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, request_io_metrics* io_metrics) {
-    return redis_handle(*this, resource_, scope, io_metrics);
+    return redis_handle(*this, process_resource(), scope, io_metrics);
 }
 
 redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, operation_options options) {
     validate_operation_options(options);
-    return redis_handle(*this, resource_, scope, std::move(options));
+    return redis_handle(*this, process_resource(), scope, std::move(options));
 }
 
 class redis_client_state final : public std::enable_shared_from_this<redis_client_state> {
@@ -160,7 +157,6 @@ private:
 
     event_loop loop_;
     worker_handle worker_;
-    worker_memory memory_;
     redis_client_runtime runtime_;
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<redis_client_state> lifecycle_;
@@ -168,8 +164,7 @@ private:
 redis_client_state::redis_client_state(event_loop loop, const redis_config& config)
     : loop_(client_lifecycle<redis_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
-      memory_(),
-      runtime_(loop_.io_context(), worker_, redis_config_storage(config, memory_.resource()), memory_.resource()),
+      runtime_(loop_.io_context(), worker_, redis_config_storage(config, process_resource())),
       lifecycle_(*this, loop_, worker_) {}
 
 void redis_client_state::throw_not_ready() {

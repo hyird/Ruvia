@@ -255,7 +255,7 @@ task<std::string_view> read_request_text(const context& context_value) {
     const auto& services = detail::context_access::services(context_value);
     auto* const decode_resource = services.inbound_buffer_pool() != nullptr
                                       ? services.inbound_buffer_pool()
-                                      : context_value.pool();
+                                      : ruvia::process_resource();
     const auto parsed_coding = require_decodable_request_coding(
         request, detail::unsupported_request_content_coding::read_type::decoded);
     const auto codings = parsed_coding.codings();
@@ -421,7 +421,7 @@ const request_name_value_list& context_request::cookie_fields() const {
             continue;
         }
         if (!cookies) {
-            cookies.emplace(detail::request_name_value_list_access::make(context_->pool()));
+            cookies.emplace(detail::request_name_value_list_access::make(ruvia::process_resource()));
         }
         http_visit_cookie_pairs(header_field.value(),
             [&cookies](std::string_view key, std::string_view value) {
@@ -574,7 +574,7 @@ std::optional<std::string_view> context_request::signed_cookie(
     const auto value = stored->substr(0, value_size);
     const auto signature = stored->substr(value_size + 1);
     char expected[detail::cookie_signature_size];
-    detail::write_cookie_signature(expected, secret, name, value, context_->pool());
+    detail::write_cookie_signature(expected, secret, name, value, ruvia::process_resource());
     if (!detail::constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {
         return std::nullopt;
     }
@@ -608,6 +608,6 @@ multipart_reader context_request::multipart_reader() const {
         throw detail::unsupported_request_content_coding(
             detail::unsupported_request_content_coding::read_type::streaming);
     }
-    return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary, .resource_ = context_->pool()});
+    return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary, .resource_ = ruvia::process_resource()});
 }
 }  // namespace ruvia

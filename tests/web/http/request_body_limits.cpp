@@ -19,6 +19,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_content_codec.h"
@@ -106,7 +107,7 @@ class body_lane_routes final {
     ruvia::task<ruvia::http_response> read_multipart(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         ruvia::multipart_reader reader(context_value.req().body_reader(),
-            {.boundary_ = ruvia::testing::make_multipart_boundary("lazy"), .resource_ = context_value.pool()});
+            {.boundary_ = ruvia::testing::make_multipart_boundary("lazy"), .resource_ = ruvia::process_resource()});
         auto first = reader.read();
         auto last = reader.read();
         std::pmr::string body(context_value.allocator<char>());

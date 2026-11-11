@@ -20,8 +20,8 @@
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -635,14 +635,10 @@ public:
         return memory_.resource();
     }
 
-    // Reclaimable worker-local storage for temporary owning objects. Destroy
-    // them on this worker within the context's scope. Deallocation returns
-    // storage to the pool for reuse without invalidating other live objects;
-    // it need not return memory to the OS. Clients may own distinct pools, so
-    // transferring owned data to an operation only avoids copying when its
-    // destination resource is compatible.
+    // Individually reclaimable storage over mimalloc's calling-thread heap.
+    // No separate worker pool: the resource has process lifetime.
     [[nodiscard]] std::pmr::memory_resource* pool() const noexcept {
-        return memory_.upstream_resource();
+        return process_resource();
     }
 
     // Request-scoped typed state: how a middleware hands a value it computed --

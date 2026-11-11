@@ -94,10 +94,9 @@ struct client_happy_eyeballs_result final {
 class client_happy_eyeballs final {
 public:
     client_happy_eyeballs(const worker_handle& worker, const asio::ip::tcp::socket::executor_type& executor,
-        const asio::ip::tcp::resolver::results_type& addresses,
-        std::pmr::memory_resource* resource = nullptr);
+        const asio::ip::tcp::resolver::results_type& addresses);
     client_happy_eyeballs(worker_handle&&, const asio::ip::tcp::socket::executor_type&,
-        const asio::ip::tcp::resolver::results_type&, std::pmr::memory_resource* = nullptr) = delete;
+        const asio::ip::tcp::resolver::results_type&) = delete;
     ~client_happy_eyeballs();
     client_happy_eyeballs(const client_happy_eyeballs&) = delete;
     client_happy_eyeballs& operator=(const client_happy_eyeballs&) = delete;

@@ -22,7 +22,7 @@ class redis_registry;
 
 class db_registry final {
 public:
-    db_registry(asio::io_context&, const worker_handle&, std::pmr::memory_resource*,
+    db_registry(asio::io_context&, const worker_handle&,
         std::span<const db_definition>, redis_registry* = nullptr) {}
 
     db_registry(const db_registry&) = delete;
@@ -66,12 +66,12 @@ class db_query_cache_state;
 class db_registry final {
 public:
     db_registry(asio::io_context& io_context, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource, const db_config& default_config);
+        const db_config& default_config);
     db_registry(asio::io_context& io_context, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource, std::span<const db_definition> databases, redis_registry* redis = nullptr);
+        std::span<const db_definition> databases, redis_registry* redis = nullptr);
 #ifdef RUVIA_ENABLE_REDIS
     db_registry(asio::io_context& io_context, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource, const db_config& config,
+        const db_config& config,
         const redis_handle& redis, const db_cache_config& policy);
 #endif
     ~db_registry();
@@ -100,7 +100,6 @@ public:
 private:
     void add(asio::io_context& io_context, const worker_handle& worker, db_config_storage config);
 
-    std::pmr::memory_resource* resource_;
     struct entry_type final {
         // Defined where db_query_cache_state is complete.
         explicit entry_type(pool_owner_type pool) noexcept;

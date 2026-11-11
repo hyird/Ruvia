@@ -86,7 +86,7 @@ pool.join();
 
 ---
 
-### 4. 跨线程通道、单次交付、信号与内存池
+### 4. 跨线程通道、单次交付、信号与内存资源
 
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ pool.join();
 | `"ruvia/core/worker_signal.h"` | `class worker_signal final`、`worker_signal::wait_operation` | 同 Worker 内部闩锁合并通知；`wait()` 返回可丢弃、仅启动前可移动的单次冷等待器，不是 `task<void>`。创建和启动须在所属 Worker，启动后必须等待完成；支持多个等待者，直接挂入调用方协程帧 |
 | `"ruvia/core/worker_notification.h"` | `class worker_notification final` | 跨线程闩锁合并通知原语（任意线程无锁 `notify()`，所属 Worker 上 `co_await notification.wait()`）。从 `event_loop` 构造时仅接受左值、拒绝含 `const` 的右值；借用的 loop 须保持地址稳定并覆盖通知对象的寿命 |
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消） |
-| `"ruvia/core/memory/memory_pool.h"` | `class worker_memory final`、`class request_memory final`、`struct memory_pool_config` | Worker 独占 mimalloc heap 的 PMR 适配与单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`、`trim(owner)`） |
+| `"ruvia/core/memory/request_memory.h"` | `class request_memory final`、`request_arena_initial_bytes`、`collect_thread_heap()` | 单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`），初始块按字节数配置；调用线程 mimalloc 线程堆的手动收集 |
 | `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_object` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
 | `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；移动赋值与赋空共用退役路径：先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；旧目标析构时的重入赋值最终生效 |
 | `"ruvia/core/local_ring_queue.h"` | `class local_ring_queue<T>` | 预分配容量的单线程零分配环形队列 |
@@ -114,12 +114,12 @@ pool.join();
 
 框架默认内存由 mimalloc 承载：`process_resource()` 是存活至进程结束的线程安全 PMR 适配器，供跨线程共享状态与停止状态使用；协程帧直接使用 mimalloc。接受显式 PMR 的 API 优先使用调用方资源，调用方须保证资源覆盖所分配对象的生命周期。
 
-- **原生 Worker 堆**：`worker_memory` 独占 `mi_heap_t`，直接适配对齐分配与释放；不叠加尺寸类缓存、对象头或协程帧缓存，不接受自定义上游。
-- **生命周期**：允许启动线程构造、业务 Worker 使用、Join 后析构；销毁前必须结束所有借用，堆删除不替代 C++ 对象析构。
-- **请求 Arena**：`memory_pool_config` 仅配置正数 `request_initial_buffer_bytes_`；`request_memory` 按请求批量释放，`fork()` 只共享 Worker 资源，不借用父 Arena 的存储。
-- **HTTP/1 工作集**：仅在活跃请求期间持有，流水线请求连续复用；连接空闲、关闭或异常退出时直接释放给 Worker 堆，不维护空闲工作集缓存。
-- **原生回收**：不覆盖 mimalloc 的原生回收默认值；回收延迟不是 RSS 归还期限或保留内存上限。完全空闲的线程不会自行执行到期收集，因此 Web 在完整空闲扫描周期后触发一次 `trim(owner)`，不自建回收线程。
-- **手动收集**：`trim(owner)` 限所属 Worker 调用，先收集默认堆，再强制收集 Worker 堆及共享 arena 的待回收范围，不影响存活分配。
+- **原生线程堆**：不另建 `mi_heap_t` 或 Worker 级 PMR 资源；`process_resource()` 的分配直接落在调用线程的 mimalloc 线程堆，可在任意线程释放；不叠加尺寸类缓存、对象头或协程帧缓存。
+- **Asio 缓存**：`ruvia::core` 公开传递 `ASIO_DISABLE_SMALL_BLOCK_RECYCLING` 与 `ASIO_DISABLE_AWAITABLE_FRAME_RECYCLING`，所有翻译单元保持一致；不在 mimalloc 之上叠加 handler 或 awaitable 帧缓存。
+- **请求 Arena**：`request_memory(initial_bytes)` 以 `process_resource()` 为上游按请求批量释放，初始块字节数须大于零；`fork()` 只沿用初始块大小，不借用父 Arena 的存储。
+- **HTTP/1 工作集**：仅在活跃请求期间持有，流水线请求连续复用；连接空闲、关闭或异常退出时直接释放给 mimalloc，不维护空闲工作集缓存。
+- **原生回收**：不覆盖 mimalloc 的原生回收默认值；回收延迟不是 RSS 归还期限或保留内存上限。完全空闲的线程不会自行执行到期收集，因此 Web 在完整空闲扫描周期后于该 Worker 上触发一次 `collect_thread_heap()`，不自建回收线程。
+- **手动收集**：`collect_thread_heap()` 强制收集调用线程的线程堆及共享 arena 的待回收范围，不影响存活分配。
 - **透明大页**：Linux 的 `x64-linux` 与 `x64-linux-musl` triplet 为 mimalloc 设置 `-DMI_NO_THP=ON`，由分配器初始化时关闭进程 THP；外部依赖构建须采用相同选项，不在 Ruvia 中重复调用 `prctl` 或覆盖 `allow_thp`。
 - **失败与检测**：分配失败抛 `std::bad_alloc`；sanitizer 构建使用系统分配器，不保留自建缓存。
 

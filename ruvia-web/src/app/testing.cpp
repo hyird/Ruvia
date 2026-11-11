@@ -12,8 +12,8 @@
 #include <vector>
 
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_protocol_error.h"
@@ -44,13 +44,12 @@ struct test_app::impl_type final {
         ready,
         failed };
 
-    detail::app_configuration configuration_{process_resource()};
-    worker_memory memory_;
+    detail::app_configuration configuration_;
     detail::controller_store controllers_;
     detail::compiled_route_plan_ptr_type route_plan_{nullptr, pmr_object_deleter<detail::compiled_route_plan>{}};
     std::optional<detail::route_table> routes_;
     env env_;
-    detail::worker_codecs codecs_{memory_.resource()};
+    detail::worker_codecs codecs_;
     // The defaults a server starts from: no listener-specific policy applies.
     detail::http_server_options options_{};
     // The pool the in-memory worker's event loop borrows, created with the loop.
@@ -105,10 +104,10 @@ struct test_app::impl_type final {
             const auto controller_registrars = detail::seal_controller_registrars();
             controllers_ = detail::controller_store(controller_registrars);
             route_plan_ = detail::compile_route_plan(
-                memory_.resource(), controller_registrars, controllers_, configuration_);
-            routes_.emplace(memory_.resource(), *route_plan_, controllers_);
+                controller_registrars, controllers_, configuration_);
+            routes_.emplace(*route_plan_, controllers_);
 
-            capabilities_.emplace(event_loop_.io_context(), worker_, memory_.resource(),
+            capabilities_.emplace(event_loop_.io_context(), worker_,
                 detail::worker_capability_definitions{.worker_states_ = configuration_.worker_states()},
                 detail::worker_capability_options{
                     .default_rate_limit_ = options_.default_rate_limit_per_worker_,
@@ -137,7 +136,7 @@ struct test_app::impl_type final {
 
     [[nodiscard]] task<dispatch_response> execute_request(const test_request& request) {
         const auto request_start = std::chrono::steady_clock::now();
-        request_memory request_memory_value(memory_);
+        request_memory request_memory_value(options_.server_.request_arena_initial_bytes_);
         detail::inline_http_header_views<16> active_headers(
             request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U), request_memory_value.resource());
         for (const auto& [name, value] : request.headers_) {

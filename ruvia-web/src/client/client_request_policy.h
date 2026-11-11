@@ -35,7 +35,7 @@ struct client_prepared_request_scratch final {
 // negotiation, cancellation, and transport retirement.
 class client_request_policy final {
 public:
-    client_request_policy(const http_client_config_storage& config, std::pmr::memory_resource* resource);
+    explicit client_request_policy(const http_client_config_storage& config);
     // The complete view borrows the request, policy text and both scratch buffers;
     // keep their owners alive through protocol serialization.
     [[nodiscard]] http_client_request_view prepare_request(
@@ -78,7 +78,6 @@ private:
         std::size_t replacement_bytes, bool adding) const noexcept;
     void recompute_next_expiry() noexcept;
     const http_client_config_storage& config_;
-    std::pmr::memory_resource* resource_;
     std::pmr::vector<stored_cookie> cookies_;
     std::optional<std::chrono::system_clock::time_point> next_expiry_{};
     std::size_t cookie_bytes_{};

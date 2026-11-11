@@ -64,13 +64,11 @@ public:
         definition.destroy_factory_ = [](void* stored_factory) noexcept {
             destroy_pmr_object(static_cast<stored_type*>(stored_factory), process_resource());
         };
-        definition.create_instance_ = [](void* stored_factory,
-                                          std::pmr::memory_resource* resource) -> void* {
-            return construct_pmr_object<t_type>(resource, (*static_cast<stored_type*>(stored_factory))());
+        definition.create_instance_ = [](void* stored_factory) -> void* {
+            return construct_pmr_object<t_type>(process_resource(), (*static_cast<stored_type*>(stored_factory))());
         };
-        definition.destroy_instance_ = [](void* instance,
-                                           std::pmr::memory_resource* resource) noexcept {
-            destroy_pmr_object(static_cast<t_type*>(instance), resource);
+        definition.destroy_instance_ = [](void* instance) noexcept {
+            destroy_pmr_object(static_cast<t_type*>(instance), process_resource());
         };
         return definition;
     }
@@ -88,8 +86,8 @@ private:
     friend class worker_state_registry;
 
     using destroy_factory_type = void (*)(void*) noexcept;
-    using create_instance_type = void* (*)(void*, std::pmr::memory_resource*);
-    using destroy_instance_type = void (*)(void*, std::pmr::memory_resource*) noexcept;
+    using create_instance_type = void* (*)(void*);
+    using destroy_instance_type = void (*)(void*) noexcept;
 
     worker_state_definition() noexcept = default;
 
@@ -124,12 +122,10 @@ inline void append_worker_state_definition(
 class worker_state_registry final {
 public:
     // `definitions` were validated by append_worker_state_definition.
-    worker_state_registry(
-        std::pmr::memory_resource* resource, std::span<const worker_state_definition> definitions)
-        : resource_(pmr_resource_or_default(resource)),
-          definitions_(definitions),
-          entries_(resource_),
-          type_index_(resource_) {}
+    explicit worker_state_registry(std::span<const worker_state_definition> definitions)
+        : definitions_(definitions),
+          entries_(process_resource()),
+          type_index_(process_resource()) {}
 
     worker_state_registry(const worker_state_registry&) = delete;
     worker_state_registry& operator=(const worker_state_registry&) = delete;
@@ -150,7 +146,7 @@ public:
         type_index_.reserve(definitions_.size());
         try {
             for (const auto& definition : definitions_) {
-                auto* const instance_value = definition.create_instance_(definition.factory_, resource_);
+                auto* const instance_value = definition.create_instance_(definition.factory_);
                 entries_.push_back(instance_entry_type{instance_value, definition.destroy_instance_});
                 type_index_.push_back(type_index_entry_type{definition.type_key_, instance_value});
             }
@@ -197,13 +193,12 @@ private:
             auto* const instance = std::exchange(entry_value.instance_, nullptr);
             auto* const destroy = std::exchange(entry_value.destroy_, nullptr);
             if (instance != nullptr && destroy != nullptr) {
-                destroy(instance, resource_);
+                destroy(instance);
             }
         }
         entries_.clear();
     }
 
-    std::pmr::memory_resource* resource_;
     std::span<const worker_state_definition> definitions_;
     std::pmr::vector<instance_entry_type> entries_;
     std::pmr::vector<type_index_entry_type> type_index_;

@@ -46,7 +46,7 @@ struct document_root_probe final {
 
 [[nodiscard]] document_root_probe probe_document_root_resource(
     const detail::document_root_binding& document_root, const http_request& request,
-    request_memory& memory, std::optional<std::pmr::string>& decoded,
+    std::optional<std::pmr::string>& decoded,
     std::optional<std::pmr::string>& storage) {
     const auto* const root = document_root.root();
     // Only an origin-form path names a document-root resource: a CONNECT
@@ -58,13 +58,13 @@ struct document_root_probe final {
         request.path().find("//") != std::string_view::npos) {
         return {};
     }
-    const auto path = detail::decode_request_path(request.path(), decoded.emplace(memory.upstream_resource()));
+    const auto path = detail::decode_request_path(request.path(), decoded.emplace(ruvia::process_resource()));
     if (!path) {
         return {};
     }
     auto relative = path->substr(1);
     auto entry_value = detail::static_root_access::try_resolve(
-        *root, relative, storage.emplace(memory.upstream_resource()));
+        *root, relative, storage.emplace(ruvia::process_resource()));
     if (!entry_value.has_value()) {
         return {};
     }
@@ -111,7 +111,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 resolution.rejected() != nullptr || document_root.root() == nullptr
                     ? document_root_probe{}
                     : probe_document_root_resource(
-                          document_root, request, memory,
+                          document_root, request,
                           decoded_fallback_path, fallback_path_storage);
             const auto method = request.known_method();
             if (fallback_probe.entry_.has_value() &&

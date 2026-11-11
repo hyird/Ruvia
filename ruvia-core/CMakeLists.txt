@@ -23,7 +23,14 @@ else()
         target_link_libraries(ruvia-core PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,mimalloc-static>")
     endif()
 endif()
-target_compile_definitions(ruvia-core PUBLIC ASIO_STANDALONE ASIO_NO_DEPRECATED)
+# Allocation reuse belongs to mimalloc alone: Asio's per-thread handler and
+# awaitable-frame caches would be a second cache layer over it. PUBLIC because
+# every translation unit that includes Asio must agree.
+target_compile_definitions(ruvia-core PUBLIC
+    ASIO_STANDALONE
+    ASIO_NO_DEPRECATED
+    ASIO_DISABLE_SMALL_BLOCK_RECYCLING
+    ASIO_DISABLE_AWAITABLE_FRAME_RECYCLING)
 
 ruvia_install_target(ruvia-core core)
 

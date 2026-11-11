@@ -18,7 +18,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
@@ -223,7 +223,7 @@ public:
     // the connection reusable. `request_stop` is the request's own stop source,
     // which a peer close or a failed write requests; it outlives the sink.
     // `request_pipelined` tells whether the request arrived behind another.
-    response_stream_sink(stream_type& stream, worker_memory& memory, worker_codecs& codecs,
+    response_stream_sink(stream_type& stream, worker_codecs& codecs,
         http_response_head_buffer& head, connection_scanner::entry& scanner_entry,
         const worker_handle& worker_value, const http_request& request, const cors_options* cors,
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
@@ -232,7 +232,7 @@ public:
         std::pmr::memory_resource& inbound_resource, stop_source& request_stop, bool request_pipelined) noexcept
         : stream_(stream),
           head_(head),
-          trailers_(memory.resource()),
+          trailers_(process_resource()),
           scanner_entry_(scanner_entry),
           worker_(worker_value),
           request_(request),
@@ -241,14 +241,14 @@ public:
           consumed_plan_(consumed_plan),
           request_body_(request_body),
           connection_plan_(plan.request_connection_plan().require_close()),
-          compression_(memory.resource(), codecs, response_coding, compression),
+          compression_(process_resource(), codecs, response_coding, compression),
           inbound_resource_(&inbound_resource),
           request_stop_(request_stop),
           request_pipelined_(request_pipelined) {
         request_body_.reader().observe_completion(this, &arm_peer_monitor_on_body_completion);
     }
 
-    response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
+    response_stream_sink(stream_type&, worker_codecs&, http_response_head_buffer&,
         connection_scanner::entry&, worker_handle&&, const http_request&, const cors_options*,
         http1_response_stream_plan, http1_response_stream_plan,
         lazy_buffered_body<stream_type>&, http_response_coding_selection,
@@ -643,7 +643,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     const stop_group request_stop(d.base_route_services_.get_stop_token(), peer_stop.token());
     const auto request_stop_token = request_stop.token();
     d.base_route_services_.bind_stop_token(request_stop_token);
-    response_sink_type response_sink(d.stream_, d.memory_, *d.options_.codecs_, response_head, d.scanner_entry_,
+    response_sink_type response_sink(d.stream_, *d.options_.codecs_, response_head, d.scanner_entry_,
         d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
         stream_plan,
         http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),

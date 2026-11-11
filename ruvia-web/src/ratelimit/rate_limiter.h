@@ -95,7 +95,7 @@ struct rate_limit_slot final {
 static_assert(sizeof(rate_limit_slot) <= 128, "worker rate-limit slots must stay compact");
 
 // One sliding-window table owned and accessed by exactly one
-// web_worker_runtime worker. Startup allocates every slot from worker_memory;
+// web_worker_runtime worker. Startup allocates every slot;
 // request-path lookup mutates ordinary worker-local state and performs no
 // allocation, locking, atomics, or cross-thread coordination. Keys are (route
 // scope, rule declaration, normalized remote address). Home slots come from a
@@ -105,7 +105,7 @@ static_assert(sizeof(rate_limit_slot) <= 128, "worker rate-limit slots must stay
 class rate_limiter final {
 public:
     rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker,
-        route_rate_limit_presence route_rules, std::size_t capacity_value, std::pmr::memory_resource* resource);
+        route_rate_limit_presence route_rules, std::size_t capacity_value);
 
     rate_limiter(const rate_limiter&) = delete;
     rate_limiter& operator=(const rate_limiter&) = delete;

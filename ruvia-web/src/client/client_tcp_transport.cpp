@@ -10,7 +10,6 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 
 #include "client/client_happy_eyeballs.h"
@@ -23,8 +22,7 @@ bool is_tls_error(const std::error_code& error) noexcept {
 }
 
 client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::context& tls,
-    const worker_handle& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters,
-    std::pmr::memory_resource* resource)
+    const worker_handle& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters)
     : worker_(worker_value),
       tls_(tls),
       endpoint_(endpoint),
@@ -36,7 +34,6 @@ client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::cont
       }()),
       counters_(counters),
       resolver_(worker_value),
-      pool_resource_(pmr_resource_or_default(resource)),
       stream_(io.get_executor(), tls) {
     // Owners build their transports eagerly, before any member that must be
     // retired, so a host this worker cannot look up rejects the client itself.
@@ -254,7 +251,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         if (resolved.error_) {
             co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
         }
-        client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_, pool_resource_);
+        client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_);
         resolved = {};
         connecting_ = &connector;
         struct clear_connector final {

@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
@@ -135,15 +136,13 @@ std::optional<client_received_cookie> accept_set_cookie(const http_set_cookie_vi
 
 }  // namespace
 
-client_request_policy::client_request_policy(const http_client_config_storage& config,
-    std::pmr::memory_resource* resource)
+client_request_policy::client_request_policy(const http_client_config_storage& config)
     : config_(config),
-      resource_(resource),
-      cookies_(resource) {
+      cookies_(process_resource()) {
     // Storage validated, deduplicated and bounded the configured cookies.
     cookies_.reserve(config.cookies_.size());
     for (const auto& cookie : config.cookies_) {
-        cookies_.emplace_back(cookie.name(), cookie.value(), resource_);
+        cookies_.emplace_back(cookie.name(), cookie.value(), process_resource());
         cookie_bytes_ += storage_bytes(cookie.name(), cookie.value(), "/", {});
     }
 }
@@ -395,7 +394,7 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
 
     if (match == cookies_.end()) {
         stored_cookie replacement(
-            cookie.name_, cookie.value_, cookie.path_, cookie.domain_, resource_);
+            cookie.name_, cookie.value_, cookie.path_, cookie.domain_, process_resource());
         replacement.expires_ = cookie.expires_;
         replacement.secure_ = cookie.secure_;
         replacement.configured_ = false;
@@ -413,11 +412,11 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
         const auto old_expires = match->expires_;
         std::optional<std::pmr::string> replacement_value;
         if (match->value_ != cookie.value_ && cookie.value_.size() > match->value_.capacity()) {
-            replacement_value.emplace(cookie.value_, resource_);
+            replacement_value.emplace(cookie.value_, process_resource());
         }
         std::optional<std::pmr::string> replacement_domain;
         if (match->domain_ != cookie.domain_ && cookie.domain_.size() > match->domain_.capacity()) {
-            replacement_domain.emplace(cookie.domain_, resource_);
+            replacement_domain.emplace(cookie.domain_, process_resource());
         }
         if (replacement_value.has_value()) {
             match->value_.swap(*replacement_value);

@@ -43,18 +43,18 @@ struct app_worker_slot final {
 };
 
 struct app_runtime_graph final {
-    explicit app_runtime_graph(std::pmr::memory_resource* resource)
-        : blocking_pool_(nullptr, pmr_object_deleter<blocking_pool>{resource}),
-          document_root_(nullptr, pmr_object_deleter<document_root_publisher>{resource}),
-          route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{resource}),
+    app_runtime_graph()
+        : blocking_pool_(nullptr, pmr_object_deleter<blocking_pool>{process_resource()}),
+          document_root_(nullptr, pmr_object_deleter<document_root_publisher>{process_resource()}),
+          route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{process_resource()}),
 #if defined(RUVIA_ENABLE_HTTP3)
-          http3_directory_(nullptr, pmr_object_deleter<http3_worker_directory>{resource}),
+          http3_directory_(nullptr, pmr_object_deleter<http3_worker_directory>{process_resource()}),
 #endif
 #if defined(_WIN32)
-          acceptor_(nullptr, pmr_object_deleter<windows_acceptor>{resource}),
+          acceptor_(nullptr, pmr_object_deleter<windows_acceptor>{process_resource()}),
 #endif
-          workers_(resource),
-          group_(resource) {
+          workers_(process_resource()),
+          group_(process_resource()) {
     }
 
     // Declared before workers so it is destroyed after suspended worker tasks.
