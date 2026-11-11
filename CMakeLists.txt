@@ -26,6 +26,8 @@ endif()
 # A top-level build installs exactly the manifest features of the enabled
 # components. Embedding projects own their toolchain and dependency manifest.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    list(APPEND VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets")
+    list(REMOVE_DUPLICATES VCPKG_OVERLAY_TRIPLETS)
     if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND NOT "$ENV{VCPKG_ROOT}" STREQUAL "")
         file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _ruvia_vcpkg_root)
         set(CMAKE_TOOLCHAIN_FILE "${_ruvia_vcpkg_root}/scripts/buildsystems/vcpkg.cmake"

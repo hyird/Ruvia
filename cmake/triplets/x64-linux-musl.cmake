@@ -10,4 +10,6 @@ set(VCPKG_MESON_CONFIGURE_OPTIONS "-Dc_link_args=-static" "-Dcpp_link_args=-stat
 if(PORT STREQUAL "brotli")
     # Encoder allocation failures must return to the request, never exit the process.
     list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DCMAKE_C_FLAGS=-DBROTLI_ENCODER_CLEANUP_ON_OOM")
+elseif(PORT STREQUAL "mimalloc")
+    list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DMI_NO_THP=ON")
 endif()
