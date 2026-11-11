@@ -219,7 +219,9 @@ private:
     client_request_policy policy_;
     http_client_advertisement_queue advertisements_;
     std::pmr::list<http_client_push> pushes_;
+#ifdef RUVIA_ENABLE_HTTP2
     std::size_t active_pushes_{};
+#endif
     std::size_t received_pushes_{};
     std::size_t rejected_pushes_{};
     std::shared_ptr<http_client_result_budget_domain> result_budget_domain_;
