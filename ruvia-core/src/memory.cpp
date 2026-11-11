@@ -34,8 +34,9 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] void* allocate_mimalloc(std::size_t bytes_value, std::size_t alignment) {
-    const std::size_t size = bytes_value == 0 ? 1 : bytes_value;
 #if RUVIA_SANITIZER_ALLOCATOR
+    // The system allocators may answer a zero-byte request with null.
+    const std::size_t size = bytes_value == 0 ? 1 : bytes_value;
 #if defined(_WIN32)
     if (void* block = _aligned_malloc(size, (std::max)(alignment, alignof(void*)))) {
         return block;
@@ -47,7 +48,8 @@ namespace {
     }
 #endif
 #else
-    if (void* block = mi_malloc_aligned(size, alignment)) {
+    // mimalloc returns a unique, aligned block for zero bytes.
+    if (void* block = mi_malloc_aligned(bytes_value, alignment)) {
         return block;
     }
 #endif

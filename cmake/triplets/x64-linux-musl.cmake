@@ -11,5 +11,6 @@ if(PORT STREQUAL "brotli")
     # Encoder allocation failures must return to the request, never exit the process.
     list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DCMAKE_C_FLAGS=-DBROTLI_ENCODER_CLEANUP_ON_OOM")
 elseif(PORT STREQUAL "mimalloc")
-    list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DMI_NO_THP=ON")
+    # MI_LIBC_MUSL selects mimalloc's musl TLS model and thread-pointer access.
+    list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DMI_LIBC_MUSL=ON" "-DMI_NO_THP=ON")
 endif()
