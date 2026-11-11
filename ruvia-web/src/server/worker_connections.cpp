@@ -124,8 +124,7 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
       tasks_(tasks),
       runtime_(runtime),
       listeners_(memory.resource()),
-      scanner_(worker_value, make_connection_scanner_options(options, memory)),
-      work_sets_(memory)
+      scanner_(worker_value, make_connection_scanner_options(options, memory))
 #if defined(RUVIA_ENABLE_HTTP3)
       ,
       http3_placement_(http3_placement),

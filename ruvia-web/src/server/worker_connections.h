@@ -153,7 +153,6 @@ private:
     worker_runtime& runtime_;
     std::pmr::vector<std::unique_ptr<listener, pmr_object_deleter<listener>>> listeners_;
     connection_scanner scanner_;
-    connection_work_set_pool work_sets_;
     // Caller-thread statistics and the Windows acceptor's balancing read it.
     connection_count connection_count_;
     std::atomic<std::size_t> refused_{};

@@ -472,7 +472,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     // only while the connection is actively serving and given back the moment
     // it goes idle, so an idle keep-alive connection holds none of it: the
     // heavy working set (read buffer, request arena, parse result, response
-    // head) is borrowed from a per-worker pool, and the request state lives in
+    // head) is allocated from the worker heap, and the request state lives in
     // the frame of serve_requests.
     connection_scanner::entry scanner_entry;
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
@@ -498,8 +498,6 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         .file_output_ = file_output,
         .remote_address_ = base_route_services.get_conn_info().remote().address(),
     };
-    connection_work_set* work_set = nullptr;
-    work_set_return work_set_return(work_sets_, work_set);
     // Connection-resident landing pad for the first bytes of a request that
     // arrives while the connection holds no work set (see the idle wait below).
     std::array<char, idle_resident_read_bytes> idle_read_buffer;
@@ -508,7 +506,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         enable_plain_tcp_sync_write(socket);
     }
     for (;;) {
-        // Borrow-on-use / return-on-idle for the whole work set: the
+        // Allocate-on-use / release-on-idle for the whole work set: the
         // connection holds none while it waits for its next request, and reads
         // that request's first bytes into the small connection-resident buffer
         // instead, so an idle keep-alive connection occupies no work set
@@ -545,7 +543,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         if (idle_ec) {
             co_return http1_request_head_read_close(idle_ec, scanner_entry);
         }
-        work_set = work_sets_.acquire();
+        auto work_set = make_connection_work_set(memory_);
         static_assert(idle_resident_read_bytes <= initial_read_buffer_bytes);
         work_set->read_buffer_.assign(std::string_view(idle_read_buffer.data(), idle_bytes));
         if (idle_bytes == idle_read_buffer.size()) {
@@ -586,9 +584,9 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         if (std::get<http1_serve_handoff>(served) == http1_serve_handoff::cleartext_http2) {
             // The session consumes the buffered input in its first feed, before
             // it suspends, and reads into its own buffer afterwards: the HTTP/1
-            // working memory goes back to the pool for the session's lifetime.
+            // working memory is released before entering the HTTP/2 session.
             const std::pmr::string pending_input(work_set->read_buffer_.pending(), memory_.resource());
-            work_sets_.release(std::exchange(work_set, nullptr));
+            work_set.reset();
             // The HTTP/1 request channels pointed into serve_requests' frame.
             auto http2_services = base_route_services;
             http2_services.bind_request_channels({});
@@ -596,12 +594,11 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                 http2_sans_io_session_context(std::move(http2_services), options_, scanner_entry), pending_input);
         }
 #endif
-        work_sets_.release(std::exchange(work_set, nullptr));
     }
 }
 
 // Serves the connection's requests while it has input, and returns
-// await_request once it holds no buffered bytes (run_stream then returns the
+// await_request once it holds no buffered bytes (run_stream then destroys the
 // work set and waits for the next request), cleartext_http2 on a complete
 // prior-knowledge preface, or how the connection closes. One frame per active
 // period: a pipelined burst stays in it.

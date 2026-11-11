@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -31,12 +32,8 @@ namespace ruvia::detail {
 class http1_request_buffer_completion;
 struct access_log_sink;
 
-// Fresh size of a work set's read buffer: a borrower always starts from at
-// least this capacity. 4 KB holds a typical request head with room to spare,
-// and prepare_read() grows on demand while bounding pending input; keeping
-// the fresh size small matters because under high concurrency every active
-// connection holds one. reset() keeps modest growth (see
-// retained_read_buffer_bytes) and restores this size only beyond it.
+// Initial read capacity for an active connection. Growth is bounded by pending
+// input, and destruction returns the buffer to the worker resource on idle.
 inline constexpr std::size_t initial_read_buffer_bytes = std::size_t{4} * 1024;
 
 // Bytes of the connection-resident buffer an idle connection reads into while
@@ -86,10 +83,6 @@ public:
     // Gives storage that a handed-over pipeline grew past max_http_header_bytes
     // back once the pending bytes fit the initial size.
     void trim();
-    // Empties the buffer for the next borrower. Storage that grew past the
-    // retained ceiling is replaced with a fresh initial-capacity block, so the
-    // grown block goes back to the worker resource; smaller growth is kept.
-    void reset();
 
 private:
     http_io_buffer storage_;
@@ -131,19 +124,9 @@ private:
     std::pmr::string text_;
 };
 
-// All of a connection's heavy per-request working memory bundled into one
-// poolable unit: the read buffer, the request arena block, the (reused) parse
-// result and the response output buffer. A connection borrows a work set only
-// while it is actively serving requests and returns it the moment it goes
-// idle, so idle keep-alive connections hold none of it and memory scales with
-// in-flight request concurrency rather than connection count. The
-// connection's small resident identity (socket, scanner entry, keep-alive
-// counters) stays in the session coroutine frame.
-//
-// The pool allocates a work set and its request arena block together; the
-// block follows the work set and is the worker's configured
-// request_initial_buffer_bytes() long, so a typical request bump-allocates
-// from it and touches no heap at all.
+// Heavy request storage exists only while the connection is serving requests.
+// A pipelined burst reuses it; idle connections retain only their session frame.
+// The work set and its configured initial arena block share one allocation.
 struct connection_work_set final {
     connection_work_set(worker_memory& memory, std::span<std::byte> arena_block);
 
@@ -157,38 +140,16 @@ struct connection_work_set final {
     route_resolution route_resolution_;
     // Initial block of the per-request arena (see above).
     std::span<std::byte> arena_block_;
-    connection_work_set* pool_next_{nullptr};
-
-    // Return the work set to a clean borrowable state: replace grown read
-    // storage with an initial-size block and clear per-request scratch.
-    void reset_for_reuse();
 };
 
-// Per-worker intrusive free list of work sets. Worker-private and only touched
-// from the worker thread (single-threaded cooperative coroutines), so it needs
-// no synchronization. Borrow = pop (warm, no allocation); return = reset + push,
-// or free to the upstream resource once the cap is reached.
-class connection_work_set_pool final {
-public:
-    explicit connection_work_set_pool(worker_memory& memory) noexcept;
-    ~connection_work_set_pool();
+struct connection_work_set_deleter final {
+    std::pmr::memory_resource* resource_;
 
-    connection_work_set_pool(const connection_work_set_pool&) = delete;
-    connection_work_set_pool& operator=(const connection_work_set_pool&) = delete;
-
-    [[nodiscard]] connection_work_set* acquire();
-    void release(connection_work_set* work_set) noexcept;
-
-private:
-    void destroy(connection_work_set* work_set) noexcept;
-
-    worker_memory* memory_;
-    // One allocation: the work set followed by its arena block.
-    std::size_t arena_bytes_;
-    std::size_t allocation_bytes_;
-    connection_work_set* free_head_{nullptr};
-    std::size_t free_count_{0};
+    void operator()(connection_work_set* work_set) const noexcept;
 };
+
+[[nodiscard]] std::unique_ptr<connection_work_set, connection_work_set_deleter>
+make_connection_work_set(worker_memory& memory);
 
 // Owns one admitted socket and its connection_slot as one linear value. The
 // slot is acquired only after socket configuration succeeds, then moves into
@@ -224,29 +185,6 @@ private:
     // Declared first: released after the socket closes.
     connection_slot slot_;
     asio::ip::tcp::socket socket_;
-};
-
-// Returns a connection's borrowed work set to the per-worker pool on scope exit.
-// Tracks the pointer variable by reference so explicit idle-gap releases are not
-// double-released.
-class work_set_return final {
-public:
-    work_set_return(connection_work_set_pool& pool, connection_work_set*& work_set) noexcept
-        : pool_(&pool),
-          work_set_(&work_set) {}
-
-    work_set_return(const work_set_return&) = delete;
-    work_set_return& operator=(const work_set_return&) = delete;
-
-    ~work_set_return() {
-        if (*work_set_ != nullptr) {
-            pool_->release(*work_set_);
-        }
-    }
-
-private:
-    connection_work_set_pool* pool_;
-    connection_work_set** work_set_;
 };
 
 }  // namespace ruvia::detail

@@ -17,23 +17,12 @@ namespace {
 // Reclaim read storage beyond the header limit once the pending bytes fit the
 // initial size. Amortized growth and handed-over pipelines can both exceed it.
 constexpr std::size_t read_buffer_shrink_capacity_bytes = max_http_header_bytes;
-// Capacity a pooled work set keeps across borrowers. A head of 4-8 KB
-// (cookie-heavy browser requests) would otherwise grow the buffer on every
-// request and have reset() shrink it back on every idle return: two
-// reallocations plus a copy per keep-alive request for the connection's
-// whole life. Growth up to this ceiling is retained; only larger storage is
-// given back, so the pool holds at most this much read storage per work set.
-constexpr std::size_t retained_read_buffer_bytes = std::min(std::size_t{16} * 1024, max_http_header_bytes);
-// Upper bound on work sets retained per worker. Beyond this, returned work sets
-// release upstream so the free list never grows unbounded after a burst.
-constexpr std::size_t max_pooled_work_sets = 64;
 // Deferred access-log entries retained across coalesced writes.
 constexpr std::size_t retained_deferred_access_entries = 64;
 
 }  // namespace
 
-// The storage is reserved to the initial capacity up front so an acquired work
-// set is immediately usable; reset() trims it back on return.
+// Reserve the initial capacity before exposing the active work set.
 connection_read_buffer::connection_read_buffer(std::pmr::polymorphic_allocator<char> allocator)
     : storage_(allocator) {
     storage_.reserve(initial_read_buffer_bytes);
@@ -82,17 +71,6 @@ void connection_read_buffer::complete_request(const http1_request_buffer_complet
 
 void connection_read_buffer::trim() {
     if (storage_.capacity() > read_buffer_shrink_capacity_bytes && storage_.size() <= initial_read_buffer_bytes) {
-        storage_.shrink_to(initial_read_buffer_bytes);
-    }
-}
-
-void connection_read_buffer::reset() {
-    storage_.clear();
-    // With no pending bytes, shrinking reallocates: the grown block is freed
-    // and an initial-size one takes its place. Growth within the retained
-    // ceiling stays, so the next borrower's head of that size reads into it
-    // without growing again.
-    if (storage_.capacity() > retained_read_buffer_bytes) {
         storage_.shrink_to(initial_read_buffer_bytes);
     }
 }
@@ -178,77 +156,29 @@ connection_work_set::connection_work_set(worker_memory& memory, std::span<std::b
       deferred_access_(memory.allocator<char>()),
       arena_block_(arena_block) {}
 
-void connection_work_set::reset_for_reuse() {
-    // Replacing a grown read buffer allocates its fresh block, so this can
-    // throw bad_alloc; the pool's release drops the work set then.
-    read_buffer_.reset();
-    response_head_.reset();
-    deferred_access_.reset();
-    // parsed is fully overwritten by the next parse_head(); the parser carries
-    // no cross-request state worth clearing.
-}
-
-// A configured arena block too large to follow a work set saturates the
-// allocation size, which the upstream then refuses with bad_alloc.
-connection_work_set_pool::connection_work_set_pool(worker_memory& memory) noexcept
-    : memory_(&memory),
-      arena_bytes_(memory.request_initial_buffer_bytes()),
-      allocation_bytes_(arena_bytes_ > std::numeric_limits<std::size_t>::max() - sizeof(connection_work_set)
-                            ? std::numeric_limits<std::size_t>::max()
-                            : sizeof(connection_work_set) + arena_bytes_) {}
-
-connection_work_set_pool::~connection_work_set_pool() {
-    auto* current = free_head_;
-    while (current != nullptr) {
-        auto* next_value = current->pool_next_;
-        destroy(current);
-        current = next_value;
+std::unique_ptr<connection_work_set, connection_work_set_deleter>
+make_connection_work_set(worker_memory& memory) {
+    const auto arena_bytes = memory.request_initial_buffer_bytes();
+    if (arena_bytes > std::numeric_limits<std::size_t>::max() - sizeof(connection_work_set)) {
+        throw std::bad_alloc();
     }
-}
-
-connection_work_set* connection_work_set_pool::acquire() {
-    if (free_head_ != nullptr) {
-        auto* work_set = free_head_;
-        free_head_ = work_set->pool_next_;
-        work_set->pool_next_ = nullptr;
-        --free_count_;
-        return work_set;
-    }
-    auto* const resource = memory_->resource();
-    auto* const storage = static_cast<std::byte*>(resource->allocate(allocation_bytes_, alignof(connection_work_set)));
+    const auto allocation_bytes = sizeof(connection_work_set) + arena_bytes;
+    auto* const resource = memory.resource();
+    auto* const storage = static_cast<std::byte*>(resource->allocate(allocation_bytes, alignof(connection_work_set)));
     try {
-        return ::new (static_cast<void*>(storage))
-            connection_work_set(*memory_, std::span<std::byte>(storage + sizeof(connection_work_set), arena_bytes_));
+        auto* work_set = ::new (static_cast<void*>(storage))
+            connection_work_set(memory, std::span<std::byte>(storage + sizeof(connection_work_set), arena_bytes));
+        return {work_set, connection_work_set_deleter{resource}};
     } catch (...) {
-        resource->deallocate(storage, allocation_bytes_, alignof(connection_work_set));
+        resource->deallocate(storage, allocation_bytes, alignof(connection_work_set));
         throw;
     }
 }
 
-void connection_work_set_pool::release(connection_work_set* work_set) noexcept {
-    if (work_set == nullptr) {
-        return;
-    }
-    if (free_count_ >= max_pooled_work_sets) {
-        destroy(work_set);
-        return;
-    }
-    try {
-        work_set->reset_for_reuse();
-    } catch (...) {
-        // Only replacing a grown read buffer can throw (bad_alloc); drop the
-        // work set rather than pooling it, keeping release noexcept.
-        destroy(work_set);
-        return;
-    }
-    work_set->pool_next_ = free_head_;
-    free_head_ = work_set;
-    ++free_count_;
-}
-
-void connection_work_set_pool::destroy(connection_work_set* work_set) noexcept {
+void connection_work_set_deleter::operator()(connection_work_set* work_set) const noexcept {
+    const auto allocation_bytes = sizeof(connection_work_set) + work_set->arena_block_.size();
     work_set->~connection_work_set();
-    memory_->resource()->deallocate(work_set, allocation_bytes_, alignof(connection_work_set));
+    resource_->deallocate(work_set, allocation_bytes, alignof(connection_work_set));
 }
 
 }  // namespace ruvia::detail
