@@ -186,6 +186,21 @@ std::optional<http_response_header> http_response_headers::make_static_header(
     return header_value;
 }
 
+std::optional<http_response_header> http_response_headers::make_shared_header(
+    std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) const noexcept {
+    if (const auto static_header = make_static_header(name, value, known_bit)) {
+        return static_header;
+    }
+    if (stable_view && !borrows_owned_header(name, value) &&
+        detail::response_header_views_contiguous(name, value) &&
+        detail::response_header_storage_size_fits(name.size(), value.size())) {
+        return detail::http_response_header_access::make(name.data(),
+            static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()),
+            known_bit, false);
+    }
+    return std::nullopt;
+}
+
 void http_response_headers::release_header(http_response_header& header_value) noexcept {
     if (header_value.owned_ && header_value.bytes_ != nullptr) {
         resource_->deallocate(const_cast<char*>(header_value.bytes_),
@@ -232,23 +247,9 @@ http_response_header& http_response_headers::append_header(http_response_header 
 }
 
 http_response_header& http_response_headers::add(
-    std::string_view name, std::string_view value, std::uint32_t known_bit) {
-    const auto static_header = make_static_header(name, value, known_bit);
-    return append_header(static_header ? *static_header : make_owned_header(name, value, known_bit));
-}
-
-http_response_header& http_response_headers::add_stable_view(
-    std::string_view name, std::string_view value, std::uint32_t known_bit) {
-    if (const auto static_header = make_static_header(name, value, known_bit)) {
-        return append_header(*static_header);
-    }
-    if (!borrows_owned_header(name, value) && detail::response_header_views_contiguous(name, value) &&
-        detail::response_header_storage_size_fits(name.size(), value.size())) {
-        return append_header(detail::http_response_header_access::make(name.data(),
-            static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()),
-            known_bit, false));
-    }
-    return append_header(make_owned_header(name, value, known_bit));
+    std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) {
+    const auto shared_header = make_shared_header(name, value, known_bit, stable_view);
+    return append_header(shared_header ? *shared_header : make_owned_header(name, value, known_bit));
 }
 
 http_response_header& http_response_headers::add_uninitialized_value(
@@ -299,39 +300,12 @@ bool http_response_headers::try_assign_owned_in_place(http_response_header& head
 }
 
 void http_response_headers::assign(http_response_header& header_value, std::string_view name,
-    std::string_view value, std::uint32_t known_bit) {
-    const auto static_header = make_static_header(name, value, known_bit);
-    if (static_header) {
+    std::string_view value, std::uint32_t known_bit, bool stable_view) {
+    if (const auto shared_header = make_shared_header(name, value, known_bit, stable_view)) {
         release_header(header_value);
-        header_value = *static_header;
+        header_value = *shared_header;
         return;
     }
-
-    if (try_assign_owned_in_place(header_value, name, value, known_bit)) {
-        return;
-    }
-    const auto replacement = make_owned_header(name, value, known_bit);
-    release_header(header_value);
-    header_value = replacement;
-}
-
-void http_response_headers::assign_stable_view(http_response_header& header_value, std::string_view name,
-    std::string_view value, std::uint32_t known_bit) {
-    const auto static_header = make_static_header(name, value, known_bit);
-    if (static_header) {
-        release_header(header_value);
-        header_value = *static_header;
-        return;
-    }
-    if (!borrows_owned_header(name, value) && detail::response_header_views_contiguous(name, value) &&
-        detail::response_header_storage_size_fits(name.size(), value.size())) {
-        release_header(header_value);
-        header_value = detail::http_response_header_access::make(name.data(),
-            static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()),
-            known_bit, false);
-        return;
-    }
-
     if (try_assign_owned_in_place(header_value, name, value, known_bit)) {
         return;
     }

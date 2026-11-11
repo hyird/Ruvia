@@ -5,6 +5,8 @@
 #include "http_client_response_fixture.h"
 #include "test_exceptions.h"
 
+using namespace ruvia::test;
+
 // HTTP/1 client responses: the exchange around it: interim responses, Expect, upgrades and tunnels.
 
 TEST(Ruvia, http_client_informational_responses_ignore_framing_fields) {
@@ -73,7 +75,7 @@ TEST(Ruvia, http_client_long_informational_sequence_preserves_continue_and_final
         EXPECT_EQ(final_wire.substr(parsed->consumed_bytes()), "abcNEXT");
         EXPECT_TRUE(!parsed->plan().request_content_signal());
     }
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)parser.parse({}); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)parser.parse({}); }));
 }
 
 TEST(Ruvia, http_client_expect_continue_is_one_stateful_exchange_contract) {
@@ -121,7 +123,7 @@ TEST(Ruvia, http_client_expect_continue_is_one_stateful_exchange_contract) {
         EXPECT_TRUE(!final_response.parsed()->plan().request_content_signal());
     }
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)parser.parse("HTTP/1.1 204 No Content\r\n\r\n"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)parser.parse("HTTP/1.1 204 No Content\r\n\r\n"); }));
     EXPECT_TRUE(parser.complete_request_content() ==
                 http1_client_request_content_completion_status::exchange_terminal);
 }
@@ -272,7 +274,7 @@ TEST(Ruvia, http_client_upgrade_accepts_omitted_continue_after_content_complete)
     if (rejected.failure() != nullptr) {
         EXPECT_TRUE(*rejected.failure() == http1_client_response_parse_error::invalid_protocol_switch);
     }
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)rejected_parser.parse(switching); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)rejected_parser.parse(switching); }));
 
     // RFC 9110 Section 10.1.1 lets the server omit 100 once it has received
     // some or all of the content, so a 101 after the client finished writing

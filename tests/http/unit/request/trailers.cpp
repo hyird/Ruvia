@@ -13,29 +13,12 @@
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response_server.h"
 
-namespace {
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations_{};
-    std::size_t deallocations_{};
+#include "memory_resource_fixture.h"
 
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        ++allocations_;
-        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-    }
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        ++deallocations_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-}  // namespace
+using ruvia::test::counting_memory_resource;
 
 TEST(Ruvia, request_trailers_own_fields_preserve_duplicates_and_bound_section_size) {
-    counting_resource resource;
+    counting_memory_resource resource;
     {
         ruvia::http_request_trailers trailers(&resource);
         std::string source_value(512, 'a');
@@ -45,7 +28,7 @@ TEST(Ruvia, request_trailers_own_fields_preserve_duplicates_and_bound_section_si
         EXPECT_TRUE(!trailers.append_http1("x-checksum: final\r\nx-extra: yes\r\n\r\n").has_value());
         EXPECT_EQ(trailers.field("X-Checksum").value_or(""), "final");
         EXPECT_EQ(trailers.fields().size(), std::size_t{3});
-        const auto allocations_before_rejected_batches = resource.allocations_;
+        const auto allocations_before_rejected_batches = resource.allocation_count();
         const std::array forbidden_batch{
             ruvia::http_header_view{"X-Batch", "1"},
             ruvia::http_header_view{"Content-Length", "3"},
@@ -62,7 +45,7 @@ TEST(Ruvia, request_trailers_own_fields_preserve_duplicates_and_bound_section_si
             ruvia::http_header_view{"x-large", large_value},
         };
         EXPECT_TRUE(trailers.append(oversized_batch) == ruvia::http_request_trailer_error::section_too_large);
-        EXPECT_EQ(resource.allocations_, allocations_before_rejected_batches);
+        EXPECT_EQ(resource.allocation_count(), allocations_before_rejected_batches);
         EXPECT_TRUE(trailers.append("Content-Length", "3").has_value());
         EXPECT_TRUE(trailers.append("bad name", "x").has_value());
         EXPECT_TRUE(trailers.append("x-ok", "bad\r\nvalue").has_value());
@@ -77,7 +60,7 @@ TEST(Ruvia, request_trailers_own_fields_preserve_duplicates_and_bound_section_si
         EXPECT_EQ(trailers.fields().size(), std::size_t{6});
         EXPECT_EQ(trailers.field("x-batch-three").value_or(""), "3");
     }
-    EXPECT_EQ(resource.allocations_, resource.deallocations_);
+    EXPECT_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 TEST(Ruvia, request_trailers_append_http1_is_atomic_and_discards_fields_not_permitted_as_trailers) {

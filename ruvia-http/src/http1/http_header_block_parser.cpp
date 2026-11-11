@@ -1,4 +1,4 @@
-#include "parser/http_header_block_parser.h"
+#include "http1/http_header_block_parser.h"
 
 #include <algorithm>
 
@@ -6,6 +6,7 @@
 #include "ruvia/http/http_protocol_error.h"
 
 #include "field/http_request_field_validation.h"
+#include "http1/http1_field_parsing.h"
 
 namespace ruvia::detail {
 namespace {
@@ -56,17 +57,16 @@ namespace {
     const auto version = buffer.substr(version_start, cursor_value - version_start);
     cursor_value += 2;
 
-    // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3); only
-    // HTTP/1.x is served. A higher minor version is processed as HTTP/1.1,
-    // the highest minor version implemented (RFC 9110 section 6.2).
-    if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' || version[5] > '9' ||
-        version[6] != '.' || version[7] < '0' || version[7] > '9') {
+    const auto parsed_version = parse_http1_version(version);
+    if (parsed_version == http1_version_parse_result::invalid) {
         return http_parse_error::invalid_request_line;
     }
-    if (version[5] != '1') {
+    if (parsed_version == http1_version_parse_result::unsupported) {
         return http_parse_error::unsupported_http_version;
     }
-    block.protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11;
+    block.protocol_version_ = parsed_version == http1_version_parse_result::http10
+                                  ? http_protocol_version::http10
+                                  : http_protocol_version::http11;
     return std::nullopt;
 }
 
@@ -74,44 +74,34 @@ namespace {
 // decides whether the value is acceptable, and the HTTP/1-specific fields are
 // parsed into typed state on the block. Finding the bytes is the loop's job
 // below; every rule about what they mean is here.
-[[nodiscard]] std::optional<http_parse_error> apply_request_header(request_header_kind kind,
+[[nodiscard]] std::optional<http_parse_error> apply_request_header(http_field_kind kind,
     std::string_view value, bool ignore_upgrade, parsed_request_header_block& block) {
     if (validate_request_field(kind, value, http_field_list_role::recipient, block.fields_) !=
         request_field_status::ok) {
-        return kind == request_header_kind::host ? http_parse_error::invalid_host
-                                                 : http_parse_error::invalid_header;
+        return kind == http_field_kind::host ? http_parse_error::invalid_host
+                                             : http_parse_error::invalid_header;
     }
     switch (kind) {
-        case request_header_kind::content_length:
-            switch (block.content_length_.parse_field(value)) {
-                case http_content_length_parse_status::ok:
-                    break;
-                case http_content_length_parse_status::invalid:
-                    return http_parse_error::invalid_content_length;
-                case http_content_length_parse_status::conflicting:
-                    return http_parse_error::conflicting_content_length;
+        case http_field_kind::content_length:
+            if (const auto error = parse_http1_content_length_field<http_parse_error>(value, block.content_length_)) {
+                return error;
             }
             break;
-        case request_header_kind::transfer_encoding:
-            switch (block.transfer_encoding_.parse_field(value)) {
-                case http_transfer_encoding_parse_status::ok:
-                    break;
-                case http_transfer_encoding_parse_status::malformed:
-                    return http_parse_error::invalid_transfer_encoding;
-                case http_transfer_encoding_parse_status::unsupported:
-                    break;
+        case http_field_kind::transfer_encoding:
+            if (const auto error = parse_http1_transfer_encoding_field<http_parse_error>(value, block.transfer_encoding_)) {
+                return error;
             }
             break;
-        case request_header_kind::connection:
+        case http_field_kind::connection:
             if (block.connection_options_.parse_field(value, http_connection_field_role::request_recipient) !=
                 http_field_list_parse_status::ok) {
                 return http_parse_error::invalid_connection;
             }
             break;
-        case request_header_kind::expect:
+        case http_field_kind::expect:
             block.expectations_.parse_field(value);
             break;
-        case request_header_kind::upgrade:
+        case http_field_kind::upgrade:
             // RFC 9110 section 7.8 requires a server to ignore Upgrade in
             // an HTTP/1.0 request. The bytes still have to be a valid
             // generic field value, but Upgrade-specific grammar must not
@@ -147,7 +137,7 @@ namespace {
         const auto name = field->name();
         const auto value = field->value();
 
-        const auto kind = classify_request_header(name);
+        const auto kind = classify_http_field(name);
         if (const auto error = apply_request_header(kind, value, ignore_upgrade, block)) {
             return error;
         }
@@ -156,7 +146,7 @@ namespace {
             parsed_request_header_slot{.name_ = make_slice(static_cast<std::size_t>(name.data() - buffer.data()), name.size()),
                 .value_ = make_slice(static_cast<std::size_t>(value.data() - buffer.data()), value.size()),
                 .kind_ = kind});
-        if (kind == request_header_kind::host) {
+        if (kind == http_field_kind::host) {
             block.host_header_index_ = static_cast<known_request_header_index_type>(block.headers_.size() - 1);
         }
     }

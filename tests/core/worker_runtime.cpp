@@ -242,7 +242,7 @@ TEST(Ruvia, worker_runtime_failure_cancels_then_drains_io_before_shutdown) {
     EXPECT_EQ(reported, runtime.failure());
     EXPECT_EQ(phases, (std::vector<int>{1, 2, 3, 4}));
     EXPECT_TRUE(runtime.failure() != nullptr);
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)runtime.start(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)runtime.start(); }));
 }
 
 TEST(Ruvia, worker_runtime_concurrent_stop_and_join_share_one_barrier) {
@@ -300,7 +300,7 @@ TEST(Ruvia, worker_runtime_rejects_self_join_without_losing_cleanup) {
     ruvia::worker_runtime runtime;
     bool rejected{};
     runtime.configure({
-        .startup_ = [&] { rejected = ruvia::testing::throws_on([&] { runtime.join(); }); },
+        .startup_ = [&] { rejected = ruvia::test::throws_on([&] { runtime.join(); }); },
     });
     EXPECT_TRUE(runtime.start());
     runtime.join();
@@ -317,7 +317,7 @@ TEST(Ruvia, worker_runtime_cold_shutdown_can_repeat_stop_and_rejects_self_join) 
         ++shutdowns;
         runtime.request_stop();
         admission_closed = !runtime.handle().accepting();
-        self_join_rejected = ruvia::testing::throws_on([&] { runtime.join(); });
+        self_join_rejected = ruvia::test::throws_on([&] { runtime.join(); });
     }});
     runtime.request_stop();
     runtime.join();
@@ -407,7 +407,7 @@ TEST(Ruvia, worker_runtime_serve_failure_fails_the_runtime) {
     EXPECT_TRUE(runtime.start());
     EXPECT_TRUE(runtime.wait_until_ready());
     runtime.request_serve();
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)runtime.wait_until_serving(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)runtime.wait_until_serving(); }));
     runtime.join();
     EXPECT_TRUE(runtime.failure() != nullptr);
 }
@@ -760,19 +760,19 @@ TEST(Ruvia, worker_group_membership_is_exclusive_and_closes_at_launch_or_stop) {
     member.configure({.startup_ = [&] { member.mark_ready(); }});
     ruvia::worker_group group;
     group.add(member);
-    const bool duplicate_rejected = ruvia::testing::throws_on([&] { group.add(member); });
+    const bool duplicate_rejected = ruvia::test::throws_on([&] { group.add(member); });
     bool other_group_rejected = false;
     bool stopped_group_rejected = false;
     {
         ruvia::worker_group other;
-        other_group_rejected = ruvia::testing::throws_on([&] { other.add(member); });
+        other_group_rejected = ruvia::test::throws_on([&] { other.add(member); });
         other.add(second);
         other.request_stop();
-        stopped_group_rejected = ruvia::testing::throws_on([&] { other.add(third); });
+        stopped_group_rejected = ruvia::test::throws_on([&] { other.add(third); });
         EXPECT_TRUE(other.join() == nullptr);
     }
     const bool started = group.start();
-    const bool launched_group_rejected = ruvia::testing::throws_on([&] { group.add(third); });
+    const bool launched_group_rejected = ruvia::test::throws_on([&] { group.add(third); });
     const auto failure = group.join();
     const auto repeated_failure = group.join();
     // Rejected additions leave the new member available to its own owner.
@@ -944,7 +944,7 @@ TEST(Ruvia, worker_runtime_and_group_reject_repeated_start_and_invalid_serve) {
         ruvia::worker_runtime stopped_runtime;
         stopped_runtime.request_stop();
         EXPECT_TRUE(!stopped_runtime.start());
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)stopped_runtime.start(); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)stopped_runtime.start(); }));
         stopped_runtime.join();
     }
     {
@@ -952,12 +952,12 @@ TEST(Ruvia, worker_runtime_and_group_reject_repeated_start_and_invalid_serve) {
         member.configure({.startup_ = [&] { member.mark_ready(); }});
         ruvia::worker_group group;
         group.add(member);
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)group.serve(); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)group.serve(); }));
         EXPECT_TRUE(group.start());
         EXPECT_TRUE(group.serve());
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)group.serve(); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)group.serve(); }));
         group.request_stop();
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)group.start(); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)group.start(); }));
         std::promise<std::exception_ptr> other_joined;
         std::thread joiner([&] { other_joined.set_value(group.join()); });
         EXPECT_TRUE(group.join() == nullptr);

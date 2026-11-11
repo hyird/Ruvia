@@ -14,6 +14,8 @@ endfunction()
 function(ruvia_apply_test_support_includes name lib)
     target_include_directories(${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_compile_definitions(${name} PRIVATE
+        RUVIA_TEST_TEMP_ROOT="${PROJECT_SOURCE_DIR}/build/test-tmp")
     if("${lib}" STREQUAL "ruvia::http")
         target_include_directories(${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
@@ -78,7 +80,6 @@ if(RUVIA_BUILD_CORE)
         core/error_text.cpp
         core/failure_report.cpp
         core/ip_address.cpp
-        core/local_ring_queue.cpp
         core/memory.cpp
         core/move_only_function.cpp
         core/scoped_operation.cpp
@@ -117,12 +118,6 @@ if(RUVIA_BUILD_HTTP)
     endif()
     ruvia_collect_test_sources(_ruvia_http_unit_sources
         ${_ruvia_http_test_patterns})
-    if(NOT RUVIA_ENABLE_HTTP2)
-        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX
-            "^http/unit/connection_advertisement\\.cpp$")
-        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX
-            "^http/websocket/client_negotiation\\.cpp$")
-    endif()
     list(SORT _ruvia_http_unit_sources)
 
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
@@ -140,8 +135,8 @@ if(RUVIA_BUILD_WEB)
     endif()
     ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/app/accept_ownership.cpp)
     if(RUVIA_ENABLE_HTTP2)
-        ruvia_add_web_standalone_test(ruvia_app_http2_goaway 30 web/app/http2_goaway.cpp)
-        ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/app/http2_request_limit.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_goaway 30 web/http2/http2_goaway.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/http2/http2_request_limit.cpp)
     endif()
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
     # Trusts the loopback peer in its second run.
@@ -214,17 +209,7 @@ if(RUVIA_BUILD_WEB)
         web/client/handle_and_response.cpp)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
-        ruvia_add_test(ruvia_http3_quic_tests ruvia::web TIMEOUT 60 SOURCES
-            web/http3/quic.cpp)
-        target_include_directories(ruvia_http3_quic_tests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
-        target_link_libraries(ruvia_http3_quic_tests PRIVATE
-            ${RUVIA_HTTP_DEPENDENCIES} ${RUVIA_WEB_DEPENDENCIES})
-        target_compile_definitions(ruvia_http3_quic_tests PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
-        if(WIN32)
-            target_compile_definitions(ruvia_http3_quic_tests PRIVATE NOMINMAX)
-        endif()
-        list(APPEND _ruvia_web_standalone_sources web/http3/quic.cpp)
+        ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http3/quic.cpp)
         # Owns a four-worker application serving HTTP/3 beside its HTTPS
         # listener, stopped gracefully at its end.
         ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http3/serving.cpp)
@@ -235,9 +220,6 @@ if(RUVIA_BUILD_WEB)
     list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/(auth|db|redis)/")
     if(NOT RUVIA_ENABLE_HTTP2)
         list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http2/")
-        # Disabled standalone suites must not re-enter through the Web glob.
-        list(REMOVE_ITEM _ruvia_web_unit_sources
-            web/app/http2_goaway.cpp web/app/http2_request_limit.cpp)
     endif()
     if(NOT RUVIA_ENABLE_HTTP3)
         list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http3/")

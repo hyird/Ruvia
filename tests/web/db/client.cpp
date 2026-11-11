@@ -24,8 +24,8 @@
 namespace {
 
 using ruvia::test::rejecting_memory_resource;
+using ruvia::test::throws_on;
 using ruvia::test::tracking_resource;
-using ruvia::testing::throws_on;
 
 [[nodiscard]] ruvia::db_config test_db_config() {
 #ifdef RUVIA_ENABLE_MARIADB
@@ -244,17 +244,6 @@ TEST(Ruvia, db_migrator_validates_migration_list_before_allocating_runtime) {
     EXPECT_EQ(resource.allocation_count(), std::size_t{0});
 }
 
-namespace {
-struct default_resource_guard final {
-    explicit default_resource_guard(std::pmr::memory_resource* resource) noexcept
-        : previous_(std::pmr::set_default_resource(resource)) {}
-    ~default_resource_guard() {
-        std::pmr::set_default_resource(previous_);
-    }
-    std::pmr::memory_resource* previous_;
-};
-}  // namespace
-
 TEST(Ruvia, db_expression_values_use_explicit_resource_for_owned_parameters) {
     ruvia::test::counting_memory_resource source_resource;
     const std::string value(128, 'v');
@@ -274,7 +263,7 @@ TEST(Ruvia, db_expression_values_use_explicit_resource_for_owned_parameters) {
         rejecting_default.reject_allocations();
         bool unexpected_allocation = false;
         try {
-            default_resource_guard guard_value(&rejecting_default);
+            ruvia::test::default_resource_guard guard_value(rejecting_default);
             destination.select(through_expressions
                                    ? destination.import_expression(expressions.value(statement.params()[0]))
                                    : destination.value(statement.params()[0]));
@@ -308,7 +297,7 @@ TEST(Ruvia, db_value_copy_inherits_owned_text_resource_and_rolls_back_failure) {
             resource.allow_allocations();
             EXPECT_EQ(allocations.live_allocations(), retained);
             {
-                default_resource_guard guard(&unrelated);
+                ruvia::test::default_resource_guard guard(unrelated);
                 copied.emplace(statement.params()[0]);
             }
         }
@@ -317,7 +306,7 @@ TEST(Ruvia, db_value_copy_inherits_owned_text_resource_and_rolls_back_failure) {
         EXPECT_THROW((void)ruvia::db_value(*copied), std::bad_alloc);
         resource.allow_allocations();
         {
-            default_resource_guard guard(&unrelated);
+            ruvia::test::default_resource_guard guard(unrelated);
             const ruvia::db_value second(*copied);
         }
     }

@@ -13,8 +13,8 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "field/http_connection_fields.h"
+#include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
-#include "parser/http_parser_syntax.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 #include "websocket/websocket_server_negotiation.h"
@@ -46,13 +46,13 @@ namespace {
         }
         // Every Sec-WebSocket-* name is handshake-owned, including ones this
         // implementation does not know yet.
-        const auto kind = classify_request_header(name);
+        const auto kind = classify_http_field(name);
         const bool is_sec_websocket =
             name.size() >= sec_websocket_prefix.size() &&
             http_ascii_equals_ignore_case(
                 name.substr(0, sec_websocket_prefix.size()), sec_websocket_prefix);
-        if ((kind != request_header_kind::host &&
-                kind != request_header_kind::expect &&
+        if ((kind != http_field_kind::host &&
+                kind != http_field_kind::expect &&
                 is_protocol_managed_request_field(kind, name)) ||
             is_sec_websocket) {
             throw std::invalid_argument("WebSocket handshake controls this response header");
@@ -189,7 +189,7 @@ std::string_view choose_websocket_subprotocol(
         return {};
     }
     websocket_subprotocol_set offered;
-    if (!http_request_access::visit_known_headers(request, request_header_kind::sec_websocket_protocol,
+    if (!http_request_access::visit_known_headers(request, http_field_kind::sec_websocket_protocol,
             [&offered](std::string_view value) noexcept { return offered.append_offered_list(value); })) {
         return {};
     }
@@ -197,20 +197,20 @@ std::string_view choose_websocket_subprotocol(
 }
 
 bool websocket_request_header_validator::observe_header(
-    request_header_kind kind, std::string_view value) noexcept {
-    if (kind == request_header_kind::sec_websocket_version) {
+    http_field_kind kind, std::string_view value) noexcept {
+    if (kind == http_field_kind::sec_websocket_version) {
         version_ = value;
         ++version_count_;
         if (version_count_ > 1) {
             valid_ = false;
         }
-    } else if (kind == request_header_kind::sec_websocket_protocol) {
+    } else if (kind == http_field_kind::sec_websocket_protocol) {
         protocols_present_ = true;
         if (valid_ && !(role_ == http_field_list_role::recipient ? protocols_.append_offered_list(value)
                                                                  : protocols_.append_list(value))) {
             valid_ = false;
         }
-    } else if (kind == request_header_kind::sec_websocket_extensions) {
+    } else if (kind == http_field_kind::sec_websocket_extensions) {
         extensions_present_ = true;
         if (valid_ && !append_websocket_extension_list(value, has_extension_)) {
             valid_ = false;
@@ -280,7 +280,7 @@ websocket_server_handshake make_websocket_server_handshake(
     const http_request& request, websocket_server_handshake_options options, std::pmr::memory_resource* resource) {
     detail::websocket_accept_key_type accept;
     detail::encode_websocket_accept(
-        accept, detail::http_request_access::known_header(request, detail::request_header_kind::sec_websocket_key));
+        accept, detail::http_request_access::known_header(request, detail::http_field_kind::sec_websocket_key));
     auto negotiation = detail::make_websocket_server_negotiation(request, options, resource);
     return websocket_server_handshake(accept, std::move(negotiation).take_subprotocol(),
         negotiation.compression(), std::move(negotiation).take_response_headers());

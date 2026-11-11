@@ -16,29 +16,15 @@
 #include "ruvia/http/http_response_file.h"
 
 #include "failing_memory_resource.h"
+#include "memory_resource_fixture.h"
 #include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
+using ruvia::test::failing_memory_resource;
+
 namespace {
 
-class switchable_failing_resource final : public std::pmr::memory_resource {
-public:
-    bool fail_{};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (fail_) {
-            throw std::bad_alloc();
-        }
-        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-    }
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
+using ruvia::test::rejecting_memory_resource;
 
 using ruvia::http_response;
 
@@ -138,7 +124,7 @@ TEST(Ruvia, response_head_metadata_body_releases_storage_and_follows_body_lifeti
 
         moved.head_metadata_body();
         resource.fail_after(0);
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { moved.body(std::string(256, 'y')); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { moved.body(std::string(256, 'y')); }));
         resource.allow_allocations();
         EXPECT_TRUE(moved.has_head_metadata_body());
         moved.owned_body(std::pmr::string("replacement", &resource));
@@ -389,14 +375,14 @@ TEST(Ruvia, response_file_body_move_preserves_owned_path_and_identity) {
 }
 
 TEST(Ruvia, multipart_body_allocation_failure_preserves_previous_body) {
-    switchable_failing_resource response_resource;
+    rejecting_memory_resource response_resource;
     http_response response(&response_resource);
     response.body("preserved");
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
     auto plan = ruvia::make_http_multipart_byte_range_plan(
         ranges, 10, "text/plain", "allocation_test", std::pmr::new_delete_resource());
 
-    response_resource.fail_ = true;
+    response_resource.reject_allocations(true);
     bool threw = false;
     try {
         response.multipart_file_body(std::filesystem::path("multipart-response-fixture.bin").native(), 10,

@@ -18,7 +18,7 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 
 namespace {
 
@@ -90,19 +90,12 @@ int main() {
         auto& app = ruvia::app();
         app.load_dotenv();
         const example::environment env_value(&app.env());
+        auto config = example::redis_config(env_value);
+        // Blocking readers do not occupy ordinary command connections.
+        config.blocking_pool_size_per_worker_ = 2;
         app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .listen({.address_ = "127.0.0.1", .http_ = 8095})
-            .redis({.config_ = {
-                        .host_ = std::string(env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
-                        .port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
-                        .username_ = std::string(env_value.get("RUVIA_REDIS_USER").value_or("")),
-                        .password_ = std::string(env_value.get("RUVIA_REDIS_PASSWORD").value_or("")),
-                        .tls_ = example::backend_tls("RUVIA_REDIS", env_value),
-                        .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
-                        // Blocking stream reads use a separate pool, leaving normal
-                        // commands usable while a consumer waits for new messages.
-                        .blocking_pool_size_per_worker_ = 2,
-                    }})
+            .redis({.config_ = config})
             .run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

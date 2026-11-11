@@ -26,7 +26,7 @@ if(RUVIA_ENABLE_HTTP3)
     target_link_libraries(ruvia-http PUBLIC ngtcp2::core)
 endif()
 
-ruvia_install_target(ruvia-http http)
+ruvia_install_component(ruvia-http http)
 
 set(_ruvia_http_excluded_headers)
 if(NOT RUVIA_ENABLE_HTTP2)
@@ -48,4 +48,3 @@ endif()
 ruvia_install_public_header_closure(http include/ruvia/http
     EXCLUDE_FILES ${_ruvia_http_excluded_headers})
 
-ruvia_install_export(http)

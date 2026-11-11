@@ -6,7 +6,8 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/worker_runtime_context.h"
+
+#include "worker_runtime_context.h"
 
 namespace ruvia::detail {
 

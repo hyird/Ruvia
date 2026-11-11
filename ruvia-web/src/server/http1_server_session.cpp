@@ -1,12 +1,13 @@
-#pragma once
-
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -14,14 +15,16 @@
 #include <utility>
 #include <variant>
 
+#include <asio/buffer.hpp>
+#include <asio/write.hpp>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_number_format.h"
+#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_request_target.h"
 
 #include "body/http_request_body_facade.h"
@@ -32,7 +35,10 @@
 #include "http/http_socket_tunnel_transport.h"
 #include "http/http_tunnel_session.h"
 #include "http/tls_tunnel_output.h"
+#include "server/worker_connections.h"
+#if defined(RUVIA_ENABLE_HTTP2)
 #include "http2/http2_sans_io_session.h"
+#endif
 #include "server/http1_request_sequence.h"
 #include "server/http1_response_output.h"
 #include "server/http1_route_dispatch.h"
@@ -48,11 +54,6 @@
 #include "server/inbound_transport_error.h"
 #include "server/response_file_source.h"
 #include "server/worker_codecs.h"
-#include "server/worker_connections.h"
-
-// Member-template definitions for worker_connections, kept out of its header so the
-// class stays readable. Included as an ordinary header: everything used here is
-// included here.
 
 namespace ruvia::detail {
 // Reads more of a cleartext connection's first bytes, which so far match the
@@ -1090,5 +1091,30 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         request_pipelined = true;
     }
 }
+
+template task<http_connection_close> worker_connections::run_stream<tcp_socket_type>(
+    http_server_session_config&, tcp_socket_type&, tcp_socket_type&, context_services);
+template task<http_connection_close> worker_connections::run_stream<server_tls_stream>(
+    http_server_session_config&, server_tls_stream&, tcp_socket_type&, context_services);
+template task<std::variant<http1_serve_handoff, http_connection_close>> worker_connections::serve_requests<tcp_socket_type>(
+    http1_connection_session<tcp_socket_type>&, connection_work_set&);
+template task<std::variant<http1_serve_handoff, http_connection_close>> worker_connections::serve_requests<server_tls_stream>(
+    http1_connection_session<server_tls_stream>&, connection_work_set&);
+
+#if defined(RUVIA_ENABLE_HTTP2)
+template <typename stream_type>
+task<http_connection_close> worker_connections::run_http2(stream_type& stream, tcp_socket_type& socket,
+    context_services services) {
+    connection_scanner::entry scanner_entry;
+    connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
+    co_return co_await run_http2_sans_io_session(
+        stream, routes_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
+}
+
+template task<http_connection_close> worker_connections::run_http2<tcp_socket_type>(
+    tcp_socket_type&, tcp_socket_type&, context_services);
+template task<http_connection_close> worker_connections::run_http2<server_tls_stream>(
+    server_tls_stream&, tcp_socket_type&, context_services);
+#endif
 
 }  // namespace ruvia::detail

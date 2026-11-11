@@ -124,17 +124,17 @@ TEST(Ruvia, json_value_parse_classifies_kinds_and_rejects_trailing_input) {
     const auto null_value = ruvia::json_value::parse("null");
     EXPECT_TRUE(null_value.is_null());
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse(R"({"name":"ada"} trailing)"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse("{"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_value::parse(R"({"name":"ada"} trailing)"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_value::parse("{"); }));
 }
 
 TEST(Ruvia, json_object_parse_requires_a_complete_object) {
     const auto json = ruvia::json_object::parse(R"({"name":"ada"})");
     EXPECT_EQ(json.view(), std::string_view(R"({"name":"ada"})"));
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse("[1,2]"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse("null"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse(R"({"name":"ada"} 1)"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse("[1,2]"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse("null"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse(R"({"name":"ada"} 1)"); }));
 }
 
 TEST(Ruvia, json_object_default_represents_an_empty_object) {
@@ -365,20 +365,20 @@ TEST(Ruvia, json_value_get_reads_object_fields_and_rejects_non_objects) {
 }
 
 TEST(Ruvia, json_dynamic_parse_enforces_cumulative_array_element_budget) {
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse("[1]", {.max_array_elements_ = 0}); }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse("[]", {.max_array_elements_ = 0}); }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse("[1]", {.max_array_elements_ = 1}); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse("[[1],[2]]", {.max_array_elements_ = 3}); }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse("[[1],[2]]", {.max_array_elements_ = 4}); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse(R"({"a":{"b":[1,2]}})", {.max_array_elements_ = 1}); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_value::parse("[1]", {.max_array_elements_ = 0}); }));
+    EXPECT_TRUE(!ruvia::test::throws_on([&] { (void)ruvia::json_value::parse("[]", {.max_array_elements_ = 0}); }));
+    EXPECT_TRUE(!ruvia::test::throws_on([&] { (void)ruvia::json_value::parse("[1]", {.max_array_elements_ = 1}); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_value::parse("[[1],[2]]", {.max_array_elements_ = 3}); }));
+    EXPECT_TRUE(!ruvia::test::throws_on([&] { (void)ruvia::json_value::parse("[[1],[2]]", {.max_array_elements_ = 4}); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_value::parse(R"({"a":{"b":[1,2]}})", {.max_array_elements_ = 1}); }));
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 0}); }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 1}); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 0}); }));
+    EXPECT_TRUE(!ruvia::test::throws_on([&] { (void)ruvia::json_object::parse(R"({"a":[1]})", {.max_array_elements_ = 1}); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::json_object::parse(R"({"a":{"b":[1,2]},"c":[3]})", {.max_array_elements_ = 2});
     }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse(" {} ", {.max_array_elements_ = 0}); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse("[]"); }));
+    EXPECT_TRUE(!ruvia::test::throws_on([&] { (void)ruvia::json_object::parse(" {} ", {.max_array_elements_ = 0}); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse("[]"); }));
 
     const auto elements = [](std::size_t count) {
         std::string body = R"({"a":[)";
@@ -390,8 +390,8 @@ TEST(Ruvia, json_dynamic_parse_enforces_cumulative_array_element_budget) {
     };
     const auto at_default_limit = elements(64 * 1024);
     const auto over_default_limit = elements(64 * 1024 + 1);
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse(at_default_limit); }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse(at_default_limit); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_value::parse(over_default_limit); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::json_object::parse(over_default_limit); }));
+    EXPECT_TRUE(!ruvia::test::throws_on([&] { (void)ruvia::json_value::parse(at_default_limit); }));
+    EXPECT_TRUE(!ruvia::test::throws_on([&] { (void)ruvia::json_object::parse(at_default_limit); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_value::parse(over_default_limit); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse(over_default_limit); }));
 }

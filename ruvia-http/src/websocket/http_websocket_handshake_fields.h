@@ -7,7 +7,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_handshake.h"
 
-#include "field/request_header_kind.h"
+#include "field/http_field_kind.h"
 
 namespace ruvia {
 
@@ -40,7 +40,7 @@ public:
     explicit websocket_request_header_validator(http_field_list_role role) noexcept
         : role_(role) {}
 
-    [[nodiscard]] bool observe_header(request_header_kind kind, std::string_view value) noexcept;
+    [[nodiscard]] bool observe_header(http_field_kind kind, std::string_view value) noexcept;
     [[nodiscard]] bool offers_valid() const noexcept;
     [[nodiscard]] bool client_offers_valid() const noexcept;
     [[nodiscard]] websocket_handshake_validation_result finish(

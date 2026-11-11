@@ -89,7 +89,8 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
     std::string_view rest;
     while (detail::split_path_segment(remaining, segment, rest)) {
         remaining = rest;
-        if (segment == "*" && remaining.empty()) {
+        const auto kind = classify_route_segment(segment);
+        if (kind == route_segment_kind::wildcard && remaining.empty()) {
             if (next_value >= values.size()) {
                 throw std::invalid_argument("url_for is missing a value for '*'");
             }
@@ -111,7 +112,7 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             throw std::invalid_argument("url_for pattern must not start with an empty segment");
         }
         estimated_size += 1U;
-        if (!segment.empty() && segment.front() == ':') {
+        if (kind == route_segment_kind::param) {
             if (next_value >= values.size()) {
                 throw std::invalid_argument("url_for is missing a route parameter value");
             }
@@ -141,7 +142,8 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
     remaining = pattern;
     while (detail::split_path_segment(remaining, segment, rest)) {
         remaining = rest;
-        if (segment == "*" && remaining.empty()) {
+        const auto kind = classify_route_segment(segment);
+        if (kind == route_segment_kind::wildcard && remaining.empty()) {
             const auto value = values[next_value++];
             if (!value.empty()) {
                 url.push_back('/');
@@ -152,7 +154,7 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             continue;
         }
         url.push_back('/');
-        if (!segment.empty() && segment.front() == ':') {
+        if (kind == route_segment_kind::param) {
             append_url_for_value(url, values[next_value++], /*keep_slashes=*/false);
         } else {
             url.append(segment.data(), segment.size());

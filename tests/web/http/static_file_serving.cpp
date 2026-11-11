@@ -35,6 +35,7 @@
 #include "ruvia/web/static_files.h"
 
 #include "context_request_fixture.h"
+#include "scoped_temp_directory.h"
 
 namespace static_file_test {
 
@@ -86,7 +87,7 @@ decltype(auto) with_static_context(const static_file_test_request& request, call
     using result_type = typename std::invoke_result_t<callback_type, ruvia::context&>::value_type;
     std::optional<std::conditional_t<std::is_void_v<result_type>, bool, result_type>> result;
     std::exception_ptr error;
-    static_cast<void>(context_request_test::with_context(
+    static_cast<void>(ruvia::test::with_context(
         request.request(), [&](ruvia::context& context_value) -> ruvia::task<void> {
             try {
                 if constexpr (std::is_void_v<result_type>) {
@@ -133,9 +134,8 @@ using static_file_test::with_static_context;
 
 TEST(Ruvia, static_root_copies_public_mime_configuration_into_owned_storage) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_static_mime_resource_dir";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_mime_resource_dir");
+    const auto& dir = directory.path();
     std::ofstream(dir / "payload.custom-resource") << "content";
 
     {
@@ -155,32 +155,12 @@ TEST(Ruvia, static_root_copies_public_mime_configuration_into_owned_storage) {
                 std::string_view("application/x-custom-resource-type"));
         });
     }
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_root_serves_utf8_file_and_directory_urls) {
     namespace fs = std::filesystem;
-    const auto temp_root = fs::canonical(fs::temp_directory_path());
-    const auto dir = temp_root /
-                     ("ruvia_static_utf8_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    if (!fs::create_directory(dir)) {
-        throw std::runtime_error("temporary static root already exists");
-    }
-    struct directory_cleanup final {
-        fs::path parent_;
-        fs::path path_;
-        ~directory_cleanup() {
-            std::error_code error;
-            const auto resolved = fs::weakly_canonical(path_, error);
-            const bool owned = !error && resolved.parent_path() == parent_;
-            EXPECT_TRUE(owned) << "owned temporary directory";
-            if (owned) {
-                fs::remove_all(path_, error);
-                EXPECT_TRUE(!error) << "temporary directory removed";
-            }
-        }
-    } cleanup{temp_root, dir};
+    const ruvia::test::scoped_temp_directory temporary("ruvia_static_utf8");
+    const auto& dir = temporary.path();
 
     const auto filename = fs::path(u8"\u6587\u6863-\U0001F4C4.txt");
     const auto directory = fs::path(u8"\u76EE\u5F55-\U0001F4C1");
@@ -229,16 +209,8 @@ TEST(Ruvia, static_root_serves_utf8_file_and_directory_urls) {
 
 TEST(Ruvia, static_root_serves_every_default_file_type_with_its_media_type) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() /
-                     ("ruvia_static_default_types_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    fs::create_directories(dir);
-    struct cleanup_dir final {
-        fs::path path_;
-        ~cleanup_dir() {
-            std::error_code error;
-            fs::remove_all(path_, error);
-        }
-    } cleanup{dir};
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_default_types");
+    const auto& dir = directory.path();
 
     const std::pair<std::string_view, std::string_view> cases[]{
         {"apng", "image/apng"},
@@ -289,9 +261,8 @@ TEST(Ruvia, static_root_serves_every_default_file_type_with_its_media_type) {
 
 TEST(Ruvia, file_response_preserves_normal_status_before_evaluating_request_conditions) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() /
-                     ("ruvia_file_normal_status_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_file_normal_status");
+    const auto& dir = directory.path();
     const auto path = dir / "payload.txt";
     {
         std::ofstream output(path, std::ios::binary);
@@ -344,14 +315,13 @@ TEST(Ruvia, file_response_preserves_normal_status_before_evaluating_request_cond
             }
         });
     }
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_response_owns_path_after_handler_local_root_is_destroyed) {
     namespace fs = std::filesystem;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_local_root";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_local_root");
+    const auto& dir = directory.path();
     {
         std::ofstream output(dir / "payload.txt", std::ios::binary | std::ios::trunc);
         output << "owned-static-path";
@@ -377,16 +347,13 @@ TEST(Ruvia, static_file_response_owns_path_after_handler_local_root_is_destroyed
         if (file.has_value()) {
             EXPECT_EQ(read_file_response_body(*file), std::string("owned-static-path"));
         }
-
-        fs::remove_all(dir);
     });
 }
 
 TEST(Ruvia, static_file_type_policy_has_closed_exact_alternatives) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_static_file_type_policy";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_file_type_policy");
+    const auto& dir = directory.path();
     std::ofstream(dir / "index.html") << "html";
     std::ofstream(dir / "asset.custom") << "custom";
 
@@ -428,8 +395,6 @@ TEST(Ruvia, static_file_type_policy_has_closed_exact_alternatives) {
     ruvia::static_root only_root(dir, std::move(only_options));
     EXPECT_TRUE(static_file_status(only_root, "index.html") != ruvia::http_status::ok);
     EXPECT_TRUE(static_file_status(only_root, "asset.custom") == ruvia::http_status::ok);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_range_serving_status_and_content_range) {
@@ -438,8 +403,8 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_range_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_range_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
         const std::string content(100, 'a');
@@ -514,8 +479,6 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
     const auto empty = serve_file("empty.txt", "bytes=0-0");
     EXPECT_EQ(empty.first, ruvia::http_status::ok);
     EXPECT_TRUE(empty.second.empty());
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_takes_decoded_path_and_stays_traversal_safe) {
@@ -523,8 +486,8 @@ TEST(Ruvia, static_file_takes_decoded_path_and_stays_traversal_safe) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_pct_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_pct_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "my report.txt", std::ios::binary | std::ios::trunc);
         const std::string content(20, 'z');
@@ -579,8 +542,6 @@ TEST(Ruvia, static_file_takes_decoded_path_and_stays_traversal_safe) {
 
     // A NUL cannot occur in a filename and is rejected outright.
     EXPECT_EQ(serve(std::string_view("my\0report.txt", 13)), ruvia::http_status::forbidden);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_declares_vary_accept_encoding_but_context_file_does_not) {
@@ -588,8 +549,8 @@ TEST(Ruvia, static_file_declares_vary_accept_encoding_but_context_file_does_not)
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_vary_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_vary_dir");
+    const auto& dir = directory.path();
     const auto file_path = dir / "app.js";
     {
         std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
@@ -628,17 +589,14 @@ TEST(Ruvia, static_file_declares_vary_accept_encoding_but_context_file_does_not)
         if (direct.file_body()) {
             EXPECT_EQ(direct.file_body()->length(), static_cast<std::uint64_t>(fs::file_size(file_path)));
         }
-
-        fs::remove_all(dir);
     });
 }
 
 TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
     namespace fs = std::filesystem;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_context_file_text_path_dir";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_context_file_text_path_dir");
+    const auto& dir = directory.path();
     // A non-ASCII name: Windows must widen the UTF-8 text, not read it in the
     // ANSI code page.
     const auto file_path = dir / fs::path(u8"caf\u00e9.txt");
@@ -697,7 +655,6 @@ TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
         const std::string invalid_utf8 = text + "\xff";
         EXPECT_EQ(co_await status_of(invalid_utf8), ruvia::http_status::not_found);
     });
-    fs::remove_all(dir);
 }
 
 // static_file() borrows its root until the returned task completes, so a
@@ -715,9 +672,8 @@ static_assert(!static_file_accepts_root<const ruvia::static_root>);
 // overwritten and destroyed still serves what the call named.
 TEST(Ruvia, file_and_static_file_own_their_options_before_returning) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_file_owned_options";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_file_owned_options");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
         out << "owned-options";
@@ -764,7 +720,6 @@ TEST(Ruvia, file_and_static_file_own_their_options_before_returning) {
         EXPECT_TRUE(serves(text_response, "text/x-owned-text"));
         EXPECT_TRUE(serves(root_response, "text/x-owned-root"));
     });
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_preserves_context_vary_when_adding_accept_encoding) {
@@ -772,8 +727,8 @@ TEST(Ruvia, static_file_preserves_context_vary_when_adding_accept_encoding) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_vary_merge_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_vary_merge_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "app.js", std::ios::binary | std::ios::trunc);
         out << "console.log('ok');";
@@ -796,8 +751,6 @@ TEST(Ruvia, static_file_preserves_context_vary_when_adding_accept_encoding) {
         // identity/encoded representation for the wrong Accept-Encoding request.
         EXPECT_TRUE(vary.find("Origin") != std::string_view::npos);
         EXPECT_TRUE(vary.find("Accept-Encoding") != std::string_view::npos);
-
-        fs::remove_all(dir);
     });
 }
 
@@ -807,8 +760,8 @@ TEST(Ruvia, static_file_if_range_dates_do_not_authorize_partial_responses) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_if_range_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_if_range_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
         const std::string content(100, 'a');
@@ -848,15 +801,13 @@ TEST(Ruvia, static_file_if_range_dates_do_not_authorize_partial_responses) {
     // is therefore false, so it must suppress the Range rather than being
     // confused with an absent field and producing a partial response.
     EXPECT_EQ(serve(std::string_view{}).first, ruvia::http_status::ok);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
     namespace fs = std::filesystem;
     using namespace std::chrono;
-    const auto dir = fs::temp_directory_path() / "ruvia_if_range_same_second";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_if_range_same_second");
+    const auto& dir = directory.path();
     const auto path = dir / "data.txt";
     const auto base_time = floor<seconds>(fs::file_time_type::clock::now()) - hours(24);
     const auto write_version = [&](std::string_view content, milliseconds fraction) {
@@ -888,7 +839,7 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
                 request.header("If-Range", *if_range);
             }
             observation result{};
-            (void)context_request_test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
+            (void)ruvia::test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
                 const auto response = use_static
                                           ? co_await context.static_file(*root, {.relative_path_ = "data.txt"})
                                           : co_await context.file({.path_ = path});
@@ -925,7 +876,6 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
         EXPECT_EQ(etag_range.status, ruvia::http_status::partial_content);
         EXPECT_EQ(etag_range.bytes, std::string("45678"));
     }
-    fs::remove_all(dir);
 }
 
 // RFC 9110 §15.3.7: a 206 answering a matched If-Range SHOULD NOT repeat
@@ -933,9 +883,8 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
 // carry every representation field a 200 would.
 TEST(Ruvia, file_partial_responses_to_if_range_omit_repeated_representation_fields) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_if_range_partial_fields";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_if_range_partial_fields");
+    const auto& dir = directory.path();
     const auto path = dir / "data.txt";
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
@@ -961,7 +910,7 @@ TEST(Ruvia, file_partial_responses_to_if_range_omit_repeated_representation_fiel
                 request.header("If-Range", *if_range);
             }
             observation result{};
-            (void)context_request_test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
+            (void)ruvia::test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
                 const auto response = use_static ? co_await context.static_file(*root, {.relative_path_ = "data.txt"})
                                                  : co_await context.file({.path_ = path, .content_type_ = "text/plain"});
                 result = observation{response.status(), copy(response.header("Content-Type")),
@@ -992,15 +941,14 @@ TEST(Ruvia, file_partial_responses_to_if_range_omit_repeated_representation_fiel
         EXPECT_TRUE(multipart.etag == std::optional<std::string>(etag));
     }
     root.reset();
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_historical_last_modified_supports_date_preconditions) {
     namespace fs = std::filesystem;
     using namespace std::chrono;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_historical_mtime_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_historical_mtime_dir");
+    const auto& dir = directory.path();
     const auto path = dir / "data.txt";
     {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -1040,7 +988,6 @@ TEST(Ruvia, static_file_historical_last_modified_supports_date_preconditions) {
         EXPECT_EQ(serve(snapshot, base.second).first, ruvia::http_status::not_modified);
         EXPECT_EQ(serve(snapshot, "Thu, 01 Jan 1959 00:00:00 GMT").first, ruvia::http_status::ok);
     }
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_clamps_future_last_modified_and_rejects_it_for_if_range) {
@@ -1049,8 +996,8 @@ TEST(Ruvia, static_file_clamps_future_last_modified_and_rejects_it_for_if_range)
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_future_mtime_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_future_mtime_dir");
+    const auto& dir = directory.path();
     const auto path = dir / "data.txt";
     {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -1093,8 +1040,6 @@ TEST(Ruvia, static_file_clamps_future_last_modified_and_rejects_it_for_if_range)
     // validator. It is therefore weak and cannot authorize stitching a partial
     // response into the client's stored representation.
     EXPECT_EQ(serve(base.second).first, ruvia::http_status::ok);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions) {
@@ -1105,8 +1050,8 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_ifrange_novalidator_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_ifrange_novalidator_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
         const std::string content(100, 'a');
@@ -1195,8 +1140,6 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
     EXPECT_EQ(serve_conditional("GET", "If-Modified-Since", "Fri, 31 Dec 9999 23:59:59 GMT")
                   .status_,
         ruvia::http_status::not_modified);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
@@ -1205,8 +1148,8 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_precedence_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_precedence_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
         const std::string content(100, 'a');
@@ -1331,8 +1274,6 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
     EXPECT_EQ(
         serve_method("OPTIONS", {{"If-Match", "\"stale\""}}).first,
         ruvia::http_status::ok);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_conditional_request_serving) {
@@ -1341,8 +1282,8 @@ TEST(Ruvia, static_file_conditional_request_serving) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_conditional_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_conditional_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
         const std::string content(100, 'a');
@@ -1423,8 +1364,6 @@ TEST(Ruvia, static_file_conditional_request_serving) {
         precondition = error.info().status() == ruvia::http_status::precondition_failed;
     }
     EXPECT_TRUE(precondition);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_root_rejects_empty_custom_mime_type) {
@@ -1433,8 +1372,8 @@ TEST(Ruvia, static_root_rejects_empty_custom_mime_type) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_empty_mime_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_empty_mime_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.custom", std::ios::binary | std::ios::trunc);
         out << "content";
@@ -1454,7 +1393,6 @@ TEST(Ruvia, static_root_rejects_empty_custom_mime_type) {
         rejected = true;
     }
     EXPECT_TRUE(rejected);
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_root_rejects_invalid_static_options_at_construction) {
@@ -1463,9 +1401,8 @@ TEST(Ruvia, static_root_rejects_invalid_static_options_at_construction) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_invalid_header_options_dir";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_invalid_header_options_dir");
+    const auto& dir = directory.path();
     std::ofstream(dir / "data.custom") << "content";
 
     const auto rejects = [&dir](static_root_options options) {
@@ -1539,8 +1476,6 @@ TEST(Ruvia, static_root_rejects_invalid_static_options_at_construction) {
             std::bit_cast<ruvia::static_response_validator_policy>(std::uint8_t{42});
         rejects(std::move(options));
     }
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_if_modified_since_serving) {
@@ -1549,8 +1484,8 @@ TEST(Ruvia, static_file_if_modified_since_serving) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_ims_dir";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_ims_dir");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
         const std::string content(50, 'a');
@@ -1576,8 +1511,6 @@ TEST(Ruvia, static_file_if_modified_since_serving) {
     // -> 200.
     EXPECT_EQ(serve("Fri, 01 Jan 2100 00:00:00 GMT"), ruvia::http_status::not_modified);
     EXPECT_EQ(serve("Sat, 01 Jan 2000 00:00:00 GMT"), ruvia::http_status::ok);
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_directory_root_index_and_403) {
@@ -1585,8 +1518,8 @@ TEST(Ruvia, static_file_directory_root_index_and_403) {
     using ruvia::static_root;
     using ruvia::static_root_options;
 
-    const auto dir = fs::temp_directory_path() / "ruvia_static_dir_index";
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_dir_index");
+    const auto& dir = directory.path();
     {
         std::ofstream out(dir / "other.txt", std::ios::binary | std::ios::trunc);
         out << "x";
@@ -1627,16 +1560,14 @@ TEST(Ruvia, static_file_directory_root_index_and_403) {
         static_root root(dir, std::move(options));
         EXPECT_EQ(serve_root(root), ruvia::http_status::ok);
     }
-
-    fs::remove_all(dir);
 }
 
 TEST(Ruvia, static_file_directory_indexes_survive_path_normalization_storage_growth) {
     namespace fs = std::filesystem;
     constexpr std::string_view index = "directory-index-document.html";
     constexpr std::string_view long_directory = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz/nested-directory";
-    const auto dir = fs::temp_directory_path() / "ruvia_static_normalized_directory_indexes";
-    fs::remove_all(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_normalized_directory_indexes");
+    const auto& dir = directory.path();
     fs::create_directories(dir / "nested" / "dir");
     fs::create_directories(dir / long_directory);
     std::ofstream(dir / "nested" / "dir" / index) << "short-index";
@@ -1669,15 +1600,13 @@ TEST(Ruvia, static_file_directory_indexes_survive_path_normalization_storage_gro
             EXPECT_EQ(response.second, expected);
         }
     }
-    fs::remove_all(dir);
 }
 
 #if defined(__linux__)
 TEST(Ruvia, file_response_rejects_a_fifo_without_blocking_the_worker) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() /
-                     ("ruvia_file_fifo_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_file_fifo");
+    const auto& dir = directory.path();
     const auto fifo = dir / "payload.txt";
     EXPECT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
 
@@ -1718,7 +1647,6 @@ TEST(Ruvia, file_response_rejects_a_fifo_without_blocking_the_worker) {
 
     EXPECT_TRUE(!rescued);
     EXPECT_EQ(status, ruvia::http_status::not_found);
-    fs::remove_all(dir);
 }
 #endif
 
@@ -1730,9 +1658,8 @@ TEST(Ruvia, file_response_rejects_a_fifo_without_blocking_the_worker) {
 TEST(Ruvia, static_file_refuses_a_directory_swapped_for_a_symlink_after_indexing) {
     namespace fs = std::filesystem;
     using static_file_test::static_file_status;
-    const auto base = fs::temp_directory_path() / "ruvia_static_symlink_swap";
-    std::error_code ignored;
-    fs::remove_all(base, ignored);
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_symlink_swap");
+    const auto& base = directory.path();
     const auto root_dir = base / "root";
     const auto outside = base / "outside";
     fs::create_directories(root_dir / "assets");
@@ -1748,6 +1675,5 @@ TEST(Ruvia, static_file_refuses_a_directory_swapped_for_a_symlink_after_indexing
     fs::rename(root_dir / "assets", base / "moved_assets");
     fs::create_directory_symlink(outside, root_dir / "assets");
     EXPECT_TRUE(static_file_status(root, "assets/a.txt") == ruvia::http_status::internal_server_error);
-    fs::remove_all(base, ignored);
 }
 #endif

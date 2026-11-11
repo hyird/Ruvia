@@ -13,7 +13,8 @@
 #include "ruvia/core/socket.h"
 
 #include "client/client_happy_eyeballs.h"
-#include "tls/tls_stream_end.h"
+#include "http/http_stream_end.h"
+#include "tls/tls_peer.h"
 
 namespace ruvia::detail {
 
@@ -297,7 +298,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
 }
 
 std::string_view client_tcp_transport::alpn() noexcept {
-    return tls_started_ ? selected_client_alpn(stream_.native_handle()) : std::string_view{};
+    return tls_started_ ? tls_selected_alpn(*stream_.native_handle()) : std::string_view{};
 }
 
 task<client_transport_result> client_tcp_transport::read_some(std::span<char> bytes_value, const operation_timeout& timeout) {

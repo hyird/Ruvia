@@ -30,6 +30,7 @@
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
@@ -41,6 +42,7 @@
 #include "context/http_connection_advertisement_output.h"
 #include "context/http_interim_response_output.h"
 #include "http/http_protocol_error_info.h"
+#include "http/http_stream_end.h"
 #include "http3/http3_endpoint.h"
 #include "http3/http3_response_write.h"
 #include "http3/http3_stream.h"
@@ -50,13 +52,12 @@
 #include "server/http_buffered_response.h"
 #include "server/http_response_stream_dispatch.h"
 #include "server/http_server_tls_contexts.h"
-#include "server/http_server_tls_handshake.h"
 #include "server/http_upgrade_route.h"
 #include "server/inbound_transport_error.h"
 #include "server/multiplexed_stream_signal.h"
 #include "server/peer_address.h"
+#include "tls/tls_peer.h"
 #include "tls/tls_random.h"
-#include "tls/tls_stream_end.h"
 
 namespace ruvia::detail {
 namespace {
@@ -77,11 +78,7 @@ constexpr std::uint64_t http3_max_connection_receive_window = 16 * 1024 * 1024;
 constexpr std::uint64_t http3_max_concurrent_requests = 100;
 
 [[nodiscard]] bool reject_early_request(const http3_request_head& head) noexcept {
-    if (!head.early_data()) {
-        return false;
-    }
-    const auto method = head.method();
-    return method != "GET" && method != "HEAD" && method != "OPTIONS" && method != "TRACE";
+    return head.early_data() && !is_http_method_safe(head.method());
 }
 
 struct interim_target final {
@@ -217,8 +214,6 @@ private:
 // and writer; this adapter returns flow credit only after consuming DATA.
 class http3_tunnel_transport final : public multiplexed_tunnel_transport_base<http3_tunnel_transport> {
 public:
-    using multiplexed_tunnel_transport_base<http3_tunnel_transport>::write_bytes;
-
     http3_tunnel_transport(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal) noexcept
         : multiplexed_tunnel_transport_base(signal),
           session_(session),
@@ -533,7 +528,7 @@ void http3_session::reset_stream(std::int64_t stream_id, http3_error_code error)
     if (auto* stream = find_stream(stream_id)) {
         stream->mark_aborted();
         if (!stream->dispatched() || stream->handler_done()) {
-            stream->close_request_body_timing();
+            stream->mark_request_body_closed();
             consume_stream_data(stream_id, stream->unconsumed_bytes());
             stream->discard_body();
             remove_stream_if_done(stream_id);
@@ -898,7 +893,7 @@ void http3_session::finish_stream_handler(std::int64_t stream_id) noexcept {
     }
     // Content that arrived but was never read holds connection credit.
     const auto unconsumed = stream->unconsumed_bytes();
-    stream->close_request_body_timing();
+    stream->mark_request_body_closed();
     consume_stream_data(stream_id, unconsumed);
     stream->discard_body();
     remove_stream_if_done(stream_id);
@@ -909,20 +904,11 @@ void http3_session::set_inactivity_phase() noexcept {
     if (lifecycle_ != lifecycle_type::open) {
         return;
     }
-    // The handshake, the peer's SETTINGS, and an incomplete header block are
-    // bounded like a request head; a tunnel is long-lived; an open stream
-    // keeps the handler's inactivity deadman and idleness starts when the last
-    // stream ends.
-    if (!base_services_.has_value() || !codec().peer_settings().has_value() ||
-        codec().header_block_in_progress()) {
-        scanner_entry_.set_phase(connection_scanner::phase::reading_initial);
-    } else if (tunnel_streams_ != 0) {
-        scanner_entry_.set_phase(connection_scanner::phase::long_lived);
-    } else if (!streams_.empty() || active_handler_tasks_ != 0) {
-        scanner_entry_.set_phase(connection_scanner::phase::idle);
-    } else {
-        scanner_entry_.set_phase(connection_scanner::phase::awaiting_stream);
-    }
+    scanner_entry_.set_phase(multiplexed_inactivity_phase(
+        base_services_.has_value() && codec().peer_settings().has_value(),
+        base_services_.has_value() && codec().header_block_in_progress(),
+        !streams_.empty() || active_handler_tasks_ != 0,
+        tunnel_streams_ != 0));
 }
 
 void http3_session::expire_stream_deadlines(std::int64_t now_ms) noexcept {
@@ -935,7 +921,7 @@ void http3_session::expire_stream_deadlines(std::int64_t now_ms) noexcept {
             continue;
         }
         if (stream.request_body_overdue(now_ms, server.request_body_timeout_, server.body_completion_timeout_)) {
-            stream.close_request_body_timing();
+            stream.mark_request_body_closed();
             reset_stream(stream_id, http3_error_code::request_cancelled);
             continue;
         }
@@ -1394,7 +1380,7 @@ void http3_session::terminate(std::error_code error) noexcept {
 void http3_session::request_drain() noexcept {
     // The scanner asks for a drain only when a connection timeout fired; it
     // recorded the close request before invoking this callback.
-    timeout_drain_ = true;
+    drain_timer_.request_timeout();
     begin_drain();
     finish_drain_if_ready();
 }
@@ -1428,26 +1414,13 @@ void http3_session::begin_drain() noexcept {
 void http3_session::arm_drain_timer() noexcept {
     // A final boundary needs no time bound, unless a timeout's drain must
     // still end the connection.
-    if (drain_timer_.registered() || termination_.terminated() || (codec().drain_final() && !timeout_drain_)) {
+    if (!drain_timer_.needed(termination_.terminated(), codec().drain_final())) {
         return;
     }
     const auto round_trip = std::chrono::ceil<std::chrono::milliseconds>(
         http3_quic_nanoseconds(connection_->close_period()));
     const auto bound = (std::min)(http3_drain_round_trip_bound, (std::max)(round_trip, std::chrono::milliseconds(1)));
-    try {
-        const auto status = services_.worker_.schedule_timer(
-            drain_timer_, worker_timer_deadline_after(bound), [this](worker_timer_outcome outcome) {
-                // Cancellation is a stopping worker, which closes the connection.
-                if (outcome == worker_timer_outcome::expired) {
-                    drain_timer_expired();
-                }
-            });
-        if (status == worker_timer_schedule_status::worker_stopping) {
-            drain_timer_expired();
-        }
-    } catch (...) {
-        close_now();
-    }
+    drain_timer_.arm(services_.worker_, bound, [this]() noexcept { drain_timer_expired(); }, [this]() noexcept { close_now(); });
 }
 
 void http3_session::drain_timer_expired() noexcept {
@@ -1457,7 +1430,7 @@ void http3_session::drain_timer_expired() noexcept {
     if (codec().finish_drain() != http3_status::accepted) {
         connection_->close(error_value(http3_error_code::internal_error));
     }
-    drain_expired_ = timeout_drain_;
+    drain_timer_.mark_expired();
     wake_writer();
     finish_drain_if_ready();
     arm_drain_timer();
@@ -1470,8 +1443,8 @@ void http3_session::finish_drain_if_ready() noexcept {
     // Every admitted stream closed -- its response acknowledged -- ends the
     // connection with H3_NO_ERROR (RFC 9114 §5.2). A connection timeout's
     // drain at its bound cancels what is left.
-    if ((streams_.empty() && active_handler_tasks_ == 0 && codec().drained()) || drain_expired_) {
-        if (drain_expired_) {
+    if ((streams_.empty() && active_handler_tasks_ == 0 && codec().drained()) || drain_timer_.expired()) {
+        if (drain_timer_.expired()) {
             terminate(std::make_error_code(std::errc::timed_out));
         }
         connection_->close(error_value(http3_error_code::no_error));

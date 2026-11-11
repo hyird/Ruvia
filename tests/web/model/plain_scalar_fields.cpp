@@ -40,19 +40,19 @@ TEST(Ruvia, model_wrapper_scalar_fields_parse_json_and_forms) {
 
 TEST(Ruvia, model_wrapper_scalar_fields_reject_mistyped_values_but_allow_missing_optional_fields) {
     std::pmr::monotonic_buffer_resource wrapped_resource;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<wrapped_scalars>(R"({"count":"nan"})", {.resource_ = &wrapped_resource});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<wrapped_scalars>(R"({"count":null})", {.resource_ = &wrapped_resource});
     }));
 
     std::pmr::monotonic_buffer_resource resource;
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<wrapped_scalars>("{}", {.resource_ = &resource});
     }));
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_form<wrapped_scalars>("count=not-a-number", {.resource_ = &resource});
     }));
 }

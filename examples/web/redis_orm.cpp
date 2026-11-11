@@ -19,7 +19,7 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis_repository.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 
 RUVIA_REDIS_ENTITY(cached_user, "users",
     RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
@@ -111,12 +111,7 @@ int main(int argc, char** argv) {
         auto& app = ruvia::app();
         app.load_dotenv();
         const example::environment env_value(&app.env());
-        ruvia::redis_config config;
-        config.tls_ = example::backend_tls("RUVIA_REDIS", env_value);
-        config.host_ = env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1");
-        config.port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379);
-        config.username_ = env_value.get("RUVIA_REDIS_USER").value_or("");
-        config.password_ = env_value.get("RUVIA_REDIS_PASSWORD").value_or("");
+        auto config = example::redis_config(env_value);
         app.redis({.config_ = config})
             .listen({.address_ = "127.0.0.1", .http_ = 8091})
             .server({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})

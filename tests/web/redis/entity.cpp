@@ -78,7 +78,7 @@ TEST(Ruvia, redis_entity_tracks_unset_value_and_null_states) {
     EXPECT_EQ(redis_user::prefix(), std::string_view("user"));
     EXPECT_TRUE(!user_value.is_set<"id">());
     EXPECT_TRUE(!user_value.is_null<"id">());
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)user_value.get<"id">(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)user_value.get<"id">(); }));
 
     user_value.set<"id">("u-1");
     user_value.set<"name">("Alice");
@@ -95,7 +95,7 @@ TEST(Ruvia, redis_entity_tracks_unset_value_and_null_states) {
     user_value.set_null<"age">();
     EXPECT_TRUE(user_value.is_set<"age">());
     EXPECT_TRUE(user_value.is_null<"age">());
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)user_value.get<"age">(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)user_value.get<"age">(); }));
 
     user_value.reset<"age">();
     EXPECT_TRUE(!user_value.is_set<"age">());
@@ -136,7 +136,7 @@ TEST(Ruvia, redis_entity_failed_owning_assignment_preserves_each_column_state) {
             entity.set<"text">("retained");
         }
         resource.reject_allocations();
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { entity.set<"text">(replacement); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { entity.set<"text">(replacement); }));
         resource.reject_allocations(false);
         EXPECT_EQ(entity.is_set<"text">(), state_value != 0);
         EXPECT_EQ(entity.is_null<"text">(), state_value == 1);
@@ -145,7 +145,7 @@ TEST(Ruvia, redis_entity_failed_owning_assignment_preserves_each_column_state) {
             EXPECT_EQ(entity.get<"text">().view(), std::string_view("retained"));
             EXPECT_TRUE(entity.get<"text">().resource() == &resource);
         } else {
-            EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)entity.get<"text">(); }));
+            EXPECT_TRUE(ruvia::test::throws_on([&] { (void)entity.get<"text">(); }));
         }
     }
 }

@@ -1,8 +1,8 @@
 // Request policies and local dispatch; no external services are required.
 // Build: cmake --build build --config Release --target ruvia_example_request_policies -j$(nproc)
 // Run the executable, then try:
-//   curl -i -d hello http://127.0.0.1:8091/policies/small
-//   curl -i -H "X-Demo-Name: reader" http://127.0.0.1:8091/policies/dispatch
+//   curl -i -d hello http://127.0.0.1:8097/policies/small
+//   curl -i -H "X-Demo-Name: reader" http://127.0.0.1:8097/policies/dispatch
 // Expected: an echo and "reader (subrequest)" respectively.
 // GET /policies/csrf issues XSRF-TOKEN. For POST, send that cookie AND copy its
 // value into X-XSRF-TOKEN; a missing or mismatched value is rejected with 403.
@@ -91,7 +91,7 @@ int main() {
         ruvia::app()
             .server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
                 .max_buffered_body_bytes_ = 1024})
-            .listen({.address_ = "127.0.0.1", .http_ = 8091})
+            .listen({.address_ = "127.0.0.1", .http_ = 8097})
             .run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

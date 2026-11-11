@@ -13,7 +13,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/model.h"
 
-namespace model_field_test {
+namespace ruvia::test {
 
 RUVIA_MODEL(accessor_surface_request, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 
@@ -57,6 +57,4 @@ RUVIA_MODEL(unlimited_field_count_response, RUVIA_TEST_BOOL_FIELD(f01),
     RUVIA_TEST_BOOL_FIELD(f65));
 #undef RUVIA_TEST_BOOL_FIELD
 
-}  // namespace model_field_test
-
-using namespace model_field_test;  // NOLINT(google-build-using-namespace)
+}  // namespace ruvia::test

@@ -9,20 +9,20 @@
 // backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 
 #include <array>
-#include <charconv>
 #include <cstdint>
 #include <exception>
 #include <iostream>
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/streaming.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 
 namespace {
 
@@ -45,7 +45,7 @@ private:
         const auto receivers = co_await c.redis().publish(channel_name, body);
         std::pmr::string output(c.arena());
         output.append("receivers=");
-        append_number(output, receivers);
+        ruvia::http_append_signed(output, receivers);
         output.push_back('\n');
         co_return c.text(std::move(output));
     }
@@ -83,14 +83,6 @@ private:
             }
         }
     }
-
-    static void append_number(std::pmr::string& output, std::int64_t value) {
-        char buffer[32]{};
-        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
-        if (ec == std::errc{}) {
-            output.append(buffer, static_cast<std::size_t>(ptr - buffer));
-        }
-    }
 };
 
 }  // namespace
@@ -102,14 +94,7 @@ int main() {
         const example::environment env_value(&app.env());
         app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .listen({.address_ = "127.0.0.1", .http_ = 8096})
-            .redis({.config_ = {
-                        .host_ = std::string(env_value.get("RUVIA_REDIS_HOST").value_or("127.0.0.1")),
-                        .port_ = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
-                        .username_ = std::string(env_value.get("RUVIA_REDIS_USER").value_or("")),
-                        .password_ = std::string(env_value.get("RUVIA_REDIS_PASSWORD").value_or("")),
-                        .tls_ = example::backend_tls("RUVIA_REDIS", env_value),
-                        .database_ = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE").value_or(0),
-                    }})
+            .redis({.config_ = example::redis_config(env_value)})
             .run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

@@ -62,11 +62,12 @@ enum class middleware_scope_coverage : std::uint8_t {
             // Every matched request ends above the scope.
             return middleware_scope_coverage::none;
         }
-        if (pattern_segment == "*") {
+        const auto kind = detail::classify_route_segment(pattern_segment);
+        if (kind == detail::route_segment_kind::wildcard) {
             // The capture may be empty or may spell out the rest of the prefix.
             return middleware_scope_coverage::partial;
         }
-        if (!pattern_segment.empty() && pattern_segment.front() == ':') {
+        if (kind == detail::route_segment_kind::param) {
             if (prefix_segment.empty()) {
                 // A parameter never matches an empty segment.
                 return middleware_scope_coverage::none;
@@ -146,7 +147,7 @@ void detail::router::validate_no_dynamic_route_conflict() const {
                 (left_tunnel != nullptr && left_tunnel->protocol() != right_tunnel->protocol())) {
                 continue;
             }
-            if (same_dynamic_shape(left.path(), right.path())) {
+            if (route_patterns_equivalent(left.path(), right.path(), /*compare_param_names=*/false)) {
                 throw std::invalid_argument("conflicting dynamic routes match the same requests with equal precedence: " +
                                             describe_route(left.method(), left.path()) + " and " +
                                             describe_route(right.method(), right.path()));

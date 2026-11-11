@@ -8,7 +8,6 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <memory>
 #include <optional>
 #include <semaphore>
 #include <set>
@@ -36,7 +35,6 @@
 #include <asio/ssl.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
-#include <openssl/bio.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/blocking_pool.h"
@@ -53,8 +51,8 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
+#include "app_run.h"
 #include "http3_test_client.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 #include "udp_port_reservation.h"
 
@@ -435,39 +433,6 @@ private:
     std::uint16_t port_{0};
 };
 
-class app_run final {
-public:
-    explicit app_run(ruvia::application& app)
-        : app_(app),
-          thread_([this] {
-              try {
-                  app_.run();
-              } catch (...) {
-                  failure_ = std::current_exception();
-              }
-          }) {}
-    ~app_run() {
-        if (thread_.joinable()) {
-            app_.stop();
-            thread_.join();
-        }
-    }
-    app_run(const app_run&) = delete;
-    app_run& operator=(const app_run&) = delete;
-
-    void join() {
-        thread_.join();
-        if (failure_) {
-            std::rethrow_exception(failure_);
-        }
-    }
-
-private:
-    ruvia::application& app_;
-    std::exception_ptr failure_;
-    std::thread thread_;
-};
-
 // One HTTP/1.1 request over TLS on TCP; returns the response head.
 std::string https_head(asio::io_context& io, std::uint16_t port, const std::filesystem::path& ca_file) {
     asio::ssl::context client(asio::ssl::context::tls_client);
@@ -665,12 +630,14 @@ ruvia::task<void> run_cancelled_slow_request(ruvia::http_client_handle client,
 }
 
 ruvia::task<void> run_cancellation_and_migration_lane(ruvia::worker_handle worker,
-    ruvia::http_client_handle h2_client, ruvia::http_client_handle h3_client) {
+    std::optional<ruvia::http_client_handle> h2_client, ruvia::http_client_handle h3_client) {
     for (int i = 0; i < 3; ++i) {
         ruvia::stop_source cancel_h2;
         ruvia::stop_source cancel_h3;
         ruvia::task_scope cancel_scope(worker);
-        cancel_scope.spawn(run_cancelled_slow_request(h2_client, cancel_h2.token()));
+        if (h2_client) {
+            cancel_scope.spawn(run_cancelled_slow_request(*h2_client, cancel_h2.token()));
+        }
         cancel_scope.spawn(run_cancelled_slow_request(h3_client, cancel_h3.token()));
         (void)co_await ruvia::sleep_for(worker, 5ms);
         cancel_h2.request_stop();
@@ -713,15 +680,20 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
     };
 
     ruvia::http_client h1_owner(loop, make_client_config(ruvia::http_client_protocol::http1_only));
-    ruvia::http_client h2_owner(loop, make_client_config(ruvia::http_client_protocol::http2_only));
+    std::optional<ruvia::http_client> h2_owner;
+#ifdef RUVIA_ENABLE_HTTP2
+    h2_owner.emplace(loop, make_client_config(ruvia::http_client_protocol::http2_only));
+#endif
     ruvia::http_client h3_owner(loop, make_client_config(ruvia::http_client_protocol::http3_only));
     ruvia::http_client neg_owner(loop, make_client_config(ruvia::http_client_protocol::negotiate));
     std::exception_ptr worker_failure;
     try {
         {
-            auto warm_h2 = co_await h2_owner.client().get("/hello").send();
-            EXPECT_TRUE(warm_h2.ok());
-            (void)co_await warm_h2.text();
+            if (h2_owner) {
+                auto warm_h2 = co_await h2_owner->client().get("/hello").send();
+                EXPECT_TRUE(warm_h2.ok());
+                (void)co_await warm_h2.text();
+            }
             auto warm_h3 = co_await h3_owner.client().get("/hello").send();
             EXPECT_TRUE(warm_h3.ok());
             (void)co_await warm_h3.text();
@@ -732,13 +704,15 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
                 loop_idx, lane, expected_stream, expected_file, completed_ops));
         }
         for (int lane = 0; lane < 4; ++lane) {
-            tasks.spawn(run_protocol_lane(h2_owner.client(), ruvia::http_protocol_version::http2,
-                loop_idx, lane, expected_stream, expected_file, completed_ops));
+            if (h2_owner) {
+                tasks.spawn(run_protocol_lane(h2_owner->client(), ruvia::http_protocol_version::http2,
+                    loop_idx, lane, expected_stream, expected_file, completed_ops));
+            }
             tasks.spawn(run_protocol_lane(h3_owner.client(), ruvia::http_protocol_version::http3,
                 loop_idx, lane, expected_stream, expected_file, completed_ops));
         }
         tasks.spawn(run_cancellation_and_migration_lane(
-            loop.handle(), h2_owner.client(), h3_owner.client()));
+            loop.handle(), h2_owner ? std::optional(h2_owner->client()) : std::nullopt, h3_owner.client()));
         tasks.spawn(run_negotiate_upgrade_lane(neg_owner.client()));
         co_await tasks.join();
     } catch (...) {
@@ -746,7 +720,9 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
     }
     co_await neg_owner.shutdown();
     co_await h3_owner.shutdown();
-    co_await h2_owner.shutdown();
+    if (h2_owner) {
+        co_await h2_owner->shutdown();
+    }
     co_await h1_owner.shutdown();
     if (worker_failure) {
         std::rethrow_exception(worker_failure);
@@ -775,14 +751,19 @@ ruvia::task<void> exercise_capped_goaway_worker(ruvia::event_loop loop, std::uin
         cfg.tls_.ca_file_ = ca_file;
         return cfg;
     };
-    ruvia::http_client h2_owner(loop, make_cfg(ruvia::http_client_protocol::http2_only));
+    std::optional<ruvia::http_client> h2_owner;
+#ifdef RUVIA_ENABLE_HTTP2
+    h2_owner.emplace(loop, make_cfg(ruvia::http_client_protocol::http2_only));
+#endif
     ruvia::http_client h3_owner(loop, make_cfg(ruvia::http_client_protocol::http3_only));
     std::exception_ptr err;
     try {
         {
-            auto w2 = co_await h2_owner.client().get("/hello").send();
-            EXPECT_TRUE(w2.ok());
-            (void)co_await w2.text();
+            if (h2_owner) {
+                auto w2 = co_await h2_owner->client().get("/hello").send();
+                EXPECT_TRUE(w2.ok());
+                (void)co_await w2.text();
+            }
             auto w3 = co_await h3_owner.client().get("/hello").send();
             EXPECT_TRUE(w3.ok());
             (void)co_await w3.text();
@@ -790,8 +771,10 @@ ruvia::task<void> exercise_capped_goaway_worker(ruvia::event_loop loop, std::uin
         for (int round = 0; round < 4; ++round) {
             ruvia::task_scope tasks(loop.handle());
             for (int lane = 0; lane < 2; ++lane) {
-                tasks.spawn(run_goaway_reconnect_request(
-                    h2_owner.client(), ruvia::http_protocol_version::http2));
+                if (h2_owner) {
+                    tasks.spawn(run_goaway_reconnect_request(
+                        h2_owner->client(), ruvia::http_protocol_version::http2));
+                }
                 tasks.spawn(run_goaway_reconnect_request(
                     h3_owner.client(), ruvia::http_protocol_version::http3));
             }
@@ -801,7 +784,9 @@ ruvia::task<void> exercise_capped_goaway_worker(ruvia::event_loop loop, std::uin
         err = std::current_exception();
     }
     co_await h3_owner.shutdown();
-    co_await h2_owner.shutdown();
+    if (h2_owner) {
+        co_await h2_owner->shutdown();
+    }
     if (err) {
         std::rethrow_exception(err);
     }
@@ -818,14 +803,7 @@ using namespace http3_serving_test;
 
 TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
-    const auto private_key = identity.ca_file_.parent_path() / "key.pem";
-    {
-        std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(private_key.string().c_str(), "w"), BIO_free);
-        if (!output || ruvia::test::write_tls_private_key(
-                           output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle())) != 1) {
-            throw std::runtime_error("cannot write the HTTP/3 test private key");
-        }
-    }
+    const auto& private_key = identity.private_key_file();
     file_path() = identity.ca_file_.parent_path() / "body.txt";
     {
         std::ofstream output(file_path(), std::ios::binary);
@@ -851,7 +829,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
         .on_start([&started] { started.release(); });
-    app_run run(app);
+    ruvia::test::app_run run(app);
     EXPECT_TRUE(started.try_acquire_for(10s));
 
     {
@@ -869,7 +847,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
             upload[index] = static_cast<char>('0' + index % 10);
         }
         const auto echoed = client.request(
-            "POST", "/echo", {{"content-length", std::to_string(upload.size())}}, upload);
+            "POST", "/echo", {{"content-type", "application/octet-stream"}}, upload);
         EXPECT_EQ(echoed.status_, 200);
         EXPECT_EQ(echoed.body_.size(), upload.size());
         EXPECT_TRUE(echoed.body_ == upload);
@@ -903,7 +881,9 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         // RFC 9114 §4.3.1: :authority and Host must agree. The malformed
         // request is a stream error of type H3_MESSAGE_ERROR (§4.1.2); the
         // connection keeps serving.
-        const auto malformed = client.request("GET", "/hello", {{"host", "attacker.example"}});
+        const auto malformed_stream = client.start_raw_request({{":method", "GET"}, {":scheme", "https"},
+            {":authority", "localhost:" + std::to_string(port)}, {":path", "/hello"}, {"host", "attacker.example"}});
+        const auto malformed = client.finish_response(malformed_stream);
         EXPECT_EQ(malformed.reset_error_.value_or(0), std::uint64_t{NGHTTP3_H3_MESSAGE_ERROR});
         EXPECT_EQ(malformed.status_, 0);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
@@ -913,7 +893,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         auto client = connect(port, identity);
         EXPECT_TRUE(client.peer_settings().enable_connect_protocol_);
         EXPECT_TRUE(client.peer_settings().h3_datagram_);
-        const auto tunnel = client.start_tunnel({{":method", "CONNECT"}, {":authority", "echo.test:443"}});
+        const auto tunnel = client.start_tunnel(ruvia::http3_connect_request_head_view{.authority_ = "echo.test:443"});
         EXPECT_EQ(client.wait_for_response_head(tunnel).status_, 200);
         const std::string payload(128 * 1024, 't');
         client.send_stream_data(tunnel, byte_view(payload), true);
@@ -921,13 +901,14 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_EQ(echo.body_, payload);
         EXPECT_TRUE(!echo.reset_error_);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
-        const auto cancelled = client.start_tunnel({{":method", "CONNECT"}, {":authority", "echo.test:443"}});
+        const auto cancelled = client.start_tunnel(ruvia::http3_connect_request_head_view{.authority_ = "echo.test:443"});
         EXPECT_EQ(client.wait_for_response_head(cancelled).status_, 200);
         client.reset_request(cancelled, NGHTTP3_H3_REQUEST_CANCELLED);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
 
-        const auto websocket = client.start_tunnel({{":method", "CONNECT"}, {":protocol", "websocket"},
-            {":scheme", "https"}, {":authority", "localhost"}, {":path", "/websocket"}, {"sec-websocket-version", "13"}});
+        constexpr std::array websocket_fields{ruvia::http_header_view{"sec-websocket-version", "13"}};
+        const auto websocket = client.start_tunnel(ruvia::http3_extended_connect_request_head_view{
+            .protocol_ = "websocket", .authority_ = "localhost", .target_ = "/websocket", .headers_ = websocket_fields});
         const auto& head = client.wait_for_response_head(websocket);
         EXPECT_EQ(head.status_, 200);
         EXPECT_TRUE(!head.header("sec-websocket-accept"));
@@ -945,9 +926,9 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_TRUE(!closed.reset_error_);
     }
 
-    const ruvia::test::http3_test_fields udp_head{{":method", "CONNECT"}, {":protocol", "connect-udp"},
-        {":scheme", "https"}, {":authority", "localhost"}, {":path", "/.well-known/masque/udp/echo.test/53/"},
-        {"capsule-protocol", "?1"}};
+    constexpr std::array udp_fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
+    const ruvia::http3_extended_connect_request_head_view udp_head{
+        .protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = udp_fields};
     {
         auto client = connect(port, identity);
         const auto tunnel = client.start_tunnel(udp_head);
@@ -1051,7 +1032,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     // RFC 9114 §8 permits.
     {
         auto client = connect(port, identity);
-        (void)client.start_request("GET", "hello");
+        (void)client.start_raw_request({{":method", "GET"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "hello"}});
         EXPECT_TRUE(client.wait_until([&client] { return client.closed(); }, client_timeout));
         const auto* close_error = ngtcp2_conn_get_ccerr2(client.native_handle());
         EXPECT_TRUE(close_error != nullptr && close_error->error_code == NGHTTP3_H3_MESSAGE_ERROR);
@@ -1102,7 +1083,12 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
             for (auto& fut : loop_futures) {
                 fut.get();
             }
-            EXPECT_EQ(completed_ops.load(), std::size_t{4 * (2 + 4 + 4) * 3});
+#ifdef RUVIA_ENABLE_HTTP2
+            constexpr std::size_t lanes_per_worker = 2 + 4 + 4;
+#else
+            constexpr std::size_t lanes_per_worker = 2 + 4;
+#endif
+            EXPECT_EQ(completed_ops.load(), std::size_t{4 * lanes_per_worker * 3});
         } catch (...) {
             client_loops.stop();
             client_loops.join();
@@ -1138,7 +1124,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     // gracefully (RFC 9114 §5.2): its requests are answered, the shutdown
     // notice and the final GOAWAY follow, then CONNECTION_CLOSE(H3_NO_ERROR).
     app.server({.worker_count_ = 4, .max_requests_per_connection_ = 2});
-    app_run capped(app);
+    ruvia::test::app_run capped(app);
     EXPECT_TRUE(started.try_acquire_for(10s));
     {
         auto client = connect(port, identity);

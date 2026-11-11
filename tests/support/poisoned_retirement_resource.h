@@ -6,7 +6,7 @@
 #include <memory_resource>
 #include <vector>
 
-namespace ruvia::testing {
+namespace ruvia::test {
 
 class poisoned_retirement_resource final : public std::pmr::memory_resource {
 public:
@@ -75,4 +75,4 @@ private:
     std::size_t live_bytes_{};
 };
 
-}  // namespace ruvia::testing
+}  // namespace ruvia::test

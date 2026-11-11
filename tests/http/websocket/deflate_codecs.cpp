@@ -13,32 +13,15 @@
 #include "ruvia/http/websocket_deflate_codecs.h"
 
 #include "failing_memory_resource.h"
+#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
+
+using ruvia::test::failing_memory_resource;
 
 namespace {
 using namespace ruvia;
 
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations_{0};
-    std::size_t live_bytes_{0};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        ++allocations_;
-        live_bytes_ += bytes_value;
-        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        live_bytes_ -= bytes_value;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
+using ruvia::test::counting_memory_resource;
 
 [[nodiscard]] std::string sample_message(std::size_t size, unsigned seed) {
     std::string message(size, '\0');
@@ -202,27 +185,27 @@ TEST(Ruvia, websocket_deflate_codecs_inflate_messages_from_every_sender_window) 
 }
 
 TEST(Ruvia, websocket_deflate_codecs_allocate_once_per_codec_from_their_resource) {
-    counting_resource resource;
+    counting_memory_resource resource;
     {
         websocket_deflate_codecs codecs(&resource);
-        EXPECT_EQ(resource.allocations_, 0U);
+        EXPECT_EQ(resource.allocation_count(), 0U);
         const auto payload = sample_message(10'000, 9);
 
         const auto compressed = deflate(codecs, payload, 6, 15);
         EXPECT_TRUE(inflate(codecs, compressed) == payload);
-        const auto warm_allocations = resource.allocations_;
+        const auto warm_allocations = resource.allocation_count();
         EXPECT_TRUE(warm_allocations != 0);
         for (int message = 0; message < 4; ++message) {
             EXPECT_TRUE(deflate(codecs, payload, 6, 15) == compressed);
             EXPECT_TRUE(inflate(codecs, compressed) == payload);
         }
-        EXPECT_EQ(resource.allocations_, warm_allocations);
+        EXPECT_EQ(resource.allocation_count(), warm_allocations);
 
         // Another level or window gets its own deflater; the inflater is shared.
         EXPECT_TRUE(inflate(codecs, deflate(codecs, payload, 1, 10)) == payload);
-        EXPECT_TRUE(resource.allocations_ > warm_allocations);
+        EXPECT_TRUE(resource.allocation_count() > warm_allocations);
     }
-    EXPECT_EQ(resource.live_bytes_, 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
 }
 
 TEST(Ruvia, websocket_deflate_codecs_recover_from_codec_allocation_failure) {
@@ -247,10 +230,10 @@ TEST(Ruvia, websocket_deflate_codecs_recover_from_codec_allocation_failure) {
 TEST(Ruvia, websocket_deflate_codecs_reject_invalid_parameters) {
     websocket_deflate_codecs codecs(nullptr);
     std::pmr::string out;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 7)); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 16)); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, -1, 15)); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 10, 15)); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 7)); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 6, 16)); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, -1, 15)); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { static_cast<void>(codecs.deflate_message("x", out, 10, 15)); }));
     EXPECT_TRUE(out.empty());
 }
 

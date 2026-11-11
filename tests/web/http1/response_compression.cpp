@@ -31,6 +31,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
+#include "scoped_temp_directory.h"
 #include "test_io_context.h"
 
 // Inline buffered-response compression on one worker, whose encoders are
@@ -59,8 +60,8 @@ const std::string small_body = make_body(3'000, 1);
 const std::string large_body = make_body(60'000, 2);
 
 [[nodiscard]] const std::filesystem::path& file_dir() {
-    static const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ruvia_response_compression_files";
-    return dir;
+    static const ruvia::test::scoped_temp_directory directory("ruvia-response-compression");
+    return directory.path();
 }
 
 std::unique_ptr<ruvia::static_root> resident_root;
@@ -510,10 +511,8 @@ TEST(Ruvia, http1_application_encoded_responses_vary_on_accept_encoding) {
 // are answered with the full coded representation; one range stays a 206.
 TEST(Ruvia, http1_precompressed_variant_answers_multiple_ranges_in_full) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_response_compression_coded";
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia-response-compression-coded");
+    const auto& dir = directory.path();
     const std::string sidecar = "gz-sidecar-bytes";
     std::ofstream(dir / "asset.txt", std::ios::binary) << "plain-asset-body";
     std::ofstream(dir / "asset.txt.gz", std::ios::binary) << sidecar;
@@ -568,7 +567,6 @@ TEST(Ruvia, http1_precompressed_variant_answers_multiple_ranges_in_full) {
     EXPECT_TRUE(identity.find("\r\nContent-Encoding:") == std::string::npos);
     server.finish();
     coded_root.reset();
-    fs::remove_all(dir, ignored);
 }
 
 // RFC 9110 §8.6: a HEAD response's Content-Length equals the GET content length

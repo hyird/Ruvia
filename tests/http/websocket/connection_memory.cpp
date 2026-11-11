@@ -14,37 +14,14 @@
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
 
+#include "memory_resource_fixture.h"
 #include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
 using namespace ruvia;
 
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations_{0};
-    std::size_t live_bytes_{0};
-    bool reject_{false};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (reject_) {
-            throw std::bad_alloc();
-        }
-        ++allocations_;
-        live_bytes_ += bytes_value;
-        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        live_bytes_ -= bytes_value;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
+using ruvia::test::counting_memory_resource;
 
 bool zero_mask(void*, websocket_mask_key_type& key) noexcept {
     key = {};
@@ -120,7 +97,7 @@ struct server_endpoint final {
               return options;
           }()) {}
 
-    counting_resource memory_;
+    counting_memory_resource memory_;
     http_io_buffer input_;
     websocket_connection protocol_;
 };
@@ -136,7 +113,7 @@ TEST(Ruvia, ws_shared_deflate_matches_private_no_context_takeover_bytes) {
     for (const int window : {8, 11, 15}) {
         for (const int level : {1, 6, 9}) {
             const websocket_compression compression{.enabled_ = true, .server_max_window_bits_ = window};
-            counting_resource codec_memory;
+            counting_memory_resource codec_memory;
             websocket_deflate_codecs codecs(&codec_memory);
             server_endpoint shared(
                 {.compression_ = compression, .deflater_ = {.compression_level_ = level}, .shared_deflate_ = &codecs});
@@ -160,8 +137,8 @@ TEST(Ruvia, ws_shared_deflate_matches_private_no_context_takeover_bytes) {
             // Both connections hold the same buffers; only the private one
             // also holds codec state, at least the hash heads and pending
             // buffer of 64 KiB each.
-            EXPECT_TRUE(owned.memory_.live_bytes_ >= shared.memory_.live_bytes_ + std::size_t{64} * 1024);
-            EXPECT_TRUE(codec_memory.allocations_ > 0);
+            EXPECT_TRUE(owned.memory_.live_bytes() >= shared.memory_.live_bytes() + std::size_t{64} * 1024);
+            EXPECT_TRUE(codec_memory.allocation_count() > 0);
         }
     }
 }
@@ -177,11 +154,11 @@ TEST(Ruvia, ws_shared_deflate_resets_after_a_failed_connection_message) {
     const auto message = sample_message(200'000, 4);
 
     // The compressed output outgrows its buffer mid-message.
-    failing.memory_.reject_ = true;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    failing.memory_.reject_allocations(true);
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         static_cast<void>(failing.protocol_.submit_frame(websocket_opcode::binary, message));
     }));
-    failing.memory_.reject_ = false;
+    failing.memory_.reject_allocations(false);
     EXPECT_TRUE(failing.protocol_.liveness_mode() == websocket_liveness_mode::open);
     EXPECT_TRUE(failing.protocol_.output_plan().bytes().empty());
 
@@ -224,23 +201,23 @@ TEST(Ruvia, ws_connection_buffers_keep_bounded_storage_after_a_large_message) {
 
     const auto small = sample_message(32, 5);
     exchange(small, true, small);
-    const auto baseline = server.memory_.live_bytes_;
+    const auto baseline = server.memory_.live_bytes();
     // 64 KiB through each buffer: raw input, inflated input, an output frame
     // and an outbound trial compression that did not shrink the payload.
     const auto large = std::size_t{64} * 1024;
     exchange(noise_message(large), false, noise_message(large));
     exchange(sample_message(large, 6), true, sample_message(large, 7));
-    EXPECT_TRUE(server.memory_.live_bytes_ <= baseline + 4 * websocket_retained_buffer_bytes);
+    EXPECT_TRUE(server.memory_.live_bytes() <= baseline + 4 * websocket_retained_buffer_bytes);
 
     // Messages within the bound reuse the retained storage.
     const auto medium = sample_message(8 * 1024, 8);
     exchange(medium, false, noise_message(8 * 1024));
-    const auto allocations = server.memory_.allocations_;
+    const auto allocations = server.memory_.allocation_count();
     for (int round = 0; round < 4; ++round) {
         exchange(medium, false, noise_message(8 * 1024));
     }
     if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-        EXPECT_EQ(server.memory_.allocations_, allocations);
+        EXPECT_EQ(server.memory_.allocation_count(), allocations);
     }
 }
 
@@ -253,11 +230,11 @@ TEST(Ruvia, ws_takeover_directions_keep_private_codecs_beside_shared_ones) {
         const websocket_compression compression{.enabled_ = true,
             .server_no_context_takeover_ = !server_takeover,
             .client_no_context_takeover_ = false};
-        counting_resource codec_memory;
+        counting_memory_resource codec_memory;
         websocket_deflate_codecs codecs(&codec_memory);
         server_endpoint server({.compression_ = compression, .shared_deflate_ = &codecs});
         client_endpoint peer(compression);
-        const auto idle_bytes = server.memory_.live_bytes_;
+        const auto idle_bytes = server.memory_.live_bytes();
 
         std::size_t first_size = 0;
         for (int round = 0; round < 3; ++round) {
@@ -279,8 +256,8 @@ TEST(Ruvia, ws_takeover_directions_keep_private_codecs_beside_shared_ones) {
         }
         // The private inflater (and deflater with server takeover) came from
         // the connection; the shared codecs serve only a no-takeover sender.
-        EXPECT_TRUE(server.memory_.live_bytes_ > idle_bytes + std::size_t{32} * 1024);
-        EXPECT_TRUE((codec_memory.allocations_ != 0) == !server_takeover);
+        EXPECT_TRUE(server.memory_.live_bytes() > idle_bytes + std::size_t{32} * 1024);
+        EXPECT_TRUE((codec_memory.allocation_count() != 0) == !server_takeover);
     }
 }
 
@@ -294,7 +271,7 @@ TEST(Ruvia, ws_takeover_deflater_uses_the_configured_mem_level) {
     std::size_t codec_bytes[2]{};
     for (const int mem_level : {8, 4}) {
         server_endpoint server({.compression_ = compression, .deflater_ = {.mem_level_ = mem_level}});
-        const auto idle_bytes = server.memory_.live_bytes_;
+        const auto idle_bytes = server.memory_.live_bytes();
         client_endpoint peer(compression);
         for (int round = 0; round < 2; ++round) {
             EXPECT_TRUE(server.protocol_.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
@@ -303,18 +280,18 @@ TEST(Ruvia, ws_takeover_deflater_uses_the_configured_mem_level) {
             const auto event = peer.protocol_.next_event();
             EXPECT_TRUE(event && event->message() && event->message()->payload() == message);
         }
-        codec_bytes[mem_level == 8 ? 0 : 1] = server.memory_.live_bytes_ - idle_bytes;
+        codec_bytes[mem_level == 8 ? 0 : 1] = server.memory_.live_bytes() - idle_bytes;
     }
     EXPECT_TRUE(codec_bytes[0] >= codec_bytes[1] + std::size_t{96} * 1024);
 }
 
 TEST(Ruvia, ws_deflate_mem_level_is_validated) {
     for (const int mem_level : {0, 10}) {
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
             websocket_connection invalid({.deflater_ = {.mem_level_ = mem_level}});
         }));
         http_io_buffer input;
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
             websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(), .deflater_ = {.mem_level_ = mem_level}});
         }));
     }

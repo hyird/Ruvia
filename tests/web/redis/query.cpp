@@ -94,5 +94,5 @@ TEST(Ruvia, redis_predicate_negation_and_entity_column_name) {
     const auto pred = !(redis_query_user::column<"email">() == "alice@example.com");
     EXPECT_TRUE(!pred.empty());
     const ruvia::redis_predicate empty;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)!empty; }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)!empty; }));
 }

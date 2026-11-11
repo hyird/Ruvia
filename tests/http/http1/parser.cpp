@@ -23,6 +23,8 @@
 #include "failing_memory_resource.h"
 #include "http1_request_message_fixture.h"
 
+using ruvia::test::failing_memory_resource;
+
 namespace {
 
 using ruvia::http1_chunk_decode_error;
@@ -34,7 +36,7 @@ using ruvia::http_parse_error;
 using ruvia::http_protocol_version;
 using ruvia::http_request_target_form;
 using ruvia::http_unsupported_expectation_policy;
-using ruvia::testing::parse_http1_request_message;
+using ruvia::test::parse_http1_request_message;
 
 const ruvia::http1_known_length_request_body& require_known_length(
     const ruvia::http1_request_body_plan& plan) {

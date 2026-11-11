@@ -12,7 +12,6 @@ namespace ruvia {
 
 class event_loop;
 class worker_runtime;
-class worker_runtime_context;
 
 struct worker_notification_options final {
     // Bounds the Windows native wake-pipe connection wait (at most one minute).
@@ -40,7 +39,7 @@ class worker_notification_state;
 // A startup-created, address-stable, cross-thread latched wake channel for one
 // worker runtime. The native wake pair is created at construction; the receiver
 // Asio handle is adopted on the worker's first wait. The notification borrows
-// its worker_runtime_context, which must outlive it. Before destruction, every
+// its worker runtime or event loop, which must outlive it. Before destruction, every
 // notify() call must have returned and no future call may begin. close()
 // rejects new notifications but does not join producers. The owner worker must
 // explicitly close the notification and join every suspended wait before its
@@ -66,8 +65,6 @@ public:
 
     explicit worker_notification(
         worker_runtime& runtime, worker_notification_options options = {});
-    explicit worker_notification(
-        worker_runtime_context& runtime, worker_notification_options options = {});
     // Borrows the loop's handle; the loop must remain address-stable and alive.
     explicit worker_notification(
         const event_loop& loop, worker_notification_options options = {});

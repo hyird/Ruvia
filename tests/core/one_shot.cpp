@@ -614,7 +614,7 @@ TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
         SCOPED_TRACE(fail_move);
         asio::io_context io;
         auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
-        failing_memory_resource resource;
+        ruvia::test::failing_memory_resource resource;
         payload_state state;
         auto [completion, receiver] = ruvia::make_one_shot<payload>(
             attachment.loop().handle(), {.resource_ = &resource});

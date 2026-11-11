@@ -1,6 +1,7 @@
 #include <array>
 #include <memory_resource>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -119,41 +120,21 @@ detail::controller_route_builder::controller_route_builder(router& router_value,
 
 detail::controller_route_builder::~controller_route_builder() = default;
 
-void detail::controller_route_builder::register_route(http_known_method method, std::string_view path,
-    route_handler handler, std::span<const controller_middleware_descriptor> middlewares) const {
+void detail::controller_route_builder::register_route(http_known_method method, std::string_view method_token,
+    std::string_view path, route_handler handler, std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
     const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(method, {}, joined.view_,
+    router_.register_endpoint(method, method_token, joined.view_,
         route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
         middlewares_, middlewares);
 }
 
-void detail::controller_route_builder::register_route(http_known_method method, std::string_view path,
-    route_stream_handler handler,
-    std::span<const controller_middleware_descriptor> middlewares) const {
-    const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
-    const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(method, {}, joined.view_,
-        route_endpoint::response_stream(callback_access::invoke(handler), body_mode),
-        callback_access::target(handler), middlewares_, middlewares);
-}
-
-void detail::controller_route_builder::register_extension_method_route(std::string_view method_token,
-    std::string_view path, route_handler handler,
-    std::span<const controller_middleware_descriptor> middlewares) const {
-    const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
-    const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(http_known_method::unknown, method_token, joined.view_,
-        route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
-        middlewares_, middlewares);
-}
-
-void detail::controller_route_builder::register_extension_method_route(std::string_view method_token,
+void detail::controller_route_builder::register_route(http_known_method method, std::string_view method_token,
     std::string_view path, route_stream_handler handler,
     std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
     const scoped_controller_path joined(prefix_, path);
-    router_.register_endpoint(http_known_method::unknown, method_token, joined.view_,
+    router_.register_endpoint(method, method_token, joined.view_,
         route_endpoint::response_stream(callback_access::invoke(handler), body_mode),
         callback_access::target(handler), middlewares_, middlewares);
 }
@@ -161,14 +142,12 @@ void detail::controller_route_builder::register_extension_method_route(std::stri
 void detail::controller_route_builder::register_tunnel_route(std::string_view protocol,
     std::string_view target, route_stream_handler handler,
     std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const {
-    if (protocol.empty()) {
-        router_.register_endpoint(http_known_method::connect, {}, target,
-            route_endpoint::tunnel(process_resource(), callback_access::invoke(handler), protocol, config),
-            callback_access::target(handler), middlewares_, middlewares);
-        return;
+    std::optional<scoped_controller_path> joined;
+    if (!protocol.empty()) {
+        joined.emplace(prefix_, target);
     }
-    const scoped_controller_path joined(prefix_, target);
-    router_.register_endpoint(http_known_method::connect, {}, joined.view_,
+    const auto path = protocol.empty() ? target : joined->view_;
+    router_.register_endpoint(http_known_method::connect, {}, path,
         route_endpoint::tunnel(process_resource(), callback_access::invoke(handler), protocol, config),
         callback_access::target(handler), middlewares_, middlewares);
 }

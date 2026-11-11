@@ -15,7 +15,7 @@
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_response_server.h"
 
-#include "request_header_memory_fixture.h"
+#include "memory_resource_fixture.h"
 
 TEST(Ruvia, http_connect_udp_default_template_roundtrip_and_target_rejection) {
     for (const auto host : {"example.test", "192.0.2.6", "2001:db8::42"}) {
@@ -503,7 +503,7 @@ TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
 }
 
 TEST(Ruvia, http_connect_udp_target_construction_inherits_resource) {
-    ruvia::test::header_memory memory;
+    ruvia::test::counting_memory_resource memory;
     {
         auto parsed = ruvia::parse_http_connect_udp_path(
             "/.well-known/masque/udp/copy-resource-source.example.test/443/", &memory);
@@ -516,27 +516,27 @@ TEST(Ruvia, http_connect_udp_target_construction_inherits_resource) {
         EXPECT_EQ(std::string_view(copied.host_), std::string_view(expected_host));
         EXPECT_EQ(copied.port_, 443);
 
-        memory.reject_ = true;
+        memory.reject_allocations(true);
         ruvia::http_connect_udp_target moved(std::move(copied));
         EXPECT_EQ(moved.host_.get_allocator().resource(), &memory);
         EXPECT_EQ(std::string_view(moved.host_), std::string_view(expected_host));
         EXPECT_EQ(moved.port_, 443);
     }
-    EXPECT_EQ(memory.live_bytes_, 0U);
+    EXPECT_EQ(memory.live_bytes(), 0U);
 }
 
 TEST(Ruvia, http_connect_udp_target_assignment_retains_resource_and_rolls_back_failure) {
     for (const bool move_assignment : {false, true}) {
         SCOPED_TRACE(move_assignment);
-        ruvia::test::header_memory source_memory;
-        ruvia::test::header_memory destination_memory;
+        ruvia::test::counting_memory_resource source_memory;
+        ruvia::test::counting_memory_resource destination_memory;
         {
             ruvia::http_connect_udp_target source{
                 std::pmr::string("long-source-subdomain.example.test", &source_memory), 443};
             ruvia::http_connect_udp_target destination{
                 std::pmr::string("old.test", &destination_memory), 80};
-            source_memory.reject_ = true;
-            destination_memory.reject_ = true;
+            source_memory.reject_allocations(true);
+            destination_memory.reject_allocations(true);
             if (move_assignment) {
                 EXPECT_THROW(destination = std::move(source), std::bad_alloc);
             } else {
@@ -549,7 +549,7 @@ TEST(Ruvia, http_connect_udp_target_assignment_retains_resource_and_rolls_back_f
             EXPECT_EQ(source.host_.get_allocator().resource(), &source_memory);
             EXPECT_EQ(destination.host_.get_allocator().resource(), &destination_memory);
 
-            destination_memory.reject_ = false;
+            destination_memory.reject_allocations(false);
             if (move_assignment) {
                 destination = std::move(source);
             } else {
@@ -559,19 +559,19 @@ TEST(Ruvia, http_connect_udp_target_assignment_retains_resource_and_rolls_back_f
             EXPECT_EQ(destination.port_, 443);
             EXPECT_EQ(destination.host_.get_allocator().resource(), &destination_memory);
         }
-        EXPECT_EQ(source_memory.live_bytes_, 0U);
-        EXPECT_EQ(destination_memory.live_bytes_, 0U);
+        EXPECT_EQ(source_memory.live_bytes(), 0U);
+        EXPECT_EQ(destination_memory.live_bytes(), 0U);
     }
 }
 
 TEST(Ruvia, http_connect_udp_target_same_resource_move_requires_no_allocation) {
-    ruvia::test::header_memory memory;
+    ruvia::test::counting_memory_resource memory;
     {
         ruvia::http_connect_udp_target source{
             std::pmr::string("long-source-subdomain.example.test", &memory), 443};
         ruvia::http_connect_udp_target destination{
             std::pmr::string("long-retired-subdomain.example.test", &memory), 80};
-        memory.reject_ = true;
+        memory.reject_allocations(true);
 
         destination = std::move(source);
 
@@ -579,5 +579,5 @@ TEST(Ruvia, http_connect_udp_target_same_resource_move_requires_no_allocation) {
         EXPECT_EQ(destination.port_, 443);
         EXPECT_EQ(destination.host_.get_allocator().resource(), &memory);
     }
-    EXPECT_EQ(memory.live_bytes_, 0U);
+    EXPECT_EQ(memory.live_bytes(), 0U);
 }

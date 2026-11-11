@@ -1,12 +1,15 @@
 #include "coding/http_content_coding.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
+#include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -89,24 +92,24 @@ void http_content_coding_field_parser::update(std::string_view value) noexcept {
         return;
     }
     // Content-Encoding members are tokens (RFC 9110 section 8.4.1).
-    invalid_ = http_visit_token_list(value, http_field_list_role::recipient, [this](std::string_view token) noexcept {
-        const auto coding = http_content_coding_from_token(token);
-        if (coding.has_value() && *coding == http_content_coding::identity) {
-            return true;
-        }
-        if (codings_.size_ == max_content_codings) {
-            // Keep scanning: later malformed members still invalidate the field.
-            depth_exceeded_ = true;
-        } else if (coding.has_value()) {
-            codings_.values_[codings_.size_++] = *coding;
-        } else {
-            ++codings_.size_;
-        }
-        if (!coding.has_value()) {
-            unknown_coding_ = true;
-        }
-        return true;
-    }) != http_field_list_parse_status::ok;
+    invalid_ = visit_http_content_coding_field(value, http_field_list_role::recipient,
+                   [this](std::string_view, std::optional<http_content_coding> coding) noexcept {
+                       if (coding.has_value() && *coding == http_content_coding::identity) {
+                           return true;
+                       }
+                       if (codings_.size_ == max_content_codings) {
+                           // Keep scanning: later malformed members still invalidate the field.
+                           depth_exceeded_ = true;
+                       } else if (coding.has_value()) {
+                           codings_.values_[codings_.size_++] = *coding;
+                       } else {
+                           ++codings_.size_;
+                       }
+                       if (!coding.has_value()) {
+                           unknown_coding_ = true;
+                       }
+                       return true;
+                   }) != http_field_list_parse_status::ok;
 }
 
 http_content_coding_field_result http_content_coding_field_parser::finish() const noexcept {
@@ -167,7 +170,7 @@ http_content_coding_field_result parse_http_content_coding_headers(
 http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
     detail::http_content_coding_field_parser parser;
     (void)detail::http_request_access::visit_known_headers(
-        request, detail::request_header_kind::content_encoding, [&parser](std::string_view value) noexcept {
+        request, detail::http_field_kind::content_encoding, [&parser](std::string_view value) noexcept {
             parser.update(value);
             return true;
         });
@@ -353,5 +356,111 @@ void http_response_coding_qualities::update(std::string_view accept_encoding) no
             }
         }
     });
+}
+
+bool http_accepts_encoding(const http_request& request, std::string_view coding) noexcept {
+    http_accepted_encoding_quality quality;
+    bool present = false;
+    (void)detail::http_request_access::visit_known_headers(
+        request, detail::http_field_kind::accept_encoding, [&](std::string_view value) noexcept {
+            present = true;
+            quality.update(value, coding);
+            return true;
+        });
+    return !present || quality.accepts(http_ascii_equals_ignore_case(coding, "identity"));
+}
+
+bool http_response_coding_selection::accepts(std::string_view coding, const http_request& request) const noexcept {
+    if (const auto known = http_content_coding_from_token(coding)) {
+        return accepts(*known);
+    }
+    return http_accepts_encoding(request, coding);
+}
+
+http_response_content_coding_status evaluate_http_response_content_coding(
+    const http_response_coding_selection& selection, const http_response& response,
+    const http_request* request) {
+    if (!detail::response_has_known_header(response, detail::response_header_content_encoding)) {
+        return http_response_content_coding_status::absent;
+    }
+    const bool evaluate_extensions = request != nullptr &&
+                                     detail::http_request_access::has_known_header(*request, detail::http_field_kind::accept_encoding);
+    struct extension_quality final {
+        std::string_view token_;
+        http_accepted_encoding_quality quality_;
+    };
+    std::array<extension_quality, 8> local{};
+    std::size_t local_size = 0;
+    std::pmr::vector<extension_quality> overflow(response.memory_resource());
+    const auto extensions = [&]() noexcept -> std::span<extension_quality> {
+        return overflow.empty() ? std::span(local.data(), local_size) : std::span(overflow);
+    };
+    bool accepted = true;
+    bool invalid = false;
+    const auto remember_extension = [&](std::string_view token) {
+        for (const auto& extension : extensions()) {
+            if (http_ascii_equals_ignore_case(extension.token_, token) ||
+                (is_compress_coding_token(extension.token_) && is_compress_coding_token(token))) {
+                return;
+            }
+        }
+        if (overflow.empty() && local_size < local.size()) {
+            local[local_size++] = {token, {}};
+        } else {
+            if (overflow.empty()) {
+                overflow.reserve(local.size() * 2);
+                overflow.insert(overflow.end(), local.begin(), local.end());
+            }
+            overflow.push_back({token, {}});
+        }
+    };
+    for (const auto& header : response.headers()) {
+        if (detail::http_response_header_access::known_bit(header) != detail::response_header_content_encoding) {
+            continue;
+        }
+        const auto status = detail::visit_http_content_coding_field(header.value(), detail::http_field_list_role::recipient,
+            [&](std::string_view token, std::optional<http_content_coding> coding) {
+                if (coding.has_value()) {
+                    accepted = accepted && selection.accepts(*coding);
+                } else if (evaluate_extensions) {
+                    remember_extension(token);
+                }
+                return true;
+            });
+        invalid = invalid || status != detail::http_field_list_parse_status::ok;
+    }
+    if (invalid) {
+        return http_response_content_coding_status::invalid;
+    }
+    if (!accepted) {
+        return http_response_content_coding_status::not_acceptable;
+    }
+    if (!extensions().empty()) {
+        bool field_present = false;
+        (void)detail::http_request_access::visit_known_headers(
+            *request, detail::http_field_kind::accept_encoding, [&](std::string_view value) noexcept {
+                field_present = true;
+                visit_accept_encoding_members(value, [&](std::string_view token, int weight) noexcept {
+                    for (auto& extension : extensions()) {
+                        const bool matches = http_ascii_equals_ignore_case(extension.token_, token) ||
+                                             (is_compress_coding_token(extension.token_) && is_compress_coding_token(token));
+                        if (matches) {
+                            extension.quality_.explicit_quality_ = std::max(extension.quality_.explicit_quality_, weight);
+                        } else if (token == "*") {
+                            extension.quality_.wildcard_quality_ = std::max(extension.quality_.wildcard_quality_, weight);
+                        }
+                    }
+                });
+                return true;
+            });
+        if (field_present) {
+            for (const auto& extension : extensions()) {
+                if (!extension.quality_.accepts()) {
+                    return http_response_content_coding_status::not_acceptable;
+                }
+            }
+        }
+    }
+    return http_response_content_coding_status::accepted;
 }
 }  // namespace ruvia

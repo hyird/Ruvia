@@ -17,7 +17,6 @@
 #include <asio/read.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
-#include <openssl/bio.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/timer.h"
@@ -26,8 +25,8 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
+#include "app_run.h"
 #include "tcp_port_reservation.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 // An interim head sent from a handler first writes the pipelined responses
@@ -127,21 +126,14 @@ using namespace interim_phase_timeout_test;
 
 TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
     ruvia::test::tls_identity identity("localhost");
-    const auto private_key = identity.ca_file_.parent_path() / "key.pem";
-    {
-        std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(private_key.string().c_str(), "w"), BIO_free);
-        if (!output || ruvia::test::write_tls_private_key(
-                           output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle())) != 1) {
-            throw std::runtime_error("cannot write interim phase test private key");
-        }
-    }
+    const auto private_key = identity.private_key_file();
 
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
 
     auto& app = ruvia::app();
-    std::binary_semaphore started{0};
+    static std::binary_semaphore started{0};
     // Error handling runs while the response is prepared; it is handler work,
     // timed by idle_timeout, not by write_timeout.
     app.on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
@@ -155,15 +147,8 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
             .https_ = endpoint.port(),
             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
-        .on_start([&started] { started.release(); });
-    std::exception_ptr failure;
-    std::thread runner([&app, &failure] {
-        try {
-            app.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
+        .on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
     if (ready) {
@@ -211,7 +196,5 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
     }
     app.stop();
     runner.join();
-    if (failure) {
-        std::rethrow_exception(failure);
-    }
+    EXPECT_TRUE(runner.failure() == nullptr);
 }

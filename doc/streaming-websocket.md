@@ -113,7 +113,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 - 网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理，不新增保活探测。
 - 取消是协作式的：未绑定 `c.stop_token()` 的自定义等待须显式传入它，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
 
-FlexEdge 的最小接入：把 `c.stop_token()` 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端，不假定 FlexEdge 私有 API 名称：
+最小接入：把 `c.stop_token()` 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端：
 
 ```cpp
 #include <string>

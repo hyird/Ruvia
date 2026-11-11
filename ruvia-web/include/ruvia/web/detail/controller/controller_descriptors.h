@@ -170,13 +170,9 @@ private:
 
     // Each builds the endpoint its route kind runs and registers it through
     // the router's single registration path.
-    void register_route(http_known_method method, std::string_view path, route_handler handler,
-        std::span<const controller_middleware_descriptor> middlewares) const;
-    void register_route(http_known_method method, std::string_view path, route_stream_handler handler,
-        std::span<const controller_middleware_descriptor> middlewares) const;
-    void register_extension_method_route(std::string_view method_token, std::string_view path,
+    void register_route(http_known_method method, std::string_view method_token, std::string_view path,
         route_handler handler, std::span<const controller_middleware_descriptor> middlewares) const;
-    void register_extension_method_route(std::string_view method_token, std::string_view path,
+    void register_route(http_known_method method, std::string_view method_token, std::string_view path,
         route_stream_handler handler, std::span<const controller_middleware_descriptor> middlewares) const;
     void register_tunnel_route(std::string_view protocol, std::string_view target, route_stream_handler handler,
         std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const;

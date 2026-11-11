@@ -15,7 +15,7 @@ namespace {
 using ruvia::http_origin_view;
 using ruvia::http_scheme;
 using ruvia::make_http_origin_authority;
-using ruvia::testing::throws_on;
+using ruvia::test::throws_on;
 
 http_origin_view origin_for(
     std::string_view host, std::uint16_t port, http_scheme scheme = http_scheme::http) {

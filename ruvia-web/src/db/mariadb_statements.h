@@ -164,13 +164,19 @@ inline constexpr std::string_view mariadb_tracked_variables =
     "session_track_system_variables,session_track_schema";
 
 // Turns on the session tracking the statement cache relies on.
-inline constexpr std::string_view mariadb_session_tracking_setup =
-    "SET SESSION session_track_system_variables = '"
-    "sql_mode,old_mode,character_set_client,character_set_connection,character_set_results,time_zone,"
-    "div_precision_increment,default_week_format,lc_time_names,max_sort_length,group_concat_max_len,"
-    "session_track_system_variables,session_track_schema"
-    "', session_track_schema = ON";
-static_assert(mariadb_session_tracking_setup.find(mariadb_tracked_variables) != std::string_view::npos);
+inline constexpr auto mariadb_session_tracking_storage = [] {
+    constexpr std::string_view prefix = "SET SESSION session_track_system_variables = '";
+    constexpr std::string_view suffix = "', session_track_schema = ON";
+    std::array<char, prefix.size() + mariadb_tracked_variables.size() + suffix.size()> statement{};
+    auto out = statement.begin();
+    for (const auto part : std::array{prefix, mariadb_tracked_variables, suffix}) {
+        for (const char byte : part) {
+            *out++ = byte;
+        }
+    }
+    return statement;
+}();
+inline constexpr std::string_view mariadb_session_tracking_setup(mariadb_session_tracking_storage.data(), mariadb_session_tracking_storage.size());
 
 // One prepared execution as a sequence of libmariadb operations: after a
 // stored procedure ran, reading back the session's tracked variables;

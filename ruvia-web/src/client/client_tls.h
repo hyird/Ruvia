@@ -15,11 +15,11 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/tls_config.h"
 
+#include "tls/dns_host.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_files.h"
 #include "tls/tls_protocol_policy.h"
 #include "util/config_validation.h"
-#include "util/dns_host.h"
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool is_client_ip_address(std::string_view host) noexcept {
@@ -109,7 +109,6 @@ enum class client_alpn : std::uint8_t {
     negotiate,
 };
 
-[[nodiscard]] std::string_view selected_client_alpn(SSL* ssl) noexcept;
 // Startup-only. Applies the shared TLS protocol policy (tls_protocol_policy.h);
 // trust and client identity loading have one implementation; the ALPN offer is
 // installed per connection by the TCP transport.

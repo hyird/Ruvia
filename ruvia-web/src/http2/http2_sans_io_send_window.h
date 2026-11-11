@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/core/task.h"
@@ -34,6 +35,20 @@ enum class http2_stream_data_write_status : std::uint8_t {
     invalid_state,
     content_length_exceeded,
 };
+
+struct http2_stream_data_submit_result final {
+    http2_data_submit_result progress_{};
+    // Only invalid_state or content_length_exceeded; no bytes were consumed.
+    std::optional<http2_stream_data_write_status> failure_{};
+};
+
+// One synchronous DATA submission. The caller already owns output credit for
+// nonempty bytes and keeps the payload alive. Records consumed credit, releases
+// unused credit on every exit, and wakes the socket writer even on exceptions.
+[[nodiscard]] http2_stream_data_submit_result submit_http2_stream_data(
+    ruvia::http2_connection& connection, std::uint32_t stream_id,
+    worker_signal& write_signal, http2_data_output_budget& output_budget,
+    std::string_view bytes, http2_end_stream end_stream);
 
 // Submits caller-owned input with a credit-sized payload allowance, retaining
 // each unconsumed suffix until window and output credit are available.

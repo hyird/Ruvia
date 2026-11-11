@@ -14,6 +14,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
@@ -30,7 +32,8 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_handle& origin) {
     std::pmr::unsynchronized_pool_resource memory;
     std::pmr::string target("/features/redirect", &memory);
     for (unsigned hop = 0; hop != 4; ++hop) {
-        auto response = co_await origin.get(target).send();
+        // Disable the fluent client's automatic redirects to inspect each hop.
+        auto response = co_await origin.get(target).redirects(0).send();
         if (!ruvia::is_http_redirect_status(response.status())) {
             auto bytes_value = co_await response.stream().read_all();
             std::cout << "redirected bytes=" << bytes_value.bytes().size() << '\n';

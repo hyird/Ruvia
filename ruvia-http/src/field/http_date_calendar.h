@@ -22,6 +22,6 @@ inline constexpr std::array<std::string_view, 12> http_month_names{
 // four-digit wire year range.
 [[nodiscard]] std::string_view cached_date_header() noexcept;
 
-// Bare date value (no field name, no CRLF) for HPACK-encoded HTTP/2 headers.
+// Bare date value (no field name, no CRLF) for HTTP/2 and HTTP/3 headers.
 [[nodiscard]] std::string_view cached_date_value() noexcept;
 }  // namespace ruvia::detail

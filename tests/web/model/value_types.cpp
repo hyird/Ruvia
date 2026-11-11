@@ -80,18 +80,18 @@ TEST(Ruvia, model_narrow_values_parse_json_form_and_reject_float_as_integer) {
     EXPECT_EQ(json.get<"i8">().value_, std::int8_t{-128});
     EXPECT_EQ(json.get<"u16">().value_, std::uint16_t{65535});
     EXPECT_EQ(json.get<"real">().value_, 1.5);
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<narrow_values>(R"({"i8":1.5,"u8":2,"i16":3,"u16":4,"real":1})");
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int8>("128"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int8>("-129"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint8>("-1"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint8>("256"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int16>("32768"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int16>("-32769"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint16>("65536"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint16>("-1"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::int8>("128"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::int8>("-129"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::uint8>("-1"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::uint8>("256"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::int16>("32768"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::int16>("-32769"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::uint16>("65536"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::uint16>("-1"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_form<narrow_values>("i8=128&u8=255&i16=-32768&u16=65535&real=1.5");
     }));
     auto form = ruvia::from_form<narrow_values>("i8=-128&u8=255&i16=-32768&u16=65535&real=1.5");

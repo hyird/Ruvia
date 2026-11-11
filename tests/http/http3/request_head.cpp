@@ -66,18 +66,15 @@ using field_list = std::initializer_list<std::pair<std::string_view, std::string
 // :path, Host comes from :authority, and split Cookie crumbs are rejoined
 // with "; " (RFC 9114 §4.2.1).
 TEST(Ruvia, http3_request_head_parses_get_received_over_nghttp3) {
-    ruvia::testing::http3_peers peers;
+    ruvia::test::http3_peers peers;
     EXPECT_TRUE(peers.bind());
     constexpr std::array request_fields{
-        ruvia::http3_field_view{":method", "GET"},
-        ruvia::http3_field_view{":scheme", "https"},
-        ruvia::http3_field_view{":authority", "example.test"},
-        ruvia::http3_field_view{":path", "/search?q=h3&page=2"},
-        ruvia::http3_field_view{"cookie", "session=abc"},
-        ruvia::http3_field_view{"accept", "text/html"},
-        ruvia::http3_field_view{"cookie", "theme=dark"},
+        ruvia::http_header_view{"cookie", "session=abc"},
+        ruvia::http_header_view{"accept", "text/html"},
+        ruvia::http_header_view{"cookie", "theme=dark"},
     };
-    EXPECT_TRUE(peers.client_.submit_request(0, request_fields, true) == ruvia::http3_status::accepted);
+    EXPECT_TRUE(peers.client_.submit_request_head(0, ruvia::http3_regular_request_head_view{
+                                                         .authority_ = "example.test", .target_ = "/search?q=h3&page=2", .headers_ = request_fields}) == ruvia::http3_status::accepted);
 
     std::pmr::unsynchronized_pool_resource resource;
     std::optional<ruvia::http3_headers_event> received;
@@ -143,8 +140,8 @@ TEST(Ruvia, http3_request_head_keeps_cookie_crumbs_after_moving) {
     };
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.expected_);
-        failing_memory_resource field_resource;
-        failing_memory_resource projection_resource;
+        ruvia::test::failing_memory_resource field_resource;
+        ruvia::test::failing_memory_resource projection_resource;
         {
             std::optional<ruvia::http3_request_head> head;
             {
@@ -197,8 +194,8 @@ TEST(Ruvia, http3_request_head_cookie_merge_releases_resources_after_allocation_
     if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
         GTEST_SKIP() << "requires STL without noexcept debug metadata allocation";
     }
-    failing_memory_resource field_resource;
-    failing_memory_resource projection_resource;
+    ruvia::test::failing_memory_resource field_resource;
+    ruvia::test::failing_memory_resource projection_resource;
     {
         const std::string first = "a=" + std::string(128, 'x');
         auto event = make_headers_event(&field_resource,
@@ -407,4 +404,192 @@ TEST(Ruvia, http3_request_head_enforces_materialized_field_count_limit) {
             }
         }
     }
+}
+
+TEST(Ruvia, http3_regular_request_submission_rejects_invalid_heads_without_consuming_stream_ids) {
+    ruvia::test::http3_peers peers;
+    ASSERT_TRUE(peers.bind());
+    const ruvia::http3_regular_request_head_view valid{
+        .authority_ = "example.test", .target_ = "/search?q=h3"};
+    auto invalid = valid;
+    invalid.method_ = "GET\r\n";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    invalid = valid;
+    invalid.method_ = "CONNECT";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    invalid = valid;
+    invalid.scheme_ = "1https";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    invalid = valid;
+    invalid.authority_ = "user@example.test";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    invalid = valid;
+    invalid.target_ = "https://other.test/resource";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    invalid = valid;
+    invalid.content_length_ = 1;
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    constexpr std::array forbidden_fields{ruvia::http_header_view{"Connection", "close"}};
+    invalid = valid;
+    invalid.headers_ = forbidden_fields;
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    constexpr std::array pseudo_fields{ruvia::http_header_view{":path", "/injected"}};
+    invalid.headers_ = pseudo_fields;
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    ruvia::test::http3_event_log server;
+    ASSERT_TRUE(peers.to_server(server));
+    EXPECT_TRUE(server.headers_.empty());
+    ASSERT_TRUE(peers.client_.submit_request_head(0, valid) == ruvia::http3_status::accepted);
+    ASSERT_TRUE(peers.to_server(server));
+    ASSERT_EQ(server.headers_.size(), std::size_t{1});
+    EXPECT_TRUE(server.headers_[0].field(":method") == "GET");
+    EXPECT_TRUE(server.headers_[0].field(":authority") == "example.test");
+    EXPECT_TRUE(server.headers_[0].field(":path") == "/search?q=h3");
+    EXPECT_TRUE(server.ended(0));
+}
+
+TEST(Ruvia, http3_all_request_head_forms_obey_local_and_negotiated_section_budgets) {
+    for (const bool local_limit : {false, true}) {
+        SCOPED_TRACE(local_limit);
+        ruvia::http3_connection_options server_options;
+        server_options.enable_connect_protocol_ = true;
+        ruvia::http3_connection_options client_options;
+        if (local_limit) {
+            client_options.max_field_section_size_ = 512;
+        } else {
+            server_options.max_field_section_size_ = 512;
+        }
+        ruvia::test::http3_peers peers(server_options, client_options);
+        ASSERT_TRUE(peers.bind());
+        ruvia::test::http3_event_log client;
+        ASSERT_TRUE(peers.to_client(client));
+        const std::string large_value(1024, 'x');
+        const std::array oversized{ruvia::http_header_view{"x-large", large_value}};
+        ruvia::http3_regular_request_head_view ordinary{
+            .authority_ = "example.test", .headers_ = oversized};
+        ruvia::http3_connect_request_head_view connect{
+            .authority_ = "example.test:443", .headers_ = oversized};
+        ruvia::http3_extended_connect_request_head_view extended{
+            .protocol_ = "connect-udp", .authority_ = "example.test", .target_ = "/ws", .headers_ = oversized};
+        EXPECT_TRUE(peers.client_.submit_request_head(0, ordinary) == ruvia::http3_status::invalid_state);
+        EXPECT_TRUE(peers.client_.submit_request_head(4, connect) == ruvia::http3_status::invalid_state);
+        EXPECT_TRUE(peers.client_.submit_request_head(8, extended) == ruvia::http3_status::invalid_state);
+        ruvia::test::http3_event_log server;
+        ASSERT_TRUE(peers.to_server(server));
+        EXPECT_TRUE(server.headers_.empty());
+        ordinary.headers_ = std::span<const ruvia::http_header_view>{};
+        connect.headers_ = std::span<const ruvia::http_header_view>{};
+        extended.headers_ = std::span<const ruvia::http_header_view>{};
+        ASSERT_TRUE(peers.client_.submit_request_head(0, ordinary) == ruvia::http3_status::accepted);
+        ASSERT_TRUE(peers.client_.submit_request_head(4, connect) == ruvia::http3_status::accepted);
+        ASSERT_TRUE(peers.client_.submit_request_head(8, extended) == ruvia::http3_status::accepted);
+        ASSERT_TRUE(peers.to_server(server));
+        ASSERT_EQ(server.headers_.size(), std::size_t{3});
+        EXPECT_TRUE(server.ended(0));
+        EXPECT_FALSE(server.ended(4));
+        EXPECT_FALSE(server.ended(8));
+        EXPECT_TRUE(server.headers_[1].field(":method") == "CONNECT");
+        EXPECT_TRUE(server.headers_[1].field(":authority") == "example.test:443");
+        EXPECT_FALSE(server.headers_[1].field(":scheme").has_value());
+        EXPECT_FALSE(server.headers_[1].field(":path").has_value());
+        EXPECT_TRUE(server.headers_[2].field(":protocol") == "connect-udp");
+        EXPECT_TRUE(server.headers_[2].field(":path") == "/ws");
+    }
+}
+
+TEST(Ruvia, http3_connect_request_submission_validates_authority_and_preserves_tunnel_bytes) {
+    ruvia::test::http3_peers peers;
+    ASSERT_TRUE(peers.bind());
+    for (const std::string_view authority : {"example.test", ":443", "user@example.test:443", "example.test:99999"}) {
+        SCOPED_TRACE(authority);
+        EXPECT_TRUE(peers.client_.submit_request_head(0,
+                        ruvia::http3_connect_request_head_view{.authority_ = authority}) == ruvia::http3_status::invalid_state);
+    }
+    constexpr std::array framing{ruvia::http_header_view{"Content-Length", "3"}};
+    EXPECT_TRUE(peers.client_.submit_request_head(0,
+                    ruvia::http3_connect_request_head_view{.authority_ = "example.test:443", .headers_ = framing}) ==
+                ruvia::http3_status::invalid_state);
+    ASSERT_TRUE(peers.client_.submit_request_head(0,
+                    ruvia::http3_connect_request_head_view{.authority_ = "example.test:443"}) == ruvia::http3_status::accepted);
+    ruvia::test::http3_event_log server;
+    ASSERT_TRUE(peers.to_server(server));
+    ruvia::http_response accepted;
+    ASSERT_FALSE(peers.server_.submit_connect_response_head(0, accepted).has_value());
+    ruvia::test::http3_event_log client;
+    ASSERT_TRUE(peers.to_client(client));
+    EXPECT_EQ(peers.client_.submit_data(0, ruvia::test::http3_bytes("tunnel")).accepted_bytes_, std::size_t{6});
+    ASSERT_TRUE(peers.client_.finish_stream(0) == ruvia::http3_status::accepted);
+    ASSERT_TRUE(peers.to_server(server));
+    ASSERT_EQ(server.headers_.size(), std::size_t{1});
+    EXPECT_TRUE(server.headers_[0].field(":authority") == "example.test:443");
+    EXPECT_FALSE(server.headers_[0].field("content-length").has_value());
+    EXPECT_EQ(server.data(0), "tunnel");
+    EXPECT_TRUE(server.ended(0));
+}
+
+TEST(Ruvia, http3_extended_connect_request_submission_requires_negotiation_and_valid_fields) {
+    ruvia::http3_extended_connect_request_head_view request{
+        .protocol_ = "websocket", .authority_ = "example.test", .target_ = "/ws"};
+    {
+        ruvia::test::http3_peers peers;
+        ASSERT_TRUE(peers.bind());
+        ruvia::test::http3_event_log client;
+        ASSERT_TRUE(peers.to_client(client));
+        EXPECT_TRUE(peers.client_.submit_request_head(0, request) == ruvia::http3_status::invalid_state);
+    }
+    ruvia::test::http3_peers peers({.enable_connect_protocol_ = true});
+    ASSERT_TRUE(peers.bind());
+    EXPECT_TRUE(peers.client_.submit_request_head(0, request) == ruvia::http3_status::invalid_state);
+    ruvia::test::http3_event_log client;
+    ASSERT_TRUE(peers.to_client(client));
+    auto invalid = request;
+    invalid.protocol_ = "bad protocol";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    invalid = request;
+    invalid.target_ = "https://other.test/ws";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    invalid = request;
+    invalid.scheme_ = "1https";
+    EXPECT_TRUE(peers.client_.submit_request_head(0, invalid) == ruvia::http3_status::invalid_state);
+    constexpr std::array fields{ruvia::http_header_view{"Sec-WebSocket-Version", "13"}};
+    request.headers_ = fields;
+    ASSERT_TRUE(peers.client_.submit_request_head(0, request) == ruvia::http3_status::accepted);
+    ruvia::test::http3_event_log server;
+    ASSERT_TRUE(peers.to_server(server));
+    ASSERT_EQ(server.headers_.size(), std::size_t{1});
+    EXPECT_TRUE(server.headers_[0].field(":method") == "CONNECT");
+    EXPECT_TRUE(server.headers_[0].field(":protocol") == "websocket");
+    EXPECT_TRUE(server.headers_[0].field("sec-websocket-version") == "13");
+    EXPECT_FALSE(server.ended(0));
+}
+
+TEST(Ruvia, http3_typed_streaming_request_sends_validated_trailers_after_exact_content_length) {
+    ruvia::test::http3_peers peers;
+    ASSERT_TRUE(peers.bind());
+    constexpr std::array headers{ruvia::http_header_view{"Content-Type", "application/octet-stream"}};
+    ASSERT_TRUE(peers.client_.submit_request_head(0, ruvia::http3_regular_request_head_view{
+                                                         .method_ = "POST", .authority_ = "example.test", .target_ = "/upload", .headers_ = headers, .content_length_ = 3, .streaming_ = true}) == ruvia::http3_status::accepted);
+    EXPECT_EQ(peers.client_.submit_data(0, ruvia::test::http3_bytes("abc")).accepted_bytes_, std::size_t{3});
+    for (const std::string_view name : {":path", "Content-Length", "Connection", "Host"}) {
+        SCOPED_TRACE(name);
+        const std::array invalid{ruvia::http3_field_view{name, "invalid"}};
+        EXPECT_TRUE(peers.client_.submit_trailers(0, invalid) == ruvia::http3_status::invalid_state);
+    }
+    constexpr std::array trailers{
+        ruvia::http3_field_view{"X-Checksum", "sha-256=abc"},
+        ruvia::http3_field_view{"Server-Timing", "db;dur=5"},
+    };
+    ASSERT_TRUE(peers.client_.submit_trailers(0, trailers) == ruvia::http3_status::accepted);
+    ruvia::test::http3_event_log server;
+    ASSERT_TRUE(peers.to_server(server));
+    ASSERT_EQ(server.headers_.size(), std::size_t{2});
+    EXPECT_TRUE(server.headers_[0].field("content-length") == "3");
+    EXPECT_TRUE(server.headers_[1].trailers_);
+    EXPECT_FALSE(server.headers_[1].status_.has_value());
+    EXPECT_EQ(server.headers_[1].fields_.size(), std::size_t{2});
+    EXPECT_TRUE(server.headers_[1].field("x-checksum") == "sha-256=abc");
+    EXPECT_TRUE(server.headers_[1].field("server-timing") == "db;dur=5");
+    EXPECT_EQ(server.data(0), "abc");
+    EXPECT_TRUE(server.ended(0));
+    EXPECT_EQ(server.sequence_, "HDHE");
 }

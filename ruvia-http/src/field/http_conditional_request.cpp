@@ -6,7 +6,7 @@
 #include "ruvia/http/http_field_syntax.h"
 
 #include "field/http_entity_tag.h"
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 #include "request/http_request_access.h"
 
 namespace ruvia {
@@ -14,16 +14,16 @@ namespace ruvia {
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
     return http_conditional_headers{
         detail::http_request_access::has_repeated_known_header(
-            request, detail::request_header_kind::if_unmodified_since)
+            request, detail::http_field_kind::if_unmodified_since)
             ? std::string_view{}
-            : detail::http_request_access::known_header(request, detail::request_header_kind::if_unmodified_since),
+            : detail::http_request_access::known_header(request, detail::http_field_kind::if_unmodified_since),
         detail::http_request_access::has_repeated_known_header(
-            request, detail::request_header_kind::if_modified_since)
+            request, detail::http_field_kind::if_modified_since)
             ? std::string_view{}
-            : detail::http_request_access::known_header(request, detail::request_header_kind::if_modified_since),
-        detail::http_request_access::known_header(request, detail::request_header_kind::range),
-        detail::http_request_access::known_header(request, detail::request_header_kind::if_range),
-        detail::http_request_access::has_known_header(request, detail::request_header_kind::if_range)};
+            : detail::http_request_access::known_header(request, detail::http_field_kind::if_modified_since),
+        detail::http_request_access::known_header(request, detail::http_field_kind::range),
+        detail::http_request_access::known_header(request, detail::http_field_kind::if_range),
+        detail::http_request_access::has_known_header(request, detail::http_field_kind::if_range)};
 }
 
 void http_etag_field_condition::update(
@@ -54,12 +54,12 @@ http_etag_preconditions get_http_etag_preconditions(
     // zero-copy views into separate wire lines. Fold them line by line and
     // retain whole-list validity without allocating a joined string.
     (void)detail::http_request_access::visit_known_headers(
-        request, detail::request_header_kind::if_match, [&result, etag](std::string_view value) noexcept {
+        request, detail::http_field_kind::if_match, [&result, etag](std::string_view value) noexcept {
             result.if_match_.update(value, etag, true);
             return true;
         });
     (void)detail::http_request_access::visit_known_headers(
-        request, detail::request_header_kind::if_none_match, [&result, etag](std::string_view value) noexcept {
+        request, detail::http_field_kind::if_none_match, [&result, etag](std::string_view value) noexcept {
             result.if_none_match_.update(value, etag, false);
             return true;
         });

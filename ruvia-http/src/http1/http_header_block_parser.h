@@ -17,9 +17,9 @@
 #include "coding/http_transfer_encoding.h"
 #include "field/field_value_scan.h"
 #include "field/http_connection_fields.h"
+#include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
 #include "parser/http_header_descriptor_storage.h"
-#include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 
@@ -69,7 +69,7 @@ struct http_header_slice {
 struct parsed_request_header_slot {
     http_header_slice name_;
     http_header_slice value_;
-    request_header_kind kind_;
+    http_field_kind kind_;
 };
 
 using known_request_header_index_type = std::int16_t;

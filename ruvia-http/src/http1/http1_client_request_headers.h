@@ -31,7 +31,7 @@ struct http1_client_request_field_facts final {
     bool has_trailer_{false};
 };
 
-[[nodiscard]] bool analyze_http1_client_request_field(http_header_view header, detail::request_header_kind kind,
+[[nodiscard]] bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind,
     http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
     http_request_field_source source = http_request_field_source::generated) noexcept;
 

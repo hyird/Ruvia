@@ -20,12 +20,8 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] constexpr std::uint16_t http_scheme_default_port(http_scheme scheme) noexcept {
-    return scheme == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80};
-}
-
 [[nodiscard]] constexpr bool http_origin_uses_default_port(const http_origin_view& origin) noexcept {
-    return origin.port() == http_scheme_default_port(origin.scheme());
+    return origin.port() == detail::http_scheme_default_port(origin.scheme());
 }
 
 void validate_origin_host(std::string_view host) {
@@ -41,7 +37,7 @@ std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options
     if (options.port_.has_value()) {
         return options.port_->value();
     }
-    return http_scheme_default_port(scheme);
+    return detail::http_scheme_default_port(scheme);
 }
 
 void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
@@ -196,7 +192,7 @@ struct http_client_redirect_authority final {
     if (!parsed_value) {
         return std::nullopt;
     }
-    const auto port = parsed_value->effective_port(http_scheme_default_port(target_scheme));
+    const auto port = parsed_value->effective_port(detail::http_scheme_default_port(target_scheme));
     return http_client_redirect_authority{
         .host_ = parsed_value->host(),
         .port_ = port,

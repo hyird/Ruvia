@@ -200,17 +200,13 @@ private:
     std::size_t tunnel_streams_{0};
     lifecycle_type lifecycle_{lifecycle_type::open};
     bool drain_begun_{false};
-    // A connection timeout started (or joined) the drain: its time bound ends
-    // the connection instead of only making the GOAWAY boundary final.
-    bool timeout_drain_{false};
-    bool drain_expired_{false};
     // The deadline the expiry timer is armed for, in ngtcp2 time.
     ngtcp2_tstamp armed_expiry_{UINT64_MAX};
     connection_scanner::entry scanner_entry_;
     std::optional<connection_scanner::guard> scanner_guard_;
     connection_scanner::periodic_check_registration scanner_checks_;
     // Declared last: unregistered before the state their completions touch.
-    worker_timer_registration drain_timer_;
+    multiplexed_drain_timer drain_timer_;
     worker_timer_registration timer_;
 };
 

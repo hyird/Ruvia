@@ -3,6 +3,8 @@
 #include "model_field_fixture.h"
 #include "test_exceptions.h"
 
+using namespace ruvia::test;
+
 TEST(Ruvia, model_public_parser_accepts_valid_strings_and_rejects_invalid_input) {
     std::pmr::monotonic_buffer_resource model_resource;
     const auto model = ruvia::from_json<accessor_surface_request>(
@@ -12,12 +14,12 @@ TEST(Ruvia, model_public_parser_accepts_valid_strings_and_rejects_invalid_input)
         EXPECT_EQ(model.get<"message">()->view(), std::string_view("ready"));
     }
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(
             R"({"message":42})", {.resource_ = std::pmr::get_default_resource()});
     }));
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(
             R"({"message":"incomplete")", {.resource_ = &model_resource});
     }));

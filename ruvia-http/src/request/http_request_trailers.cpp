@@ -2,7 +2,8 @@
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
-#include "ruvia/http/http_ascii.h"
+
+#include "field/http_header_lookup.h"
 
 namespace ruvia {
 namespace {
@@ -108,11 +109,6 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
 }
 
 std::optional<std::string_view> http_request_trailers::field(std::string_view name) const& noexcept {
-    for (auto field = fields_.rbegin(); field != fields_.rend(); ++field) {
-        if (http_ascii_equals_ignore_case(field->name(), name)) {
-            return field->value();
-        }
-    }
-    return std::nullopt;
+    return detail::find_last_http_header<http_header>(fields_, name);
 }
 }  // namespace ruvia

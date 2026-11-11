@@ -25,7 +25,7 @@
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/error.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis_handle.h"
 #endif
@@ -169,24 +169,16 @@ task<void> demonstrate_cache(db_client& db) {
 }
 #endif
 
-task<void> run(const db_config& settings, event_loop_attachment& attachment) {
+task<void> run(const db_config& settings, event_loop_attachment& attachment, const example::environment& env) {
     std::exception_ptr failure;
     std::unique_ptr<db_client> db;
 #ifdef RUVIA_ENABLE_REDIS
     std::unique_ptr<redis_client> redis;
 #endif
     try {
-        if (const auto* port = std::getenv("RUVIA_ORM_CACHE_REDIS_PORT")) {
+        if (const auto port = env.get<std::uint16_t>("RUVIA_ORM_CACHE_REDIS_PORT")) {
 #ifdef RUVIA_ENABLE_REDIS
-            const auto value = std::stoul(port);
-            if (value == 0) {
-                throw std::invalid_argument("invalid cache Redis port");
-            }
-            redis_config config{.port_ = value};
-            config.tls_ = example::backend_tls("RUVIA_ORM_CACHE_REDIS");
-            if (const auto* host = std::getenv("RUVIA_ORM_CACHE_REDIS_HOST")) {
-                config.host_ = host;
-            }
+            auto config = example::redis_config(env, "RUVIA_ORM_CACHE_REDIS");
             redis = std::make_unique<redis_client>(attachment.loop(), config);
             co_await redis->connect();
             auto store_value = redis->handle();
@@ -223,28 +215,8 @@ task<void> run(const db_config& settings, event_loop_attachment& attachment) {
     }
 }
 
-db_config config() {
-    db_config result_value{.driver_ = db_driver::postgresql};
-    result_value.tls_ = example::backend_tls("RUVIA_DB");
-    auto read = [](const char* key, std::string& target) {
-        if (const auto* value = std::getenv(key)) {
-            target = value;
-        }
-    };
-    read("RUVIA_DB_HOST", result_value.host_);
-    read("RUVIA_DB_USER", result_value.username_);
-    read("RUVIA_DB_PASSWORD", result_value.password_);
-    read("RUVIA_DB_DATABASE", result_value.database_);
-    if (const auto* port = std::getenv("RUVIA_DB_PORT")) {
-        const auto value = std::stoul(port);
-        if (value == 0) {
-            throw std::invalid_argument("invalid database port");
-        }
-        result_value.port_ = value;
-    }
-    result_value.connect_timeout_ = std::chrono::seconds(5);
-    result_value.query_timeout_ = std::chrono::seconds(10);
-    return result_value;
+db_config config(const example::environment& env) {
+    return example::database_config(env, db_driver::postgresql);
 }
 }  // namespace
 
@@ -267,7 +239,10 @@ int main(int argc, char** argv) {
         if (!migrate && !execute) {
             return 0;
         }
-        const auto settings = config();
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env(&app.env());
+        const auto settings = config(env);
         if (migrate) {
             (void)db_migrator::migrate(settings, changes);
         }
@@ -277,7 +252,7 @@ int main(int argc, char** argv) {
             // first, it outlives the attachment.
             blocking_pool host_lookups({.thread_count_ = 1});
             auto attachment = attach_event_loop(context_value, {.blocking_pool_ = &host_lookups});
-            auto root = attachment.loop().start(run(settings, attachment));
+            auto root = attachment.loop().start(run(settings, attachment, env));
             attachment.run();
             root.get();
         }

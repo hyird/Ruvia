@@ -9,6 +9,7 @@ target_link_libraries(ruvia-core
 )
 if(WIN32)
     target_link_libraries(ruvia-core PRIVATE $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc>)
+    target_link_libraries(ruvia-core PUBLIC ws2_32 mswsock PRIVATE Advapi32 Bcrypt)
 else()
     if(NOT TARGET mimalloc-static)
         message(FATAL_ERROR "Ruvia non-Windows core requires a static mimalloc build with override enabled")
@@ -32,12 +33,7 @@ target_compile_definitions(ruvia-core PUBLIC
     ASIO_DISABLE_SMALL_BLOCK_RECYCLING
     ASIO_DISABLE_AWAITABLE_FRAME_RECYCLING)
 
-ruvia_install_target(ruvia-core core)
+ruvia_install_component(ruvia-core core)
 
 ruvia_install_public_header_closure(core include/ruvia/core)
 
-if(WIN32)
-    target_link_libraries(ruvia-core PUBLIC ws2_32 mswsock PRIVATE Advapi32 Bcrypt)
-endif()
-
-ruvia_install_export(core)

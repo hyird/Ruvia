@@ -113,8 +113,8 @@ TEST(Ruvia, http1_streaming_request_known_length_and_continue_gate) {
     EXPECT_TRUE((finish_value.index() == 0));
     EXPECT_TRUE(std::get<0>(finish_value).empty());
     writer.commit_finish();
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { writer.commit_chunk(); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { writer.commit_finish(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { writer.commit_chunk(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { writer.commit_finish(); }));
 }
 TEST(Ruvia, http1_streaming_request_rejects_forbidden_trailer_without_mutating_buffer) {
     std::array<char, 1024> head{};
@@ -237,9 +237,9 @@ TEST(Ruvia, http_content_length_rejects_negative_sources_without_mutating_existi
     ruvia::http1_client_request_head_view request{.method_ = "POST", .target_ = "/upload", .content_length_ = 3};
     for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
         EXPECT_TRUE(!ruvia::http_content_length::try_from_value(invalid).has_value());
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { request.content_length_ = invalid; }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::known_length(invalid); }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::streaming(invalid); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { request.content_length_ = invalid; }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::http2_request_content::known_length(invalid); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::http2_request_content::streaming(invalid); }));
     }
     std::array<char, 256> head{};
     const auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(

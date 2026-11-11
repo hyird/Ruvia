@@ -38,10 +38,10 @@ class http_request;
 
 namespace detail {
 
-enum class request_header_kind : std::uint8_t;
+enum class http_field_kind : std::uint8_t;
 struct http_request_access;
 
-// Owns field descriptors and the parser's request_header_kind for each field.
+// Owns field descriptors and the parser's http_field_kind for each field.
 // Kinds sit in the same allocation so Cookie/Accept scans do not re-classify
 // names. Production parsers reserve the final size once after validating the
 // head. Moving this block never allocates.
@@ -83,7 +83,7 @@ public:
         return fields_[index];
     }
     const http_header_view& operator[](std::size_t) const&& = delete;
-    [[nodiscard]] request_header_kind kind_at(std::size_t index) const noexcept {
+    [[nodiscard]] http_field_kind kind_at(std::size_t index) const noexcept {
         return kinds_[index];
     }
     [[nodiscard]] std::span<const http_header_view> fields() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -109,7 +109,7 @@ public:
         auto* owner_value = http_pmr_resource_or_default(resource);
         auto* memory = static_cast<std::byte*>(owner_value->allocate(bytes_for(count), alignof(http_header_view)));
         auto* replacement = reinterpret_cast<http_header_view*>(memory);
-        auto* replacement_kinds = reinterpret_cast<request_header_kind*>(replacement + count);
+        auto* replacement_kinds = reinterpret_cast<http_field_kind*>(replacement + count);
         for (std::size_t i = 0; i < size_; ++i) {
             std::construct_at(replacement + i, fields_[i]);
             replacement_kinds[i] = kinds_[i];
@@ -125,7 +125,7 @@ public:
         repeated_known_bits_ = repeated_known_bits;
     }
 
-    void append(http_header_view field, request_header_kind kind) {
+    void append(http_header_view field, http_field_kind kind) {
         if (size_ == (std::numeric_limits<std::uint16_t>::max)()) {
             throw std::logic_error("request header block is full");
         }
@@ -141,7 +141,7 @@ public:
 
 private:
     [[nodiscard]] static std::size_t bytes_for(std::size_t count) noexcept {
-        return count * sizeof(http_header_view) + count * sizeof(request_header_kind);
+        return count * sizeof(http_header_view) + count * sizeof(http_field_kind);
     }
 
     void release() noexcept {
@@ -158,7 +158,7 @@ private:
     }
 
     http_header_view* fields_{nullptr};
-    request_header_kind* kinds_{nullptr};
+    http_field_kind* kinds_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
     std::uint16_t size_{0};
     std::uint16_t capacity_{0};

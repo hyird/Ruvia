@@ -8,13 +8,13 @@
 // Missing required values and invalid fields become structured HTTP errors
 // before a handler runs. Keep parsed request-backed models inside the request.
 
-#include <charconv>
 #include <cstdint>
 #include <exception>
 #include <iostream>
 #include <span>
 #include <string_view>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -179,11 +179,7 @@ private:
                         : "false");
         if (const auto page = query.get<"page">()) {
             body.append("\npage=");
-            char buffer[16]{};
-            const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), page->value_);
-            if (ec == std::errc{}) {
-                body.append(buffer, static_cast<std::size_t>(ptr - buffer));
-            }
+            ruvia::http_append_signed(body, page->value_);
         }
         body.push_back('\n');
         co_return c.text(std::move(body));

@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -12,7 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 
 #include <asio/co_spawn.hpp>
@@ -31,6 +29,8 @@
 #include "ruvia/web/model.h"
 #include "ruvia/web/streaming.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 #include "test_exceptions.h"
 #include "test_io_context.h"
@@ -299,13 +299,7 @@ public:
         targets_->destination_ = "http://127.0.0.1:" + std::to_string(destination_port_.endpoint().port());
         targets_->secure_ = "https://localhost:" + std::to_string(secure_port_.endpoint().port());
         targets_->unregistered_ = "http://127.0.0.1:" + std::to_string(unknown_port_.endpoint().port());
-        const auto key = identity_.ca_file_.parent_path() / "key.pem";
-        {
-            std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(key.string().c_str(), "w"), BIO_free);
-            if (!output || ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(identity_.context_.native_handle())) != 1) {
-                throw std::runtime_error("cannot write fluent client test TLS key");
-            }
-        }
+        const auto& key = identity_.private_key_file();
         const std::array listeners{
             ruvia::listen_config{.address_ = "127.0.0.1", .http_ = source_port_.endpoint().port(), .https_ = secure_port_.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}}},
             ruvia::listen_config{.address_ = "127.0.0.1", .http_ = destination_port_.endpoint().port()}};
@@ -317,51 +311,32 @@ public:
             .client({.alias_ = "secure", .base_url_ = targets_->secure_, .request_timeout_ = std::chrono::seconds(3), .protocol_ = ruvia::http_client_protocol::http1_only, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}});
         app.use_worker_state<std::shared_ptr<redirect_destinations>>([targets = targets_] { return targets; });
         app.on_start([this] {
-            announced_.store(true);
             ready_.set_value();
         });
         auto ready = ready_.get_future();
-        thread_ = std::thread([this] {
-            try {
-                ruvia::app().run();
-            } catch (...) {
-                failure_ = std::current_exception();
-                if (!announced_.load()) {
-                    ready_.set_exception(failure_);
-                }
+        run_.emplace(app);
+        ruvia::test::wait_until([&] {
+            if (const auto failure = run_->failure()) {
+                std::rethrow_exception(failure);
             }
-        });
-        try {
-            ready.get();
-        } catch (...) {
-            stop();
-            throw;
-        }
+            return ready.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+        },
+            std::chrono::seconds(10));
+        ready.get();
     }
 
-    ~server() {
-        stop();
-    }
+    ~server() = default;
 
     const redirect_destinations& targets() const noexcept {
         return *targets_;
     }
 
     void finish() {
-        stop();
-        if (failure_) {
-            std::rethrow_exception(failure_);
-        }
+        ruvia::app().stop();
+        run_->join();
     }
 
 private:
-    void stop() {
-        if (thread_.joinable()) {
-            ruvia::app().stop();
-            thread_.join();
-        }
-    }
-
     asio::io_context io_;
     ruvia::test::tcp_port_reservation source_port_;
     ruvia::test::tcp_port_reservation destination_port_;
@@ -370,9 +345,7 @@ private:
     ruvia::test::tls_identity identity_;
     std::shared_ptr<redirect_destinations> targets_;
     std::promise<void> ready_;
-    std::atomic_bool announced_{false};
-    std::exception_ptr failure_;
-    std::thread thread_;
+    std::optional<ruvia::test::app_run> run_;
 };
 
 }  // namespace fluent_client_tests
@@ -425,7 +398,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 replay_rejected = true;
             }
             EXPECT_TRUE(replay_rejected);
-            EXPECT_TRUE(ruvia::testing::throws_on([&] {
+            EXPECT_TRUE(ruvia::test::throws_on([&] {
                 auto consumed = origin.get("/fluent/inspect");
                 auto first = consumed.send();
                 (void)consumed.send();

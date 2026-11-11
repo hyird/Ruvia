@@ -15,6 +15,8 @@
 #include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
+using namespace ruvia::test;
+
 // HTTP/1 client responses: reading a response head off the wire.
 
 namespace {
@@ -144,7 +146,7 @@ TEST(Ruvia, http_client_fieldless_exchange_completes_with_no_response_storage) {
             EXPECT_TRUE(!parsed->plan().request_content_signal());
         }
     }
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)parser.parse({}); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)parser.parse({}); }));
 }
 
 TEST(Ruvia, http_client_take_head_leaves_empty_parsed_fields_and_retains_owned_headers) {
@@ -358,7 +360,7 @@ TEST(Ruvia, http_client_many_response_fields_retry_every_allocation_failure_with
                     check_many_field_response(final_response, wires[1].size(), false);
                 }
                 EXPECT_EQ(memory.live_allocations(), std::size_t{0});
-                EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)parser.parse(wires[1]); }));
+                EXPECT_TRUE(ruvia::test::throws_on([&] { (void)parser.parse(wires[1]); }));
             }
             EXPECT_EQ(memory.live_allocations(), std::size_t{0});
         }

@@ -9,7 +9,12 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/detail/io/asio_await.h"
+#include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 
 namespace ruvia {
@@ -165,6 +170,87 @@ public:
 private:
     root_task_completion completion_;
     [[no_unique_address]] std::conditional_t<std::is_void_v<t_type>, root_task_void_result, std::optional<t_type>> value_;
+};
+
+// drain() destroys remaining queue closures without invoking them when
+// a posted task throws. Own that destructor path so wait()/get() cannot
+// hang and an unobserved failure still reaches the loop sink.
+template <typename t_type>
+struct root_task_launch_guard final {
+    std::optional<task<t_type>> task_;
+    std::shared_ptr<detail::root_task_state<t_type>> completion_;
+
+    root_task_launch_guard(task<t_type> task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept
+        : task_(std::move(task_value)),
+          completion_(std::move(state_value)) {}
+    root_task_launch_guard(const root_task_launch_guard&) = delete;
+    root_task_launch_guard& operator=(const root_task_launch_guard&) = delete;
+    root_task_launch_guard(root_task_launch_guard&& other) noexcept
+        : task_(std::move(other.task_)),
+          completion_(std::move(other.completion_)) {}
+    root_task_launch_guard& operator=(root_task_launch_guard&&) = delete;
+    ~root_task_launch_guard() {
+        // A rejected or discarded launch still owns a cold frame.
+        // Retire it before waking a caller that may reclaim its inputs.
+        task_.reset();
+        if (completion_ != nullptr) {
+            completion_->completion().complete_failure(
+                std::make_exception_ptr(std::runtime_error("event loop is stopping")));
+        }
+    }
+    void release() noexcept {
+        task_.reset();
+        completion_.reset();
+    }
+};
+template <typename t_type>
+struct root_task_completion_handler final {
+    using executor_type = asio::io_context::executor_type;
+
+    executor_type executor_;
+    std::shared_ptr<detail::root_task_state<t_type>> completion_;
+    std::shared_ptr<void> retirement_lease_;
+    bool delivered_{false};
+
+    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value,
+        std::shared_ptr<void> lease_value) noexcept
+        : executor_(std::move(executor_value)),
+          completion_(std::move(state_value)),
+          retirement_lease_(std::move(lease_value)) {}
+    root_task_completion_handler(const root_task_completion_handler&) = delete;
+    root_task_completion_handler& operator=(const root_task_completion_handler&) = delete;
+    root_task_completion_handler(root_task_completion_handler&& other) noexcept
+        : executor_(std::move(other.executor_)),
+          completion_(std::move(other.completion_)),
+          retirement_lease_(std::move(other.retirement_lease_)),
+          delivered_(std::exchange(other.delivered_, false)) {}
+    root_task_completion_handler& operator=(root_task_completion_handler&&) = delete;
+    ~root_task_completion_handler() {
+        if (delivered_) {
+            completion_->completion().publish_completion();
+        }
+    }
+    [[nodiscard]] executor_type get_executor() const noexcept {
+        return executor_;
+    }
+    void operator()(detail::task_completion_result<t_type>&& result_value) noexcept {
+        try {
+            if constexpr (std::is_void_v<t_type>) {
+                if (result_value != nullptr) {
+                    completion_->completion().stage_failure(std::move(result_value));
+                } else {
+                    completion_->stage_value();
+                }
+            } else if (result_value.index() == 1) {
+                completion_->completion().stage_failure(std::get<1>(result_value));
+            } else {
+                completion_->stage_value(std::move(std::get<0>(result_value)));
+            }
+        } catch (...) {
+            completion_->completion().stage_failure(std::current_exception());
+        }
+        delivered_ = true;
+    }
 };
 
 }  // namespace detail

@@ -27,6 +27,9 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/static_files.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
+#include "scoped_temp_directory.h"
 #include "tcp_port_reservation.h"
 
 // A file body that fails before its head is sent is answered with an error
@@ -46,8 +49,8 @@ using namespace std::chrono_literals;
 constexpr auto write_timeout = 300ms;
 
 [[nodiscard]] const std::filesystem::path& failure_dir() {
-    static const std::filesystem::path dir = std::filesystem::current_path() / "ruvia_file_response_failure";
-    return dir;
+    static const ruvia::test::scoped_temp_directory directory("ruvia-file-response-failure");
+    return directory.path();
 }
 
 void write_file(const std::filesystem::path& path, std::string_view bytes) {
@@ -128,14 +131,8 @@ std::string get(std::string_view target) {
 // longer than `limit` (the socket is then shut down to end the read).
 [[nodiscard]] std::optional<std::string> read_to_close(asio::ip::tcp::socket& socket, std::chrono::milliseconds limit) {
     auto reader = std::async(std::launch::async, [&socket] {
-        std::string wire;
-        std::array<char, 4096> buffer{};
-        std::error_code ec;
-        while (!ec) {
-            const auto count = socket.read_some(asio::buffer(buffer), ec);
-            wire.append(buffer.data(), count);
-        }
-        return wire;
+        std::error_code error;
+        return ruvia::test::read_to_end(socket, error);
     });
     if (reader.wait_for(limit) != std::future_status::ready) {
         std::error_code ignored;
@@ -146,25 +143,11 @@ std::string get(std::string_view target) {
     return reader.get();
 }
 
-template <typename predicate_type>
-[[nodiscard]] bool wait_for(predicate_type predicate) {
-    const auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!predicate()) {
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return false;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    return true;
-}
-
 }  // namespace file_response_failure_test
 
 using namespace file_response_failure_test;
 
 TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_opens_time_out) {
-    std::error_code ignored;
-    std::filesystem::remove_all(failure_dir(), ignored);
     std::filesystem::create_directories(failure_dir() / "static");
     write_file(failure_dir() / "body.bin", std::string(4096, 'b'));
     write_file(failure_dir() / "static" / "asset.txt", std::string(4096, 's'));
@@ -175,20 +158,13 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
     const auto endpoint = reservation.endpoint();
 
     auto& app = ruvia::app();
-    std::binary_semaphore started{0};
+    static std::binary_semaphore started{0};
     app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .write_timeout_ = write_timeout})
         .blocking_pool({.thread_count_ = 1, .queue_capacity_ = 4})
         .listen({.address_ = "127.0.0.1", .http_ = endpoint.port()})
         .on_connection_failure(&record_failure)
-        .on_start([&started] { started.release(); });
-    std::exception_ptr failure;
-    std::thread runner([&app, &failure] {
-        try {
-            app.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
+        .on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
     if (ready) {
@@ -214,7 +190,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
         asio::ip::tcp::socket holder(io);
         holder.connect(endpoint);
         asio::write(holder, asio::buffer(get("/file-failure/hold-pool")));
-        EXPECT_TRUE(wait_for([] { return pool_held.load(); }));
+        ruvia::test::wait_until([] { return pool_held.load(); }, 5s);
         for (const std::string_view target : {"/file-failure/file", "/file-failure/static"}) {
             const auto timeouts_before = reported_timeouts.load();
             asio::ip::tcp::socket socket(io);
@@ -226,7 +202,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
                 EXPECT_TRUE(wire->starts_with("HTTP/1.1 503 "));
                 EXPECT_TRUE(wire->find("file_read_unavailable") != std::string::npos);
             }
-            EXPECT_TRUE(wait_for([timeouts_before] { return reported_timeouts.load() > timeouts_before; }));
+            ruvia::test::wait_until([timeouts_before] { return reported_timeouts.load() > timeouts_before; }, 5s);
         }
         release_pool.store(true);
         const auto released = read_to_close(holder, 5s);
@@ -249,24 +225,18 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
                         wire->ends_with(std::string(4096, 's')));
         }
-        EXPECT_TRUE(wait_for([&app] { return app.http_stats().active_connections_ == 0; }));
+        ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 5s);
     }
     release_pool.store(true);
     app.stop();
     runner.join();
-    EXPECT_TRUE(failure == nullptr);
+    EXPECT_TRUE(runner.failure() == nullptr);
 
     // Without a blocking pool nothing opens a file on the worker, on any
     // platform: context::file and a standalone static_root answer 503 before
     // any head, and each missing pool is reported as a fault.
     app.blocking_pool(nullptr);
-    std::thread pool_less_runner([&app, &failure] {
-        try {
-            app.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
+    ruvia::test::app_run pool_less_runner(app);
     const bool pool_less_ready = started.try_acquire_for(10s);
     EXPECT_TRUE(pool_less_ready);
     if (pool_less_ready) {
@@ -281,13 +251,12 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
                 EXPECT_TRUE(wire->starts_with("HTTP/1.1 503 "));
                 EXPECT_TRUE(wire->find("file_read_unavailable") != std::string::npos);
             }
-            EXPECT_TRUE(wait_for([missing_before] { return reported_missing_pools.load() > missing_before; }));
+            ruvia::test::wait_until([missing_before] { return reported_missing_pools.load() > missing_before; }, 5s);
         }
     }
     app.stop();
     pool_less_runner.join();
-    EXPECT_TRUE(failure == nullptr);
+    EXPECT_TRUE(pool_less_runner.failure() == nullptr);
     app.blocking_pool(ruvia::blocking_pool_options{});
     static_files.reset();
-    std::filesystem::remove_all(failure_dir(), ignored);
 }

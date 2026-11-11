@@ -8,8 +8,8 @@
 #include "ruvia/http/http_protocol_managed_fields.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
-#include "client/http1_client_request_headers.h"
 #include "field/http_connection_fields.h"
+#include "http1/http1_client_request_headers.h"
 #include "parser/http_header_descriptor_storage.h"
 #include "websocket/http_websocket_handshake_fields.h"
 
@@ -19,14 +19,14 @@ namespace {
 // writer owns every protocol-managed field (Host, framing, Expect and the
 // Upgrade/Connection pair) and the handshake generates every Sec-WebSocket-*
 // field.
-bool is_reserved_handshake_header(std::string_view name, detail::request_header_kind kind) noexcept {
+bool is_reserved_handshake_header(std::string_view name, detail::http_field_kind kind) noexcept {
     switch (kind) {
-        case detail::request_header_kind::sec_websocket_key:
-        case detail::request_header_kind::sec_websocket_version:
-        case detail::request_header_kind::sec_websocket_protocol:
-        case detail::request_header_kind::sec_websocket_extensions:
+        case detail::http_field_kind::sec_websocket_key:
+        case detail::http_field_kind::sec_websocket_version:
+        case detail::http_field_kind::sec_websocket_protocol:
+        case detail::http_field_kind::sec_websocket_extensions:
             return true;
-        case detail::request_header_kind::other:
+        case detail::http_field_kind::other:
             return detail::is_protocol_managed_request_field(kind, name) ||
                    http_ascii_equals_ignore_case(name, "sec-websocket-accept");
         default:
@@ -39,7 +39,7 @@ void validate_http1_websocket_client_handshake_configuration(std::span<const htt
     detail::http1_client_request_field_facts facts;
     http1_client_request_prepare_error error{};
     for (const auto& header : headers) {
-        const auto kind = detail::classify_request_header(header.name());
+        const auto kind = detail::classify_http_field(header.name());
         if (is_reserved_handshake_header(header.name(), kind)) {
             throw std::invalid_argument("invalid or reserved WebSocket handshake header");
         }
@@ -108,15 +108,15 @@ validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
     std::size_t accepts = 0;
     bool accept_matches = false, has_upgrade = false, has_connection = false;
     for (const auto& header : response.head().headers()) {
-        switch (detail::classify_request_header(header.name())) {
-            case detail::request_header_kind::upgrade:
+        switch (detail::classify_http_field(header.name())) {
+            case detail::http_field_kind::upgrade:
                 has_upgrade = has_upgrade || detail::http_has_token(header.value(), "websocket");
                 break;
-            case detail::request_header_kind::connection:
+            case detail::http_field_kind::connection:
                 has_connection = has_connection ||
                                  detail::http_has_token(header.value(), detail::http_connection_upgrade_option);
                 break;
-            case detail::request_header_kind::other:
+            case detail::http_field_kind::other:
                 if (http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
                     ++accepts;
                     accept_matches = http_trim_ows(header.value()) ==

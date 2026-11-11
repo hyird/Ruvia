@@ -24,7 +24,6 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_runtime.h"
-#include "ruvia/core/worker_runtime_context.h"
 
 namespace {
 
@@ -69,11 +68,11 @@ ruvia::task<void> close_notification(ruvia::worker_notification& notification) {
     co_return;
 }
 
-ruvia::task<void> close_and_stop_runtime(ruvia::worker_notification& notification,
-    ruvia::worker_runtime_context& runtime, asio::steady_timer& watchdog_value) {
+ruvia::task<void> close_and_stop_attachment(ruvia::worker_notification& notification,
+    ruvia::event_loop_attachment& attachment, asio::steady_timer& watchdog_value) {
     watchdog_value.cancel();
     notification.close();
-    runtime.close();
+    attachment.stop();
     co_return;
 }
 
@@ -323,11 +322,12 @@ TEST(Ruvia, worker_notification_early_latch_cold_wait_and_repeated_reuse) {
     EXPECT_TRUE(stop(worker));
 }
 
-TEST(Ruvia, worker_notification_borrows_worker_runtime_context) {
+TEST(Ruvia, worker_notification_borrows_attached_loop_on_unsafe_io_context) {
     constexpr std::size_t round_count = 4;
     asio::io_context io_context(ASIO_CONCURRENCY_HINT_UNSAFE_IO);
-    ruvia::worker_runtime_context runtime(io_context, 64);
-    ruvia::worker_notification notification(runtime);
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 64});
+    const auto loop = attachment.loop();
+    ruvia::worker_notification notification(loop);
 
     bool close_rejected_off_worker = false;
     try {
@@ -346,14 +346,14 @@ TEST(Ruvia, worker_notification_borrows_worker_runtime_context) {
 
     round_state rounds;
     bool rounds_succeeded = false;
-    auto rounds_task = spawn(runtime, wait_runtime_rounds(notification, rounds, round_count, rounds_succeeded));
+    auto rounds_task = spawn(loop, wait_runtime_rounds(notification, rounds, round_count, rounds_succeeded));
 
     asio::steady_timer watchdog(io_context);
     watchdog.expires_after(20s);
     watchdog.async_wait([&](const asio::error_code& error) {
         if (!error) {
             notification.close();
-            runtime.close();
+            attachment.stop();
         }
     });
 
@@ -362,7 +362,7 @@ TEST(Ruvia, worker_notification_borrows_worker_runtime_context) {
     std::thread worker_value([&] {
         std::exception_ptr failure;
         try {
-            runtime.run();
+            attachment.run();
         } catch (...) {
             failure = std::current_exception();
         }
@@ -388,10 +388,10 @@ TEST(Ruvia, worker_notification_borrows_worker_runtime_context) {
     std::promise<void> wait_started;
     auto wait_started_future = wait_started.get_future();
     std::atomic<int> wait_result{0};
-    auto pending_wait = spawn(runtime, wait_for_one(notification, &wait_started, &wait_result));
+    auto pending_wait = spawn(loop, wait_for_one(notification, &wait_started, &wait_result));
     const bool entered = wait_started_future.wait_for(wait_timeout) == std::future_status::ready;
 
-    auto shutdown = spawn(runtime, close_and_stop_runtime(notification, runtime, watchdog));
+    auto shutdown = spawn(loop, close_and_stop_attachment(notification, attachment, watchdog));
     const bool shutdown_completed = finish(shutdown);
     const bool wait_completed = finish(pending_wait);
     EXPECT_TRUE(entered);
@@ -401,7 +401,7 @@ TEST(Ruvia, worker_notification_borrows_worker_runtime_context) {
 
     bool runtime_exited = runtime_exit.wait_for(wait_timeout) == std::future_status::ready;
     if (!runtime_exited) {
-        runtime.close();
+        attachment.stop();
     }
     EXPECT_TRUE(runtime_exited);
     if (runtime_exited) {
@@ -411,7 +411,7 @@ TEST(Ruvia, worker_notification_borrows_worker_runtime_context) {
         std::terminate();
     }
     worker_value.join();
-    EXPECT_TRUE(!runtime.handle().accepting());
+    EXPECT_TRUE(!loop.handle().accepting());
 }
 
 TEST(Ruvia, worker_notification_many_producers_coalesce_without_lost_final_state) {

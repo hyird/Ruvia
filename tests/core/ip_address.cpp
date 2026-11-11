@@ -7,50 +7,7 @@
 
 #include "ruvia/core/socket.h"
 
-namespace {
-
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations_{};
-    std::size_t returns_{};
-    std::size_t live_{};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        void* block = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-        ++allocations_;
-        ++live_;
-        return block;
-    }
-
-    void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
-        ++returns_;
-        --live_;
-        std::pmr::new_delete_resource()->deallocate(block, bytes_value, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-
-class scoped_default_resource final {
-public:
-    explicit scoped_default_resource(std::pmr::memory_resource& resource) noexcept
-        : previous_(std::pmr::set_default_resource(&resource)) {}
-
-    ~scoped_default_resource() {
-        std::pmr::set_default_resource(previous_);
-    }
-
-    scoped_default_resource(const scoped_default_resource&) = delete;
-    scoped_default_resource& operator=(const scoped_default_resource&) = delete;
-
-private:
-    std::pmr::memory_resource* previous_;
-};
-
-}  // namespace
+#include "memory_resource_fixture.h"
 
 TEST(Ruvia, ip_address_parsing_handles_ipv4_ipv6_and_view_bounds) {
     const auto v4 = ruvia::parse_ip_address("192.0.2.1");
@@ -83,9 +40,9 @@ TEST(Ruvia, ip_address_parsing_rejects_ports_brackets_and_partial_or_padded_ipv4
 }
 
 TEST(Ruvia, ip_address_parsing_returns_long_input_pmr_storage) {
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     const auto result_value = [&] {
-        scoped_default_resource scope(resource);
+        ruvia::test::default_resource_guard scope(resource);
         // Only a lexically plausible literal reaches the platform parser;
         // temporary storage uses process_resource() rather than the global default.
         return ruvia::parse_ip_address("fe80::1%" + std::string(1024, 'x'));
@@ -93,9 +50,9 @@ TEST(Ruvia, ip_address_parsing_returns_long_input_pmr_storage) {
 
     // An unknown zone name is a platform decision; the storage must round-trip either way.
     EXPECT_TRUE(!result_value.has_value() || result_value->is_v6());
-    EXPECT_EQ(resource.allocations_, std::size_t{0});
-    EXPECT_EQ(resource.live_, std::size_t{0});
-    EXPECT_EQ(resource.allocations_, resource.returns_);
+    EXPECT_EQ(resource.allocation_count(), std::size_t{0});
+    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    EXPECT_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 TEST(Ruvia, ip_address_parsing_rejects_invalid_ipv6_zone_identifiers) {

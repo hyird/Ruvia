@@ -16,34 +16,10 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 
+#include "memory_resource_fixture.h"
 #include "worker_task_fixture.h"
 
 namespace {
-
-class counting_memory_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations_{};
-    std::size_t deallocations_{};
-    std::size_t live_blocks_{};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        void* const block = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-        ++allocations_;
-        ++live_blocks_;
-        return block;
-    }
-
-    void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
-        ++deallocations_;
-        --live_blocks_;
-        std::pmr::new_delete_resource()->deallocate(block, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
 
 ruvia::task<void> exercise_lease_and_close(
     ruvia::pool_lease_scheduler& scheduler, asio::io_context& io_context, bool& success) {
@@ -198,14 +174,14 @@ ruvia::task<void> exercise_nonpositive_timeout_does_not_steal_same_turn_release(
 }
 ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
     asio::io_context& io_context, const ruvia::worker_handle& worker_value,
-    counting_memory_resource& resource, std::size_t baseline_blocks,
+    ruvia::test::counting_memory_resource& resource, std::size_t baseline_blocks,
     std::optional<ruvia::worker_wait_result<std::size_t>>& retained_result, bool& success) {
     for (std::size_t i = 0; i < 32; ++i) {
         {
             auto discarded_cold_acquire = scheduler.acquire(std::nullopt);
             static_cast<void>(discarded_cold_acquire);
         }
-        if (resource.live_blocks_ != baseline_blocks) {
+        if (resource.live_allocations() != baseline_blocks) {
             co_return;
         }
     }
@@ -218,7 +194,7 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
         scheduler.release(held.value());
         const auto acquired = co_await scheduler.acquire(std::nullopt);
         if (!acquired.has_value() || acquired.value() != held.value() ||
-            resource.live_blocks_ != baseline_blocks) {
+            resource.live_allocations() != baseline_blocks) {
             co_return;
         }
         retained_result.emplace(acquired);
@@ -226,20 +202,20 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
 
     for (std::size_t i = 0; i < 32; ++i) {
         const auto timed_out = co_await scheduler.acquire(std::chrono::milliseconds(1));
-        if (timed_out.status() != ruvia::worker_wait_status::timed_out || resource.live_blocks_ != baseline_blocks) {
+        if (timed_out.status() != ruvia::worker_wait_status::timed_out || resource.live_allocations() != baseline_blocks) {
             co_return;
         }
 
         ruvia::stop_source source;
         asio::post(io_context, [&source] { source.request_stop(); });
         const auto cancelled = co_await scheduler.acquire(std::nullopt, source.token());
-        if (cancelled.status() != ruvia::worker_wait_status::cancelled || resource.live_blocks_ != baseline_blocks) {
+        if (cancelled.status() != ruvia::worker_wait_status::cancelled || resource.live_allocations() != baseline_blocks) {
             co_return;
         }
     }
 
     scheduler.release(held.value());
-    success = resource.live_blocks_ == baseline_blocks && retained_result.has_value() &&
+    success = resource.live_allocations() == baseline_blocks && retained_result.has_value() &&
               retained_result->has_value() && retained_result->value() == held.value();
 }
 
@@ -287,7 +263,7 @@ bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
     asio::io_context context;
     auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 8});
     const auto worker_value = attachment.loop().handle();
-    counting_memory_resource memory;
+    ruvia::test::counting_memory_resource memory;
     bool success = true;
     {
         std::optional<ruvia::pool_lease_scheduler> scheduler;
@@ -298,37 +274,37 @@ bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
             scheduler.emplace(0, temporary_worker, &memory);
             pending.emplace(scheduler->acquire(std::nullopt, source.token()));
         }
-        const auto baseline = memory.live_blocks_;
+        const auto baseline = memory.live_allocations();
         // An unstarted operation releases its reservation before its scheduler.
         // The scheduler needs a live worker, so this runs before the loop retires.
         {
             ruvia::pool_lease_scheduler temporary_scheduler(1, worker_value, &memory);
             auto discarded = temporary_scheduler.acquire(std::nullopt, ruvia::stop_source{}.token());
         }
-        success = memory.live_blocks_ == baseline;
+        success = memory.live_allocations() == baseline;
         bool cancelled = false;
         auto prepared = std::move(*pending);
         pending.reset();
         ruvia::test::run_worker_tasks(
             attachment, observe_worker_acquire(std::move(prepared), worker_value, source, cancelled));
-        success = success && cancelled && memory.live_blocks_ == baseline;
+        success = success && cancelled && memory.live_allocations() == baseline;
     }
-    return success && memory.live_blocks_ == 0 && memory.allocations_ == memory.deallocations_;
+    return success && memory.live_allocations() == 0 && memory.allocation_count() == memory.deallocation_count();
 }
 
 ruvia::task<void> exercise_pmr_test(asio::io_context& io_context,
     const ruvia::worker_handle& worker_value, bool& success) {
-    counting_memory_resource resource;
+    ruvia::test::counting_memory_resource resource;
     std::optional<ruvia::worker_wait_result<std::size_t>> retained_result;
     {
         ruvia::pool_lease_scheduler scheduler(1, worker_value, &resource);
-        const auto baseline_blocks = resource.live_blocks_;
+        const auto baseline_blocks = resource.live_allocations();
         co_await exercise_pmr_lifecycle(scheduler, io_context, worker_value,
             resource, baseline_blocks, retained_result, success);
-        success = success && resource.live_blocks_ == baseline_blocks;
+        success = success && resource.live_allocations() == baseline_blocks;
     }
-    success = success && resource.live_blocks_ == 0 &&
-              resource.allocations_ == resource.deallocations_;
+    success = success && resource.live_allocations() == 0 &&
+              resource.allocation_count() == resource.deallocation_count();
 }
 
 }  // namespace

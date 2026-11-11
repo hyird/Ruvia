@@ -220,7 +220,7 @@ void hpack_encoder::encode_header(std::pmr::string& output, std::string_view nam
         value = owned_value;
     }
     detail::hpack_field_deflater deflater(output.get_allocator().resource());
-    deflater.encode(output, name, value, detail::hpack_header_name_is_sensitive(name));
+    deflater.encode(output, name, value, detail::http_field_never_indexed(name));
 }
 
 void hpack_encoder::encode_status(std::pmr::string& output, http_status_code status) {

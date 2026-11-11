@@ -18,7 +18,7 @@
 #include "ruvia/http/http_status.h"
 
 #include "http1_request_message_fixture.h"
-#include "request_header_memory_fixture.h"
+#include "memory_resource_fixture.h"
 #include "stl_allocation_fixture.h"
 
 namespace {
@@ -30,9 +30,10 @@ using ruvia::http_protocol_version;
 using ruvia::http_request;
 using ruvia::http_request_target_form;
 using ruvia::request_content_coding;
-using ruvia::testing::parse_http1_request_message;
+using ruvia::test::parse_http1_request_message;
 
-using ruvia::test::header_memory;
+using ruvia::test::counting_memory_resource;
+using ruvia::test::reentrant_memory_resource;
 
 struct request_retirement_observation final {
     http_request* request_;
@@ -43,11 +44,11 @@ struct request_retirement_observation final {
 }  // namespace
 
 TEST(Ruvia, request_header_blocks_reclaim_repeated_parses_and_preserve_retained_results) {
-    header_memory resource;
+    counting_memory_resource resource;
     {
         auto retained = parse_http1_request_message("GET /saved HTTP/1.1\r\nHost: example\r\nX-Data: saved\r\n\r\n", &resource);
         EXPECT_TRUE(retained.complete());
-        const auto baseline = resource.live_bytes_;
+        const auto baseline = resource.live_bytes();
         for (int i = 0; i < 64; ++i) {
             {
                 auto result_value = parse_http1_request_message("GET / HTTP/1.1\r\nHost: second\r\n\r\n", &resource);
@@ -56,14 +57,14 @@ TEST(Ruvia, request_header_blocks_reclaim_repeated_parses_and_preserve_retained_
                 EXPECT_EQ(moved.state_.request_.header("Host").value(), std::string_view("second"));
                 EXPECT_EQ(retained.state_.request_.header("X-Data").value(), std::string_view("saved"));
             }
-            EXPECT_EQ(resource.live_bytes_, baseline);
+            EXPECT_EQ(resource.live_bytes(), baseline);
             {
                 const auto incomplete = parse_http1_request_message("POST / HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\n\r\nx", &resource);
                 EXPECT_TRUE(incomplete.need_body());
             }
-            EXPECT_EQ(resource.live_bytes_, baseline);
+            EXPECT_EQ(resource.live_bytes(), baseline);
         }
-        resource.reject_ = true;
+        resource.reject_allocations(true);
         bool failed = false;
         try {
             (void)parse_http1_request_message("GET / HTTP/1.1\r\nHost: example\r\n\r\n", &resource);
@@ -71,18 +72,18 @@ TEST(Ruvia, request_header_blocks_reclaim_repeated_parses_and_preserve_retained_
             failed = true;
         }
         EXPECT_TRUE(failed);
-        EXPECT_EQ(resource.live_bytes_, baseline);
+        EXPECT_EQ(resource.live_bytes(), baseline);
         EXPECT_EQ(retained.state_.request_.path(), std::string_view("/saved"));
     }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, request_public_reset_clears_borrowed_views_and_owned_headers) {
-    header_memory resource;
+    counting_memory_resource resource;
     const http_header_view headers[]{{"Host", "example.test"}};
     auto request = ruvia::make_parsed_http_request(
         "GET", "https://example.test/path?key=value", headers, {}, &resource);
-    EXPECT_TRUE(resource.live_bytes_ > 0);
+    EXPECT_TRUE(resource.live_bytes() > 0);
     {
         const http_header_view conflicting_host[]{{"Host", "conflicting.example"}};
         auto rebound_req = ruvia::make_parsed_http_request(
@@ -90,7 +91,7 @@ TEST(Ruvia, request_public_reset_clears_borrowed_views_and_owned_headers) {
         EXPECT_EQ(rebound_req.header("Host").value_or(""), std::string_view("example.test"));
     }
     request.reset();
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
     EXPECT_TRUE(request.method().empty());
     EXPECT_TRUE(request.target().empty());
     EXPECT_TRUE(request.scheme().empty());
@@ -106,8 +107,8 @@ TEST(Ruvia, request_public_reset_clears_borrowed_views_and_owned_headers) {
 }
 
 TEST(Ruvia, request_reset_commits_before_retirement_and_preserves_reentrant_replacement) {
-    header_memory original_resource;
-    header_memory replacement_resource;
+    reentrant_memory_resource original_resource;
+    counting_memory_resource replacement_resource;
     const http_header_view original_headers[]{{"Host", "old.test"}, {"Cookie", "sid=old"}};
     const http_header_view replacement_headers[]{{"Cookie", "sid=new"}, {"Host", "new.test"}};
     const std::array original_body{std::byte{'o'}, std::byte{'l'}, std::byte{'d'}};
@@ -129,8 +130,8 @@ TEST(Ruvia, request_reset_commits_before_retirement_and_preserves_reentrant_repl
             *state.request_ = std::move(*state.replacement_);
         }
     };
-    original_resource.reject_ = true;
-    replacement_resource.reject_ = true;
+    original_resource.reject_allocations(true);
+    replacement_resource.reject_allocations(true);
     request.reset();
     EXPECT_TRUE(observation.committed_);
     EXPECT_EQ(request.method(), std::string_view("PUT"));
@@ -139,14 +140,14 @@ TEST(Ruvia, request_reset_commits_before_retirement_and_preserves_reentrant_repl
     EXPECT_EQ(request.cookie("sid").value_or(""), std::string_view("new"));
     EXPECT_EQ(request.body(), std::string_view("new"));
     EXPECT_TRUE(replacement.headers().empty());
-    EXPECT_EQ(original_resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(original_resource.live_bytes(), std::size_t{0});
     request.reset();
-    EXPECT_EQ(replacement_resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(replacement_resource.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, request_move_commits_all_views_before_retirement_and_preserves_reentrant_reset) {
-    header_memory original_resource;
-    header_memory replacement_resource;
+    reentrant_memory_resource original_resource;
+    counting_memory_resource replacement_resource;
     const http_header_view original_headers[]{{"Host", "old.test"}, {"Cookie", "sid=old"}};
     const http_header_view replacement_headers[]{{"Cookie", "sid=new"}, {"Host", "new.test"}};
     const std::array original_body{std::byte{'o'}, std::byte{'l'}, std::byte{'d'}};
@@ -170,16 +171,16 @@ TEST(Ruvia, request_move_commits_all_views_before_retirement_and_preserves_reent
             state.request_->reset();
         }
     };
-    original_resource.reject_ = true;
-    replacement_resource.reject_ = true;
+    original_resource.reject_allocations(true);
+    replacement_resource.reject_allocations(true);
     request = std::move(replacement);
     EXPECT_TRUE(observation.committed_);
     EXPECT_TRUE(request.method().empty());
     EXPECT_TRUE(request.headers().empty());
     EXPECT_TRUE(request.body().empty());
-    EXPECT_EQ(original_resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(original_resource.live_bytes(), std::size_t{0});
     request.reset();
-    EXPECT_EQ(replacement_resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(replacement_resource.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, request_header_distinguishes_missing_from_present_empty) {
@@ -296,35 +297,35 @@ TEST(Ruvia, request_access_cookie_lookup_preserves_distinct_fields_with_shared_s
 }
 
 TEST(Ruvia, owned_header_copies_stay_in_the_source_resource) {
-    header_memory memory;
+    counting_memory_resource memory;
     {
         std::pmr::vector<ruvia::http_header> headers(&memory);
         headers.emplace_back("x-name", "value", &memory);
-        const auto before = memory.allocations_;
+        const auto before = memory.allocation_count();
         const std::pmr::vector<ruvia::http_header> copied(headers, &memory);
         const ruvia::http_header single(headers.front());
         EXPECT_EQ(copied.front().name(), std::string_view("x-name"));
         EXPECT_EQ(single.value(), std::string_view("value"));
         // Vector storage plus both field blocks come from the owning resource.
         if constexpr (ruvia::test::stl_moves_allocate_debug_metadata) {
-            EXPECT_TRUE(memory.allocations_ >= before + 3);
+            EXPECT_TRUE(memory.allocation_count() >= before + 3);
         } else {
-            EXPECT_EQ(memory.allocations_, before + 3);
+            EXPECT_EQ(memory.allocation_count(), before + 3);
         }
     }
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
+    EXPECT_EQ(memory.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, owned_header_lowercase_copy_normalizes_only_the_name_in_one_allocation) {
-    header_memory memory;
+    counting_memory_resource memory;
     {
-        const auto before = memory.allocations_;
+        const auto before = memory.allocation_count();
         const auto header = ruvia::http_header::copy_with_lowercase_name("X-Trace-ID", "AbC", &memory);
         EXPECT_EQ(header.name(), std::string_view("x-trace-id"));
         EXPECT_EQ(header.value(), std::string_view("AbC"));
-        EXPECT_EQ(memory.allocations_, before + 1);
+        EXPECT_EQ(memory.allocation_count(), before + 1);
     }
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
+    EXPECT_EQ(memory.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, request_body_string_view_and_known_method_bits_match_contracts) {

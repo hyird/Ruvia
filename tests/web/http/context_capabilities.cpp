@@ -16,7 +16,7 @@
 
 #if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
 TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
-    const auto response = context_request_test::with_context(
+    const auto response = ruvia::test::with_context(
         ruvia::test_request::get("/capabilities"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
 #ifdef RUVIA_ENABLE_DATABASE
@@ -45,7 +45,7 @@ TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {
 #endif
 
 TEST(Ruvia, context_session_capability_requires_explicit_middleware_binding) {
-    const auto response = context_request_test::with_context(
+    const auto response = ruvia::test::with_context(
         ruvia::test_request::get("/capabilities"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             bool rejected = false;

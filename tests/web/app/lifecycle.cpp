@@ -29,6 +29,8 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/websocket.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 
 namespace lifecycle_test {
@@ -149,53 +151,7 @@ void install_hooks() {
     });
 }
 
-class app_run final {
-public:
-    explicit app_run(ruvia::application& app)
-        : app_(app),
-          thread_([this] {
-              try {
-                  app_.run();
-              } catch (...) {
-                  failure_ = std::current_exception();
-              }
-          }) {}
-
-    ~app_run() {
-        if (thread_.joinable()) {
-            app_.stop();
-            thread_.join();
-        }
-    }
-
-    app_run(const app_run&) = delete;
-    app_run& operator=(const app_run&) = delete;
-
-    void join() {
-        thread_.join();
-    }
-
-    [[nodiscard]] std::exception_ptr failure() const noexcept {
-        return failure_;
-    }
-
-private:
-    ruvia::application& app_;
-    std::exception_ptr failure_;
-    std::thread thread_;
-};
-
-template <typename predicate_type>
-[[nodiscard]] bool wait_for(predicate_type&& predicate, std::chrono::milliseconds limit = 3s) {
-    const auto deadline = std::chrono::steady_clock::now() + limit;
-    while (!predicate()) {
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return false;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    return true;
-}
+using ruvia::test::app_run;
 
 // Appends received bytes until `done` holds or the peer ends the stream.
 // Returns true when the peer ended it.
@@ -371,8 +327,8 @@ TEST(Ruvia, app_stop_closes_every_connection_at_once) {
     asio::ip::tcp::socket busy(io);
     busy.connect(endpoint);
     send(busy, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    EXPECT_TRUE(wait_for([&] { return state_value.slow_entered_.load(); }));
-    EXPECT_TRUE(wait_for([&] { return app.http_stats().active_connections_ == 3; }));
+    ruvia::test::wait_until([&] { return state_value.slow_entered_.load(); }, 3s);
+    ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 3; }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
@@ -408,7 +364,7 @@ TEST(Ruvia, app_stop_cancels_a_request_that_never_ends) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
     send(socket, "GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    EXPECT_TRUE(wait_for([&] { return state_value.stuck_entered_.load(); }));
+    ruvia::test::wait_until([&] { return state_value.stuck_entered_.load(); }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
@@ -441,7 +397,7 @@ TEST(Ruvia, app_stop_closes_an_upgrade_still_in_its_route_chain) {
     asio::ip::tcp::socket upgrading(io);
     upgrading.connect(endpoint);
     send_websocket_upgrade(upgrading, "/held-socket");
-    EXPECT_TRUE(wait_for([&] { return state_value.upgrade_held_.load(); }));
+    ruvia::test::wait_until([&] { return state_value.upgrade_held_.load(); }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
@@ -475,7 +431,7 @@ TEST(Ruvia, app_stop_closes_websockets_without_close_handshake) {
     std::string received;
     EXPECT_TRUE(!read_until(client, received, [](const std::string& value) { return value.find("\r\n\r\n") != std::string::npos; }));
     EXPECT_TRUE(received.starts_with("HTTP/1.1 101 "));
-    EXPECT_TRUE(wait_for([&] { return state_value.socket_open_.load(); }));
+    ruvia::test::wait_until([&] { return state_value.socket_open_.load(); }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
@@ -507,7 +463,7 @@ TEST(Ruvia, app_stop_closes_tunnels_at_once) {
     std::string head;
     EXPECT_TRUE(!read_until(tunnel, head, [](const std::string& value) { return value.ends_with("\r\n\r\n"); }));
     EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
-    EXPECT_TRUE(wait_for([&] { return state_value.tunnel_open_.load(); }));
+    ruvia::test::wait_until([&] { return state_value.tunnel_open_.load(); }, 3s);
     send(tunnel, "ping");
     std::string echoed;
     EXPECT_TRUE(!read_until(tunnel, echoed, [](const std::string& value) { return value.size() >= 4; }));
@@ -554,7 +510,7 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     asio::ip::tcp::socket newer(io);
     newer.connect(endpoint);
     EXPECT_TRUE(served(newer));
-    EXPECT_TRUE(wait_for([&] { return app.http_stats().active_connections_ == 2; }));
+    ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 2; }, 3s);
 
     asio::ip::tcp::socket admitted(io);
     admitted.connect(endpoint);
@@ -567,9 +523,9 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
 
     // With a request in flight on both, no connection is idle.
     send(newer, "GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    EXPECT_TRUE(wait_for([&] { return state_value.stuck_entered_.load(); }));
+    ruvia::test::wait_until([&] { return state_value.stuck_entered_.load(); }, 3s);
     send(admitted, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    EXPECT_TRUE(wait_for([&] { return state_value.slow_entered_.load(); }));
+    ruvia::test::wait_until([&] { return state_value.slow_entered_.load(); }, 3s);
     asio::ip::tcp::socket refused(io);
     refused.connect(endpoint);
     std::string refused_bytes;
@@ -645,11 +601,12 @@ TEST(Ruvia, app_stop_during_capability_connect_returns_normally) {
     std::optional<app_run> run(std::in_place, app);
     silent_redis.non_blocking(true);
     asio::ip::tcp::socket peer(io);
-    EXPECT_TRUE(wait_for([&] {
+    ruvia::test::wait_until([&] {
         asio::error_code error;
         silent_redis.accept(peer, error);
         return !error;
-    }));
+    },
+        3s);
     std::string auth;
     EXPECT_TRUE(!read_until(peer, auth, [](const std::string& value) { return !value.empty(); }));
     EXPECT_TRUE(!auth.empty());

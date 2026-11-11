@@ -194,6 +194,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 - **原始 SQL（`sql()` / `db_expr::raw_sql`）**：语法片段以 `-` 或 `/` 结尾时，编译器在其后的参数前补一个空格，避免负数字面量或 `*` 拼出 `--` / `/*` 注释。PostgreSQL 绑定模式下片段不得包含位置参数（`$` 后接数字且不处于标识符中，如 `$1`），否则抛出 `std::invalid_argument`，值请通过 `value()` 参数传入；字面量模式（如函数体 DDL）与 MariaDB 不受此限制。
 - **参数与嵌套上限**：PostgreSQL 绑定模式按节点为每个值只分配一个 `$n`（分组表达式在 `SELECT` / `GROUP BY` / `HAVING` 中复用同一编号），单条语句超过 65535 个绑定参数（协议 Bind 消息的 Int16 计数）时 `compile()` 抛出 `std::length_error`，请分批写入。表达式与子查询嵌套上限为 256 层；同一运算符的左深 `AND` / `OR` 链（`and_where` 循环、`p = std::move(p) && q`）只算一层，编译为扁平的 `(a AND b AND c)`。`render_expression()` 只以字面量渲染单个表达式。
 - **携带表名的表达式**：`db_expr::from_expression(expr, table)` 与 `db_expr(expr, table)` 记录的表名只在导入方未指定表名（`expression(query, {}, alias)`）时参与限定名重写；导入方指定表名时以导入方为准，其他表的限定名保持不变。`db_expr(expr, table)` 的 `table` 为借用文本，拒绝 `std::string` 等拥有型右值。
+- **NULL 谓词**：`expr == nullptr` / `expr != nullptr` 与 `is_null()` / `is_not_null()` 使用相同的 `IS NULL` / `IS NOT NULL` 语义；NULL 在比较任一侧均适用，PostgreSQL 的无类型绑定操作数统一显式标注参数类型。
 - **关系路径**：`*_join_and_select` 的路径首段同时是根实体关系名、又是根别名或另一条已加载关系的别名时抛出 `std::invalid_argument`，拒绝有歧义的关系路径；`join_relation` 的多对多中间表别名 `<alias>_junction` 已被占用时同样拒绝。
 
 ### 2.2 `ruvia::db_schema` 与 `ruvia::db_procedure`
@@ -289,6 +290,10 @@ RUVIA_DB_PROJECTION(device_summary,
 `insert_builder(entity/span)` 与后续 `.values(entity/span)` 使用同一实体写入规则：每批可以包含设置了不同字段的实体，重复调用按行追加，不替换旧行或重新解释旧列。列按首次出现的批次合并（批内遵循实体声明顺序），缺失字段补 `DEFAULT`；因此不同分批方式可以改变 SQL 列顺序，但不改变每行字段对应的数据。单个全默认实体保留为一行，之后可追加显式字段行，也可在已有显式列时追加默认行；所有行都没有显式列的多行 INSERT 仍被拒绝。空批次与失败批次不改变此前 SQL、参数或默认 upsert 更新列集合；`.values()` 与 `.insert_from()` 不可混用。
 
 写 Builder 的 `.set(span<db_assignment>)`、`.set({...})` 和 `.set(entity)` 整批提交：字段校验与表达式导入完成后才发布 SET 列表，后续项失败不会留下此前项的部分更新。失败前已构建的 SQL 与参数语义不变；此保证针对查询构建，不等同于数据库事务。
+
+- **写入入口一致**：Repository 的 `update`、`delete_by`、`increment` / `decrement` 使用对应写 Builder；重复 SET 列以最后一次赋值为准。空 assignment 批次被拒绝；空实体变更仅在 UPDATE 自带生命周期盖章时有效。
+- **表达式列表**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，列名入口保留；`db_expression` 与类型化列引用隐式转为 `db_expr`。`order_by` / `add_order_by` 共用 `db_expr` 表达式入口。
+- **CTE 校验一致**：读 Builder 的 `with` 不按来源入口区分校验；只读 CTE 可与关系预加载并用，含写入的 CTE 统一要求平面结果映射。
 
 读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载在同一 resource 下直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
 

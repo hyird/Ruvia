@@ -9,9 +9,9 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 

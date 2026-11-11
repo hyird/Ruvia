@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/worker_cancellation.h"
 
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
@@ -355,21 +354,14 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     }
 #endif
     transport_.reset_abort();
-    generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
+    next_nonzero_id(generation_);
     struct connect_generation final {
         http_client_connection& connection_;
         ~connect_generation() {
-            ++connection_.generation_;
+            next_nonzero_id(connection_.generation_);
         }
     } connect_generation_value{*this};
-    worker_cancellation_registration cancellation(pool_.cancellation_target(), cancellation_id_);
-    response.cancellation_id_ = cancellation.id();
-    struct response_connect_binding final {
-        http_client_response_state& response_;
-        ~response_connect_binding() {
-            response_.cancellation_id_ = 0;
-        }
-    } binding{response};
+    http_client_response_cancellation cancellation(pool_.cancellation_target(), cancellation_id_, response);
     cancellation.arm(stop_token_value);
     throw_if_aborted();
 #ifdef RUVIA_ENABLE_HTTP2

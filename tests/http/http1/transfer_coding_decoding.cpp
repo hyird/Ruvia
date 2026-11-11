@@ -3,8 +3,9 @@
 #include "content_decoding_fixture.h"
 #include "http1_request_message_fixture.h"
 
+using namespace ruvia::test;
+
 namespace {
-using ruvia::testing::parse_http1_request_message;
 
 class decoder_memory_resource final : public std::pmr::memory_resource {
 public:

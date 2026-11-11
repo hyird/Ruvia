@@ -136,8 +136,10 @@ private:
         tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
     template <typename stream_type>
     task<http_connection_close> run_stream(http_server_session_config& listener_value, stream_type& stream, tcp_socket_type& socket, context_services services);
+#if defined(RUVIA_ENABLE_HTTP2)
     template <typename stream_type>
     task<http_connection_close> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services);
+#endif
     template <typename stream_type>
     task<std::variant<http1_serve_handoff, http_connection_close>> serve_requests(
         http1_connection_session<stream_type>& session, connection_work_set& work_set);

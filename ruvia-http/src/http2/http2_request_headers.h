@@ -7,12 +7,13 @@
 #include "ruvia/http/http_known_method.h"
 
 #include "coding/http_content_length.h"
+#include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
 #include "field/http_te_fields.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
-#include "parser/http_parser_syntax.h"
 #include "parser/http_request_target.h"
+#include "request/http_binary_request_fields.h"
 
 namespace ruvia::detail {
 
@@ -21,31 +22,9 @@ struct http2_header_decode_context final {
         : stream_(stream_value) {}
 
     http2_stream_state& stream_;
-    http2_header_list_size decoded_header_list_size_;
+    binary_field_section_size decoded_header_list_size_{max_http_header_bytes};
     request_field_state request_fields_{request_field_framing::binary};
 };
-
-// Cross-field constraints only. Decoded :path syntax is already checked;
-// senders combine this predicate with the origin-form grammar below.
-[[nodiscard]] inline bool http2_request_path_matches_method_and_scheme(
-    http_known_method method, std::string_view scheme, std::string_view path) noexcept {
-    if (path.empty()) {
-        return !is_http_request_scheme(scheme);
-    }
-    return path != "*" || method == http_known_method::options;
-}
-
-[[nodiscard]] inline bool http2_is_valid_regular_request_path(
-    http_known_method method, std::string_view scheme, std::string_view path) noexcept {
-    return http2_request_path_matches_method_and_scheme(method, scheme, path) &&
-           (path.empty() || path == "*" || is_valid_origin_form_target(path));
-}
-
-[[nodiscard]] inline bool http2_is_valid_extended_connect_path(
-    std::string_view scheme, std::string_view path) noexcept {
-    return http2_request_path_matches_method_and_scheme(http_known_method::connect, scheme, path) &&
-           (path.empty() || is_valid_origin_form_target(path));
-}
 
 // Call only after authority admission (or validated local push submission).
 // HTTP(S) already uses Host syntax; other schemes can contain URI userinfo.
@@ -61,7 +40,7 @@ struct http2_header_decode_context final {
     const auto index = stream.host_header_index();
     if (index < stream.remote_header_count()) {
         const auto header_value = stream.remote_header_at(index);
-        if (header_value.kind_ == request_header_kind::host) {
+        if (header_value.kind_ == http_field_kind::host) {
             return header_value.value_;
         }
     }
@@ -170,27 +149,27 @@ struct http2_header_decode_context final {
         return false;
     }
     stream.mark_regular_header_seen();
-    const auto kind = classify_request_header(name);
+    const auto kind = classify_http_field(name);
     if (validate_request_field(kind, value, http_field_list_role::recipient, context_value.request_fields_) !=
         request_field_status::ok) {
         return false;
     }
     switch (kind) {
-        case request_header_kind::host:
+        case http_field_kind::host:
             if (stream.has_authority() &&
                 !authority_matches_host(stream.request_authority(), value, stream.scheme_default_port())) {
                 return false;
             }
             stream.mark_host(stream.remote_header_count());
             break;
-        case request_header_kind::cookie:
+        case http_field_kind::cookie:
             return http2_append_cookie_header_value(stream, value);
-        case request_header_kind::expect:
+        case http_field_kind::expect:
             // Expect is an extensible semantic list. Preserve unsupported but
             // syntactically valid members for the Web product's 417 policy.
             stream.parse_request_expectation_field(value);
             break;
-        case request_header_kind::content_length: {
+        case http_field_kind::content_length: {
             http_content_length_state content_length;
             if (content_length.parse_field(value) != http_content_length_parse_status::ok ||
                 !stream.declare_remote_content_length(*content_length.value())) {

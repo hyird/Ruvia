@@ -22,6 +22,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
+#include "scoped_temp_directory.h"
 #include "test_io_context.h"
 
 // Pipelined HTTP/1.1 requests: the server may coalesce the responses of
@@ -34,7 +35,8 @@ namespace http1_pipelining_test {
 namespace fs = std::filesystem;
 
 [[nodiscard]] const fs::path& pipelined_file_path() {
-    static const fs::path path = fs::temp_directory_path() / "ruvia_http1_pipelining_file.txt";
+    static const ruvia::test::scoped_temp_directory directory("ruvia_http1_pipelining");
+    static const fs::path path = directory.path() / "file.txt";
     return path;
 }
 
@@ -201,8 +203,6 @@ TEST(Ruvia, pipelined_responses_of_every_kind_leave_in_request_order) {
     requests += get("/pipelining/item/10", "Connection: close\r\n");
     const auto response = exchange_pipelined(server.endpoint(), requests);
     server.finish();
-    std::error_code ignored;
-    fs::remove(pipelined_file_path(), ignored);
 
     EXPECT_TRUE(response.has_value());
     const auto output = response.value_or("");

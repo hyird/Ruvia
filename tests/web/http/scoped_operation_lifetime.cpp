@@ -6,6 +6,8 @@
 
 #include "streaming_fixture.h"
 
+using namespace ruvia::test;
+
 // Scoped operations release cold frames and shared registrations exactly once.
 
 TEST(Ruvia, scoped_operation_destruction_destroys_cold_frame) {

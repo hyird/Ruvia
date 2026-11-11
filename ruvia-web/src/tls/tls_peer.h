@@ -1,25 +1,29 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
-#include <utility>
 
-#include <asio/ip/tcp.hpp>
-#include <asio/ssl.hpp>
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "server/server_tls_stream.h"
-
-// The two pieces the TLS half of a session needs: how a server-side handshake
-// is initiated as an async operation, and how the verified peer identity is
-// read off the finished connection.
+// What a finished TLS handshake negotiated with the peer: the selected ALPN
+// protocol and the verified peer certificate identity.
 
 namespace ruvia::detail {
+
+// The ALPN protocol the handshake selected; empty when none was negotiated.
+[[nodiscard]] inline std::string_view tls_selected_alpn(SSL& ssl) noexcept {
+    const unsigned char* selected = nullptr;
+    unsigned int size = 0;
+    SSL_get0_alpn_selected(&ssl, &selected, &size);
+    return {reinterpret_cast<const char*>(selected), size};
+}
 
 // Surface certificate presence independently of its Subject: RFC 5280 section
 // 4.1.2.6 permits an empty DN with a critical subjectAltName. Conversion failure
@@ -55,14 +59,5 @@ inline std::optional<std::string_view> extract_tls_client_certificate(SSL* ssl, 
     }
     return std::string_view(out);
 }
-
-struct tls_server_handshake_initiator final {
-    server_tls_stream* stream_;
-
-    template <typename handler_type>
-    void operator()(handler_type handler) const {
-        stream_->async_handshake(asio::ssl::stream_base::server, std::move(handler));
-    }
-};
 
 }  // namespace ruvia::detail

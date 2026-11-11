@@ -25,18 +25,18 @@ namespace {
 template <typename stored_type, typename registration_type>
 void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<const registration_type> handlers) {
     auto* const resource = stored.get_allocator().resource();
-    std::pmr::vector<stored_type> normalized(resource);
-    normalized.reserve(handlers.size());
+    std::pmr::vector<stored_type> ordered(resource);
+    ordered.reserve(handlers.size());
     for (const auto& registration : handlers) {
-        normalized.emplace_back(resource, registration.prefix_, registration.handler_);
+        ordered.emplace_back(resource, std::string_view(registration.first), callback_access::ref(registration.second));
     }
     // Deepest prefix first: selection is a first-match scan. A nested scope
     // always has more segments; distinct scopes of equal depth cannot nest, so
     // their relative order is irrelevant; keep it stable.
-    std::ranges::stable_sort(normalized, [](const stored_type& left, const stored_type& right) noexcept {
+    std::ranges::stable_sort(ordered, [](const stored_type& left, const stored_type& right) noexcept {
         return detail::fallback_prefix_depth(left.prefix_) > detail::fallback_prefix_depth(right.prefix_);
     });
-    stored = std::move(normalized);
+    stored = std::move(ordered);
 }
 
 }  // namespace
@@ -58,12 +58,13 @@ void detail::router::set_not_found_handler(http_not_found_handler_ref handler) n
     plan_->not_found_handler_ = handler;
 }
 
-void detail::router::set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers) {
+void detail::router::set_prefix_error_handlers(
+    std::span<const std::pair<std::pmr::string, http_error_handler>> handlers) {
     replace_prefix_handlers(plan_->prefix_error_handlers_, handlers);
 }
 
 void detail::router::set_prefix_not_found_handlers(
-    std::span<const http_prefix_not_found_handler> handlers) {
+    std::span<const std::pair<std::pmr::string, http_not_found_handler>> handlers) {
     replace_prefix_handlers(plan_->prefix_not_found_handlers_, handlers);
 }
 
@@ -185,35 +186,6 @@ detail::compiled_route_plan_ptr_type detail::compile_route_plan(
     return routes_value.compile();
 }
 
-namespace {
-
-[[nodiscard]] bool same_route_pattern(std::string_view left, std::string_view right) noexcept {
-    const auto kind = [](std::string_view segment) noexcept {
-        if (segment == "*") {
-            return 2;
-        }
-        return !segment.empty() && segment.front() == ':' ? 1 : 0;
-    };
-    for (;;) {
-        std::string_view left_segment;
-        std::string_view left_rest;
-        std::string_view right_segment;
-        std::string_view right_rest;
-        const auto has_left = split_path_segment(left, left_segment, left_rest);
-        const auto has_right = split_path_segment(right, right_segment, right_rest);
-        if (!has_left || !has_right) {
-            return has_left == has_right;
-        }
-        if (kind(left_segment) != kind(right_segment) || !uri_paths_equivalent(left_segment, right_segment)) {
-            return false;
-        }
-        left = left_rest;
-        right = right_rest;
-    }
-}
-
-}  // namespace
-
 void detail::router::register_endpoint(http_known_method method, std::string_view method_token,
     std::string_view path, route_endpoint endpoint, void* handler_target,
     std::span<const controller_middleware_descriptor> controller_middlewares,
@@ -255,10 +227,10 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
             if (registered_tunnel != nullptr && registered_tunnel->protocol() == tunnel->protocol() &&
                 (tunnel->protocol().empty()
                         ? registered.path() == path || http_authorities_equal(path, registered.path(), 0)
-                        : same_route_pattern(registered.path(), path))) {
+                        : route_patterns_equivalent(registered.path(), path, /*compare_param_names=*/true))) {
                 throw std::invalid_argument("duplicate CONNECT route registration");
             }
-        } else if (same_route_pattern(registered.path(), path)) {
+        } else if (route_patterns_equivalent(registered.path(), path, /*compare_param_names=*/true)) {
             throw std::invalid_argument("duplicate route registration");
         }
     }

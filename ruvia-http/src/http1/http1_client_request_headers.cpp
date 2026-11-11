@@ -1,10 +1,10 @@
-#include "client/http1_client_request_headers.h"
+#include "http1/http1_client_request_headers.h"
 
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 
 namespace ruvia::detail {
 
-bool analyze_http1_client_request_field(http_header_view header, detail::request_header_kind kind,
+bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind,
     http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
     http_request_field_source source) noexcept {
     const auto name = header.name();
@@ -16,10 +16,10 @@ bool analyze_http1_client_request_field(http_header_view header, detail::request
     // The HTTP/1 writer owns Host and refuses message framing it does not
     // generate; the remaining semantics are version-independent.
     switch (kind) {
-        case detail::request_header_kind::host:
+        case detail::http_field_kind::host:
             error = http1_client_request_prepare_error::host_header_managed_by_writer;
             return false;
-        case detail::request_header_kind::transfer_encoding:
+        case detail::http_field_kind::transfer_encoding:
             error = http1_client_request_prepare_error::transfer_encoding_unsupported;
             return false;
         default:
@@ -32,18 +32,18 @@ bool analyze_http1_client_request_field(http_header_view header, detail::request
             error = http1_client_request_prepare_error::invalid_header;
             return false;
         case detail::request_field_status::managed_by_sender:
-            error = kind == detail::request_header_kind::expect
+            error = kind == detail::http_field_kind::expect
                         ? http1_client_request_prepare_error::expect_header_managed_by_writer
                         : http1_client_request_prepare_error::content_length_managed_by_writer;
             return false;
     }
-    if (kind == detail::request_header_kind::connection) {
+    if (kind == detail::http_field_kind::connection) {
         if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) !=
             detail::http_field_list_parse_status::ok) {
             error = http1_client_request_prepare_error::invalid_connection;
             return false;
         }
-    } else if (kind == detail::request_header_kind::upgrade) {
+    } else if (kind == detail::http_field_kind::upgrade) {
         const auto role = source == http_request_field_source::forwarded
                               ? detail::http_field_list_role::recipient
                               : detail::http_field_list_role::sender;
@@ -59,9 +59,9 @@ bool analyze_http1_client_request_field(http_header_view header, detail::request
         }
         facts.upgrade_value_bytes_ += value.size();
         ++facts.upgrade_field_count_;
-    } else if (kind == detail::request_header_kind::te) {
+    } else if (kind == detail::http_field_kind::te) {
         facts.has_te_ = true;
-    } else if (kind == detail::request_header_kind::trailer) {
+    } else if (kind == detail::http_field_kind::trailer) {
         facts.has_trailer_ = true;
     }
 
@@ -88,7 +88,7 @@ bool finish_http1_client_request_fields(
 bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts,
     http1_client_request_prepare_error& error, http_request_field_source source) noexcept {
     for (const auto& header : headers) {
-        if (!analyze_http1_client_request_field(header, detail::classify_request_header(header.name()), facts, error, source)) {
+        if (!analyze_http1_client_request_field(header, detail::classify_http_field(header.name()), facts, error, source)) {
             return false;
         }
     }

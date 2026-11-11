@@ -2,13 +2,14 @@
 
 #include <variant>
 
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
 
-#include "client/http_client_response_head.h"
-#include "parser/http_header_block_parser.h"
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
+#include "field/http_header_lookup.h"
+#include "http1/http1_field_parsing.h"
+#include "http1/http_client_response_head.h"
+#include "http1/http_header_block_parser.h"
 #include "response/http_response_header_state.h"
 
 namespace ruvia::detail {
@@ -37,30 +38,6 @@ namespace {
     return protocols.has_protocol() && offered;
 }
 
-[[nodiscard]] request_header_kind classify_client_response_control_header(
-    std::string_view name) noexcept {
-    switch (name.size()) {
-        case 7:
-            return http_ascii_equals_ignore_case(name, "Upgrade")
-                       ? request_header_kind::upgrade
-                       : request_header_kind::other;
-        case 10:
-            return http_ascii_equals_ignore_case(name, "Connection")
-                       ? request_header_kind::connection
-                       : request_header_kind::other;
-        case 14:
-            return http_ascii_equals_ignore_case(name, "Content-Length")
-                       ? request_header_kind::content_length
-                       : request_header_kind::other;
-        case 17:
-            return http_ascii_equals_ignore_case(name, "Transfer-Encoding")
-                       ? request_header_kind::transfer_encoding
-                       : request_header_kind::other;
-        default:
-            return request_header_kind::other;
-    }
-}
-
 }  // namespace
 
 http1_client_status_line_parse_result_type parse_http1_client_status_line(std::string_view status_line) noexcept {
@@ -69,10 +46,8 @@ http1_client_status_line_parse_result_type parse_http1_client_status_line(std::s
         return http1_client_response_parse_error::invalid_status_line;
     }
 
-    // HTTP-version = "HTTP/" DIGIT "." DIGIT (RFC 9112 section 2.3). A higher
-    // HTTP/1 minor version is processed as HTTP/1.1 (RFC 9110 section 6.2).
-    const auto version = status_line.substr(0, separator);
-    if (version.size() != 8 || !version.starts_with("HTTP/1.") || version[7] < '0' || version[7] > '9') {
+    const auto version = parse_http1_version(status_line.substr(0, separator));
+    if (version == http1_version_parse_result::invalid || version == http1_version_parse_result::unsupported) {
         return http1_client_response_parse_error::unsupported_http_version;
     }
 
@@ -96,7 +71,7 @@ http1_client_status_line_parse_result_type parse_http1_client_status_line(std::s
     }
 
     return http1_client_parsed_status_line{.received_status_ = *parsed_status,
-        .protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11};
+        .protocol_version_ = version == http1_version_parse_result::http10 ? http_protocol_version::http10 : http_protocol_version::http11};
 }
 
 http1_client_parsed_response_head::http1_client_parsed_response_head(
@@ -133,47 +108,37 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
         }
         const auto name = field->name();
         const auto value = field->value();
-        const auto kind = classify_client_response_control_header(name);
+        const auto kind = classify_http_field(name);
         output.headers_.append(http_header_view{name, value});
 
         switch (kind) {
-            case request_header_kind::content_length:
+            case http_field_kind::content_length:
                 // RFC 9112 section 6.3 rule 1: 1xx (including 101), 204, 304,
                 // and HEAD responses end at the first empty line regardless of
                 // framing fields; successful CONNECT becomes a tunnel.
                 if (framing_fields_apply) {
-                    switch (output.content_length_.parse_field(value)) {
-                        case http_content_length_parse_status::ok:
-                            break;
-                        case http_content_length_parse_status::invalid:
-                            return http1_client_response_parse_error::invalid_content_length;
-                        case http_content_length_parse_status::conflicting:
-                            return http1_client_response_parse_error::conflicting_content_length;
+                    if (const auto error = parse_http1_content_length_field<http1_client_response_parse_error>(value, output.content_length_)) {
+                        return *error;
                     }
                 }
                 break;
-            case request_header_kind::connection:
+            case http_field_kind::connection:
                 if (output.connection_options_.parse_field(value, http_connection_field_role::response_recipient) !=
                     http_field_list_parse_status::ok) {
                     return http1_client_response_parse_error::invalid_connection;
                 }
                 break;
-            case request_header_kind::transfer_encoding:
+            case http_field_kind::transfer_encoding:
                 output.saw_transfer_encoding_ = true;
                 // Only a response with content is framed by Transfer-Encoding;
                 // successful CONNECT is ignored by client-side rule.
                 if (framing_fields_apply && output.protocol_version_ == http_protocol_version::http11) {
-                    switch (output.transfer_encoding_.parse_field(value)) {
-                        case http_transfer_encoding_parse_status::ok:
-                            break;
-                        case http_transfer_encoding_parse_status::malformed:
-                            return http1_client_response_parse_error::invalid_transfer_encoding;
-                        case http_transfer_encoding_parse_status::unsupported:
-                            break;
+                    if (const auto error = parse_http1_transfer_encoding_field<http1_client_response_parse_error>(value, output.transfer_encoding_)) {
+                        return *error;
                     }
                 }
                 break;
-            case request_header_kind::upgrade:
+            case http_field_kind::upgrade:
                 if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient,
                         [&exchange_state, &output,
                             check_offered = content_semantics ==
@@ -209,12 +174,7 @@ namespace ruvia {
 
 std::optional<std::string_view> http_client_response_head::header(
     std::string_view name) const& noexcept {
-    for (auto field = headers_.rbegin(); field != headers_.rend(); ++field) {
-        if (http_ascii_equals_ignore_case(field->name(), name)) {
-            return field->value();
-        }
-    }
-    return std::nullopt;
+    return detail::find_last_http_header<http_header>(headers_, name);
 }
 
 }  // namespace ruvia

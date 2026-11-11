@@ -14,7 +14,7 @@
 
 namespace {
 
-using ruvia::testing::poisoned_retirement_resource;
+using ruvia::test::poisoned_retirement_resource;
 
 void check_encoder_alias(ruvia::http_content_coding coding) {
     std::string input(8 * 1024 * 1024 + 37, '\0');

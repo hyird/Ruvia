@@ -174,15 +174,12 @@ bool is_valid_host_header(std::string_view value) noexcept {
 }
 
 bool is_valid_uri_scheme(std::string_view value) noexcept {
-    const auto is_alpha = [](unsigned char byte) noexcept {
-        return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
-    };
-    if (value.empty() || !is_alpha(static_cast<unsigned char>(value.front()))) {
+    if (value.empty() || !is_uri_alpha(static_cast<unsigned char>(value.front()))) {
         return false;
     }
     for (const auto c : value.substr(1)) {
         const auto byte = static_cast<unsigned char>(c);
-        if (!is_alpha(byte) && !(byte >= '0' && byte <= '9') && byte != '+' && byte != '-' &&
+        if (!is_uri_alpha(byte) && !is_decimal_digit(c) && byte != '+' && byte != '-' &&
             byte != '.') {
             return false;
         }
@@ -328,6 +325,9 @@ bool parse_request_target(
 
 namespace ruvia::detail {
 std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept {
-    return http_ascii_equals_ignore_case(scheme, "https") ? 443 : (http_ascii_equals_ignore_case(scheme, "http") ? 80 : 0);
+    if (http_ascii_equals_ignore_case(scheme, "https")) {
+        return http_scheme_default_port(http_scheme::https);
+    }
+    return http_ascii_equals_ignore_case(scheme, "http") ? http_scheme_default_port(http_scheme::http) : 0;
 }
 }  // namespace ruvia::detail

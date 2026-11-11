@@ -1,23 +1,10 @@
 #pragma once
 
-#include <algorithm>
-#include <cstddef>
-#include <memory_resource>
-#include <string>
-#include <string_view>
-#include <utility>
-
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 
-#include "http2/http2_field_list.h"
-#include "http2/http2_header_rules.h"
-#include "http2/http2_response_headers.h"
 #include "http2/http2_stream_state.h"
-#include "parser/http_parser_syntax.h"
-#include "request/http_request_access.h"
 #include "websocket/http_websocket_handshake_fields.h"
-#include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
 
@@ -54,44 +41,6 @@ namespace ruvia::detail {
     // RFC 8441 section 5: :protocol supersedes the RFC 6455 key exchange, so
     // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
     return validate_extended_connect_websocket_headers(request, options);
-}
-
-inline void http2_append_websocket_handshake_headers(
-    http2_field_list& fields, const websocket_server_negotiation& negotiation) {
-    fields.clear();
-    const auto fields_value = negotiation.response_headers();
-    const bool has_date = std::ranges::any_of(fields_value, [](const http_header& field) {
-        return field.name() == "date";
-    });
-    const auto date = has_date ? std::string_view{} : cached_date_value();
-    const auto subprotocol = negotiation.subprotocol();
-    const auto extensions = negotiation.extensions();
-    http2_header_list_size section_size;
-    if (!section_size.add(":status", "200") ||
-        (!date.empty() && !section_size.add("date", date)) ||
-        (!subprotocol.empty() && !section_size.add("sec-websocket-protocol", subprotocol)) ||
-        (!extensions.empty() && !section_size.add("sec-websocket-extensions", extensions))) {
-        throw std::invalid_argument("WebSocket response headers exceed HTTP/2 header list limit");
-    }
-    for (const auto& field : fields_value) {
-        if (!section_size.add(field.name(), field.value())) {
-            throw std::invalid_argument("WebSocket response headers exceed HTTP/2 header list limit");
-        }
-    }
-    fields.reserve(fields_value.size() + 4);
-    fields.add(":status", "200");
-    if (!date.empty()) {
-        fields.add_owned_value("date", date);
-    }
-    if (!subprotocol.empty()) {
-        fields.add("sec-websocket-protocol", subprotocol);
-    }
-    if (!extensions.empty()) {
-        fields.add("sec-websocket-extensions", extensions);
-    }
-    for (const auto& field : fields_value) {
-        fields.add(field.name(), field.value());
-    }
 }
 
 }  // namespace ruvia::detail

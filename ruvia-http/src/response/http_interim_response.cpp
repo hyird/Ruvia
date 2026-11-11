@@ -43,7 +43,7 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
     for (const auto& header : response.headers()) {
         const auto name = header.name();
         const auto value = header.value();
-        auto kind = detail::request_header_kind::other;
+        auto kind = detail::http_field_kind::other;
         const auto status = validator.validate(name, value, &kind);
         if (status != detail::http_interim_response_header_validation_status::ok) {
             throw http1_response_head_error(common_validation_message(status));

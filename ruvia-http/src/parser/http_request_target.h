@@ -27,6 +27,10 @@ struct request_target_view {
 // RFC 3986 scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
 [[nodiscard]] bool is_valid_uri_scheme(std::string_view value) noexcept;
 
+[[nodiscard]] constexpr std::uint16_t http_scheme_default_port(http_scheme scheme) noexcept {
+    return scheme == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80};
+}
+
 [[nodiscard]] std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept;
 [[nodiscard]] bool is_valid_uri_authority(std::string_view value) noexcept;
 

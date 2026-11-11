@@ -29,8 +29,6 @@ class http2_sans_io_stream_runtime_table;
 // submitted any sooner.
 inline constexpr std::size_t http2_file_read_slots = http2_data_output_credit_slots;
 
-using http2_buffered_response_write_result = multiplexed_buffered_response_write_result;
-
 // Non-transport HTTP/2 buffered/file response driver. The session template owns
 // socket reads/writes and event dispatch; this object owns the single response
 // commit, DATA backpressure, the file body (through response_file_source), and
@@ -52,7 +50,7 @@ public:
     http2_buffered_response_writer(http2_buffered_response_writer&&) = delete;
     http2_buffered_response_writer& operator=(http2_buffered_response_writer&&) = delete;
 
-    [[nodiscard]] task<http2_buffered_response_write_result> write(std::uint32_t stream_id,
+    [[nodiscard]] task<multiplexed_buffered_response_write_result> write(std::uint32_t stream_id,
         const http_response& response, http_buffered_response_write_plan write_plan);
 
 private:
@@ -62,7 +60,7 @@ private:
 
     [[nodiscard]] task<data_write_result_type> write_data(
         std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream);
-    [[nodiscard]] task<http2_buffered_response_write_result> write_file_body(
+    [[nodiscard]] task<multiplexed_buffered_response_write_result> write_file_body(
         std::uint32_t stream_id, response_file_source& source, http_status_code committed_status);
     [[nodiscard]] bool stream_ended(std::uint32_t stream_id) const noexcept;
     void wake_writer() noexcept;

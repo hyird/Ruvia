@@ -698,10 +698,10 @@ public:
         return compare_expr(db_binary_operator::is_not_distinct_from, value(std::forward<v_type>(rhs)));
     }
     [[nodiscard]] db_predicate is_null() const {
-        return compare_expr(db_binary_operator::equal, null());
+        return unary_predicate(db_unary_operator::is_null);
     }
     [[nodiscard]] db_predicate is_not_null() const {
-        return compare_expr(db_binary_operator::not_equal, null());
+        return unary_predicate(db_unary_operator::is_not_null);
     }
     [[nodiscard]] db_predicate is_true() const {
         return unary_predicate(db_unary_operator::is_true);

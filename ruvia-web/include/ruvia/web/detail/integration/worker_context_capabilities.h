@@ -58,7 +58,7 @@ public:
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
         std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
         return ruvia::run_blocking(worker_,
-            {.timeout_ = worker_timer_ceil_milliseconds(worker_timer_saturating_duration_cast(timeout)),
+            {.timeout_ = worker_timer_ceil_milliseconds(timeout),
                 .stop_token_ = stop_token_},
             std::move(callable));
     }

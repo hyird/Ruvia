@@ -26,19 +26,6 @@ void append_prefix_handler(handlers_type& handlers, std::string_view prefix, han
         std::pmr::string(normalized, handlers.get_allocator().resource()), std::move(handler));
 }
 
-template <typename view_type, typename handlers_type, typename setter_type>
-void apply_prefix_handlers(const handlers_type& handlers, setter_type&& setter) {
-    if (handlers.empty()) {
-        return;
-    }
-    std::pmr::vector<view_type> views(process_resource());
-    views.reserve(handlers.size());
-    for (const auto& [prefix, handler] : handlers) {
-        views.push_back({std::string_view(prefix), callback_access::ref(handler)});
-    }
-    setter(std::span<const view_type>(views));
-}
-
 }  // namespace
 
 app_configuration::app_configuration()
@@ -109,14 +96,8 @@ void app_configuration::on_not_found(scoped_not_found_handler_options&& options)
 void app_configuration::apply(router& routes_value) const {
     routes_value.set_error_handler(callback_access::ref(error_handler_));
     routes_value.set_not_found_handler(callback_access::ref(not_found_handler_));
-    apply_prefix_handlers<http_prefix_error_handler>(
-        prefix_error_handlers_, [&routes_value](std::span<const http_prefix_error_handler> views) {
-            routes_value.set_prefix_error_handlers(views);
-        });
-    apply_prefix_handlers<http_prefix_not_found_handler>(prefix_not_found_handlers_,
-        [&routes_value](std::span<const http_prefix_not_found_handler> views) {
-            routes_value.set_prefix_not_found_handlers(views);
-        });
+    routes_value.set_prefix_error_handlers(prefix_error_handlers_);
+    routes_value.set_prefix_not_found_handlers(prefix_not_found_handlers_);
     if (!middlewares_.empty()) {
         std::pmr::vector<controller_middleware_descriptor> descriptors(process_resource());
         descriptors.reserve(middlewares_.size());

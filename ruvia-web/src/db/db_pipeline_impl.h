@@ -820,7 +820,7 @@ public:
             io_deadline_.reset();
             if (const auto io_timeout = db_io_timeout(pool_.config(), wanted)) {
                 io_deadline_ = worker_timer_saturating_deadline(
-                    *group.stretch_start_, worker_timer_saturating_duration_cast(io_timeout->value()));
+                    *group.stretch_start_, io_timeout->value());
             }
             auto until = pool_.state().earliest_deadline(slot);
             if (io_deadline_.has_value() && (!until.has_value() || *io_deadline_ < *until)) {

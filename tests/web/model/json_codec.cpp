@@ -139,11 +139,11 @@ TEST(Ruvia, model_json_codec_supports_public_scalar_and_array_roots) {
     EXPECT_TRUE(boolean.value_);
     auto strings = ruvia::from_json<ruvia::array<ruvia::string>>(R"(["a","b"])");
     EXPECT_EQ(strings.size(), std::size_t{2});
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::boxed_array<ruvia::string>>(R"(["x",[1]])");
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int64>("1 trailing"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::string>("null"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::int64>("1 trailing"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::string>("null"); }));
 }
 
 TEST(Ruvia, model_json_scalar_roots_keep_short_output_in_inline_storage) {
@@ -209,16 +209,16 @@ TEST(Ruvia, model_json_member_keys_escape_controls_and_keep_utf8) {
 }
 
 TEST(Ruvia, model_json_codec_rejects_nested_wrong_null_and_duplicate_fields) {
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":null,"values":[]},"flag":true})");
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[1]},"flag":true})");
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[]},"flag":true,"flag":false})");
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[]},"flag":true}junk)");
     }));
 }
@@ -257,8 +257,8 @@ TEST(Ruvia, model_json_codec_root_model_arrays_validate_and_roundtrip_recursivel
     EXPECT_EQ(std::string_view(ruvia::to_json(boxed)), input);
     for (const auto bad : {R"([{}])", R"([{"name":null}])",
              R"([{"name":"root","children":[{}]}])", R"([{"name":"a","name":"b"}])"}) {
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::array<codec_node>>(bad); }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::boxed_array<codec_node>>(bad); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::array<codec_node>>(bad); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::boxed_array<codec_node>>(bad); }));
     }
 }
 
@@ -461,7 +461,7 @@ TEST(Ruvia, model_json_codec_owns_dynamic_tokens_and_preserves_retained_results)
         const std::string invalid_input = "{\"value\":\"" + std::string(160, 'i') + "\",\"object\":[]}";
         for (std::size_t i = 0; i < 32; ++i) {
             const auto allocated = model_resource.allocation_count();
-            EXPECT_TRUE(ruvia::testing::throws_on([&] {
+            EXPECT_TRUE(ruvia::test::throws_on([&] {
                 (void)ruvia::from_json<codec_dynamic>(invalid_input, {.resource_ = &model_resource});
             }));
             EXPECT_TRUE(model_resource.allocation_count() > allocated);
@@ -543,87 +543,87 @@ TEST(Ruvia, model_json_codec_roundtrips_empty_schema_and_rejects_non_object_root
     EXPECT_EQ(std::string_view(output), "{}");
     auto reparsed = ruvia::from_json<codec_empty>(output);
     EXPECT_EQ(std::string_view(ruvia::to_json(reparsed)), "{}");
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<codec_empty>(R"([])"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<codec_empty>(R"([])"); }));
 }
 
 TEST(Ruvia, json_array_limits_apply_across_nested_collections_and_model_fields) {
     using nested_array = ruvia::array<ruvia::array<ruvia::int32>>;
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<nested_array>("[[1,2],[3]]", {.max_array_elements_ = 5});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<nested_array>("[[1,2],[3]]", {.max_array_elements_ = 4});
     }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<nested_array>("[]", {.max_array_elements_ = 0});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<nested_array>("[[]]", {.max_array_elements_ = 0});
     }));
 
     constexpr auto tree = R"({"name":"a","children":[{"name":"b","children":[{"name":"c"}]},{"name":"d"}]})";
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_node>(tree, {.max_array_elements_ = 3});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_node>(tree, {.max_array_elements_ = 2});
     }));
 }
 
 TEST(Ruvia, json_array_limits_include_dynamic_tokens_and_unknown_fields) {
     constexpr auto nested = R"({"value":[[1,2],[3]],"object":{}})";
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 5});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 4});
     }));
 
     constexpr auto dynamic = R"({"value":[1,2],"object":{"nested":[3]}})";
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 3});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 2});
     }));
 
     constexpr auto mixed = R"({"dense":[[1,2]],"boxed":[{"nested":[3]}]})";
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 5});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 4});
     }));
 
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 2});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 1});
     }));
 }
 
 TEST(Ruvia, json_representation_budget_bounds_scalar_and_owned_string_results) {
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::int32>("1", {.max_representation_bytes_ = 0});
     }));
 
     const std::string text = "\"" + std::string(4096, 'x') + "\"";
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 1024});
     }));
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 16384});
     }));
 
     // A literal string is retained as one sized copy and is charged once;
     // decoding an escaped string grows its buffer, so it is charged twice.
     constexpr std::size_t single_copy_budget = 4096 + 1024;
-    EXPECT_TRUE(!ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = single_copy_budget});
     }));
     const std::string escaped = "\"\\n" + std::string(4094, 'x') + "\"";
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(escaped, {.max_representation_bytes_ = single_copy_budget});
     }));
 }
@@ -639,11 +639,11 @@ TEST(Ruvia, json_representation_budget_includes_decoded_field_names) {
         auto parsed_value = ruvia::from_json<codec_empty>(single,
             {.resource_ = &memory, .max_representation_bytes_ = one_key_budget});
         EXPECT_EQ(std::string_view(ruvia::to_json(parsed_value)), "{}");
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
             (void)ruvia::from_json<codec_empty>(single,
                 {.resource_ = &memory, .max_representation_bytes_ = sizeof(codec_empty) + 1024});
         }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
             (void)ruvia::from_json<codec_empty>(repeated,
                 {.resource_ = &memory, .max_representation_bytes_ = one_key_budget});
         }));
@@ -659,7 +659,7 @@ TEST(Ruvia, json_budget_failure_releases_partial_results_and_preserves_retained_
             R"(["retained value with owned storage"])", {.resource_ = &memory});
         const auto retained_allocations = memory.live_allocations();
         for (std::size_t index = 0; index < 8; ++index) {
-            EXPECT_TRUE(ruvia::testing::throws_on([&] {
+            EXPECT_TRUE(ruvia::test::throws_on([&] {
                 (void)ruvia::from_json<ruvia::boxed_array<ruvia::string>>(
                     R"(["first element with owned storage","second element with owned storage"])",
                     {.resource_ = &memory, .max_array_elements_ = 1});

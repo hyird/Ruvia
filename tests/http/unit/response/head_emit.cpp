@@ -24,7 +24,9 @@
 
 #include "failing_memory_resource.h"
 #include "http1_request_message_fixture.h"
-#include "request_header_memory_fixture.h"
+#include "memory_resource_fixture.h"
+
+using ruvia::test::failing_memory_resource;
 
 namespace {
 
@@ -160,7 +162,7 @@ TEST(Ruvia, http1_response_head_reserve_preserves_inline_capacity_and_failed_gro
 }
 
 TEST(Ruvia, http1_response_head_reset_preserves_reentrant_refill) {
-    ruvia::test::header_memory resource;
+    ruvia::test::reentrant_memory_resource resource;
     {
         ruvia::http_response_head_buffer buffer(&resource);
         buffer.append(std::string(ruvia::response_head_retained_heap_bytes + 1, 'h'));
@@ -178,7 +180,7 @@ TEST(Ruvia, http1_response_head_reset_preserves_reentrant_refill) {
         buffer.append("reused");
         EXPECT_EQ(buffer.view(), "reused");
     }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, http1_response_head_assignment_preserves_both_buffers_on_allocation_failure) {
@@ -334,8 +336,8 @@ TEST(Ruvia, http1_response_head_growing_assignment_commits_before_retirement) {
     };
 
     for (const bool move : {false, true}) {
-        ruvia::test::header_memory target_resource;
-        ruvia::test::header_memory source_resource;
+        ruvia::test::reentrant_memory_resource target_resource;
+        ruvia::test::counting_memory_resource source_resource;
         {
             ruvia::http_response_head_buffer target(&target_resource);
             ruvia::http_response_head_buffer source(&source_resource);
@@ -367,8 +369,8 @@ TEST(Ruvia, http1_response_head_growing_assignment_commits_before_retirement) {
             EXPECT_EQ(source.view(), "reused");
             EXPECT_EQ(target.view(), "refilled");
         }
-        EXPECT_EQ(target_resource.live_bytes_, std::size_t{0});
-        EXPECT_EQ(source_resource.live_bytes_, std::size_t{0});
+        EXPECT_EQ(target_resource.live_bytes(), std::size_t{0});
+        EXPECT_EQ(source_resource.live_bytes(), std::size_t{0});
     }
 }
 
@@ -551,7 +553,7 @@ TEST(Ruvia, http1_response_trailers_leave_existing_output_on_allocation_failure)
 
 TEST(Ruvia, http1_buffered_response_plan_owns_request_version_and_length) {
     using ruvia::plan_buffered_http_response_write;
-    using ruvia::testing::parse_http1_request_message;
+    using ruvia::test::parse_http1_request_message;
 
     const auto emit_for = [&](std::string_view request) {
         http_response response(std::pmr::new_delete_resource());

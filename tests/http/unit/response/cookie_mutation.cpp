@@ -13,6 +13,8 @@
 
 #include "failing_memory_resource.h"
 
+using ruvia::test::failing_memory_resource;
+
 TEST(Ruvia, response_cookie_plan_and_raw_headers_share_replacement_semantics) {
     ruvia::http_response response;
     response.header("Set-Cookie", "first=one");

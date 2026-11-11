@@ -35,6 +35,8 @@
 #include "multipart_boundary_fixture.h"
 #include "test_io_context.h"
 
+using namespace ruvia::test;
+
 namespace request_body_limits_test {
 
 struct body_lane_observation final {
@@ -107,7 +109,7 @@ class body_lane_routes final {
     ruvia::task<ruvia::http_response> read_multipart(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         ruvia::multipart_reader reader(context_value.req().body_reader(),
-            {.boundary_ = ruvia::testing::make_multipart_boundary("lazy"), .resource_ = ruvia::process_resource()});
+            {.boundary_ = ruvia::test::make_multipart_boundary("lazy"), .resource_ = ruvia::process_resource()});
         auto first = reader.read();
         auto last = reader.read();
         std::pmr::string body(context_value.allocator<char>());
@@ -506,7 +508,7 @@ TEST(Ruvia, web_request_decodes_content_coding_stacks_in_reverse_order) {
     if (!encoded.has_value()) {
         return;
     }
-    (void)context_request_test::with_context(
+    (void)ruvia::test::with_context(
         ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(*encoded),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             const auto body = co_await context_value.req().text();

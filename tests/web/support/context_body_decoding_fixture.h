@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -11,7 +12,7 @@
 #include "content_decoding_fixture.h"
 #include "context_request_fixture.h"
 
-namespace context_body_decoding_test {
+namespace ruvia::test {
 
 struct context_body_read_observation final {
     std::string body_;
@@ -20,7 +21,7 @@ struct context_body_read_observation final {
 
 inline std::unique_ptr<ruvia::task<std::string_view>> make_expired_context_text_read() {
     std::unique_ptr<ruvia::task<std::string_view>> operation;
-    (void)context_request_test::with_context(ruvia::test_request::post("/").body("body"),
+    (void)with_context(ruvia::test_request::post("/").body("body"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             operation.reset(new ruvia::task<std::string_view>(context_value.req().text()));
             co_return;
@@ -39,7 +40,7 @@ inline ruvia::task<void> await_expired_context_text_read(
 
 inline context_body_read_observation read_context_gzip_body(std::string_view encoded) {
     context_body_read_observation observation;
-    (void)context_request_test::with_context(
+    (void)with_context(
         ruvia::test_request::post("/").header("Content-Encoding", "gzip").body(encoded),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             try {
@@ -52,7 +53,4 @@ inline context_body_read_observation read_context_gzip_body(std::string_view enc
     return observation;
 }
 
-}  // namespace context_body_decoding_test
-
-using namespace content_decoding_test;       // NOLINT(google-build-using-namespace)
-using namespace context_body_decoding_test;  // NOLINT(google-build-using-namespace)
+}  // namespace ruvia::test

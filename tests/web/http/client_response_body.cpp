@@ -479,7 +479,7 @@ private:
         std::size_t received = 0;
         for (;;) {
             if (connection.wants_write()) {
-                ruvia::testing::drain_output(connection, output);
+                ruvia::test::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             if (received == requests_.size()) {
@@ -2842,7 +2842,7 @@ TEST(Ruvia, tls_client_sends_close_notify_before_closing) {
                 std::pmr::string output;
                 while (!client_end) {
                     if (connection.wants_write()) {
-                        ruvia::testing::drain_output(connection, output);
+                        ruvia::test::drain_output(connection, output);
                         // A failed write leaves the client's end to the next read.
                         (void)co_await asio::async_write(stream, asio::buffer(output),
                             asio::redirect_error(asio::use_awaitable, write_error));
@@ -3782,7 +3782,7 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
             throw std::runtime_error("HTTP/2 capacity settings rejected");
         }
         std::pmr::string output;
-        ruvia::testing::drain_output(connections[index], output);
+        ruvia::test::drain_output(connections[index], output);
         if (!output.empty()) {
             co_await asio::async_write(*sockets[index], asio::buffer(output), asio::use_awaitable);
         }
@@ -3935,7 +3935,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
         bool answered = false;
         for (;;) {
             if (connection.wants_write()) {
-                ruvia::testing::drain_output(connection, output);
+                ruvia::test::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             if (answered && !connection.wants_write()) {
@@ -4061,7 +4061,7 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
             bool answered = false;
             for (;;) {
                 if (connection.wants_write()) {
-                    ruvia::testing::drain_output(connection, output);
+                    ruvia::test::drain_output(connection, output);
                     co_await asio::async_write(stream, asio::buffer(output), asio::use_awaitable);
                 }
                 // The drain ends with the final GOAWAY sent after the client's
@@ -4472,7 +4472,7 @@ private:
         for (;;) {
             std::error_code error;
             if (!silent && connection.wants_write()) {
-                ruvia::testing::drain_output(connection, output);
+                ruvia::test::drain_output(connection, output);
                 // The core answers a client GOAWAY with its own, which may
                 // reach a client that already closed.
                 co_await asio::async_write(
@@ -4795,7 +4795,7 @@ public:
                                 ruvia::http2_submit_status::accepted) {
             throw std::runtime_error("HTTP/2 scripted origin settings rejected");
         }
-        ruvia::testing::drain_output(connection_, output_);
+        ruvia::test::drain_output(connection_, output_);
         if (output_.empty()) {
             co_return true;
         }

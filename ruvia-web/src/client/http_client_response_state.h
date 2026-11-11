@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -19,6 +20,7 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #ifdef RUVIA_ENABLE_HTTP2
@@ -47,6 +49,13 @@ namespace ruvia::detail {
 
 class http_client_pool;
 class http_client_response_memory_domain;
+
+inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
+    if (++value == 0) {
+        ++value;
+    }
+    return value;
+}
 
 // Owned by the response memory domain, not by a connection/session arena.
 // At most one application chunk is queued; wire drivers borrow it until their
@@ -447,6 +456,39 @@ private:
     http_client_response_state* next_memory_state_{};
 
     friend class http_client_response_memory_domain;
+};
+
+// Publish both identities before arm(), which may deliver cancellation inline.
+// The owner must declare this after any generation/stream guard so callback
+// retirement precedes unpublishing the operation.
+template <typename target_type>
+class http_client_response_cancellation final {
+public:
+    http_client_response_cancellation(const std::shared_ptr<target_type>& target,
+        std::uint64_t& identity, http_client_response_state& response)
+        : response_(response),
+          registration_(target, identity) {
+        response_.cancellation_id_ = registration_.id();
+    }
+    http_client_response_cancellation(std::shared_ptr<target_type>&&, std::uint64_t&, http_client_response_state&) = delete;
+    http_client_response_cancellation(const std::shared_ptr<target_type>&&, std::uint64_t&, http_client_response_state&) = delete;
+    http_client_response_cancellation(const http_client_response_cancellation&) = delete;
+    http_client_response_cancellation& operator=(const http_client_response_cancellation&) = delete;
+    http_client_response_cancellation(http_client_response_cancellation&&) = delete;
+    http_client_response_cancellation& operator=(http_client_response_cancellation&&) = delete;
+    ~http_client_response_cancellation() {
+        registration_.reset();
+        if (response_.cancellation_id_ == registration_.id()) {
+            response_.cancellation_id_ = 0;
+        }
+    }
+    void arm(const stop_token& stop) {
+        registration_.arm(stop);
+    }
+
+private:
+    http_client_response_state& response_;
+    worker_cancellation_registration<target_type> registration_;
 };
 
 }  // namespace ruvia::detail

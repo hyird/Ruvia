@@ -25,11 +25,12 @@
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_transfer_coding.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
-namespace content_decoding_test {
+namespace ruvia::test {
 
 using ruvia::decode_http_content;
 using ruvia::encode_http_content;
@@ -223,6 +224,4 @@ inline std::optional<std::string> zstd_round_trip(std::string_view plain, std::s
     return std::string(*decoded);
 }
 
-}  // namespace content_decoding_test
-
-using namespace content_decoding_test;  // NOLINT(google-build-using-namespace)
+}  // namespace ruvia::test

@@ -23,7 +23,8 @@ using ruvia::db_schema_column;
 using ruvia::db_schema_constraint;
 using ruvia::db_table_definition;
 using ruvia::db_table_option;
-using ruvia::testing::throws_on;
+using ruvia::test::failing_memory_resource;
+using ruvia::test::throws_on;
 
 RUVIA_DB_ENTITY(enum_entity_type, "enum_events",
     ruvia::db_column<"state", std::pmr::string,

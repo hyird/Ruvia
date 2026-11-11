@@ -115,11 +115,11 @@ void check_character_class_rule(std::string_view value, bool matches, std::strin
 }  // namespace
 
 TEST(Ruvia, request_model_required_and_optional_fields_are_structural) {
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<required_optional_model>("{}");
     }));
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_form<required_optional_model>("", {.resource_ = std::pmr::get_default_resource()});
     }));
 }

@@ -13,72 +13,11 @@
 #include "response/http_response_header_bits.h"
 #include "response/http_response_header_state.h"
 
-// Content-Length planning for protocols whose frames delimit the content
-// (HTTP/2 DATA frames, RFC 9113 §8.1.1; HTTP/3 DATA frames, RFC 9114 §4.1.2).
-// Framing never depends on the field there, but any emitted value must agree
-// with the content actually sent, so the plan names the one normalized value
-// the head encodes and the length the content accounting enforces.
+// Shared response Content-Length semantics. HTTP/1 adds its chunked and
+// close-delimited framing policy; HTTP/2 and HTTP/3 delimit content with DATA
+// frames but enforce the same normalized field value.
 
 namespace ruvia::detail {
-
-// RFC 7541 §7.1.3 / RFC 9204 §4.2.1: credential-bearing fields use the
-// never-indexed literal so an intermediary never places them in a shared dynamic table.
-[[nodiscard]] inline bool hpack_header_name_is_sensitive(std::string_view name) noexcept {
-    return http_ascii_equals_ignore_case(name, "authorization") ||
-           http_ascii_equals_ignore_case(name, "proxy-authorization") ||
-           http_ascii_equals_ignore_case(name, "cookie") ||
-           http_ascii_equals_ignore_case(name, "set-cookie");
-}
-
-[[nodiscard]] inline std::string_view get_http2_known_header_name(
-    std::uint32_t known_bit) noexcept {
-    switch (known_bit) {
-        case response_header_content_length:
-            return "content-length";
-        case response_header_content_encoding:
-            return "content-encoding";
-        case response_header_content_type:
-            return "content-type";
-        case response_header_vary:
-            return "vary";
-        case response_header_date:
-            return "date";
-        case response_header_server:
-            return "server";
-        case response_header_cache_control:
-            return "cache-control";
-        case response_header_allow:
-            return "allow";
-        case response_header_access_control_allow_origin:
-            return "access-control-allow-origin";
-        case response_header_access_control_allow_credentials:
-            return "access-control-allow-credentials";
-        case response_header_access_control_allow_methods:
-            return "access-control-allow-methods";
-        case response_header_access_control_allow_headers:
-            return "access-control-allow-headers";
-        case response_header_access_control_max_age:
-            return "access-control-max-age";
-        case response_header_access_control_expose_headers:
-            return "access-control-expose-headers";
-        case response_header_accept_ranges:
-            return "accept-ranges";
-        case response_header_content_range:
-            return "content-range";
-        case response_header_etag:
-            return "etag";
-        case response_header_last_modified:
-            return "last-modified";
-        case response_header_location:
-            return "location";
-        case response_header_set_cookie:
-            return "set-cookie";
-        case response_header_trailer:
-            return "trailer";
-        default:
-            return {};
-    }
-}
 
 enum class http_framed_response_head_plan_error : std::uint8_t {
     invalid_content_length,
@@ -159,30 +98,36 @@ using http_framed_response_head_plan_result =
     std::variant<http_framed_response_head_plan, http_framed_response_head_plan_error>;
 
 [[nodiscard]] inline http_framed_response_head_plan_result http_framed_buffered_response_head_plan(
-    const http_buffered_response_write_plan& write_plan, const http_response& response) noexcept {
-    const auto body_plan = write_plan.body_plan();
+    const http_response_body_plan& body_plan, std::uint64_t content_length,
+    const http_response& response) noexcept {
     if (body_plan.response_status() != response.status()) {
         return http_framed_response_head_plan_error::response_status_mismatch;
     }
-    if (!write_plan.matches_response(response)) {
+    if (content_length != body_plan.buffered_representation_length(response)) {
         return http_framed_response_head_plan_error::response_representation_mismatch;
     }
     // An empty suppressed HEAD body describes the GET representation only
     // through its declared Content-Length, if any (RFC 9110 section 8.6).
     if (body_plan.body_suppressed() && body_plan.status_allows_body() &&
-        body_plan.explicit_content_length_allowed() && write_plan.content_length() == 0 &&
+        body_plan.explicit_content_length_allowed() && content_length == 0 &&
         (response.has_head_metadata_body() ||
             response_has_known_header(response, response_header_content_length))) {
         return http_framed_response_head_plan::preserve_explicit(body_plan, response);
     }
     if (body_plan.auto_content_length_allowed()) {
         return http_framed_response_head_plan::canonical(
-            body_plan, body_plan.status_allows_body() ? write_plan.content_length() : 0);
+            body_plan, body_plan.status_allows_body() ? content_length : 0);
     }
     if (body_plan.explicit_content_length_allowed()) {
         return http_framed_response_head_plan::preserve_explicit(body_plan, response);
     }
     return http_framed_response_head_plan::omit(body_plan);
+}
+
+[[nodiscard]] inline http_framed_response_head_plan_result http_framed_buffered_response_head_plan(
+    const http_buffered_response_write_plan& write_plan, const http_response& response) noexcept {
+    return http_framed_buffered_response_head_plan(
+        write_plan.body_plan(), write_plan.content_length(), response);
 }
 
 [[nodiscard]] inline http_framed_response_head_plan_result http_framed_streaming_response_head_plan(

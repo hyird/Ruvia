@@ -28,8 +28,6 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/http_accept_match.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_known_method.h"
@@ -84,9 +82,6 @@ template <typename t_type>
     requires(!std::is_lvalue_reference_v<t_type>)
 request_binding_handle<std::remove_cvref_t<t_type>> bind_validated_model(context&, t_type&&) = delete;
 
-[[noreturn]] void throw_invalid_json_content_type();
-[[noreturn]] void throw_invalid_json_body();
-[[noreturn]] void throw_invalid_form_content_type();
 [[noreturn]] void throw_invalid_query();
 [[noreturn]] void throw_invalid_param();
 
@@ -411,6 +406,10 @@ private:
     friend class context;
     explicit constexpr context_request(const context& context_value RUVIA_LIFETIMEBOUND) noexcept
         : context_(&context_value) {}
+
+    template <typename t_type>
+    [[nodiscard]] static std::optional<t_type> parse_typed(
+        std::optional<std::string_view> raw, void (*fail)());
 
     const context* context_{nullptr};
 };
@@ -925,113 +924,52 @@ inline http_response context::json(const t_type& value) {
     return json_serialized(body);
 }
 
-template <detail::parsed_integer t_type>
-inline std::optional<t_type> context_request::query(std::string_view name) const {
-    const auto raw = query(name);
-    if (!raw.has_value()) {
+template <typename t_type>
+inline std::optional<t_type> context_request::parse_typed(
+    std::optional<std::string_view> raw, void (*fail)()) {
+    if (!raw) {
         return std::nullopt;
     }
-    const auto parsed_value = parse_integer<t_type>(*raw);
-    if (parsed_value.index() != 0) {
-        detail::throw_invalid_query();
+    if constexpr (std::same_as<t_type, bool>) {
+        const auto parsed_value = detail::parse_form_bool(*raw);
+        if (!parsed_value) {
+            fail();
+        }
+        return *parsed_value;
+    } else {
+        const auto parsed_value = parse_integer<t_type>(*raw);
+        if (parsed_value.index() != 0) {
+            fail();
+        }
+        return std::get<0>(parsed_value);
     }
-    return std::get<0>(parsed_value);
+}
+
+template <detail::parsed_integer t_type>
+inline std::optional<t_type> context_request::query(std::string_view name) const {
+    return parse_typed<t_type>(query(name), detail::throw_invalid_query);
 }
 
 template <std::same_as<bool> t_type>
 inline std::optional<bool> context_request::query(std::string_view name) const {
-    const auto raw = query(name);
-    if (!raw.has_value()) {
-        return std::nullopt;
-    }
-    const auto parsed_value = detail::parse_form_bool(*raw);
-    if (!parsed_value.has_value()) {
-        detail::throw_invalid_query();
-    }
-    return *parsed_value;
+    return parse_typed<t_type>(query(name), detail::throw_invalid_query);
 }
 
 template <detail::parsed_integer t_type>
 inline std::optional<t_type> context_request::param(std::string_view name) const {
-    const auto raw = param(name);
-    if (!raw.has_value()) {
-        return std::nullopt;
-    }
-    const auto parsed_value = parse_integer<t_type>(*raw);
-    if (parsed_value.index() != 0) {
-        detail::throw_invalid_param();
-    }
-    return std::get<0>(parsed_value);
+    return parse_typed<t_type>(param(name), detail::throw_invalid_param);
 }
 
 template <std::same_as<bool> t_type>
 inline std::optional<bool> context_request::param(std::string_view name) const {
-    const auto raw = param(name);
-    if (!raw.has_value()) {
-        return std::nullopt;
-    }
-    const auto parsed_value = detail::parse_form_bool(*raw);
-    if (!parsed_value.has_value()) {
-        detail::throw_invalid_param();
-    }
-    return *parsed_value;
+    return parse_typed<t_type>(param(name), detail::throw_invalid_param);
 }
 
 namespace detail {
 
-template <validation_target target>
-inline constexpr std::string_view request_body_media_type =
-    target == validation_target::json ? "application/json" : "application/x-www-form-urlencoded";
-
-// Whether Content-Type names the media type `target` parses; parameters such
-// as charset do not take part in the match.
-template <validation_target target>
-[[nodiscard]] bool request_has_body_media_type(const context& context_value) {
-    const auto content_type = context_value.req().header("Content-Type").value_or(std::string_view{});
-    return http_ascii_equals_ignore_case(::ruvia::http_media_type_only(content_type), request_body_media_type<target>);
-}
-
-template <validation_target target>
-[[noreturn]] inline void throw_invalid_content_type() {
-    if constexpr (target == validation_target::json) {
-        detail::throw_invalid_json_content_type();
-    } else {
-        detail::throw_invalid_form_content_type();
-    }
-}
-
-template <validation_target target, typename model_type>
-[[nodiscard]] model_type parse_request_body_model(
-    std::string_view raw_body, std::pmr::memory_resource* arena) {
-    if constexpr (target == validation_target::json) {
-        auto parsed_value = parse_complete_json_value<model_type>(raw_body, arena, model_string_storage::borrowed);
-        if (!parsed_value) {
-            // Once Content-Type selects JSON, malformed JSON is a 400 rather than
-            // an absent optional format. This keeps json_if<T>() from turning an
-            // explicitly JSON request into a successful fallback.
-            detail::throw_invalid_json_body();
-        }
-        return std::move(*parsed_value);
-    } else if constexpr (target == validation_target::form) {
-        return model_parse_access::parse_form<model_type>(form_body_input{.body_ = raw_body}, arena);
-    } else {
-        static_assert(always_false<model_type>, "unsupported request body validation target");
-    }
-}
-
-template <validation_target target, typename model_type>
-[[nodiscard]] model_type parse_and_validate_request_model(
-    std::string_view raw_body, std::pmr::memory_resource* arena) {
-    auto model = parse_request_body_model<target, model_type>(raw_body, arena);
-    validator validator_value;
-    detail::model_validation_access::validate_model(model, validator_value);
-    std::move(validator_value).throw_if_invalid();
-    return model;
-}
-
 template <validation_target target, typename model_type>
 [[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(const context& context_value) {
-    if (!request_has_body_media_type<target>(context_value)) {
+    if (!request_has_body_media_type<target>(context_value.req().header("Content-Type"))) {
         co_return std::nullopt;
     }
     const auto request_body = co_await context_value.req().text();
@@ -1086,23 +1024,20 @@ template <validation_target target>
 
 template <validation_target target, typename body_type>
 task<void> model_validation_middleware<target, body_type>::handle(context& c, next& next_value) {
-    std::optional<body_type> parsed_body;
     if constexpr (target == validation_target::json || target == validation_target::form) {
-        if (!request_has_body_media_type<target>(c)) {
+        if (!request_has_body_media_type<target>(c.req().header("Content-Type"))) {
             throw_invalid_content_type<target>();
         }
         const auto request_body = co_await c.req().text();
-        parsed_body.emplace(parse_request_body_model<target, body_type>(request_body, c.arena()));
+        auto body = parse_and_validate_request_model<target, body_type>(request_body, c.arena());
+        auto binding = bind_validated_model(c, body);
+        co_await next_value();
     } else {
-        parsed_body.emplace(model_parse_access::parse_form<body_type>(
-            std::cref(validation_target_fields<target>(c)), c.arena()));
+        auto body = parse_and_validate_request_model<target, body_type>(
+            std::cref(validation_target_fields<target>(c)), c.arena());
+        auto binding = bind_validated_model(c, body);
+        co_await next_value();
     }
-    auto& body = *parsed_body;
-    validator validator_value;
-    validate(body, validator_value);
-    std::move(validator_value).throw_if_invalid();
-    auto binding = detail::bind_validated_model(c, body);
-    co_await next_value();
 }
 
 }  // namespace ruvia::detail

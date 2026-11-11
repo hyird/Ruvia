@@ -16,6 +16,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
 
+#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 
 namespace ruvia::test::scoped_operation_tests {
@@ -139,32 +140,10 @@ ruvia::task<void> cold_with_reentrant_close(closing_frame_input input) {
 
 namespace {
 
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t in_use_allocations_{};
-    std::size_t in_use_bytes_{};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-        ++in_use_allocations_;
-        in_use_bytes_ += bytes_value;
-        return allocation;
-    }
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        --in_use_allocations_;
-        in_use_bytes_ -= bytes_value;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-
 class test_scoped_capability final {
 public:
     test_scoped_capability(ruvia::operation_scope& scope, int& expired_count,
-        counting_resource* resource = nullptr, std::size_t* bytes_at_expire = nullptr,
+        ruvia::test::counting_memory_resource* resource = nullptr, std::size_t* bytes_at_expire = nullptr,
         const bool* lease_active = nullptr, bool* lease_at_expire = nullptr) noexcept
         : expired_count_(&expired_count),
           resource_(resource),
@@ -198,7 +177,7 @@ private:
         auto& capability = *static_cast<test_scoped_capability*>(target);
         ++*capability.expired_count_;
         if (capability.resource_ != nullptr && capability.bytes_at_expire_ != nullptr) {
-            *capability.bytes_at_expire_ = capability.resource_->in_use_bytes_;
+            *capability.bytes_at_expire_ = capability.resource_->live_bytes();
         }
         if (capability.lease_active_ != nullptr && capability.lease_at_expire_ != nullptr) {
             *capability.lease_at_expire_ = *capability.lease_active_;
@@ -206,7 +185,7 @@ private:
     }
 
     int* expired_count_;
-    counting_resource* resource_;
+    ruvia::test::counting_memory_resource* resource_;
     std::size_t* bytes_at_expire_;
     const bool* lease_active_;
     bool* lease_at_expire_;
@@ -246,9 +225,9 @@ private:
 };
 
 ruvia::task<std::size_t> join_and_observe_bytes(
-    ruvia::operation_scope& scope, const counting_resource& resource) {
+    ruvia::operation_scope& scope, const ruvia::test::counting_memory_resource& resource) {
     co_await scope.close_and_join();
-    co_return resource.in_use_bytes_;
+    co_return resource.live_bytes();
 }
 
 ruvia::task<void> wait_with_payload(std::pmr::string payload_value,
@@ -316,7 +295,7 @@ struct owned_result final {
     std::pmr::string bytes_;
 };
 
-ruvia::task<owned_result> wait_and_return(std::pmr::string payload_value, counting_resource& result_resource,
+ruvia::task<owned_result> wait_and_return(std::pmr::string payload_value, ruvia::test::counting_memory_resource& result_resource,
     ruvia::worker_signal& signal, std::promise<void>& started) {
     started.set_value();
     co_await signal.wait();
@@ -328,7 +307,7 @@ ruvia::task<owned_result> wait_and_return(std::pmr::string payload_value, counti
     co_return result_value;
 }
 
-ruvia::task<owned_result> return_with_payload(std::pmr::string payload_value, counting_resource& result_resource) {
+ruvia::task<owned_result> return_with_payload(std::pmr::string payload_value, ruvia::test::counting_memory_resource& result_resource) {
     owned_result result_value(&result_resource);
     result_value.bytes_.assign(2048, 's');
     if (payload_value.empty()) {
@@ -338,7 +317,7 @@ ruvia::task<owned_result> return_with_payload(std::pmr::string payload_value, co
 }
 
 struct throw_on_second_move final {
-    throw_on_second_move(counting_resource& resource, int& moves)
+    throw_on_second_move(ruvia::test::counting_memory_resource& resource, int& moves)
         : bytes_(2048, 'm', &resource),
           moves_(&moves) {}
     throw_on_second_move(const throw_on_second_move&) = delete;
@@ -357,7 +336,7 @@ struct throw_on_second_move final {
 };
 
 ruvia::task<throw_on_second_move> wait_and_return_throwing_result(std::pmr::string payload_value,
-    counting_resource& result_resource, int& moves,
+    ruvia::test::counting_memory_resource& result_resource, int& moves,
     ruvia::worker_signal& signal, std::promise<void>& started) {
     started.set_value();
     co_await signal.wait();
@@ -395,16 +374,16 @@ struct reentrant_retirement_stats final {
 };
 
 ruvia::task<void> join_and_observe_task(ruvia::operation_scope& scope,
-    counting_resource& resource, int& expired_count, reentrant_retirement_stats& stats) {
+    ruvia::test::counting_memory_resource& resource, int& expired_count, reentrant_retirement_stats& stats) {
     co_await scope.close_and_join();
-    stats.allocations_after_join_ = resource.in_use_allocations_;
-    stats.bytes_after_join_ = resource.in_use_bytes_;
+    stats.allocations_after_join_ = resource.live_allocations();
+    stats.bytes_after_join_ = resource.live_bytes();
     stats.expirations_after_join_ = expired_count;
 }
 
 struct reentrant_frame_input final {
     reentrant_frame_input(std::pmr::memory_resource* resource, ruvia::task_scope& children,
-        ruvia::operation_scope& parent_scope, counting_resource& counting_resource_value,
+        ruvia::operation_scope& parent_scope, ruvia::test::counting_memory_resource& counting_resource_value,
         int& expired_count, reentrant_retirement_stats& stats)
         : payload_(1024, 'r', resource),
           children_(&children),
@@ -431,13 +410,13 @@ struct reentrant_frame_input final {
         stats_->child_spawned_ = true;
         stats_->pending_operations_at_spawn_ = parent_scope_->has_pending_operations();
         stats_->expirations_at_spawn_ = *expired_count_;
-        stats_->bytes_at_spawn_ = counting_resource_->in_use_bytes_;
+        stats_->bytes_at_spawn_ = counting_resource_->live_bytes();
     }
 
     std::pmr::string payload_;
     ruvia::task_scope* children_;
     ruvia::operation_scope* parent_scope_;
-    counting_resource* counting_resource_;
+    ruvia::test::counting_memory_resource* counting_resource_;
     int* expired_count_;
     reentrant_retirement_stats* stats_;
 };
@@ -450,7 +429,7 @@ ruvia::task<void> cold_with_reentrant_input(reentrant_frame_input input) {
 }
 
 struct sibling_drop_input final {
-    sibling_drop_input(counting_resource& resource,
+    sibling_drop_input(ruvia::test::counting_memory_resource& resource,
         std::unique_ptr<ruvia::task<void>>& sibling)
         : payload_(1024, 's', &resource),
           sibling_(&sibling) {}
@@ -478,7 +457,7 @@ ruvia::task<void> cold_with_sibling_drop(sibling_drop_input input) {
 }
 
 ruvia::task<void> run_reentrant_cold_drop(const ruvia::worker_handle& worker_value,
-    ruvia::operation_scope& parent_scope, counting_resource& resource,
+    ruvia::operation_scope& parent_scope, ruvia::test::counting_memory_resource& resource,
     int& expired_count, reentrant_retirement_stats& stats, bool close_scope = false) {
     ruvia::task_scope children(worker_value);
     {
@@ -524,7 +503,7 @@ TEST(Ruvia, scoped_operation_direct_spawn_retires_frame_before_join_and_capabili
 
 TEST(Ruvia, scoped_operation_cold_frame_cleanup_can_reenter_scope_close) {
     ruvia::operation_scope scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     int retired = 0;
     int expired = 0;
     bool premature_expiry = false;
@@ -544,7 +523,7 @@ TEST(Ruvia, scoped_operation_cold_frame_cleanup_can_reenter_scope_close) {
     EXPECT_FALSE(premature_expiry);
     EXPECT_FALSE(scope.active());
     EXPECT_FALSE(scope.has_pending_operations());
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
     EXPECT_EQ(bytes_at_expire, 0U);
     scope.close();
     EXPECT_EQ(retired, 2);
@@ -558,7 +537,7 @@ TEST(Ruvia, scoped_operation_close_and_join_releases_frame_before_expiring_capab
     ruvia::worker_signal signal(worker_value);
     ruvia::operation_scope scope;
     int expired_count = 0;
-    counting_resource parameter_resource;
+    ruvia::test::counting_memory_resource parameter_resource;
     std::size_t bytes_at_expire = static_cast<std::size_t>(-1);
     bool lease_active = false;
     bool lease_at_expire = true;
@@ -583,7 +562,7 @@ TEST(Ruvia, scoped_operation_close_and_join_releases_frame_before_expiring_capab
     EXPECT_TRUE(notified == ruvia::post_status::accepted);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
-    EXPECT_EQ(parameter_resource.in_use_allocations_, 0U);
+    EXPECT_EQ(parameter_resource.live_allocations(), 0U);
     EXPECT_EQ(bytes_at_join, 0U);
     EXPECT_TRUE(!lease_at_expire);
     EXPECT_TRUE(!lease_active);
@@ -598,7 +577,7 @@ TEST(Ruvia, scoped_operation_exception_releases_frame_before_expiring_capabiliti
     ruvia::worker_signal signal(worker_value);
     ruvia::operation_scope scope;
     int expired_count = 0;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     std::size_t bytes_at_expire = static_cast<std::size_t>(-1);
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
     static_cast<void>(capability);
@@ -613,11 +592,11 @@ TEST(Ruvia, scoped_operation_exception_releases_frame_before_expiring_capabiliti
     auto join_root = loop.start(join_and_observe_bytes(scope, resource));
     const auto notified = loop.handle().post([&] { signal.notify(); });
     EXPECT_EQ(join_root.get(), 0U);
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { operation_root.get(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { operation_root.get(); }));
     EXPECT_TRUE(notified == ruvia::post_status::accepted);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
     loops.stop();
     loops.join();
 }
@@ -629,7 +608,7 @@ TEST(Ruvia, scoped_operation_cooperative_cancellation_releases_frame_before_expi
     ruvia::worker_signal signal(worker_value);
     ruvia::operation_scope scope;
     int expired_count = 0;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     std::size_t bytes_at_expire = static_cast<std::size_t>(-1);
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
     static_cast<void>(capability);
@@ -650,7 +629,7 @@ TEST(Ruvia, scoped_operation_cooperative_cancellation_releases_frame_before_expi
     EXPECT_TRUE(notified == ruvia::post_status::accepted);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
     loops.stop();
     loops.join();
 }
@@ -662,11 +641,11 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
     ruvia::worker_signal signal(worker_value);
     ruvia::operation_scope scope;
     int expired_count = 0;
-    counting_resource parameter_resource;
-    counting_resource result_resource;
+    ruvia::test::counting_memory_resource parameter_resource;
+    ruvia::test::counting_memory_resource result_resource;
     const auto allocations_per_result = [&] {
         const std::pmr::string sample(2048, 'r', &result_resource);
-        return result_resource.in_use_allocations_;
+        return result_resource.live_allocations();
     }();
     std::size_t bytes_at_expire = static_cast<std::size_t>(-1);
     test_scoped_capability capability(scope, expired_count, &parameter_resource, &bytes_at_expire);
@@ -687,24 +666,24 @@ TEST(Ruvia, scoped_operation_result_survives_join_after_frame_release) {
         EXPECT_TRUE(notified == ruvia::post_status::accepted);
         EXPECT_EQ(expired_count, 1);
         EXPECT_EQ(bytes_at_expire, 0U);
-        EXPECT_EQ(parameter_resource.in_use_allocations_, 0U);
+        EXPECT_EQ(parameter_resource.live_allocations(), 0U);
         EXPECT_EQ(result_value.bytes_.size(), 2048U);
-        EXPECT_EQ(result_resource.in_use_allocations_, allocations_per_result);
+        EXPECT_EQ(result_resource.live_allocations(), allocations_per_result);
         {
             ruvia::operation_scope repeated_scope;
             auto repeated = ruvia::make_scoped_operation(repeated_scope,
                 return_with_payload(std::pmr::string(1024, 'q', &parameter_resource), result_resource));
             auto repeated_root = loop.start(await_scoped_result(repeated));
             auto repeated_result = repeated_root.get();
-            EXPECT_EQ(parameter_resource.in_use_allocations_, 0U);
-            EXPECT_EQ(result_resource.in_use_allocations_, 2 * allocations_per_result);
+            EXPECT_EQ(parameter_resource.live_allocations(), 0U);
+            EXPECT_EQ(result_resource.live_allocations(), 2 * allocations_per_result);
             EXPECT_EQ(result_value.bytes_.find_first_not_of('r'), std::pmr::string::npos);
             EXPECT_EQ(repeated_result.bytes_.size(), 2048U);
             EXPECT_EQ(repeated_result.bytes_.find_first_not_of('s'), std::pmr::string::npos);
         }
-        EXPECT_EQ(result_resource.in_use_allocations_, allocations_per_result);
+        EXPECT_EQ(result_resource.live_allocations(), allocations_per_result);
     }
-    EXPECT_EQ(result_resource.in_use_allocations_, 0U);
+    EXPECT_EQ(result_resource.live_allocations(), 0U);
     loops.stop();
     loops.join();
 }
@@ -722,7 +701,7 @@ TEST(Ruvia, root_result_publication_retires_delivery_borrows_before_get_returns)
         }
         EXPECT_EQ(borrows.load(), 0U);
         auto failed = loop.start(return_delivery_borrow(borrows, true));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)failed.get(); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)failed.get(); }));
         EXPECT_EQ(borrows.load(), 0U);
     }
     loops.stop();
@@ -737,9 +716,9 @@ TEST(Ruvia, root_rejected_launch_retires_cold_input_before_publishing_failure) {
     auto root = loop.start(return_cold_delivery_borrow(delivery_borrow(borrows)));
     EXPECT_EQ(borrows.load(), 1U);
     loops.start();
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)root.get(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)root.get(); }));
     EXPECT_EQ(borrows.load(), 0U);
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { loops.join(); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { loops.join(); }));
 }
 
 TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
@@ -748,8 +727,8 @@ TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
     const auto worker_value = loop.handle();
     ruvia::worker_signal signal(worker_value);
     ruvia::operation_scope scope;
-    counting_resource parameter_resource;
-    counting_resource result_resource;
+    ruvia::test::counting_memory_resource parameter_resource;
+    ruvia::test::counting_memory_resource result_resource;
     int moves = 0;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
@@ -777,26 +756,26 @@ TEST(Ruvia, scoped_operation_result_move_failure_releases_frame_before_join) {
     EXPECT_EQ(moves, 2);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
-    EXPECT_EQ(parameter_resource.in_use_allocations_, 0U);
-    EXPECT_EQ(result_resource.in_use_allocations_, 0U);
+    EXPECT_EQ(parameter_resource.live_allocations(), 0U);
+    EXPECT_EQ(result_resource.live_allocations(), 0U);
     loops.stop();
     loops.join();
 }
 
 TEST(Ruvia, scoped_operation_scope_close_reclaims_cold_frame_before_capability_expiry) {
     ruvia::operation_scope scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
     auto operation = ruvia::make_scoped_operation(
         scope, cold_with_payload(std::pmr::string(1024, 'p', &resource)));
-    EXPECT_TRUE(resource.in_use_allocations_ != 0);
+    EXPECT_TRUE(resource.live_allocations() != 0);
     scope.close();
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
-    EXPECT_EQ(resource.in_use_bytes_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
     EXPECT_TRUE(!scope.has_pending_operations());
     // The expired public operation may remain alive after its frame is gone.
     static_cast<void>(operation);
@@ -804,13 +783,13 @@ TEST(Ruvia, scoped_operation_scope_close_reclaims_cold_frame_before_capability_e
 
 TEST(Ruvia, scoped_operation_expired_by_scope_close_rejects_start) {
     ruvia::operation_scope scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     {
         auto operation = ruvia::make_scoped_operation(scope,
             cold_with_payload(std::pmr::string(1024, 'p', &resource)));
-        EXPECT_TRUE(resource.in_use_bytes_ > 0U);
+        EXPECT_TRUE(resource.live_bytes() > 0U);
         scope.close();
-        EXPECT_EQ(resource.in_use_bytes_, 0U);
+        EXPECT_EQ(resource.live_bytes(), 0U);
 
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         const auto loop = loops.loop(0);
@@ -826,19 +805,19 @@ TEST(Ruvia, scoped_operation_expired_by_scope_close_rejects_start) {
         loops.stop();
         loops.join();
     }
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
-    EXPECT_EQ(resource.in_use_bytes_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
 }
 
 TEST(Ruvia, scoped_operation_created_after_scope_close_discards_cold_frame) {
     ruvia::operation_scope scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     scope.close();
 
     auto operation = ruvia::make_scoped_operation(scope,
         cold_with_payload(std::pmr::string(1024, 'p', &resource)));
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
-    EXPECT_EQ(resource.in_use_bytes_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
 
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
@@ -854,8 +833,8 @@ TEST(Ruvia, scoped_operation_created_after_scope_close_discards_cold_frame) {
     loops.stop();
     loops.join();
 
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
-    EXPECT_EQ(resource.in_use_bytes_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
 }
 
 TEST(Ruvia, scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
@@ -863,7 +842,7 @@ TEST(Ruvia, scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
     const auto loop = loops.loop(0);
     const auto worker_value = loop.handle();
     ruvia::operation_scope parent_scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(parent_scope, expired_count, &resource, &bytes_at_expire);
@@ -884,8 +863,8 @@ TEST(Ruvia, scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
     EXPECT_EQ(stats.allocations_after_join_, 0U);
     EXPECT_EQ(stats.bytes_after_join_, 0U);
     EXPECT_EQ(stats.expirations_after_join_, 1);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
-    EXPECT_EQ(resource.in_use_bytes_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
     EXPECT_TRUE(!parent_scope.has_pending_operations());
     loops.stop();
     loops.join();
@@ -948,7 +927,7 @@ TEST(Ruvia, scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_
     const auto loop = loops.loop(0);
     const auto worker_value = loop.handle();
     ruvia::operation_scope scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
@@ -966,7 +945,7 @@ TEST(Ruvia, scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_
     EXPECT_EQ(stats.allocations_after_join_, 0U);
     EXPECT_EQ(stats.bytes_after_join_, 0U);
     EXPECT_EQ(stats.expirations_after_join_, 1);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
     EXPECT_TRUE(!scope.has_pending_operations());
     loops.stop();
     loops.join();
@@ -974,16 +953,16 @@ TEST(Ruvia, scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_
 
 TEST(Ruvia, scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
     ruvia::operation_scope scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
     auto sibling = std::make_unique<ruvia::task<void>>(ruvia::make_scoped_operation(
         scope, cold_with_payload(std::pmr::string(1024, 'p', &resource))));
-    const auto sibling_allocations = resource.in_use_allocations_;
+    const auto sibling_allocations = resource.live_allocations();
     auto operation = ruvia::make_scoped_operation(scope,
         cold_with_sibling_drop(sibling_drop_input(resource, sibling)));
-    EXPECT_EQ(resource.in_use_allocations_, 2 * sibling_allocations);
+    EXPECT_EQ(resource.live_allocations(), 2 * sibling_allocations);
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     auto joined = loop.start(join_and_observe_bytes(scope, resource));
@@ -992,8 +971,8 @@ TEST(Ruvia, scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
     EXPECT_TRUE(sibling == nullptr);
     EXPECT_EQ(expired_count, 1);
     EXPECT_EQ(bytes_at_expire, 0U);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
-    EXPECT_EQ(resource.in_use_bytes_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
     EXPECT_TRUE(!scope.has_pending_operations());
     loops.stop();
     loops.join();
@@ -1029,7 +1008,7 @@ TEST(Ruvia, scoped_capabilities_copy_move_and_unregister_without_expiring_other_
 
 TEST(Ruvia, scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
     struct capability_owner final {
-        capability_owner(ruvia::operation_scope& scope, counting_resource& resource,
+        capability_owner(ruvia::operation_scope& scope, ruvia::test::counting_memory_resource& resource,
             int& expired_count, bool& expired_before_cleanup,
             std::unique_ptr<capability_owner>* self,
             std::unique_ptr<capability_owner>* sibling)
@@ -1067,7 +1046,7 @@ TEST(Ruvia, scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
     };
 
     ruvia::operation_scope scope;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     int expired_count = 0;
     bool expired_before_cleanup = false;
     std::unique_ptr<capability_owner> self;
@@ -1080,8 +1059,8 @@ TEST(Ruvia, scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
     EXPECT_TRUE(sibling == nullptr);
     EXPECT_TRUE(expired_before_cleanup);
     EXPECT_EQ(expired_count, 1);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
-    EXPECT_EQ(resource.in_use_bytes_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
 }
 
 TEST(Ruvia, scoped_capability_cleanup_can_reenter_scope_close) {
@@ -1192,11 +1171,11 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     const auto worker_value = loop.handle();
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     int expired_count = 0;
     bool join_destroyed_scope = false;
     struct inline_destroy_input final {
-        inline_destroy_input(counting_resource& res, ruvia::task_scope& children,
+        inline_destroy_input(ruvia::test::counting_memory_resource& res, ruvia::task_scope& children,
             std::unique_ptr<ruvia::operation_scope>& owned_scope, int& expired, bool& destroyed)
             : payload_(512, 'd', &res),
               children_(&children),
@@ -1235,7 +1214,7 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
             static_cast<void>(input);
             co_return;
         }
-        static ruvia::task<void> drive(const ruvia::worker_handle& worker, counting_resource& res,
+        static ruvia::task<void> drive(const ruvia::worker_handle& worker, ruvia::test::counting_memory_resource& res,
             int& expired, bool& destroyed) {
             ruvia::task_scope children(worker);
             auto owned_scope = std::make_unique<ruvia::operation_scope>();
@@ -1253,7 +1232,7 @@ TEST(Ruvia, scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_
     root.get();
     EXPECT_TRUE(join_destroyed_scope);
     EXPECT_EQ(expired_count, 1);
-    EXPECT_EQ(resource.in_use_allocations_, 0U);
+    EXPECT_EQ(resource.live_allocations(), 0U);
     loops.stop();
     loops.join();
 }

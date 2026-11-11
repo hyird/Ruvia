@@ -24,19 +24,7 @@ task<http2_send_window_wait_status> await_http2_send_window(
     multiplexed_stream_signal* signal, const bool* aborted) {
     // Marks the whole wait, across wakes that find no capacity, so the
     // session's write_timeout check sees one continuous stall.
-    struct send_window_wait_guard final {
-        multiplexed_stream_signal& signal_;
-        explicit send_window_wait_guard(multiplexed_stream_signal& signal_value) noexcept
-            : signal_(signal_value) {
-            signal_.set_waiting_output(true);
-        }
-        ~send_window_wait_guard() noexcept {
-            signal_.set_waiting_output(false);
-        }
-        send_window_wait_guard(const send_window_wait_guard&) = delete;
-        send_window_wait_guard& operator=(const send_window_wait_guard&) = delete;
-    };
-    std::optional<send_window_wait_guard> wait_guard;
+    std::optional<multiplexed_stream_signal::output_wait_guard> wait_guard;
     for (;;) {
         if ((aborted != nullptr && *aborted) ||
             connection.stream_aborted(stream_id) ||
@@ -54,6 +42,35 @@ task<http2_send_window_wait_status> await_http2_send_window(
             wait_guard.emplace(*signal);
         }
         co_await signal->wait();
+    }
+}
+
+http2_stream_data_submit_result submit_http2_stream_data(
+    ruvia::http2_connection& connection, std::uint32_t stream_id,
+    worker_signal& write_signal, http2_data_output_budget& output_budget,
+    std::string_view bytes, http2_end_stream end_stream) {
+    struct submission_completion final {
+        http2_data_output_budget& budget_;
+        worker_signal& write_signal_;
+        std::uint32_t stream_id_;
+        bool release_credit_;
+        ~submission_completion() noexcept {
+            write_signal_.notify();
+            if (release_credit_) {
+                budget_.release(stream_id_);
+            }
+        }
+    } completion{output_budget, write_signal, stream_id, !bytes.empty()};
+    try {
+        const auto progress = connection.submit_data(
+            stream_id, bytes, end_stream, http2_data_output_credit_bytes);
+        output_budget.note_data_submitted(stream_id, progress.consumed_bytes_);
+        completion.release_credit_ = !bytes.empty() && progress.consumed_bytes_ == 0;
+        return {.progress_ = progress};
+    } catch (const std::invalid_argument&) {
+        return {.failure_ = http2_stream_data_write_status::content_length_exceeded};
+    } catch (const std::logic_error&) {
+        return {.failure_ = http2_stream_data_write_status::invalid_state};
     }
 }
 
@@ -100,33 +117,12 @@ task<http2_stream_data_write_status> write_http2_stream_data(
                 }
             }
         }
-        http2_data_submit_result result_value{};
-        try {
-            result_value = connection.submit_data(stream_id, bytes, end_stream, http2_data_output_credit_bytes);
-        } catch (const std::invalid_argument&) {
-            write_signal.notify();
-            if (!bytes.empty()) {
-                output_budget.release(stream_id);
-            }
-            co_return http2_stream_data_write_status::content_length_exceeded;
-        } catch (const std::logic_error&) {
-            write_signal.notify();
-            if (!bytes.empty()) {
-                output_budget.release(stream_id);
-            }
-            co_return http2_stream_data_write_status::invalid_state;
-        } catch (...) {
-            write_signal.notify();
-            if (!bytes.empty()) {
-                output_budget.release(stream_id);
-            }
-            throw;
+        const auto submitted = submit_http2_stream_data(
+            connection, stream_id, write_signal, output_budget, bytes, end_stream);
+        if (submitted.failure_) {
+            co_return *submitted.failure_;
         }
-        output_budget.note_data_submitted(stream_id, result_value.consumed_bytes_);
-        write_signal.notify();
-        if (!bytes.empty() && result_value.consumed_bytes_ == 0) {
-            output_budget.release(stream_id);
-        }
+        const auto& result_value = submitted.progress_;
         bytes.remove_prefix(result_value.consumed_bytes_);
         if (result_value.status_ == http2_data_submit_status::complete) {
             co_return http2_stream_data_write_status::completed;

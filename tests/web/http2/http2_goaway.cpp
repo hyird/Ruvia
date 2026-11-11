@@ -31,6 +31,9 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 
+#include "app_run.h"
+#include "http2_wire_fixture.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 
 namespace http2_goaway_test {
@@ -91,56 +94,9 @@ public:
     }
 };
 
-class app_run final {
-public:
-    explicit app_run(ruvia::application& app)
-        : app_(app),
-          thread_([this] {
-              try {
-                  app_.run();
-              } catch (...) {
-                  failure_ = std::current_exception();
-              }
-          }) {}
-    ~app_run() {
-        if (thread_.joinable()) {
-            app_.stop();
-            thread_.join();
-        }
-    }
-    void join() {
-        thread_.join();
-        if (failure_) {
-            std::rethrow_exception(failure_);
-        }
-    }
+using ruvia::test::app_run;
 
-private:
-    ruvia::application& app_;
-    std::exception_ptr failure_;
-    std::thread thread_;
-};
-
-template <typename predicate_type>
-void await_observation(predicate_type predicate) {
-    const auto deadline = std::chrono::steady_clock::now() + 3s;
-    while (!predicate()) {
-        if (std::chrono::steady_clock::now() >= deadline) {
-            throw std::runtime_error("HTTP/2 GOAWAY observation timed out");
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-}
-
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
-    std::uint32_t stream, std::string_view payload) {
-    std::array<char, ruvia::http2_frame_header_bytes> header{};
-    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream)) {
-        throw std::logic_error("invalid HTTP/2 test frame");
-    }
-    wire.append(header.data(), header.size());
-    wire.append(payload);
-}
+using ruvia::test::append_frame;
 std::string request(std::uint32_t stream, std::string_view path, std::string_view method = "GET") {
     std::pmr::string block;
     ruvia::hpack_encoder::encode_header(block, ":method", method);
@@ -158,10 +114,7 @@ std::string data_frame(std::uint32_t stream, std::string_view payload, bool end_
     return wire;
 }
 
-struct frame final {
-    ruvia::http2_frame_header header_;
-    std::string payload_;
-};
+using frame = ruvia::test::received_frame;
 // Nonblocking reads bound every wire assertion, including a missing GOAWAY.
 class peer final {
 public:
@@ -169,35 +122,8 @@ public:
         : socket_(socket) {
         socket_.non_blocking(true);
     }
-    void read_exact(char* bytes, std::size_t count) {
-        const auto deadline = std::chrono::steady_clock::now() + 3s;
-        while (count != 0) {
-            asio::error_code error;
-            const auto received = socket_.read_some(asio::buffer(bytes, count), error);
-            if (error == asio::error::would_block || error == asio::error::try_again) {
-                if (std::chrono::steady_clock::now() >= deadline) {
-                    throw std::runtime_error("HTTP/2 GOAWAY frame timed out");
-                }
-                std::this_thread::sleep_for(1ms);
-                continue;
-            }
-            if (error) {
-                throw std::system_error(error);
-            }
-            bytes += received;
-            count -= received;
-        }
-    }
     frame next() {
-        std::array<char, ruvia::http2_frame_header_bytes> bytes{};
-        read_exact(bytes.data(), bytes.size());
-        const auto header = ruvia::parse_http2_frame_header(bytes);
-        if (!header || header->length_ > 64 * 1024) {
-            throw std::runtime_error("invalid HTTP/2 GOAWAY response frame");
-        }
-        frame value{*header, std::string(header->length_, '\0')};
-        read_exact(value.payload_.data(), value.payload_.size());
-        return value;
+        return ruvia::test::read_frame(socket_, std::chrono::steady_clock::now() + 3s);
     }
     bool ended() {
         asio::error_code error;
@@ -271,7 +197,7 @@ void check_stop_closes_connection() {
     peer client(socket);
     // The server's SETTINGS shows the session runs before stop begins.
     (void)next_of_type(client, ruvia::http2_frame_type::settings);
-    await_observation([&state] { return state.entered_.load(); });
+    ruvia::test::wait_until([&state] { return state.entered_.load(); }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
@@ -356,7 +282,7 @@ void expect_final_goaway_and_end(
     const auto last = next_of_type(client, ruvia::http2_frame_type::goaway);
     EXPECT_EQ(uint32(last.payload_) & 0x7fffffffU, last_stream_id);
     EXPECT_EQ(uint32(std::string_view(last.payload_).substr(4)), 0U);
-    await_observation([&client] { return client.ended(); });
+    ruvia::test::wait_until([&client] { return client.ended(); }, 3s);
 }
 
 void check_idle_timeout_drain(bool stalled_stream) {
@@ -375,7 +301,7 @@ void check_idle_timeout_drain(bool stalled_stream) {
     // Ends the server's lingering close at once.
     run.socket().close();
     if (stalled_stream) {
-        await_observation([&state] { return state.cancelled_.load(); });
+        ruvia::test::wait_until([&state] { return state.cancelled_.load(); }, 3s);
     }
     run.app().stop();
     run.join();

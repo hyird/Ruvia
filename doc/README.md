@@ -50,6 +50,10 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"ruvia/web/redis/..."`、服务端 `session_middleware` 与数据库查询缓存 |
 | `RUVIA_ENABLE_JWT` | `OFF` | `RUVIA_ENABLE_JWT` | 启用 `"ruvia/web/auth/jwt.h"` |
 
+顶层构建在未指定 `CMAKE_TOOLCHAIN_FILE` 时从环境变量 `VCPKG_ROOT` 选择 vcpkg，并加载项目 triplet、按开关选择 manifest 特性。子项目由宿主提供工具链与依赖清单。未启用功能不编译对应源码，也不安装相应公开头文件。
+
+依赖使用当前 vcpkg 端口；Core 要求 mimalloc 3.5+，HTTP/3 要求 ngtcp2 1.26.0+。非 Windows 静态 mimalloc 必须启用 `override`，不得叠加其他全局分配器替换。
+
 ### 2.2 在下游 CMake 项目中使用
 
 安装 Ruvia：
@@ -95,13 +99,6 @@ target_link_libraries(my_service PRIVATE ruvia::web)
 ruvia_link_controllers(my_service user_controllers)
 ```
 
-### 2.3 持续集成与执行记录
-
-- **并发构建**：Build 工作流不设置 `concurrency` 组，Musl 与 Windows MSVC 构建并行执行。
-- **结束清理**：现有 `style` job 等待工具链解析与两个平台构建结束；旧记录清理位于最后一步，前序失败也会进入收尾，不设置独立清理 job。
-- **删除范围**：仅 `main` 的 `push` / `workflow_dispatch` 清理同一工作流中运行编号更小且已完成的记录；保留当前、较新与未完成的执行，Pull Request 不清理。
-- **并发保护**：删除前复查执行状态与重跑轮次；已被删除或重跑冲突的记录跳过，权限等其他错误仍使清理失败。
-
 ---
 
 ## 3. 核心架构与生命周期准则
@@ -144,6 +141,10 @@ ruvia_link_controllers(my_service user_controllers)
 
 仓库 `examples/web/` 下包含 30 个可独立运行的示例程序（开启 `-DRUVIA_BUILD_EXAMPLES=ON` 构建）：
 
+后端示例通过 `backend_config.h` 共享启动配置：先加载可执行文件旁的 `.env`，进程环境优先；`RUVIA_DB_*` 选择 SQL 连接，`RUVIA_REDIS_*` 选择 Redis 连接（包括 `DATABASE`、认证与 TLS）。ORM 查询缓存使用独立前缀 `RUVIA_ORM_CACHE_REDIS_*`。
+
+独立服务使用不同端口：基础 HTTP `8080`、请求策略 `8097`、运维 `8098`、HTTP 客户端网关 `8099`。客户端示例的上游地址保持各自注释所述配置。
+
 | 示例文件 | CMake Target | 所需开关 | 核心演示内容 |
 | --- | --- | --- | --- |
 | [basic_http.cpp](../examples/web/basic_http.cpp) | `ruvia_example_basic_http` | 默认 | 控制器与嵌套路由组、中间件、路径参数 `:id` 与通配符 `*`、Query/Header/Cookie 读取、文本/JSON/重定向/错误响应、`url_for`、全局与前缀级 `on_error` / `on_not_found` |
@@ -156,6 +157,9 @@ ruvia_link_controllers(my_service user_controllers)
 | [streaming.cpp](../examples/web/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `body_reader()`、流式 Multipart `multipart_reader()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
 | [http_features.cpp](../examples/web/http_features.cpp) | `ruvia_example_http_features` | 默认 | `103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告与请求/响应 Trailer |
 | [websocket.cpp](../examples/web/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
+| [http_client.cpp](../examples/web/http_client.cpp) | `ruvia_example_http_client` | 默认 | 独立事件循环 HTTP 客户端 |
+| [http_client_advanced.cpp](../examples/web/http_client_advanced.cpp) | `ruvia_example_http_client_advanced` | 默认 | 请求策略、流式响应与隧道 |
+| [websocket_client.cpp](../examples/web/websocket_client.cpp) | `ruvia_example_websocket_client` | 默认 | 出站 WebSocket 会话 |
 | [tunnels.cpp](../examples/web/tunnels.cpp) | `ruvia_example_tunnels` | 默认 | HTTP/1.1 & HTTP/2 `CONNECT` 字节流隧道与 RFC 9298 `CONNECT-UDP` 数据报隧道 |
 | [runtime_config.cpp](../examples/web/runtime_config.cpp) | `ruvia_example_runtime_config` | 默认 | `.env` 加载、全局与前缀中间件、请求 Arena 与连接限制、协商压缩、CORS、TLS / mTLS / SNI 与 HTTP 自动跳转 HTTPS |
 | [ops.cpp](../examples/web/ops.cpp) | `ruvia_example_ops` | 默认 | `security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`http_stats()`、生命周期与日志钩子 |

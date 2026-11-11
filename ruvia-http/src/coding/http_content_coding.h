@@ -28,6 +28,16 @@ struct http_content_coding_field_result_access final {
     }
 };
 
+// Shared token walk for decoding and outbound acceptance. The caller decides
+// whether an unknown extension requires a decoder or only a quality check.
+template <typename visitor_type>
+[[nodiscard]] inline http_field_list_parse_status visit_http_content_coding_field(
+    std::string_view value, http_field_list_role role, visitor_type&& visitor) {
+    return http_visit_token_list(value, role, [&visitor](std::string_view token) {
+        return visitor(token, http_content_coding_from_token(token));
+    });
+}
+
 // Accumulates recipient list grammar across every Content-Encoding field line;
 // empty list members are ignored.
 class http_content_coding_field_parser final {

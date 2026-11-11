@@ -85,7 +85,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
                 ended = result_value.status_ == ruvia::http2_data_submit_status::complete;
             }
             if (connection.wants_write()) {
-                ruvia::testing::drain_output(connection, wire);
+                ruvia::test::drain_output(connection, wire);
                 co_await asio::async_write(socket, asio::buffer(wire), asio::use_awaitable);
             }
             if (saw_client_end || (reset_peer && websocket)) {
@@ -249,7 +249,7 @@ void exercise_closing_peer(closing_peer behavior) {
         std::pmr::string output;
         for (;;) {
             if (connection.wants_write()) {
-                ruvia::testing::drain_output(connection, output);
+                ruvia::test::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             const auto count = co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
@@ -299,7 +299,7 @@ void exercise_closing_peer(closing_peer behavior) {
             }
             // Publish the DATA/END_STREAM before releasing the real server lease.
             // Its half-open retirement emits NO_ERROR, in the same socket write.
-            ruvia::testing::drain_output(connection, output);
+            ruvia::test::drain_output(connection, output);
             if (behavior == closing_peer::clean_release || behavior == closing_peer::no_close ||
                 behavior == closing_peer::no_close_after_end) {
                 if (behavior == closing_peer::no_close) {
@@ -312,7 +312,7 @@ void exercise_closing_peer(closing_peer behavior) {
                 EXPECT_TRUE(connection.submit_reset(1, error) == ruvia::http2_submit_status::accepted);
             }
             std::pmr::string retirement;
-            ruvia::testing::drain_output(connection, retirement);
+            ruvia::test::drain_output(connection, retirement);
             output.append(retirement);
             for (std::size_t offset = 0; offset < output.size();) {
                 const auto header_value = ruvia::parse_http2_frame_header(std::span<const char>(output.data() + offset, ruvia::http2_frame_header_bytes));
@@ -425,7 +425,7 @@ void exercise_handshake_end(handshake_end mode) {
         std::pmr::string output(&resource);
         for (;;) {
             if (connection.wants_write()) {
-                ruvia::testing::drain_output(connection, output);
+                ruvia::test::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             std::size_t count = 0;
@@ -452,7 +452,7 @@ void exercise_handshake_end(handshake_end mode) {
                         continue;
                     }
                     if (mode == handshake_end::end_on_headers) {
-                        ruvia::testing::drain_output(connection, output);
+                        ruvia::test::drain_output(connection, output);
                         std::pmr::string block(&resource);
                         ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
                         std::array<char, ruvia::http2_frame_header_bytes> header{};

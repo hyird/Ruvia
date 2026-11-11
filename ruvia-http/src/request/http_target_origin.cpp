@@ -108,7 +108,7 @@ http_target_origin decide_http_target_origin(
     }
     const auto authority = !request.authority().empty()
                                ? request.authority()
-                               : detail::http_request_access::known_header(request, detail::request_header_kind::host);
+                               : detail::http_request_access::known_header(request, detail::http_field_kind::host);
     if (authority.empty()) {
         return http_target_origin::accepted();
     }

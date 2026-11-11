@@ -39,6 +39,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
+#include "http2_wire_fixture.h"
 #include "http_server_fixture.h"
 #include "memory_resource_fixture.h"
 #include "test_io_context.h"
@@ -435,12 +436,8 @@ TEST(Ruvia, http2_connect_route_receives_data_sent_before_the_response) {
             // The client core only sends after the 2xx; write the optimistic
             // DATA frame directly behind its HEADERS.
             const std::string early(64, 't');
-            std::array<char, ruvia::http2_frame_header_bytes> frame_header{};
-            if (!ruvia::encode_http2_frame_header(frame_header, static_cast<std::uint32_t>(early.size()), ruvia::http2_frame_type::data, 0, id)) {
-                throw std::logic_error("invalid test DATA frame");
-            }
-            std::string raw(frame_header.data(), frame_header.size());
-            raw.append(early);
+            std::string raw;
+            ruvia::test::append_frame(raw, ruvia::http2_frame_type::data, 0, id, early);
             const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(socket, asio::buffer(raw), std::move(handler)); });
             if (written.error_code()) {
                 throw std::system_error(written.error_code());
@@ -756,17 +753,6 @@ TEST(Ruvia, http2_rejected_expectation_discards_request_content_received_during_
             // The client API generates Expect only for 100-continue, so the
             // request is framed directly: static-index and literal HPACK fields
             // without indexing, then DATA that keeps arriving after dispatch.
-            const auto append_frame = [](std::string& wire, char type, char flags, char stream_id, std::string_view payload) {
-                const auto size = payload.size();
-                wire.push_back(static_cast<char>((size >> 16) & 0xffU));
-                wire.push_back(static_cast<char>((size >> 8) & 0xffU));
-                wire.push_back(static_cast<char>(size & 0xffU));
-                wire.push_back(type);
-                wire.push_back(flags);
-                wire.append(3, '\0');
-                wire.push_back(stream_id);
-                wire.append(payload);
-            };
             const auto literal = [](std::string& block, std::string_view value) {
                 block.push_back(static_cast<char>(value.size()));
                 block.append(value);
@@ -779,12 +765,12 @@ TEST(Ruvia, http2_rejected_expectation_discards_request_content_received_during_
             block.push_back('\0');  // new-name literal without indexing
             literal(block, "expect");
             literal(block, "x-unknown");
-            std::string wire("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
-            append_frame(wire, 0x4, 0x0, 0, {});     // SETTINGS
-            append_frame(wire, 0x1, 0x4, 1, block);  // HEADERS, END_HEADERS
+            std::string wire(ruvia::http2_client_preface);
+            ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+            ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
             const std::string chunk(16384, 'd');
             for (int index = 0; index < 3; ++index) {
-                append_frame(wire, 0x0, 0x0, 1, chunk);  // DATA within the initial window
+                ruvia::test::append_frame(wire, ruvia::http2_frame_type::data, 0, 1, chunk);
             }
             const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(socket, asio::buffer(wire), std::move(handler)); });
             if (written.error_code()) {
@@ -1005,10 +991,8 @@ TEST(Ruvia, http2_capsule_route_closed_stream_rejects_truncated_capsule_without_
         co_await flush_peer(socket, peer, &resource);
         const auto& worker_value = attachment.loop().handle();
         (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(30));
-        std::array<char, 9> ping_hdr{};
-        (void)ruvia::encode_http2_frame_header(ping_hdr, 8, ruvia::http2_frame_type::ping, 0, 0);
-        std::string ping_frame(ping_hdr.data(), 9);
-        ping_frame.append("12345678", 8);
+        std::string ping_frame;
+        ruvia::test::append_frame(ping_frame, ruvia::http2_frame_type::ping, 0, 0, "12345678");
         (void)co_await ruvia::async_asio<std::size_t>([&](auto h) {
             asio::async_write(socket, asio::buffer(ping_frame), std::move(h));
         });
@@ -1042,17 +1026,8 @@ TEST(Ruvia, http2_web_idle_priority_update_and_buffered_push_stream_limit_cancel
     sock.connect(server.endpoint());
 
     std::pmr::unsynchronized_pool_resource res;
-    auto append_raw_frame = [](std::pmr::string& out, ruvia::http2_frame_type type, std::uint8_t flags,
-                                std::uint32_t stream_id, std::string_view payload) {
-        std::array<char, 9> header{};
-        (void)ruvia::encode_http2_frame_header(
-            header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id);
-        out.append(header.data(), header.size());
-        out.append(payload.data(), payload.size());
-    };
-    std::pmr::string wire(&res);
-    wire.append(ruvia::http2_client_preface);
-    append_raw_frame(wire, ruvia::http2_frame_type::settings, 0, 0,
+    std::string wire(ruvia::http2_client_preface);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0,
         std::string_view("\x00\x02\x00\x00\x00\x01\x00\x03\x00\x00\x00\x01", 12));
     std::array<char, 32> prio_buf{};
     const auto prio_sz =
@@ -1063,14 +1038,14 @@ TEST(Ruvia, http2_web_idle_priority_update_and_buffered_push_stream_limit_cancel
     ruvia::hpack_encoder::encode_header(get1, ":scheme", "http");
     ruvia::hpack_encoder::encode_header(get1, ":authority", "localhost");
     ruvia::hpack_encoder::encode_header(get1, ":path", "/prio-idle");
-    append_raw_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, get1);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, get1);
 
     std::pmr::string get3(&res);
     ruvia::hpack_encoder::encode_header(get3, ":method", "GET");
     ruvia::hpack_encoder::encode_header(get3, ":scheme", "http");
     ruvia::hpack_encoder::encode_header(get3, ":authority", "localhost");
     ruvia::hpack_encoder::encode_header(get3, ":path", "/push-parent-cancel");
-    append_raw_frame(wire, ruvia::http2_frame_type::headers, 0x5, 3, get3);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 3, get3);
     asio::write(sock, asio::buffer(wire));
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -1079,8 +1054,8 @@ TEST(Ruvia, http2_web_idle_priority_update_and_buffered_push_stream_limit_cancel
     }
     EXPECT_EQ(observation->seen_urgency_.load(), 1);
 
-    std::pmr::string wire2(&res);
-    append_raw_frame(wire2, ruvia::http2_frame_type::settings, 0, 0,
+    std::string wire2;
+    ruvia::test::append_frame(wire2, ruvia::http2_frame_type::settings, 0, 0,
         std::string_view("\x00\x03\x00\x00\x00\x00", 6));
     asio::write(sock, asio::buffer(wire2));
     std::this_thread::sleep_for(std::chrono::milliseconds(20));

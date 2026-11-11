@@ -9,10 +9,12 @@
 
 #include "ruvia/web/app.h"
 
+#include "scoped_temp_directory.h"
+
 namespace {
 
-std::filesystem::path write_temp_env(std::string_view name, std::string_view contents) {
-    const auto path = std::filesystem::temp_directory_path() / name;
+std::filesystem::path write_temp_env(const std::filesystem::path& directory, std::string_view name, std::string_view contents) {
+    const auto path = directory / name;
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
     return path;
@@ -21,12 +23,12 @@ std::filesystem::path write_temp_env(std::string_view name, std::string_view con
 }  // namespace
 
 TEST(Ruvia, dotenv_typed_lookup_does_not_hide_invalid_values) {
-    const auto path = write_temp_env("ruvia_dotenv_typed.env",
+    const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_typed");
+    const auto path = write_temp_env(directory.path(), "ruvia_dotenv_typed.env",
         "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\nBAD_DOUBLE=nan\nBAD_INF=inf\n");
     auto& app = ruvia::app();
     app.load_dotenv(path, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
     const auto& env = app.env();
-    std::filesystem::remove(path);
 
     EXPECT_TRUE(!env.get<std::uint16_t>("MISSING").has_value());
     EXPECT_EQ(env.get<std::uint16_t>("PORT").value_or(0), std::uint16_t{8080});
@@ -67,10 +69,10 @@ TEST(Ruvia, dotenv_typed_lookup_does_not_hide_invalid_values) {
 }
 
 TEST(Ruvia, dotenv_options_use_explicit_policies) {
-    const auto first = write_temp_env("ruvia_dotenv_policy_first.env", "KEY=first\n");
-    const auto second = write_temp_env("ruvia_dotenv_policy_second.env", "KEY=second\nNEW=value\n");
-    const auto missing = std::filesystem::temp_directory_path() / "ruvia_dotenv_policy_missing.env";
-    std::filesystem::remove(missing);
+    const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_policy");
+    const auto first = write_temp_env(directory.path(), "ruvia_dotenv_policy_first.env", "KEY=first\n");
+    const auto second = write_temp_env(directory.path(), "ruvia_dotenv_policy_second.env", "KEY=second\nNEW=value\n");
+    const auto missing = directory.path() / "ruvia_dotenv_policy_missing.env";
 
     auto& app = ruvia::app();
     app.load_dotenv(first, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
@@ -113,13 +115,11 @@ TEST(Ruvia, dotenv_options_use_explicit_policies) {
         invalid_missing_policy_threw = true;
     }
     EXPECT_TRUE(invalid_missing_policy_threw);
-
-    std::filesystem::remove(first);
-    std::filesystem::remove(second);
 }
 
 TEST(Ruvia, dotenv_double_quoted_undefined_escapes_keep_backslash) {
-    const auto path = write_temp_env("ruvia_dotenv_escapes.env",
+    const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_escapes");
+    const auto path = write_temp_env(directory.path(), "ruvia_dotenv_escapes.env",
         R"(DOTENV_ESCAPE_DEFINED="a\nb\rc\td\"e\\f"
 DOTENV_ESCAPE_UNDEFINED="\q\$x\'y\0 C:\Users"
 DOTENV_ESCAPE_TRAILING="end\\"
@@ -128,8 +128,6 @@ DOTENV_ESCAPE_SINGLE='\n\q'
     auto& app = ruvia::app();
     app.load_dotenv(path, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
     const auto& env = app.env();
-    std::filesystem::remove(path);
-
     EXPECT_EQ(env.get("DOTENV_ESCAPE_DEFINED").value_or(""), std::string_view("a\nb\rc\td\"e\\f"));
     EXPECT_EQ(
         env.get("DOTENV_ESCAPE_UNDEFINED").value_or(""), std::string_view(R"(\q\$x\'y\0 C:\Users)"));
@@ -138,8 +136,9 @@ DOTENV_ESCAPE_SINGLE='\n\q'
 }
 
 TEST(Ruvia, dotenv_duplicate_name_in_one_file_is_rejected) {
-    const auto earlier = write_temp_env("ruvia_dotenv_duplicate_earlier.env", "DOTENV_DUP=earlier\n");
-    const auto duplicate = write_temp_env("ruvia_dotenv_duplicate.env",
+    const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_duplicate");
+    const auto earlier = write_temp_env(directory.path(), "ruvia_dotenv_duplicate_earlier.env", "DOTENV_DUP=earlier\n");
+    const auto duplicate = write_temp_env(directory.path(), "ruvia_dotenv_duplicate.env",
         "DOTENV_DUP_OTHER=kept\nDOTENV_DUP=first\n\n# comment\nexport DOTENV_DUP = second\n");
     const auto utf8_path = [](const std::filesystem::path& path) {
         const auto text = path.u8string();
@@ -168,15 +167,13 @@ TEST(Ruvia, dotenv_duplicate_name_in_one_file_is_rejected) {
         failure({.existing_variables_ = ruvia::dotenv_existing_variable_policy::override}), expected);
     EXPECT_EQ(env.get("DOTENV_DUP").value_or(""), std::string_view("earlier"));
     EXPECT_TRUE(!env.get("DOTENV_DUP_OTHER").has_value());
-
-    std::filesystem::remove(earlier);
-    std::filesystem::remove(duplicate);
 }
 
 TEST(Ruvia, dotenv_errors_name_non_ascii_paths_in_utf8) {
-    const auto directory = std::filesystem::temp_directory_path() /
-                           std::filesystem::path(u8"ruvia-dotenv-\u914d\u7f6e-\u0442\u0435\u0441\u0442-\U0001F4C1");
-    std::filesystem::create_directories(directory);
+    const ruvia::test::scoped_temp_directory temporary("ruvia-dotenv");
+    const auto directory = temporary.path() /
+                           std::filesystem::path(u8"\u914d\u7f6e-\u0442\u0435\u0441\u0442-\U0001F4C1");
+    std::filesystem::create_directory(directory);
     const auto missing = directory / "missing.env";
     const auto invalid = directory / "invalid.env";
     {
@@ -200,12 +197,11 @@ TEST(Ruvia, dotenv_errors_name_non_ascii_paths_in_utf8) {
     EXPECT_EQ(failure(missing, {.missing_file_ = ruvia::dotenv_missing_file_policy::require}),
         "dotenv file not found: " + utf8_path(missing));
     EXPECT_TRUE(failure(invalid, {}).starts_with("invalid dotenv entry in " + utf8_path(invalid) + ":1: "));
-
-    std::filesystem::remove_all(directory);
 }
 
 TEST(Ruvia, dotenv_preserves_utf8_values_and_escaped_characters) {
-    const auto path = write_temp_env("ruvia_dotenv_utf8_values.env",
+    const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_utf8");
+    const auto path = write_temp_env(directory.path(), "ruvia_dotenv_utf8_values.env",
         "DOTENV_UTF8_UNQUOTED=\xE4\xB8\xAD\xE6\x96\x87 # comment\n"
         "DOTENV_UTF8_SINGLE='caf\xC3\xA9'\n"
         "DOTENV_UTF8_DOUBLE=\"\xE4\xB8\xAD\\n\xE6\x96\x87\"\n"
@@ -213,7 +209,6 @@ TEST(Ruvia, dotenv_preserves_utf8_values_and_escaped_characters) {
         "DOTENV_UTF8_UNKNOWN_ESCAPE=\"\\\xC3\xA9\"\n");
     auto& app = ruvia::app();
     app.load_dotenv(path, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
-    std::filesystem::remove(path);
     const auto& env = app.env();
 
     EXPECT_EQ(env.get("DOTENV_UTF8_UNQUOTED").value_or(""), "\xE4\xB8\xAD\xE6\x96\x87");
@@ -224,10 +219,10 @@ TEST(Ruvia, dotenv_preserves_utf8_values_and_escaped_characters) {
 }
 
 TEST(Ruvia, dotenv_invalid_utf8_rejects_all_entries_without_changing_prior_state) {
-    const auto earlier = write_temp_env("ruvia_dotenv_utf8_earlier.env", "DOTENV_UTF8_ROLLBACK=original\n");
+    const ruvia::test::scoped_temp_directory directory("ruvia_dotenv_utf8_invalid");
+    const auto earlier = write_temp_env(directory.path(), "ruvia_dotenv_utf8_earlier.env", "DOTENV_UTF8_ROLLBACK=original\n");
     auto& app = ruvia::app();
     app.load_dotenv(earlier, {.existing_variables_ = ruvia::dotenv_existing_variable_policy::override});
-    std::filesystem::remove(earlier);
     const auto& env = app.env();
     const auto size = env.size();
     const auto loaded = env.loaded();
@@ -242,7 +237,7 @@ TEST(Ruvia, dotenv_invalid_utf8_rejects_all_entries_without_changing_prior_state
         ruvia::dotenv_existing_variable_policy::override,
     };
     for (const auto value : invalid_values) {
-        const auto invalid = write_temp_env("ruvia_dotenv_utf8_invalid.env",
+        const auto invalid = write_temp_env(directory.path(), "ruvia_dotenv_utf8_invalid.env",
             std::string("DOTENV_UTF8_ROLLBACK=changed\nDOTENV_UTF8_PARTIAL=not_committed\nDOTENV_UTF8_INVALID=") +
                 std::string(value) + '\n');
         for (const auto policy : policies) {
@@ -253,6 +248,5 @@ TEST(Ruvia, dotenv_invalid_utf8_rejects_all_entries_without_changing_prior_state
             EXPECT_EQ(env.size(), size);
             EXPECT_EQ(env.loaded(), loaded);
         }
-        std::filesystem::remove(invalid);
     }
 }

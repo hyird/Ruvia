@@ -30,7 +30,7 @@ using ruvia::jwt_expiration_claim_policy;
 using ruvia::jwt_sign;
 using ruvia::jwt_sign_options;
 using ruvia::jwt_verify_options;
-using ruvia::testing::throws_on;
+using ruvia::test::throws_on;
 
 template <typename function_type>
 [[nodiscard]] bool throws_jwt_error(function_type&& function, jwt_error::code_type expected) {

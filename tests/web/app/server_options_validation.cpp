@@ -14,35 +14,11 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 
+#include "memory_resource_fixture.h"
+
 namespace {
 
-class releasable_memory_resource final : public std::pmr::memory_resource {
-public:
-    void release() noexcept {
-        released_ = true;
-    }
-
-    [[nodiscard]] bool deallocated_after_release() const noexcept {
-        return deallocated_after_release_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        deallocated_after_release_ = deallocated_after_release_ || released_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool released_{false};
-    bool deallocated_after_release_{false};
-};
+using ruvia::test::tracking_resource;
 
 template <typename fn_type>
 bool throws_invalid(fn_type&& fn) {
@@ -255,7 +231,7 @@ TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
 }
 
 TEST(Ruvia, tls_identity_owns_password_independently_of_caller_resource) {
-    releasable_memory_resource caller_resource;
+    tracking_resource caller_resource;
     const std::string expected(80, 's');
     std::optional<ruvia::tls_config> identity;
     {

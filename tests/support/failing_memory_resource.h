@@ -6,6 +6,8 @@
 
 #include "stl_allocation_fixture.h"
 
+namespace ruvia::test {
+
 class failing_memory_resource final : public std::pmr::memory_resource {
 public:
     // 裸分配或已确认可抛出的存储增长可直接注入；包含 STL 构造/移动的
@@ -57,3 +59,5 @@ private:
     std::size_t live_allocations_{0};
     bool armed_{false};
 };
+
+}  // namespace ruvia::test

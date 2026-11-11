@@ -14,19 +14,11 @@
 #include "http2/http2_header_rules.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_websocket_handshake.h"
+#include "request/http_binary_request_fields.h"
 #include "response/http_final_response_control_plan.h"
 #include "response/http_response_header_state.h"
 namespace ruvia::detail {
 namespace {
-
-[[nodiscard]] bool http2_is_valid_connect_response_head(const http_response& response) noexcept {
-    const auto& body = response_body(response);
-    if (!response.status().is_successful() || body.size() != 0 || body.file().has_value()) {
-        return false;
-    }
-    return !response_has_known_header(
-        response, response_header_content_length | response_header_transfer_encoding);
-}
 
 // nghttp2 packs an extension payload into a buffer of at least 16 KiB
 // (nghttp2_pack_extension_callback2), so larger peer frame limits do not apply.
@@ -35,6 +27,28 @@ namespace {
 }
 
 }  // namespace
+
+void http2_connection::apply_response_priority(http2_stream_state& stream, const http_response_headers& headers) {
+    const auto parsed = parse_http_priority(headers);
+    const auto* fields = std::get_if<http_priority_fields>(&parsed);
+    if (fields == nullptr || (!fields->urgency_ && !fields->incremental_)) {
+        return;
+    }
+    nghttp2_extpri priority{NGHTTP2_EXTPRI_DEFAULT_URGENCY, 0};
+    if (nghttp2_session_get_extpri_stream_priority(
+            session_.get(), &priority, static_cast<std::int32_t>(stream.id())) != 0) {
+        return;
+    }
+    // Response parameters override only their specified request parameters.
+    if (fields->urgency_) {
+        priority.urgency = fields->urgency_->value();
+    }
+    if (fields->incremental_) {
+        priority.inc = *fields->incremental_ ? 1 : 0;
+    }
+    check_nghttp2(nghttp2_session_change_extpri_stream_priority(
+        session_.get(), static_cast<std::int32_t>(stream.id()), &priority, 0));
+}
 
 void http2_connection::submit_header_frames(http2_stream_state& stream, http2_end_stream end_stream) {
     const auto fields = fields_.nv();
@@ -103,9 +117,10 @@ std::optional<http2_response_head_submit_error> http2_connection::response_head_
 bool http2_connection::commit_final_response_head(http2_stream_state& stream, const http_response& response,
     const http_framed_response_head_plan& head_plan, http2_end_stream end_stream,
     std::optional<std::uint64_t> content_length) {
-    if (!append_http2_response_headers(fields_, response, head_plan)) {
+    if (!append_http_binary_response_fields(fields_, response, head_plan, max_http_header_bytes)) {
         return false;
     }
+    apply_response_priority(stream, response.headers());
     submit_header_frames(stream, end_stream);
     if (head_plan.body_plan().body_suppressed()) {
         stream.begin_local_content_forbidden();
@@ -138,7 +153,7 @@ http2_connection::submit_response_head(
         !write_plan.matches_response(response)) {
         return http2_response_head_submit_error::response_plan_mismatch;
     }
-    if (http2_final_response_control_plan(response).has_value()) {
+    if (http_binary_final_response_control_plan(response).has_value()) {
         return http2_response_head_submit_error::invalid_message;
     }
     const auto head_plan_result = http_framed_buffered_response_head_plan(write_plan, response);
@@ -173,7 +188,7 @@ http2_connection::submit_streaming_response_head(
     if (!prepared_commit_plan.trailer_intent_allowed()) {
         return http2_response_head_submit_error::invalid_message;
     }
-    if (http2_final_response_control_plan(head).has_value()) {
+    if (http_binary_final_response_control_plan(head).has_value()) {
         return http2_response_head_submit_error::invalid_message;
     }
     auto stream_head =
@@ -211,8 +226,7 @@ http2_submit_status http2_connection::submit_interim_response_head(
                 return http2_submit_status::invalid_state;
         }
     }
-    if (append_http2_interim_response_headers(fields_, response) !=
-        http2_interim_response_header_encode_status::ok) {
+    if (!append_http_binary_interim_response_fields(fields_, response, max_http_header_bytes)) {
         return http2_submit_status::invalid_message;
     }
     submit_header_frames(*stream, http2_end_stream::keep_open);
@@ -242,14 +256,14 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id,
     // Check the whole offered input before consuming a prefix. A terminal input
     // that cannot satisfy Content-Length must never partially reach the wire.
     switch (stream->local_content().check_accept(chunk.size(), http2_ends_stream(end_stream))) {
-        case http2_local_content_check::accepted:
+        case http_local_content_check::accepted:
             break;
-        case http2_local_content_check::not_started:
-        case http2_local_content_check::forbidden:
+        case http_local_content_check::not_started:
+        case http_local_content_check::forbidden:
             throw std::logic_error("HTTP/2 stream content is not allowed");
-        case http2_local_content_check::length_exceeded:
+        case http_local_content_check::length_exceeded:
             throw std::invalid_argument("HTTP/2 DATA exceeds declared Content-Length");
-        case http2_local_content_check::length_incomplete:
+        case http_local_content_check::length_incomplete:
             throw std::invalid_argument("HTTP/2 DATA ended before declared Content-Length");
     }
     const auto window = send_window_state(stream_id);
@@ -297,16 +311,17 @@ http2_submit_status http2_connection::submit_connect_response_head(
         stream->local_send().head_pending() == nullptr || stream->tunnel().pending() == nullptr) {
         return http2_submit_status::invalid_state;
     }
-    if (!http2_is_valid_connect_response_head(response) ||
-        http2_final_response_control_plan(response).has_value()) {
+    if (!is_valid_http_binary_connect_response_head(response) ||
+        http_binary_final_response_control_plan(response).has_value()) {
         return http2_submit_status::invalid_message;
     }
     const auto head_plan_result = http_framed_connect_response_head_plan(
         plan_http_response_body(http_known_method::connect, response.status()));
     const auto* head_plan = std::get_if<http_framed_response_head_plan>(&head_plan_result);
-    if (head_plan == nullptr || !append_http2_response_headers(fields_, response, *head_plan)) {
+    if (head_plan == nullptr || !append_http_binary_response_fields(fields_, response, *head_plan, max_http_header_bytes)) {
         return http2_submit_status::invalid_message;
     }
+    apply_response_priority(*stream, response.headers());
     commit_connect_response_head(*stream, http2_remote_peer_half_closed(*stream));
     return http2_submit_status::accepted;
 }
@@ -328,7 +343,9 @@ http2_connection::submit_websocket_handshake(
         return http2_websocket_handshake_submit_error::invalid_state;
     }
     auto negotiation = make_websocket_server_negotiation(request, options, resource_);
-    http2_append_websocket_handshake_headers(fields_, negotiation);
+    if (!append_http_binary_websocket_response_fields(fields_, negotiation, max_http_header_bytes)) {
+        throw std::invalid_argument("WebSocket response headers exceed HTTP/2 header list limit");
+    }
     commit_connect_response_head(*stream, http2_remote_peer_half_closed(*stream));
     const auto compression = negotiation.compression();
     return websocket_extended_connect_negotiation(std::move(negotiation).take_subprotocol(), compression);
@@ -352,9 +369,9 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
             return http2_finish_status::backpressured;
         }
     } else {
-        http2_header_list_size size;
+        binary_field_section_size size(max_http_header_bytes);
         for (const auto& field : trailers) {
-            if (!http2_is_valid_outbound_regular_header(field.name(), field.value()) ||
+            if (!http_binary_is_valid_outbound_regular_header(field.name(), field.value()) ||
                 is_forbidden_http_request_trailer_name(field.name()) || !size.add(field.name(), field.value())) {
                 throw std::invalid_argument("invalid HTTP/2 request trailer");
             }

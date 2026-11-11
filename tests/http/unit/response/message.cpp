@@ -16,8 +16,10 @@
 #include "ruvia/http/http_response.h"
 
 #include "failing_memory_resource.h"
-#include "request_header_memory_fixture.h"
+#include "memory_resource_fixture.h"
 #include "stl_allocation_fixture.h"
+
+using ruvia::test::failing_memory_resource;
 
 namespace {
 
@@ -61,7 +63,7 @@ TEST(Ruvia, response_header_append_preserves_multiplicity_across_table_spill) {
 }
 
 TEST(Ruvia, response_header_reserve_publishes_storage_before_retirement) {
-    ruvia::test::header_memory resource;
+    ruvia::test::reentrant_memory_resource resource;
     {
         http_response response(&resource);
         for (int index = 0; index != 9; ++index) {
@@ -75,7 +77,7 @@ TEST(Ruvia, response_header_reserve_publishes_storage_before_retirement) {
         struct observation final {
             ruvia::http_response_headers* headers_;
             const ruvia::http_response_header* previous_;
-            ruvia::test::header_memory* resource_;
+            ruvia::test::reentrant_memory_resource* resource_;
             bool committed_{false};
         } observed{&headers, headers.begin(), &resource};
         resource.deallocation_context_ = &observed;
@@ -83,7 +85,7 @@ TEST(Ruvia, response_header_reserve_publishes_storage_before_retirement) {
             auto& observed = *static_cast<observation*>(context);
             observed.committed_ = observed.headers_->begin() != observed.previous_;
             if (observed.committed_) {
-                observed.resource_->reject_ = true;
+                observed.resource_->reject_allocations(true);
                 observed.headers_->content_type(ruvia::http_content_type::application_json);
             }
         };
@@ -97,9 +99,9 @@ TEST(Ruvia, response_header_reserve_publishes_storage_before_retirement) {
             EXPECT_EQ(headers.begin()[index].value().data(), values[index].data());
         }
         headers.reserve(64);
-        resource.reject_ = false;
+        resource.reject_allocations(false);
     }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, response_header_reserve_failure_preserves_fields_for_retry) {
@@ -179,7 +181,7 @@ TEST(Ruvia, response_body_replacement_commits_before_resource_retirement) {
     for (const auto kind : {body_kind::copied, body_kind::owned, body_kind::static_view,
              body_kind::file_bytes, body_kind::head_metadata}) {
         SCOPED_TRACE(static_cast<int>(kind));
-        ruvia::test::header_memory resource;
+        ruvia::test::reentrant_memory_resource resource;
         {
             http_response response(&resource);
             response.body(std::string(256, 'x'));
@@ -219,7 +221,7 @@ TEST(Ruvia, response_body_replacement_commits_before_resource_retirement) {
             EXPECT_FALSE(response.has_file_representation());
             EXPECT_FALSE(response.has_head_metadata_body());
         }
-        EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+        EXPECT_EQ(resource.live_bytes(), std::size_t{0});
     }
 }
 
@@ -416,7 +418,7 @@ TEST(Ruvia, response_header_removal_commits_before_retiring_match_key) {
         for (const int filler_count : {0, 8}) {
             SCOPED_TRACE(known);
             SCOPED_TRACE(filler_count);
-            ruvia::test::header_memory resource;
+            ruvia::test::reentrant_memory_resource resource;
             {
                 http_response response(&resource);
                 const std::string_view key = known ? "Content-Type" : "X-Delete";
@@ -454,7 +456,7 @@ TEST(Ruvia, response_header_removal_commits_before_retiring_match_key) {
                     EXPECT_EQ(response.header("X-Filler-" + std::to_string(index)), std::string_view("value"));
                 }
             }
-            EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+            EXPECT_EQ(resource.live_bytes(), std::size_t{0});
         }
     }
 }

@@ -3,19 +3,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <memory_resource>
-#include <optional>
 #include <span>
 #include <stdexcept>
-#include <string>
 #include <string_view>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_base64.h"
 
 #include "auth/hmac.h"
+#include "util/inline_text_concat.h"
 
 namespace ruvia::detail {
 
@@ -52,42 +50,19 @@ inline void write_cookie_signature(
         static_cast<char>((name_len >> 8) & 0xFF),
         static_cast<char>(name_len & 0xFF),
     };
-    // Assemble lenPrefix||name||value for the one-shot HMAC. A stack arena keeps
-    // signing a typical cookie allocation-free; an oversized name/value spills to
-    // the request's recyclable pool.
-    if (name.size() > std::numeric_limits<std::size_t>::max() - name_len_bytes.size() ||
-        value.size() >
-            std::numeric_limits<std::size_t>::max() - name_len_bytes.size() - name.size()) {
-        throw std::length_error("signed cookie message is too large");
-    }
-    const auto message_size = name_len_bytes.size() + name.size() + value.size();
-    if (message_size > hmac_max_input_size) {
+    // Assemble lenPrefix||name||value for the one-shot HMAC. Inline storage keeps
+    // signing a typical cookie allocation-free; larger messages use the request's
+    // recyclable pool.
+    if (name.size() > hmac_max_input_size - name_len_bytes.size() ||
+        value.size() > hmac_max_input_size - name_len_bytes.size() - name.size()) {
         throw std::length_error("signed cookie message is too large for HMAC");
     }
-    std::array<char, 512> inline_message;
-    std::optional<std::pmr::string> heap_message;
-    std::string_view message_view;
-    if (message_size <= inline_message.size()) {
-        std::memcpy(inline_message.data(), name_len_bytes.data(), name_len_bytes.size());
-        if (!name.empty()) {
-            std::memcpy(inline_message.data() + name_len_bytes.size(), name.data(), name.size());
-        }
-        if (!value.empty()) {
-            std::memcpy(
-                inline_message.data() + name_len_bytes.size() + name.size(), value.data(), value.size());
-        }
-        message_view = std::string_view(inline_message.data(), message_size);
-    } else {
-        auto& message = heap_message.emplace(pmr_resource_or_default(resource));
-        message.reserve(message_size);
-        message.append(name_len_bytes.data(), name_len_bytes.size());
-        message.append(name.data(), name.size());
-        message.append(value.data(), value.size());
-        message_view = message;
-    }
+    const inline_text_concat<512> message(
+        {std::string_view(name_len_bytes.data(), name_len_bytes.size()), name, value},
+        pmr_resource_or_default(resource));
 
     std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest;
-    if (!compute_hmac(hmac_digest::sha256, secret, message_view, digest)) {
+    if (!compute_hmac(hmac_digest::sha256, secret, message.view(), digest)) {
         throw std::runtime_error("signed cookie HMAC computation failed");
     }
     http_base64_encode(output, std::span<const std::uint8_t>(digest));

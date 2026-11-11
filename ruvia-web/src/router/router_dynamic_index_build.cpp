@@ -23,11 +23,12 @@ struct dynamic_route_upper_bounds final {
         if (!detail::split_path_segment(path, segment, rest)) {
             return bounds;
         }
-        if (segment == "*") {
+        const auto kind = detail::classify_route_segment(segment);
+        if (kind == detail::route_segment_kind::wildcard) {
             ++bounds.param_names_;
         } else {
             ++bounds.nodes_;
-            if (!segment.empty() && segment.front() == ':') {
+            if (kind == detail::route_segment_kind::param) {
                 ++bounds.param_names_;
             }
         }
@@ -107,7 +108,7 @@ bool detail::router::is_dynamic_path(std::string_view path) noexcept {
         if (!split_path_segment(path, segment, rest)) {
             return false;
         }
-        if (segment == "*" || (!segment.empty() && segment.front() == ':')) {
+        if (classify_route_segment(segment) != route_segment_kind::literal) {
             return true;
         }
         path = rest;
@@ -141,7 +142,8 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
             node_value->route_index_ = route.index();
             return;
         }
-        if (segment == "*") {
+        const auto kind = classify_route_segment(segment);
+        if (kind == route_segment_kind::wildcard) {
             if (!rest.empty()) {
                 throw std::invalid_argument("wildcard route segment must be final");
             }
@@ -149,7 +151,7 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
             node_value->wildcard_route_index_ = route.index();
             return;
         }
-        if (!segment.empty() && segment.front() == ':') {
+        if (kind == route_segment_kind::param) {
             if (segment.size() == 1) {
                 throw std::invalid_argument("route parameter name must not be empty");
             }
@@ -181,44 +183,6 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
             return;
         }
         path = rest;
-    }
-}
-
-// find_dynamic_node orders every pair of distinct trie branches -- a literal child before the
-// parameter child before the wildcard, backtracking on failure -- so two dynamic routes are only
-// ambiguous when they occupy the same trie slot: segment by segment both are the same literal, both
-// are parameters (whatever their names), or both are the wildcard, and both end at the same depth.
-// Any other pair overlaps at most with a deterministic winner ("/a/*" vs "/:x/:y", "/a/*" vs
-// "/a/:x"), which is legal routing, not a conflict.
-bool detail::router::same_dynamic_shape(std::string_view left, std::string_view right) noexcept {
-    const auto is_param = [](std::string_view segment) noexcept {
-        return !segment.empty() && segment.front() == ':';
-    };
-    for (;;) {
-        std::string_view left_segment;
-        std::string_view left_rest;
-        std::string_view right_segment;
-        std::string_view right_rest;
-        const auto has_left = split_path_segment(left, left_segment, left_rest);
-        const auto has_right = split_path_segment(right, right_segment, right_rest);
-        if (!has_left || !has_right) {
-            return has_left == has_right;
-        }
-
-        // Literal segments occupy one trie slot when their canonical forms
-        // match; a parameter or the wildcard is a slot of its own kind.
-        const auto left_literal = !is_param(left_segment) && left_segment != "*";
-        const auto right_literal = !is_param(right_segment) && right_segment != "*";
-        if (left_literal != right_literal) {
-            return false;
-        }
-        if (left_literal ? !uri_paths_equivalent(left_segment, right_segment)
-                         : is_param(left_segment) != is_param(right_segment)) {
-            return false;
-        }
-
-        left = left_rest;
-        right = right_rest;
     }
 }
 

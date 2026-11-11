@@ -9,7 +9,7 @@
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_server_request_parser.h"
 
-namespace ruvia::testing {
+namespace ruvia::test {
 
 // One-shot whole-message view of a buffered request over the public server
 // contract: parse_head frames the head, and the body plan drives either a
@@ -72,4 +72,4 @@ struct http1_request_message final {
     }
 }
 
-}  // namespace ruvia::testing
+}  // namespace ruvia::test

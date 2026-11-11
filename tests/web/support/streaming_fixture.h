@@ -7,7 +7,7 @@
 
 #include "ruvia/core/scoped_operation.h"
 
-namespace streaming_test {
+namespace ruvia::test {
 
 class test_scoped_capability final {
 public:
@@ -58,6 +58,4 @@ inline ruvia::task<void> cold_frame_task(cold_frame_probe probe) {
     co_return;
 }
 
-}  // namespace streaming_test
-
-using namespace streaming_test;  // NOLINT(google-build-using-namespace)
+}  // namespace ruvia::test

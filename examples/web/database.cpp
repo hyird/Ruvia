@@ -1,7 +1,3 @@
-// Database: unified MariaDB/PostgreSQL configuration, query, execute,
-// streaming query, transaction and optional migration. Built with either
-// database feature.
-
 // Direct SQL, buffered/streamed rows, transactions, and startup migrations.
 // Build with a SQL backend and set RUVIA_DB_DRIVER=postgresql or mariadb,
 // RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE. Run on port 8086. Startup fails
@@ -25,43 +21,26 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/error.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 
 namespace {
-
-void assign_if_present(std::string& target, std::optional<std::string_view> value) {
-    if (value) {
-        target.assign(value->data(), value->size());
-    }
-}
 
 ruvia::db_config db_config_from_env(const example::environment& env_value) {
 #if defined(RUVIA_ENABLE_MARIADB) && defined(RUVIA_ENABLE_POSTGRESQL)
     const auto driver = env_value.get("RUVIA_DB_DRIVER");
-    auto config = driver && *driver == "postgresql"
-                      ? ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}
-                      : ruvia::db_config{.driver_ = ruvia::db_driver::mariadb};
+    const auto selected = driver && *driver == "postgresql" ? ruvia::db_driver::postgresql : ruvia::db_driver::mariadb;
 #elif defined(RUVIA_ENABLE_MARIADB)
-    auto config = ruvia::db_config{.driver_ = ruvia::db_driver::mariadb};
+    const auto selected = ruvia::db_driver::mariadb;
 #else
-    auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
+    const auto selected = ruvia::db_driver::postgresql;
 #endif
-    assign_if_present(config.host_, env_value.get("RUVIA_DB_HOST"));
-    assign_if_present(config.username_, env_value.get("RUVIA_DB_USER"));
-    assign_if_present(config.password_, env_value.get("RUVIA_DB_PASSWORD"));
-    assign_if_present(config.database_, env_value.get("RUVIA_DB_DATABASE"));
-    config.tls_ = example::backend_tls("RUVIA_DB", env_value);
-    if (const auto port = env_value.get<std::uint16_t>("RUVIA_DB_PORT")) {
-        config.port_ = *port;
-    }
-    if (const auto pool_size = env_value.get<std::size_t>("RUVIA_DB_POOL_SIZE")) {
-        config.pool_size_per_worker_ = *pool_size;
-    }
+    auto config = example::database_config(env_value, selected);
     config.acquire_timeout_ = std::chrono::seconds(2);
     config.connect_timeout_ = std::chrono::seconds(5);
     config.query_timeout_ = std::chrono::seconds(30);
@@ -107,7 +86,7 @@ private:
         co_await insert_user(c, name, id);
         std::pmr::string body(c.allocator<char>());
         body.append("created id=");
-        append_unsigned(body, id);
+        ruvia::http_append_unsigned(body, id);
         body.push_back('\n');
         c.draft().status(ruvia::http_status::created);
         co_return c.text(std::move(body));
@@ -166,14 +145,6 @@ private:
             100, 2);
         co_await tx.commit();
         co_return;
-    }
-
-    static void append_unsigned(std::pmr::string& output, std::uint64_t value) {
-        char buffer[32]{};
-        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
-        if (ec == std::errc{}) {
-            output.append(buffer, static_cast<std::size_t>(ptr - buffer));
-        }
     }
 
     static inline ruvia::db_driver driver_{ruvia::db_driver::mariadb};

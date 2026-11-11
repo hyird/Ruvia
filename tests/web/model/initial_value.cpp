@@ -143,8 +143,8 @@ TEST(Ruvia, model_null_initial_is_a_value_state_without_allocation) {
 TEST(Ruvia, model_required_initial_is_not_used_by_parsing) {
     evaluations = 0;
     EXPECT_EQ(evaluations, std::size_t{0});
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<required_initial_model>("{}"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_form<required_initial_model>(""); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<required_initial_model>("{}"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_form<required_initial_model>(""); }));
     EXPECT_EQ(evaluations, std::size_t{0});
 }
 

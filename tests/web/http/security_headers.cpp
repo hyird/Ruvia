@@ -30,7 +30,7 @@ using ruvia::xss_protection_header_policy;
     };
     ruvia::test_app app;
     app.use<ruvia::security_headers_middleware>(options);
-    app.use<context_request_test::context_callback<decltype(callback)>>(&callback);
+    app.use<ruvia::test::context_callback<decltype(callback)>>(&callback);
     return app.request(ruvia::test_request::get("/"));
 }
 

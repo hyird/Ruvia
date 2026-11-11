@@ -21,6 +21,8 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 
 // A peer that resets its connection while a buffered handler is still running
@@ -129,22 +131,12 @@ void send_and_reset(asio::io_context& io, const asio::ip::tcp::endpoint& endpoin
 }
 
 void wait_until_idle(ruvia::application& app) {
-    const auto deadline = std::chrono::steady_clock::now() + 10s;
-    while (app.http_stats().active_connections_ != 0 && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(5ms);
-    }
+    ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
 }
 
 // Reads until the server closes the connection.
 void send_and_read_to_close(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
-    asio::ip::tcp::socket socket(io);
-    socket.connect(endpoint);
-    asio::write(socket, asio::buffer(request));
-    std::array<char, 1024> buffer{};
-    std::error_code ec;
-    while (!ec) {
-        (void)socket.read_some(asio::buffer(buffer), ec);
-    }
+    (void)ruvia::test::exchange(io, endpoint, request);
 }
 
 }  // namespace peer_reset_test
@@ -157,19 +149,12 @@ TEST(Ruvia, a_peer_reset_during_a_handlers_transport_write_is_a_normal_connectio
     const auto endpoint = reservation.endpoint();
 
     auto& app = ruvia::app();
-    std::binary_semaphore started{0};
+    static std::binary_semaphore started{0};
     app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms})
         .listen({.address_ = "127.0.0.1", .http_ = endpoint.port()})
         .on_error(&count_error)
-        .on_start([&started] { started.release(); });
-    std::exception_ptr failure;
-    std::thread runner([&app, &failure] {
-        try {
-            app.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
+        .on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
     if (ready) {
@@ -202,5 +187,5 @@ TEST(Ruvia, a_peer_reset_during_a_handlers_transport_write_is_a_normal_connectio
     }
     app.stop();
     runner.join();
-    EXPECT_TRUE(failure == nullptr);
+    EXPECT_TRUE(runner.failure() == nullptr);
 }

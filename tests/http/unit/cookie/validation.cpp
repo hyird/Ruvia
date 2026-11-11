@@ -13,7 +13,7 @@
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_set_cookie.h"
 
-#include "request_header_memory_fixture.h"
+#include "memory_resource_fixture.h"
 
 namespace {
 
@@ -381,23 +381,23 @@ TEST(Ruvia, cookie_request_pair_preserves_aliased_inputs_and_terminators) {
 }
 
 TEST(Ruvia, cookie_request_pair_preserves_contents_when_allocations_are_rejected) {
-    ruvia::test::header_memory memory;
+    ruvia::test::counting_memory_resource memory;
     {
         std::pmr::string header(&memory);
         header.reserve(1024);
         const std::string value(300, 'v');
         const auto expected = std::string("\0=", 2) + value;
-        memory.reject_ = true;
+        memory.reject_allocations(true);
         try {
             ruvia::append_cookie_request_pair(header, std::string_view(header.data(), 1), value);
         } catch (const std::bad_alloc&) {
             ASSERT_TRUE(header.empty());
-            memory.reject_ = false;
+            memory.reject_allocations(false);
             ruvia::append_cookie_request_pair(header, std::string_view(header.data(), 1), value);
         }
         EXPECT_EQ(std::string_view(header), std::string_view(expected));
     }
-    EXPECT_EQ(memory.live_bytes_, 0U);
+    EXPECT_EQ(memory.live_bytes(), 0U);
 }
 
 TEST(Ruvia, cookie_request_pair_snapshots_only_overlapping_inputs) {
@@ -411,14 +411,14 @@ TEST(Ruvia, cookie_request_pair_snapshots_only_overlapping_inputs) {
             std::string output = aliased;
             output.resize(expected.size());
             const std::string_view borrowed(output.data(), aliased.size());
-            ruvia::test::header_memory memory;
-            memory.reject_ = aliased_size == 3;
+            ruvia::test::counting_memory_resource memory;
+            memory.reject_allocations(aliased_size == 3);
 
             (void)ruvia::write_cookie_request_pair(output.data(),
                 alias_name ? borrowed : independent, alias_name ? independent : borrowed, &memory);
 
             EXPECT_EQ(output, expected);
-            EXPECT_EQ(memory.live_bytes_, 0U);
+            EXPECT_EQ(memory.live_bytes(), 0U);
         }
     }
 }
@@ -431,17 +431,17 @@ TEST(Ruvia, cookie_request_pair_preserves_both_long_aliased_inputs_on_failure_an
     const auto original = output;
     const std::string_view borrowed_name(output.data() + value.size(), name.size());
     const std::string_view borrowed_value(output.data(), value.size());
-    ruvia::test::header_memory memory;
-    memory.reject_ = true;
+    ruvia::test::counting_memory_resource memory;
+    memory.reject_allocations(true);
 
     try {
         (void)ruvia::write_cookie_request_pair(output.data(), borrowed_name, borrowed_value, &memory);
     } catch (const std::bad_alloc&) {
         ASSERT_EQ(output, original);
-        memory.reject_ = false;
+        memory.reject_allocations(false);
         (void)ruvia::write_cookie_request_pair(output.data(), borrowed_name, borrowed_value, &memory);
     }
 
     EXPECT_EQ(output, name + "=" + value);
-    EXPECT_EQ(memory.live_bytes_, 0U);
+    EXPECT_EQ(memory.live_bytes(), 0U);
 }

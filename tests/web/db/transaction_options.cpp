@@ -294,7 +294,7 @@ TEST(Ruvia, db_transaction_savepoint_commands_quote_identifiers_and_keep_transac
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto transaction = co_await connected.handle().begin_transaction();
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)transaction.savepoint(""); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)transaction.savepoint(""); }));
         co_await transaction.savepoint("stage_1");
         EXPECT_TRUE(transaction.active());
         co_await transaction.rollback_to_savepoint("stage_1");

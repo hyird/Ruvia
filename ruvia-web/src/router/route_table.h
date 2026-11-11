@@ -10,8 +10,8 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/router/route_handlers.h"
@@ -51,20 +51,6 @@ struct route_request_view final {
 
 class controller_store;
 class router;
-
-// One path-prefix-scoped fallback registration (Hono sub-app scoping analog).
-// The prefix is a borrowed view during registration; the compiled plan copies
-// it into owned storage. Selection is deepest-prefix-first on whole path
-// segments (path_is_under_prefix).
-struct http_prefix_error_handler final {
-    std::string_view prefix_;
-    http_error_handler_ref handler_{nullptr};
-};
-
-struct http_prefix_not_found_handler final {
-    std::string_view prefix_;
-    http_not_found_handler_ref handler_{nullptr};
-};
 
 // One worker's binding of the process route plan: the worker's controller
 // instance behind every route and the worker's middleware instance behind

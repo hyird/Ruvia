@@ -12,8 +12,10 @@
 
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
-#include "request_header_memory_fixture.h"
+#include "memory_resource_fixture.h"
 #include "stl_allocation_fixture.h"
+
+using namespace ruvia::test;
 
 // HTTP/1 client responses: what the head says about the body.
 
@@ -119,7 +121,7 @@ TEST(Ruvia, http_owned_header_assignment_commits_before_retirement) {
 
     for (const auto action : {operation::copy_empty, operation::move_empty, operation::move_owned}) {
         SCOPED_TRACE(static_cast<int>(action));
-        ruvia::test::header_memory resource;
+        ruvia::test::reentrant_memory_resource resource;
         {
             ruvia::http_header target("X-Old", "before", &resource);
             const bool empty = action != operation::move_owned;
@@ -148,7 +150,7 @@ TEST(Ruvia, http_owned_header_assignment_commits_before_retirement) {
             EXPECT_TRUE(source.name().empty());
             EXPECT_TRUE(source.value().empty());
         }
-        EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+        EXPECT_EQ(resource.live_bytes(), std::size_t{0});
     }
 }
 

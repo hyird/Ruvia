@@ -17,6 +17,7 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/util/http_pmr_object.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
@@ -26,6 +27,7 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/http/websocket_handshake.h"
 
 namespace ruvia {
@@ -70,6 +72,33 @@ struct http3_field_view final {
     bool sensitive_{false};
 };
 
+struct http3_regular_request_head_view final {
+    borrowed_text method_{"GET"};
+    borrowed_text scheme_{"https"};
+    borrowed_text authority_{};
+    borrowed_text target_{"/"};
+    borrowed_http_headers headers_{};
+    std::optional<std::uint64_t> content_length_{};
+    bool streaming_{false};
+    http_client_request_expectation expectation_{http_client_request_expectation::none};
+    http_request_field_source field_source_{http_request_field_source::generated};
+};
+
+struct http3_connect_request_head_view final {
+    borrowed_text authority_{};
+    borrowed_http_headers headers_{};
+    http_request_field_source field_source_{http_request_field_source::generated};
+};
+
+struct http3_extended_connect_request_head_view final {
+    borrowed_text protocol_{};
+    borrowed_text scheme_{"https"};
+    borrowed_text authority_{};
+    borrowed_text target_{"/"};
+    borrowed_http_headers headers_{};
+    http_request_field_source field_source_{http_request_field_source::generated};
+};
+
 class http3_field final {
 public:
     http3_field(std::string_view name, std::string_view value,
@@ -105,6 +134,10 @@ struct http3_headers_event final {
     std::pmr::vector<http3_field> fields_;
     bool stream_ended_{false};
     bool trailers_{false};
+    // Client heads contain validated regular fields only. The raw three-digit
+    // status is retained; status_->status() applies RFC 9110 §15 semantics.
+    // Official nghttp3 rejects 000..099 before callbacks; 600..999 map to 500.
+    std::optional<http_received_status> status_{};
     // Server, set by http3_quic_connection: some of the stream's data arrived
     // in 0-RTT packets before the handshake completed (RFC 9001 §4.6.1), so
     // the request may be a replay (RFC 8470 §5, RFC 9001 §9.2).
@@ -321,8 +354,15 @@ public:
     // resume it without retaining caller views.
     [[nodiscard]] http3_status submit_request(std::int64_t stream_id,
         std::span<const http3_field_view> fields, bool end_stream);
-    [[nodiscard]] http3_status submit_response(std::int64_t stream_id,
-        std::span<const http3_field_view> fields, bool end_stream);
+    // Validates the whole request against local/known peer section limits before
+    // publishing it. Invalid messages or unavailable extended CONNECT return
+    // invalid_state without submitting a head. The core owns framing fields.
+    [[nodiscard]] http3_status submit_request_head(std::int64_t stream_id,
+        const http3_regular_request_head_view& request);
+    [[nodiscard]] http3_status submit_request_head(std::int64_t stream_id,
+        const http3_connect_request_head_view& request);
+    [[nodiscard]] http3_status submit_request_head(std::int64_t stream_id,
+        const http3_extended_connect_request_head_view& request);
     // Copies the prefix that fits the stream's output budget. A stream whose
     // head declared a content length rejects DATA beyond it with
     // std::length_error before copying anything.
@@ -331,6 +371,8 @@ public:
     // DATA payload submitted on the stream and not yet acknowledged.
     [[nodiscard]] std::size_t pending_output_bytes(
         std::int64_t stream_id) const noexcept;
+    // Remaining DATA capacity; unavailable and ended streams have no capacity.
+    [[nodiscard]] std::size_t available_output_bytes(std::int64_t stream_id) const noexcept;
     // Ends the content. A declared content length that the submitted DATA
     // does not reach throws std::length_error and leaves the stream open.
     [[nodiscard]] http3_status finish_stream(std::int64_t stream_id);
@@ -400,9 +442,6 @@ public:
     // Server only: the current RFC 9218 priority of an open request stream.
     [[nodiscard]] std::optional<http_priority> stream_priority(
         std::int64_t stream_id) const noexcept;
-    // Server only: overrides the RFC 9218 priority of an open request stream.
-    [[nodiscard]] http3_status set_server_stream_priority(
-        std::int64_t stream_id, http_priority priority) noexcept;
     [[nodiscard]] http3_status close_stream(std::int64_t stream_id,
         std::optional<std::uint64_t> receive_error,
         std::optional<std::uint64_t> send_error) noexcept;

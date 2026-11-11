@@ -31,26 +31,22 @@ function(ruvia_configure_library target component)
             PRIVATE /W4 /permissive- /bigobj /FS)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-        # Shadowing a local or a parameter hides a rename or a stale variable
-        # behind code that still compiles, so it is worth rejecting outright.
-        # Shadowing a *member* is not the same thing: `field_(field)` in a
-        # constructor and `operator=(span headers)` inside a nested type are the
-        # idiomatic spellings, and renaming them to appease a warning trades
-        # real clarity for none. GCC names exactly the useful subset; Clang's
-        # -Wshadow bundles the member form in with no way to separate it, so it
-        # is left off rather than paid for in worse names. The Linux CI job
-        # builds with GCC, so the check runs on every push either way.
+        # Reject local/parameter shadowing without rejecting member names.
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             target_compile_options(${target} PRIVATE -Wshadow=local)
             # GCC prints a psABI note when a function returns std::variant of
             # long double. The note is not a defect in that return and cannot
             # be silenced with a diagnostic pragma.
             target_compile_options(${target} PRIVATE -Wno-psabi)
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            # Clang's -Wshadow and -Wshadow-uncaptured-local both diagnose
+            # member shadowing in the same group as locals; neither offers
+            # GCC's local-only coverage. Musl CI therefore does not enforce it.
         endif()
     endif()
 endfunction()
 
-function(ruvia_install_target target component)
+function(ruvia_install_component target component)
     install(
         TARGETS ${target}
         EXPORT ruvia_${component}_targets
@@ -59,12 +55,6 @@ function(ruvia_install_target target component)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${component}
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
-endfunction()
-
-# Install the export set for a component. Each component calls this itself so its
-# targets file lives with the component that produced it; a partial prefix never
-# imports libraries that were not installed.
-function(ruvia_install_export component)
     install(
         EXPORT ruvia_${component}_targets
         FILE ruvia-${component}-targets.cmake

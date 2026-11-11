@@ -18,7 +18,6 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
-#include <openssl/bio.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/http/http2_connection.h"
@@ -26,8 +25,9 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 // RFC 9110 §7.4 / §15.5.20: an origin server rejects with 421 a request for
@@ -52,16 +52,7 @@ public:
     }
 };
 
-template <typename stream_type>
-std::string read_to_end(stream_type& stream, asio::error_code& error) {
-    std::string response;
-    std::array<char, 1024> buffer;
-    while (!error) {
-        const auto size = stream.read_some(asio::buffer(buffer), error);
-        response.append(buffer.data(), size);
-    }
-    return response;
-}
+using ruvia::test::read_to_end;
 
 // The status line of `request` on a fresh cleartext connection.
 std::string http_exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
@@ -71,7 +62,7 @@ std::string http_exchange(asio::io_context& io, const asio::ip::tcp::endpoint& e
     if (!error) {
         asio::write(socket, asio::buffer(request), error);
     }
-    const auto response = read_to_end(socket, error);
+    const auto response = error ? std::string{} : read_to_end(socket, error);
     return response.substr(0, response.find("\r\n"));
 }
 
@@ -93,7 +84,7 @@ std::string https_exchange(
     if (!error) {
         asio::write(stream, asio::buffer(request), error);
     }
-    const auto response = read_to_end(stream, error);
+    const auto response = error ? std::string{} : read_to_end(stream, error);
     return response.substr(0, response.find("\r\n"));
 }
 
@@ -183,14 +174,7 @@ using namespace misdirected_request_test;
 
 TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,DNS:*.wild.test,IP:127.0.0.1");
-    const auto private_key = identity.ca_file_.parent_path() / "key.pem";
-    {
-        std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(private_key.string().c_str(), "w"), BIO_free);
-        if (!output || ruvia::test::write_tls_private_key(
-                           output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle())) != 1) {
-            throw std::runtime_error("cannot write misdirected-request test private key");
-        }
-    }
+    const auto private_key = identity.private_key_file();
 
     asio::io_context io;
     ruvia::test::tcp_port_reservation http_reservation(io);
@@ -199,7 +183,7 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
     const auto https_endpoint = https_reservation.endpoint();
 
     auto& app = ruvia::app();
-    std::binary_semaphore started{0};
+    static std::binary_semaphore started{0};
     app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms})
         .listen({
             .address_ = "127.0.0.1",
@@ -207,20 +191,13 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
             .https_ = https_endpoint.port(),
             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
-        .on_start([&started] { started.release(); });
+        .on_start([] { started.release(); });
     const auto ip_host = "127.0.0.1:" + std::to_string(https_endpoint.port());
     for (const bool trusted : {false, true}) {
         if (trusted) {
             app.trusted_proxies({.cidrs_ = {"127.0.0.1/32"}});
         }
-        std::exception_ptr failure;
-        std::thread runner([&app, &failure] {
-            try {
-                app.run();
-            } catch (...) {
-                failure = std::current_exception();
-            }
-        });
+        ruvia::test::app_run runner(app);
         const bool ready = started.try_acquire_for(10s);
         EXPECT_TRUE(ready);
         if (ready && !trusted) {
@@ -301,9 +278,6 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
         }
         app.stop();
         runner.join();
-        if (failure) {
-            std::rethrow_exception(failure);
-        }
     }
     app.trusted_proxies(nullptr);
 }

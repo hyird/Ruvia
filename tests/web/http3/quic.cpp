@@ -11,7 +11,6 @@
 #include <map>
 #include <memory>
 #include <memory_resource>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -55,10 +54,11 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
+#include "app_run.h"
 #include "http3_test_client.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 #include "test_exceptions.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 #include "udp_port_reservation.h"
 
@@ -401,13 +401,9 @@ struct served_get final {
 // http3_request_head and the buffered response mapping.
 served_get serve_get(in_memory_h3_pair& pair, std::int64_t stream_id, std::string_view path, std::string_view body) {
     served_get result;
-    const std::array request_fields{
-        ruvia::http3_field_view{":method", "GET"},
-        ruvia::http3_field_view{":scheme", "https"},
-        ruvia::http3_field_view{":authority", "localhost"},
-        ruvia::http3_field_view{":path", path},
-    };
-    if (pair.client().http3().submit_request(stream_id, request_fields, true) != ruvia::http3_status::accepted) {
+    const ruvia::http3_regular_request_head_view request_head{
+        .authority_ = "localhost", .target_ = path};
+    if (pair.client().http3().submit_request_head(stream_id, request_head) != ruvia::http3_status::accepted) {
         return result;
     }
     pair.exchange();
@@ -557,7 +553,7 @@ TEST(Ruvia, http3_quic_server_accepts_a_client_initial_and_serves_a_request_in_m
     EXPECT_TRUE(served.response_submitted_);
     EXPECT_TRUE(served.response_head_.has_value());
     if (served.response_head_) {
-        EXPECT_TRUE(field(*served.response_head_, ":status") == std::string_view("200"));
+        EXPECT_TRUE(served.response_head_->status_ && served.response_head_->status_->status() == ruvia::http_status::ok);
         EXPECT_TRUE(field(*served.response_head_, "content-length") == std::to_string(body.size()));
         EXPECT_TRUE(field(*served.response_head_, "x-served-by") == std::string_view("ruvia-http3"));
         EXPECT_TRUE(field(*served.response_head_, "date").has_value());
@@ -943,7 +939,7 @@ TEST(Ruvia, http3_test_client_exchanges_requests_with_a_udp_loopback_server) {
         for (std::size_t index = 0; index < upload.size(); ++index) {
             upload[index] = static_cast<char>('a' + index % 23);
         }
-        const auto echo = client.request("POST", "/echo", {{"content-length", std::to_string(upload.size())}}, upload);
+        const auto echo = client.request("POST", "/echo", {{"content-type", "application/octet-stream"}}, upload);
         EXPECT_TRUE(echo.status_ == 200);
         EXPECT_TRUE(echo.header("content-length") == std::to_string(upload.size()));
         EXPECT_TRUE(echo.body_ == upload);
@@ -951,7 +947,7 @@ TEST(Ruvia, http3_test_client_exchanges_requests_with_a_udp_loopback_server) {
         // Incremental reading: chunks taken one at a time reassemble the body.
         const std::string streamed_upload(96 * 1024, 's');
         const auto stream_id = client.start_request(
-            "POST", "/echo", {{"content-length", std::to_string(streamed_upload.size())}}, streamed_upload);
+            "POST", "/echo", {{"content-type", "application/octet-stream"}}, streamed_upload);
         EXPECT_TRUE(client.wait_for_response_head(stream_id).status_ == 200);
         std::string streamed;
         while (auto chunk = client.read_body_chunk(stream_id, 5s)) {
@@ -986,7 +982,7 @@ TEST(Ruvia, http3_test_client_rejects_a_certificate_for_another_server_name) {
     configure_h3_server(identity.context_.native_handle());
     udp_h3_test_server server(identity.context_.native_handle(), reservation.endpoint());
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         ruvia::test::http3_test_client client(reservation.endpoint(), identity.ca_file_, "other.example", 5s);
     }));
     // The client's CONNECTION_CLOSE ends the server's only connection.
@@ -998,7 +994,7 @@ TEST(Ruvia, http3_test_client_fails_within_its_timeout_without_a_server) {
     ruvia::test::udp_port_reservation reservation(io);
     ruvia::test::tls_identity identity("localhost");
     const auto started = std::chrono::steady_clock::now();
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         ruvia::test::http3_test_client client(reservation.endpoint(), identity.ca_file_, "localhost", 1s);
     }));
     EXPECT_TRUE(std::chrono::steady_clock::now() - started < 5s);
@@ -1102,14 +1098,7 @@ public:
           retry_base_url_("https://localhost:" + std::to_string(retry_udp_.endpoint().port())),
           identity_("localhost"),
           app_(ruvia::app()) {
-        const auto key = identity_.ca_file_.parent_path() / "quic-key.pem";
-        {
-            std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(key.string().c_str(), "w"), BIO_free);
-            if (!output || ruvia::test::write_tls_private_key(
-                               output.get(), SSL_CTX_get0_privatekey(identity_.context_.native_handle())) != 1) {
-                throw std::runtime_error("cannot write the QUIC resumption test private key");
-            }
-        }
+        const auto& key = identity_.private_key_file();
         app_.server({.worker_count_ = 4})
             .listen({{
                          .address_ = "127.0.0.1",
@@ -1132,51 +1121,29 @@ public:
                     .tls_ = {.identity_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}},
                 }})
             .on_start([this] {
-                startup_announced_ = true;
                 started_.set_value();
             });
         auto ready = started_.get_future();
-        thread_ = std::thread([this] {
-            try {
-                app_.run();
-            } catch (...) {
-                const auto failure = std::current_exception();
-                {
-                    std::lock_guard lock(failure_mutex_);
-                    failure_ = failure;
-                }
-                if (!startup_announced_.exchange(true)) {
-                    started_.set_exception(failure);
-                }
+        run_.emplace(app_);
+        ruvia::test::wait_until([&] {
+            if (const auto failure = run_->failure()) {
+                std::rethrow_exception(failure);
             }
-        });
-        try {
-            if (ready.wait_for(10s) != std::future_status::ready) {
-                throw std::runtime_error("QUIC resumption test server did not start");
-            }
-            ready.get();
-        } catch (...) {
-            app_.stop();
-            thread_.join();
-            throw;
-        }
+            return ready.wait_for(0s) == std::future_status::ready;
+        },
+            10s);
+        ready.get();
     }
 
-    ~server() {
-        app_.stop();
-        thread_.join();
-    }
+    ~server() = default;
 
     server(const server&) = delete;
     server& operator=(const server&) = delete;
 
     [[nodiscard]] ruvia::test::http3_test_client connect(bool enabled = true,
         const ruvia::test::http3_test_resumption* ticket = nullptr, bool early = false) {
-        {
-            std::lock_guard lock(failure_mutex_);
-            if (failure_) {
-                std::rethrow_exception(failure_);
-            }
+        if (const auto failure = run_->failure()) {
+            std::rethrow_exception(failure);
         }
         return ruvia::test::http3_test_client(
             enabled ? enabled_udp_.endpoint() : disabled_udp_.endpoint(),
@@ -1184,11 +1151,8 @@ public:
     }
 
     [[nodiscard]] ruvia::test::http3_test_client connect_retry() {
-        {
-            std::lock_guard lock(failure_mutex_);
-            if (failure_) {
-                std::rethrow_exception(failure_);
-            }
+        if (const auto failure = run_->failure()) {
+            std::rethrow_exception(failure);
         }
         return ruvia::test::http3_test_client(
             retry_udp_.endpoint(), identity_.ca_file_, "localhost", 5s);
@@ -1236,10 +1200,7 @@ private:
     ruvia::test::tls_identity identity_;
     ruvia::application& app_;
     std::promise<void> started_;
-    std::atomic<bool> startup_announced_{false};
-    std::mutex failure_mutex_;
-    std::exception_ptr failure_;
-    std::thread thread_;
+    std::optional<ruvia::test::app_run> run_;
 };
 
 ruvia::test::http3_test_resumption ticket(bool enabled = true) {

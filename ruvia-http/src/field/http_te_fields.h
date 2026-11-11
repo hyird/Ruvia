@@ -12,15 +12,12 @@
 
 namespace ruvia::detail {
 
-enum class http_te_field_validation_mode : std::uint8_t { recipient,
-    client_capability };
-
 [[nodiscard]] inline bool http_is_client_supported_te_transfer_coding(std::string_view coding) noexcept {
     return http_is_gzip_coding_token(coding) || http_ascii_equals_ignore_case(coding, "deflate");
 }
 
 [[nodiscard]] inline bool is_valid_http_te_field_item(
-    std::string_view item, http_te_field_validation_mode mode) noexcept {
+    std::string_view item, http_field_list_role role) noexcept {
     const auto first_semicolon = http_find_unquoted_delimiter(item, 0, ';');
     const auto coding = http_trim_ows(item.substr(0, first_semicolon));
     if (!is_valid_http_header_name(coding)) {
@@ -31,7 +28,7 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     }
     // RFC 9112 section 7.4: a client MUST NOT list chunked in TE. That binds
     // the sender; a recipient treats it as an always-acceptable coding.
-    if (mode == http_te_field_validation_mode::client_capability &&
+    if (role == http_field_list_role::sender &&
         !http_is_client_supported_te_transfer_coding(coding)) {
         return false;
     }
@@ -42,7 +39,7 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     // the codings they can decode, with an optional weight.
     bool quality_seen = false;
     return http_all_parameters(item.substr(first_semicolon),
-        [&quality_seen, mode](std::string_view parameter) noexcept {
+        [&quality_seen, role](std::string_view parameter) noexcept {
             const auto equals = parameter.find('=');
             if (equals == std::string_view::npos) {
                 return false;
@@ -59,12 +56,12 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
                 quality_seen = true;
                 return true;
             }
-            return mode == http_te_field_validation_mode::recipient && is_valid_http_transfer_parameter(parameter);
+            return role == http_field_list_role::recipient && is_valid_http_transfer_parameter(parameter);
         });
 }
 
 [[nodiscard]] inline bool is_valid_http_te_field_value(
-    std::string_view value, http_te_field_validation_mode mode) noexcept {
+    std::string_view value, http_field_list_role role) noexcept {
     // RFC 9112 section 7.4 explicitly permits an empty TE field. It advertises
     // no optional transfer coding; chunked remains implicitly acceptable.
     if (http_trim_ows(value).empty()) {
@@ -72,20 +69,10 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     }
 
     // A client generating TE is held to the sender's no-empty-member rule.
-    const auto role = mode == http_te_field_validation_mode::recipient ? http_field_list_role::recipient
-                                                                       : http_field_list_role::sender;
-    return http_visit_list_members(value, role, [mode](std::string_view item) noexcept {
-        return is_valid_http_te_field_item(item, mode) ? http_field_list_parse_status::ok
+    return http_visit_list_members(value, role, [role](std::string_view item) noexcept {
+        return is_valid_http_te_field_item(item, role) ? http_field_list_parse_status::ok
                                                        : http_field_list_parse_status::malformed;
     }) == http_field_list_parse_status::ok;
-}
-
-[[nodiscard]] inline bool is_valid_received_http_te_field_value(std::string_view value) noexcept {
-    return is_valid_http_te_field_value(value, http_te_field_validation_mode::recipient);
-}
-
-[[nodiscard]] inline bool is_valid_client_http_te_field_value(std::string_view value) noexcept {
-    return is_valid_http_te_field_value(value, http_te_field_validation_mode::client_capability);
 }
 
 // HTTP/2 carries no transfer codings, so TE may only advertise

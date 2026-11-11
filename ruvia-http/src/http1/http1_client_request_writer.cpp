@@ -13,11 +13,11 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
-#include "client/http1_client_request_headers.h"
 #include "field/http_connection_fields.h"
+#include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
+#include "http1/http1_client_request_headers.h"
 #include "parser/http_header_descriptor_storage.h"
-#include "parser/http_parser_syntax.h"
 #include "parser/http_request_target.h"
 #include "response/http_response_header_state.h"
 #include "util/http_wire_sink.h"
@@ -266,7 +266,7 @@ struct request_head_write_plan final {
         // OPTIONS content, not when forwarding an already received request.
         if (policy.field_source_ == http_request_field_source::generated &&
             content_semantics == http_request_content_semantics::content_type_required &&
-            !header_facts.fields_.seen(detail::request_header_kind::content_type)) {
+            !header_facts.fields_.seen(detail::http_field_kind::content_type)) {
             return detail::http1_client_request_prepare_result_access::failure(
                 http1_client_request_prepare_error::options_content_type_required);
         }

@@ -781,7 +781,7 @@ ruvia::task<void> check_self_nested_copy(ruvia::redis_client& client) {
     co_await client.connect();
     auto redis = client.handle();
     const auto reply = co_await redis.command("NESTED");
-    ruvia::testing::poisoned_retirement_resource memory;
+    ruvia::test::poisoned_retirement_resource memory;
     {
         ruvia::redis_value value(reply, ruvia::redis_value::allocator_type(&memory));
         // The source is a subtree of the destination; assigning must not read

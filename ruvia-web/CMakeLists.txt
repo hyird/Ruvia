@@ -44,12 +44,6 @@ target_link_libraries(ruvia-web
         ${RUVIA_WEB_DEPENDENCIES}
 )
 target_compile_definitions(ruvia-web PRIVATE ${RUVIA_OPENSSL_DEFINITIONS})
-if(RUVIA_ENABLE_HTTP2)
-    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_HTTP2)
-endif()
-if(RUVIA_ENABLE_HTTP3)
-    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_HTTP3)
-endif()
 
 foreach(_ruvia_feature IN ITEMS MARIADB POSTGRESQL REDIS JWT)
     if(RUVIA_ENABLE_${_ruvia_feature})
@@ -61,7 +55,7 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_DATABASE)
 endif()
 
-ruvia_install_target(ruvia-web web)
+ruvia_install_component(ruvia-web web)
 
 set(_ruvia_web_excluded_header_directories)
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
@@ -77,4 +71,3 @@ endif()
 ruvia_install_public_header_closure(web include/ruvia/web
     EXCLUDE_DIRECTORIES ${_ruvia_web_excluded_header_directories})
 
-ruvia_install_export(web)

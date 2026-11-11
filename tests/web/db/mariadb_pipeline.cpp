@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -20,6 +19,7 @@
 
 #include "backend_client_fixture.h"
 #include "pipeline_support.h"
+#include "scoped_temp_directory.h"
 #include "test_io_context.h"
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -828,7 +828,8 @@ TEST(Ruvia, db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_ne
 TEST(Ruvia, db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    const auto path = (std::filesystem::temp_directory_path() / "ruvia_mariadb_load_data_local.txt").generic_string();
+    test::scoped_temp_directory directory("ruvia-mariadb-infile");
+    const auto path = (directory.path() / "load_data_local.txt").generic_string();
     {
         std::ofstream file(path, std::ios::binary | std::ios::trunc);
         file << "row1\nrow2\n";
@@ -850,7 +851,6 @@ TEST(Ruvia, db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
         co_await statements.join();
         co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
     });
-    std::filesystem::remove(path);
     EXPECT_TRUE(outcomes[0].value_ == "a");
     EXPECT_TRUE(!outcomes[1].error_.has_value());
     EXPECT_EQ(outcomes[1].affected_rows_, std::uint64_t{2});

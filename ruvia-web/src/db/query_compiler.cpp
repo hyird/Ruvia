@@ -1247,14 +1247,6 @@ private:
         }
         const auto& left = s.nodes_.at(n.left_);
         const auto& right = s.nodes_.at(n.right_);
-        const bool null_left = left.kind_ == db_node_kind::value && db_value_access::type(left.value_) == db_value_type::null;
-        const bool null_right = right.kind_ == db_node_kind::value && db_value_access::type(right.value_) == db_value_type::null;
-        if ((n.binary_ == db_binary_operator::equal || n.binary_ == db_binary_operator::not_equal) && (null_left || null_right)) {
-            output_.sql_ += '(';
-            expr(s, null_left ? n.right_ : n.left_, depth);
-            output_.sql_ += n.binary_ == db_binary_operator::equal ? " IS NULL)" : " IS NOT NULL)";
-            return;
-        }
         if ((n.binary_ == db_binary_operator::in || n.binary_ == db_binary_operator::not_in) && right.kind_ == db_node_kind::list && right.args_.empty()) {
             output_.sql_ += n.binary_ == db_binary_operator::in ? "FALSE" : "TRUE";
             return;

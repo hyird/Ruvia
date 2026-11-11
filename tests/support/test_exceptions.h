@@ -2,10 +2,10 @@
 
 #include <exception>
 
-namespace ruvia::testing {
+namespace ruvia::test {
 
 template <typename fn_type>
-[[nodiscard]] bool throws_on(fn_type&& fn) {
+[[nodiscard]] inline bool throws_on(fn_type&& fn) {
     try {
         fn();
         return false;
@@ -14,4 +14,4 @@ template <typename fn_type>
     }
 }
 
-}  // namespace ruvia::testing
+}  // namespace ruvia::test

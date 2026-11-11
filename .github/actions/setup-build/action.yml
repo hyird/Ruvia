@@ -12,8 +12,8 @@ inputs:
     description: Latest microsoft/vcpkg commit SHA resolved once for this workflow run.
     required: true
   compiler-cache:
-    description: Compiler cache namespace; empty for assembly-only jobs.
-    default: ''
+    description: Compiler cache namespace.
+    required: true
 
 outputs:
   compiler-cache-hit:
@@ -42,49 +42,22 @@ runs:
         fi
         echo "VCPKG_MAX_CONCURRENCY=$(nproc)" >> "$GITHUB_ENV"
 
-    - name: Setup mise
-      uses: jdx/mise-action@v5.2.1
+    - name: Setup LLVM and build tools
+      uses: ./.github/actions/setup-llvm
       with:
-        install: false
-        cache: false
+        toolchain-release: ${{ inputs.toolchain-release }}
+        toolchain-sha256: ${{ inputs.toolchain-sha256 }}
+        tools: cmake@latest ninja@latest ccache@latest
+        save-cache: 'true'
 
-    - name: Restore mise tools and musl toolchain cache
-      id: musl-toolchain
-      uses: actions/cache@v6.1.0
-      with:
-        path: ~/.local/share/mise/installs
-        key: mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}
-        restore-keys: |
-          mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ inputs.toolchain-release }}-
-          mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-
-
-    - name: Install build tools and LLVM musl toolchain globally with mise
+    - name: Configure musl compilers
       shell: bash
-      env:
-        TOOLCHAIN_RELEASE: ${{ inputs.toolchain-release }}
-        TOOLCHAIN_SHA256: ${{ inputs.toolchain-sha256 }}
-        MISE_GITHUB_TOKEN: ${{ github.token }}
       run: |
-        set -euo pipefail
-        [[ "$TOOLCHAIN_RELEASE" =~ ^[A-Za-z0-9._-]+$ ]]
-        [[ "$TOOLCHAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
-        mise use --global \
-          cmake@latest \
-          ninja@latest \
-          ccache@latest \
-          "github:cross-tools/clang-cross[asset_pattern=x86_64-unknown-linux-musl.tar.xz,strip_components=0,bin_path=x86_64-unknown-linux-musl/bin,checksum=sha256:$TOOLCHAIN_SHA256]@$TOOLCHAIN_RELEASE"
-        root="$(mise where github:cross-tools/clang-cross)/x86_64-unknown-linux-musl"
         {
-          echo "RUVIA_MUSL_ROOT=$root"
-          echo "FLEXEDGE_MUSL_ROOT=$root"
-          echo "CC=$root/bin/x86_64-unknown-linux-musl-clang"
-          echo "CXX=$root/bin/x86_64-unknown-linux-musl-clang++"
-          echo "CCACHE_EXTRAFILES=$root/bin/clang"
+          echo "CC=$RUVIA_MUSL_ROOT/bin/x86_64-unknown-linux-musl-clang"
+          echo "CXX=$RUVIA_MUSL_ROOT/bin/x86_64-unknown-linux-musl-clang++"
+          echo "CCACHE_EXTRAFILES=$RUVIA_MUSL_ROOT/bin/clang"
         } >> "$GITHUB_ENV"
-        {
-          echo "$HOME/.local/share/mise/shims"
-          echo "$root/bin"
-        } >> "$GITHUB_PATH"
 
     - name: Show toolchain and compiler cache configuration
       shell: bash
@@ -98,23 +71,22 @@ runs:
         ccache --show-config
 
     - name: Restore compiler cache
-      if: inputs.compiler-cache != ''
       id: ccache
       uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ env.CCACHE_DIR }}
-        key: ccache-v5-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-pch-${{ hashFiles('.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-${{ env.BUILD_TYPE }}-${{ inputs.compiler-cache }}-${{ github.sha }}
+        key: ccache-v5-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-pch-${{ hashFiles('.github/actions/setup-build/action.yml', '.github/actions/setup-llvm/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-${{ env.BUILD_TYPE }}-${{ inputs.compiler-cache }}-${{ github.sha }}
         restore-keys: |
-          ccache-v5-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-pch-${{ hashFiles('.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-${{ env.BUILD_TYPE }}-${{ inputs.compiler-cache }}-
+          ccache-v5-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-pch-${{ hashFiles('.github/actions/setup-build/action.yml', '.github/actions/setup-llvm/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-${{ env.BUILD_TYPE }}-${{ inputs.compiler-cache }}-
 
     - name: Restore vcpkg binary cache
       id: vcpkg-cache
       uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-        key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ inputs.vcpkg-commit }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', '.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}
+        key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ inputs.vcpkg-commit }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', '.github/actions/setup-build/action.yml', '.github/actions/setup-llvm/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}
         restore-keys: |
-          vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ inputs.vcpkg-commit }}-${{ hashFiles('.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-
+          vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ inputs.vcpkg-commit }}-${{ hashFiles('.github/actions/setup-build/action.yml', '.github/actions/setup-llvm/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-
           vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-
 
     - name: Bootstrap vcpkg

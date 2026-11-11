@@ -13,7 +13,7 @@
 #include "ruvia/http/http_pmr_string.h"
 
 #include "field/http_lower_header_name.h"
-#include "http2/http2_header_rules.h"
+#include "response/http_response_header_bits.h"
 #include "util/geometric_reserve.h"
 namespace ruvia::detail {
 
@@ -61,7 +61,7 @@ public:
         reserve_geometric(entries_, entries_.size() + 1);
         entries_.push_back(entry_type{.name_ = text_type::borrowed(name),
             .value_ = text_type::borrowed(value),
-            .sensitive_ = hpack_header_name_is_sensitive(name)});
+            .sensitive_ = http_field_never_indexed(name)});
     }
 
     // Copies `value`, which may be a temporary formatting buffer.
@@ -70,7 +70,7 @@ public:
         const auto owned_value = own(value);
         entries_.push_back(entry_type{.name_ = text_type::borrowed(name),
             .value_ = owned_value,
-            .sensitive_ = hpack_header_name_is_sensitive(name)});
+            .sensitive_ = http_field_never_indexed(name)});
     }
 
     // HTTP/2 field names are lowercase on the wire (RFC 9113 §8.2.1).
@@ -87,7 +87,7 @@ public:
                                     : text_type{.data_ = nullptr, .offset_ = offset, .size_ = lower.size()};
         entries_.push_back(entry_type{.name_ = entry_name,
             .value_ = text_type::borrowed(value),
-            .sensitive_ = hpack_header_name_is_sensitive(lower)});
+            .sensitive_ = http_field_never_indexed(lower)});
     }
 
     template <typename field_range_type>

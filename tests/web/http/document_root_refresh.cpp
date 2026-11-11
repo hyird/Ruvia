@@ -25,6 +25,8 @@
 #include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
+#include "raw_http_peer.h"
+#include "scoped_temp_directory.h"
 #include "test_io_context.h"
 
 // A multi-worker application serves a document root that changes while it
@@ -68,12 +70,17 @@ public:
     }
 };
 
+[[nodiscard]] const fs::path& test_directory() {
+    static const ruvia::test::scoped_temp_directory directory("ruvia-document-root-refresh");
+    return directory.path();
+}
+
 [[nodiscard]] fs::path document_root_dir() {
-    return fs::temp_directory_path() / "ruvia_document_root_refresh_test";
+    return test_directory() / "root";
 }
 
 [[nodiscard]] fs::path retired_root_dir() {
-    return fs::temp_directory_path() / "ruvia_document_root_refresh_test.retired";
+    return test_directory() / "retired";
 }
 
 // The application is configured through this symlink where the platform
@@ -82,7 +89,7 @@ public:
 #ifdef _WIN32
     return document_root_dir();
 #else
-    return fs::temp_directory_path() / "ruvia_document_root_refresh_link";
+    return test_directory() / "link";
 #endif
 }
 
@@ -96,13 +103,7 @@ public:
 
 template <typename fn_type>
 [[nodiscard]] bool retry_until_deadline(fn_type&& attempt) {
-    const auto deadline = steady_clock::now() + observation_timeout;
-    while (!attempt()) {
-        if (steady_clock::now() >= deadline) {
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    ruvia::test::wait_until(std::forward<fn_type>(attempt), observation_timeout);
     return true;
 }
 
@@ -165,16 +166,10 @@ template <typename fn_type>
 // Sends one request on a fresh connection and returns the complete response.
 [[nodiscard]] std::string exchange(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
-    asio::ip::tcp::socket socket(io);
-    socket.connect(endpoint);
     std::string request("GET ");
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n");
-    asio::write(socket, asio::buffer(request));
-    std::string output;
-    std::error_code error;
-    asio::read(socket, asio::dynamic_buffer(output), error);
-    return output;
+    return ruvia::test::exchange(io, endpoint, request);
 }
 
 // Observe distinct workers rather than whichever one accepts first. Windows
@@ -268,8 +263,8 @@ TEST(Ruvia, document_root_refresh_follows_a_retargeted_symlink_root) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, multi_worker_config());
 
-    const auto release = fs::temp_directory_path() / "ruvia_document_root_refresh_release";
-    const auto staged_link = fs::temp_directory_path() / "ruvia_document_root_refresh_link.next";
+    const auto release = test_directory() / "release";
+    const auto staged_link = test_directory() / "link.next";
     std::error_code ignored;
     fs::remove_all(release, ignored);
     fs::remove(staged_link, ignored);

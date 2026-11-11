@@ -8,9 +8,9 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_status.h"
 
-#include "client/http_client_response_head.h"
+#include "http1/http_client_response_head.h"
+#include "http1/http_header_block_parser.h"
 #include "parser/field_line_folding.h"
-#include "parser/http_header_block_parser.h"
 
 namespace ruvia::detail {
 

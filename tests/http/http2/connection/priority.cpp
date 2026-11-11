@@ -12,7 +12,7 @@
 
 #include "output_drain.h"
 TEST(Ruvia, http2_priority_update_client_submission_and_server_event) {
-    ruvia::testing::output_relay relay;
+    ruvia::test::output_relay relay;
     auto client = ruvia::http2_connection::client();
     auto server = ruvia::http2_connection::server();
     relay.transfer(client, server);
@@ -28,7 +28,7 @@ TEST(Ruvia, http2_priority_update_client_submission_and_server_event) {
     EXPECT_TRUE(client.submit_priority_update(2, {}) == ruvia::http2_submit_status::invalid_state);
 }
 TEST(Ruvia, http2_priority_update_idle_stream_budget_and_wrong_peer_role) {
-    ruvia::testing::output_relay relay;
+    ruvia::test::output_relay relay;
     auto client = ruvia::http2_connection::client();
     auto server = ruvia::http2_connection::server();
     relay.transfer(client, server);
@@ -45,7 +45,7 @@ TEST(Ruvia, http2_priority_update_idle_stream_budget_and_wrong_peer_role) {
 }
 
 TEST(Ruvia, http2_priority_update_rejects_invalid_ids_even_with_malformed_values) {
-    ruvia::testing::output_relay relay;
+    ruvia::test::output_relay relay;
     for (const char id : {char{0}, char{2}}) {
         auto client = ruvia::http2_connection::client();
         auto server = ruvia::http2_connection::server();
@@ -64,7 +64,7 @@ TEST(Ruvia, http2_priority_update_rejects_invalid_ids_even_with_malformed_values
 }
 
 TEST(Ruvia, http2_priority_update_zero_length_on_client_yields_protocol_error) {
-    ruvia::testing::output_relay relay;
+    ruvia::test::output_relay relay;
     auto client = ruvia::http2_connection::client();
     auto server = ruvia::http2_connection::server();
     relay.transfer(client, server);
@@ -89,7 +89,7 @@ TEST(Ruvia, http2_priority_update_zero_length_on_client_yields_protocol_error) {
 
 TEST(Ruvia, http2_priority_update_on_idle_stream_is_attached_to_snapshot_and_cleaned_up_on_release) {
     std::pmr::unsynchronized_pool_resource resource;
-    ruvia::testing::output_relay relay;
+    ruvia::test::output_relay relay;
     auto client = ruvia::http2_connection::client({.resource_ = &resource});
     auto server = ruvia::http2_connection::server({.resource_ = &resource});
     relay.transfer(client, server);

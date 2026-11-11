@@ -6,7 +6,7 @@
 
 #include "ruvia/http/multipart_parser.h"
 
-namespace ruvia::testing {
+namespace ruvia::test {
 
 // A multipart/form-data Content-Type whose boundary parameter is `value` as a
 // quoted-string, so every byte reaches the boundary rule unchanged.
@@ -31,4 +31,4 @@ namespace ruvia::testing {
     throw std::invalid_argument("invalid test multipart boundary");
 }
 
-}  // namespace ruvia::testing
+}  // namespace ruvia::test

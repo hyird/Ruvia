@@ -61,72 +61,13 @@ enum class http_response_compression_status : std::uint8_t {
         .message_ = "no acceptable response content coding"};
 }
 
-[[nodiscard]] inline bool http_response_custom_coding_accepted(
-    const http_request* request, std::string_view coding) noexcept {
-    if (request == nullptr || !request->header("Accept-Encoding").has_value()) {
-        return true;
-    }
-    bool saw_header = false;
-    http_accepted_encoding_quality quality;
-    for (const auto& header : request->headers()) {
-        if (header.name().size() == 15U &&
-            http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
-            saw_header = true;
-            quality.update(header.value(), coding);
-        }
-    }
-    return !saw_header || quality.accepts(false);
-}
-
-// Response negotiation inspects every coding in application-supplied
-// stacks: a client that accepts gzip but rejects br cannot be sent `gzip, br`.
-[[nodiscard]] inline bool http_known_response_content_encoding_stack_accepted(
-    const http_response_coding_selection& selection, const http_response& response,
-    const http_request* request = nullptr, bool* has_content_encoding = nullptr) noexcept {
-    if (!response.header("Content-Encoding").has_value()) {
-        if (has_content_encoding != nullptr) {
-            *has_content_encoding = false;
-        }
-        return true;
-    }
-    bool saw_header = false;
-    bool saw_coding = false;
-    bool accepted = true;
-    for (const auto& header : response.headers()) {
-        const auto name = header.name();
-        if (name.size() != 16U || !http_ascii_equals_ignore_case(name, "Content-Encoding")) {
-            continue;
-        }
-        saw_header = true;
-        http_visit_comma_separated_quoted_field_items(header.value(), [&](std::string_view item) noexcept {
-            if (item.empty()) {
-                return true;
-            }
-            saw_coding = true;
-            if (const auto coding = http_content_coding_from_token(item)) {
-                accepted = accepted && selection.accepts(*coding);
-            } else {
-                accepted = accepted && http_response_custom_coding_accepted(request, item);
-            }
-            return accepted;
-        });
-        if (!accepted) {
-            break;
-        }
-    }
-    if (has_content_encoding != nullptr) {
-        *has_content_encoding = saw_header;
-    }
-    return !saw_coding || accepted;
-}
-
 // Return true when the response cannot satisfy the client's coding policy:
 // the negotiation failed, a framework-selected coding fell back to forbidden
 // identity, or a handler supplied a pre-encoded representation the client
 // excluded. Bodyless statuses are representation-free and therefore never
 // need a content-coding fallback.
 [[nodiscard]] inline bool http_response_coding_fallback_forbidden(const http_response_coding_selection& selection,
-    http_known_method request_method, const http_response& response, const http_request* request = nullptr) noexcept {
+    http_known_method request_method, const http_response& response, const http_request* request = nullptr) {
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
         return false;
     }
@@ -135,11 +76,14 @@ enum class http_response_compression_status : std::uint8_t {
     if (response.status() == http_status::range_not_satisfiable && response.body_bytes().empty()) {
         return false;
     }
-    bool has_content_encoding = false;
-    const bool stack_accepted =
-        http_known_response_content_encoding_stack_accepted(selection, response, request, &has_content_encoding);
-    if (has_content_encoding) {
-        return !stack_accepted;
+    switch (evaluate_http_response_content_coding(selection, response, request)) {
+        case http_response_content_coding_status::accepted:
+            return false;
+        case http_response_content_coding_status::not_acceptable:
+        case http_response_content_coding_status::invalid:
+            return true;
+        case http_response_content_coding_status::absent:
+            break;
     }
     if (!selection.acceptable()) {
         return true;

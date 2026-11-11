@@ -23,7 +23,8 @@
 
 namespace {
 using namespace ruvia;
-namespace testing = ::ruvia::testing;
+using ruvia::test::failing_memory_resource;
+namespace testing = ::ruvia::test;
 using op_type = db_binary_operator;
 RUVIA_DB_ENTITY(entity_type, "device", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>)
 
@@ -542,6 +543,43 @@ TEST(Ruvia, db_query_null_comparisons_and_empty_membership_have_defined_semantic
     const auto statement = query.compile(db_driver::postgresql, nullptr);
     EXPECT_EQ(statement.sql(), "SELECT (\"id\" IS NULL), (\"id\" IS NOT NULL), FALSE, TRUE FROM \"devices\"");
     EXPECT_TRUE(statement.params().empty());
+}
+
+TEST(Ruvia, db_query_null_comparisons_share_unary_parameter_typing) {
+    const auto value = db_expr::value(7);
+    const auto null = db_expr::null();
+    const std::array predicates{
+        value == nullptr, null == value, value != nullptr, null != value,
+        value.is_null(), value.is_not_null()};
+    for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+        for (const auto mode : {db_parameter_mode::bound, db_parameter_mode::literal}) {
+            for (std::size_t i = 0; i < predicates.size(); ++i) {
+                const bool negate = i == 2 || i == 3 || i == 5;
+                const auto op = negate ? db_binary_operator::not_equal : db_binary_operator::equal;
+                db_query expected;
+                expected.select(expected.unary(negate ? db_unary_operator::is_not_null : db_unary_operator::is_null,
+                    expected.value(7)));
+                const auto reference = expected.compile(driver, nullptr, mode);
+                db_query owned;
+                owned.select(predicates[i].expression(owned));
+                const auto owned_statement = owned.compile(driver, nullptr, mode);
+                EXPECT_EQ(owned_statement.sql(), reference.sql());
+                EXPECT_EQ(owned_statement.params().size(), reference.params().size());
+                db_query direct;
+                const auto operand = direct.value(7);
+                const auto null_value = direct.null_value();
+                direct.select(i == 1 || i == 3
+                                  ? direct.binary(null_value, op, operand)
+                                  : direct.binary(operand, op, null_value));
+                const auto direct_statement = direct.compile(driver, nullptr, mode);
+                EXPECT_EQ(direct_statement.sql(), reference.sql());
+                EXPECT_EQ(direct_statement.params().size(), reference.params().size());
+                if (driver == db_driver::postgresql && mode == db_parameter_mode::bound) {
+                    EXPECT_TRUE(reference.sql().find("$1::int8 IS ") != std::string_view::npos);
+                }
+            }
+        }
+    }
 }
 
 TEST(Ruvia, db_query_window_aggregate_filter_and_lateral_source) {

@@ -13,7 +13,7 @@
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 #include "response/http_response_header_bits.h"
 
 namespace ruvia::detail {
@@ -52,36 +52,6 @@ inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
 
 [[nodiscard]] bool is_forbidden_http_binary_response_field(std::string_view name) noexcept;
 
-// The field identity of a response field line: classify_request_header(name),
-// which also identifies response control fields (Trailer, TE, Upgrade). A
-// field already indexed by classify_response_header_name (known_bit) needs no
-// second name scan; indexed response-only fields have no shared identity.
-[[nodiscard]] inline request_header_kind classify_response_field(
-    std::string_view name, std::uint32_t known_bit) noexcept {
-    switch (known_bit) {
-        case 0:
-            return name.size() == 2 && http_ascii_equals_ignore_case(name, "TE")
-                       ? request_header_kind::te
-                       : request_header_kind::other;
-        case response_header_connection:
-            return request_header_kind::connection;
-        case response_header_content_encoding:
-            return request_header_kind::content_encoding;
-        case response_header_content_length:
-            return request_header_kind::content_length;
-        case response_header_content_type:
-            return request_header_kind::content_type;
-        case response_header_transfer_encoding:
-            return request_header_kind::transfer_encoding;
-        case response_header_upgrade:
-            return request_header_kind::upgrade;
-        case response_header_trailer:
-            return request_header_kind::trailer;
-        default:
-            return request_header_kind::other;
-    }
-}
-
 // Spellings of every generated Connection field line. A sender of Upgrade
 // lists the "Upgrade" connection option (RFC 9110 section 7.8); an HTTP/1.0
 // persistent connection lists "keep-alive" (RFC 9112 section 9.3).
@@ -108,48 +78,49 @@ enum class http_connection_option : std::uint8_t {
 // nominations.
 [[nodiscard]] inline bool http_connection_option_conflicts_with_managed_field(
     std::string_view option) noexcept {
-    switch (classify_request_header(option)) {
-        case request_header_kind::other:
+    const auto field = classify_http_field_name(option);
+    switch (field.kind_) {
+        case http_field_kind::other:
             if (http_ascii_equals_ignore_case(option, "X-Forwarded-Host")) {
                 return true;
             }
             break;
-        case request_header_kind::connection:
-        case request_header_kind::upgrade:
-        case request_header_kind::sec_websocket_extensions:
-        case request_header_kind::te:
-        case request_header_kind::proxy_authorization:
+        case http_field_kind::connection:
+        case http_field_kind::upgrade:
+        case http_field_kind::sec_websocket_extensions:
+        case http_field_kind::te:
+        case http_field_kind::proxy_authorization:
             return false;
-        case request_header_kind::forwarded:
-        case request_header_kind::x_forwarded_for:
-        case request_header_kind::x_forwarded_proto:
-        case request_header_kind::accept:
-        case request_header_kind::accept_encoding:
-        case request_header_kind::access_control_request_headers:
-        case request_header_kind::access_control_request_method:
-        case request_header_kind::authorization:
-        case request_header_kind::content_encoding:
-        case request_header_kind::content_length:
-        case request_header_kind::content_type:
-        case request_header_kind::transfer_encoding:
-        case request_header_kind::cookie:
-        case request_header_kind::expect:
-        case request_header_kind::host:
-        case request_header_kind::if_match:
-        case request_header_kind::if_modified_since:
-        case request_header_kind::if_none_match:
-        case request_header_kind::if_range:
-        case request_header_kind::if_unmodified_since:
-        case request_header_kind::origin:
-        case request_header_kind::range:
-        case request_header_kind::sec_websocket_key:
-        case request_header_kind::sec_websocket_protocol:
-        case request_header_kind::sec_websocket_version:
-        case request_header_kind::user_agent:
-        case request_header_kind::trailer:
+        case http_field_kind::forwarded:
+        case http_field_kind::x_forwarded_for:
+        case http_field_kind::x_forwarded_proto:
+        case http_field_kind::accept:
+        case http_field_kind::accept_encoding:
+        case http_field_kind::access_control_request_headers:
+        case http_field_kind::access_control_request_method:
+        case http_field_kind::authorization:
+        case http_field_kind::content_encoding:
+        case http_field_kind::content_length:
+        case http_field_kind::content_type:
+        case http_field_kind::transfer_encoding:
+        case http_field_kind::cookie:
+        case http_field_kind::expect:
+        case http_field_kind::host:
+        case http_field_kind::if_match:
+        case http_field_kind::if_modified_since:
+        case http_field_kind::if_none_match:
+        case http_field_kind::if_range:
+        case http_field_kind::if_unmodified_since:
+        case http_field_kind::origin:
+        case http_field_kind::range:
+        case http_field_kind::sec_websocket_key:
+        case http_field_kind::sec_websocket_protocol:
+        case http_field_kind::sec_websocket_version:
+        case http_field_kind::user_agent:
+        case http_field_kind::trailer:
             return true;
     }
-    const auto known_bit = classify_response_header_name(option);
+    const auto known_bit = field.response_bit_;
     return (known_bit & ~(response_header_connection | response_header_upgrade |
                             response_header_keep_alive | response_header_proxy_connection)) != 0;
 }
@@ -176,14 +147,14 @@ enum class http_connection_field_role : std::uint8_t {
 // ignored.
 [[nodiscard]] inline bool http_connection_option_names_protected_field(
     std::string_view option, http_connection_field_role recipient) noexcept {
-    switch (classify_request_header(option)) {
-        case request_header_kind::content_length:
-        case request_header_kind::transfer_encoding:
+    switch (classify_http_field(option)) {
+        case http_field_kind::content_length:
+        case http_field_kind::transfer_encoding:
             return true;
-        case request_header_kind::host:
-        case request_header_kind::authorization:
-        case request_header_kind::cookie:
-        case request_header_kind::origin:
+        case http_field_kind::host:
+        case http_field_kind::authorization:
+        case http_field_kind::cookie:
+        case http_field_kind::origin:
             return recipient == http_connection_field_role::request_recipient;
         default:
             return classify_response_header_name(option) == response_header_set_cookie;
@@ -369,20 +340,20 @@ enum class http_response_control_field_status : std::uint8_t {
 // Keep the parsed state across repeated lines, but do not check the Upgrade
 // association until construction of all Connection fields has finished.
 [[nodiscard]] inline http_response_control_field_status parse_http_response_control_field(
-    request_header_kind kind, std::string_view value,
+    http_field_kind kind, std::string_view value,
     http_connection_options& connection_options, http_upgrade_protocols& upgrade_protocols) noexcept {
     switch (kind) {
-        case request_header_kind::connection:
+        case http_field_kind::connection:
             return connection_options.parse_field(value, http_connection_field_role::sender) ==
                            http_field_list_parse_status::ok
                        ? http_response_control_field_status::ok
                        : http_response_control_field_status::invalid_connection;
-        case request_header_kind::upgrade:
+        case http_field_kind::upgrade:
             return upgrade_protocols.parse_field(value, http_field_list_role::sender) ==
                            http_field_list_parse_status::ok
                        ? http_response_control_field_status::ok
                        : http_response_control_field_status::invalid_upgrade;
-        case request_header_kind::te:
+        case http_field_kind::te:
             return http_response_control_field_status::te_forbidden;
         default:
             return http_response_control_field_status::ok;

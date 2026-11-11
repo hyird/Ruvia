@@ -815,7 +815,7 @@ TEST(Ruvia, ChannelSendPinsStateDuringReentrantRebinding) {
         SCOPED_TRACE(fail_move);
         asio::io_context io;
         auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
-        failing_memory_resource resource;
+        ruvia::test::failing_memory_resource resource;
         auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(
             attachment.loop().handle(), {.capacity_ = 1, .resource_ = &resource});
         std::optional<ruvia::channel_receiver<reentrant_payload>> owner(std::move(receiver));

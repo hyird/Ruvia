@@ -25,7 +25,6 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
-#include <openssl/bio.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/timer.h"
@@ -38,8 +37,12 @@
 #include "ruvia/web/streaming.h"
 #include "ruvia/web/websocket.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http2_wire_fixture.h"
+#endif
 #include "tcp_port_reservation.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 namespace stream_disconnect_test {
@@ -206,25 +209,8 @@ class routes final {
     }
 };
 
-template <typename predicate>
-bool wait_until(predicate ready, std::chrono::milliseconds timeout = 2s) {
-    const auto deadline = clock_type::now() + timeout;
-    while (!ready() && clock_type::now() < deadline) {
-        std::this_thread::sleep_for(1ms);
-    }
-    return ready();
-}
-
 #if defined(RUVIA_ENABLE_HTTP2)
-void append_http2_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags, std::uint32_t stream,
-    std::string_view payload) {
-    std::array<char, ruvia::http2_frame_header_bytes> header{};
-    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream)) {
-        throw std::logic_error("invalid HTTP/2 test frame");
-    }
-    wire.append(header.data(), header.size());
-    wire.append(payload);
-}
+using ruvia::test::append_frame;
 
 void append_u32(std::string& out, std::uint32_t value) {
     for (int shift = 24; shift >= 0; shift -= 8) {
@@ -240,22 +226,22 @@ std::string http2_request_without_reading(bool tunnel) {
     std::string wire(ruvia::http2_client_preface);
     std::string settings{0x00, 0x04};
     append_u32(settings, max_window);
-    append_http2_frame(wire, ruvia::http2_frame_type::settings, 0, 0, settings);
+    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, settings);
     std::string increment;
     append_u32(increment, max_window - 65535U);
-    append_http2_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, increment);
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, increment);
     std::pmr::unsynchronized_pool_resource resource;
     std::pmr::string block(&resource);
     if (tunnel) {
         ruvia::hpack_encoder::encode_header(block, ":method", "CONNECT");
         ruvia::hpack_encoder::encode_header(block, ":authority", "stall.test:443");
-        append_http2_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
     } else {
         ruvia::hpack_encoder::encode_header(block, ":method", "GET");
         ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
         ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
         ruvia::hpack_encoder::encode_header(block, ":path", "/disconnect/h2-bulk");
-        append_http2_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
     }
     return wire;
 }
@@ -560,7 +546,7 @@ void check_single_stream_end(asio::io_context& io,
     client.send(request("token"));
     EXPECT_TRUE(client.read_until("data: first").find("data: first") != std::string::npos);
     client.end_requests();
-    EXPECT_TRUE(wait_until([&] { return cancelled.load() == before + 1; }));
+    ruvia::test::wait_until([&] { return cancelled.load() == before + 1; }, 2s);
     EXPECT_EQ(context_cancelled.load(), context_before + 1);
     EXPECT_TRUE(client.read_until("0\r\n\r\n", 500ms).find("0\r\n\r\n") == std::string::npos);
     client.close();
@@ -584,21 +570,14 @@ using namespace stream_disconnect_test;
 
 TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
     ruvia::test::tls_identity identity("localhost");
-    const auto private_key = identity.ca_file_.parent_path() / "key.pem";
-    {
-        std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(private_key.string().c_str(), "w"), BIO_free);
-        if (!output || ruvia::test::write_tls_private_key(output.get(),
-                           SSL_CTX_get0_privatekey(identity.context_.native_handle())) != 1) {
-            throw std::runtime_error("cannot write disconnect test private key");
-        }
-    }
+    const auto private_key = identity.private_key_file();
     asio::io_context io;
     ruvia::test::tcp_port_reservation plain_reservation(io);
     ruvia::test::tcp_port_reservation tls_reservation(io);
     const auto plain_endpoint = plain_reservation.endpoint();
     const auto tls_endpoint = tls_reservation.endpoint();
     auto& app = ruvia::app();
-    std::binary_semaphore started{0};
+    static std::binary_semaphore started{0};
     app.server({.worker_count_ = 2, .idle_timeout_ = 15s, .connection_scan_interval_ = 5ms, .write_timeout_ = 150ms})
         .listen({.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}})
         .on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
@@ -607,15 +586,8 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             c.draft().status(error.status());
             co_return c.text("unexpected-error");
         })
-        .on_start([&started] { started.release(); });
-    std::exception_ptr server_failure;
-    std::thread runner([&] {
-        try {
-            app.run();
-        } catch (...) {
-            server_failure = std::current_exception();
-        }
-    });
+        .on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
     std::exception_ptr client_failure;
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
@@ -638,10 +610,10 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                         EXPECT_TRUE(client.read_until("data: first").find("data: first") != std::string::npos);
                         const auto begin = clock_type::now();
                         client.close(kind.notify_, kind.reset_);
-                        EXPECT_TRUE(wait_until([&] { return cancelled.load() == before + 1; }));
+                        ruvia::test::wait_until([&] { return cancelled.load() == before + 1; }, 2s);
                         EXPECT_TRUE(clock_type::now() - begin < 2s);
                         EXPECT_EQ(context_cancelled.load(), context_before + 1);
-                        EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+                        ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
                     }
                 }
                 peer body_client(io, endpoint, tls);
@@ -661,7 +633,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 EXPECT_TRUE(waiting_body_client.read_until("hello-world").find("hello-world") != std::string::npos);
                 const auto body_close_begin = clock_type::now();
                 waiting_body_client.close();
-                EXPECT_TRUE(wait_until([&] { return body_cancelled.load() == body_cancelled_before + 1; }));
+                ruvia::test::wait_until([&] { return body_cancelled.load() == body_cancelled_before + 1; }, 2s);
                 EXPECT_TRUE(clock_type::now() - body_close_begin < 2s);
                 peer post_sse_client(io, endpoint, tls);
                 post_sse_client.send("POST /disconnect/post-sse HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"id\":\"1\"}");
@@ -675,7 +647,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 const auto early_output = early_client.read_until({});
                 EXPECT_TRUE(early_output.find("hello-world") != std::string::npos);
                 EXPECT_TRUE(early_output.find("healthy") == std::string::npos);
-                EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+                ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
 
                 const auto pipeline_cancelled_before = pipeline_cancelled.load();
                 for (const std::size_t size : {std::size_t{31}, std::size_t{256 * 1024}}) {
@@ -705,18 +677,18 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                     check_pipelined_stream_end(io, endpoint, tls, slow_request, "slow-done", pipeline_end::truncated);
                 }
                 check_single_stream_end(io, endpoint, tls);
-                EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+                ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
                 for (const auto mode : {"write", "timeout"}) {
                     peer racing(io, endpoint, tls);
                     const auto writes_before = write_entered.load();
                     racing.send(request(mode));
                     EXPECT_TRUE(racing.read_until("data: first").find("data: first") != std::string::npos);
-                    EXPECT_TRUE(wait_until([&] { return write_entered.load() == writes_before + 1; }));
+                    ruvia::test::wait_until([&] { return write_entered.load() == writes_before + 1; }, 2s);
                     if (std::string_view(mode) == "timeout") {
-                        EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+                        ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
                     }
                     racing.close(false, true);
-                    EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+                    ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
                 }
                 // write_timeout_ bounds every write of an upgraded connection
                 // as well: a WebSocket without heartbeat or a CONNECT tunnel
@@ -732,9 +704,9 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                     stalled.send(upgrade);
                     const auto head = stalled.read_until("\r\n\r\n");
                     EXPECT_TRUE(head.starts_with(upgrade.starts_with("GET") ? "HTTP/1.1 101 " : "HTTP/1.1 200 "));
-                    EXPECT_TRUE(wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }));
-                    EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }, 5s));
-                    EXPECT_TRUE(wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }));
+                    ruvia::test::wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }, 2s);
+                    ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 5s);
+                    ruvia::test::wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }, 2s);
                     stalled.close(false, true);
                 }
             }
@@ -748,11 +720,11 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 const auto failures_before = stalled_upgrade_failures.load();
                 stalled.send(http2_request_without_reading(tunnel));
                 if (tunnel) {
-                    EXPECT_TRUE(wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }));
+                    ruvia::test::wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }, 2s);
                 }
-                EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }, 5s));
+                ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 5s);
                 if (tunnel) {
-                    EXPECT_TRUE(wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }));
+                    ruvia::test::wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }, 2s);
                 }
                 stalled.close(false, true);
             }
@@ -763,10 +735,10 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             explicit_peer.send(request("explicit"));
             EXPECT_TRUE(explicit_peer.read_until("data: first").find("data: first") != std::string::npos);
             explicit_stop.request_stop();
-            EXPECT_TRUE(wait_until([&] { return cancelled.load() == explicit_before + 1; }));
+            ruvia::test::wait_until([&] { return cancelled.load() == explicit_before + 1; }, 2s);
             EXPECT_EQ(context_cancelled.load(), explicit_context_before);
             explicit_peer.close();
-            EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+            ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
 
             const auto fd_baseline = fd_count();
             std::size_t fd_peak = fd_baseline, active_peak = 0;
@@ -788,7 +760,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
                 for (auto& client : clients) {
                     client->close();
                 }
-                EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+                ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
                 EXPECT_EQ(cancelled.load(), before + batch_size);
                 EXPECT_EQ(context_cancelled.load(), context_before + batch_size);
                 recycle_max = std::max(recycle_max, std::chrono::duration_cast<std::chrono::milliseconds>(clock_type::now() - begin));
@@ -802,7 +774,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             recovery.send("GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
             EXPECT_TRUE(recovery.read_until("healthy").find("healthy") != std::string::npos);
             recovery.close();
-            EXPECT_TRUE(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
+            ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 0; }, 2s);
             std::cout << "stream_disconnect metrics: total=" << batch_size * batches << " peak_active=" << active_peak
                       << " fd_baseline=" << fd_baseline << " fd_peak=" << fd_peak << " fd_final=" << fd_final
                       << " max_recycle_ms=" << recycle_max.count() << " errors=" << errors.load()
@@ -818,7 +790,7 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
             EXPECT_TRUE(stopping.read_until("data: first").find("data: first") != std::string::npos);
             app.stop();
             stopping.close();
-            EXPECT_TRUE(wait_until([&] { return finished.load() == before_stop + 1; }));
+            ruvia::test::wait_until([&] { return finished.load() == before_stop + 1; }, 2s);
         }
     } catch (...) {
         client_failure = std::current_exception();
@@ -829,9 +801,6 @@ TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
     EXPECT_EQ(app.http_stats().connection_failures_, std::size_t{0});
     EXPECT_EQ(app.http_stats().accept_failures_, std::size_t{0});
     EXPECT_EQ(app.http_stats().worker_failures_, std::size_t{0});
-    if (server_failure) {
-        std::rethrow_exception(server_failure);
-    }
     if (client_failure) {
         std::rethrow_exception(client_failure);
     }

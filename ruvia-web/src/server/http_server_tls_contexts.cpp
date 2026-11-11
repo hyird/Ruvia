@@ -17,6 +17,7 @@
 #include "ruvia/http/http3_quic_connection.h"
 #endif
 
+#include "auth/constant_time.h"
 #include "server/http_server_tls_identity.h"
 #include "tls/tls_protocol_policy.h"
 
@@ -47,8 +48,9 @@ SSL_TICKET_RETURN decrypt_quic_ticket(SSL* ssl, SSL_SESSION* ticket,
     // RFC 9001 §4.6.1 and RFC 9114 §7.2.8: changed transport limits or
     // SETTINGS require a fresh handshake, not acceptance of stale 0-RTT.
     if (context == nullptr || SSL_SESSION_get0_ticket_appdata(ticket, &remembered, &remembered_size) != 1 ||
-        remembered_size != context->size() ||
-        CRYPTO_memcmp(remembered, context->data(), context->size()) != 0) {
+        !constant_time_bytes_equal(
+            std::string_view(static_cast<const char*>(remembered), remembered_size),
+            std::string_view(reinterpret_cast<const char*>(context->data()), context->size()))) {
         return SSL_TICKET_RETURN_IGNORE_RENEW;
     }
     return status == SSL_TICKET_SUCCESS ? SSL_TICKET_RETURN_USE : SSL_TICKET_RETURN_USE_RENEW;

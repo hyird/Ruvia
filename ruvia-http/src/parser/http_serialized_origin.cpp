@@ -15,19 +15,16 @@ namespace ruvia {
 namespace {
 
 using detail::is_decimal_digit;
+using detail::is_uri_lower_alpha;
 using detail::parse_ipv4_address;
 using detail::parse_port_value;
 
-[[nodiscard]] bool is_lower_alpha(char value) noexcept {
-    return value >= 'a' && value <= 'z';
-}
-
 [[nodiscard]] bool is_lower_alpha_numeric(char value) noexcept {
-    return is_lower_alpha(value) || is_decimal_digit(value);
+    return is_uri_lower_alpha(static_cast<unsigned char>(value)) || is_decimal_digit(value);
 }
 
 [[nodiscard]] bool is_valid_serialized_origin_scheme(std::string_view scheme) noexcept {
-    if (scheme.empty() || !is_lower_alpha(scheme.front())) {
+    if (scheme.empty() || !is_uri_lower_alpha(static_cast<unsigned char>(scheme.front()))) {
         return false;
     }
     for (const auto value : scheme.substr(1)) {

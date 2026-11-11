@@ -14,13 +14,13 @@
 
 namespace ruvia::detail {
 
-enum class request_header_kind : std::uint8_t;
+enum class http_field_kind : std::uint8_t;
 
 // Shared request/response restrictions (RFC 9110 section 6.5.1): fields that
 // control framing, routing, authentication or representation interpretation.
 // Direction-specific permissions are composed below and by response policy.
 [[nodiscard]] bool is_forbidden_common_trailer_name(
-    std::string_view name, request_header_kind kind) noexcept;
+    std::string_view name, http_field_kind kind) noexcept;
 
 // Trailer advertisements and actual request sections use the same policy.
 // Accept-Ranges is permitted in response trailers, not request trailers.

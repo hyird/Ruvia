@@ -31,10 +31,10 @@
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/websocket.h"
 
+#include "http/http_stream_end.h"
 #include "server/connection_scanner.h"
 #include "server/inbound_buffer_resource.h"
 #include "server/inbound_transport_error.h"
-#include "tls/tls_stream_end.h"
 #include "util/steady_clock.h"
 #include "websocket/http_websocket_liveness.h"
 
@@ -143,11 +143,6 @@ private:
     enum class write_claim_type : std::uint8_t {
         acquire,
         adopt,
-    };
-
-    enum class write_wait_type : std::uint8_t {
-        reader,
-        writer,
     };
 
     enum class read_phase_type : std::uint8_t {
@@ -319,9 +314,6 @@ private:
         websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease, bool compress);
     task<void> close_owned(::ruvia::websocket_close_options options, write_operation_lease_type write_lease);
     task<void> write_heartbeat_ping();
-    // A blocked reader reserves the next message boundary. Writers must also
-    // check reader_waiting_ before taking an otherwise idle lane.
-    task<void> wait_for_write_idle(write_wait_type type);
     // Maps a rejected submit to its exception; false when the protocol is no
     // longer open and nothing was queued.
     bool accept_submitted_frame(websocket_frame_submit_status status);
@@ -481,7 +473,7 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                     // automatic Close/Pong. Reserve the next message boundary
                     // and retain the lane through that control output flush.
                     if (write_lane_.write_in_progress()) {
-                        co_await wait_for_write_idle(write_wait_type::reader);
+                        co_await write_lane_.wait_for_idle(true);
                     }
                     write_guard_type write_guard(*this, write_claim_type::acquire, false);
                     event = protocol_.next_event();
@@ -505,7 +497,7 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                         // received. The core discards unsent WS output and plans the
                         // transport end.
                         if (write_lane_.write_in_progress()) {
-                            co_await wait_for_write_idle(write_wait_type::reader);
+                            co_await write_lane_.wait_for_idle(true);
                         }
                         write_guard_type write_guard(*this);
                         protocol_.notify_transport_eof();
@@ -619,7 +611,7 @@ task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcod
         write_operation_lease_type active_write(std::move(write_lease));
         static_cast<void>(active_write);
         if (write_lane_.blocked_for_writer()) {
-            co_await wait_for_write_idle(write_wait_type::writer);
+            co_await write_lane_.wait_for_idle(false);
         }
         write_guard_type write_guard(*this);
         // The caller keeps the payload alive until this write completes, so an
@@ -648,7 +640,7 @@ task<void> server_websocket_connection<stream_type>::close_owned(::ruvia::websoc
         write_operation_lease_type active_write(std::move(write_lease));
         static_cast<void>(active_write);
         if (write_lane_.blocked_for_writer()) {
-            co_await wait_for_write_idle(write_wait_type::writer);
+            co_await write_lane_.wait_for_idle(false);
         }
         const auto reason = options.reason_.view();
         bool flush_output = false;
@@ -717,11 +709,6 @@ task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::wait_for_write_idle(write_wait_type type) {
-    return write_lane_.wait_for_idle(type == write_wait_type::reader);
-}
-
-template <typename stream_type>
 void server_websocket_connection<stream_type>::notify_write_idle() noexcept {
     write_lane_.notify();
 }
@@ -764,13 +751,17 @@ auto server_websocket_connection<stream_type>::write_bytes(const websocket_outpu
 
 template <typename stream_type>
 task<std::error_code> server_websocket_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
+    // The websocket protocol's transport disposition maps onto the stream end
+    // at this one boundary; the multiplexed transports only speak http_stream_end.
+    const auto end = plan.disposition() == websocket_transport_disposition::end_transport ? http_stream_end::end
+                                                                                          : http_stream_end::keep_open;
     if (plan.borrowed_bytes().empty()) {
-        co_return co_await stream_.write_bytes(plan.bytes(), plan.disposition());
+        co_return co_await stream_.write_bytes(plan.bytes(), end);
     }
-    if (const auto error = co_await stream_.write_bytes(plan.bytes(), websocket_transport_disposition::keep_open)) {
+    if (const auto error = co_await stream_.write_bytes(plan.bytes(), http_stream_end::keep_open)) {
         co_return error;
     }
-    co_return co_await stream_.write_bytes(plan.borrowed_bytes(), plan.disposition());
+    co_return co_await stream_.write_bytes(plan.borrowed_bytes(), end);
 }
 
 template <typename stream_type>

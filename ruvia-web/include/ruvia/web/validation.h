@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <memory_resource>
 #include <optional>
@@ -10,10 +11,13 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_accept_match.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
@@ -355,6 +359,60 @@ class context;
 
 namespace detail {
 
+[[noreturn]] void throw_invalid_json_body();
+[[noreturn]] void throw_invalid_json_content_type();
+[[noreturn]] void throw_invalid_form_content_type();
+
+template <validation_target target>
+    requires(target == validation_target::json || target == validation_target::form)
+inline constexpr std::string_view request_body_media_type =
+    target == validation_target::json ? "application/json" : "application/x-www-form-urlencoded";
+
+// Media-type parameters, including charset, do not select the request model.
+template <validation_target target>
+    requires(target == validation_target::json || target == validation_target::form)
+[[nodiscard]] bool request_has_body_media_type(std::optional<std::string_view> content_type) {
+    return http_ascii_equals_ignore_case(
+        http_media_type_only(content_type.value_or(std::string_view{})), request_body_media_type<target>);
+}
+
+template <validation_target target>
+    requires(target == validation_target::json || target == validation_target::form)
+[[noreturn]] inline void throw_invalid_content_type() {
+    if constexpr (target == validation_target::json) {
+        throw_invalid_json_content_type();
+    } else {
+        throw_invalid_form_content_type();
+    }
+}
+
+template <validation_target target, typename model_type>
+[[nodiscard]] model_type parse_and_validate_request_model(
+    std::conditional_t<target == validation_target::json || target == validation_target::form,
+        std::string_view, std::reference_wrapper<const request_name_value_list>>
+        input,
+    std::pmr::memory_resource* arena) {
+    auto model = [&] {
+        if constexpr (target == validation_target::json) {
+            auto parsed_value = parse_complete_json_value<model_type>(input, arena, model_string_storage::borrowed);
+            if (!parsed_value) {
+                // Selecting JSON makes malformed input an error, not an optional
+                // format mismatch that json_if<T>() may silently skip.
+                throw_invalid_json_body();
+            }
+            return std::move(*parsed_value);
+        } else if constexpr (target == validation_target::form) {
+            return model_parse_access::parse_form<model_type>(form_body_input{.body_ = input}, arena);
+        } else {
+            return model_parse_access::parse_form<model_type>(input, arena);
+        }
+    }();
+    validator validator_value;
+    model_validation_access::validate_model(model, validator_value);
+    std::move(validator_value).throw_if_invalid();
+    return model;
+}
+
 // One validating middleware per request source: parses the model from `target`,
 // runs its declared rules, binds it for the handler, then continues the chain.
 template <validation_target target, typename body_type>
@@ -365,10 +423,6 @@ public:
                       model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_type>()),
         "header_model field names must be unique ignoring ASCII case");
     using ruvia_validation_body_type = body_type;
-
-    void validate(const body_type& body, validator& validator_value) const {
-        validate_model(body, validator_value);
-    }
 
     [[nodiscard]] task<void> handle(context& c, next& next_value);
 };

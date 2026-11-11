@@ -30,6 +30,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
+#include "app_run.h"
 #include "tcp_port_reservation.h"
 #include "test_tls_identity.h"
 
@@ -92,36 +93,6 @@ public:
         context.draft().header("X-Connection-Worker", std::to_string(worker_id));
         co_return context.text(std::move(body));
     }
-};
-
-class app_run final {
-public:
-    explicit app_run(ruvia::application& app)
-        : app_(app),
-          thread_([this] {
-              try {
-                  app_.run();
-              } catch (...) {
-                  failure_ = std::current_exception();
-              }
-          }) {}
-    ~app_run() {
-        if (thread_.joinable()) {
-            app_.stop();
-            thread_.join();
-        }
-    }
-    void join() {
-        thread_.join();
-        if (failure_) {
-            std::rethrow_exception(failure_);
-        }
-    }
-
-private:
-    ruvia::application& app_;
-    std::exception_ptr failure_;
-    std::thread thread_;
 };
 
 std::string_view header(std::string_view head, std::string_view name) {
@@ -212,13 +183,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
     app.use_worker_state<worker_state>([observed] { return worker_state(observed); });
     app.on_start([observed] { observed->started_.release(); });
     ruvia::test::tls_identity identity("localhost");
-    const auto key = identity.ca_file_.parent_path() / "key.pem";
-    {
-        std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(key.string().c_str(), "w"), BIO_free);
-        if (!output || ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle())) != 1) {
-            throw std::runtime_error("cannot write ownership test TLS key");
-        }
-    }
+    const auto key = identity.private_key_file();
     asio::io_context io;
     ruvia::test::tcp_port_reservation http_reservation(io);
     ruvia::test::tcp_port_reservation https_reservation(io);
@@ -237,7 +202,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
     const auto cold_destroyed = observed->destroyed_.load();
     for (unsigned cycle = 0; cycle != 3; ++cycle) {
         configure();
-        app_run run(app);
+        ruvia::test::app_run run(app);
         if (!observed->started_.try_acquire_for(5s)) {
             // join 在此传播启动失败的原始异常。
             app.stop();

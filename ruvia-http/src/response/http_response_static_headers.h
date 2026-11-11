@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 
@@ -14,9 +17,10 @@ namespace ruvia::detail {
 
 template <std::size_t n>
 [[nodiscard]] consteval http_response_header static_response_header(
-    const char (&bytes_value)[n], std::uint32_t name_size, std::uint32_t known_bit) {
+    std::string_view name, const char (&bytes_value)[n], std::uint32_t known_bit) {
     static_assert(n > 1 && response_header_storage_size_fits(0, n - 1));
-    if (name_size == 0 || name_size > n - 1 || bytes_value[n - 1] != '\0') {
+    if (name.empty() || name.size() > n - 1 || bytes_value[n - 1] != '\0' ||
+        !std::string_view(bytes_value, n - 1).starts_with(name)) {
         throw "invalid static response header storage";
     }
     if (known_bit != 0 && known_bit != response_header_upgrade &&
@@ -24,253 +28,123 @@ template <std::size_t n>
         throw "static response header requires one known header bit";
     }
     return http_response_header_access::make(
-        bytes_value, name_size, static_cast<std::uint32_t>(n - 1 - name_size), known_bit, false);
+        bytes_value, static_cast<std::uint32_t>(name.size()),
+        static_cast<std::uint32_t>(n - 1 - name.size()), known_bit, false);
 }
 
-inline constexpr char text_plain_utf8_content_type[] = "Content-Typetext/plain; charset=UTF-8";
-inline constexpr char application_json_content_type[] = "Content-Typeapplication/json";
-inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; charset=UTF-8";
+template <std::size_t... sizes>
+[[nodiscard]] consteval auto static_response_headers(
+    std::string_view name, std::uint32_t known_bit, const char (&... bytes_values)[sizes]) {
+    return std::array{static_response_header(name, bytes_values, known_bit)...};
+}
+
+[[nodiscard]] inline std::optional<http_response_header> find_static_response_header(
+    std::span<const http_response_header> headers, std::string_view value) noexcept {
+    for (const auto& header_value : headers) {
+        if (header_value.value() == value) {
+            return header_value;
+        }
+    }
+    return std::nullopt;
+}
+
+inline constexpr auto content_type_headers = static_response_headers("Content-Type", response_header_content_type,
+    "Content-Typetext/plain; charset=UTF-8",
+    "Content-Typeapplication/json",
+    "Content-Typetext/html; charset=UTF-8",
+    "Content-Typetext/plain; charset=utf-8",
+    "Content-Typeapplication/json; charset=utf-8",
+    "Content-Typetext/html; charset=utf-8",
+    "Content-Typetext/css; charset=utf-8",
+    "Content-Typetext/javascript; charset=utf-8",
+    "Content-Typetext/event-stream",
+    "Content-Typeimage/png",
+    "Content-Typeimage/jpeg",
+    "Content-Typeimage/gif",
+    "Content-Typeimage/svg+xml",
+    "Content-Typeapplication/wasm",
+    "Content-Typeapplication/octet-stream",
+    "Content-Typeapplication/problem+json",
+    "Content-Typeimage/apng",
+    "Content-Typeimage/avif",
+    "Content-Typeimage/webp",
+    "Content-Typeimage/bmp",
+    "Content-Typeimage/vnd.microsoft.icon",
+    "Content-Typefont/woff",
+    "Content-Typefont/woff2",
+    "Content-Typefont/ttf",
+    "Content-Typefont/otf",
+    "Content-Typeapplication/vnd.ms-fontobject",
+    "Content-Typetext/xml; charset=utf-8",
+    "Content-Typeapplication/manifest+json; charset=utf-8");
 
 [[nodiscard]] inline http_response_header static_content_type_header(http_content_type type) {
     switch (type) {
         case http_content_type::text_plain_utf8:
-            return static_response_header(text_plain_utf8_content_type, 12, response_header_content_type);
+            return content_type_headers[0];
         case http_content_type::text_html_utf8:
-            return static_response_header(text_html_utf8_content_type, 12, response_header_content_type);
+            return content_type_headers[2];
         case http_content_type::application_json:
-            return static_response_header(application_json_content_type, 12, response_header_content_type);
+            return content_type_headers[1];
     }
     throw std::invalid_argument("invalid HTTP content type");
 }
 
 [[nodiscard]] inline std::optional<http_response_header> builtin_static_response_header(
     std::uint32_t known_bit, std::string_view value) noexcept {
-    static constexpr char lowercase_utf8_text_content_type[] = "Content-Typetext/plain; charset=utf-8";
-    static constexpr char lowercase_utf8_json_content_type[] =
-        "Content-Typeapplication/json; charset=utf-8";
-    static constexpr char lowercase_utf8_html_content_type[] = "Content-Typetext/html; charset=utf-8";
-    static constexpr char css_content_type[] = "Content-Typetext/css; charset=utf-8";
-    static constexpr char js_content_type[] = "Content-Typetext/javascript; charset=utf-8";
-    static constexpr char event_stream_content_type[] = "Content-Typetext/event-stream";
-    static constexpr char png_content_type[] = "Content-Typeimage/png";
-    static constexpr char jpeg_content_type[] = "Content-Typeimage/jpeg";
-    static constexpr char gif_content_type[] = "Content-Typeimage/gif";
-    static constexpr char svg_content_type[] = "Content-Typeimage/svg+xml";
-    static constexpr char apng_content_type[] = "Content-Typeimage/apng";
-    static constexpr char avif_content_type[] = "Content-Typeimage/avif";
-    static constexpr char webp_content_type[] = "Content-Typeimage/webp";
-    static constexpr char bmp_content_type[] = "Content-Typeimage/bmp";
-    static constexpr char ico_content_type[] = "Content-Typeimage/vnd.microsoft.icon";
-    static constexpr char woff_content_type[] = "Content-Typefont/woff";
-    static constexpr char woff2_content_type[] = "Content-Typefont/woff2";
-    static constexpr char ttf_content_type[] = "Content-Typefont/ttf";
-    static constexpr char otf_content_type[] = "Content-Typefont/otf";
-    static constexpr char eot_content_type[] = "Content-Typeapplication/vnd.ms-fontobject";
-    static constexpr char xml_utf8_content_type[] = "Content-Typetext/xml; charset=utf-8";
-    static constexpr char manifest_json_content_type[] =
-        "Content-Typeapplication/manifest+json; charset=utf-8";
-    static constexpr char problem_json_content_type[] = "Content-Typeapplication/problem+json";
-    static constexpr char wasm_content_type[] = "Content-Typeapplication/wasm";
-    static constexpr char octet_stream_content_type[] = "Content-Typeapplication/octet-stream";
-    static constexpr char connection_close[] = "Connectionclose";
-    static constexpr char connection_keep_alive[] = "Connectionkeep-alive";
-    static constexpr char connection_upgrade[] = "ConnectionUpgrade";
-    static constexpr char accept_ranges_bytes[] = "Accept-Rangesbytes";
-    static constexpr char content_encoding_gzip[] = "Content-Encodinggzip";
-    static constexpr char content_encoding_br[] = "Content-Encodingbr";
-    static constexpr char content_encoding_zstd[] = "Content-Encodingzstd";
-    static constexpr char content_encoding_deflate[] = "Content-Encodingdeflate";
-    static constexpr char transfer_encoding_chunked[] = "Transfer-Encodingchunked";
-    static constexpr char cache_control_no_store[] = "Cache-Controlno-store";
-    static constexpr char cache_control_no_cache[] = "Cache-Controlno-cache";
-    static constexpr char cache_control_private[] = "Cache-Controlprivate";
-    static constexpr char vary_wildcard[] = "Vary*";
-    static constexpr char vary_accept_encoding[] = "VaryAccept-Encoding";
-    static constexpr char vary_origin[] = "VaryOrigin";
-    static constexpr char vary_access_control_request_headers[] = "VaryAccess-Control-Request-Headers";
-    static constexpr char vary_access_control_request_method[] = "VaryAccess-Control-Request-Method";
-    static constexpr char access_control_allow_origin_wildcard[] =
-        "Access-Control-Allow-Origin*";
-    static constexpr char access_control_allow_credentials_true[] =
-        "Access-Control-Allow-Credentialstrue";
-    static constexpr char access_control_allow_methods_default[] =
-        "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS";
-    static constexpr char upgrade_websocket[] = "Upgradewebsocket";
-    static constexpr char upgrade_connect_udp[] = "Upgradeconnect-udp";
-
     switch (known_bit) {
         case response_header_content_type:
-            if (value == "text/plain; charset=UTF-8") {
-                return static_content_type_header(http_content_type::text_plain_utf8);
-            }
-            if (value == "application/json") {
-                return static_content_type_header(http_content_type::application_json);
-            }
-            if (value == "text/html; charset=UTF-8") {
-                return static_content_type_header(http_content_type::text_html_utf8);
-            }
-            if (value == "text/plain; charset=utf-8") {
-                return static_response_header(lowercase_utf8_text_content_type, 12, response_header_content_type);
-            }
-            if (value == "application/json; charset=utf-8") {
-                return static_response_header(lowercase_utf8_json_content_type, 12, response_header_content_type);
-            }
-            if (value == "text/html; charset=utf-8") {
-                return static_response_header(lowercase_utf8_html_content_type, 12, response_header_content_type);
-            }
-            if (value == "text/css; charset=utf-8") {
-                return static_response_header(css_content_type, 12, response_header_content_type);
-            }
-            if (value == "text/javascript; charset=utf-8") {
-                return static_response_header(js_content_type, 12, response_header_content_type);
-            }
-            if (value == "text/event-stream") {
-                return static_response_header(event_stream_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/png") {
-                return static_response_header(png_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/jpeg") {
-                return static_response_header(jpeg_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/gif") {
-                return static_response_header(gif_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/svg+xml") {
-                return static_response_header(svg_content_type, 12, response_header_content_type);
-            }
-            if (value == "application/wasm") {
-                return static_response_header(wasm_content_type, 12, response_header_content_type);
-            }
-            if (value == "application/octet-stream") {
-                return static_response_header(octet_stream_content_type, 12, response_header_content_type);
-            }
-            if (value == "application/problem+json") {
-                return static_response_header(problem_json_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/apng") {
-                return static_response_header(apng_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/avif") {
-                return static_response_header(avif_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/webp") {
-                return static_response_header(webp_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/bmp") {
-                return static_response_header(bmp_content_type, 12, response_header_content_type);
-            }
-            if (value == "image/vnd.microsoft.icon") {
-                return static_response_header(ico_content_type, 12, response_header_content_type);
-            }
-            if (value == "font/woff") {
-                return static_response_header(woff_content_type, 12, response_header_content_type);
-            }
-            if (value == "font/woff2") {
-                return static_response_header(woff2_content_type, 12, response_header_content_type);
-            }
-            if (value == "font/ttf") {
-                return static_response_header(ttf_content_type, 12, response_header_content_type);
-            }
-            if (value == "font/otf") {
-                return static_response_header(otf_content_type, 12, response_header_content_type);
-            }
-            if (value == "application/vnd.ms-fontobject") {
-                return static_response_header(eot_content_type, 12, response_header_content_type);
-            }
-            if (value == "text/xml; charset=utf-8") {
-                return static_response_header(xml_utf8_content_type, 12, response_header_content_type);
-            }
-            if (value == "application/manifest+json; charset=utf-8") {
-                return static_response_header(manifest_json_content_type, 12, response_header_content_type);
-            }
-            return std::nullopt;
-        case response_header_connection:
-            if (value == "close") {
-                return static_response_header(connection_close, 10, response_header_connection);
-            }
-            if (value == "keep-alive") {
-                return static_response_header(connection_keep_alive, 10, response_header_connection);
-            }
-            if (value == "Upgrade") {
-                return static_response_header(connection_upgrade, 10, response_header_connection);
-            }
-            return std::nullopt;
-        case response_header_accept_ranges:
-            if (value == "bytes") {
-                return static_response_header(accept_ranges_bytes, 13, response_header_accept_ranges);
-            }
-            return std::nullopt;
-        case response_header_content_encoding:
-            if (value == "gzip") {
-                return static_response_header(content_encoding_gzip, 16, response_header_content_encoding);
-            }
-            if (value == "br") {
-                return static_response_header(content_encoding_br, 16, response_header_content_encoding);
-            }
-            if (value == "zstd") {
-                return static_response_header(content_encoding_zstd, 16, response_header_content_encoding);
-            }
-            if (value == "deflate") {
-                return static_response_header(content_encoding_deflate, 16, response_header_content_encoding);
-            }
-            return std::nullopt;
-        case response_header_transfer_encoding:
-            if (value == "chunked") {
-                return static_response_header(transfer_encoding_chunked, 17, response_header_transfer_encoding);
-            }
-            return std::nullopt;
-        case response_header_cache_control:
-            if (value == "no-store") {
-                return static_response_header(cache_control_no_store, 13, response_header_cache_control);
-            }
-            if (value == "no-cache") {
-                return static_response_header(cache_control_no_cache, 13, response_header_cache_control);
-            }
-            if (value == "private") {
-                return static_response_header(cache_control_private, 13, response_header_cache_control);
-            }
-            return std::nullopt;
-        case response_header_vary:
-            if (value == "*") {
-                return static_response_header(vary_wildcard, 4, response_header_vary);
-            }
-            if (value == "Accept-Encoding") {
-                return static_response_header(vary_accept_encoding, 4, response_header_vary);
-            }
-            if (value == "Origin") {
-                return static_response_header(vary_origin, 4, response_header_vary);
-            }
-            if (value == "Access-Control-Request-Headers") {
-                return static_response_header(vary_access_control_request_headers, 4, response_header_vary);
-            }
-            if (value == "Access-Control-Request-Method") {
-                return static_response_header(vary_access_control_request_method, 4, response_header_vary);
-            }
-            return std::nullopt;
-        case response_header_access_control_allow_origin:
-            if (value == "*") {
-                return static_response_header(access_control_allow_origin_wildcard, 27, response_header_access_control_allow_origin);
-            }
-            return std::nullopt;
-        case response_header_access_control_allow_credentials:
-            if (value == "true") {
-                return static_response_header(access_control_allow_credentials_true, 32, response_header_access_control_allow_credentials);
-            }
-            return std::nullopt;
-        case response_header_access_control_allow_methods:
-            if (value == "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS") {
-                return static_response_header(access_control_allow_methods_default, 28, response_header_access_control_allow_methods);
-            }
-            return std::nullopt;
-        case response_header_upgrade:
-            if (value == "websocket") {
-                return static_response_header(upgrade_websocket, 7, response_header_upgrade);
-            }
-            if (value == "connect-udp") {
-                return static_response_header(upgrade_connect_udp, 7, response_header_upgrade);
-            }
-            return std::nullopt;
+            return find_static_response_header(content_type_headers, value);
+        case response_header_connection: {
+            static constexpr auto headers = static_response_headers("Connection", response_header_connection,
+                "Connectionclose", "Connectionkeep-alive", "ConnectionUpgrade");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_accept_ranges: {
+            static constexpr auto headers = static_response_headers("Accept-Ranges", response_header_accept_ranges,
+                "Accept-Rangesbytes");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_content_encoding: {
+            static constexpr auto headers = static_response_headers("Content-Encoding", response_header_content_encoding,
+                "Content-Encodinggzip", "Content-Encodingbr", "Content-Encodingzstd", "Content-Encodingdeflate");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_transfer_encoding: {
+            static constexpr auto headers = static_response_headers("Transfer-Encoding", response_header_transfer_encoding,
+                "Transfer-Encodingchunked");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_cache_control: {
+            static constexpr auto headers = static_response_headers("Cache-Control", response_header_cache_control,
+                "Cache-Controlno-store", "Cache-Controlno-cache", "Cache-Controlprivate");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_vary: {
+            static constexpr auto headers = static_response_headers("Vary", response_header_vary,
+                "Vary*", "VaryAccept-Encoding", "VaryOrigin", "VaryAccess-Control-Request-Headers", "VaryAccess-Control-Request-Method");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_access_control_allow_origin: {
+            static constexpr auto headers = static_response_headers("Access-Control-Allow-Origin", response_header_access_control_allow_origin,
+                "Access-Control-Allow-Origin*");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_access_control_allow_credentials: {
+            static constexpr auto headers = static_response_headers("Access-Control-Allow-Credentials", response_header_access_control_allow_credentials,
+                "Access-Control-Allow-Credentialstrue");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_access_control_allow_methods: {
+            static constexpr auto headers = static_response_headers("Access-Control-Allow-Methods", response_header_access_control_allow_methods,
+                "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
+            return find_static_response_header(headers, value);
+        }
+        case response_header_upgrade: {
+            static constexpr auto headers = static_response_headers("Upgrade", response_header_upgrade,
+                "Upgradewebsocket", "Upgradeconnect-udp");
+            return find_static_response_header(headers, value);
+        }
         default:
             return std::nullopt;
     }
@@ -278,104 +152,77 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
 
 [[nodiscard]] inline std::optional<http_response_header> builtin_static_custom_response_header(
     std::string_view name, std::string_view value) noexcept {
-    static constexpr char x_content_type_options_nosniff[] = "X-Content-Type-Optionsnosniff";
-    static constexpr char x_frame_options_deny[] = "X-Frame-OptionsDENY";
-    static constexpr char x_frame_options_sameorigin[] = "X-Frame-OptionsSAMEORIGIN";
-    static constexpr char strict_transport_security_default[] =
-        "Strict-Transport-Securitymax-age=31536000; includeSubDomains";
-    static constexpr char x_xss_protection_zero[] = "X-XSS-Protection0";
-    static constexpr char content_security_policy_self[] =
-        "Content-Security-Policydefault-src 'self'";
-    static constexpr char content_security_policy_none[] =
-        "Content-Security-Policydefault-src 'none'";
-    static constexpr char referrer_policy_strict_origin[] =
-        "Referrer-Policystrict-origin-when-cross-origin";
-    static constexpr char referrer_policy_no_referrer[] = "Referrer-Policyno-referrer";
-    static constexpr char permissions_policy_default[] =
-        "Permissions-Policygeolocation=(), microphone=(), camera=()";
-    static constexpr char retry_after_one[] = "Retry-After1";
-    static constexpr char accept_encoding_all[] = "Accept-Encodinggzip, deflate, br, zstd";
-    static constexpr char accept_encoding_identity[] = "Accept-Encodingidentity";
-    static constexpr char capsule_protocol_true[] = "Capsule-Protocol?1";
-    static constexpr char x_ratelimit_reset_one[] = "X-RateLimit-Reset1";
-    static constexpr char x_ratelimit_remaining_zero[] = "X-RateLimit-Remaining0";
-
     switch (name.size()) {
-        case 11:
-            if (name == "Retry-After" && value == "1") {
-                return static_response_header(retry_after_one, 11, 0);
+        case std::string_view("Retry-After").size():
+            if (name == "Retry-After") {
+                static constexpr auto headers = static_response_headers("Retry-After", 0, "Retry-After1");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
-        case 15:
+        case std::string_view("X-Frame-Options").size():
             if (name == "X-Frame-Options") {
-                if (value == "DENY") {
-                    return static_response_header(x_frame_options_deny, 15, 0);
-                }
-                if (value == "SAMEORIGIN") {
-                    return static_response_header(x_frame_options_sameorigin, 15, 0);
-                }
-                return std::nullopt;
+                static constexpr auto headers = static_response_headers("X-Frame-Options", 0,
+                    "X-Frame-OptionsDENY", "X-Frame-OptionsSAMEORIGIN");
+                return find_static_response_header(headers, value);
             }
             if (name == "Referrer-Policy") {
-                if (value == "strict-origin-when-cross-origin") {
-                    return static_response_header(referrer_policy_strict_origin, 15, 0);
-                }
-                if (value == "no-referrer") {
-                    return static_response_header(referrer_policy_no_referrer, 15, 0);
-                }
+                static constexpr auto headers = static_response_headers("Referrer-Policy", 0,
+                    "Referrer-Policystrict-origin-when-cross-origin", "Referrer-Policyno-referrer");
+                return find_static_response_header(headers, value);
             }
             if (name == "Accept-Encoding") {
-                if (value == "gzip, deflate, br, zstd") {
-                    return static_response_header(accept_encoding_all, 15, 0);
-                }
-                if (value == "identity") {
-                    return static_response_header(accept_encoding_identity, 15, 0);
-                }
+                static constexpr auto headers = static_response_headers("Accept-Encoding", 0,
+                    "Accept-Encodinggzip, deflate, br, zstd", "Accept-Encodingidentity");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
-        case 16:
-            if (name == "X-XSS-Protection" && value == "0") {
-                return static_response_header(x_xss_protection_zero, 16, 0);
+        case std::string_view("X-XSS-Protection").size():
+            if (name == "X-XSS-Protection") {
+                static constexpr auto headers = static_response_headers("X-XSS-Protection", 0, "X-XSS-Protection0");
+                return find_static_response_header(headers, value);
             }
-            if (name == "Capsule-Protocol" && value == "?1") {
-                return static_response_header(capsule_protocol_true, 16, 0);
-            }
-            return std::nullopt;
-        case 17:
-            if (name == "X-RateLimit-Reset" && value == "1") {
-                return static_response_header(x_ratelimit_reset_one, 17, 0);
+            if (name == "Capsule-Protocol") {
+                static constexpr auto headers = static_response_headers("Capsule-Protocol", 0, "Capsule-Protocol?1");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
-        case 18:
-            if (name == "Permissions-Policy" &&
-                value == "geolocation=(), microphone=(), camera=()") {
-                return static_response_header(permissions_policy_default, 18, 0);
+        case std::string_view("X-RateLimit-Reset").size():
+            if (name == "X-RateLimit-Reset") {
+                static constexpr auto headers = static_response_headers("X-RateLimit-Reset", 0, "X-RateLimit-Reset1");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
-        case 21:
-            if (name == "X-RateLimit-Remaining" && value == "0") {
-                return static_response_header(x_ratelimit_remaining_zero, 21, 0);
+        case std::string_view("Permissions-Policy").size():
+            if (name == "Permissions-Policy") {
+                static constexpr auto headers = static_response_headers("Permissions-Policy", 0,
+                    "Permissions-Policygeolocation=(), microphone=(), camera=()");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
-        case 22:
-            if (name == "X-Content-Type-Options" && value == "nosniff") {
-                return static_response_header(x_content_type_options_nosniff, 22, 0);
+        case std::string_view("X-RateLimit-Remaining").size():
+            if (name == "X-RateLimit-Remaining") {
+                static constexpr auto headers = static_response_headers("X-RateLimit-Remaining", 0, "X-RateLimit-Remaining0");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
-        case 23:
+        case std::string_view("X-Content-Type-Options").size():
+            if (name == "X-Content-Type-Options") {
+                static constexpr auto headers = static_response_headers("X-Content-Type-Options", 0, "X-Content-Type-Optionsnosniff");
+                return find_static_response_header(headers, value);
+            }
+            return std::nullopt;
+        case std::string_view("Content-Security-Policy").size():
             if (name == "Content-Security-Policy") {
-                if (value == "default-src 'self'") {
-                    return static_response_header(content_security_policy_self, 23, 0);
-                }
-                if (value == "default-src 'none'") {
-                    return static_response_header(content_security_policy_none, 23, 0);
-                }
+                static constexpr auto headers = static_response_headers("Content-Security-Policy", 0,
+                    "Content-Security-Policydefault-src 'self'", "Content-Security-Policydefault-src 'none'");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
-        case 25:
-            if (name == "Strict-Transport-Security" &&
-                value == "max-age=31536000; includeSubDomains") {
-                return static_response_header(strict_transport_security_default, 25, 0);
+        case std::string_view("Strict-Transport-Security").size():
+            if (name == "Strict-Transport-Security") {
+                static constexpr auto headers = static_response_headers("Strict-Transport-Security", 0,
+                    "Strict-Transport-Securitymax-age=31536000; includeSubDomains");
+                return find_static_response_header(headers, value);
             }
             return std::nullopt;
         default:

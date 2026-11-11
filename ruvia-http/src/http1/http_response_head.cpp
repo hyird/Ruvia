@@ -10,12 +10,12 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_content_length.h"
 #include "field/http_connection_fields.h"
+#include "field/http_date_calendar.h"
 #include "response/http_final_response_control_plan.h"
+#include "response/http_framed_response_head_plan.h"
 #include "response/http_response_header_state.h"
 #include "response/http_response_header_storage.h"
-#include "server/http_date_cache.h"
 #include "util/http_wire_sink.h"
 
 namespace ruvia::detail {
@@ -24,28 +24,16 @@ namespace {
 
 inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-Encoding: chunked\r\n";
 
-[[nodiscard]] std::optional<std::uint64_t> explicit_content_length(const http_response& response) {
-    if (!response_has_known_header(response, response_header_content_length)) {
-        return std::nullopt;
-    }
-    http_content_length_state state;
-    if (state.parse_field(http_response_header_state_access::known_header_value(response.headers(), response_header_content_length)) !=
-        http_content_length_parse_status::ok) {
-        throw http1_response_head_error("invalid explicit HTTP response Content-Length");
-    }
-    return state.value();
-}
-
 inline constexpr std::string_view content_length_name = "Content-Length";
 
 // Every field line was validated when it was inserted into the response
 // (name, value, per-field grammar, forbidden fields, singletons). Only the
 // rules that span several lines or depend on this head's framing remain.
 [[nodiscard]] bool is_valid_http1_emitted_response_header(std::string_view name, std::string_view value,
-    std::uint32_t known_bit, bool trailer_header_allowed, http_connection_options& connection_options,
+    bool trailer_header_allowed, http_connection_options& connection_options,
     http_upgrade_protocols& upgrade_protocols) noexcept {
-    const auto kind = classify_response_field(name, known_bit);
-    if (kind == request_header_kind::trailer) {
+    const auto kind = classify_http_field(name);
+    if (kind == http_field_kind::trailer) {
         return trailer_header_allowed || http_trim_ows(value).empty();
     }
     return parse_http_response_control_field(kind, value, connection_options, upgrade_protocols) ==
@@ -116,13 +104,22 @@ namespace ruvia {
 void append_http1_response_head(
     const http_response& response, http_response_head_buffer& head, const http1_response_head_plan& plan) {
     const auto body_plan = plan.body_plan();
-    if (response.status() != body_plan.response_status()) {
-        throw std::invalid_argument("HTTP/1 response plan status does not match response");
-    }
     const auto* buffered = plan.buffered();
-    if (buffered != nullptr &&
-        buffered->content_length() != body_plan.buffered_representation_length(response)) {
-        throw std::invalid_argument("HTTP/1 response plan representation does not match response");
+    const auto content_length_plan = buffered != nullptr
+                                         ? detail::http_framed_buffered_response_head_plan(body_plan, buffered->content_length(), response)
+                                         : detail::http_framed_streaming_response_head_plan(body_plan, response);
+    const auto* framed = std::get_if<detail::http_framed_response_head_plan>(&content_length_plan);
+    if (framed == nullptr) {
+        switch (std::get<detail::http_framed_response_head_plan_error>(content_length_plan)) {
+            case detail::http_framed_response_head_plan_error::invalid_content_length:
+                throw http1_response_head_error("invalid explicit HTTP response Content-Length");
+            case detail::http_framed_response_head_plan_error::response_status_mismatch:
+                throw std::invalid_argument("HTTP/1 response plan status does not match response");
+            case detail::http_framed_response_head_plan_error::response_representation_mismatch:
+                throw std::invalid_argument("HTTP/1 response plan representation does not match response");
+            case detail::http_framed_response_head_plan_error::connect_tunnel_required:
+                throw http1_response_head_error("HTTP CONNECT tunnel response required");
+        }
     }
     if (!detail::response_transfer_encoding_replaceable(response)) {
         throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
@@ -134,30 +131,13 @@ void append_http1_response_head(
         throw http1_response_head_error("HTTP/1.0 response cannot use chunked Transfer-Encoding");
     }
     const bool emit_chunked_transfer_encoding = chunked_payload_plan;
-    // A HEAD handler may describe the GET representation without producing it.
-    // Its empty suppressed body then has no length of its own, so the declared
-    // Content-Length is the only truthful value, and without one the field is
-    // omitted rather than claiming an empty GET (RFC 9110 section 8.6).
+    // HTTP/1 alone can frame a stream with chunked coding or connection close.
+    // Those delimiters replace Content-Length except suppressed HEAD metadata.
+    const auto content_length = emit_chunked_transfer_encoding ||
+                                        (plan.close_delimited_stream() != nullptr && !body_plan.body_suppressed())
+                                    ? std::nullopt
+                                    : framed->content_length();
     const auto known_bits = detail::response_known_header_bits(response);
-    const bool suppressed_empty_buffered_body =
-        buffered != nullptr && body_plan.body_suppressed() && body_plan.status_allows_body() &&
-        body_plan.explicit_content_length_allowed() && buffered->content_length() == 0 &&
-        (response.has_head_metadata_body() ||
-            (known_bits & detail::response_header_content_length) != 0);
-    const bool auto_content_length_owned_by_writer =
-        body_plan.auto_content_length_allowed() && !emit_chunked_transfer_encoding &&
-        !suppressed_empty_buffered_body && (buffered != nullptr || !body_plan.status_allows_body());
-    const bool explicit_content_length_allowed =
-        body_plan.explicit_content_length_allowed() && !emit_chunked_transfer_encoding &&
-        !auto_content_length_owned_by_writer &&
-        (plan.close_delimited_stream() == nullptr || body_plan.body_suppressed());
-    const auto declared_content_length =
-        (explicit_content_length_allowed || suppressed_empty_buffered_body) &&
-                (known_bits & detail::response_header_content_length) != 0
-            ? detail::explicit_content_length(response)
-            : std::nullopt;
-    const bool emit_content_length =
-        auto_content_length_owned_by_writer || declared_content_length.has_value();
 
     const auto reason_phrase = http_reason_phrase(response_status);
     const auto date_header = (known_bits & detail::response_header_date) == 0
@@ -170,12 +150,8 @@ void append_http1_response_head(
     // canonicalized to zero for both buffered and streaming heads.
     std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
     const auto content_length_value =
-        emit_content_length
-            ? http_format_unsigned(content_length_buffer,
-                  declared_content_length.value_or(
-                      body_plan.status_allows_body()
-                          ? (buffered != nullptr ? buffered->content_length() : std::uint64_t{0})
-                          : std::uint64_t{0}))
+        content_length.has_value()
+            ? http_format_unsigned(content_length_buffer, *content_length)
             : std::string_view{};
 
     // Measure the exact emitted head before touching reusable output storage.
@@ -196,7 +172,7 @@ void append_http1_response_head(
             known_bit == detail::response_header_content_length) {
             continue;
         }
-        if (!detail::is_valid_http1_emitted_response_header(header.name(), header.value(), known_bit,
+        if (!detail::is_valid_http1_emitted_response_header(header.name(), header.value(),
                 emit_chunked_transfer_encoding, connection_options, upgrade_protocols)) {
             throw http1_response_head_error("invalid HTTP response header");
         }

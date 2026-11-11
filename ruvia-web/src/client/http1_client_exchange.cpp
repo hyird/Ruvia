@@ -19,7 +19,6 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_chunked_framing.h"
@@ -41,6 +40,7 @@
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
 #include "http/http_socket_tunnel_transport.h"
+#include "http/http_stream_end.h"
 #include "http/inline_http_header_views.h"
 #include "http/tls_tunnel_output.h"
 
@@ -236,18 +236,15 @@ task<void> http1_client_exchange::run(
     auto& connection = connection_;
     connection.end_idle();
     connection.transport_.reset_abort();
-    connection.generation_ = connection.generation_ + 1 == 0 ? 1 : connection.generation_ + 1;
+    next_nonzero_id(connection.generation_);
     struct exchange_generation final {
         http_client_connection& connection_;
-        http_client_response_state& response_;
         ~exchange_generation() {
-            ++connection_.generation_;
+            next_nonzero_id(connection_.generation_);
             connection_.http1_response_ = nullptr;
-            response_.cancellation_id_ = 0;
         }
-    } exchange_generation_value{connection, state_value};
-    worker_cancellation_registration cancellation(pool_.cancellation_target(), connection.cancellation_id_);
-    state_value.cancellation_id_ = cancellation.id();
+    } exchange_generation_value{connection};
+    http_client_response_cancellation cancellation(pool_.cancellation_target(), connection.cancellation_id_, state_value);
     // Bound for the exchange so a cancellation or shutdown stops the
     // response's output and wakes its producer waits.
     connection.http1_response_ = &state_value;

@@ -32,10 +32,6 @@ inline constexpr std::size_t hmac_max_input_size = static_cast<std::size_t>((std
     return 0;
 }
 
-// Writes the hmac_digest_size(digest) bytes of HMAC(key, message) to the front
-// of `output`. Returns false when key or message exceeds hmac_max_input_size,
-// `output` is too small, or OpenSSL fails; callers check the sizes first to
-// report them in their own terms.
 [[nodiscard]] constexpr const char* openssl_digest_name(hmac_digest digest) noexcept {
     switch (digest) {
         case hmac_digest::sha256:
@@ -48,6 +44,10 @@ inline constexpr std::size_t hmac_max_input_size = static_cast<std::size_t>((std
     return nullptr;
 }
 
+// Writes the hmac_digest_size(digest) bytes of HMAC(key, message) to the front
+// of `output`. Returns false when key or message exceeds hmac_max_input_size,
+// `output` is too small, or OpenSSL fails; callers check the sizes first to
+// report them in their own terms.
 [[nodiscard]] inline bool compute_hmac(
     hmac_digest digest, std::string_view key, std::string_view message, std::span<std::uint8_t> output) noexcept {
     const auto* const digest_name = openssl_digest_name(digest);

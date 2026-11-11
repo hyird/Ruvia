@@ -1093,6 +1093,7 @@ private:
         const http_framed_response_head_plan& head_plan, http2_end_stream end_stream,
         std::optional<std::uint64_t> content_length);
     void commit_connect_response_head(http2_stream_state& stream, bool terminal_remote_half);
+    void apply_response_priority(http2_stream_state& stream, const http_response_headers& headers);
     // Sends `bytes` (already clamped to both send windows) as DATA within this
     // call; nghttp2 copies them while the session drains.
     void send_data(std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream);

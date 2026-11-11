@@ -15,6 +15,8 @@
 
 #include "failing_memory_resource.h"
 
+using ruvia::test::failing_memory_resource;
+
 namespace {
 
 std::string materialize_multipart(const ruvia::http_multipart_byte_range_plan& plan, std::string_view payload_value) {

@@ -33,7 +33,7 @@ std::optional<std::string_view> negotiate_encoding(
     std::initializer_list<std::string_view> supported) {
     auto request = make_request("/", headers);
     std::optional<std::string_view> chosen;
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
         co_return;
     });
@@ -47,7 +47,7 @@ TEST(Ruvia, context_request_priority_combines_repeated_field_values_before_parsi
         {http_header_view{"Priority", "extra=\"alpha"}, http_header_view{"X-Other", "ignored"},
             http_header_view{"priority", "beta\", u=1, i"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         EXPECT_TRUE(context_value.req().priority().urgency_ == 1);
         EXPECT_TRUE(context_value.req().priority().incremental_);
         co_return;
@@ -57,7 +57,7 @@ TEST(Ruvia, context_request_priority_combines_repeated_field_values_before_parsi
 TEST(Ruvia, context_request_cookie_single_lookup_uses_last_duplicate) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1; b=2; a=3"}});
 
-    const auto response = context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    const auto response = ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto cookie = context_value.req().cookie("a");
         EXPECT_TRUE(cookie.has_value());
         EXPECT_EQ(cookie.value_or("missing"), std::string_view("3"));
@@ -70,7 +70,7 @@ TEST(Ruvia, context_request_cookie_single_lookup_uses_last_duplicate) {
 TEST(Ruvia, context_request_cookie_single_lookup_scans_repeated_cookie_fields) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1"}, http_header_view{"Cookie", "b=2"}});
 
-    const auto response = context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    const auto response = ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto cookie = context_value.req().cookie("a");
         EXPECT_TRUE(cookie.has_value());
         EXPECT_EQ(cookie.value_or("missing"), std::string_view("1"));
@@ -83,7 +83,7 @@ TEST(Ruvia, context_request_cookie_single_lookup_scans_repeated_cookie_fields) {
 TEST(Ruvia, context_request_cookie_fields_include_repeated_cookie_headers) {
     auto request = make_request("/", {http_header_view{"Cookie", "a=1"}, http_header_view{"Cookie", "b=2; a=3"}});
 
-    const auto response = context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    const auto response = ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto& cookies = context_value.req().cookie_fields();
         EXPECT_EQ(cookies.size(), std::size_t{3});
         if (cookies.size() == 3) {
@@ -108,7 +108,7 @@ TEST(Ruvia, context_request_cookie_fields_preserve_literal_syntax_and_case_sensi
         {http_header_view{"Cookie", "x=first; ignored; = unnamed; q=\"a;b\""},
             http_header_view{"X-Other", "unrelated=value"},
             http_header_view{"cOoKiE", "X=upper; x = last ; empty=;"}});
-    const auto response = context_request_test::with_context(request,
+    const auto response = ruvia::test::with_context(request,
         [](ruvia::context& context) -> ruvia::task<void> {
             EXPECT_EQ(context.req().cookie("x").value_or("missing"), "last");
             EXPECT_EQ(context.req().cookie("X").value_or("missing"), "upper");
@@ -145,7 +145,7 @@ TEST(Ruvia, context_request_cookie_fields_keep_all_values_across_growth_and_cach
     }
     auto request = make_request("/",
         {http_header_view{"Cookie", value}, http_header_view{"Cookie", "c0=latest; tail=end"}});
-    const auto response = context_request_test::with_context(request,
+    const auto response = ruvia::test::with_context(request,
         [](ruvia::context& context) -> ruvia::task<void> {
             ruvia::test::rejecting_memory_resource unrelated;
             unrelated.reject_allocations();
@@ -183,7 +183,7 @@ TEST(Ruvia, context_request_cookie_fields_distinguish_no_pairs_from_missing_valu
         if (include_header) {
             request.header("Cookie", "; ignored ; flag ;");
         }
-        const auto response = context_request_test::with_context(request,
+        const auto response = ruvia::test::with_context(request,
             [](ruvia::context& context) -> ruvia::task<void> {
                 EXPECT_TRUE(context.req().cookie_fields().empty());
                 EXPECT_FALSE(context.req().cookie("missing").has_value());
@@ -199,7 +199,7 @@ TEST(Ruvia, context_request_cookie_fields_distinguish_no_pairs_from_missing_valu
 TEST(Ruvia, context_request_query_accessors_agree_on_decoded_values) {
     auto request = make_request("/?a=first&b=2&a=one+two");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto query = context_value.req().query("a");
         EXPECT_TRUE(query.has_value());
         EXPECT_EQ(*query, std::string_view("one two"));
@@ -217,7 +217,7 @@ TEST(Ruvia, context_request_query_accessors_agree_on_decoded_values) {
 
 TEST(Ruvia, context_request_query_views_survive_multivalue_lookups) {
     auto request = make_request("/?z=first&%61=one+two&z=last&a=three&empty=&=unnamed");
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto scalar = context_value.req().query("a");
         const auto& fields = context_value.req().query_fields();
         const auto decoded = fields[1].value();
@@ -252,7 +252,7 @@ TEST(Ruvia, context_request_query_views_survive_multivalue_lookups) {
 TEST(Ruvia, context_request_query_reads_unencoded_fields) {
     auto request = make_request("/?tag=x&page=2");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto tag = context_value.req().query("tag");
         EXPECT_TRUE(tag.has_value());
         EXPECT_EQ(*tag, std::string_view("x"));
@@ -265,7 +265,7 @@ TEST(Ruvia, context_request_query_reads_unencoded_fields) {
 TEST(Ruvia, context_request_query_preserves_short_decoded_names_and_values) {
     auto request = make_request("/?%61=%31&%62=%32&%61=%33");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto& fields_value = context_value.req().query_fields();
         EXPECT_EQ(fields_value.size(), std::size_t{3});
         EXPECT_EQ(fields_value[0].name(), std::string_view("a"));
@@ -289,7 +289,7 @@ TEST(Ruvia, context_request_query_preserves_short_decoded_names_and_values) {
 TEST(Ruvia, context_request_query_list_uses_last_duplicate_like_single_lookup) {
     auto request = make_request("/?a=1&b=2&a=3");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         // Single-value lookup resolves a duplicate name to its LAST value.
         EXPECT_EQ(*context_value.req().query("a"), std::string_view("3"));
 
@@ -321,7 +321,7 @@ TEST(Ruvia, context_request_query_list_uses_last_duplicate_like_single_lookup) {
 TEST(Ruvia, context_request_queries_use_empty_span_only_for_missing_name) {
     auto request = make_request("/?empty=&flag&value=x");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto empty_value = context_value.req().queries("empty");
         EXPECT_EQ(empty_value.size(), std::size_t{1});
         EXPECT_TRUE(empty_value.front().empty());
@@ -344,7 +344,7 @@ TEST(Ruvia, context_request_negotiate_merges_multiple_accept_field_lines) {
         }
         auto request = make_request("/", headers);
         bool accepted = false;
-        (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+        (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
             accepted = context_value.req()
                            .negotiate(ruvia::context_request::negotiable_field::media_type, {media_type})
                            .has_value();
@@ -381,7 +381,7 @@ TEST(Ruvia, context_request_negotiate_merges_multiple_accept_field_lines) {
 TEST(Ruvia, context_request_header_lookup_uses_last_match) {
     auto request = make_request("/", {http_header_view{"X-Trace", "first"}, http_header_view{"x-trace", "second"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         EXPECT_EQ(context_value.req().header("X-Trace"), std::string_view("second"));
         co_return;
     });
@@ -390,7 +390,7 @@ TEST(Ruvia, context_request_header_lookup_uses_last_match) {
 TEST(Ruvia, context_request_header_lookup_is_case_insensitive_and_presence_aware) {
     auto request = make_request("/", {http_header_view{"X-Empty", ""}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto present_empty = context_value.req().header("x-EMPTY");
         EXPECT_TRUE(present_empty.has_value());
         EXPECT_TRUE(present_empty.value_or("missing").empty());
@@ -402,7 +402,7 @@ TEST(Ruvia, context_request_header_lookup_is_case_insensitive_and_presence_aware
 TEST(Ruvia, context_request_preserves_exact_extension_method_token) {
     auto request = make_request("/", {}, "PROPFIND");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         EXPECT_EQ(context_value.req().method(), std::string_view("PROPFIND"));
         EXPECT_TRUE(context_value.req().known_method() == ruvia::http_known_method::unknown);
         co_return;
@@ -412,7 +412,7 @@ TEST(Ruvia, context_request_preserves_exact_extension_method_token) {
 TEST(Ruvia, context_request_header_fields_enumerate_every_field_in_order) {
     auto request = make_request("/", {http_header_view{"X-Trace", "a"}, http_header_view{"X-Trace", "b"}, http_header_view{"X-Other", "c"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto& headers = context_value.req().header_fields();
         // Enumeration preserves spelling; both lookup surfaces ignore ASCII case.
         EXPECT_EQ(headers.count("x-trace"), std::size_t(2));
@@ -433,7 +433,7 @@ TEST(Ruvia, context_request_header_fields_enumerate_every_field_in_order) {
 TEST(Ruvia, context_request_query_fields_enumerate_repeated_names) {
     auto request = make_request("/?tag=x&tag=y&page=2");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto& queries = context_value.req().query_fields();
         EXPECT_EQ(queries.size(), std::size_t(3));
         EXPECT_EQ(queries.count("tag"), std::size_t(2));
@@ -471,7 +471,7 @@ TEST(Ruvia, context_request_negotiate_encoding_preserves_coding_aliases) {
 TEST(Ruvia, context_request_negotiate_picks_the_client_preferred_media_type) {
     auto request = make_request("/", {http_header_view{"Accept", "text/html;q=0.3, application/json;q=0.9"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         // Server order lists html first, but the client prefers json.
         const std::string_view supported[] = {"text/html", "application/json"};
         const auto chosen =
@@ -491,7 +491,7 @@ TEST(Ruvia, context_request_negotiate_picks_the_client_preferred_media_type) {
 TEST(Ruvia, context_request_negotiate_reports_no_acceptable_representation) {
     auto request = make_request("/", {http_header_view{"Accept", "image/png"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"text/html", "application/json"};
         // nullopt is the 406 signal, which is why this cannot fall back to front().
         EXPECT_TRUE(!context_value.req()
@@ -504,7 +504,7 @@ TEST(Ruvia, context_request_negotiate_reports_no_acceptable_representation) {
 TEST(Ruvia, context_request_negotiate_without_the_field_takes_server_preference) {
     auto request = make_request("/");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"application/json", "text/html"};
         const auto chosen =
             context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, supported);
@@ -517,7 +517,7 @@ TEST(Ruvia, context_request_negotiate_without_the_field_takes_server_preference)
 TEST(Ruvia, context_request_negotiate_language_uses_basic_prefix_filtering) {
     auto request = make_request("/", {http_header_view{"Accept-Language", "fr;q=0.4, en;q=0.8"}});
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         // RFC 4647 basic filtering: the range "en" matches the tag "en-US".
         const std::string_view supported[] = {"fr-CA", "en-US"};
         const auto chosen =
@@ -532,7 +532,7 @@ TEST(Ruvia, context_request_negotiate_honours_explicit_zero_quality_exclusion) {
     auto request = make_request("/", {http_header_view{"Accept-Encoding", "*, gzip;q=0"}});
     // "*" accepts everything except the explicitly excluded, more specific tag.
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"gzip", "br"};
         const auto chosen =
             context_value.req().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
@@ -546,7 +546,7 @@ TEST(Ruvia, context_request_negotiate_folds_repeated_field_lines) {
     auto request = make_request("/", {http_header_view{"Accept-Language", "de;q=0.2"}, http_header_view{"Accept-Language", "ja;q=0.9"}});
     // RFC 9110 5.3: equivalent to one comma-joined value.
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"de", "ja"};
         const auto chosen =
             context_value.req().negotiate(ruvia::context_request::negotiable_field::language, supported);
@@ -560,7 +560,7 @@ TEST(Ruvia, context_request_query_decodes_names_and_values_in_wire_order) {
     auto request = make_request(
         "/?%61=one+two&%62=three%20four&%61=five+six&plain=borrowed");
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto& fields_value = context_value.req().query_fields();
         EXPECT_EQ(fields_value.size(), std::size_t{4});
         EXPECT_EQ(fields_value[0].name(), std::string_view("a"));
@@ -598,7 +598,7 @@ TEST(Ruvia, context_request_query_preserves_many_decoded_values) {
 
     auto request = make_request(target);
 
-    (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto& fields_value = context_value.req().query_fields();
         const auto values = context_value.req().queries("tag");
         EXPECT_EQ(fields_value.size(), count);

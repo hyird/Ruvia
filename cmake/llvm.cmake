@@ -1,7 +1,4 @@
 set(RUVIA_MUSL_ROOT "$ENV{RUVIA_MUSL_ROOT}" CACHE PATH "Prebuilt LLVM musl toolchain")
-if(NOT RUVIA_MUSL_ROOT AND NOT "$ENV{FLEXEDGE_MUSL_ROOT}" STREQUAL "")
-    set(RUVIA_MUSL_ROOT "$ENV{FLEXEDGE_MUSL_ROOT}" CACHE PATH "Prebuilt LLVM musl toolchain" FORCE)
-endif()
 if(NOT RUVIA_MUSL_ROOT)
     find_program(RUVIA_MISE_EXECUTABLE mise REQUIRED)
     execute_process(COMMAND "${RUVIA_MISE_EXECUTABLE}" where github:cross-tools/clang-cross

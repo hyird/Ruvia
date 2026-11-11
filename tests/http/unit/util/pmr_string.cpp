@@ -6,48 +6,27 @@
 
 #include "ruvia/http/http_pmr_string.h"
 
-namespace {
+#include "memory_resource_fixture.h"
 
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t live_bytes_{0};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        void* result_value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-        live_bytes_ += bytes_value;
-        return result_value;
-    }
-
-    void do_deallocate(void* address, std::size_t bytes_value, std::size_t alignment) override {
-        live_bytes_ -= bytes_value;
-        std::pmr::new_delete_resource()->deallocate(address, bytes_value, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-
-}  // namespace
+using ruvia::test::counting_memory_resource;
 
 TEST(Ruvia, pmr_string_clear_returns_large_storage_and_retains_small_storage) {
-    counting_resource resource;
+    counting_memory_resource resource;
     {
         std::pmr::string buffer(&resource);
-        const auto empty_bytes = resource.live_bytes_;
+        const auto empty_bytes = resource.live_bytes();
         buffer.resize(8192);
         EXPECT_EQ(buffer.size(), std::size_t{8192});
-        EXPECT_TRUE(resource.live_bytes_ > empty_bytes);
+        EXPECT_TRUE(resource.live_bytes() > empty_bytes);
         ruvia::http_clear_pmr_string_retaining_small(buffer);
         EXPECT_TRUE(buffer.empty());
-        EXPECT_EQ(resource.live_bytes_, empty_bytes);
+        EXPECT_EQ(resource.live_bytes(), empty_bytes);
 
         buffer.resize(32);
-        const auto retained = resource.live_bytes_;
+        const auto retained = resource.live_bytes();
         EXPECT_TRUE(retained > empty_bytes);
         ruvia::http_clear_pmr_string_retaining_small(buffer);
-        EXPECT_EQ(resource.live_bytes_, retained);
+        EXPECT_EQ(resource.live_bytes(), retained);
     }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 }

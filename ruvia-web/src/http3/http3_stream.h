@@ -16,10 +16,10 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_priority.h"
+#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/web/detail/router/route_handlers.h"
@@ -193,22 +193,20 @@ public:
     // The request content ended (the peer's FIN, or no content at all).
     void mark_request_ended() noexcept {
         request_ended_ = true;
-        request_body_open_ = false;
+        request_body_deadline_.close();
     }
     [[nodiscard]] bool request_ended() const noexcept {
         return request_ended_;
     }
 
     void mark_request_body_open(std::int64_t now_ms) noexcept {
-        request_body_open_ = true;
-        request_body_opened_ms_ = now_ms;
-        request_body_progress_ms_ = now_ms;
+        request_body_deadline_.open(now_ms);
     }
     void note_request_body_progress(std::int64_t now_ms) noexcept {
-        request_body_progress_ms_ = now_ms;
+        request_body_deadline_.progress(now_ms);
     }
-    void close_request_body_timing() noexcept {
-        request_body_open_ = false;
+    void mark_request_body_closed() noexcept {
+        request_body_deadline_.close();
     }
     // The request body is still open and went `inactivity` without DATA, or
     // `completion` since it opened (request_body_timeout_ and
@@ -216,9 +214,7 @@ public:
     [[nodiscard]] bool request_body_overdue(std::int64_t now_ms,
         const std::optional<timeout_duration>& inactivity,
         const std::optional<timeout_duration>& completion) const noexcept {
-        return request_body_open_ &&
-               ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->value().count()) ||
-                   (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->value().count()));
+        return request_body_deadline_.overdue(now_ms, inactivity, completion);
     }
 
     void mark_tunnel() noexcept {
@@ -299,9 +295,7 @@ private:
     std::size_t received_bytes_{0};
     std::optional<http_request_body_failure> body_failure_{};
     std::optional<multiplexed_stream_signal> signal_;
-    std::int64_t request_body_opened_ms_{0};
-    std::int64_t request_body_progress_ms_{0};
-    bool request_body_open_{false};
+    multiplexed_request_body_deadline request_body_deadline_;
     bool request_ended_{false};
     bool tunnel_{false};
     bool response_committed_{false};

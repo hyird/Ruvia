@@ -7,7 +7,7 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/multipart_parser.h"
 
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 
 namespace ruvia {
 

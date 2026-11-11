@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -16,6 +15,8 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
+
+#include "util/inline_text_concat.h"
 
 namespace ruvia::detail {
 namespace {
@@ -58,44 +59,25 @@ void add_vary_tokens(http_response& response, const std::string_view* tokens, st
 // Validates Origin, Access-Control-Request-Method and the complete
 // Access-Control-Request-Headers list, folding reflected header names in one pass.
 struct cors_request_fields final {
-    static constexpr std::size_t inline_capacity = 256;
-
     explicit cors_request_fields(std::pmr::memory_resource* resource)
-        : overflow_(resource) {}
+        : reflected_headers_(resource) {}
 
     void append_header_name(std::string_view name) {
-        const std::string_view separator =
-            (inline_size_ != 0 || using_overflow_) ? std::string_view(", ") : std::string_view{};
-        const auto needed = separator.size() + name.size();
-        if (!using_overflow_) {
-            if (needed <= inline_.size() - inline_size_) {
-                if (!separator.empty()) {
-                    std::memcpy(inline_.data() + inline_size_, separator.data(), separator.size());
-                    inline_size_ += separator.size();
-                }
-                std::memcpy(inline_.data() + inline_size_, name.data(), name.size());
-                inline_size_ += name.size();
-                return;
-            }
-            overflow_.reserve((std::max)(inline_size_ + needed, inline_.size() * 2));
-            overflow_.append(inline_.data(), inline_size_);
-            using_overflow_ = true;
+        if (reflected_headers_.size() != 0) {
+            reflected_headers_.append(", ");
         }
-        overflow_.append(separator);
-        overflow_.append(name);
+        reflected_headers_.append(name);
     }
 
-    [[nodiscard]] std::string_view reflected_headers() const noexcept {
-        return using_overflow_ ? std::string_view(overflow_)
-                               : std::string_view(inline_.data(), inline_size_);
+    [[nodiscard]] std::string_view reflected_headers() const& noexcept RUVIA_LIFETIMEBOUND {
+        return reflected_headers_.view();
     }
+
+    std::string_view reflected_headers() const&& = delete;
 
     std::optional<std::string_view> origin_{};
     std::optional<std::string_view> requested_method_{};
-    std::array<char, inline_capacity> inline_{};
-    std::pmr::string overflow_;
-    std::size_t inline_size_{0};
-    bool using_overflow_{false};
+    inline_text_buffer<256> reflected_headers_;
 };
 
 [[nodiscard]] bool scan_cors_request_fields(

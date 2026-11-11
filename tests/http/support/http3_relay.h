@@ -17,7 +17,7 @@
 
 #include "ruvia/http/http3_connection.h"
 
-namespace ruvia::testing {
+namespace ruvia::test {
 
 // Stream data delivered to the peer whose QUIC acknowledgement has not been
 // reported back to the sending codec yet.
@@ -106,6 +106,8 @@ struct http3_headers_record final {
     std::int64_t stream_id_{-1};
     std::vector<http3_field_record> fields_;
     bool stream_ended_{false};
+    std::optional<http_received_status> status_;
+    bool trailers_{false};
 };
 
 // Owned copy of every event a codec published, in arrival order. sequence_
@@ -116,7 +118,7 @@ class http3_event_log final {
 public:
     void operator()(const http3_event& event) {
         if (const auto* headers = std::get_if<http3_headers_event>(&event)) {
-            http3_headers_record record{headers->stream_id_, {}, headers->stream_ended_};
+            http3_headers_record record{headers->stream_id_, {}, headers->stream_ended_, headers->status_, headers->trailers_};
             for (const auto& field : headers->fields_) {
                 record.fields_.push_back({std::string(field.name()), std::string(field.value())});
             }
@@ -209,9 +211,10 @@ public:
     }
 
     // Submits a request head on `stream_id` and delivers it to the server.
-    [[nodiscard]] bool send_request(std::int64_t stream_id, std::span<const http3_field_view> fields,
+    [[nodiscard]] bool send_request(std::int64_t stream_id, http3_regular_request_head_view head,
         bool end_stream, http3_event_log& server_log) {
-        return client_.submit_request(stream_id, fields, end_stream) == http3_status::accepted &&
+        head.streaming_ = !end_stream;
+        return client_.submit_request_head(stream_id, head) == http3_status::accepted &&
                to_server(server_log);
     }
 
@@ -220,4 +223,4 @@ public:
     std::uint64_t timestamp_{1};
 };
 
-}  // namespace ruvia::testing
+}  // namespace ruvia::test

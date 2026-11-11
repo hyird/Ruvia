@@ -120,10 +120,10 @@ TEST(Ruvia, response_public_cookie_and_metadata_capabilities) {
     EXPECT_EQ(response.header("Content-Range").value_or(""), "bytes 5-7/10");
     EXPECT_EQ(response.header("Vary").value_or(""), "Accept-Encoding");
     for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { response.content_range(invalid, 3, 10); }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { response.content_range(5, invalid, 10); }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { response.content_range(5, 3, invalid); }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { response.content_range_unsatisfied(invalid); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { response.content_range(invalid, 3, 10); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { response.content_range(5, invalid, 10); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { response.content_range(5, 3, invalid); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { response.content_range_unsatisfied(invalid); }));
     }
     EXPECT_EQ(response.header("Content-Range").value_or(""), "bytes 5-7/10");
     response.add_vary_token(" Accept-Encoding ");

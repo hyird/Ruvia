@@ -76,7 +76,7 @@ std::vector<wire_frame> parse_frames(std::string_view output) {
 }
 
 std::vector<wire_frame> take_frames(ruvia::http2_connection& connection) {
-    return parse_frames(ruvia::testing::drain_output(connection));
+    return parse_frames(ruvia::test::drain_output(connection));
 }
 
 bool has_frame(const std::vector<wire_frame>& frames, ruvia::http2_frame_type type, std::uint32_t stream_id) {
@@ -152,7 +152,7 @@ std::optional<ruvia::http2_request_head_event> take_request_head(ruvia::http2_co
 
 ruvia::http2_connection started_server(std::pmr::memory_resource* resource) {
     auto server = ruvia::http2_connection::server({.resource_ = resource});
-    (void)ruvia::testing::drain_output(server);
+    (void)ruvia::test::drain_output(server);
     return server;
 }
 
@@ -472,7 +472,7 @@ TEST(Ruvia, http2_server_graceful_drain_bounds_streams_opened_before_ping_ack) {
 TEST(Ruvia, http2_client_graceful_drain_sends_final_goaway_at_once) {
     std::pmr::unsynchronized_pool_resource resource;
     auto client = ruvia::http2_connection::client({.resource_ = &resource});
-    (void)ruvia::testing::drain_output(client);
+    (void)ruvia::test::drain_output(client);
     client.begin_drain();
     EXPECT_TRUE(client.drain_final());
     const auto frames = take_frames(client);
@@ -593,7 +593,7 @@ TEST(Ruvia, http2_enable_connect_protocol_values_are_validated_for_both_roles) {
 
     for (const std::string_view value : {std::string_view("\x00\x00\x00\x02", 4), std::string_view("\x00\x00\x00\x00", 4)}) {
         auto client = ruvia::http2_connection::client({.resource_ = &resource});
-        (void)ruvia::testing::drain_output(client);
+        (void)ruvia::test::drain_output(client);
         std::pmr::string from_server(&resource);
         append_frame(from_server, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x08\x00\x00\x00\x01", 6));
         std::pmr::string entry("\x00\x08", 2, &resource);

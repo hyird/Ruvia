@@ -70,7 +70,7 @@ TEST(Ruvia, nullable_null_does_not_apply_default) {
 
 TEST(Ruvia, required_string_rejects_json_null) {
     std::pmr::monotonic_buffer_resource resource;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<required_remark_request>(R"({"remark":null})", {.resource_ = &resource});
     }));
 }
@@ -95,7 +95,7 @@ TEST(Ruvia, json_value_model_fields_accept_any_json_token) {
 
 TEST(Ruvia, json_object_model_field_rejects_non_objects) {
     std::pmr::monotonic_buffer_resource resource;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<json_bag_request>(R"({"object":[1]})", {.resource_ = &resource});
     }));
 

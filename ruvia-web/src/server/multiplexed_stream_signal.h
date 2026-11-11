@@ -20,9 +20,9 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
@@ -34,19 +34,106 @@
 #include "context/http_interim_response_output.h"
 #include "http/http_cors.h"
 #include "http/http_protocol_error_info.h"
+#include "http/http_stream_end.h"
+#include "server/connection_scanner.h"
 #include "server/http_request_admission.h"
 #include "server/http_response_stream_dispatch.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
 #include "server/response_file_source.h"
-#include "tls/tls_stream_end.h"
 
 namespace ruvia {
 class context;
 }
 
 namespace ruvia::detail {
+
+// Inactivity belongs to the connection; request bodies and output waits have
+// independent per-stream deadlines.
+[[nodiscard]] inline connection_scanner::phase multiplexed_inactivity_phase(bool peer_settings_received,
+    bool header_block_in_progress, bool stream_active, bool tunnel_active) noexcept {
+    if (!peer_settings_received || header_block_in_progress) {
+        return connection_scanner::phase::reading_initial;
+    }
+    if (tunnel_active) {
+        return connection_scanner::phase::long_lived;
+    }
+    return stream_active ? connection_scanner::phase::idle : connection_scanner::phase::awaiting_stream;
+}
+
+class multiplexed_request_body_deadline final {
+public:
+    void open(std::int64_t now_ms) noexcept {
+        open_ = true;
+        opened_ms_ = now_ms;
+        progress_ms_ = now_ms;
+    }
+    void progress(std::int64_t now_ms) noexcept {
+        progress_ms_ = now_ms;
+    }
+    void close() noexcept {
+        open_ = false;
+    }
+    [[nodiscard]] bool overdue(std::int64_t now_ms,
+        const std::optional<timeout_duration>& inactivity,
+        const std::optional<timeout_duration>& completion) const noexcept {
+        return open_ &&
+               ((inactivity.has_value() && now_ms - progress_ms_ >= inactivity->value().count()) ||
+                   (completion.has_value() && now_ms - opened_ms_ >= completion->value().count()));
+    }
+
+private:
+    std::int64_t opened_ms_{0};
+    std::int64_t progress_ms_{0};
+    bool open_{false};
+};
+
+// A timeout drain must end the connection at its bound; an ordinary drain only
+// finalizes GOAWAY. Protocol owners keep their own wake/close ordering.
+class multiplexed_drain_timer final {
+public:
+    void request_timeout() noexcept {
+        timeout_drain_ = true;
+    }
+    [[nodiscard]] bool needed(bool terminated, bool final_boundary) const noexcept {
+        return !timer_.registered() && !terminated && (!final_boundary || timeout_drain_);
+    }
+    void mark_expired() noexcept {
+        expired_ = timeout_drain_;
+    }
+    [[nodiscard]] bool expired() const noexcept {
+        return expired_;
+    }
+    void cancel() noexcept {
+        timer_.cancel();
+    }
+
+    template <typename duration_type, typename expired_type, typename failure_type>
+    void arm(const worker_handle& worker_value, duration_type bound,
+        expired_type on_expired, failure_type on_failure) noexcept {
+        try {
+            const auto status = worker_value.schedule_timer(timer_,
+                worker_timer_deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
+                    // Cancellation belongs to worker shutdown, which closes the session.
+                    if (outcome == worker_timer_outcome::expired) {
+                        on_expired();
+                    }
+                });
+            if (status == worker_timer_schedule_status::worker_stopping) {
+                on_expired();
+            }
+        } catch (...) {
+            on_failure();
+        }
+    }
+
+private:
+    bool timeout_drain_{false};
+    bool expired_{false};
+    // Unregister before the state captured by its completion can retire.
+    worker_timer_registration timer_;
+};
 
 // Connection-owned terminal state shared by every Web capability derived from
 // one multiplexed HTTP/2 or HTTP/3 session. Stream waits that must end on
@@ -558,13 +645,6 @@ public:
             derived().require_live();
             co_await signal_.wait();
         }
-    }
-
-    [[nodiscard]] task<std::error_code> write_bytes(
-        std::string_view bytes_value, websocket_transport_disposition disposition) {
-        return derived().write_bytes(bytes_value,
-            disposition == websocket_transport_disposition::end_transport ? http_stream_end::end
-                                                                          : http_stream_end::keep_open);
     }
 
 protected:

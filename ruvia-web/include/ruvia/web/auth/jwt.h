@@ -186,7 +186,6 @@ public:
 
 private:
     friend struct detail::jwt_payload_access;
-    friend jwt_payload jwt_verify(const jwt_verify_options&);
 
     explicit jwt_payload(std::pmr::memory_resource* resource);
 

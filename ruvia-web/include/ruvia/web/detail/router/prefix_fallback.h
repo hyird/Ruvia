@@ -9,9 +9,9 @@
 
 namespace ruvia::detail {
 
-// One canonical spelling is shared by application, test_app and route_table. router_impl
-// receives the already-normalized registrations from the public configuration
-// facades and keeps the final table's validation as its defensive boundary.
+// One canonical spelling is shared by application, test_app and route_table.
+// router_impl receives the already-normalized registrations from the public
+// configuration facades.
 // A trailing slash does not create a different path scope; accepting both
 // spellings at one layer and not another makes duplicate fallback handlers
 // order-dependent and lets tests exercise a different route graph.

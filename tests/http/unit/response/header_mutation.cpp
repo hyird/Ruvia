@@ -13,6 +13,8 @@
 
 #include "failing_memory_resource.h"
 
+using ruvia::test::failing_memory_resource;
+
 namespace {
 
 struct field_names final {

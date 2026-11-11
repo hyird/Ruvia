@@ -5,7 +5,6 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
-#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -108,90 +107,12 @@ public:
             std::pmr::polymorphic_allocator<detail::root_task_state<t_type>>(process_resource()),
             handle(), state_);
         const auto bound_executor = executor();
-        // drain() destroys remaining queue closures without invoking them when
-        // a posted task throws. Own that destructor path so wait()/get() cannot
-        // hang and an unobserved failure still reaches the loop sink.
-        struct launch_guard final {
-            std::optional<task<t_type>> task_;
-            std::shared_ptr<detail::root_task_state<t_type>> completion_;
-
-            launch_guard(task<t_type> task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept
-                : task_(std::move(task_value)),
-                  completion_(std::move(state_value)) {}
-            launch_guard(const launch_guard&) = delete;
-            launch_guard& operator=(const launch_guard&) = delete;
-            launch_guard(launch_guard&& other) noexcept
-                : task_(std::move(other.task_)),
-                  completion_(std::move(other.completion_)) {}
-            launch_guard& operator=(launch_guard&&) = delete;
-            ~launch_guard() {
-                // A rejected or discarded launch still owns a cold frame.
-                // Retire it before waking a caller that may reclaim its inputs.
-                task_.reset();
-                if (completion_ != nullptr) {
-                    completion_->completion().complete_failure(
-                        std::make_exception_ptr(std::runtime_error("event loop is stopping")));
-                }
-            }
-            void release() noexcept {
-                task_.reset();
-                completion_.reset();
-            }
-        };
-        struct root_completion final {
-            using executor_type = asio::io_context::executor_type;
-
-            executor_type executor_;
-            std::shared_ptr<detail::root_task_state<t_type>> completion_;
-            std::shared_ptr<void> retirement_lease_;
-            bool delivered_{false};
-
-            root_completion(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value,
-                std::shared_ptr<void> lease_value) noexcept
-                : executor_(std::move(executor_value)),
-                  completion_(std::move(state_value)),
-                  retirement_lease_(std::move(lease_value)) {}
-            root_completion(const root_completion&) = delete;
-            root_completion& operator=(const root_completion&) = delete;
-            root_completion(root_completion&& other) noexcept
-                : executor_(std::move(other.executor_)),
-                  completion_(std::move(other.completion_)),
-                  retirement_lease_(std::move(other.retirement_lease_)),
-                  delivered_(std::exchange(other.delivered_, false)) {}
-            root_completion& operator=(root_completion&&) = delete;
-            ~root_completion() {
-                if (delivered_) {
-                    completion_->completion().publish_completion();
-                }
-            }
-            [[nodiscard]] executor_type get_executor() const noexcept {
-                return executor_;
-            }
-            void operator()(detail::task_completion_result<t_type>&& result_value) noexcept {
-                try {
-                    if constexpr (std::is_void_v<t_type>) {
-                        if (result_value != nullptr) {
-                            completion_->completion().stage_failure(std::move(result_value));
-                        } else {
-                            completion_->stage_value();
-                        }
-                    } else if (result_value.index() == 1) {
-                        completion_->completion().stage_failure(std::get<1>(result_value));
-                    } else {
-                        completion_->stage_value(std::move(std::get<0>(result_value)));
-                    }
-                } catch (...) {
-                    completion_->completion().stage_failure(std::current_exception());
-                }
-                delivered_ = true;
-            }
-        };
         auto posted = handle().post([bound_executor,
                                         retirement_lease = std::move(retirement_lease),
-                                        launch = launch_guard(std::move(task_value), completion)]() mutable {
+                                        launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
             try {
                 detail::async_start_task(std::move(*launch.task_),
-                    root_completion(std::move(bound_executor), launch.completion_, std::move(retirement_lease)));
+                    detail::root_task_completion_handler<t_type>(std::move(bound_executor), launch.completion_, std::move(retirement_lease)));
                 launch.release();
             } catch (...) {
                 auto failed_completion = std::move(launch.completion_);

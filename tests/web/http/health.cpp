@@ -9,7 +9,7 @@
 #include "context_request_fixture.h"
 
 TEST(Ruvia, health_responses_use_context_response_state) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
         context_value.draft().header("X-Trace", "health");
         context_value.draft().set_cookie({.name_ = "probe", .value_ = "ok"});
 
@@ -25,7 +25,7 @@ TEST(Ruvia, health_responses_use_context_response_state) {
 }
 
 TEST(Ruvia, readiness_response_defaults_to_ready) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
         const auto response = ruvia::make_readiness_response(context_value);
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("application/json"));
@@ -35,7 +35,7 @@ TEST(Ruvia, readiness_response_defaults_to_ready) {
 }
 
 TEST(Ruvia, readiness_response_keeps_explicit_failure_status) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
         context_value.draft().status(ruvia::http_status::created);
 
         const auto response =
@@ -52,7 +52,7 @@ TEST(Ruvia, readiness_response_keeps_explicit_failure_status) {
 }
 
 TEST(Ruvia, readiness_response_rejects_invalid_state) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
         bool rejected = false;
         try {
             (void)ruvia::make_readiness_response(

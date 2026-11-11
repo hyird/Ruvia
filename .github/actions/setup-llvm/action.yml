@@ -1,0 +1,62 @@
+name: Setup LLVM musl toolchain
+description: Restore mise tools and install the resolved LLVM musl toolchain, including clang-format.
+
+inputs:
+  toolchain-release:
+    description: clang-cross release resolved once for this workflow run.
+    required: true
+  toolchain-sha256:
+    description: Official SHA256 for the resolved musl toolchain archive.
+    required: true
+  tools:
+    description: Additional space-separated mise tools to install and cache with LLVM.
+    default: ''
+  save-cache:
+    description: Save newly installed tools to the shared cache.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Setup mise
+      uses: jdx/mise-action@v5.2.1
+      with:
+        install: false
+        cache: false
+
+    - name: Restore LLVM toolchain cache
+      id: toolchain-cache
+      uses: actions/cache/restore@v6.1.0
+      with:
+        path: ~/.local/share/mise/installs
+        key: mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}
+        restore-keys: |
+          mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ inputs.toolchain-release }}-
+          mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install resolved LLVM musl toolchain with mise
+      shell: bash
+      env:
+        TOOLCHAIN_RELEASE: ${{ inputs.toolchain-release }}
+        TOOLCHAIN_SHA256: ${{ inputs.toolchain-sha256 }}
+        MISE_GITHUB_TOKEN: ${{ github.token }}
+        MISE_TOOLS: ${{ inputs.tools }}
+      run: |
+        set -euo pipefail
+        [[ "$TOOLCHAIN_RELEASE" =~ ^[A-Za-z0-9._-]+$ ]]
+        [[ "$TOOLCHAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
+        read -r -a tools <<< "$MISE_TOOLS"
+        mise use --global "${tools[@]}" "github:cross-tools/clang-cross[asset_pattern=x86_64-unknown-linux-musl.tar.xz,strip_components=0,bin_path=x86_64-unknown-linux-musl/bin,checksum=sha256:$TOOLCHAIN_SHA256]@$TOOLCHAIN_RELEASE"
+        root="$(mise where github:cross-tools/clang-cross)/x86_64-unknown-linux-musl"
+        echo "RUVIA_MUSL_ROOT=$root" >> "$GITHUB_ENV"
+        {
+          echo "$HOME/.local/share/mise/shims"
+          echo "$root/bin"
+        } >> "$GITHUB_PATH"
+
+    - name: Save LLVM toolchain cache
+      if: inputs.save-cache == 'true' && steps.toolchain-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6.1.0
+      with:
+        path: ~/.local/share/mise/installs
+        key: ${{ steps.toolchain-cache.outputs.cache-primary-key }}

@@ -517,6 +517,8 @@ RUVIA_MODEL(create_user_request,
 
 将以下校验中间件直接挂在路由宏末尾，框架会在进入路由处理器前自动解析并执行全部字段规则（校验失败自动返回 `400`/`422` 结构化错误响应，包含 `validation_issues`）：
 
+请求校验中间件与 `json_if<T>()` / `form_if<T>()` 共用解析后校验路径；JSON/Form 媒体类型不匹配时，中间件拒绝请求，按需解析返回 `std::nullopt`。
+
 | 校验中间件类型 | 数据源 | 路由内提取方式 |
 | --- | --- | --- |
 | `ruvia::json_body<T>` | JSON 请求体（`application/json`） | `c.req().validated<T>()` |

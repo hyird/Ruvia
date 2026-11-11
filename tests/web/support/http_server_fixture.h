@@ -1,12 +1,9 @@
 #pragma once
 
 #include <chrono>
-#include <exception>
 #include <future>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
-#include <thread>
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
@@ -14,6 +11,8 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/server_config.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 
 namespace ruvia::test {
@@ -45,35 +44,23 @@ private:
               startup_(std::make_shared<startup_state>()) {
             app().server(config).listen({.address_ = "127.0.0.1", .http_ = endpoint_.port()}).on_start([startup = std::weak_ptr<startup_state>(startup_)] {
                 if (auto state = startup.lock()) {
-                    state->announced_ = true;
                     state->ready_.set_value();
                 }
             });
             auto ready = startup_->ready_.get_future();
-            thread_ = std::thread([this] {
-                try {
-                    app().run();
-                } catch (...) {
-                    const auto failure = std::current_exception();
-                    {
-                        std::lock_guard lock(mutex_);
-                        failure_ = failure;
-                    }
-                    if (!startup_->announced_) {
-                        startup_->ready_.set_exception(failure);
-                    }
-                }
-            });
+            runner_ = std::make_unique<app_run>(app());
             try {
+                wait_until([&] {
+                    return ready.wait_for(std::chrono::seconds(0)) == std::future_status::ready ||
+                           runner_->failure() != nullptr;
+                },
+                    std::chrono::seconds(5));
+                rethrow_failure();
                 ready.get();
             } catch (...) {
-                stop_and_join();
+                runner_.reset();
                 throw;
             }
-        }
-
-        ~server_runtime() {
-            stop_and_join();
         }
 
         [[nodiscard]] const asio::ip::tcp::endpoint& endpoint() const noexcept {
@@ -81,43 +68,28 @@ private:
         }
 
         void finish_case() {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            while (app().http_stats().active_connections_ != 0) {
+            wait_until([&] {
                 rethrow_failure();
-                if (std::chrono::steady_clock::now() >= deadline) {
-                    throw std::runtime_error("HTTP test clients did not retire");
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            rethrow_failure();
+                return app().http_stats().active_connections_ == 0;
+            },
+                std::chrono::seconds(5));
         }
 
     private:
         struct startup_state final {
             std::promise<void> ready_;
-            bool announced_{false};
         };
 
         void rethrow_failure() {
-            std::lock_guard lock(mutex_);
-            if (failure_) {
-                std::rethrow_exception(failure_);
-            }
-        }
-
-        void stop_and_join() {
-            if (thread_.joinable()) {
-                app().stop();
-                thread_.join();
+            if (const auto failure = runner_->failure()) {
+                std::rethrow_exception(failure);
             }
         }
 
         tcp_port_reservation reservation_;
         asio::ip::tcp::endpoint endpoint_;
         std::shared_ptr<startup_state> startup_;
-        std::thread thread_;
-        std::mutex mutex_;
-        std::exception_ptr failure_;
+        std::unique_ptr<app_run> runner_;
     };
 
     static server_runtime& shared_runtime(asio::io_context& io, const server_config& config) {

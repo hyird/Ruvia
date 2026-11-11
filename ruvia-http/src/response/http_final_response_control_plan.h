@@ -13,7 +13,7 @@
 
 namespace ruvia::detail {
 
-enum class http2_final_response_control_plan_error : std::uint8_t {
+enum class http_binary_final_response_control_plan_error : std::uint8_t {
     invalid_status,
     upgrade_unavailable,
     connection_specific_field_forbidden
@@ -23,7 +23,7 @@ class http1_final_response_control;
 
 [[nodiscard]] http1_final_response_control http1_final_response_control_plan(const http_response& response);
 
-[[nodiscard]] std::optional<http2_final_response_control_plan_error> http2_final_response_control_plan(
+[[nodiscard]] std::optional<http_binary_final_response_control_plan_error> http_binary_final_response_control_plan(
     const http_response& response) noexcept;
 // The protocol writer alone frames a response (RFC 9112 section 6.1, RFC 9113
 // section 8.2.2), so an application Transfer-Encoding is accepted only as a
@@ -105,25 +105,25 @@ private:
     return http1_final_response_control(connection_options, upgrade_protocols);
 }
 
-// Validate HTTP/2 control semantics before HPACK or stream state is mutated.
-// The success token proves that no connection-specific field exists; RFC 9113
-// section 8.2.2 requires rejection rather than silent filtering. A replaceable
-// Transfer-Encoding hint is not application metadata but the framing the
-// HTTP/2 writer owns, so the encoder omits it like HTTP/1 replaces it.
-[[nodiscard]] inline std::optional<http2_final_response_control_plan_error>
-http2_final_response_control_plan(const http_response& response) noexcept {
+// Validate HTTP/2 and HTTP/3 control semantics before field encoding or stream
+// state is mutated. Success proves that no connection-specific field exists;
+// RFC 9113 section 8.2.2 and RFC 9114 section 4.2 require rejection rather than
+// silent filtering. A replaceable Transfer-Encoding hint is not application
+// metadata but writer-owned framing, so both encoders omit it.
+[[nodiscard]] inline std::optional<http_binary_final_response_control_plan_error>
+http_binary_final_response_control_plan(const http_response& response) noexcept {
     const auto status_code = response.status();
     if (!status_code.is_final()) {
-        return http2_final_response_control_plan_error::invalid_status;
+        return http_binary_final_response_control_plan_error::invalid_status;
     }
     if (status_code == http_status::upgrade_required) {
-        return http2_final_response_control_plan_error::upgrade_unavailable;
+        return http_binary_final_response_control_plan_error::upgrade_unavailable;
     }
     if (response_has_known_header(response,
             response_header_connection | response_header_upgrade | response_header_keep_alive |
                 response_header_proxy_connection) ||
         !response_transfer_encoding_replaceable(response)) {
-        return http2_final_response_control_plan_error::connection_specific_field_forbidden;
+        return http_binary_final_response_control_plan_error::connection_specific_field_forbidden;
     }
     return std::nullopt;
 }

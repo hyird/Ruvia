@@ -11,6 +11,8 @@
 
 #include "http_client_response_fixture.h"
 
+using namespace ruvia::test;
+
 namespace {
 
 using ruvia::classify_http_client_origin_authority;
@@ -173,7 +175,7 @@ TEST(Ruvia, http_client_redirect_request_plan_owns_preserved_method) {
 }
 
 TEST(Ruvia, http_client_response_header_lookup_distinguishes_empty_and_repeated) {
-    auto parsed = http_client_response_test::parse_response(
+    auto parsed = ruvia::test::parse_response(
         "GET", "HTTP/1.1 302 Found\r\nLocation:\r\nContent-Length: 0");
     const auto& head = parsed.head_;
 
@@ -184,7 +186,7 @@ TEST(Ruvia, http_client_response_header_lookup_distinguishes_empty_and_repeated)
     const auto missing = lookup_unique_http_client_response_header(head, "missing");
     EXPECT_TRUE(missing.status_ == http_unique_header_status::absent);
 
-    auto repeated_parsed = http_client_response_test::parse_response(
+    auto repeated_parsed = ruvia::test::parse_response(
         "GET", "HTTP/1.1 302 Found\r\nLocation:\r\nLOCATION: /second\r\nContent-Length: 0");
     const auto repeated = lookup_unique_http_client_response_header(repeated_parsed.head_, "Location");
     EXPECT_TRUE(repeated.status_ == http_unique_header_status::repeated);

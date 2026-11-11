@@ -45,36 +45,6 @@ RUVIA_DB_ENTITY(numeric_input_entity, "numeric_input",
     ruvia::db_column<"optional_values", std::pmr::vector<std::optional<std::int32_t>>>,
     ruvia::db_column<"real_values", std::pmr::vector<float>>)
 
-class equivalent_memory_resource final : public std::pmr::memory_resource {
-public:
-    explicit equivalent_memory_resource(std::pmr::memory_resource* upstream)
-        : upstream_(upstream) {}
-
-    void reject_allocations(bool reject = true) noexcept {
-        reject_allocations_ = reject;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (reject_allocations_) {
-            throw std::bad_alloc();
-        }
-        return upstream_->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        upstream_->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        const auto* equivalent = dynamic_cast<const equivalent_memory_resource*>(&other);
-        return equivalent != nullptr && upstream_ == equivalent->upstream_;
-    }
-
-    std::pmr::memory_resource* upstream_;
-    bool reject_allocations_{false};
-};
-
 TEST(Ruvia, db_entity_tracks_unset_null_and_value_states) {
     entity entity;
     EXPECT_TRUE(!entity.is_set<"id">());
@@ -214,11 +184,11 @@ TEST(Ruvia, db_entity_set_normalizes_nested_owned_values_to_entity_resource) {
 
 TEST(Ruvia, db_entity_string_vector_assignment_normalizes_equivalent_resource_allocators) {
     ruvia::test::counting_memory_resource upstream;
-    equivalent_memory_resource target(&upstream);
+    ruvia::test::equivalent_tracking_resource target(upstream);
     {
         string_array_entity entity(&target);
         {
-            equivalent_memory_resource source_value(&upstream);
+            ruvia::test::equivalent_tracking_resource source_value(upstream);
             EXPECT_TRUE(source_value.is_equal(target));
             std::pmr::vector<std::pmr::string> values(&source_value);
             values.emplace_back(200, 'a');
@@ -238,7 +208,7 @@ TEST(Ruvia, db_entity_string_vector_assignment_normalizes_equivalent_resource_al
         EXPECT_EQ(lvalue_stored[1], std::string_view(std::string(240, 'b')));
 
         {
-            equivalent_memory_resource source_value(&upstream);
+            ruvia::test::equivalent_tracking_resource source_value(upstream);
             std::pmr::vector<std::pmr::string> values(&source_value);
             values.emplace_back(260, 'b');
             values.emplace_back(280, 'c');
@@ -251,14 +221,14 @@ TEST(Ruvia, db_entity_string_vector_assignment_normalizes_equivalent_resource_al
         EXPECT_EQ(rvalue_stored[0], std::string_view(std::string(260, 'b')));
         EXPECT_EQ(rvalue_stored[1], std::string_view(std::string(280, 'c')));
 
-        target.reject_allocations();
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
-            equivalent_memory_resource source_value(&upstream);
+        target.reject_allocations_after(0);
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
+            ruvia::test::equivalent_tracking_resource source_value(upstream);
             std::pmr::vector<std::pmr::string> values(&source_value);
             values.emplace_back(220, 'd');
             entity.set<"values">(std::move(values));
         }));
-        target.reject_allocations(false);
+        target.allow_allocations();
         EXPECT_TRUE(entity.is_set<"values">());
         EXPECT_EQ(entity.get<"values">().size(), std::size_t{2});
         EXPECT_EQ(entity.get<"values">()[0], std::string_view(std::string(260, 'b')));
@@ -272,7 +242,7 @@ TEST(Ruvia, db_entity_string_vector_assignment_normalizes_equivalent_resource_al
 TEST(Ruvia, db_entity_reset_owned_containers_preserves_value_on_allocation_failure) {
     for (const bool text : {false, true}) {
         ruvia::test::counting_memory_resource upstream;
-        equivalent_memory_resource target(&upstream);
+        ruvia::test::equivalent_tracking_resource target(upstream);
         {
             owned_container_entity entity(&target);
             entity.set<"text">(std::string(200, 'a'));
@@ -280,7 +250,7 @@ TEST(Ruvia, db_entity_reset_owned_containers_preserves_value_on_allocation_failu
             values.emplace_back(240, 'b');
             entity.set<"values">(values);
             bool failed = false;
-            target.reject_allocations();
+            target.reject_allocations_after(0);
             try {
                 if (text) {
                     entity.reset<"text">();
@@ -290,7 +260,7 @@ TEST(Ruvia, db_entity_reset_owned_containers_preserves_value_on_allocation_failu
             } catch (const std::bad_alloc&) {
                 failed = true;
             }
-            target.reject_allocations(false);
+            target.allow_allocations();
             if (failed) {
                 EXPECT_TRUE(entity.is_set<"text">());
                 EXPECT_TRUE(entity.is_set<"values">());
@@ -318,7 +288,7 @@ TEST(Ruvia, db_entity_rows_reject_elements_from_a_different_memory_resource) {
         entity entity(&entity_resource);
         entity.set<"id">(7);
         entity.set<"name">(std::string(200, 'x'));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { rows.push_back(std::move(entity)); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { rows.push_back(std::move(entity)); }));
         EXPECT_TRUE(rows.empty());
     }
     EXPECT_EQ(result_resource.live_allocations(), std::size_t{0});

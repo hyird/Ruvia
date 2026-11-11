@@ -19,7 +19,7 @@
 #include "ruvia/http/websocket_protocol.h"
 
 #include "coding/http_zlib_stream.h"
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_handshake_fields.h"
 #include "websocket/websocket_deflate_message.h"
@@ -276,7 +276,7 @@ struct permessage_deflate_params final {
     bool has_extension = false;
     websocket_compression negotiated{};
     const bool valid = http_request_access::visit_known_headers(request,
-        request_header_kind::sec_websocket_extensions,
+        http_field_kind::sec_websocket_extensions,
         [&has_extension, &negotiated, &config](std::string_view value) noexcept {
             if (!append_websocket_extension_list(value, has_extension)) {
                 return false;

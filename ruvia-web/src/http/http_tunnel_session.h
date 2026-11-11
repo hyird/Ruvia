@@ -13,10 +13,10 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "context/context_access.h"
+#include "http/http_stream_end.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "server/inbound_transport_error.h"
-#include "tls/tls_stream_end.h"
 #include "util/steady_clock.h"
 namespace ruvia::detail {
 // A tunnel over an HTTP/1 socket transport or one HTTP/2 or HTTP/3 stream. Received

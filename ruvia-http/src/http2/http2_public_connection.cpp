@@ -20,7 +20,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
-#include "client/http_client_response_head.h"
+#include "http1/http_client_response_head.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_websocket_handshake.h"
 #include "parser/http_header_descriptor_storage.h"

@@ -29,33 +29,12 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - name: Setup mise
+      - name: Setup LLVM clang-format
         if: needs.resolve_toolchain.result == 'success'
-        uses: jdx/mise-action@v5.2.1
+        uses: ./.github/actions/setup-llvm
         with:
-          install: false
-          cache: false
-      - name: Restore LLVM toolchain cache
-        if: needs.resolve_toolchain.result == 'success'
-        uses: actions/cache/restore@v6.1.0
-        with:
-          path: ~/.local/share/mise/installs
-          key: mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ needs.resolve_toolchain.outputs.release }}-${{ needs.resolve_toolchain.outputs.sha256 }}
-          restore-keys: |
-            mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ needs.resolve_toolchain.outputs.release }}-
-            mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install resolved LLVM clang-format
-        if: needs.resolve_toolchain.result == 'success'
-        env:
-          MISE_GITHUB_TOKEN: ${{ github.token }}
-          TOOLCHAIN_RELEASE: ${{ needs.resolve_toolchain.outputs.release }}
-          TOOLCHAIN_SHA256: ${{ needs.resolve_toolchain.outputs.sha256 }}
-        run: |
-          set -euo pipefail
-          [[ "$TOOLCHAIN_RELEASE" =~ ^[A-Za-z0-9._-]+$ ]]
-          [[ "$TOOLCHAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
-          mise use --global "github:cross-tools/clang-cross[asset_pattern=x86_64-unknown-linux-musl.tar.xz,strip_components=0,bin_path=x86_64-unknown-linux-musl/bin,checksum=sha256:$TOOLCHAIN_SHA256]@$TOOLCHAIN_RELEASE"
-          echo "$(mise where github:cross-tools/clang-cross)/x86_64-unknown-linux-musl/bin" >> "$GITHUB_PATH"
+          toolchain-release: ${{ needs.resolve_toolchain.outputs.release }}
+          toolchain-sha256: ${{ needs.resolve_toolchain.outputs.sha256 }}
       - name: Check formatting
         if: needs.resolve_toolchain.result == 'success'
         run: |
@@ -112,7 +91,6 @@ jobs:
       sha256: ${{ steps.resolve.outputs.sha256 }}
       vcpkg_commit: ${{ steps.resolve.outputs.vcpkg_commit }}
     steps:
-      - uses: actions/checkout@v6
       - name: Resolve latest toolchain release, checksum, and vcpkg commit
         id: resolve
         env:
@@ -177,9 +155,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/llvm.cmake" \
             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET" \
-            -DVCPKG_HOST_TRIPLET="$VCPKG_HOST_TRIPLET" \
-            -DVCPKG_OVERLAY_TRIPLETS="$VCPKG_OVERLAY_TRIPLETS" \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DVCPKG_HOST_TRIPLET="$VCPKG_HOST_TRIPLET"
 
       - name: Save shared vcpkg binary cache
         if: ${{ !cancelled() && steps.setup.outputs.vcpkg-cache-hit != 'true' }}

@@ -292,8 +292,7 @@ std::optional<std::array<std::uint16_t, 8>> parse_ipv6_address(std::string_view 
     bool label_ends_with_alnum = false;
     for (const char c : name) {
         const auto byte = static_cast<unsigned char>(c);
-        const bool alnum = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
-                           (byte >= '0' && byte <= '9');
+        const bool alnum = is_uri_alpha(byte) || is_decimal_digit(c);
         if (c == '.') {
             if (label_length == 0 || !label_ends_with_alnum) {
                 return false;

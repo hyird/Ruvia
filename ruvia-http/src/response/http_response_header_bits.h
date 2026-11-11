@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string_view>
 
+#include "field/http_field_kind.h"
+
 namespace ruvia::detail {
 
 inline constexpr std::uint32_t response_header_content_length = 1U << 0;
@@ -55,4 +57,17 @@ inline constexpr std::uint32_t response_header_proxy_connection = 1U << 25;
 }
 
 [[nodiscard]] std::uint32_t classify_response_header_name(std::string_view name) noexcept;
+
+// RFC 7541 §7.1.3 / RFC 9204 §4.2.1: credential-bearing fields use the
+// never-indexed literal so an intermediary never places them in a shared dynamic table.
+[[nodiscard]] inline bool http_field_never_indexed(std::string_view name) noexcept {
+    const auto field = classify_http_field_name(name);
+    return field.kind_ == http_field_kind::authorization ||
+           field.kind_ == http_field_kind::proxy_authorization ||
+           field.kind_ == http_field_kind::cookie ||
+           field.response_bit_ == response_header_set_cookie;
+}
+
+[[nodiscard]] std::string_view response_known_header_lowercase_name(std::uint32_t known_bit) noexcept;
+
 }  // namespace ruvia::detail

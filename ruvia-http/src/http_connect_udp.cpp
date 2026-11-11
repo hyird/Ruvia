@@ -288,7 +288,7 @@ bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
     detail::http_upgrade_protocols upgrade_protocols;
     bool connect_udp = false;
     const bool valid = detail::http_request_access::visit_known_headers(
-        request, detail::request_header_kind::upgrade, [&](std::string_view value) noexcept {
+        request, detail::http_field_kind::upgrade, [&](std::string_view value) noexcept {
             return upgrade_protocols.parse_field(value, detail::http_field_list_role::recipient,
                        [&connect_udp](const detail::http_upgrade_protocol& protocol) noexcept {
                            if (protocol.version_.empty() &&
@@ -308,7 +308,7 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_request(const ht
     const auto path = request.target_form() == http_request_target_form::absolute
                           ? request.path()
                           : request.target();
-    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .protocol_ = request.protocol(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::http_request_access::known_header(request, detail::request_header_kind::host) : request.authority(), .path_ = path, .headers_ = request.headers()});
+    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .protocol_ = request.protocol(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::http_request_access::known_header(request, detail::http_field_kind::host) : request.authority(), .path_ = path, .headers_ = request.headers()});
 }
 std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version) {
     if (version == http_protocol_version::http10 || !response.status().is_successful() ||

@@ -20,7 +20,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
-#include "ruvia/core/worker_runtime_context.h"
 
 #include "worker_notification.h"
 
@@ -374,10 +373,6 @@ worker_notification::worker_notification(state_pointer state) noexcept
 
 worker_notification::worker_notification(
     worker_runtime& runtime, worker_notification_options options)
-    : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.handle(), options)) {}
-
-worker_notification::worker_notification(
-    worker_runtime_context& runtime, worker_notification_options options)
     : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.handle(), options)) {}
 
 worker_notification::worker_notification(

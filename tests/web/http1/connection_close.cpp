@@ -19,7 +19,6 @@
 #include <asio/ssl/error.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
-#include <openssl/bio.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/web/app.h"
@@ -27,8 +26,12 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/websocket.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http2_wire_fixture.h"
+#endif
 #include "tcp_port_reservation.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 // How the server ends connections it closes itself. A final response that
@@ -75,18 +78,7 @@ class connection_close_routes final {
 
 using tls_stream = asio::ssl::stream<asio::ip::tcp::socket>;
 
-// Reads until the server ends the stream. TLS reports a close_notify as eof
-// and a TCP close without it as stream_truncated.
-template <typename stream_type>
-std::error_code read_to_end(stream_type& stream, std::string& received) {
-    std::array<char, 16 * 1024> buffer;
-    std::error_code error;
-    while (!error) {
-        const auto size = stream.read_some(asio::buffer(buffer), error);
-        received.append(buffer.data(), size);
-    }
-    return error;
-}
+using ruvia::test::read_to_end;
 
 std::unique_ptr<tls_stream> connect_tls(asio::io_context& io, asio::ssl::context& client,
     const asio::ip::tcp::endpoint& endpoint) {
@@ -111,8 +103,8 @@ void final_response_survives_unread_request_content(
     request.append(std::size_t{64} * 1024, 'u');
     asio::write(socket, asio::buffer(request));
     std::this_thread::sleep_for(200ms);
-    std::string response;
-    const auto end = read_to_end(socket, response);
+    asio::error_code end;
+    const auto response = read_to_end(socket, end);
     const auto head_end = response.find("\r\n\r\n");
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(head_end != std::string::npos);
@@ -131,8 +123,8 @@ void idle_tls_connection_ends_with_close_notify(
     // 服务端可在发送返回前开始空闲计时，所以先记录请求发送的起点。
     const auto started = std::chrono::steady_clock::now();
     asio::write(*stream, asio::buffer(std::string_view("GET /close/item HTTP/1.1\r\nHost: localhost\r\n\r\n")));
-    std::string response;
-    const auto end = read_to_end(*stream, response);
+    asio::error_code end;
+    const auto response = read_to_end(*stream, end);
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(response.ends_with("item"));
     EXPECT_TRUE(std::chrono::steady_clock::now() - started >= idle_timeout);
@@ -150,10 +142,8 @@ void idle_http2_connection_sends_goaway_then_close_notify(
     static constexpr unsigned char alpn[] = {2, 'h', '2'};
     EXPECT_EQ(SSL_CTX_set_alpn_protos(client.native_handle(), alpn, sizeof(alpn)), 0);
     const auto stream = connect_tls(io, client, endpoint);
-    constexpr std::string_view preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-    constexpr std::array<char, 9> settings{0, 0, 0, 4, 0, 0, 0, 0, 0};
-    std::string opening(preface);
-    opening.append(settings.data(), settings.size());
+    std::string opening(ruvia::http2_client_preface);
+    ruvia::test::append_frame(opening, ruvia::http2_frame_type::settings, 0, 0, {});
     asio::write(*stream, asio::buffer(opening));
 
     std::string received;
@@ -280,14 +270,7 @@ using namespace connection_close_test;
 
 TEST(Ruvia, server_closes_connections_gracefully) {
     ruvia::test::tls_identity identity("localhost");
-    const auto private_key = identity.ca_file_.parent_path() / "key.pem";
-    {
-        std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(private_key.string().c_str(), "w"), BIO_free);
-        if (!output || ruvia::test::write_tls_private_key(
-                           output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle())) != 1) {
-            throw std::runtime_error("cannot write connection close test private key");
-        }
-    }
+    const auto private_key = identity.private_key_file();
 
     asio::io_context io;
     ruvia::test::tcp_port_reservation plain_reservation(io);
@@ -296,7 +279,7 @@ TEST(Ruvia, server_closes_connections_gracefully) {
     const auto tls_endpoint = tls_reservation.endpoint();
 
     auto& app = ruvia::app();
-    std::binary_semaphore started{0};
+    static std::binary_semaphore started{0};
     app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms})
         .listen({
             .address_ = "127.0.0.1",
@@ -304,15 +287,8 @@ TEST(Ruvia, server_closes_connections_gracefully) {
             .https_ = tls_endpoint.port(),
             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
-        .on_start([&started] { started.release(); });
-    std::exception_ptr failure;
-    std::thread runner([&app, &failure] {
-        try {
-            app.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
+        .on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
     if (ready) {
@@ -330,8 +306,8 @@ TEST(Ruvia, server_closes_connections_gracefully) {
         client.set_verify_mode(asio::ssl::verify_none);
         const auto unused = open_unused_tls_connection(io, client, tls_endpoint);
         std::thread stopper([&app] { app.stop(); });
-        std::string received;
-        const auto end = read_to_end(*unused, received);
+        asio::error_code end;
+        const auto received = read_to_end(*unused, end);
         stopper.join();
         EXPECT_TRUE(received.empty());
         EXPECT_TRUE(end == asio::ssl::error::stream_truncated || end == asio::error::connection_reset);
@@ -339,7 +315,4 @@ TEST(Ruvia, server_closes_connections_gracefully) {
         app.stop();
     }
     runner.join();
-    if (failure) {
-        std::rethrow_exception(failure);
-    }
 }

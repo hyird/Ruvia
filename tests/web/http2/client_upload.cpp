@@ -21,6 +21,7 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/http_client.h"
 
+#include "http2_wire_fixture.h"
 #include "test_io_context.h"
 
 namespace http2_client_upload_test {
@@ -41,15 +42,7 @@ enum class response_mode { ordinary,
 
 constexpr std::size_t streaming_payload_bytes = 256 * 1024;
 
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
-    std::uint32_t stream_id, std::string_view payload) {
-    std::array<char, ruvia::http2_frame_header_bytes> header;
-    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
-        throw std::logic_error("invalid scripted HTTP/2 frame");
-    }
-    wire.append(header.data(), header.size());
-    wire.append(payload);
-}
+using ruvia::test::append_frame;
 
 // A raw peer deliberately keeps the request half open after the final response.
 // It advertises one stream and never supplies the optional server-side reset, so

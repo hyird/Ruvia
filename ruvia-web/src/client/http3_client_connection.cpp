@@ -6,8 +6,8 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
+#include <concepts>
 #include <coroutine>
 #include <cstring>
 #include <limits>
@@ -15,7 +15,6 @@
 #include <optional>
 #include <stdexcept>
 #include <system_error>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -27,10 +26,8 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/pool_lease_scheduler.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http3_quic_connection.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_known_method.h"
 
 #include "client/client_happy_eyeballs.h"
@@ -42,6 +39,7 @@
 #include "client/http_client_transport_error.h"
 #include "http3/http3_quic_runtime.h"
 #include "http3/http3_udp_receive.h"
+#include "tls/tls_peer.h"
 #include "tls/tls_random.h"
 
 namespace ruvia::detail {
@@ -53,17 +51,6 @@ void initialize_quic_crypto() {
     if (!initialized) {
         throw http_client_error(error_code::tls_failed, "failed to initialize the QUIC TLS backend");
     }
-}
-[[nodiscard]] bool is_valid_lowercase_field_name(std::string_view name) noexcept {
-    if (!is_valid_http_header_name(name)) {
-        return false;
-    }
-    for (const char byte : name) {
-        if (byte >= 'A' && byte <= 'Z') {
-            return false;
-        }
-    }
-    return true;
 }
 ngtcp2_cid random_cid() {
     ngtcp2_cid cid{};
@@ -88,9 +75,6 @@ ngtcp2_callbacks crypto_callbacks() noexcept {
     result.recv_retry = ngtcp2_crypto_recv_retry_cb;
     result.get_new_connection_id2 = new_cid;
     return result;
-}
-bool safe_early_method(std::string_view method) noexcept {
-    return method == "GET" || method == "HEAD" || method == "OPTIONS" || method == "TRACE";
 }
 void require_accepted(http3_status status) {
     if (status != http3_status::accepted) {
@@ -339,7 +323,9 @@ public:
             item.retry_ = true;
             item.rejected_ = true;
         } else {
-            item.error_ = error_code::io_error;
+            item.error_ = application_error_code == static_cast<std::uint64_t>(http3_error_code::message_error)
+                              ? error_code::protocol_error
+                              : error_code::io_error;
             if (auto* output = response.output()) {
                 output->stop();
             }
@@ -402,6 +388,243 @@ public:
             }
         }
     }
+    void submit_request_head(stream& item, const http_client_request_storage& request,
+        borrowed_http_headers headers) {
+        std::pmr::vector<http_header_view> websocket_fields(process_resource());
+        if (const auto* websocket = request.websocket()) {
+            const auto prepared_fields = headers.view();
+            const auto request_fields = websocket->negotiation_.request_fields();
+            websocket_fields.reserve(prepared_fields.size() + request_fields.size());
+            websocket_fields.insert(websocket_fields.end(), prepared_fields.begin(), prepared_fields.end());
+            for (const auto& field : request_fields) {
+                websocket_fields.emplace_back(field.name(), field.value());
+            }
+            headers = websocket_fields;
+        }
+        auto& connection = quic_->http3();
+        if (request.is_tunnel()) {
+            if (request.tunnel_protocol().empty()) {
+                const http3_connect_request_head_view head{
+                    .authority_ = request.tunnel_authority(),
+                    .headers_ = headers};
+                require_accepted(connection.submit_request_head(item.id_, head));
+            } else {
+                const http3_extended_connect_request_head_view head{
+                    .protocol_ = request.tunnel_protocol(),
+                    .scheme_ = "https",
+                    .authority_ = request.tunnel_authority(),
+                    .target_ = request.target(),
+                    .headers_ = headers};
+                require_accepted(connection.submit_request_head(item.id_, head));
+            }
+            return;
+        }
+        std::optional<std::uint64_t> content_length;
+        auto expectation = http_client_request_expectation::none;
+        if (const auto* upload = request.upload()) {
+            if (const auto declared = upload->config_.content_length_) {
+                content_length = declared->value();
+            }
+            expectation = upload->config_.expectation_;
+        } else if (request.has_body()) {
+            content_length = request.body().size();
+        }
+        const http3_regular_request_head_view head{
+            .method_ = request.method(),
+            .scheme_ = "https",
+            .authority_ = pool_.config().authority_,
+            .target_ = request.target(),
+            .headers_ = headers,
+            .content_length_ = content_length,
+            .streaming_ = request.output() != nullptr || !request.body().empty(),
+            .expectation_ = expectation};
+        require_accepted(connection.submit_request_head(item.id_, head));
+    }
+    void consume_event(const http_origin_advertisement& origins) {
+        pool_.advertisements().retain(index_, http_protocol_version::http3, origins);
+    }
+    void consume_event(const http3_goaway_event& away) {
+        draining_ = true;
+        for (auto* item : streams_) {
+            if (item->id_ >= away.id_ && !item->response_.head_ready_) {
+                item->retry_ = true;
+                item->error_.reset();
+                if (auto* output = item->response_.output()) {
+                    output->stop();
+                }
+                item->signal_.notify();
+            }
+        }
+    }
+    void consume_event(const http3_deferred_consume_event& value) {
+        quic_->consume_stream_data(value.stream_id_, value.bytes_);
+    }
+    template <typename event_type>
+    void consume_event(const event_type& value) {
+        auto* item = find(value.stream_id_);
+        if (!item || item->error_ || item->failure_) {
+            if constexpr (std::same_as<event_type, http3_data_event>) {
+                quic_->consume_stream_data(value.stream_id_, value.bytes_.size());
+            }
+            return;
+        }
+        try {
+            consume_stream_event(*item, value);
+        } catch (...) {
+            item->failure_ = std::current_exception();
+            quic_->reset_stream(item->id_, static_cast<std::uint64_t>(http3_error_code::message_error));
+        }
+        item->signal_.notify();
+    }
+    void consume_stream_event(stream& item, const http3_headers_event& value) {
+        if (item.retry_425_) {
+            return;
+        }
+        auto& response = item.response_;
+        std::pmr::vector<http_header> fields(response.resource_);
+        fields.reserve(value.fields_.size());
+        for (const auto& field : value.fields_) {
+            fields.emplace_back(field.name(), field.value(), response.resource_);
+        }
+        if (value.trailers_) {
+            response.trailers_ = std::move(fields);
+        } else {
+            const auto received_status = *value.status_;
+            const auto status = received_status.value();
+            const auto semantic_status = received_status.status();
+            if (status >= 100 && status < 200) {
+                const auto signal = status == 100
+                                        ? std::optional(http_client_request_content_signal::continue_value)
+                                        : std::nullopt;
+                response.retain_informational(semantic_status, std::move(fields), signal);
+            } else {
+                if (status == 425 && item.early_) {
+                    item.retry_425_ = true;
+                    return;
+                }
+                response.headers_ = std::move(fields);
+                if (item.websocket_) {
+                    accept_extended_connect_websocket_response(*item.websocket_,
+                        semantic_status, response.headers_, value.stream_ended_,
+                        "invalid HTTP/3 WebSocket handshake response");
+                    item.timeout_ = operation_timeout(std::nullopt);
+                }
+                const auto content_signal = value.stream_ended_
+                                                ? std::optional(http_client_request_content_signal::exchange_complete)
+                                                : std::nullopt;
+                const auto origin_target = item.origin_ ? std::optional(item.target_) : std::nullopt;
+                publish_http_client_final_head(response, pool_.policy(),
+                    {.status_ = received_status,
+                        .protocol_version_ = http_protocol_version::http3,
+                        .request_content_signal_ = content_signal,
+                        .origin_target_ = origin_target,
+                        .opens_tunnel_ = response.tunnel_.has_value() && semantic_status.value() < 300});
+                if (response.tunnel_ && response.tunnel_->accepted_) {
+                    const auto settings = quic_->http3().peer_settings();
+                    response.http3_native_datagrams_ = settings && settings->h3_datagram_;
+                    item.timeout_ = operation_timeout(std::nullopt);
+                    item.timer_.read_deadline_.reset();
+                }
+            }
+        }
+        read_progress(item);
+    }
+    void consume_stream_event(stream& item, const http3_data_event& value) {
+        auto& response = item.response_;
+        const auto bytes = value.bytes_.size();
+        pool_.wire_counters().received_ += bytes;
+        if (item.retry_425_) {
+            quic_->consume_stream_data(value.stream_id_, bytes);
+            return;
+        }
+        const bool tunnel = response.tunnel_ && response.tunnel_->accepted_;
+        const auto& body_plan = response.response_body_plan_;
+        const bool suppressed = body_plan &&
+                                (body_plan->body_suppressed() ||
+                                    body_plan->content_semantics() != http_response_content_semantics::with_content);
+        if (!tunnel && suppressed) {
+            quic_->consume_stream_data(value.stream_id_, bytes);
+            read_progress(item);
+            return;
+        }
+        if (!response.append_received_body(value.bytes_, pool_.config().max_response_bytes_)) {
+            throw http_client_error(error_code::response_too_large, "HTTP/3 response exceeds byte budget");
+        }
+        if (response.collect_all_) {
+            quic_->consume_stream_data(value.stream_id_, bytes);
+            read_progress(item);
+        } else {
+            response.http3_data_credit_ += bytes;
+            item.timer_.read_deadline_.reset();
+        }
+    }
+    void consume_stream_event(stream& item, const http3_stream_end_event&) {
+        auto& response = item.response_;
+        if (item.retry_425_) {
+            item.retry_ = true;
+            item.done_ = true;
+        } else if (response.tunnel_ && response.tunnel_->accepted_) {
+            response.tunnel_->receive_ended_ = true;
+            if (item.websocket_ && item.write_stopped_ &&
+                item.stop_sending_error_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
+                complete_websocket_tunnel(item);
+            } else if (response.tunnel_->output_.ended_ || response.tunnel_->output_.stopped_) {
+                item.done_ = true;
+            }
+        } else {
+            const bool content = response.response_body_plan_ &&
+                                 response.response_body_plan_->content_semantics() == http_response_content_semantics::with_content;
+            finish_http_client_response_body(response, item.timeout_, content, pool_.config().max_response_bytes_);
+            response.complete_ = true;
+            if (response.upload_ && !response.upload_->output_.ended_) {
+                response.upload_->output_.stop();
+            }
+            item.done_ = true;
+        }
+        item.timer_.read_deadline_.reset();
+        response.data_signal_.notify();
+    }
+    void consume_stream_event(stream& item, const http3_transport_action_event& value) {
+        auto& response = item.response_;
+        if (value.action_ == http3_transport_action::stop_sending) {
+            item.write_stopped_ = true;
+            item.stop_sending_error_ = value.application_error_code_;
+            if (item.websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
+                response.tunnel_->receive_ended_ &&
+                value.application_error_code_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
+                complete_websocket_tunnel(item);
+            } else if (auto* output = response.output()) {
+                output->stop();
+            }
+        } else if (!item.done_ && !item.retry_) {
+            fail_or_retry_closed_stream(item, value.application_error_code_);
+        }
+    }
+    void consume_stream_event(stream& item, const http3_stream_close_event& value) {
+        auto& response = item.response_;
+        if (item.websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
+            response.tunnel_->receive_ended_ && !value.application_error_code_) {
+            complete_websocket_tunnel(item);
+        } else if (!item.done_ && !item.retry_) {
+            fail_or_retry_closed_stream(item, value.application_error_code_);
+        } else if (auto* output = response.output(); output && item.done_) {
+            output->stop();
+        }
+    }
+    void consume_stream_event(stream& item, const http3_datagram_event& value) {
+        auto& response = item.response_;
+        if (!response.tunnel_ || !response.tunnel_->accepted_ || !response.http3_datagrams_) {
+            return;
+        }
+        const auto bound = pool_.config().max_response_bytes_;
+        const auto available = bound - (std::min)(bound, response.http3_datagram_bytes_);
+        if (response.http3_datagrams_->size() >= 64 || value.payload_.size() > available) {
+            return;
+        }
+        response.http3_datagrams_->emplace_back(value.payload_);
+        response.http3_datagram_bytes_ += value.payload_.size();
+        response.data_signal_.notify();
+    }
     void consume_events() {
         if (early_started_ && !early_rejected_ && ngtcp2_conn_get_tls_early_data_rejected2(quic_->native_handle())) {
             early_rejected_ = true;
@@ -416,220 +639,7 @@ public:
             }
         }
         while (auto event = quic_->next_event()) {
-            if (const auto* origins = std::get_if<http_origin_advertisement>(&*event)) {
-                pool_.advertisements().retain(index_, http_protocol_version::http3, *origins);
-                continue;
-            }
-            if (const auto* away = std::get_if<http3_goaway_event>(&*event)) {
-                draining_ = true;
-                for (auto* item : streams_) {
-                    if (item->id_ >= away->id_ && !item->response_.head_ready_) {
-                        item->retry_ = true;
-                        item->error_.reset();
-                        if (auto* output = item->response_.output()) {
-                            output->stop();
-                        }
-                        item->signal_.notify();
-                    }
-                }
-                continue;
-            }
-            std::visit([this](auto& value) {
-                using event_type = std::remove_cvref_t<decltype(value)>;
-                if constexpr (requires { value.stream_id_; }) {
-                    auto* item = find(value.stream_id_);
-                    if (!item || item->error_ || item->failure_) {
-                        if constexpr (std::same_as<event_type, http3_data_event>) {
-                            quic_->consume_stream_data(value.stream_id_, value.bytes_.size());
-                        }
-                        return;
-                    }
-                    auto& response = item->response_;
-                    try {
-                        if constexpr (std::same_as<event_type, http3_headers_event>) {
-                            if (item->retry_425_) {
-                                return;
-                            }
-                            if (value.trailers_) {
-                                if (!response.head_ready_) {
-                                    throw http_client_error(error_code::protocol_error, "HTTP/3 trailers before final response head");
-                                }
-                                std::pmr::vector<http_header> fields(response.resource_);
-                                fields.reserve(value.fields_.size());
-                                auto budget = http_trailer_section_budget();
-                                for (const auto& field : value.fields_) {
-                                    const auto name = field.name();
-                                    const auto text = field.value();
-                                    if (name.empty() || name.front() == ':' || !is_valid_lowercase_field_name(name) ||
-                                        !is_valid_http_header_value(text) || is_forbidden_http_binary_response_field(name) ||
-                                        !budget.add_field(name, text)) {
-                                        throw http_client_error(error_code::protocol_error, "invalid HTTP/3 response trailer");
-                                    }
-                                    if (!is_forbidden_response_trailer_name(name)) {
-                                        fields.emplace_back(name, text, response.resource_);
-                                    }
-                                }
-                                response.trailers_ = std::move(fields);
-                            } else {
-                                if (response.head_ready_) {
-                                    throw http_client_error(error_code::protocol_error, "duplicate HTTP/3 final response head");
-                                }
-                                std::pmr::vector<http_header> fields(response.resource_);
-                                fields.reserve(value.fields_.size());
-                                std::optional<http_received_status> received_status;
-                                bool regular_seen = false;
-                                for (const auto& field : value.fields_) {
-                                    const auto name = field.name();
-                                    const auto text = field.value();
-                                    if (!name.empty() && name.front() == ':') {
-                                        if (regular_seen || name != ":status" || received_status.has_value()) {
-                                            throw http_client_error(error_code::protocol_error, "invalid HTTP/3 pseudo-header");
-                                        }
-                                        received_status = http_received_status::try_parse(text);
-                                        if (!received_status || received_status->value() < 100 || received_status->value() > 599 ||
-                                            received_status->value() == 101) {
-                                            throw http_client_error(error_code::protocol_error, "invalid HTTP/3 status");
-                                        }
-                                        continue;
-                                    }
-                                    regular_seen = true;
-                                    if (!is_valid_lowercase_field_name(name) || !is_valid_http_header_value(text) ||
-                                        is_forbidden_http_binary_response_field(name)) {
-                                        throw http_client_error(error_code::protocol_error, "invalid HTTP/3 response field");
-                                    }
-                                    fields.emplace_back(name, text, response.resource_);
-                                }
-                                if (!received_status) {
-                                    throw http_client_error(error_code::protocol_error, "missing HTTP/3 :status");
-                                }
-                                const auto status = received_status->value();
-                                if (status >= 100 && status < 200) {
-                                    if (value.stream_ended_) {
-                                        throw http_client_error(error_code::protocol_error, "HTTP/3 informational response ended stream");
-                                    }
-                                    response.retain_informational(http_status_code::from_value(status), std::move(fields),
-                                        status == 100 ? std::optional(http_client_request_content_signal::continue_value) : std::nullopt);
-                                } else {
-                                    if (status == 425 && item->early_) {
-                                        item->retry_425_ = true;
-                                        return;
-                                    }
-                                    response.headers_ = std::move(fields);
-                                    if (item->websocket_) {
-                                        accept_extended_connect_websocket_response(*item->websocket_,
-                                            http_status_code::from_value(status), response.headers_,
-                                            value.stream_ended_, "invalid HTTP/3 WebSocket handshake response");
-                                        item->timeout_ = operation_timeout(std::nullopt);
-                                    }
-                                    publish_http_client_final_head(response, pool_.policy(),
-                                        {.status_ = http_received_status(http_status_code::from_value(status)),
-                                            .protocol_version_ = http_protocol_version::http3,
-                                            .request_content_signal_ = value.stream_ended_
-                                                                           ? std::optional(http_client_request_content_signal::exchange_complete)
-                                                                           : std::nullopt,
-                                            .origin_target_ = item->origin_ ? std::optional(item->target_) : std::nullopt,
-                                            .opens_tunnel_ = response.tunnel_.has_value() && status < 300});
-                                    if (response.tunnel_ && response.tunnel_->accepted_) {
-                                        const auto settings = quic_->http3().peer_settings();
-                                        response.http3_native_datagrams_ = settings && settings->h3_datagram_;
-                                        item->timeout_ = operation_timeout(std::nullopt);
-                                        item->timer_.read_deadline_.reset();
-                                    }
-                                }
-                            }
-                            read_progress(*item);
-                        } else if constexpr (std::same_as<event_type, http3_data_event>) {
-                            pool_.wire_counters().received_ += value.bytes_.size();
-                            if (item->retry_425_) {
-                                quic_->consume_stream_data(value.stream_id_, value.bytes_.size());
-                                return;
-                            }
-                            if (response.response_body_plan_ && !(response.tunnel_ && response.tunnel_->accepted_) &&
-                                (response.response_body_plan_->body_suppressed() || response.response_body_plan_->content_semantics() != http_response_content_semantics::with_content)) {
-                                quic_->consume_stream_data(value.stream_id_, value.bytes_.size());
-                                read_progress(*item);
-                                return;
-                            }
-                            if (!response.append_received_body(value.bytes_, pool_.config().max_response_bytes_)) {
-                                throw http_client_error(error_code::response_too_large, "HTTP/3 response exceeds byte budget");
-                            }
-                            if (response.collect_all_) {
-                                quic_->consume_stream_data(value.stream_id_, value.bytes_.size());
-                                read_progress(*item);
-                            } else {
-                                response.http3_data_credit_ += value.bytes_.size();
-                                item->timer_.read_deadline_.reset();
-                            }
-                        } else if constexpr (std::same_as<event_type, http3_stream_end_event>) {
-                            if (item->retry_425_) {
-                                item->retry_ = true;
-                                item->done_ = true;
-                            } else if (response.tunnel_ && response.tunnel_->accepted_) {
-                                response.tunnel_->receive_ended_ = true;
-                                if (item->websocket_ && item->write_stopped_ &&
-                                    item->stop_sending_error_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
-                                    complete_websocket_tunnel(*item);
-                                } else if (response.tunnel_->output_.ended_ || response.tunnel_->output_.stopped_) {
-                                    item->done_ = true;
-                                }
-                            } else {
-                                if (!response.head_ready_) {
-                                    throw http_client_error(error_code::protocol_error, "HTTP/3 response ended without a final head");
-                                }
-                                const bool content = response.response_body_plan_ &&
-                                                     response.response_body_plan_->content_semantics() == http_response_content_semantics::with_content;
-                                finish_http_client_response_body(response, item->timeout_, content, pool_.config().max_response_bytes_);
-                                response.complete_ = true;
-                                if (response.upload_ && !response.upload_->output_.ended_) {
-                                    response.upload_->output_.stop();
-                                }
-                                item->done_ = true;
-                            }
-                            item->timer_.read_deadline_.reset();
-                            response.data_signal_.notify();
-                        } else if constexpr (std::same_as<event_type, http3_transport_action_event>) {
-                            if (value.action_ == http3_transport_action::stop_sending) {
-                                item->write_stopped_ = true;
-                                item->stop_sending_error_ = value.application_error_code_;
-                                if (item->websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
-                                    response.tunnel_->receive_ended_ &&
-                                    value.application_error_code_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
-                                    complete_websocket_tunnel(*item);
-                                } else if (auto* output = response.output()) {
-                                    output->stop();
-                                }
-                            } else if (!item->done_ && !item->retry_) {
-                                fail_or_retry_closed_stream(*item, value.application_error_code_);
-                            }
-                        } else if constexpr (std::same_as<event_type, http3_stream_close_event>) {
-                            if (item->websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
-                                response.tunnel_->receive_ended_ && !value.application_error_code_) {
-                                complete_websocket_tunnel(*item);
-                            } else if (!item->done_ && !item->retry_) {
-                                fail_or_retry_closed_stream(*item, value.application_error_code_);
-                            } else if (auto* output = response.output(); output && item->done_) {
-                                output->stop();
-                            }
-                        } else if constexpr (std::same_as<event_type, http3_datagram_event>) {
-                            if (!response.tunnel_ || !response.tunnel_->accepted_ || !response.http3_datagrams_) {
-                                return;
-                            }
-                            const auto bound = pool_.config().max_response_bytes_;
-                            if (response.http3_datagrams_->size() >= 64 || value.payload_.size() > bound - (std::min)(bound, response.http3_datagram_bytes_)) {
-                                return;
-                            }
-                            response.http3_datagrams_->emplace_back(value.payload_);
-                            response.http3_datagram_bytes_ += value.payload_.size();
-                            response.data_signal_.notify();
-                        }
-                    } catch (...) {
-                        item->failure_ = std::current_exception();
-                        quic_->reset_stream(item->id_, static_cast<std::uint64_t>(http3_error_code::message_error));
-                    }
-                    item->signal_.notify();
-                }
-            },
-                *event);
+            std::visit([this](const auto& value) { consume_event(value); }, *event);
         }
         if (tls_state_.ticket_) {
             if (const auto settings = quic_->http3().peer_settings()) {
@@ -917,7 +927,7 @@ public:
         auto callbacks = crypto_callbacks();
         callbacks.handshake_completed = [](ngtcp2_conn*, void* target) noexcept {
             auto& owner = *static_cast<session*>(target);
-            if (selected_client_alpn(owner.tls_.get()) != "h3") {
+            if (tls_selected_alpn(*owner.tls_) != "h3") {
                 return NGTCP2_ERR_CALLBACK_FAILURE;
             }
             if (owner.early_started_ && SSL_get_early_data_status(owner.tls_.get()) != SSL_EARLY_DATA_ACCEPTED) {
@@ -937,7 +947,28 @@ public:
             owner.changed_.notify();
             return 0;
         };
-        quic_.emplace(http3_quic_connection::client({.callbacks_ = callbacks, .source_connection_id_ = random_cid(), .destination_connection_id_ = random_cid(), .initial_path_ = path(local_, remote_), .initial_timestamp_ = http3_quic_now(), .handshake_timeout_ = http3_quic_duration(config.connect_timeout_), .idle_timeout_ = 0, .initial_max_data_ = (std::max)(std::uint64_t{64 * 1024}, (std::min)(std::uint64_t{16 * 1024 * 1024}, static_cast<std::uint64_t>(config.max_response_bytes_))), .initial_max_stream_data_ = 64 * 1024, .max_udp_payload_size_ = config.http3_.max_datagram_bytes_, .callback_user_data_ = this, .resource_ = process_resource(), .http3_ = {.resource_ = process_resource(), .max_concurrent_streams_ = config.http3_.max_concurrent_streams_, .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_, .enable_h3_datagram_ = true}}));
+        const auto receive_window = (std::max)(std::uint64_t{64 * 1024},
+            (std::min)(std::uint64_t{16 * 1024 * 1024},
+                static_cast<std::uint64_t>(config.max_response_bytes_)));
+        const http3_quic_connection_options options{
+            .callbacks_ = callbacks,
+            .source_connection_id_ = random_cid(),
+            .destination_connection_id_ = random_cid(),
+            .initial_path_ = path(local_, remote_),
+            .initial_timestamp_ = http3_quic_now(),
+            .handshake_timeout_ = http3_quic_duration(config.connect_timeout_),
+            .idle_timeout_ = 0,
+            .initial_max_data_ = receive_window,
+            .initial_max_stream_data_ = 64 * 1024,
+            .max_udp_payload_size_ = config.http3_.max_datagram_bytes_,
+            .callback_user_data_ = this,
+            .resource_ = process_resource(),
+            .http3_ = {
+                .resource_ = process_resource(),
+                .max_concurrent_streams_ = config.http3_.max_concurrent_streams_,
+                .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_,
+                .enable_h3_datagram_ = true}};
+        quic_.emplace(http3_quic_connection::client(options));
         quic_->set_tls_native_handle(crypto_.get());
         if (allow_early && config.http3_.enable_early_data_ && tls_state_.ticket_ &&
             tls_state_.ticket_params_size_ && tls_state_.ticket_settings_valid_ &&
@@ -949,7 +980,7 @@ public:
                                  std::as_bytes(std::span(tls_state_.ticket_params_.data(), tls_state_.ticket_params_size_)),
                                  tls_state_.ticket_settings_) == http3_quic_status::accepted;
         }
-        ++generation_;
+        next_nonzero_id(generation_);
         open_ = true;
         active_receive_buffer_ = 0;
         receive_buffers_[0].resize(http3_max_udp_payload_bytes);
@@ -975,7 +1006,7 @@ public:
             }
             co_await changed_.wait();
         }
-        if (quic_->handshake_completed() && selected_client_alpn(tls_.get()) != "h3") {
+        if (quic_->handshake_completed() && tls_selected_alpn(*tls_) != "h3") {
             throw http_client_error(error_code::protocol_unavailable, "peer did not negotiate HTTP/3");
         }
         if (!early_started_) {
@@ -1196,20 +1227,19 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
     race.last_failure_ = nullptr;
     race.winner_.reset();
     race.launch_ready_ = true;
-    worker_cancellation_registration cancellation(race.pool_.cancellation_target(), race.cancellation_id_);
-    response.cancellation_id_ = cancellation.id();
-    struct response_binding final {
-        http_client_response_state& response_;
-        ~response_binding() {
-            response_.cancellation_id_ = 0;
-        }
-    } binding{response};
+    http_client_response_cancellation cancellation(
+        race.pool_.cancellation_target(), race.cancellation_id_, response);
     cancellation.arm(stop);
-    const auto bound = timeout.constrained_by(acquire_timeout.remaining()).constrained_by(race.pool_.config().connect_timeout_);
+    const auto bound = timeout.constrained_by(acquire_timeout.remaining())
+                           .constrained_by(race.pool_.config().connect_timeout_);
     worker_timer_registration deadline_timer;
     if (const auto deadline = bound.deadline()) {
         (void)race.pool_.worker().schedule_timer(deadline_timer, *deadline,
-            [&race](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { race.cancel(error_code::timeout); } });
+            [&race](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired) {
+                    race.cancel(error_code::timeout);
+                }
+            });
     }
     std::unique_ptr<session, pmr_object_deleter<session>> retained{
         nullptr, pmr_object_deleter<session>{process_resource()}};
@@ -1499,8 +1529,8 @@ void http3_client_connection::release_data(http_client_response_state& response)
 task<bool> http3_client_connection::execute(const http_client_request_storage& request,
     std::string_view host, std::uint16_t port, bool fallback, const operation_timeout& timeout,
     const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& response) {
-    const bool may_send_early = safe_early_method(request.method()) && !request.has_body() &&
-                                request.output() == nullptr && !request.is_tunnel();
+    const bool may_send_early = is_http_method_safe(request.method()) &&
+                                !request.has_body() && request.output() == nullptr && !request.is_tunnel();
     try {
         co_await select_endpoint(may_send_early, host, port, timeout, acquire_timeout, stop, response);
     } catch (...) {
@@ -1534,7 +1564,6 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                 output->wake_ = nullptr;
                 output->wake_target_ = nullptr;
             }
-            item_.response_.cancellation_id_ = 0;
             std::erase(owner_.streams_, &item_);
             owner_.changed_.notify();
             if (owner_.race_signal_) {
@@ -1547,8 +1576,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             }
         }
     } registered{self, item};
-    worker_cancellation_registration cancellation(self.pool_.cancellation_target(), item.cancellation_id_);
-    response.cancellation_id_ = cancellation.id();
+    http_client_response_cancellation cancellation(
+        self.pool_.cancellation_target(), item.cancellation_id_, response);
     cancellation.arm(stop);
     self.schedule(item);
     try {
@@ -1627,47 +1656,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             item.early_ = !self.quic_->handshake_completed();
             client_prepared_request_scratch scratch(process_resource());
             const auto prepared = self.pool_.policy().prepare_request(request, scratch);
-            std::pmr::vector<http3_field_view> fields(process_resource());
-            fields.reserve(static_cast<std::span<const http_header_view>>(prepared.headers_).size() + 12);
-            fields.push_back({":method", request.is_tunnel() ? std::string_view("CONNECT") : request.method()});
-            fields.push_back({":authority", request.is_tunnel() ? request.tunnel_authority() : std::string_view(self.pool_.config().authority_)});
-            if (!request.is_tunnel() || !request.tunnel_protocol().empty()) {
-                fields.push_back({":scheme", "https"});
-                fields.push_back({":path", request.target()});
-            }
-            if (request.is_tunnel() && !request.tunnel_protocol().empty()) {
-                fields.push_back({":protocol", request.tunnel_protocol()});
-            }
-            for (const auto& field : static_cast<std::span<const http_header_view>>(prepared.headers_)) {
-                if (field.name() == "host" || field.name() == "content-length") {
-                    continue;
-                }
-                fields.push_back({field.name(), field.value(), field.name() == "authorization" || field.name() == "cookie"});
-            }
-            if (request.websocket()) {
-                for (const auto& field : request.websocket()->negotiation_.request_fields()) {
-                    fields.push_back({field.name(), field.value()});
-                }
-            }
-            std::array<char, 32> length{};
-            std::optional<std::uint64_t> content_length;
-            if (request.upload()) {
-                if (const auto declared = request.upload()->config_.content_length_) {
-                    content_length = declared->value();
-                }
-            } else if (request.has_body()) {
-                content_length = request.body().size();
-            }
-            if (content_length && !request.is_tunnel()) {
-                const auto text = std::to_chars(length.data(), length.data() + length.size(), *content_length);
-                fields.push_back({"content-length", std::string_view(length.data(), static_cast<std::size_t>(text.ptr - length.data()))});
-            }
-            if (request.upload() && request.upload()->config_.expectation_ != http_client_request_expectation::none) {
-                fields.push_back({"expect", "100-continue"});
-            }
-            const bool streaming = request.output() != nullptr || !request.body().empty();
             try {
-                require_accepted(self.quic_->http3().submit_request(item.id_, fields, !streaming));
+                self.submit_request_head(item, request, prepared.headers_);
                 self.writer_.notify();
                 if (!request.body().empty()) {
                     co_await self.send_body(item, request.body());

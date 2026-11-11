@@ -17,177 +17,6 @@
 #include "response/http_response_header_storage.h"
 #include "response/http_response_static_headers.h"
 
-namespace ruvia::detail {
-
-std::uint32_t classify_response_header_name(std::string_view name) noexcept {
-    if (name.empty()) {
-        return 0;
-    }
-    const auto first = http_ascii_to_lower(static_cast<unsigned char>(name.front()));
-    switch (name.size()) {
-        case 4:
-            switch (first) {
-                case 'd':
-                    if (http_ascii_equals_ignore_case(name, "Date")) {
-                        return response_header_date;
-                    }
-                    break;
-                case 'e':
-                    if (http_ascii_equals_ignore_case(name, "ETag")) {
-                        return response_header_etag;
-                    }
-                    break;
-                case 'v':
-                    if (http_ascii_equals_ignore_case(name, "Vary")) {
-                        return response_header_vary;
-                    }
-                    break;
-                default:
-                    break;
-            }
-            return 0;
-        case 5:
-            if (first == 'a' && http_ascii_equals_ignore_case(name, "Allow")) {
-                return response_header_allow;
-            }
-            return 0;
-        case 6:
-            if (first == 's' && http_ascii_equals_ignore_case(name, "Server")) {
-                return response_header_server;
-            }
-            return 0;
-        case 7:
-            switch (first) {
-                case 't':
-                    if (http_ascii_equals_ignore_case(name, "Trailer")) {
-                        return response_header_trailer;
-                    }
-                    break;
-                case 'u':
-                    if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-                        return response_header_upgrade;
-                    }
-                    break;
-                default:
-                    break;
-            }
-            return 0;
-        case 8:
-            if (first == 'l' && http_ascii_equals_ignore_case(name, "Location")) {
-                return response_header_location;
-            }
-            return 0;
-        case 10:
-            switch (first) {
-                case 'c':
-                    if (http_ascii_equals_ignore_case(name, "Connection")) {
-                        return response_header_connection;
-                    }
-                    break;
-                case 'k':
-                    if (http_ascii_equals_ignore_case(name, "Keep-Alive")) {
-                        return response_header_keep_alive;
-                    }
-                    break;
-                case 's':
-                    if (http_ascii_equals_ignore_case(name, "Set-Cookie")) {
-                        return response_header_set_cookie;
-                    }
-                    break;
-            }
-            return 0;
-        case 12:
-            if (first == 'c' && http_ascii_equals_ignore_case(name, "Content-Type")) {
-                return response_header_content_type;
-            }
-            return 0;
-        case 13:
-            switch (first) {
-                case 'a':
-                    if (http_ascii_equals_ignore_case(name, "Accept-Ranges")) {
-                        return response_header_accept_ranges;
-                    }
-                    break;
-                case 'c':
-                    if (http_ascii_equals_ignore_case(name, "Cache-Control")) {
-                        return response_header_cache_control;
-                    }
-                    if (http_ascii_equals_ignore_case(name, "Content-Range")) {
-                        return response_header_content_range;
-                    }
-                    break;
-                case 'l':
-                    if (http_ascii_equals_ignore_case(name, "Last-Modified")) {
-                        return response_header_last_modified;
-                    }
-                    break;
-                default:
-                    break;
-            }
-            return 0;
-        case 14:
-            if (first == 'c' && http_ascii_equals_ignore_case(name, "Content-Length")) {
-                return response_header_content_length;
-            }
-            return 0;
-        case 16:
-            switch (first) {
-                case 'c':
-                    if (http_ascii_equals_ignore_case(name, "Content-Encoding")) {
-                        return response_header_content_encoding;
-                    }
-                    break;
-                case 'p':
-                    if (http_ascii_equals_ignore_case(name, "Proxy-Connection")) {
-                        return response_header_proxy_connection;
-                    }
-                    break;
-                default:
-                    break;
-            }
-            return 0;
-        case 17:
-            if (first == 't' && http_ascii_equals_ignore_case(name, "Transfer-Encoding")) {
-                return response_header_transfer_encoding;
-            }
-            return 0;
-        case 27:
-            if (first == 'a' && http_ascii_equals_ignore_case(name, "Access-Control-Allow-Origin")) {
-                return response_header_access_control_allow_origin;
-            }
-            return 0;
-        case 28:
-            if (first == 'a') {
-                if (http_ascii_equals_ignore_case(name, "Access-Control-Allow-Methods")) {
-                    return response_header_access_control_allow_methods;
-                }
-                if (http_ascii_equals_ignore_case(name, "Access-Control-Allow-Headers")) {
-                    return response_header_access_control_allow_headers;
-                }
-            }
-            return 0;
-        case 22:
-            if (first == 'a' && http_ascii_equals_ignore_case(name, "Access-Control-Max-Age")) {
-                return response_header_access_control_max_age;
-            }
-            return 0;
-        case 29:
-            if (first == 'a' && http_ascii_equals_ignore_case(name, "Access-Control-Expose-Headers")) {
-                return response_header_access_control_expose_headers;
-            }
-            return 0;
-        case 32:
-            if (first == 'a' &&
-                http_ascii_equals_ignore_case(name, "Access-Control-Allow-Credentials")) {
-                return response_header_access_control_allow_credentials;
-            }
-            return 0;
-        default:
-            return 0;
-    }
-}
-
-}  // namespace ruvia::detail
 namespace ruvia {
 namespace {
 
@@ -204,8 +33,9 @@ namespace {
     if (!is_valid_http_header_value(value)) {
         throw std::invalid_argument("invalid HTTP header value");
     }
-    const auto known_bit = detail::classify_response_header_name(key);
-    const auto kind = detail::classify_response_field(key, known_bit);
+    const auto field = detail::classify_http_field_name(key);
+    const auto known_bit = field.response_bit_;
+    const auto kind = field.kind_;
     detail::http_connection_options connection_options;
     detail::http_upgrade_protocols upgrade_protocols;
     switch (detail::parse_http_response_control_field(kind, value, connection_options, upgrade_protocols)) {
@@ -443,18 +273,27 @@ const http_response_header* http_response_headers::find_header_for_read(
     return nullptr;
 }
 
-http_response_header& http_response_headers::prepare_header_value_storage(
-    std::string_view key, std::size_t value_size, std::uint32_t known_bit) {
-    if (auto* const header_value = find_header_for_update(key, known_bit)) {
-        const bool was_appended = detail::http_response_header_access::append(*header_value);
-        assign_uninitialized_value(*header_value, key, value_size, known_bit);
-        return was_appended ? collapse_response_headers(*header_value, known_bit) : *header_value;
+template <typename Mutation>
+http_response_header& http_response_headers::upsert_header(
+    std::string_view key, std::uint32_t known_bit, Mutation&& mutate) {
+    if (auto* const existing = find_header_for_update(key, known_bit)) {
+        const bool was_appended = detail::http_response_header_access::append(*existing);
+        auto& header_value = mutate(existing);
+        return was_appended ? collapse_response_headers(header_value, known_bit) : header_value;
     }
-
     const auto index = size();
-    auto& header_value = add_uninitialized_value(key, value_size, known_bit);
+    auto& header_value = mutate(nullptr);
     record_known_header_index(known_bit, index);
     return header_value;
+}
+
+http_response_header& http_response_headers::prepare_header_value_storage(
+    std::string_view key, std::size_t value_size, std::uint32_t known_bit) {
+    return upsert_header(key, known_bit, [&](http_response_header* existing) -> http_response_header& {
+        return existing != nullptr
+                   ? assign_uninitialized_value(*existing, key, value_size, known_bit)
+                   : add_uninitialized_value(key, value_size, known_bit);
+    });
 }
 
 std::optional<std::string_view> http_response_headers::header(std::string_view name) const& noexcept {
@@ -494,14 +333,14 @@ http_response_header& http_response_headers::replace_header(
 }
 
 void http_response_headers::publish_header(http_response_header prepared) {
-    const auto known_bit = prepared.known_bit_;
-    if (auto* const existing = find_header_for_update(prepared.name(), known_bit)) {
-        (void)replace_header(*existing, prepared);
-        return;
-    }
-    const auto index = size();
-    (void)append_header(prepared);
-    record_known_header_index(known_bit, index);
+    (void)upsert_header(prepared.name(), prepared.known_bit_, [&](http_response_header* existing) -> http_response_header& {
+        if (existing != nullptr) {
+            release_header(*existing);
+            *existing = prepared;
+            return *existing;
+        }
+        return append_header(prepared);
+    });
 }
 
 void http_response_headers::header(
@@ -530,19 +369,14 @@ void http_response_headers::remove_header(std::string_view key) {
 }
 
 void http_response_headers::set_header_validated(
-    std::string_view key, std::string_view value, std::uint32_t known_bit) {
-    if (auto* const header_value = find_header_for_update(key, known_bit)) {
-        const bool was_appended = detail::http_response_header_access::append(*header_value);
-        assign(*header_value, key, value, known_bit);
-        if (was_appended) {
-            (void)collapse_response_headers(*header_value, known_bit);
+    std::string_view key, std::string_view value, std::uint32_t known_bit, bool stable_view) {
+    (void)upsert_header(key, known_bit, [&](http_response_header* existing) -> http_response_header& {
+        if (existing != nullptr) {
+            assign(*existing, key, value, known_bit, stable_view);
+            return *existing;
         }
-        return;
-    }
-
-    const auto index = size();
-    add(key, value, known_bit);
-    record_known_header_index(known_bit, index);
+        return add(key, value, known_bit, stable_view);
+    });
 }
 
 void http_response_headers::append_header_validated(
@@ -653,18 +487,7 @@ bool http_response_headers::remove_header_validated(std::string_view key, std::u
 
 void http_response_headers::header_stable_view(std::string_view key, std::string_view value) {
     const auto known_bit = validate_response_header_field(key, value);
-    if (auto* const header_value = find_header_for_update(key, known_bit)) {
-        const bool was_appended = detail::http_response_header_access::append(*header_value);
-        assign_stable_view(*header_value, key, value, known_bit);
-        if (was_appended) {
-            (void)collapse_response_headers(*header_value, known_bit);
-        }
-        return;
-    }
-
-    const auto index = size();
-    add_stable_view(key, value, known_bit);
-    record_known_header_index(known_bit, index);
+    set_header_validated(key, value, known_bit, true);
 }
 
 void http_response_headers::add_vary_token(std::string_view token) {

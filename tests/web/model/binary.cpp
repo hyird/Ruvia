@@ -79,7 +79,7 @@ TEST(Ruvia, model_json_bytes_accepts_padding_and_rejects_noncanonical_inputs) {
     for (const auto input : {R"("Zg")", R"("Zh==")", R"("Zm=9")", R"("Zm9v=")",
              R"("Zm-v")", R"("Zm_v")", R"("Zm9v\n")", R"("Zm9=")", R"("====")",
              R"("Zg==AAAA")", R"("AA== ")", "null", "[1]", "123"}) {
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::bytes>(input); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<ruvia::bytes>(input); }));
     }
 }
 
@@ -126,7 +126,7 @@ TEST(Ruvia, model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
                 EXPECT_TRUE(parsed_value == retained.get<"bytes">());
                 const auto output = ruvia::to_json(parsed_value, {.resource_ = &output_memory});
                 EXPECT_EQ(output, saved);
-                EXPECT_TRUE(ruvia::testing::throws_on([&] {
+                EXPECT_TRUE(ruvia::test::throws_on([&] {
                     (void)ruvia::from_json<ruvia::array<ruvia::bytes>>(
                         R"(["AQIDBA==","Zh=="])", {.resource_ = &memory});
                 }));

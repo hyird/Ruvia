@@ -9,7 +9,7 @@
 #include "ruvia/http/http_limits.h"
 
 #include "field/http_request_field_validation.h"
-#include "parser/http_header_block_parser.h"
+#include "http1/http_header_block_parser.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
 
@@ -279,7 +279,7 @@ http_request make_parsed_http_request(
     http_field_section_budget budget;
     detail::request_field_state fields(detail::request_field_framing::http1);
     static constexpr std::size_t inline_kind_capacity = 32;
-    std::array<detail::request_header_kind, inline_kind_capacity> inline_kinds{};
+    std::array<detail::http_field_kind, inline_kind_capacity> inline_kinds{};
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header = headers[i];
         if (!is_valid_http_header_name(header.name()) ||
@@ -289,13 +289,13 @@ http_request make_parsed_http_request(
         if (!budget.add_field(header.name(), header.value())) {
             throw http_parse_protocol_error(http_parse_error::header_too_large);
         }
-        const auto kind = detail::classify_request_header(header.name());
+        const auto kind = detail::classify_http_field(header.name());
         if (i < inline_kind_capacity) {
             inline_kinds[i] = kind;
         }
         if (detail::validate_request_field(kind, header.value(), detail::http_field_list_role::recipient, fields) !=
             detail::request_field_status::ok) {
-            throw http_parse_protocol_error(kind == detail::request_header_kind::host
+            throw http_parse_protocol_error(kind == detail::http_field_kind::host
                                                 ? http_parse_error::invalid_host
                                                 : http_parse_error::invalid_header);
         }
@@ -307,8 +307,8 @@ http_request make_parsed_http_request(
         auto field = headers[i];
         const auto kind = i < inline_kind_capacity
                               ? inline_kinds[i]
-                              : detail::classify_request_header(field.name());
-        if (kind == detail::request_header_kind::host) {
+                              : detail::classify_http_field(field.name());
+        if (kind == detail::http_field_kind::host) {
             field = http_header_view{field.name(), bound_host_field_value(target_view, field.value())};
         }
         if (!http_request_access::add_header(request, field, kind)) {

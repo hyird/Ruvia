@@ -59,6 +59,10 @@ public:
         destination[size_++] = field;
     }
 
+    void clear() noexcept {
+        size_ = 0;
+    }
+
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
     }

@@ -65,7 +65,7 @@ TEST(Ruvia, model_default_expression_is_not_evaluated_for_supplied_or_invalid_in
     EXPECT_EQ(valid_json.get<"value">()->value_, 9);
     for (auto input : {R"({"value":null})", R"({"value":"wrong"})",
              R"({"value":8,"value":9})", R"({"value":)"}) {
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_json<optional_default>(input); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_json<optional_default>(input); }));
         EXPECT_EQ(evaluations, std::size_t{0});
     }
     auto null = ruvia::from_json<nullable_default>(R"({"value":null})");
@@ -73,8 +73,8 @@ TEST(Ruvia, model_default_expression_is_not_evaluated_for_supplied_or_invalid_in
     EXPECT_EQ(evaluations, std::size_t{0});
     const auto valid_form = ruvia::from_form<optional_default>("value=9");
     EXPECT_EQ(valid_form.get<"value">()->value_, 9);
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_form<optional_default>("value=wrong"); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)ruvia::from_form<optional_default>("value=8&value=9"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_form<optional_default>("value=wrong"); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::from_form<optional_default>("value=8&value=9"); }));
     EXPECT_EQ(evaluations, std::size_t{0});
 }
 

@@ -14,36 +14,14 @@
 
 #include "ruvia/http/hpack.h"
 
+#include "memory_resource_fixture.h"
 #include "poisoned_retirement_resource.h"
 #include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
 
-class toggle_allocation_resource final : public std::pmr::memory_resource {
-public:
-    void reject(bool value = true) noexcept {
-        reject_ = value;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (reject_) {
-            throw std::bad_alloc();
-        }
-        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool reject_{false};
-};
+using ruvia::test::rejecting_memory_resource;
 
 // RFC 7541 section 5.1 prefix integer, used to craft wire input.
 void append_prefixed_integer(std::string& output, std::uint8_t flags, unsigned prefix_bits, std::uint32_t value) {
@@ -146,7 +124,7 @@ TEST(Ruvia, hpack_public_encoder_accepts_fields_borrowed_from_output) {
         for (const auto kind : {alias_kind::name, alias_kind::value, alias_kind::disjoint,
                  alias_kind::overlapping, alias_kind::identical, alias_kind::static_name,
                  alias_kind::sensitive_name}) {
-            ruvia::testing::poisoned_retirement_resource resource;
+            ruvia::test::poisoned_retirement_resource resource;
             {
                 std::pmr::string output(&resource);
                 prepare_alias_output(output, grow);
@@ -257,7 +235,7 @@ TEST(Ruvia, hpack_public_lowered_capacity_requires_a_leading_update) {
 }
 
 TEST(Ruvia, hpack_public_encoder_preserves_output_when_alias_copy_fails) {
-    toggle_allocation_resource resource;
+    rejecting_memory_resource resource;
     std::pmr::string output(256, 'a', &resource);
     const std::string before(output);
     const auto borrowed = std::string_view(output);
@@ -266,7 +244,7 @@ TEST(Ruvia, hpack_public_encoder_preserves_output_when_alias_copy_fails) {
         check_encoded_field(output, before, before, before);
         return;
     }
-    resource.reject();
+    resource.reject_allocations();
     bool threw = false;
     try {
         ruvia::hpack_encoder::encode_header(output, borrowed, borrowed);
@@ -415,9 +393,9 @@ TEST(Ruvia, hpack_public_compression_error_poisons_the_decoder) {
 }
 
 TEST(Ruvia, hpack_public_allocation_failure_throws_and_poisons_the_decoder) {
-    toggle_allocation_resource resource;
+    rejecting_memory_resource resource;
     ruvia::hpack_decoder decoder({.resource_ = &resource});
-    resource.reject();
+    resource.reject_allocations();
     bool threw = false;
     try {
         (void)decoder.decode(indexed_literal("x-insert", std::string(64, 'v')), [](auto, auto) { return true; });
@@ -425,7 +403,7 @@ TEST(Ruvia, hpack_public_allocation_failure_throws_and_poisons_the_decoder) {
         threw = true;
     }
     EXPECT_TRUE(threw);
-    resource.reject(false);
+    resource.reject_allocations(false);
     EXPECT_TRUE(decoder_is_poisoned(decoder));
 }
 
@@ -478,19 +456,19 @@ TEST(Ruvia, hpack_public_decoder_move_preserves_dynamic_entries) {
         check_newest(destination, 62, "a", "b");
     }
 
-    toggle_allocation_resource unused_resource;
+    rejecting_memory_resource unused_resource;
     {
         ruvia::hpack_decoder unused({.resource_ = &unused_resource});
     }
-    unused_resource.reject();
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    unused_resource.reject_allocations();
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         ruvia::hpack_decoder rejected({.resource_ = &unused_resource});
     }));
 }
 
 #if !defined(_MSC_VER)
 TEST(Ruvia, hpack_public_callback_exception_precedes_continuation_allocation_failure) {
-    toggle_allocation_resource resource;
+    rejecting_memory_resource resource;
     ruvia::hpack_decoder decoder({.resource_ = &resource});
 
     std::string block(1, static_cast<char>(0x82));  // indexed :method: GET
@@ -499,7 +477,7 @@ TEST(Ruvia, hpack_public_callback_exception_precedes_continuation_allocation_fai
     bool saw_original = false;
     try {
         (void)decoder.decode(block, [&](std::string_view, std::string_view) -> bool {
-            resource.reject();
+            resource.reject_allocations();
             throw std::runtime_error("original callback failure");
         });
     } catch (const std::runtime_error& error) {

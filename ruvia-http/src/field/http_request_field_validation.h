@@ -12,8 +12,7 @@
 #include "ruvia/http/http_request_target.h"
 
 #include "field/http_connection_fields.h"
-#include "field/request_header_kind.h"
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 #include "parser/http_request_target.h"
 #include "util/geometric_reserve.h"
 namespace ruvia::detail {
@@ -185,10 +184,10 @@ public:
 
     // True once a field that may occur only once (Host and every
     // singleton_request_header_bit() kind) has been validated.
-    [[nodiscard]] bool seen(request_header_kind kind) const noexcept;
+    [[nodiscard]] bool seen(http_field_kind kind) const noexcept;
 
 private:
-    friend request_field_status validate_request_field(request_header_kind kind, std::string_view value,
+    friend request_field_status validate_request_field(http_field_kind kind, std::string_view value,
         http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept;
 
     std::uint32_t seen_{0};
@@ -198,14 +197,14 @@ private:
 // The authoritative semantic check for one request field, shared by the
 // HTTP/1 and HTTP/2 request writers (role sender) and request
 // recipients (role recipient). Callers classify the name once with
-// classify_request_header() and keep version-specific concerns themselves:
+// classify_http_field() and keep version-specific concerns themselves:
 // framing state (Content-Length values on receipt, Transfer-Encoding,
 // Connection, Upgrade), Host/:authority agreement, cookie joining, and parsing
 // accepted Expect members.
-[[nodiscard]] request_field_status validate_request_field(request_header_kind kind, std::string_view value,
+[[nodiscard]] request_field_status validate_request_field(http_field_kind kind, std::string_view value,
     http_field_list_role role, request_field_state& state,
     http_request_field_source source = http_request_field_source::generated) noexcept;
 
 [[nodiscard]] bool is_protocol_managed_request_field(
-    request_header_kind kind, std::string_view name) noexcept;
+    http_field_kind kind, std::string_view name) noexcept;
 }  // namespace ruvia::detail

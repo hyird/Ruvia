@@ -19,10 +19,10 @@
 RUVIA_MODEL(context_json_response, RUVIA_REQUIRED_FIELD(number, ruvia::int64),
     RUVIA_REQUIRED_FIELD(boolean, ruvia::bool_value), RUVIA_REQUIRED_FIELD(real, ruvia::double_value));
 
-using ruvia::testing::throws_on;
+using ruvia::test::throws_on;
 
 TEST(Ruvia, context_redirect_sets_verbatim_ascii_location_and_status) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response = context.redirect({.location_ = "https://example.com/path?q=1"});
         EXPECT_EQ(response.status(), ruvia::http_status::found);
         EXPECT_EQ(response.header("Location"), std::string_view("https://example.com/path?q=1"));
@@ -31,7 +31,7 @@ TEST(Ruvia, context_redirect_sets_verbatim_ascii_location_and_status) {
 }
 
 TEST(Ruvia, context_redirect_accepts_only_redirect_statuses) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         for (const auto status : {ruvia::http_status::moved_permanently, ruvia::http_status::found,
                  ruvia::http_status::see_other, ruvia::http_status::temporary_redirect,
                  ruvia::http_status::permanent_redirect}) {
@@ -51,7 +51,7 @@ TEST(Ruvia, context_redirect_accepts_only_redirect_statuses) {
 }
 
 TEST(Ruvia, context_redirect_percent_encodes_non_ascii_location) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         // A UTF-8 'é' (0xC3 0xA9) is percent-encoded while the URI structure
         // (scheme, host, path separators) is preserved.
         const auto response =
@@ -64,7 +64,7 @@ TEST(Ruvia, context_redirect_percent_encodes_non_ascii_location) {
 }
 
 TEST(Ruvia, context_redirect_percent_encodes_invalid_ascii_uri_bytes) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response = context.redirect({.location_ = "/a b/100%off?q=\"x y\"\\z"});
         EXPECT_EQ(
             response.header("Location"), std::string_view("/a%20b/100%25off?q=%22x%20y%22%5Cz"));
@@ -73,7 +73,7 @@ TEST(Ruvia, context_redirect_percent_encodes_invalid_ascii_uri_bytes) {
 }
 
 TEST(Ruvia, context_redirect_preserves_existing_percent_escapes_when_encoding) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         // The location mixes already-encoded escapes ("%20", "%2F") with a raw UTF-8
         // 'é' (0xC3 0xA9) that triggers the whole-string encoding pass. The 'é' must
         // become %C3%A9, but the existing escapes must survive intact -- not be
@@ -94,7 +94,7 @@ TEST(Ruvia, context_redirect_preserves_existing_percent_escapes_when_encoding) {
 }
 
 TEST(Ruvia, context_redirect_preserves_ipv6_literal_brackets_when_encoding) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response =
             context.redirect({.location_ = std::string_view("https://[2001:db8::1]/caf\xC3\xA9")});
         EXPECT_EQ(
@@ -104,7 +104,7 @@ TEST(Ruvia, context_redirect_preserves_ipv6_literal_brackets_when_encoding) {
 }
 
 TEST(Ruvia, context_redirect_percent_encodes_square_brackets_outside_ip_literal) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response = context.redirect({.location_ = "/items[0]?filter=[x]#section[1]"});
         EXPECT_EQ(response.header("Location"),
             std::string_view("/items%5B0%5D?filter=%5Bx%5D#section%5B1%5D"));
@@ -118,7 +118,7 @@ TEST(Ruvia, context_redirect_percent_encodes_square_brackets_outside_ip_literal)
 }
 
 TEST(Ruvia, context_redirect_preserves_fragment_separator_and_escapes_fragment_hashes) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         constexpr std::pair<std::string_view, std::string_view> cases[]{
             {"/page#part#nested", "/page#part%23nested"},
             {"/page?x=1#part##nested", "/page?x=1#part%23%23nested"},
@@ -138,7 +138,7 @@ TEST(Ruvia, context_redirect_preserves_fragment_separator_and_escapes_fragment_h
 }
 
 TEST(Ruvia, context_redirect_escapes_colons_that_would_read_as_a_scheme) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         constexpr std::pair<std::string_view, std::string_view> cases[]{
             {"1foo:bar", "1foo%3Abar"},
             {"a b:c/d:e", "a%20b%3Ac/d:e"},
@@ -157,7 +157,7 @@ TEST(Ruvia, context_redirect_escapes_colons_that_would_read_as_a_scheme) {
 }
 
 TEST(Ruvia, context_redirect_escapes_at_signs_inside_userinfo) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         constexpr std::pair<std::string_view, std::string_view> cases[]{
             {"http://user@name@host.example/p@q", "http://user%40name@host.example/p@q"},
             {"//a@b@[::1]/", "//a%40b@[::1]/"},
@@ -172,7 +172,7 @@ TEST(Ruvia, context_redirect_escapes_at_signs_inside_userinfo) {
 }
 
 TEST(Ruvia, context_redirect_rejects_crlf_header_injection) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         // A CRLF in the location must not split the response: header-value
         // validation rejects it (the location is ASCII, so it takes the verbatim
         // path straight into the validated header setter).
@@ -189,7 +189,7 @@ TEST(Ruvia, context_redirect_rejects_crlf_header_injection) {
 }
 
 TEST(Ruvia, context_redirect_rejects_crlf_even_when_location_needs_encoding) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         EXPECT_TRUE(throws_on([&] {
             (void)context.redirect(
                 {.location_ = std::string_view("https://example.com/caf\xC3\xA9\r\nX-Injected: y")});
@@ -199,7 +199,7 @@ TEST(Ruvia, context_redirect_rejects_crlf_even_when_location_needs_encoding) {
 }
 
 TEST(Ruvia, context_body_sets_body_and_status) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.draft().status(ruvia::http_status::created);
         const auto response = context.body("hello world");
         EXPECT_EQ(response.status(), ruvia::http_status::created);
@@ -209,7 +209,7 @@ TEST(Ruvia, context_body_sets_body_and_status) {
 }
 
 TEST(Ruvia, context_dynamic_body_owns_input_and_preserves_lvalue) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         std::string source_value("dynamic body");
 
         const auto response = context.body(std::string_view(source_value));
@@ -222,7 +222,7 @@ TEST(Ruvia, context_dynamic_body_owns_input_and_preserves_lvalue) {
 }
 
 TEST(Ruvia, context_static_text_builders_borrow_static_storage) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         static constexpr std::string_view page = "<b>html</b>";
         constexpr ruvia::static_text body_text("bo\0dy");
         const auto body_response = context.body(body_text);
@@ -241,7 +241,7 @@ TEST(Ruvia, context_static_text_builders_borrow_static_storage) {
 }
 
 TEST(Ruvia, context_character_array_builders_copy_until_terminator) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         char buffer[64] = {};
         const auto written = std::snprintf(buffer, sizeof(buffer), "count=%d", 7);
         EXPECT_TRUE(written > 0);
@@ -266,7 +266,7 @@ TEST(Ruvia, context_character_array_builders_copy_until_terminator) {
 
 TEST(Ruvia, context_rejects_informational_and_non_http_final_statuses) {
     {
-        (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+        (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
             bool threw = false;
             try {
                 context.draft().status(ruvia::http_status::early_hints);
@@ -289,7 +289,7 @@ TEST(Ruvia, context_rejects_informational_and_non_http_final_statuses) {
 }
 
 TEST(Ruvia, context_error_normalizes_non_error_status_before_response_state) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.draft().header("X-Trace", "1");
 
         const auto ok = context.error(
@@ -306,7 +306,7 @@ TEST(Ruvia, context_error_normalizes_non_error_status_before_response_state) {
 }
 
 TEST(Ruvia, context_response_metadata_uses_http_response_validation) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         bool threw = false;
         try {
             context.draft().header("Connection", "close,");
@@ -321,7 +321,7 @@ TEST(Ruvia, context_response_metadata_uses_http_response_validation) {
 }
 
 TEST(Ruvia, context_body_applies_context_headers) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.draft().status(ruvia::http_status::ok);
         context.draft().header("Content-Type", "text/plain");
         context.draft().header("X-Custom", "v");
@@ -335,7 +335,7 @@ TEST(Ruvia, context_body_applies_context_headers) {
 }
 
 TEST(Ruvia, context_text_responses_send_nosniff_unless_the_application_set_it) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto borrowed = context.text("plain");
         EXPECT_EQ(borrowed.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
         EXPECT_EQ(borrowed.header("X-Content-Type-Options"), std::string_view("nosniff"));
@@ -349,7 +349,7 @@ TEST(Ruvia, context_text_responses_send_nosniff_unless_the_application_set_it) {
 }
 
 TEST(Ruvia, context_response_header_transactions_preserve_owned_body_storage) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.draft().header("X-Added", "context");
         context.draft().header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
         context.draft().header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
@@ -366,7 +366,7 @@ TEST(Ruvia, context_response_header_transactions_preserve_owned_body_storage) {
 }
 
 TEST(Ruvia, context_response_header_transactions_preserve_cookie_policy_and_spilled_headers) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.draft().header("Set-Cookie", "session=new; Path=/");
         context.draft().header("Cache-Control", "no-store");
         ruvia::http_response response;
@@ -398,7 +398,7 @@ TEST(Ruvia, context_response_header_transactions_preserve_cookie_policy_and_spil
 }
 
 TEST(Ruvia, context_draft_is_consumed_and_final_edits_do_not_cross_replacement) {
-    const auto delivered = context_request_test::with_context(ruvia::test_request::get("/"),
+    const auto delivered = ruvia::test::with_context(ruvia::test_request::get("/"),
         [](ruvia::context& context) -> ruvia::task<void> {
             bool missing_rejected = false;
             try {
@@ -426,7 +426,7 @@ TEST(Ruvia, context_draft_is_consumed_and_final_edits_do_not_cross_replacement) 
 
 TEST(Ruvia, context_policy_is_explicit_and_independent_of_response_selection_time) {
     for (const bool after : {false, true}) {
-        const auto delivered = context_request_test::with_context(ruvia::test_request::get("/"),
+        const auto delivered = ruvia::test::with_context(ruvia::test_request::get("/"),
             [after](ruvia::context& context) -> ruvia::task<void> {
                 if (!after) {
                     context.policy().header("X-Policy", "retained");
@@ -457,7 +457,7 @@ TEST(Ruvia, context_policy_is_explicit_and_independent_of_response_selection_tim
 }
 
 TEST(Ruvia, context_metadata_preserves_repeated_set_cookie_headers) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.draft().header("Set-Cookie", "a=1", {.mode_ = ruvia::http_response_header_mode::append});
         context.draft().header("Set-Cookie", "b=2", {.mode_ = ruvia::http_response_header_mode::append});
         const auto response = context.body("data");
@@ -474,7 +474,7 @@ TEST(Ruvia, context_metadata_preserves_repeated_set_cookie_headers) {
 }
 
 TEST(Ruvia, context_body_null_gives_empty_body_with_status) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.draft().status(ruvia::http_status::no_content);
         const auto response = context.body();
         EXPECT_EQ(response.status(), ruvia::http_status::no_content);
@@ -484,7 +484,7 @@ TEST(Ruvia, context_body_null_gives_empty_body_with_status) {
 }
 
 TEST(Ruvia, context_body_byte_span_copies_into_response_storage) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const std::byte bytes_value[] = {
             std::byte{0x00},
             std::byte{0x41},
@@ -502,7 +502,7 @@ TEST(Ruvia, context_body_byte_span_copies_into_response_storage) {
 }
 
 TEST(Ruvia, context_text_sets_plain_content_type) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response = context.text("hello");
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
@@ -512,7 +512,7 @@ TEST(Ruvia, context_text_sets_plain_content_type) {
 }
 
 TEST(Ruvia, context_html_sets_html_content_type) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         const auto response = context.html("<h1>hi</h1>");
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
@@ -522,7 +522,7 @@ TEST(Ruvia, context_html_sets_html_content_type) {
 }
 
 TEST(Ruvia, context_json_serializes_response_model_with_json_content_type) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context_json_response model({.resource_ = context.arena()});
         model.set<"number">(42);
         model.set<"boolean">(true);
@@ -537,7 +537,7 @@ TEST(Ruvia, context_json_serializes_response_model_with_json_content_type) {
 }
 
 TEST(Ruvia, context_redirect_rejects_backslash_inside_authority) {
-    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+    (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         // Browsers end the host at '\'; "%5C" would send them to evil.example.
         EXPECT_TRUE(throws_on([&] { (void)context.redirect({.location_ = "http://good.example\\@evil.example/"}); }));
         EXPECT_TRUE(throws_on([&] { (void)context.redirect({.location_ = "//good.example\\@evil.example/"}); }));

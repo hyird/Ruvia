@@ -4,6 +4,7 @@
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <utility>
 
 #include "stl_allocation_fixture.h"
 
@@ -48,11 +49,23 @@ public:
         return deallocation_count_;
     }
 
+    [[nodiscard]] std::size_t live_bytes() const noexcept {
+        return live_bytes_;
+    }
+
+    void reject_allocations(bool value = true) noexcept {
+        rejecting_ = value;
+    }
+
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (rejecting_) {
+            throw std::bad_alloc();
+        }
         auto* const storage = upstream_->allocate(bytes_value, alignment);
         ++allocation_count_;
         ++live_allocations_;
+        live_bytes_ += bytes_value;
         return storage;
     }
 
@@ -60,6 +73,7 @@ private:
         upstream_->deallocate(pointer, bytes_value, alignment);
         --live_allocations_;
         ++deallocation_count_;
+        live_bytes_ -= bytes_value;
     }
 
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -70,6 +84,53 @@ private:
     std::size_t allocation_count_{0};
     std::size_t live_allocations_{0};
     std::size_t deallocation_count_{0};
+    std::size_t live_bytes_{0};
+    bool rejecting_{false};
+};
+
+class reentrant_memory_resource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocation_count() const noexcept {
+        return allocations_;
+    }
+
+    [[nodiscard]] std::size_t live_bytes() const noexcept {
+        return live_bytes_;
+    }
+
+    void reject_allocations(bool value = true) noexcept {
+        rejecting_ = value;
+    }
+
+    void (*before_deallocate_)(void*) noexcept {};
+    void* deallocation_context_{};
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (rejecting_) {
+            throw std::bad_alloc();
+        }
+        auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        live_bytes_ += bytes;
+        ++allocations_;
+        return result;
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        live_bytes_ -= bytes;
+        if (const auto callback = std::exchange(before_deallocate_, nullptr)) {
+            callback(deallocation_context_);
+        }
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocations_{0};
+    std::size_t live_bytes_{0};
+    bool rejecting_{false};
 };
 
 class equivalent_tracking_resource final : public std::pmr::memory_resource {

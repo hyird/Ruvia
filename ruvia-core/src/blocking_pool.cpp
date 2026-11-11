@@ -12,8 +12,9 @@
 #include <vector>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/local_ring_queue.h"
 #include "ruvia/core/memory/pmr_object.h"
+
+#include "local_ring_queue.h"
 
 namespace ruvia {
 

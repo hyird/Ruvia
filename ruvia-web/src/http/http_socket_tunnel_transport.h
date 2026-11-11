@@ -14,10 +14,10 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 
+#include "http/http_stream_end.h"
 #include "http/tls_tunnel_output.h"
 #include "server/connection_scanner.h"
 #include "server/inbound_transport_error.h"
-#include "tls/tls_stream_end.h"
 
 namespace ruvia::detail {
 

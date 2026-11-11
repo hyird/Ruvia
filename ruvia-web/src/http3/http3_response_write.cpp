@@ -17,16 +17,8 @@
 namespace ruvia::detail {
 namespace {
 
-using write_result = http3_buffered_response_write_result;
-
 [[nodiscard]] std::span<const std::byte> byte_view(std::string_view bytes) noexcept {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
-}
-
-// Output budget the stream may still submit before acknowledgements free more.
-[[nodiscard]] std::size_t output_budget(http3_session& session, std::int64_t stream_id) noexcept {
-    const auto pending = session.codec().pending_output_bytes(stream_id);
-    return pending >= http3_stream_output_bytes ? 0 : http3_stream_output_bytes - pending;
 }
 
 [[nodiscard]] bool stream_aborted(http3_session& session, std::int64_t stream_id) noexcept {
@@ -38,16 +30,11 @@ using write_result = http3_buffered_response_write_result;
 // connection ended first.
 [[nodiscard]] task<bool> await_output_budget(
     http3_session& session, std::int64_t stream_id, multiplexed_stream_signal& signal) {
-    struct output_wait final {
-        multiplexed_stream_signal& signal_;
-        ~output_wait() {
-            signal_.set_waiting_output(false);
+    std::optional<multiplexed_stream_signal::output_wait_guard> waiting;
+    while (session.codec().available_output_bytes(stream_id) == 0) {
+        if (!waiting) {
+            waiting.emplace(signal);
         }
-    } waiting{signal};
-    if (output_budget(session, stream_id) == 0) {
-        signal.set_waiting_output(true);
-    }
-    while (output_budget(session, stream_id) == 0) {
         if (signal.stopped() || stream_aborted(session, stream_id)) {
             co_return false;
         }
@@ -86,7 +73,7 @@ http3_buffered_response_writer::http3_buffered_response_writer(
     http3_session& session, response_file_io file_io) noexcept
     : session_(session),
       file_io_(std::move(file_io)),
-      file_reads_(file_io_.worker_, http3_file_read_slots) {}
+      file_reads_(file_io_.worker_, multiplexed_file_read_slots) {}
 bool http3_buffered_response_writer::stream_ended(std::int64_t stream_id) noexcept {
     auto* stream = session_.find_stream(stream_id);
     if (stream == nullptr || stream->aborted()) {
@@ -96,7 +83,7 @@ bool http3_buffered_response_writer::stream_ended(std::int64_t stream_id) noexce
     return signal != nullptr && signal->stopped();
 }
 
-task<http3_buffered_response_write_result> http3_buffered_response_writer::write_file_body(
+task<multiplexed_buffered_response_write_result> http3_buffered_response_writer::write_file_body(
     std::int64_t stream_id, multiplexed_stream_signal& signal, response_file_source& source,
     http_status_code committed_status) {
     for (;;) {
@@ -108,13 +95,13 @@ task<http3_buffered_response_write_result> http3_buffered_response_writer::write
             if (!(co_await await_output_budget(session_, stream_id, signal)) ||
                 !(co_await file_reads_.acquire(
                     [this, stream_id]() noexcept { return stream_ended(stream_id); }))) {
-                co_return write_result{.committed_status_ = committed_status};
+                co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
             slot.emplace(file_reads_);
             if (stream_ended(stream_id)) {
-                co_return write_result{.committed_status_ = committed_status};
+                co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
-            const auto budget = output_budget(session_, stream_id);
+            const auto budget = session_.codec().available_output_bytes(stream_id);
             if (budget == 0) {
                 continue;
             }
@@ -124,30 +111,30 @@ task<http3_buffered_response_write_result> http3_buffered_response_writer::write
         if (chunk.kind() == response_body_chunk::kind_type::failed) {
             // The committed Content-Length can no longer be honoured.
             session_.reset_stream(stream_id, http3_error_code::internal_error);
-            co_return write_result{.committed_status_ = committed_status, .file_failure_ = *source.failure()};
+            co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status, .file_failure_ = *source.failure()};
         }
         if (chunk.kind() == response_body_chunk::kind_type::end) {
             if (stream_ended(stream_id)) {
-                co_return write_result{.committed_status_ = committed_status};
+                co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
             if (session_.codec().finish_stream(stream_id) != http3_status::accepted) {
                 session_.reset_stream(stream_id, http3_error_code::internal_error);
             }
             session_.wake_writer();
-            co_return write_result{.committed_status_ = committed_status};
+            co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
         }
         const auto status = co_await write_http3_stream_data(session_, stream_id, signal, chunk.bytes());
         source.release_buffer();
         if (status != http3_data_write_status::completed) {
-            co_return write_result{.committed_status_ = committed_status};
+            co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
         }
     }
 }
 
-task<http3_buffered_response_write_result> http3_buffered_response_writer::write(
+task<multiplexed_buffered_response_write_result> http3_buffered_response_writer::write(
     std::int64_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
     if (stream_ended(stream_id)) {
-        co_return write_result{};
+        co_return multiplexed_buffered_response_write_result{};
     }
     std::optional<response_file_source> source;
     // Open and validate the file before the head, without reading it: a file
@@ -170,7 +157,7 @@ task<http3_buffered_response_write_result> http3_buffered_response_writer::write
             // for a response the head submission rejected.
             session_.reset_stream(stream_id, http3_error_code::internal_error);
         }
-        co_return write_result{};
+        co_return multiplexed_buffered_response_write_result{};
     }
     auto* stream = session_.find_stream(stream_id);
     auto* signal = stream != nullptr ? stream->signal() : nullptr;
@@ -181,7 +168,7 @@ task<http3_buffered_response_write_result> http3_buffered_response_writer::write
     session_.wake_writer();
     const auto committed_status = submitted_head->body_plan().response_status();
     if (!submitted_head->send_body()) {
-        co_return write_result{.committed_status_ = committed_status};
+        co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
     }
     if (source) {
         co_return co_await write_file_body(stream_id, *signal, *source, committed_status);
@@ -193,7 +180,7 @@ task<http3_buffered_response_write_result> http3_buffered_response_writer::write
         }
         session_.wake_writer();
     }
-    co_return write_result{.committed_status_ = committed_status};
+    co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
 }
 
 }  // namespace ruvia::detail

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "context_request_fixture.h"
+#include "scoped_temp_directory.h"
 
 namespace static_files_test {
 
@@ -16,10 +17,7 @@ namespace fs = std::filesystem;
 
 // A throwaway document root mixing a normal asset with hidden files and a
 // hidden directory (the .git checkout an operator might accidentally deploy).
-fs::path make_dotfile_root() {
-    const auto dir = fs::temp_directory_path() / "ruvia_static_dotfiles_test";
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
+void populate_dotfile_root(const fs::path& dir) {
     fs::create_directories(dir / ".git");
     const auto write = [](const fs::path& path, std::string_view body) {
         std::ofstream file(path);
@@ -30,12 +28,11 @@ fs::path make_dotfile_root() {
     write(dir / ".htpasswd", "user:hash");
     write(dir / ".backup.json", "{}");
     write(dir / ".git" / "config", "[core]");
-    return dir;
 }
 
 [[nodiscard]] bool served(const ruvia::static_root& root, std::string_view path) {
     bool found = false;
-    static_cast<void>(context_request_test::with_context(
+    static_cast<void>(ruvia::test::with_context(
         ruvia::test_request::get("/"),
         [&](ruvia::context& ctx) -> ruvia::task<void> {
             try {
@@ -60,7 +57,7 @@ struct served_body final {
 // transport or carries its bytes in memory.
 [[nodiscard]] served_body serve_body(const ruvia::static_root& root, std::string_view path) {
     served_body result;
-    static_cast<void>(context_request_test::with_context(
+    static_cast<void>(ruvia::test::with_context(
         ruvia::test_request::get("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
             try {
                 const auto response = co_await ctx.static_file(root, {.relative_path_ = path});
@@ -76,27 +73,25 @@ struct served_body final {
     return result;
 }
 
-fs::path make_resident_root() {
-    const auto dir = fs::temp_directory_path() / "ruvia_static_resident_test";
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
+void populate_resident_root(const fs::path& dir) {
     fs::create_directories(dir / "nested");
     std::ofstream(dir / "small.txt", std::ios::binary) << "small-v1";
     std::ofstream(dir / "nested" / "page.txt", std::ios::binary) << "nested-v1";
     std::ofstream(dir / "large.txt", std::ios::binary) << std::string(64, 'L');
-    return dir;
 }
 
 }  // namespace static_files_test
 
-using static_files_test::make_dotfile_root;
-using static_files_test::make_resident_root;
+using static_files_test::populate_dotfile_root;
+using static_files_test::populate_resident_root;
 using static_files_test::serve_body;
 using static_files_test::served;
 namespace fs = std::filesystem;
 
 TEST(Ruvia, static_root_hides_dotfiles_even_under_all_policy) {
-    const auto dir = make_dotfile_root();
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_dotfiles");
+    const auto& dir = directory.path();
+    populate_dotfile_root(dir);
     ruvia::static_root_options options;
     // The hidden-path default-deny must still keep secrets out of responses.
     options.file_types_ =
@@ -108,13 +103,12 @@ TEST(Ruvia, static_root_hides_dotfiles_even_under_all_policy) {
     EXPECT_TRUE(!served(root, ".htpasswd"));
     EXPECT_TRUE(!served(root, ".backup.json"));
     EXPECT_TRUE(!served(root, ".git/config"));
-
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
 }
 
 TEST(Ruvia, static_root_serves_dotfiles_when_opted_in) {
-    const auto dir = make_dotfile_root();
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_dotfiles");
+    const auto& dir = directory.path();
+    populate_dotfile_root(dir);
     ruvia::static_root_options options;
     options.file_types_ =
         ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
@@ -124,13 +118,12 @@ TEST(Ruvia, static_root_serves_dotfiles_when_opted_in) {
     EXPECT_TRUE(served(root, ".env"));
     EXPECT_TRUE(served(root, ".git/config"));
     EXPECT_TRUE(served(root, "app.js"));
-
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
 }
 
 TEST(Ruvia, static_root_without_resident_opt_in_stays_file_backed_and_fails_closed) {
-    const auto dir = make_resident_root();
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_resident");
+    const auto& dir = directory.path();
+    populate_resident_root(dir);
     ruvia::static_root root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
 
     const auto before = serve_body(root, "nested/page.txt");
@@ -141,7 +134,7 @@ TEST(Ruvia, static_root_without_resident_opt_in_stays_file_backed_and_fails_clos
     // A HEAD has no body for the transport to check, so the identity check
     // runs while framing.
     bool head_failed = false;
-    static_cast<void>(context_request_test::with_context(
+    static_cast<void>(ruvia::test::with_context(
         ruvia::test_request::head("/"), [&](ruvia::context& ctx) -> ruvia::task<void> {
             try {
                 static_cast<void>(co_await ctx.static_file(root, {.relative_path_ = "nested/page.txt"}));
@@ -152,13 +145,12 @@ TEST(Ruvia, static_root_without_resident_opt_in_stays_file_backed_and_fails_clos
             co_return;
         }));
     EXPECT_TRUE(head_failed);
-
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
 }
 
 TEST(Ruvia, static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
-    const auto dir = make_resident_root();
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_resident");
+    const auto& dir = directory.path();
+    populate_resident_root(dir);
     ruvia::static_root root(dir,
         {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
             .resident_max_bytes_ = 32,
@@ -182,13 +174,12 @@ TEST(Ruvia, static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
     const auto large = serve_body(root, "large.txt");
     EXPECT_EQ(large.status_, ruvia::http_status::ok);
     EXPECT_TRUE(large.file_backed_);
-
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
 }
 
 TEST(Ruvia, static_root_resident_budget_bounds_the_kept_bytes) {
-    const auto dir = make_resident_root();
+    const ruvia::test::scoped_temp_directory directory("ruvia_static_resident");
+    const auto& dir = directory.path();
+    populate_resident_root(dir);
     // Index order is large.txt, nested/page.txt, small.txt; only the first
     // eligible files that fit the budget stay resident.
     ruvia::static_root root(dir,
@@ -197,7 +188,4 @@ TEST(Ruvia, static_root_resident_budget_bounds_the_kept_bytes) {
             .resident_budget_bytes_ = 9});
     EXPECT_TRUE(!serve_body(root, "nested/page.txt").file_backed_);
     EXPECT_TRUE(serve_body(root, "small.txt").file_backed_);
-
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
 }

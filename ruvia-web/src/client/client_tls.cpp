@@ -145,13 +145,6 @@ client_tls_config_storage::client_tls_config_storage(
     }
 }
 
-std::string_view selected_client_alpn(SSL* ssl) noexcept {
-    const unsigned char* selected = nullptr;
-    unsigned int size = 0;
-    SSL_get0_alpn_selected(ssl, &selected, &size);
-    return {reinterpret_cast<const char*>(selected), size};
-}
-
 void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config) {
     if (config.mode_ != client_tls_mode::verify_identity) {
         throw std::invalid_argument("client TLS context requires TLS to be enabled");

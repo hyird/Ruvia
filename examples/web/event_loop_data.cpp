@@ -23,7 +23,7 @@
 #include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/redis/redis_repository.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 
 namespace {
 using namespace ruvia;
@@ -86,11 +86,6 @@ struct worker_data final {
     redis_client redis_;
 };
 
-std::string setting(const char* name, const char* fallback) {
-    const auto* value = std::getenv(name);
-    return value == nullptr ? fallback : value;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -100,18 +95,17 @@ int main(int argc, char** argv) {
         return 0;
     }
     try {
-        const example::environment env;
-        db_config sql{.driver_ = db_driver::postgresql,
-            .host_ = setting("RUVIA_DB_HOST", "127.0.0.1"),
-            .port_ = env.get<std::uint16_t>("RUVIA_DB_PORT").value_or(5432),
-            .username_ = setting("RUVIA_DB_USER", "postgres"),
-            .password_ = setting("RUVIA_DB_PASSWORD", ""),
-            .tls_ = example::backend_tls("RUVIA_DB"),
-            .database_ = setting("RUVIA_DB_DATABASE", "postgres")};
-        redis_config cache{.host_ = setting("RUVIA_REDIS_HOST", "127.0.0.1"),
-            .port_ = env.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
-            .tls_ = example::backend_tls("RUVIA_REDIS"),
-            .pool_size_per_worker_ = 1};
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env(&app.env());
+        auto sql = example::database_config(env, db_driver::postgresql);
+        if (!env.get("RUVIA_DB_USER")) {
+            sql.username_ = "postgres";
+        }
+        if (!env.get("RUVIA_DB_DATABASE")) {
+            sql.database_ = "postgres";
+        }
+        auto cache = example::redis_config(env);
         // Both loops look DNS hosts up on this pool; IP literals need none.
         // Declared first, it outlives the loops.
         blocking_pool host_lookups({.thread_count_ = 1});

@@ -20,7 +20,7 @@ namespace {
 
 using ruvia::http_request;
 using ruvia::validate_websocket_handshake;
-using ruvia::testing::parse_http1_request_message;
+using ruvia::test::parse_http1_request_message;
 
 http_request parse_request(std::string_view raw_request) {
     auto parsed_value = parse_http1_request_message(raw_request);

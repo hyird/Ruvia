@@ -27,7 +27,7 @@ void check_unverifiable_history(
     config.driver_ = driver;
     config.username_ = "test";
     config.query_timeout_ = std::chrono::seconds(2);
-    failing_memory_resource resource;
+    ruvia::test::failing_memory_resource resource;
     bool rejected = false;
     try {
         (void)ruvia::db_migrator::migrate(config, migrations, {.resource_ = &resource});

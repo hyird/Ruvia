@@ -5,8 +5,8 @@
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_client_response_head.h"
 
-#include "client/http_client_response_head.h"
 #include "field/http_connection_fields.h"
+#include "http1/http_client_response_head.h"
 #include "response/http_response_header_state.h"
 
 // Whether a parsed response head lets the exchange continue: may this 101 switch

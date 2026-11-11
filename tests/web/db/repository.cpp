@@ -31,7 +31,7 @@
 
 namespace db_repository_test {
 using namespace ruvia;
-namespace testing = ::ruvia::testing;
+namespace testing = ::ruvia::test;
 RUVIA_DB_ENTITY(entity_type, "items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"name", std::pmr::string>)
 RUVIA_DB_ENTITY(nullable_entity_type, "nullable_items",
@@ -108,6 +108,34 @@ TEST(Ruvia, db_repository_projects_computed_dto_and_owns_expression_sources) {
         auto result_value = partial.get_many();
         EXPECT_TRUE(testing::throws_on([&] { partial.select({{"missing"}}); }));
         EXPECT_TRUE(testing::throws_on([&] { partial.select({{"id"}, {"id"}}); }));
+        co_return;
+    });
+}
+
+TEST(Ruvia, db_repository_write_validation_and_cte_rules_are_entry_point_independent) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto items = client.handle().repository<entity_type>();
+        const auto condition = entity_type::column<"id">() == 1;
+        const entity_type empty_changes;
+        auto builder = items.update_builder();
+        EXPECT_TRUE(testing::throws_on([&] { builder.set(empty_changes); }));
+        EXPECT_TRUE(testing::throws_on([&] { builder.set(std::span<const db_assignment>{}); }));
+        EXPECT_TRUE(testing::throws_on([&] { (void)items.update(condition, empty_changes); }));
+        EXPECT_TRUE(testing::throws_on([&] { (void)items.update(condition, std::span<const db_assignment>{}); }));
+
+        auto parents = client.handle().repository<parent>();
+        auto hydrated = parents.query_builder("p");
+        hydrated.left_join_and_select("children", "c");
+        auto read_source = parents.query_builder("read");
+        hydrated.with("read_source", read_source);
+        auto mutation = parents.delete_builder();
+        mutation.where(parent::column<"id">() == 1).returning();
+        auto nested = parents.query_builder("changed");
+        nested.with("deleted", mutation).from_cte("deleted");
+        EXPECT_TRUE(testing::throws_on([&] { hydrated.with("mutation", mutation); }));
+        EXPECT_TRUE(testing::throws_on([&] { hydrated.with("mutation", mutation.query()); }));
+        EXPECT_TRUE(testing::throws_on([&] { hydrated.with("nested", nested); }));
         co_return;
     });
 }
@@ -858,7 +886,12 @@ TEST(Ruvia, db_repository_expression_writes_own_sources_and_validate_returning) 
                 auto upsert = repository.insert_builder(entity).on_conflict(options).returning().get_many();
                 auto direct_result = repository.update(where, {{"name", x.value("replacement")}});
                 EXPECT_TRUE(testing::throws_on([&] { (void)repository.update(where, {{"missing", x.value(1)}}); }));
-                EXPECT_TRUE(testing::throws_on([&] { (void)repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}}); }));
+                auto repeated = repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}});
+                auto repeated_builder = repository.update_builder();
+                repeated_builder.set({{"id", x.value(1)}, {"id", x.value(2)}}).where(where);
+                const auto repeated_sql = repeated_builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                EXPECT_TRUE(repeated_sql.sql().find("SET \"id\" = 2") != std::string_view::npos);
+                EXPECT_TRUE(repeated_sql.sql().find("SET \"id\" = 1") == std::string_view::npos);
                 options.update_expressions_ = duplicate_updates;
                 EXPECT_TRUE(testing::throws_on([&] { (void)repository.upsert(entity, options); }));
             }
@@ -1443,7 +1476,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
         auto clean_grouped = roles.query_builder("r");
         clean_grouped.select({{"id"}, role_entity::column<"name">().coalesce("fallback", "label")})
             .group_by({"id"})
-            .add_group_by(role_entity::column<"name">())
+            .add_group_by({role_entity::column<"name">()})
             .having(role_entity::column<"id">() > 0)
             .and_having(query.exists());
         const auto grouped_sql = clean_grouped.get_query_and_parameters();

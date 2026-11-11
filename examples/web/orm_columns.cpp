@@ -19,7 +19,7 @@
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/error.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 
 namespace {
 using namespace ruvia;
@@ -118,25 +118,9 @@ task<void> run(db_client& db, db_client& concurrent, event_loop_attachment& atta
 }
 
 db_config config() {
-    db_config result_value{.driver_ = db_driver::postgresql};
-    result_value.tls_ = example::backend_tls("RUVIA_DB");
-    const auto read = [](const char* key, std::string& target) {
-        if (const auto* value = std::getenv(key)) {
-            target = value;
-        }
-    };
-    read("RUVIA_DB_HOST", result_value.host_);
-    read("RUVIA_DB_USER", result_value.username_);
-    read("RUVIA_DB_PASSWORD", result_value.password_);
-    read("RUVIA_DB_DATABASE", result_value.database_);
-    if (const auto* port = std::getenv("RUVIA_DB_PORT")) {
-        const auto value = std::stoul(port);
-        if (value == 0) {
-            throw std::invalid_argument("invalid database port");
-        }
-        result_value.port_ = value;
-    }
-    return result_value;
+    auto& app = ruvia::app();
+    app.load_dotenv();
+    return example::database_config(example::environment(&app.env()), db_driver::postgresql);
 }
 }  // namespace
 

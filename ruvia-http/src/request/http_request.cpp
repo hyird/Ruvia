@@ -9,7 +9,7 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/url_encoding.h"
 
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 #include "request/http_request_access.h"
 
 namespace ruvia {
@@ -26,9 +26,9 @@ http_request& http_request::operator=(http_request&& other) noexcept {
 }
 
 std::optional<std::string_view> http_request::header(std::string_view name) const noexcept {
-    const auto kind = detail::classify_request_header(name);
-    if (kind != detail::request_header_kind::other) {
-        const auto known_slot = detail::request_header_kind_known_slot(kind);
+    const auto kind = detail::classify_http_field(name);
+    if (kind != detail::http_field_kind::other) {
+        const auto known_slot = detail::http_field_kind_known_slot(kind);
         const auto index = cached_headers_[known_slot];
         if (index == 0 || index > headers_.size()) {
             return std::nullopt;
@@ -38,7 +38,7 @@ std::optional<std::string_view> http_request::header(std::string_view name) cons
 
     for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
-        if (headers_.kind_at(index) == detail::request_header_kind::other &&
+        if (headers_.kind_at(index) == detail::http_field_kind::other &&
             http_ascii_equals_ignore_case(headers_[index].name(), name)) {
             return headers_[index].value();
         }
@@ -61,7 +61,7 @@ std::optional<std::string_view> http_request::last_raw_query_value(
 }
 
 std::optional<std::string_view> http_request::cookie(std::string_view name) const noexcept {
-    if (!detail::http_request_access::has_known_header(*this, detail::request_header_kind::cookie)) {
+    if (!detail::http_request_access::has_known_header(*this, detail::http_field_kind::cookie)) {
         return std::nullopt;
     }
     // The last matching pair within one field line wins.
@@ -76,20 +76,20 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
         return result;
     };
     const auto last_cookie =
-        detail::http_request_access::known_header(*this, detail::request_header_kind::cookie);
+        detail::http_request_access::known_header(*this, detail::http_field_kind::cookie);
     if (auto value = find_in(last_cookie)) {
         return value;
     }
     if (!detail::http_request_access::has_repeated_known_header(
-            *this, detail::request_header_kind::cookie)) {
+            *this, detail::http_field_kind::cookie)) {
         return std::nullopt;
     }
     const auto last_cookie_index =
-        cached_headers_[detail::request_header_kind_known_slot(detail::request_header_kind::cookie)];
+        cached_headers_[detail::http_field_kind_known_slot(detail::http_field_kind::cookie)];
     // The one-based cache points to the last Cookie field; only earlier fields can contribute.
     for (std::size_t i = last_cookie_index - 1; i > 0; --i) {
         const auto index = i - 1;
-        if (headers_.kind_at(index) != detail::request_header_kind::cookie) {
+        if (headers_.kind_at(index) != detail::http_field_kind::cookie) {
             continue;
         }
         if (auto value = find_in(headers_[index].value())) {
@@ -103,7 +103,7 @@ http_response_coding_selection http_response_coding_selection_for(const http_req
     http_response_coding_qualities qualities;
     // Every field line contributes: RFC 9110 section 5.3 combines repeated list fields.
     (void)detail::http_request_access::visit_known_headers(
-        request, detail::request_header_kind::accept_encoding, [&qualities](std::string_view value) noexcept {
+        request, detail::http_field_kind::accept_encoding, [&qualities](std::string_view value) noexcept {
             qualities.update(value);
             return true;
         });

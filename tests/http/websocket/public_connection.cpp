@@ -205,7 +205,7 @@ TEST(Ruvia, ws_public_compression_recovers_after_unsent_message_failure) {
             // owner before growing the already-constructed output strings.
             memory.reject_ = failure == failure_kind::allocation;
             mask.fail_ = failure != failure_kind::allocation;
-            EXPECT_TRUE(ruvia::testing::throws_on([&] {
+            EXPECT_TRUE(ruvia::test::throws_on([&] {
                 static_cast<void>(sender.submit_frame(websocket_opcode::binary, payload));
             }));
             memory.reject_ = false;
@@ -708,11 +708,11 @@ TEST(Ruvia, ws_public_client_rejects_masked_server_and_oversized_message) {
 }
 
 TEST(Ruvia, ws_public_client_requires_entropy_and_handles_transport_end) {
-    EXPECT_TRUE(ruvia::testing::throws_on([] {
+    EXPECT_TRUE(ruvia::test::throws_on([] {
         http_io_buffer input;
         websocket_connection connection(input, {.role_ = websocket_connection_role::client});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([] {
+    EXPECT_TRUE(ruvia::test::throws_on([] {
         http_io_buffer input;
         websocket_connection connection(input, {.role_ = static_cast<websocket_connection_role>(255)});
     }));
@@ -720,7 +720,7 @@ TEST(Ruvia, ws_public_client_requires_entropy_and_handles_transport_end) {
     http_io_buffer input;
     auto connection = client(input, source);
     source.fail_ = true;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)connection.submit_frame(websocket_opcode::binary, "x");
     }));
     EXPECT_TRUE(connection.output_plan().bytes().empty());
@@ -836,11 +836,11 @@ TEST(Ruvia, ws_public_driver_releases_owned_memory_after_construction_failures) 
         EXPECT_TRUE(memory.live_bytes_ > 0);
     }
     EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         websocket_connection invalid({.resource_ = &memory, .role_ = websocket_connection_role::client});
     }));
     EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         websocket_connection invalid({.resource_ = &memory, .compression_ = websocket_compression{.enabled_ = true, .server_max_window_bits_ = 7}});
     }));
     EXPECT_EQ(memory.live_bytes_, std::size_t{0});
@@ -852,16 +852,16 @@ TEST(Ruvia, ws_public_driver_releases_owned_memory_after_construction_failures) 
             EXPECT_TRUE(memory.live_bytes_ > input_bytes);
         }
         EXPECT_EQ(memory.live_bytes_, input_bytes);
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
             websocket_connection invalid(input, {.role_ = websocket_connection_role::client});
         }));
         EXPECT_EQ(memory.live_bytes_, input_bytes);
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
             websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(),
                                                     .compression_ = websocket_compression{.enabled_ = true, .server_max_window_bits_ = 7}});
         }));
         EXPECT_EQ(memory.live_bytes_, input_bytes);
-        EXPECT_TRUE(ruvia::testing::throws_on([&] {
+        EXPECT_TRUE(ruvia::test::throws_on([&] {
             websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(),
                                                     .deflater_ = {.compression_level_ = 10}});
         }));
@@ -871,7 +871,7 @@ TEST(Ruvia, ws_public_driver_releases_owned_memory_after_construction_failures) 
     // http_io_buffer itself does not allocate. The rejected request is the raw
     // connection implementation storage, before its STL members are constructed.
     memory.reject_ = true;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         http_io_buffer input(&memory);
         websocket_connection rejected(input);
     }));
@@ -1014,7 +1014,7 @@ TEST(Ruvia, ws_owned_input_accepts_message_payload_during_compaction) {
 }
 
 TEST(Ruvia, ws_owned_input_accepts_message_payload_when_storage_grows) {
-    ruvia::testing::poisoned_retirement_resource resource;
+    ruvia::test::poisoned_retirement_resource resource;
     {
         const std::string payload(8000, 'x');
         std::string nested_frame("\x82\x7e\x1f\x40", 4);
@@ -1151,7 +1151,7 @@ TEST(Ruvia, ws_input_accepts_borrowed_message_payload_during_compaction) {
 }
 
 TEST(Ruvia, ws_input_accepts_borrowed_message_payload_when_storage_grows) {
-    ruvia::testing::poisoned_retirement_resource resource;
+    ruvia::test::poisoned_retirement_resource resource;
     {
         const std::string payload(8000, 'x');
         std::string nested_frame("\x82\x7e\x1f\x40", 4);

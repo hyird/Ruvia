@@ -18,11 +18,19 @@ namespace ruvia::detail {
     return c >= '0' && c <= '9';
 }
 
+[[nodiscard]] inline constexpr bool is_uri_lower_alpha(unsigned char byte) noexcept {
+    return byte >= 'a' && byte <= 'z';
+}
+
+[[nodiscard]] inline constexpr bool is_uri_alpha(unsigned char byte) noexcept {
+    return is_uri_lower_alpha(byte) || (byte >= 'A' && byte <= 'Z');
+}
+
 // RFC 3986 section 2.3 unreserved. Percent-encoding one of these octets is
 // equivalent to spelling it literally, which host comparison relies on.
 [[nodiscard]] inline constexpr bool is_unreserved_byte(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') ||
-           (byte >= 'a' && byte <= 'z') || byte == '-' || byte == '.' || byte == '_' || byte == '~';
+    return (byte >= '0' && byte <= '9') || is_uri_alpha(byte) ||
+           byte == '-' || byte == '.' || byte == '_' || byte == '~';
 }
 
 // Literal pchar bytes. The caller validates percent-encoded triplets separately.

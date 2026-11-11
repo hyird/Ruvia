@@ -300,7 +300,7 @@ void http_response::apply_encoded_representation(
     // content so the same response can be emitted by HTTP/1 and HTTP/2.
     content_encoding = http_trim_ows(content_encoding);
     detail::response_field_state fields;
-    if (detail::validate_response_field(detail::request_header_kind::content_encoding, content_encoding,
+    if (detail::validate_response_field(detail::http_field_kind::content_encoding, content_encoding,
             fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }

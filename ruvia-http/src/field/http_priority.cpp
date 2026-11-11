@@ -6,6 +6,7 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_response.h"
 
 #include "field/http_structured_fields.h"
 
@@ -13,10 +14,12 @@ namespace ruvia {
 namespace {
 using item_type = detail::http_structured_item;
 
+template <typename iterator_type>
 class priority_header_input final {
 public:
-    explicit priority_header_input(std::span<const http_header_view> headers) noexcept
-        : headers_(headers) {
+    priority_header_input(iterator_type first, iterator_type last) noexcept
+        : next_(first),
+          last_(last) {
         (void)select_next(remaining_);
         normalize();
     }
@@ -36,8 +39,8 @@ public:
 
 private:
     [[nodiscard]] bool select_next(std::string_view& value) noexcept {
-        while (next_header_ != headers_.size()) {
-            const auto& header_value = headers_[next_header_++];
+        while (next_ != last_) {
+            const auto& header_value = *next_++;
             if (http_ascii_equals_ignore_case(header_value.name(), "priority")) {
                 value = header_value.value();
                 return true;
@@ -60,10 +63,10 @@ private:
         }
     }
 
-    std::span<const http_header_view> headers_;
+    iterator_type next_;
+    iterator_type last_;
     std::string_view remaining_;
     std::string_view pending_;
-    std::size_t next_header_{0};
     bool separator_{false};
 };
 
@@ -117,7 +120,14 @@ std::variant<http_priority_fields, http_priority_error> parse_http_priority(std:
 }
 std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::span<const http_header_view> headers) noexcept {
     http_priority_fields fields;
-    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{priority_header_input{headers}}, fields); parsed_value.index() != 0) {
+    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{priority_header_input{headers.begin(), headers.end()}}, fields); parsed_value.index() != 0) {
+        return std::get<1>(parsed_value);
+    }
+    return fields;
+}
+std::variant<http_priority_fields, http_priority_error> parse_http_priority(const http_response_headers& headers) noexcept {
+    http_priority_fields fields;
+    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{priority_header_input{headers.begin(), headers.end()}}, fields); parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
     return fields;

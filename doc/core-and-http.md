@@ -99,7 +99,6 @@ pool.join();
 | `"ruvia/core/memory/request_memory.h"` | `class request_memory final`、`request_arena_initial_bytes`、`collect_thread_heap()` | 单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`），初始块按字节数配置；调用线程 mimalloc 线程堆的手动收集 |
 | `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_object` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
 | `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；移动赋值与赋空共用退役路径：先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；旧目标析构时的重入赋值最终生效 |
-| `"ruvia/core/local_ring_queue.h"` | `class local_ring_queue<T>` | 预分配容量的单线程零分配环形队列 |
 | `"ruvia/core/fnv1a.h"` | `fnv1a_offset_basis`、`fnv1a_prime`、`fnv1a_accumulate`、`fnv1a_accumulate_integer` | 零分配、可编译期求值的 64 位 FNV-1a 非密码学散列；整数按小端字节混入，跨平台结果一致 |
 | `"ruvia/core/bytes.h"` / `"ruvia/core/failure_report.h"` / `"ruvia/core/socket.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address`、`close_socket` | 字节/字符零拷贝视图转换（拒绝绑定临时拥有型字符串或连续字节容器，调用方须保持底层存储存活到消费完成）、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`）与取消未完成 I/O 后关闭 TCP socket |
 
@@ -174,6 +173,7 @@ pool.join();
 | `"ruvia/http/http_priority.h"` | `class http_priority_urgency`、`struct http_priority`、`struct http_priority_fields`、`parse_http_priority`、`encode_http_priority` | RFC 9218 可扩展 HTTP 优先级首部与 HTTP/2 `PRIORITY_UPDATE` 帧编解码 |
 
 - **HTTP/2 与 HTTP/3 字段名规范化**：共用单遍 ASCII 转换；已小写名称在暂存阶段直接借用，需转换时写入拥有缓冲。
+- **字段名称权威**：请求、响应与连接控制规则共用按长度索引的字段名称表；响应位标记与二进制协议的小写名称由同一表导出。
 - **Accept 参数值比较**：`charset` 及 `text/plain` 的 `format`、`delsp` 值忽略 ASCII 大小写（[RFC 3676 §4](https://www.rfc-editor.org/rfc/rfc3676.html#section-4)）；其他参数值保持大小写敏感，带引号值按解码后的字节比较。
 - **Cookie Max-Age**：十进制校验与转换单遍完成，仅对完整数值应用饱和；非法的后续 `Max-Age` 不覆盖此前有效值。
 - **Cookie 写出原子性**：`write_cookie_request_pair()` 与 `append_cookie_request_pair()` 失败保留原内容；追加器扩容可能使旧借用视图失效，重试时重新获取视图。
@@ -202,6 +202,7 @@ pool.join();
 | `"ruvia/http/sse.h"` | `struct sse_message final`、`format_sse_message` | Server-Sent Events 消息格式化与校验 |
 
 - **首部转移模式**：`http_response_headers::transfer_from()` 与 `http_response::transfer_headers_from()` 仅接受 `merge` / `assign` / `apply`；非法值在变更前抛出 `std::invalid_argument`，空源也不例外。
+- **响应编码接受性**：`http_response_coding_selection::accepts(token, request)` 支持自定义 coding；`evaluate_http_response_content_coding()` 区分无字段、接受、拒绝与非法栈。编码栈单遍解析，所需扩展 coding 一次性遍历请求偏好；常见栈不分配扩展存储，协商快照不借用请求。
 - **响应首部预留**：`http_response_headers::reserve()` 扩容先切换描述符表，再释放旧表，保留退役回调中的首部修改；不复制字段字节，分配失败保留原表，容量足够时不分配。
 - **首部移除键退役**：`remove_header()` 保留匹配键存储至描述符表截短与已知字段索引重建完成；该存储释放回调中重新添加的首部保留。
 - **Vary 合并**：跨行查重与计长后直接写入最终字段存储，不拼接临时字符串；已有成员或通配符时不分配，新增通配符复用静态描述符。合并完成前保留旧字段，支持借用 token 与分配失败重试。
@@ -227,6 +228,7 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 ### 4. HTTP/1.x、HTTP/2 与 HTTP/3 Sans-I/O 状态机
 
 - **跨协议描述符存储**：协议解析与首部写出共用 `parser/http_header_descriptor_storage.h`；预留或追加超过 32 项时才整体迁入调用方 PMR（缺省为默认资源）。
+- **响应长度语义**：HTTP/1、HTTP/2 与 HTTP/3 共用 `Content-Length` 选择；HTTP/1 仅叠加 chunked 与 close-delimited 分帧，保留 HEAD 元数据及 204、205、CONNECT 规则。
 - **通告值资源**：`http_origin_advertisement` 与 `http_alternative_service_advertisement` 复制构造沿用源 PMR，赋值保留目标 PMR；嵌套字符串同步绑定目标资源。
 - **通告赋值提交**：复制或跨资源移动分配失败时保留两端原值；同资源移动不分配，完成提交后才释放旧存储。
 
@@ -337,7 +339,12 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 
 #### 4.3 HTTP/3、QPACK 与 QUIC（`"ruvia/http/http3_connection.h"`, `"ruvia/http/http3_quic_connection.h"`）
 
-`http3_connection` 用 `nghttp3` 封装请求流、控制流与 QPACK，提供 `read_stream()`、`peek_output()` / `commit_output()` / `acknowledge_output()`、请求/响应/正文/Trailer 提交、RFC 9412 `ORIGIN` 帧（`http3_connection_options::origins_` 与 `submit_origin_advertisement()`）以及 RFC 9218 优先级（`submit_priority_update()`、`stream_priority()`、`set_server_stream_priority()`）接口。`peek_output()` 返回借用向量，不复制待发送正文；QUIC 接受前缀后必须以实际字节数调用 `commit_output()`，收到确认后再调用 `acknowledge_output()`，底层正文块才可回收。
+`http3_connection` 用 `nghttp3` 封装请求流、控制流与 QPACK。`read_stream()` 消费输入，`peek_output()` / `commit_output()` / `acknowledge_output()` 管理借用输出与确认；正文块和动态 ORIGIN 帧在确认前保持地址稳定。RFC 9412 通告通过 `origins_` / `submit_origin_advertisement()` 提交，RFC 9218 优先级通过客户端 `submit_priority_update()`、服务端响应 `Priority` 字段与 `stream_priority()` 访问。
+
+- **请求构造**：客户端 `submit_request_head()` 分别接受普通、CONNECT 与 extended CONNECT 视图；核心校验目标、字段、期望与对端能力，统一生成伪首部及 Content-Length，凭据始终 never-index。字段节预算按每个名称、值加 32 字节计算，受本地与已知对端限制共同约束。
+- **响应事件**：客户端 `http3_headers_event::status_` 保留收到的状态码，`status_->status()` 提供语义状态；`fields_` 仅含已验证的普通字段。600–999 按 5xx 处理，101 拒绝；保持官方 `nghttp3`，其在应用回调前拒绝 000–099，这是当前实现例外。
+- **正文与 trailer**：核心校验 Content-Length 的实际字节数和终结，发布已验证的 trailer，并丢弃仅违反发送方 trailer 限制的字段。驱动不再解析响应语法。
+- **响应提交与预算**：服务端只通过受检响应头、临时响应和握手入口提交；`available_output_bytes(stream_id)` 是 DATA 剩余容量的唯一权威，终结或关闭流返回零。最终、临时、WebSocket 与 CONNECT 响应共用字段生成规则。
 
 - **留存输入借用**：`http3_data_event` 和 `read_stream()` 在编译期拒绝直接传入临时拥有型字符串或连续容器，后者也拒绝 `std::initializer_list`；命名输入及显式借用视图仍可使用。借用模式下，底层存储须覆盖对应事件的消费；显式构造 view/span 不延长 owner 寿命。
 - **DATA 赋值回滚**：`http3_data_event` 跨资源移动赋值保留目标资源，分配失败时双方的流 ID、正文与借用视图保持不变；恢复资源后可重试。

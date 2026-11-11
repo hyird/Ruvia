@@ -165,7 +165,7 @@ public:
 
     // Request-body DATA arrived at `now_ms` (the time of the read carrying it).
     void note_request_body_progress(std::int64_t now_ms) noexcept {
-        request_body_progress_ms_ = now_ms;
+        request_body_deadline_.progress(now_ms);
     }
 
     // The request body is still open and has gone `inactivity` without DATA,
@@ -174,9 +174,7 @@ public:
     [[nodiscard]] bool request_body_overdue(std::int64_t now_ms,
         const std::optional<timeout_duration>& inactivity,
         const std::optional<timeout_duration>& completion) const noexcept {
-        return request_body_open_ &&
-               ((inactivity.has_value() && now_ms - request_body_progress_ms_ >= inactivity->value().count()) ||
-                   (completion.has_value() && now_ms - request_body_opened_ms_ >= completion->value().count()));
+        return request_body_deadline_.overdue(now_ms, inactivity, completion);
     }
 
 private:
@@ -200,13 +198,11 @@ private:
     }
 
     void mark_request_body_open(std::int64_t now_ms) noexcept {
-        request_body_open_ = true;
-        request_body_opened_ms_ = now_ms;
-        request_body_progress_ms_ = now_ms;
+        request_body_deadline_.open(now_ms);
     }
 
     void mark_request_body_closed() noexcept {
-        request_body_open_ = false;
+        request_body_deadline_.close();
     }
 
     std::uint32_t stream_id_;
@@ -223,12 +219,9 @@ private:
     std::size_t received_bytes_{0};
     std::optional<multiplexed_stream_signal> signal_;
     std::optional<http_request_body_failure> body_failure_{};
-    // Valid while request_body_open_, in the connection scanner's clock.
-    std::int64_t request_body_opened_ms_{0};
-    std::int64_t request_body_progress_ms_{0};
+    multiplexed_request_body_deadline request_body_deadline_;
     bool route_selected_{false};
     bool tunnel_{false};
-    bool request_body_open_{false};
     bool response_committed_{false};
 };
 

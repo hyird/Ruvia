@@ -21,6 +21,8 @@
 #include "failing_memory_resource.h"
 #include "output_drain.h"
 
+using ruvia::test::failing_memory_resource;
+
 namespace {
 
 using pseudo_header = ruvia::http2_request_pseudo_header;
@@ -156,7 +158,7 @@ TEST(Ruvia, http2_request_pseudo_headers_huffman_dynamic_index_and_continuation)
 TEST(Ruvia, http2_request_pseudo_headers_preserve_both_connect_forms) {
     for (const bool extended : {false, true}) {
         auto server = ruvia::http2_connection::server();
-        (void)ruvia::testing::drain_output(server);
+        (void)ruvia::test::drain_output(server);
         std::pmr::string block;
         if (extended) {
             encode_pseudo_header(block, pseudo_header::protocol);
@@ -250,7 +252,7 @@ TEST(Ruvia, http2_request_pseudo_header_lease_survives_reset_move_and_later_inpu
 }
 
 TEST(Ruvia, http2_locally_synthesized_push_has_no_received_pseudo_header_order) {
-    ruvia::testing::output_relay relay;
+    ruvia::test::output_relay relay;
     auto client = ruvia::http2_connection::client({.enable_push_ = true});
     auto server = ruvia::http2_connection::server();
     relay.transfer(client, server);

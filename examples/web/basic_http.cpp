@@ -7,7 +7,6 @@
 // Use Ctrl+C to stop servers built with process signal handlers installed.
 
 #include <algorithm>
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +17,7 @@
 #include <system_error>
 #include <variant>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -119,11 +119,7 @@ private:
         body.append("\npage=");
         const std::uint32_t page =
             std::max(std::uint32_t{1}, c.req().query<std::uint32_t>("page").value_or(1));
-        char buffer[16]{};
-        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), page);
-        if (ec == std::errc{}) {
-            body.append(buffer, static_cast<std::size_t>(ptr - buffer));
-        }
+        ruvia::http_append_unsigned(body, page);
         body.append("\nsession=");
         body.append(c.req().cookie("session").value_or(""));
         body.push_back('\n');

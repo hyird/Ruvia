@@ -40,6 +40,7 @@
 #include "context/http_interim_response_output.h"
 #include "context/http_push_output.h"
 #include "http/http_protocol_error_info.h"
+#include "http/http_stream_end.h"
 #include "http/http_tunnel_session.h"
 #include "http2/http2_sans_io_request_body.h"
 #include "http2/http2_sans_io_send_window.h"
@@ -51,7 +52,6 @@
 #include "server/http_response_writer.h"
 #include "server/http_upgrade_route.h"
 #include "server/inbound_transport_error.h"
-#include "tls/tls_stream_end.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_session.h"
 
@@ -232,8 +232,6 @@ private:
 class http2_sans_io_tunnel_transport final
     : public multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport> {
 public:
-    using multiplexed_tunnel_transport_base<http2_sans_io_tunnel_transport>::write_bytes;
-
     http2_sans_io_tunnel_transport(http2_sans_io_session_engine& engine, ruvia::http2_connection& connection,
         std::uint32_t stream_id, http2_sans_io_body_queue& body_queue, multiplexed_stream_signal& signal,
         worker_signal& write_signal, http2_data_output_budget& output_budget) noexcept
@@ -459,7 +457,7 @@ bool http2_sans_io_session_engine::drain_finished() const noexcept {
 void http2_sans_io_session_engine::request_drain() noexcept {
     // The scanner asks for a drain only when a connection timeout fired; it
     // recorded the close request before invoking this callback.
-    timeout_drain_ = true;
+    drain_timer_.request_timeout();
     begin_drain();
     finish_drain_if_ready();
 }
@@ -478,26 +476,12 @@ void http2_sans_io_session_engine::begin_drain() noexcept {
 void http2_sans_io_session_engine::arm_drain_timer() noexcept {
     // A final boundary needs no time bound, unless a timeout's drain must
     // still end the session.
-    if (drain_timer_.registered() || termination_.terminated() ||
-        (connection_.drain_final() && !timeout_drain_)) {
+    if (!drain_timer_.needed(termination_.terminated(), connection_.drain_final())) {
         return;
     }
     // RFC 9113 §6.8 asks only for "at least one round-trip time" before the
     // final GOAWAY; nothing requires waiting for the PING ACK.
-    try {
-        const auto status = session_.services().worker().schedule_timer(drain_timer_,
-            worker_timer_deadline_after(http2_drain_round_trip_bound), [this](worker_timer_outcome outcome) {
-                // Cancellation is a stopping worker, which closes the connection.
-                if (outcome == worker_timer_outcome::expired) {
-                    drain_timer_expired();
-                }
-            });
-        if (status == worker_timer_schedule_status::worker_stopping) {
-            drain_timer_expired();
-        }
-    } catch (...) {
-        terminate(std::make_error_code(std::errc::not_enough_memory));
-    }
+    drain_timer_.arm(session_.services().worker(), http2_drain_round_trip_bound, [this]() noexcept { drain_timer_expired(); }, [this]() noexcept { terminate(std::make_error_code(std::errc::not_enough_memory)); });
 }
 
 void http2_sans_io_session_engine::drain_timer_expired() noexcept {
@@ -511,7 +495,7 @@ void http2_sans_io_session_engine::drain_timer_expired() noexcept {
         return;
     }
     wake_writer();
-    drain_expired_ = timeout_drain_;
+    drain_timer_.mark_expired();
     finish_drain_if_ready();
 }
 
@@ -528,7 +512,7 @@ void http2_sans_io_session_engine::finish_drain_if_ready() noexcept {
         socket_.cancel(error);
         return;
     }
-    if (drain_expired_) {
+    if (drain_timer_.expired()) {
         // A connection timeout's drain reached its bound with the write side
         // idle: cancel the remaining streams and end the session now. The
         // writer still flushes the final GOAWAY before the close alert.
@@ -550,7 +534,7 @@ void http2_sans_io_session_engine::peer_input_ended() noexcept {
 }
 
 void http2_sans_io_session_engine::set_inactivity_phase() noexcept {
-    session_.scanner_entry().set_phase(http2_sans_io_inactivity_phase(connection_.received_peer_settings(),
+    session_.scanner_entry().set_phase(multiplexed_inactivity_phase(connection_.received_peer_settings(),
         connection_.header_block_in_progress(), stream_runtimes_.size() != 0 || active_handler_tasks_ != 0,
         stream_runtimes_.tunnel_count() != 0));
 }

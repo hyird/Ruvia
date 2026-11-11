@@ -17,6 +17,8 @@
 #include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
+using namespace ruvia::test;
+
 using ruvia::http_content_encoder;
 
 namespace {
@@ -71,7 +73,7 @@ private:
     std::size_t releases_{};
 };
 
-class counting_memory_resource final : public std::pmr::memory_resource {
+class peak_allocation_resource final : public std::pmr::memory_resource {
 public:
     [[nodiscard]] std::size_t allocations() const noexcept {
         return allocations_;
@@ -311,7 +313,7 @@ TEST(Ruvia, http_content_encoding_stack_round_trips_in_protocol_order) {
     constexpr std::array codings{http_content_coding::gzip, http_content_coding::deflate,
         http_content_coding::brotli};
     const std::string input(8192, 's');
-    counting_memory_resource resource;
+    peak_allocation_resource resource;
     {
         auto encoded = encode_http_content(codings, input,
             {.max_encoded_bytes_ = input.size(), .resource_ = &resource});
@@ -350,8 +352,8 @@ TEST(Ruvia, http_content_encoding_stack_round_trips_in_protocol_order) {
 TEST(Ruvia, http_content_encoding_stack_skips_identity_stages_without_copying) {
     const std::string input(8192, 'i');
     constexpr std::array stacked{http_content_coding::gzip, http_content_coding::identity};
-    counting_memory_resource single_resource;
-    counting_memory_resource stacked_resource;
+    peak_allocation_resource single_resource;
+    peak_allocation_resource stacked_resource;
     auto single = encode_http_content(http_content_coding::gzip, input,
         {.max_encoded_bytes_ = input.size(), .resource_ = &single_resource});
     auto encoded = encode_http_content(stacked, input,
@@ -376,7 +378,7 @@ TEST(Ruvia, http_content_encoder_reset_starts_an_equivalent_fresh_stream) {
     const std::string input(16384, 'e');
     for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate,
              http_content_coding::brotli, http_content_coding::zstd}) {
-        counting_memory_resource resource;
+        peak_allocation_resource resource;
         {
             http_content_encoder encoder(coding, &resource);
             std::pmr::string first(&resource);
@@ -481,7 +483,7 @@ TEST(Ruvia, http_content_encoding_stack_caps_each_stage_and_throws_for_unknown_c
         EXPECT_TRUE(!encode_http_content(codings, input, {.max_encoded_bytes_ = first->size() - 1}).has_value());
     }
 
-    counting_memory_resource resource;
+    peak_allocation_resource resource;
     constexpr std::array invalid_stack{http_content_coding::gzip, static_cast<http_content_coding>(255)};
     bool stack_threw = false;
     try {
@@ -497,7 +499,7 @@ TEST(Ruvia, http_content_encoding_stack_caps_each_stage_and_throws_for_unknown_c
 TEST(Ruvia, http_content_codec_error_is_thrown_only_when_a_codec_cannot_run) {
     const std::string input(2048, 's');
     const auto unknown = static_cast<http_content_coding>(255);
-    counting_memory_resource resource;
+    peak_allocation_resource resource;
     bool threw = false;
     try {
         static_cast<void>(encode_http_content(unknown, input, {.max_encoded_bytes_ = 0, .resource_ = &resource}));
@@ -558,7 +560,7 @@ TEST(Ruvia, http_content_whole_buffer_results_keep_their_memory_resource_and_rel
         http_content_coding::brotli, http_content_coding::zstd};
 
     for (const auto coding : codings) {
-        counting_memory_resource resource;
+        peak_allocation_resource resource;
         {
             auto first_encoded = encode_http_content(coding, plain,
                 {.max_encoded_bytes_ = plain.size() * 2, .resource_ = &resource});
@@ -722,7 +724,7 @@ TEST(Ruvia, http_content_decoder_state_uses_the_callers_memory_resource) {
     };
 
     for (const auto& test : cases) {
-        counting_memory_resource resource;
+        peak_allocation_resource resource;
         const auto result_value = decode_http_content(
             std::array{test.coding_}, test.encoded_, {.max_decoded_bytes_ = 0, .resource_ = &resource});
         EXPECT_TRUE(std::holds_alternative<std::pmr::string>(result_value));
@@ -793,8 +795,8 @@ TEST(Ruvia, http_content_encoder_failure_is_terminal) {
     }
     EXPECT_TRUE(allocation_failed);
     resource.allow_allocations();
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { encoder.finish(output); }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { encoder.write("retry", output); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { encoder.finish(output); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { encoder.write("retry", output); }));
 }
 
 TEST(Ruvia, http_content_encoder_brotli_reset_recovers_after_output_allocation_failure) {
@@ -821,8 +823,8 @@ TEST(Ruvia, http_content_encoder_brotli_reset_recovers_after_output_allocation_f
         EXPECT_TRUE(allocation_failed);
         resource.allow_allocations();
         std::pmr::string recovered;
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { encoder.write("retry", recovered); }));
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { encoder.finish(recovered); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { encoder.write("retry", recovered); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { encoder.finish(recovered); }));
         EXPECT_TRUE(recovered.empty());
         encoder.reset();
         encoder.write(input, recovered, true);
@@ -874,7 +876,7 @@ TEST(Ruvia, http_content_encoder_accepts_empty_flushes_between_chunks) {
 TEST(Ruvia, http_content_encoder_results_survive_subsequent_writes_and_encoder_destruction) {
     const std::string input(16385, 'x');
     for (const auto coding : {http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd}) {
-        counting_memory_resource resource;
+        peak_allocation_resource resource;
         {
             std::pmr::string first(&resource);
             std::pmr::string rest(&resource);
@@ -920,8 +922,8 @@ TEST(Ruvia, http_content_encoder_rethrows_codec_allocations_and_reclaims_partial
                     EXPECT_EQ(decoded(coding, output, input.size()), input);
                 } catch (const codec_test_allocation_error&) {
                     ++failures;
-                    EXPECT_TRUE(ruvia::testing::throws_on([&] { encoder.write("retry", output); }));
-                    EXPECT_TRUE(ruvia::testing::throws_on([&] { encoder.finish(output); }));
+                    EXPECT_TRUE(ruvia::test::throws_on([&] { encoder.write("retry", output); }));
+                    EXPECT_TRUE(ruvia::test::throws_on([&] { encoder.finish(output); }));
                 }
             } catch (const codec_test_allocation_error&) {
                 ++failures;
@@ -952,7 +954,7 @@ TEST(Ruvia, http_content_encoder_brotli_constructor_rethrows_allocator_exception
 }
 
 TEST(Ruvia, http_content_encoder_rejects_unsupported_coding_and_reclaims_owner) {
-    counting_memory_resource resource;
+    peak_allocation_resource resource;
     bool rejected = false;
     try {
         http_content_encoder encoder(static_cast<http_content_coding>(255), &resource);
@@ -1095,7 +1097,7 @@ TEST(Ruvia, http_content_encoder_stream_state_stays_below_the_maximum_windows) {
         byte_value = static_cast<char>('a' + ((state_value >> 16U) % 23U));
     }
     for (const auto coding : {http_content_coding::brotli, http_content_coding::zstd}) {
-        counting_memory_resource resource;
+        peak_allocation_resource resource;
         {
             http_content_encoder encoder(coding, &resource);
             std::pmr::string encoded(std::pmr::new_delete_resource());
@@ -1114,7 +1116,7 @@ TEST(Ruvia, http_brotli_decoder_memory_is_bounded_by_the_decoded_size_cap) {
     // a few content bytes: the header alone asks for a 16 MiB ring buffer.
     std::string encoded("\xCF\xFF\xFF\xFF", 4);
     encoded.append(8, 'x');
-    counting_memory_resource resource;
+    peak_allocation_resource resource;
     const auto result_value = decode_http_content(std::array{http_content_coding::brotli}, encoded,
         {.max_decoded_bytes_ = 4096, .resource_ = &resource});
     EXPECT_TRUE(std::holds_alternative<http_content_decode_error>(result_value));

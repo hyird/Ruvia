@@ -28,6 +28,8 @@
 #include "ruvia/web/static_files.h"
 
 #include "http_server_fixture.h"
+#include "raw_http_peer.h"
+#include "scoped_temp_directory.h"
 #include "test_io_context.h"
 
 // File bodies are read on the blocking pool on every platform; Windows plain
@@ -45,8 +47,9 @@ constexpr std::size_t medium_size = 20 * 1024;
 constexpr std::size_t large_size = 300 * 1024 + 17;
 
 [[nodiscard]] const fs::path& transfer_dir() {
-    static const fs::path dir = fs::current_path() / "ruvia_file_response_transfer";
-    return dir;
+    static const ruvia::test::scoped_temp_directory directory("ruvia-file-response-transfer");
+    static const fs::path active = directory.path() / "active";
+    return active;
 }
 
 [[nodiscard]] std::string file_bytes(std::size_t size, char seed) {
@@ -163,15 +166,7 @@ struct parsed_response final {
     return responses;
 }
 
-[[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view requests) {
-    asio::ip::tcp::socket socket(io);
-    socket.connect(endpoint);
-    asio::write(socket, asio::buffer(requests));
-    std::string output;
-    std::error_code error;
-    asio::read(socket, asio::dynamic_buffer(output), error);
-    return output;
-}
+using ruvia::test::exchange;
 
 [[nodiscard]] std::string get(std::string_view target, std::string_view extra = {}) {
     std::string request("GET ");
@@ -433,7 +428,7 @@ TEST(Ruvia, file_changed_in_place_after_framing_is_never_sent_under_its_head) {
 // POSIX and fails on Windows, so this identity check is POSIX-only.
 TEST(Ruvia, file_response_keeps_its_opened_file_after_path_replacement) {
     std::error_code ignored;
-    const auto previous_dir = transfer_dir().parent_path() / "ruvia_file_response_previous";
+    const auto previous_dir = transfer_dir().parent_path() / "previous";
     fs::remove_all(transfer_dir(), ignored);
     fs::remove_all(previous_dir, ignored);
     fs::create_directories(transfer_dir());

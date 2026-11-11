@@ -25,6 +25,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/model.h"
 
+#include "http2_wire_fixture.h"
 #include "http_server_fixture.h"
 #include "test_io_context.h"
 
@@ -265,16 +266,7 @@ class sleeping_stream_routes final {
     }
 };
 
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
-    std::uint32_t stream_id, std::string_view payload) {
-    std::array<char, ruvia::http2_frame_header_bytes> header_value{};
-    if (!ruvia::encode_http2_frame_header(
-            header_value, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
-        throw std::logic_error("invalid test HTTP/2 frame");
-    }
-    wire.append(header_value.data(), header_value.size());
-    wire.append(payload);
-}
+using ruvia::test::append_frame;
 
 // With expect_continue the HEADERS announce the content but the DATA frame is
 // left for the caller to send once the server has answered the expectation.
@@ -300,56 +292,7 @@ std::string request_wire(std::pmr::memory_resource* resource, std::string_view m
     return wire;
 }
 
-struct received_frame final {
-    ruvia::http2_frame_header header_;
-    std::string payload_;
-};
-
-received_frame read_frame(asio::ip::tcp::socket& client) {
-    std::array<char, ruvia::http2_frame_header_bytes> header_bytes{};
-    asio::read(client, asio::buffer(header_bytes));
-    const auto header_value = ruvia::parse_http2_frame_header(header_bytes);
-    if (!header_value.has_value()) {
-        throw std::logic_error("invalid HTTP/2 frame header");
-    }
-    received_frame frame{*header_value, std::string(header_value->length_, '\0')};
-    if (!frame.payload_.empty()) {
-        asio::read(client, asio::buffer(frame.payload_));
-    }
-    return frame;
-}
-
-// The quiet-stream regression must fail promptly even if no response arrives.
-// Its socket is nonblocking; one deadline bounds the entire frame sequence.
-received_frame read_frame(asio::ip::tcp::socket& client, std::chrono::steady_clock::time_point deadline) {
-    const auto read_exact = [&](char* bytes, std::size_t size) {
-        while (size != 0) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                throw std::runtime_error("HTTP/2 quiet SSE response timed out");
-            }
-            asio::error_code error;
-            const auto count = client.read_some(asio::buffer(bytes, size), error);
-            if (error == asio::error::would_block || error == asio::error::try_again) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (error) {
-                throw std::system_error(error);
-            }
-            bytes += count;
-            size -= count;
-        }
-    };
-    std::array<char, ruvia::http2_frame_header_bytes> header_bytes{};
-    read_exact(header_bytes.data(), header_bytes.size());
-    const auto header_value = ruvia::parse_http2_frame_header(header_bytes);
-    if (!header_value || header_value->length_ > 64 * 1024) {
-        throw std::logic_error("invalid HTTP/2 quiet SSE frame");
-    }
-    received_frame frame{*header_value, std::string(header_value->length_, '\0')};
-    read_exact(frame.payload_.data(), frame.payload_.size());
-    return frame;
-}
+using ruvia::test::read_frame;
 
 // Reads frames until the first HEADERS frame on stream 1 and returns the
 // decoded :status; connection-level frames before it are skipped.

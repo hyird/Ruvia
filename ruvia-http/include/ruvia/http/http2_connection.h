@@ -237,6 +237,8 @@ public:
     // invalid_message (RFC 9113 section 8.2.2) except a Transfer-Encoding of
     // exactly `chunked` (OWS and ASCII case aside): that is the framing hint
     // HTTP/1 also replaces, and the HTTP/2 writer omits it.
+    // Repeated Priority fields form one Structured Field dictionary. Valid
+    // response parameters override the corresponding request scheduling values.
     [[nodiscard]] std::variant<http_buffered_response_write_plan, http2_response_head_submit_error>
     submit_response_head(std::uint32_t stream_id, const http_response& response,
         http_buffered_response_write_plan write_plan);

@@ -27,6 +27,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
+#include "raw_http_peer.h"
 #include "test_io_context.h"
 
 // Multiple client connections share one application rate-limit budget.
@@ -102,16 +103,10 @@ class admission_routes final {
 // response; returns everything the server wrote.
 std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint, std::string_view target,
     std::string_view headers) {
-    asio::ip::tcp::socket socket(io);
-    socket.connect(server_endpoint);
     std::string request = "GET ";
     request.append(target).append(" HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
     request.append(headers).append("\r\n");
-    asio::write(socket, asio::buffer(request));
-    std::string output;
-    std::error_code error;
-    asio::read(socket, asio::dynamic_buffer(output), error);
-    return output;
+    return ruvia::test::exchange(io, server_endpoint, request);
 }
 
 std::string lowercase(std::string_view text) {

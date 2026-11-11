@@ -193,16 +193,12 @@ private:
     bool drain_finished_{};
     // A batch removed from protocol output still belongs to the socket writer.
     bool output_write_in_flight_{};
-    // A connection timeout started (or joined) the drain: its time bound ends
-    // the session instead of only making the GOAWAY boundary final.
-    bool timeout_drain_{};
-    bool drain_expired_{};
     bool has_pushed_streams_{};
     // Scanner tick (per-stream deadlines) and drain callback.
     connection_scanner::periodic_check_registration scanner_checks_;
     // Declared last: destroyed (and so unregistered) before the state its
     // completion touches.
-    worker_timer_registration drain_timer_;
+    multiplexed_drain_timer drain_timer_;
 };
 
 }  // namespace ruvia::detail

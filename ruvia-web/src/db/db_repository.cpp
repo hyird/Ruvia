@@ -1,13 +1,117 @@
+#include "ruvia/web/db/db_repository.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
-
-#include "ruvia/web/db/db_repository.h"
 
 #include "db/db_sql_format.h"
 #include "query_storage.h"
 
 namespace ruvia::detail {
+
+const db_column_info& require_db_column(std::span<const db_column_info> columns, std::string_view name) {
+    const auto found = std::ranges::find(columns, name, &db_column_info::name_);
+    if (found == columns.end()) {
+        throw std::invalid_argument("unknown database entity column");
+    }
+    return *found;
+}
+
+void validate_insert_columns(std::span<const db_column_info> entity_columns, std::span<const std::string_view> columns) {
+    if (columns.empty()) {
+        throw std::invalid_argument("insert_from requires target columns");
+    }
+    for (const auto column : columns) {
+        if (!require_db_column(entity_columns, column).writable_) {
+            throw std::invalid_argument("insert_from cannot write a generated column");
+        }
+    }
+}
+
+void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity_columns,
+    std::span<db_assignment> updates, std::span<const std::string_view> inserted_columns,
+    const db_upsert_options& options, db_driver driver, std::string_view table, std::string_view qualifier,
+    std::string_view update_date, std::string_view version) {
+    if ((options.skip_update_if_no_values_changed_ || !options.index_predicate_.empty() ||
+            !options.update_where_.empty()) &&
+        driver != db_driver::postgresql) {
+        throw std::invalid_argument("conditional repository upsert requires PostgreSQL");
+    }
+    for (const auto& name : options.conflict_paths_) {
+        require_db_column(entity_columns, name);
+    }
+    for (const auto& name : options.update_columns_) {
+        if (!require_db_column(entity_columns, name).writable_) {
+            throw std::invalid_argument("repository upsert cannot update a generated column");
+        }
+    }
+    for (std::size_t i = 0; i < options.update_expressions_.size(); ++i) {
+        const auto& item = options.update_expressions_[i];
+        if (!require_db_column(entity_columns, item.column_).writable_ || item.empty() || options.do_nothing_) {
+            throw std::invalid_argument("upsert expression requires a writable column and update action");
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (options.update_expressions_[j].column_ == item.column_) {
+                throw std::invalid_argument("duplicate upsert expression column");
+            }
+        }
+    }
+    if (options.do_nothing_ && !options.update_where_.empty()) {
+        throw std::invalid_argument("upsert update condition requires an update action");
+    }
+    const auto alias = qualifier == table ? std::string_view{} : qualifier;
+    const auto target_where = options.index_predicate_.expression(query, table, alias);
+    std::size_t update_count = 0;
+    db_expression update_where;
+    bool do_nothing = options.do_nothing_;
+    if (!do_nothing) {
+        for (const auto& column : entity_columns) {
+            const auto name = column.name_;
+            const auto custom = std::ranges::find_if(options.update_expressions_,
+                [name](const auto& item) { return item.column_ == name; });
+            bool selected = custom != options.update_expressions_.end();
+            if (!selected) {
+                selected = options.update_columns_.empty()
+                               ? column.conflict_updatable_ && std::ranges::find(inserted_columns, name) != inserted_columns.end() &&
+                                     std::ranges::find(options.conflict_paths_, borrowed_text(name)) == options.conflict_paths_.end()
+                               : column.writable_ && std::ranges::find(options.update_columns_, borrowed_text(name)) != options.update_columns_.end();
+            }
+            if (!selected) {
+                continue;
+            }
+            const auto value = custom == options.update_expressions_.end()
+                                   ? query.excluded(name)
+                                   : custom->expression(query, table, alias);
+            updates[update_count++] = {name, db_expr(value, {}, true)};
+            if (options.skip_update_if_no_values_changed_) {
+                const auto changed = query.binary(query.column(name, qualifier), db_binary_operator::is_distinct_from, value);
+                update_where = update_where.empty() ? changed : query.binary(update_where, db_binary_operator::or_value, changed);
+            }
+        }
+        if (update_count != 0) {
+            const auto assigned_count = update_count;
+            const auto assigned = [&](std::string_view name) {
+                return std::ranges::any_of(updates.first(assigned_count), [name](const auto& item) { return item.column_ == name; });
+            };
+            append_lifecycle_assignments(query, qualifier, update_date, version, assigned,
+                [&](std::string_view name, db_expression value) { updates[update_count++] = {name, db_expr(value, {}, true)}; });
+        } else if (driver == db_driver::postgresql) {
+            do_nothing = true;
+        }
+    }
+    if (!options.update_where_.empty()) {
+        const auto condition = options.update_where_.expression(query, table, alias);
+        update_where = update_where.empty() ? condition : query.binary(update_where, db_binary_operator::and_value, condition);
+    }
+    query.on_conflict({
+        .columns_ = options.conflict_paths_,
+        .target_where_ = target_where,
+        .update_ = std::span<const db_assignment>(updates.data(), update_count),
+        .update_where_ = update_where,
+        .do_nothing_ = do_nothing,
+        .any_unique_key_ = options.any_unique_key_,
+    });
+}
 
 db_relation_plan db_relation_plan::clone() const {
     db_relation_plan result(resource_);

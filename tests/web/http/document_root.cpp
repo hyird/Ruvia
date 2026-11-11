@@ -19,6 +19,8 @@
 #include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
+#include "raw_http_peer.h"
+#include "scoped_temp_directory.h"
 #include "test_io_context.h"
 
 // A document root shares paths with a guarded wildcard route. This executable
@@ -61,10 +63,7 @@ class document_root_routes final {
     }
 };
 
-[[nodiscard]] fs::path make_document_root() {
-    const auto dir = fs::temp_directory_path() / "ruvia_document_root_dot_segment_test";
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
+void populate_document_root(const fs::path& dir) {
     fs::create_directories(dir / "private");
     fs::create_directories(dir / "admin" / "panel");
     fs::create_directories(dir / "encoded");
@@ -75,23 +74,16 @@ class document_root_routes final {
     std::ofstream(dir / "encoded" / "readme.txt") << "readme-from-disk";
     std::ofstream(dir / "encoded" / "hello world.txt") << "hello-world-from-disk";
     std::ofstream(dir / "a%20b.txt") << "literal-percent";
-    return dir;
 }
 
 // Sends one request on a fresh connection and returns the complete response.
 [[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
     std::string_view target, std::string_view method = "GET") {
-    asio::ip::tcp::socket socket(io);
-    socket.connect(endpoint);
     std::string request(method);
     request.append(" ");
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-    asio::write(socket, asio::buffer(request));
-    std::string output;
-    std::error_code error;
-    asio::read(socket, asio::dynamic_buffer(output), error);
-    return output;
+    return ruvia::test::exchange(io, endpoint, request);
 }
 
 [[nodiscard]] bool has_status(std::string_view response, std::string_view status) {
@@ -101,7 +93,9 @@ class document_root_routes final {
 }  // namespace
 
 TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
-    const auto dir = make_document_root();
+    const ruvia::test::scoped_temp_directory directory("ruvia-document-root");
+    const auto& dir = directory.path();
+    populate_document_root(dir);
     ruvia::document_root_config config;
     config.root_ = dir;
     config.static_options_.file_types_ =

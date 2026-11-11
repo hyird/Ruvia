@@ -7,6 +7,8 @@
 #include "model_field_fixture.h"
 #include "test_exceptions.h"
 
+using namespace ruvia::test;
+
 TEST(Ruvia, model_json_parser_dispatches_decoded_keys) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value = ruvia::from_json<accessor_surface_request>(
@@ -58,7 +60,7 @@ TEST(Ruvia, model_form_parser_keeps_malformed_percent_sequences_literally) {
 
 TEST(Ruvia, model_json_parser_rejects_invalid_field_types) {
     std::pmr::monotonic_buffer_resource resource;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<nested_model_item>(
             R"({"id":"wrong","label":"still parsed"})", {.resource_ = &resource});
     }));
@@ -66,24 +68,24 @@ TEST(Ruvia, model_json_parser_rejects_invalid_field_types) {
 
 TEST(Ruvia, model_json_parser_fully_validates_unknown_and_duplicate_values) {
     std::pmr::monotonic_buffer_resource resource;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(
             R"({"message":"ready","unknown":[1,]})", {.resource_ = &resource});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(
             R"({"message":"ready","unknown":"\ud83d"})", {.resource_ = &resource});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(
             R"({"message":"first","message":{"broken":}})", {.resource_ = &resource});
     }));
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(
             R"({"message":"first","message":"\ud83d"})", {.resource_ = &resource});
     }));
 
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(
             R"({"message":"first","message":"second"})", {.resource_ = &resource});
     }));
@@ -92,7 +94,7 @@ TEST(Ruvia, model_json_parser_fully_validates_unknown_and_duplicate_values) {
 TEST(Ruvia, model_json_parser_rejects_nested_structure_recursively) {
     std::pmr::monotonic_buffer_resource resource;
     constexpr auto body = R"({"primary":{},"items":[{"label":"missing id"}]})";
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<nested_model_envelope>(body, {.resource_ = &resource});
     }));
 }
@@ -104,7 +106,7 @@ TEST(Ruvia, model_json_parser_enforces_depth_while_skipping_unknown_values) {
     input.push_back('}');
 
     std::pmr::monotonic_buffer_resource resource;
-    EXPECT_TRUE(ruvia::testing::throws_on([&] {
+    EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<accessor_surface_request>(input, {.resource_ = &resource});
     }));
 }

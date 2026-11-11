@@ -12,6 +12,8 @@
 
 #include "http_client_response_fixture.h"
 
+using namespace ruvia::test;
+
 // HTTP/1 client responses: Content-Encoding and decoding the body.
 
 TEST(Ruvia, http_client_content_encoding_has_one_authoritative_path) {

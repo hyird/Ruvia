@@ -9,7 +9,7 @@
 
 #include "ruvia/http/http2_connection.h"
 
-namespace ruvia::testing {
+namespace ruvia::test {
 
 // Replaces `into` with every pending outbound frame through the public batch
 // drain. A single unbounded batch moves the whole buffer; on copy failure the
@@ -48,4 +48,4 @@ private:
     std::deque<std::string> retained_;
 };
 
-}  // namespace ruvia::testing
+}  // namespace ruvia::test

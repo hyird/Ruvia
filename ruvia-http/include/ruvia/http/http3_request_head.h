@@ -78,7 +78,7 @@ public:
 private:
     struct regular_field final {
         std::uint32_t index_;
-        detail::request_header_kind kind_;
+        detail::http_field_kind kind_;
     };
 
     explicit http3_request_head(http3_headers_event event, std::pmr::memory_resource* resource);

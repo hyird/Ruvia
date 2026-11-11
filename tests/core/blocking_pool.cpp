@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <concepts>
@@ -767,6 +768,38 @@ TEST(Ruvia, blocking_pool_full_queue_rejects_work) {
         pool.join();
     }
     EXPECT_TRUE(queue_full);
+}
+
+TEST(Ruvia, blocking_pool_preserves_fifo_and_recovers_queue_capacity) {
+    for (const std::size_t capacity : {1, 3, 5, 8}) {
+        std::size_t next = 0;
+        std::array<std::size_t, 8> observed{};
+        thread_gate gate;
+        std::binary_semaphore completed{0};
+        blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = capacity});
+        EXPECT_EQ(pool.queue_capacity(), capacity);
+        for (std::size_t round = 0; round != 16; ++round) {
+            next = 0;
+            gate.occupy(pool);
+            for (std::size_t index = 0; index != capacity; ++index) {
+                EXPECT_EQ(pool.submit([&, index, round] {
+                    observed[next++] = round * capacity + index;
+                    if (index + 1 == capacity) {
+                        completed.release();
+                    }
+                }),
+                    blocking_submit_status::accepted);
+            }
+            EXPECT_EQ(pool.stats().queued_, capacity);
+            EXPECT_EQ(pool.submit([] {}), blocking_submit_status::queue_full);
+            gate.release_.release();
+            completed.acquire();
+            for (std::size_t index = 0; index != capacity; ++index) {
+                EXPECT_EQ(observed[index], round * capacity + index);
+            }
+        }
+        pool.join();
+    }
 }
 
 TEST(Ruvia, blocking_pool_worker_stop_releases_the_waiter) {

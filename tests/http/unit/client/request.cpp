@@ -1183,7 +1183,7 @@ TEST(Ruvia, http1_connect_udp_forwarding_keeps_protocol_owned_fields) {
 TEST(Ruvia, http1_client_forwards_options_content_without_inventing_media_type) {
     constexpr std::string_view incoming_wire =
         "OPTIONS / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 4\r\n\r\nbody";
-    const auto incoming = ruvia::testing::parse_http1_request_message(incoming_wire);
+    const auto incoming = ruvia::test::parse_http1_request_message(incoming_wire);
     EXPECT_TRUE(incoming.complete());
     EXPECT_EQ(incoming.body_, "body");
     const auto origin = http_origin_view::https({.host_ = "example.test"});
@@ -1235,7 +1235,7 @@ TEST(Ruvia, http1_client_forwards_options_content_without_inventing_media_type) 
             wire.append(std::get<0>(finish));
             content.commit_finish();
         }
-        const auto upstream = ruvia::testing::parse_http1_request_message(wire);
+        const auto upstream = ruvia::test::parse_http1_request_message(wire);
         EXPECT_TRUE(upstream.complete());
         EXPECT_EQ(upstream.body_, incoming.body_);
         EXPECT_TRUE(!upstream.state_.request_.header("Content-Type"));

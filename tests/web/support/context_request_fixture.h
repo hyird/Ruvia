@@ -9,7 +9,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/testing.h"
 
-namespace context_request_test {
+namespace ruvia::test {
 
 template <typename callback_type>
 class context_callback final {
@@ -35,4 +35,4 @@ template <typename callback_type>
     return app.request(request);
 }
 
-}  // namespace context_request_test
+}  // namespace ruvia::test

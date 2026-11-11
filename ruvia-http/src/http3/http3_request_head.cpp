@@ -17,8 +17,8 @@
 
 #include "coding/http_content_length.h"
 #include "field/http_connection_fields.h"
+#include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
-#include "parser/http_parser_syntax.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
 #include "util/geometric_reserve.h"
@@ -127,16 +127,16 @@ bool http3_request_head::validate() {
             detail::is_forbidden_http_binary_connection_field(name)) {
             return false;
         }
-        const auto kind = detail::classify_request_header(name);
+        const auto kind = detail::classify_http_field(name);
         if (detail::validate_request_field(kind, value, detail::http_field_list_role::recipient, request_fields) !=
             detail::request_field_status::ok) {
             return false;
         }
         switch (kind) {
-            case detail::request_header_kind::host:
+            case detail::http_field_kind::host:
                 host_ = index;
                 break;
-            case detail::request_header_kind::cookie: {
+            case detail::http_field_kind::cookie: {
                 if (value.empty()) {
                     continue;
                 }
@@ -152,12 +152,12 @@ bool http3_request_head::validate() {
                 }
                 continue;
             }
-            case detail::request_header_kind::expect:
+            case detail::http_field_kind::expect:
                 // An extensible list: unsupported members stay for the Web
                 // product's 417 policy.
                 expectations_.parse_field(value);
                 break;
-            case detail::request_header_kind::content_length:
+            case detail::http_field_kind::content_length:
                 if (content_length.parse_field(value) != detail::http_content_length_parse_status::ok) {
                     return false;
                 }

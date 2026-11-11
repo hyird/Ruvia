@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ruvia/web/detail/controller/controller_descriptors.h"
+#include "ruvia/web/error.h"
 
 #include "router/compiled_route_plan.h"
 #include "router/route_table.h"
@@ -39,11 +40,10 @@ public:
 
     void set_error_handler(http_error_handler_ref handler) noexcept;
     void set_not_found_handler(http_not_found_handler_ref handler) noexcept;
-    // Path-prefix-scoped fallbacks (Hono sub-app scoping analog): wholesale
-    // replacement with prefixes the caller already normalized and de-duplicated,
-    // ordered deepest prefix first.
-    void set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers);
-    void set_prefix_not_found_handlers(std::span<const http_prefix_not_found_handler> handlers);
+    // Copies normalized, de-duplicated prefixes into the plan, deepest first.
+    // Callback views borrow their app_configuration owners until the plan retires.
+    void set_prefix_error_handlers(std::span<const std::pair<std::pmr::string, http_error_handler>> handlers);
+    void set_prefix_not_found_handlers(std::span<const std::pair<std::pmr::string, http_not_found_handler>> handlers);
     // Application-wide middleware, prepended to every route's chain. Each
     // descriptor becomes exactly one instance per worker, serving all routes.
     void set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors);
@@ -85,7 +85,6 @@ private:
     void build_url_patterns();
 
     [[nodiscard]] static bool is_dynamic_path(std::string_view path) noexcept;
-    [[nodiscard]] static bool same_dynamic_shape(std::string_view left, std::string_view right) noexcept;
 
     compiled_route_plan_ptr_type plan_;
     std::pmr::vector<std::uint64_t> route_hashes_;

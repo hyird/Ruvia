@@ -26,6 +26,8 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/websocket.h"
 
+#include "app_run.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -112,22 +114,18 @@ public:
     }
 };
 
-class app_run final {
+// Startup hooks may block independently of application::stop().
+class startup_run final {
 public:
-    explicit app_run(ruvia::application& app, startup_state& state_value)
+    explicit startup_run(ruvia::application& app, startup_state& state_value)
         : app_(app),
           state_(state_value),
-          thread_([this] {
-              try {
-                  app_.run();
-              } catch (...) {
-                  failure_ = std::current_exception();
-              }
-          }) {}
+          run_(app) {}
 
-    ~app_run() {
-        if (thread_.joinable()) {
-            stop_and_join();
+    ~startup_run() {
+        if (!joined_) {
+            app_.stop();
+            state_.release_hook_.release();
         }
     }
     void stop_and_join() {
@@ -136,17 +134,23 @@ public:
         join();
     }
     void join() {
-        thread_.join();
+        joined_ = true;
+        try {
+            run_.join();
+        } catch (...) {
+            failure_ = std::current_exception();
+        }
     }
     [[nodiscard]] std::thread::id id() const noexcept {
-        return thread_.get_id();
+        return run_.id();
     }
     std::exception_ptr failure_;
 
 private:
     ruvia::application& app_;
     startup_state& state_;
-    std::thread thread_;
+    ruvia::test::app_run run_;
+    bool joined_{};
 };
 
 std::string read_response(asio::ip::tcp::socket& socket) {
@@ -224,17 +228,7 @@ bool resume_tls_session(asio::io_context& io, const asio::ip::tcp::endpoint& end
     return true;
 }
 
-// Reads until the peer ends the stream and returns the terminal error.
-template <typename stream_type>
-asio::error_code read_to_end(stream_type& stream, std::string& received) {
-    std::array<char, 4096> buffer;
-    asio::error_code error;
-    while (!error) {
-        const auto size = stream.read_some(asio::buffer(buffer), error);
-        received.append(buffer.data(), size);
-    }
-    return error;
-}
+using ruvia::test::read_to_end;
 
 // RFC 8446 §6.1: closing after a Connection: close response sends close_notify,
 // so the client observes a clean TLS end instead of a truncated stream.
@@ -254,8 +248,8 @@ bool tls_close_sends_close_notify(asio::io_context& io, const asio::ip::tcp::end
     if (error) {
         return false;
     }
-    std::string response;
-    const auto end = read_to_end(stream, response);
+    asio::error_code end;
+    const auto response = read_to_end(stream, end);
     return response.starts_with("HTTP/1.1 404 ") && end == asio::error::eof &&
            (SSL_get_shutdown(stream.native_handle()) & SSL_RECEIVED_SHUTDOWN) != 0;
 }
@@ -302,7 +296,8 @@ bool tls_keep_alive_serves_decrypted_and_later_requests(
     if (error) {
         return false;
     }
-    const auto end = read_to_end(stream, received);
+    asio::error_code end;
+    received += read_to_end(stream, end);
     return end == asio::error::eof && count_occurrences(received, "HTTP/1.1 404 ") == 3;
 }
 
@@ -321,8 +316,8 @@ bool rejected_expect_upload_closes_without_body(asio::io_context& io, const asio
     if (error) {
         return false;
     }
-    std::string response;
-    const auto end = read_to_end(socket, response);
+    asio::error_code end;
+    const auto response = read_to_end(socket, end);
     return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::string::npos &&
            response.find("HTTP/1.1 100 ") == std::string::npos && end == asio::error::eof;
 }
@@ -444,13 +439,7 @@ TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
 // test runs in its own executable and exercises retries against the same config.
 TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
     ruvia::test::tls_identity identity("localhost");
-    const auto private_key = identity.ca_file_.parent_path() / "key.pem";
-    {
-        std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(private_key.string().c_str(), "w"), BIO_free);
-        if (!output || ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(identity.context_.native_handle())) != 1) {
-            throw std::runtime_error("cannot write startup test private key");
-        }
-    }
+    const auto private_key = identity.private_key_file();
     auto state_value = std::make_shared<startup_state>();
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4})
@@ -597,7 +586,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto endpoint = reservation.endpoint();
         const auto tls_endpoint = tls_reservation.endpoint();
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}, .client_certificates_ = {.ca_file_ = identity.ca_file_}}});
-        app_run run(app, *state_value);
+        startup_run run(app, *state_value);
         const auto owner_thread = run.id();
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
         EXPECT_TRUE(entered);
@@ -739,7 +728,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 1);
         EXPECT_EQ(state_value->live_workers_.load(), 0U);
 
-        app_run run(app, *state_value);
+        startup_run run(app, *state_value);
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
         EXPECT_TRUE(entered);
         if (!entered) {

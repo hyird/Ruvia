@@ -1,6 +1,6 @@
 // Outbound HTTP client usage from a Ruvia controller.
 // First run ruvia_example_http_features (localhost:8093), then this gateway
-// (localhost:8080). POST /api/forward or GET /api/forward-stream.
+// (localhost:8099). POST /api/forward or GET /api/forward-stream.
 // RUVIA_UPSTREAM_HOST/PORT override the fixed upstream; RUVIA_UPSTREAM_TLS=true
 // enables HTTPS and RUVIA_TLS_CA selects a custom CA file. Verification stays on.
 // One configured pool per worker is reused across requests. The handle borrows
@@ -16,6 +16,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
@@ -127,14 +128,16 @@ private:
 
 int main() {
     try {
-        const example::environment env;
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env(&app.env());
         const bool tls = env.get<bool>("RUVIA_UPSTREAM_TLS").value_or(false);
         const std::string_view host = env.get("RUVIA_UPSTREAM_HOST").value_or("localhost");
         const std::string authority = host.find(':') == std::string_view::npos ? std::string(host) : "[" + std::string(host) + "]";
         const std::string base_url = std::string(tls ? "https://" : "http://") + authority + ":" +
                                      std::to_string(env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093));
-        ruvia::app()
-            .listen({.address_ = "0.0.0.0", .http_ = 8080})
+        app
+            .listen({.address_ = "0.0.0.0", .http_ = 8099})
             .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .client({
                 .base_url_ = base_url,

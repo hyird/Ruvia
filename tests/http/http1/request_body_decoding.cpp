@@ -9,7 +9,7 @@
 
 // Decoding a request body: what each coding accepts and what it refuses.
 
-using ruvia::testing::parse_http1_request_message;
+using namespace ruvia::test;
 
 TEST(Ruvia, request_body_failures_own_cross_runtime_http_errors) {
     const auto too_large =

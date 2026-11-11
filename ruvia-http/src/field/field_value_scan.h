@@ -6,7 +6,7 @@
 #include <cstring>
 #include <string_view>
 
-#include "parser/http_parser_syntax.h"
+#include "ruvia/http/http_field_syntax.h"
 
 namespace ruvia::detail {
 

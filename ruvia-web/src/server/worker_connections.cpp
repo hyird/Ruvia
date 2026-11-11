@@ -36,11 +36,10 @@
 #include "integration/worker_capabilities.h"
 #include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
-#include "server/http_server_stream_session.h"
 #include "server/http_server_tls_contexts.h"
-#include "server/http_server_tls_handshake.h"
 #include "server/peer_address.h"
 #include "server/tcp_accept_error.h"
+#include "tls/tls_peer.h"
 #include "tls/tls_served_certificate.h"
 #include "util/tcp_socket_policies.h"
 
@@ -54,15 +53,6 @@ void configure_accepted_socket(asio::ip::tcp::socket& socket) {
         throw std::system_error(error, "failed to configure accepted TCP socket");
     }
 }
-
-#if defined(RUVIA_ENABLE_HTTP2)
-bool is_http2_alpn_selected(server_tls_stream& tls_stream) noexcept {
-    const unsigned char* selected = nullptr;
-    unsigned int selected_length = 0;
-    SSL_get0_alpn_selected(tls_stream.native_handle(), &selected, &selected_length);
-    return selected_length == 2 && selected != nullptr && std::memcmp(selected, "h2", 2) == 0;
-}
-#endif
 
 #if !defined(_WIN32)
 void configure_listener_address(asio::ip::tcp::acceptor& socket) {
@@ -435,8 +425,9 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
             connection_scanner::entry handshake_entry;
             connection_scanner::guard handshake_guard(scanner_, handshake_entry, connection_transport::tcp(socket));
             handshake_entry.read_request_head(connection_scanner::phase::reading_initial);
-            const auto handshake_completion =
-                co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
+            const auto handshake_completion = co_await ruvia::async_asio([&tls_stream](auto handler) {
+                tls_stream.async_handshake(asio::ssl::stream_base::server, std::move(handler));
+            });
             if (handshake_completion.error_code()) {
                 ruvia::close_socket(socket);
                 co_return;
@@ -452,7 +443,7 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
                                   .with_tls_transport(remote_address, client_subject, remote_port, served_certificate)
                                   .with_alternative_service(listener_value.alternative_service_);
 #if defined(RUVIA_ENABLE_HTTP2)
-        const auto close_mode = is_http2_alpn_selected(tls_stream)
+        const auto close_mode = tls_selected_alpn(*tls_stream.native_handle()) == "h2"
                                     ? co_await run_http2(tls_stream, socket, services)
                                     : co_await run_stream(listener_value, tls_stream, socket, services);
 #else
@@ -468,17 +459,6 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         report_session_failure(socket, remote_address, std::current_exception());
     }
 }
-
-#if defined(RUVIA_ENABLE_HTTP2)
-template <typename stream_type>
-task<http_connection_close> worker_connections::run_http2(stream_type& stream, tcp_socket_type& socket,
-    context_services services) {
-    connection_scanner::entry scanner_entry;
-    connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
-    co_return co_await run_http2_sans_io_session(
-        stream, routes_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
-}
-#endif
 
 void worker_connections::report_session_failure(
     tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept {

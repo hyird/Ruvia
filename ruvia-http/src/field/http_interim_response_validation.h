@@ -30,19 +30,20 @@ public:
     // kind_out receives the field identity of an accepted line.
     [[nodiscard]] http_interim_response_header_validation_status validate(
         std::string_view name, std::string_view value,
-        request_header_kind* kind_out = nullptr) noexcept {
+        http_field_kind* kind_out = nullptr) noexcept {
         if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
             return http_interim_response_header_validation_status::invalid_header;
         }
 
-        const auto known_bit = classify_response_header_name(name);
-        const auto kind = classify_response_field(name, known_bit);
+        const auto field = classify_http_field_name(name);
+        const auto known_bit = field.response_bit_;
+        const auto kind = field.kind_;
         switch (kind) {
-            case request_header_kind::content_length:
+            case http_field_kind::content_length:
                 return http_interim_response_header_validation_status::content_length_forbidden;
-            case request_header_kind::transfer_encoding:
+            case http_field_kind::transfer_encoding:
                 return http_interim_response_header_validation_status::transfer_encoding_forbidden;
-            case request_header_kind::trailer:
+            case http_field_kind::trailer:
                 return http_interim_response_header_validation_status::trailer_forbidden;
             default:
                 break;

@@ -4,7 +4,7 @@
 
 #include <asio/error.hpp>
 
-#include "tls/tls_stream_end.h"
+#include "http/http_stream_end.h"
 
 namespace ruvia::detail {
 

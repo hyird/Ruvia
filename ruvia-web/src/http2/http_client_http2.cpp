@@ -1,12 +1,16 @@
 #include <algorithm>
 #include <chrono>
+#include <exception>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_ascii.h"
@@ -21,6 +25,417 @@
 #include "http/inline_http_header_views.h"
 
 namespace ruvia::detail {
+
+namespace {
+
+// A protocol failure observed by the reader is reported to the handler as an
+// io_failed transport result carrying this error.
+[[nodiscard]] client_transport_result http2_client_protocol_failure() noexcept {
+    return {.status_ = client_transport_status::io_failed, .error_ = std::make_error_code(std::errc::protocol_error)};
+}
+
+// Product limit: the longest a graceful close waits for its GOAWAY to reach the
+// transport before it closes anyway (an unread peer, or write_timeout nullopt).
+constexpr std::chrono::milliseconds http2_client_goaway_flush_time{1000};
+
+}  // namespace
+
+http2_client_session::http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
+    const worker_handle& worker_value, std::optional<timeout_duration> write_timeout,
+    std::optional<timeout_duration> ping_interval)
+    : handler_(handler),
+      transport_(transport),
+      tasks_(tasks),
+      worker_(worker_value),
+      write_timeout_(write_timeout),
+      ping_interval_(ping_interval),
+      read_buffer_(process_resource()),
+      write_buffer_(process_resource()),
+      write_signal_(worker_value),
+      state_signal_(worker_value),
+      capacity_signal_(worker_value) {}
+
+task<http2_client_session_start_result> http2_client_session::start(
+    http2_connection_options options, const operation_timeout& timeout) {
+    if (session_tasks_ != 0) {
+        std::terminate();
+    }
+    options.resource_ = process_resource();
+    connection_.emplace(::ruvia::http2_connection::client(options));
+    next_nonzero_id(generation_);
+    failed_ = false;
+    draining_ = false;
+    closing_ = false;
+    request_capacity_ = 0;
+    read_buffer_.clear();
+    // Only the prefix reported by read_some reaches the parser.
+    const auto input = read_buffer_.prepare(read_buffer_bytes);
+    for (;;) {
+        while (connection_->wants_write()) {
+            take_output_batch(write_buffer_);
+            const auto written = co_await transport_.write(write_buffer_, timeout);
+            http_clear_pmr_string_retaining_small(write_buffer_, write_batch_bytes);
+            if (!written.ok()) {
+                reset();
+                co_return http2_client_session_start_result{
+                    .status_ = http2_client_session_start_status::transport_failed, .transport_ = written};
+            }
+        }
+        if (connection_->received_peer_settings()) {
+            break;
+        }
+        const auto read = co_await transport_.read_some(input, timeout);
+        if (!read.ok()) {
+            reset();
+            co_return http2_client_session_start_result{
+                .status_ = http2_client_session_start_status::transport_failed, .transport_ = read};
+        }
+        if (!feed(std::string_view(input.data(), read.bytes_))) {
+            reset();
+            co_return http2_client_session_start_result{.status_ = http2_client_session_start_status::protocol_failed};
+        }
+    }
+    const auto generation = generation_;
+    try {
+        ++session_tasks_;
+        try {
+            tasks_.spawn(run_reader(generation));
+        } catch (...) {
+            --session_tasks_;
+            throw;
+        }
+        ++session_tasks_;
+        try {
+            tasks_.spawn(run_writer(generation));
+        } catch (...) {
+            --session_tasks_;
+            throw;
+        }
+        if (ping_interval_) {
+            last_input_ = std::chrono::steady_clock::now();
+            ping_pending_ = false;
+            schedule_ping(generation,
+                worker_timer_saturating_deadline(last_input_, ping_interval_->value()));
+        }
+    } catch (...) {
+        const auto failure = std::current_exception();
+        fail(generation, {}, failure);
+        std::rethrow_exception(failure);
+    }
+    co_return http2_client_session_start_result{};
+}
+
+::ruvia::http2_connection& http2_client_session::connection() noexcept {
+    return *connection_;
+}
+
+bool http2_client_session::has_connection() const noexcept {
+    return connection_.has_value();
+}
+
+bool http2_client_session::usable() const noexcept {
+    return connection_.has_value() && session_tasks_ != 0 && !failed_ && !draining_;
+}
+
+std::size_t http2_client_session::available_request_streams(std::size_t local_limit) const noexcept {
+    return usable() ? connection_->available_request_streams(local_limit) : 0;
+}
+
+bool http2_client_session::running() const noexcept {
+    return session_tasks_ != 0;
+}
+
+bool http2_client_session::failed() const noexcept {
+    return failed_;
+}
+
+bool http2_client_session::draining() const noexcept {
+    return draining_;
+}
+
+bool http2_client_session::writing() const noexcept {
+    return writing_;
+}
+
+bool http2_client_session::closing() const noexcept {
+    return closing_ && !failed_;
+}
+
+std::uint64_t http2_client_session::generation() const noexcept {
+    return generation_;
+}
+
+void http2_client_session::mark_draining() noexcept {
+    draining_ = true;
+    state_signal_.notify();
+    capacity_signal_.notify();
+}
+
+void http2_client_session::wake_writer() noexcept {
+    if (connection_.has_value() && !failed_ && connection_->wants_write()) {
+        write_signal_.notify();
+    }
+}
+
+worker_signal& http2_client_session::state_signal() noexcept {
+    return state_signal_;
+}
+
+worker_signal& http2_client_session::capacity_signal() noexcept {
+    return capacity_signal_;
+}
+
+void http2_client_session::fail(const client_transport_result& transport, std::exception_ptr failure) noexcept {
+    fail(generation_, transport, std::move(failure));
+}
+
+bool http2_client_session::begin_close(const client_transport_result& transport) noexcept {
+    if (closing()) {
+        return true;
+    }
+    if (!connection_.has_value() || session_tasks_ == 0 || failed_) {
+        fail(transport);
+        return false;
+    }
+    const auto generation = generation_;
+    close_result_ = transport;
+    try {
+        // A client drain queues its final GOAWAY at once; idempotent.
+        connection_->begin_drain();
+        if (worker_.schedule_timer(close_timer_, worker_timer_deadline_after(http2_client_goaway_flush_time),
+                [this, generation](worker_timer_outcome outcome) noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        fail(generation, close_result_, {});
+                    }
+                }) != worker_timer_schedule_status::scheduled) {
+            // A stopping worker cannot bound the flush.
+            fail(generation, transport, {});
+            return false;
+        }
+    } catch (...) {
+        fail(generation, transport, {});
+        return false;
+    }
+    closing_ = true;
+    mark_draining();
+    // Also wakes an idle writer when the GOAWAY was already sent.
+    write_signal_.notify();
+    return true;
+}
+
+void http2_client_session::submit_reset(std::uint32_t stream_id, http2_error_code error) noexcept {
+    if (stream_id == 0 || !connection_.has_value() || failed_) {
+        return;
+    }
+    try {
+        if (connection_->submit_reset(stream_id, error) == http2_submit_status::accepted &&
+            connection_->wants_write()) {
+            write_signal_.notify();
+        }
+    } catch (...) {
+        fail({}, std::current_exception());
+    }
+}
+
+bool http2_client_session::output_flushed() const noexcept {
+    return !writing_ && connection_.has_value() && !connection_->wants_write();
+}
+
+void http2_client_session::reset() noexcept {
+    if (session_tasks_ == 0) {
+        connection_.reset();
+        read_buffer_.clear();
+        std::pmr::string(process_resource()).swap(write_buffer_);
+    }
+}
+
+bool http2_client_session::ended(std::uint64_t generation) const noexcept {
+    return generation != generation_ || failed_ || !connection_.has_value();
+}
+
+void http2_client_session::schedule_ping(std::uint64_t generation, std::chrono::steady_clock::time_point deadline) {
+    (void)worker_.schedule_timer(ping_timer_, deadline, [this, generation](worker_timer_outcome outcome) noexcept {
+        if (outcome == worker_timer_outcome::expired) {
+            check_liveness(generation);
+        }
+    });
+}
+
+void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
+    if (ended(generation) || session_tasks_ == 0) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto interval = ping_interval_->value();
+    try {
+        if (ping_pending_ && last_input_ > ping_sent_at_) {
+            ping_pending_ = false;
+        }
+        if (ping_pending_) {
+            if (now >= worker_timer_saturating_deadline(ping_sent_at_, interval)) {
+                fail(generation,
+                    {.status_ = client_transport_status::aborted, .abort_ = client_abort_reason::timeout}, {});
+            } else {
+                schedule_ping(generation, worker_timer_saturating_deadline(ping_sent_at_, interval));
+            }
+            return;
+        }
+        if (const auto idle_deadline = worker_timer_saturating_deadline(last_input_, interval); idle_deadline > now) {
+            schedule_ping(generation, idle_deadline);
+            return;
+        }
+        if (connection_->submit_ping() != http2_submit_status::accepted) {
+            // The connection already failed; the reader reports it.
+            return;
+        }
+        ping_pending_ = true;
+        ping_sent_at_ = now;
+        wake_writer();
+        schedule_ping(generation, worker_timer_saturating_deadline(now, interval));
+    } catch (...) {
+        fail(generation, {}, std::current_exception());
+    }
+}
+
+void http2_client_session::take_output_batch(std::pmr::string& output) {
+    output.clear();
+    (void)connection_->take_output_batch(write_batch_bytes, output);
+}
+
+bool http2_client_session::feed(std::string_view bytes_value) {
+    for (;;) {
+        const auto status = connection_->feed(bytes_value);
+        drain();
+        if (status == http2_feed_result::protocol_failure || connection_->connection_error()) {
+            return false;
+        }
+        if (status != http2_feed_result::events_pending) {
+            return true;
+        }
+    }
+}
+
+void http2_client_session::publish_state() noexcept {
+    state_signal_.notify();
+    const auto capacity =
+        usable() ? connection_->available_request_streams(std::numeric_limits<std::size_t>::max()) : 0;
+    if (capacity > request_capacity_) {
+        capacity_signal_.notify();
+    }
+    request_capacity_ = capacity;
+}
+
+void http2_client_session::finish_task(std::uint64_t generation) noexcept {
+    if (generation != generation_ || session_tasks_ == 0) {
+        std::terminate();
+    }
+    --session_tasks_;
+    state_signal_.notify();
+}
+
+http2_client_session::task_guard::~task_guard() {
+    session_.finish_task(generation_);
+}
+
+task<void> http2_client_session::run_reader(std::uint64_t generation) {
+    const task_guard guard{*this, generation};
+    const auto input = read_buffer_.prepare(read_buffer_bytes);
+    const operation_timeout unbounded(std::nullopt);
+    try {
+        while (generation_ == generation && !failed_) {
+            const auto read = co_await transport_.read_some(input, unbounded);
+            if (!read.ok()) {
+                // A peer can close immediately after receiving our final
+                // END_STREAM, before the socket write callback is dispatched.
+                // Let that callback establish success or failure first.
+                if (read.status_ == client_transport_status::eof) {
+                    while (generation_ == generation && writing_ && !failed_) {
+                        co_await state_signal_.wait();
+                    }
+                    if (generation_ != generation || failed_) {
+                        co_return;
+                    }
+                }
+                fail(generation, read, {});
+                co_return;
+            }
+            if (generation_ != generation || failed_) {
+                co_return;
+            }
+            if (ping_interval_) {
+                last_input_ = std::chrono::steady_clock::now();
+            }
+            if (!feed(std::string_view(input.data(), read.bytes_))) {
+                fail(generation, http2_client_protocol_failure(), {});
+                co_return;
+            }
+        }
+    } catch (...) {
+        fail(generation, {}, std::current_exception());
+    }
+}
+
+task<void> http2_client_session::run_writer(std::uint64_t generation) {
+    const task_guard guard{*this, generation};
+    try {
+        for (;;) {
+            while (generation_ == generation && !failed_ && connection_->wants_write()) {
+                take_output_batch(write_buffer_);
+                writing_ = true;
+                const auto written =
+                    co_await transport_.write(write_buffer_, operation_timeout(write_timeout_));
+                writing_ = false;
+                // Retain ordinary heads and frame-sized DATA batches, but
+                // return an unexpectedly larger indivisible frame before
+                // the connection idles.
+                http_clear_pmr_string_retaining_small(write_buffer_, write_batch_bytes);
+                if (!written.ok()) {
+                    fail(generation, written, {});
+                    co_return;
+                }
+                publish_state();
+            }
+            if (generation_ != generation || failed_) {
+                co_return;
+            }
+            if (closing_) {
+                // Every frame queued up to and after the GOAWAY was written.
+                fail(generation, close_result_, {});
+                co_return;
+            }
+            co_await write_signal_.wait();
+        }
+    } catch (...) {
+        writing_ = false;
+        fail(generation, {}, std::current_exception());
+    }
+}
+
+void http2_client_session::drain() {
+    while (auto event = connection_->next_event()) {
+        handler_.on_http2_event(*event);
+    }
+    if (connection_->wants_write()) {
+        write_signal_.notify();
+    }
+    publish_state();
+}
+
+void http2_client_session::fail(
+    std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept {
+    if (generation != generation_ || failed_) {
+        return;
+    }
+    failed_ = true;
+    draining_ = true;
+    ping_timer_.cancel();
+    close_timer_.cancel();
+    transport_.close();
+    handler_.on_http2_failure(transport, std::move(failure));
+    write_signal_.notify();
+    state_signal_.notify();
+    capacity_signal_.notify();
+}
 
 http_client_connection::http2_stream* http_client_connection::find_http2_stream(std::uint32_t stream_id) noexcept {
     if (stream_id != 0 && last_http2_stream_ != nullptr && last_http2_stream_->stream_id_ == stream_id) {
@@ -80,8 +495,7 @@ void http_client_connection::arm_http2_write_timer(
 }
 
 std::uint64_t http_client_connection::next_http2_request_id() noexcept {
-    next_http2_request_id_ = next_http2_request_id_ + 1 == 0 ? 1 : next_http2_request_id_ + 1;
-    return next_http2_request_id_;
+    return next_nonzero_id(next_http2_request_id_);
 }
 
 void http_client_connection::register_http2_stream(http2_stream& stream) {
@@ -492,15 +906,7 @@ task<void> http_client_connection::wait_for_http2_session_stop(
             *link = waiter_.next_;
         }
     } wait_guard{state_waiters_, waiter};
-    worker_cancellation_registration cancellation(pool_.cancellation_target(), waiter.cancellation_id_);
-    // Abandoning the response finds this waiter through the id.
-    response.cancellation_id_ = cancellation.id();
-    struct response_wait_binding final {
-        http_client_response_state& response_;
-        ~response_wait_binding() {
-            response_.cancellation_id_ = 0;
-        }
-    } binding{response};
+    http_client_response_cancellation cancellation(pool_.cancellation_target(), waiter.cancellation_id_, response);
     cancellation.arm(stop_token_value);
     while (http2_.running() || !http2_streams_.empty()) {
         if (stop_token_value.stop_requested() || response.abandoned_) {
@@ -564,8 +970,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 reset();
             }
         } registration{*this, stream};
-        worker_cancellation_registration cancellation(pool_.cancellation_target(), stream.cancellation_id_);
-        state_value.cancellation_id_ = cancellation.id();
+        http_client_response_cancellation cancellation(pool_.cancellation_target(), stream.cancellation_id_, state_value);
         cancellation.arm(stop_token_value);
 
         auto& connection = http2_.connection();

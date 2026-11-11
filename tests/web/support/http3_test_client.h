@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -372,10 +371,9 @@ public:
     http3_test_client(http3_test_client&&) = delete;
     http3_test_client& operator=(http3_test_client&&) = delete;
 
-    // Sends one request with :scheme https and :authority server_name:port and
-    // waits for its complete response, or for the stream's reset. Header
-    // names must be lowercase (RFC 9114 §4.2). A non-empty body is sent as
-    // DATA within the stream's output budget; add content-length to declare it.
+    // Sends a validated ordinary request with :scheme https and :authority
+    // server_name:port. Nonempty content gets an exact typed Content-Length;
+    // headers contain only application fields, not managed framing fields.
     [[nodiscard]] http3_test_response request(std::string_view method, std::string_view path,
         const http3_test_fields& headers = {}, std::string_view body = {}) {
         return finish_response(open_request(method, path, headers, body, true));
@@ -387,6 +385,21 @@ public:
     [[nodiscard]] std::int64_t start_request(std::string_view method, std::string_view path,
         const http3_test_fields& headers = {}, std::string_view body = {}) {
         return open_request(method, path, headers, body, false);
+    }
+
+    // Raw field sections are reserved for malformed-request wire regressions.
+    [[nodiscard]] std::int64_t start_raw_request(const http3_test_fields& headers) {
+        const auto stream_id = open_stream(false);
+        std::vector<http3_field_view> fields;
+        fields.reserve(headers.size());
+        for (const auto& [name, value] : headers) {
+            fields.push_back({name, value});
+        }
+        if (connection_->http3().submit_request(stream_id, fields, true) != http3_status::accepted) {
+            throw std::runtime_error("HTTP/3 malformed wire request was not accepted");
+        }
+        flush();
+        return stream_id;
     }
 
     // Keep the server handshake incomplete until the request flight is sent.
@@ -433,26 +446,12 @@ public:
         }
     }
 
-    // Complete pseudo-header list, including classic or extended CONNECT.
-    // The request remains open for bidirectional DATA until finish=true.
-    [[nodiscard]] std::int64_t start_tunnel(const http3_test_fields& headers) {
-        std::optional<std::int64_t> opened;
-        wait_or_throw([&] {
-            opened = connection_->open_request_stream();
-            return opened.has_value();
-        },
-            "HTTP/3 tunnel stream did not open");
-        streams_.try_emplace(*opened);
-        std::vector<http3_field_view> fields;
-        fields.reserve(headers.size());
-        for (const auto& [name, value] : headers) {
-            fields.push_back({name, value});
-        }
-        if (connection_->http3().submit_request(*opened, fields, false) != http3_status::accepted) {
-            throw std::runtime_error("HTTP/3 tunnel request was not accepted");
-        }
-        flush();
-        return *opened;
+    [[nodiscard]] std::int64_t start_tunnel(const http3_connect_request_head_view& request) {
+        return open_tunnel(request);
+    }
+
+    [[nodiscard]] std::int64_t start_tunnel(const http3_extended_connect_request_head_view& request) {
+        return open_tunnel(request);
     }
 
     void send_stream_data(std::int64_t stream_id, std::span<const std::byte> bytes, bool finish = false) {
@@ -766,29 +765,45 @@ private:
         return stream.ended_ || stream.closed_ || stream.response_.reset_error_.has_value();
     }
 
-    [[nodiscard]] std::int64_t open_request(std::string_view method, std::string_view request_path,
-        const http3_test_fields& headers, std::string_view body, bool consume_on_arrival) {
+    [[nodiscard]] std::int64_t open_stream(bool consume_on_arrival) {
         std::optional<std::int64_t> opened;
         wait_or_throw([&] {
             opened = connection_->open_request_stream();
             return opened.has_value();
         },
             "HTTP/3 request stream did not open");
-        const auto stream_id = *opened;
-        auto& stream = streams_[stream_id];
-        stream.consume_on_arrival_ = consume_on_arrival;
+        streams_[*opened].consume_on_arrival_ = consume_on_arrival;
+        return *opened;
+    }
+
+    template <typename head_type>
+    [[nodiscard]] std::int64_t open_tunnel(const head_type& request) {
+        if constexpr (std::is_same_v<head_type, http3_extended_connect_request_head_view>) {
+            // TLS completion does not imply arrival of the server's HTTP/3 SETTINGS.
+            (void)peer_settings();
+        }
+        const auto stream_id = open_stream(false);
+        if (connection_->http3().submit_request_head(stream_id, request) != http3_status::accepted) {
+            throw std::runtime_error("HTTP/3 tunnel request was not accepted");
+        }
+        flush();
+        return stream_id;
+    }
+
+    [[nodiscard]] std::int64_t open_request(std::string_view method, std::string_view request_path,
+        const http3_test_fields& headers, std::string_view body, bool consume_on_arrival) {
+        const auto stream_id = open_stream(consume_on_arrival);
+        auto& stream = streams_.at(stream_id);
 
         const auto request_authority = authority();
-        std::vector<http3_field_view> fields{
-            {":method", method},
-            {":scheme", "https"},
-            {":authority", request_authority},
-            {":path", request_path},
-        };
+        std::vector<http_header_view> fields;
+        fields.reserve(headers.size());
         for (const auto& [name, value] : headers) {
-            fields.push_back({name, value});
+            fields.emplace_back(name, value);
         }
-        if (connection_->http3().submit_request(stream_id, fields, body.empty()) != http3_status::accepted) {
+        const http3_regular_request_head_view head{
+            .method_ = method, .authority_ = request_authority, .target_ = request_path, .headers_ = fields, .content_length_ = body.empty() ? std::nullopt : std::optional<std::uint64_t>(body.size()), .streaming_ = !body.empty()};
+        if (connection_->http3().submit_request_head(stream_id, head) != http3_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the request head");
         }
         if (!body.empty()) {
@@ -981,27 +996,17 @@ private:
             return;
         }
         auto& stream = found->second;
-        std::optional<int> status;
         http3_test_fields fields;
+        fields.reserve(event.fields_.size());
         for (const auto& field : event.fields_) {
-            const auto name = field.name();
-            const auto value = field.value();
-            if (name == ":status") {
-                int parsed = 0;
-                const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
-                if (error == std::errc{} && end == value.data() + value.size()) {
-                    status = parsed;
-                }
-            } else if (!name.starts_with(':')) {
-                fields.emplace_back(std::string(name), std::string(value));
-            }
+            fields.emplace_back(std::string(field.name()), std::string(field.value()));
         }
-        if (stream.response_.status_ != 0) {
+        if (event.trailers_) {
             stream.response_.trailers_ = std::move(fields);
-        } else if (status && *status < 200) {
-            stream.response_.interim_statuses_.push_back(*status);
-        } else if (status) {
-            stream.response_.status_ = *status;
+        } else if (event.status_ && event.status_->status().is_informational()) {
+            stream.response_.interim_statuses_.push_back(event.status_->value());
+        } else if (event.status_) {
+            stream.response_.status_ = event.status_->status().value();
             stream.response_.headers_ = std::move(fields);
         }
         if (event.stream_ended_) {

@@ -10,7 +10,6 @@
 // requires the explicit setting RUVIA_REDIS_TLS=false.
 
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -23,49 +22,14 @@
 #include <system_error>
 #include <utility>
 
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 
-#include "backend_tls.h"
+#include "backend_config.h"
 
 namespace {
-
-void assign_if_present(std::string& target, std::optional<std::string_view> value) {
-    if (value) {
-        target.assign(value->data(), value->size());
-    }
-}
-
-ruvia::redis_config redis_config(const example::environment& env_value) {
-    ruvia::redis_config config;
-    config.tls_ = example::backend_tls("RUVIA_REDIS", env_value);
-    assign_if_present(config.host_, env_value.get("RUVIA_REDIS_HOST"));
-    assign_if_present(config.username_, env_value.get("RUVIA_REDIS_USER"));
-    assign_if_present(config.password_, env_value.get("RUVIA_REDIS_PASSWORD"));
-    if (const auto port = env_value.get<std::uint16_t>("RUVIA_REDIS_PORT")) {
-        config.port_ = *port;
-    }
-    if (const auto database = env_value.get<std::uint32_t>("RUVIA_REDIS_DATABASE")) {
-        config.database_ = *database;
-    }
-    if (const auto pool_size = env_value.get<std::uint32_t>("RUVIA_REDIS_POOL_SIZE_PER_WORKER")) {
-        config.pool_size_per_worker_ = *pool_size;
-    }
-    if (const auto pool_size = env_value.get<std::uint32_t>("RUVIA_REDIS_BLOCKING_POOL_SIZE_PER_WORKER")) {
-        config.blocking_pool_size_per_worker_ = *pool_size;
-    }
-    return config;
-}
-
-void append_signed(std::pmr::string& output, std::int64_t value) {
-    std::array<char, 32> buffer{};
-    auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec != std::errc{}) {
-        throw std::logic_error("failed to format integer");
-    }
-    output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
-}
 
 void append_bool(std::pmr::string& output, bool value) {
     output.append(value ? "true" : "false");
@@ -80,7 +44,7 @@ void append_ttl(std::pmr::string& output, const ruvia::redis_ttl& ttl) {
             output.append("persistent");
             break;
         case ruvia::redis_ttl_state::expiring:
-            append_signed(output, ttl.remaining()->count());
+            ruvia::http_append_signed(output, ttl.remaining()->count());
             output.append("ms");
             break;
     }
@@ -136,7 +100,7 @@ public:
     ruvia::task<ruvia::http_response> increment(ruvia::context& c) {
         const auto value = co_await c.redis().incr(c.req().param("key").value_or(""));
         std::pmr::string body(c.allocator<char>());
-        append_signed(body, value);
+        ruvia::http_append_signed(body, value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -204,19 +168,19 @@ public:
         body.append("\nreplaced=");
         body.append(replaced.previous().value_or(""));
         body.append("\nappended=");
-        append_signed(body, appended);
+        ruvia::http_append_signed(body, appended);
         body.append("\nlength=");
-        append_signed(body, length);
+        ruvia::http_append_signed(body, length);
         body.append("\ndeleted=");
         body.append(deleted.value_or(""));
         body.append("\nmget=");
-        append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
         body.append("\ndecr=");
-        append_signed(body, decremented);
+        ruvia::http_append_signed(body, decremented);
         body.append("\ndecr-by=");
-        append_signed(body, decremented_by);
+        ruvia::http_append_signed(body, decremented_by);
         body.append("\nincr-by=");
-        append_signed(body, incremented_by);
+        ruvia::http_append_signed(body, incremented_by);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -237,25 +201,25 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("changed=");
-        append_signed(body, changed + extra);
+        ruvia::http_append_signed(body, changed + extra);
         body.append("\ncount=");
-        append_signed(body, count);
+        ruvia::http_append_signed(body, count);
         body.append("\nname=");
         body.append(name.value_or(""));
         body.append("\nhmget=");
-        append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
         body.append("\nall=");
-        append_signed(body, static_cast<std::int64_t>(all.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(all.size()));
         body.append("\nkeys=");
-        append_signed(body, static_cast<std::int64_t>(keys.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(keys.size()));
         body.append("\nvalues=");
-        append_signed(body, static_cast<std::int64_t>(hvals.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(hvals.size()));
         body.append("\nexists=");
         append_bool(body, exists);
         body.append("\nlength=");
-        append_signed(body, length);
+        ruvia::http_append_signed(body, length);
         body.append("\nremoved=");
-        append_signed(body, removed);
+        ruvia::http_append_signed(body, removed);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -277,15 +241,15 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("pushed=");
-        append_signed(body, left + right);
+        ruvia::http_append_signed(body, left + right);
         body.append("\nlength=");
-        append_signed(body, length);
+        ruvia::http_append_signed(body, length);
         body.append("\nrange=");
-        append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
         body.append("\nfirst=");
         body.append(first.value_or(""));
         body.append("\nremoved=");
-        append_signed(body, removed);
+        ruvia::http_append_signed(body, removed);
         body.append("\nleft=");
         body.append(popped_left.value_or(""));
         body.append("\nright=");
@@ -313,25 +277,25 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("added=");
-        append_signed(body, added + also_added);
+        ruvia::http_append_signed(body, added + also_added);
         body.append("\nmembers=");
-        append_signed(body, static_cast<std::int64_t>(members.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(members.size()));
         body.append("\nsize=");
-        append_signed(body, size);
+        ruvia::http_append_signed(body, size);
         body.append("\nis-member=");
         append_bool(body, member);
         body.append("\nrandom=");
         body.append(random.value_or(""));
         body.append("\nintersection=");
-        append_signed(body, static_cast<std::int64_t>(intersection.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(intersection.size()));
         body.append("\nunion=");
-        append_signed(body, static_cast<std::int64_t>(union_values.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(union_values.size()));
         body.append("\ndifference=");
-        append_signed(body, static_cast<std::int64_t>(difference.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(difference.size()));
         body.append("\npopped=");
         body.append(popped.value_or(""));
         body.append("\nremoved=");
-        append_signed(body, removed);
+        ruvia::http_append_signed(body, removed);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -349,19 +313,19 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("added=");
-        append_signed(body, added + added_two);
+        ruvia::http_append_signed(body, added + added_two);
         body.append("\nvalues=");
-        append_signed(body, static_cast<std::int64_t>(values.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(values.size()));
         body.append("\nscored=");
-        append_signed(body, static_cast<std::int64_t>(scored.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(scored.size()));
         body.append("\nscore=");
         append_bool(body, score.has_value());
         body.append("\nsize=");
-        append_signed(body, size);
+        ruvia::http_append_signed(body, size);
         body.append("\ncounted=");
-        append_signed(body, counted);
+        ruvia::http_append_signed(body, counted);
         body.append("\nremoved=");
-        append_signed(body, removed);
+        ruvia::http_append_signed(body, removed);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -379,13 +343,13 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("keys=");
-        append_signed(body, static_cast<std::int64_t>(keys.values().size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(keys.values().size()));
         body.append("\nhash=");
-        append_signed(body, static_cast<std::int64_t>(hash.entries().size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(hash.entries().size()));
         body.append("\nset=");
-        append_signed(body, static_cast<std::int64_t>(set.values().size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(set.values().size()));
         body.append("\nzset=");
-        append_signed(body, static_cast<std::int64_t>(zset.entries().size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(zset.entries().size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -405,7 +369,7 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("pipeline results=");
-        append_signed(body, static_cast<std::int64_t>(results.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -419,7 +383,7 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("transaction results=");
-        append_signed(body, static_cast<std::int64_t>(results.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -434,11 +398,11 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("eval-kind=");
-        append_signed(body, static_cast<std::int64_t>(value.kind()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(value.kind()));
         body.append("\nsha-kind=");
-        append_signed(body, static_cast<std::int64_t>(sha_value.kind()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(sha_value.kind()));
         body.append("\nexists=");
-        append_signed(body, static_cast<std::int64_t>(exists.size()));
+        ruvia::http_append_signed(body, static_cast<std::int64_t>(exists.size()));
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -476,7 +440,7 @@ int main() {
         auto& app = ruvia::app();
         app.load_dotenv();
         const example::environment env_value(&app.env());
-        auto config = redis_config(env_value);
+        auto config = example::redis_config(env_value);
         app.redis({.config_ = config})
             .redis({.alias_ = "cache", .config_ = config})
             .listen({.address_ = "0.0.0.0",

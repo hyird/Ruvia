@@ -226,3 +226,8 @@ TEST(Ruvia, http_parse_error_messages_and_codes) {
     EXPECT_TRUE(std::string_view(http_parse_protocol_error(http_parse_error::invalid_upgrade).what()).size() !=
                 0);
 }
+
+TEST(Ruvia, http_field_ows_trims_only_space_and_tab) {
+    EXPECT_EQ(ruvia::http_trim_ows(" \t text/plain \t"), std::string_view("text/plain"));
+    EXPECT_EQ(ruvia::http_trim_ows("\ntext/plain\n"), std::string_view("\ntext/plain\n"));
+}

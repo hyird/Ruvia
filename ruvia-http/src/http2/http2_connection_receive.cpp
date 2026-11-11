@@ -8,8 +8,8 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
-#include "client/http_client_response_head.h"
 #include "coding/http_content_length.h"
+#include "http1/http_client_response_head.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_request_headers.h"
@@ -67,10 +67,10 @@ namespace {
         informational_fields.emplace_back(name, value, informational_fields.get_allocator().resource());
         return true;
     }
-    const auto kind = classify_request_header(name);
+    const auto kind = classify_http_field(name);
     // RFC 9110 §9.3.6: successful CONNECT ignores Content-Length semantics,
     // including invalid numerals; the field is retained for extension validators.
-    if (kind == request_header_kind::content_length &&
+    if (kind == http_field_kind::content_length &&
         content_semantics != http_response_content_semantics::connect_tunnel) {
         http_content_length_state content_length;
         if (content_length.parse_field(value) != http_content_length_parse_status::ok ||
@@ -306,7 +306,7 @@ bool http2_connection::finish_request_head(http2_stream_state& stream) {
             stream.request_known_method() != http_known_method::connect || !stream.has_scheme() ||
             !stream.has_path() || !stream.has_authority() ||
             !is_valid_binary_request_authority(stream.request_scheme(), stream.request_authority()) ||
-            !http2_request_path_matches_method_and_scheme(
+            !http_binary_request_path_matches_method_and_scheme(
                 stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||
             !http2_connect_content_length_acceptable(stream)) {
             return false;
@@ -333,7 +333,7 @@ bool http2_connection::finish_request_head(http2_stream_state& stream) {
     } else if (!stream.has_scheme() || !stream.has_path() ||
                (stream.has_authority() && !is_valid_binary_request_authority(
                                               stream.request_scheme(), stream.request_authority())) ||
-               !http2_request_path_matches_method_and_scheme(
+               !http_binary_request_path_matches_method_and_scheme(
                    stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||
                !http2_has_required_request_authority(stream)) {
         return false;

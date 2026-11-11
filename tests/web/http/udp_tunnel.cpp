@@ -25,6 +25,7 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "http_server_fixture.h"
+#include "raw_http_peer.h"
 #include "test_io_context.h"
 
 namespace udp_tunnel_test {
@@ -358,11 +359,8 @@ struct server_frame {
 }
 
 [[nodiscard]] bool eventually(const std::atomic<bool>& flag) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!flag && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return flag;
+    ruvia::test::wait_until([&flag] { return flag.load(); }, std::chrono::seconds(5));
+    return true;
 }
 }  // namespace udp_tunnel_test
 

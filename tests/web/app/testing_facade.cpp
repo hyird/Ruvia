@@ -30,6 +30,8 @@
 #include "ruvia/web/testing.h"
 #include "ruvia/web/validation.h"
 
+#include "scoped_temp_directory.h"
+
 RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
 
 RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
@@ -1637,11 +1639,8 @@ TEST(Ruvia, testing_facade_wildcard_capture_rejects_encoded_separators) {
 }
 
 TEST(Ruvia, testing_facade_subrequest_rejects_non_buffered_routes_protocol_fields_and_enforces_406) {
-    namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_testing_facade_subrequest_file";
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_testing_facade_subrequest_file");
+    const auto& dir = directory.path();
     testing_facade_file_path() = dir / "sample.bin";
     {
         std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
@@ -1651,15 +1650,11 @@ TEST(Ruvia, testing_facade_subrequest_rejects_non_buffered_routes_protocol_field
     const auto res = app.request(ruvia::test_request::get("/t/sub-checks"));
     EXPECT_EQ(res.status(), ruvia::http_status::ok);
     EXPECT_EQ(res.body(), "1111");
-    fs::remove_all(dir, ignored);
 }
 
 TEST(Ruvia, testing_facade_subrequest_rejects_a_file_response_recovered_from_406) {
-    namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_testing_facade_subrequest_406_file";
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_testing_facade_subrequest_406_file");
+    const auto& dir = directory.path();
     testing_facade_file_path() = dir / "large.bin";
     // Larger than the inline-read limit, so the error handler's answer stays
     // a file body instead of being read into the response.
@@ -1679,15 +1674,11 @@ TEST(Ruvia, testing_facade_subrequest_rejects_a_file_response_recovered_from_406
     const auto res = app.request(ruvia::test_request::get("/t/sub-refused-file"));
     EXPECT_EQ(res.status(), ruvia::http_status::ok);
     EXPECT_EQ(res.body(), "rejected");
-    fs::remove_all(dir, ignored);
 }
 
 TEST(Ruvia, testing_facade_reads_file_bodies_and_negotiates_precompressed_static_files) {
-    namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_testing_facade_files";
-    std::error_code ignored;
-    fs::remove_all(dir, ignored);
-    fs::create_directories(dir);
+    const ruvia::test::scoped_temp_directory directory("ruvia_testing_facade_files");
+    const auto& dir = directory.path();
     testing_facade_file_path() = dir / "large.bin";
     const std::string large_payload(20000, 'L');
     {
@@ -1732,7 +1723,6 @@ TEST(Ruvia, testing_facade_reads_file_bodies_and_negotiates_precompressed_static
         EXPECT_EQ(app.request(ruvia::test_request::get(target)).status(), ruvia::http_status::forbidden);
     }
     testing_facade_static_root().reset();
-    fs::remove_all(dir, ignored);
 }
 
 TEST(Ruvia, testing_facade_supports_typed_params_queries_const_handlers_json_arrays_and_remote_info) {

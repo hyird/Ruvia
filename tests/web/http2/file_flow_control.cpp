@@ -27,7 +27,9 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/static_files.h"
 
+#include "http2_wire_fixture.h"
 #include "http_server_fixture.h"
+#include "scoped_temp_directory.h"
 #include "test_io_context.h"
 
 namespace http2_file_flow_control_test {
@@ -37,6 +39,11 @@ constexpr std::size_t file_size = 65535;
 std::filesystem::path& file_path() {
     static std::filesystem::path path;
     return path;
+}
+
+[[nodiscard]] const std::filesystem::path& empty_directory() {
+    static const ruvia::test::scoped_temp_directory directory("ruvia-http2-empty-file");
+    return directory.path();
 }
 
 std::unique_ptr<ruvia::static_root> empty_root;
@@ -71,7 +78,7 @@ class file_routes final {
     }
 
     ruvia::task<ruvia::http_response> mutated_empty(ruvia::context& context_value) {
-        const auto path = std::filesystem::current_path() / "ruvia_http2_empty_file" / "body.bin";
+        const auto path = empty_directory() / "body.bin";
         {
             std::ofstream output(path, std::ios::binary | std::ios::trunc);
         }
@@ -94,52 +101,21 @@ class file_routes final {
 
 struct test_file final {
     test_file() {
-        std::random_device random;
-        for (unsigned attempt = 0; attempt != 100; ++attempt) {
-            directory_ = std::filesystem::temp_directory_path() /
-                         ("ruvia-http2-file-" + std::to_string(random()) + "-" + std::to_string(random()));
-            if (std::filesystem::create_directory(directory_)) {
-                break;
-            }
-            directory_.clear();
+        file_path() = directory_.path() / "body.bin";
+        std::ofstream output(file_path(), std::ios::binary | std::ios::trunc);
+        const std::string bytes(file_size, 'f');
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        output.close();
+        if (!output) {
+            throw std::runtime_error("cannot write HTTP/2 flow-control test file");
         }
-        if (directory_.empty()) {
-            throw std::runtime_error("cannot create HTTP/2 flow-control test directory");
-        }
-        try {
-            file_path() = directory_ / "body.bin";
-            std::ofstream output(file_path(), std::ios::binary | std::ios::trunc);
-            const std::string bytes(file_size, 'f');
-            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-            output.close();
-            if (!output) {
-                throw std::runtime_error("cannot write HTTP/2 flow-control test file");
-            }
-        } catch (...) {
-            std::filesystem::remove_all(directory_);
-            throw;
-        }
-    }
-
-    ~test_file() {
-        std::error_code ignored;
-        std::filesystem::remove_all(directory_, ignored);
     }
 
 private:
-    std::filesystem::path directory_;
+    ruvia::test::scoped_temp_directory directory_{"ruvia-http2-file"};
 };
 
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
-    std::uint32_t stream_id, std::string_view payload) {
-    std::array<char, ruvia::http2_frame_header_bytes> header{};
-    if (!ruvia::encode_http2_frame_header(
-            header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
-        throw std::logic_error("invalid HTTP/2 flow-control test frame");
-    }
-    wire.append(header.data(), header.size());
-    wire.append(payload);
-}
+using ruvia::test::append_frame;
 
 std::string request_wire(bool exhaust_connection, std::pmr::memory_resource* resource) {
     std::string wire(ruvia::http2_client_preface);
@@ -162,10 +138,7 @@ std::string request_wire(bool exhaust_connection, std::pmr::memory_resource* res
     return wire;
 }
 
-struct received_frame final {
-    ruvia::http2_frame_header header_;
-    std::string payload_;
-};
+using ruvia::test::received_frame;
 
 ruvia::task<received_frame> read_frame(asio::ip::tcp::socket& socket) {
     std::array<char, ruvia::http2_frame_header_bytes> header_bytes{};
@@ -557,10 +530,7 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
 
 TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
     using namespace http2_file_flow_control_test;
-    const auto directory = std::filesystem::current_path() / "ruvia_http2_empty_file";
-    std::error_code ignored;
-    std::filesystem::remove_all(directory, ignored);
-    std::filesystem::create_directories(directory);
+    const auto& directory = empty_directory();
     const auto path = directory / "body.bin";
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -681,7 +651,6 @@ TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
     io.run();
     operation.get();
     empty_root.reset();
-    std::filesystem::remove_all(directory, ignored);
     EXPECT_TRUE(!expired);
     if (failure) {
         std::rethrow_exception(failure);

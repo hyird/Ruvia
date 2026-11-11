@@ -12,26 +12,26 @@
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
 
+#include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
-#include "parser/http_parser_syntax.h"
 
 namespace ruvia::detail {
 
 struct http_request_access final {
     static constexpr std::size_t cached_header_slots = http_request::cached_header_slots;
-    static_assert(cached_header_slots == request_header_kind_count - 1);
+    static_assert(cached_header_slots == http_field_kind_count - 1);
 
     [[nodiscard]] static http_request make() noexcept {
         return http_request();
     }
 
-    [[nodiscard]] static constexpr std::size_t known_header_slot(request_header_kind name) noexcept {
-        const auto slot = request_header_kind_known_slot(name);
+    [[nodiscard]] static constexpr std::size_t known_header_slot(http_field_kind name) noexcept {
+        const auto slot = http_field_kind_known_slot(name);
         return slot < cached_header_slots ? slot : cached_header_slots;
     }
 
     [[nodiscard]] static std::string_view known_header(
-        const http_request& request, request_header_kind name) noexcept {
+        const http_request& request, http_field_kind name) noexcept {
         const auto slot = known_header_slot(name);
         if (slot >= cached_header_slots) {
             return {};
@@ -43,14 +43,14 @@ struct http_request_access final {
     }
 
     [[nodiscard]] static bool has_known_header(
-        const http_request& request, request_header_kind name) noexcept {
+        const http_request& request, http_field_kind name) noexcept {
         const auto slot = known_header_slot(name);
         return slot < cached_header_slots && request.cached_headers_[slot] != 0 &&
                request.cached_headers_[slot] <= request.headers_.size();
     }
 
     [[nodiscard]] static bool has_repeated_known_header(
-        const http_request& request, request_header_kind name) noexcept {
+        const http_request& request, http_field_kind name) noexcept {
         const auto slot = known_header_slot(name);
         return slot < cached_header_slots && request.headers_.has_repeated_known_slot(slot);
     }
@@ -60,7 +60,7 @@ struct http_request_access final {
     // from the cache; repeated fields scan only up to the cached last line.
     template <typename visitor_type>
     static bool visit_known_headers(
-        const http_request& request, request_header_kind name, visitor_type&& visitor) {
+        const http_request& request, http_field_kind name, visitor_type&& visitor) {
         const auto slot = known_header_slot(name);
         if (slot >= cached_header_slots) {
             return true;
@@ -134,13 +134,13 @@ struct http_request_access final {
     }
 
     static bool add_header(
-        http_request& request, http_header_view header_value, request_header_kind kind) {
+        http_request& request, http_header_view header_value, http_field_kind kind) {
         if (request.headers_.size() == (std::numeric_limits<std::uint16_t>::max)()) {
             return false;
         }
         const auto known_slot = known_header_slot(kind);
         request.headers_.append(
-            header_value, known_slot < cached_header_slots ? kind : request_header_kind::other);
+            header_value, known_slot < cached_header_slots ? kind : http_field_kind::other);
         if (known_slot < cached_header_slots) {
             if (request.cached_headers_[known_slot] != 0) {
                 request.headers_.mark_repeated_known_slot(known_slot);
@@ -150,7 +150,7 @@ struct http_request_access final {
         return true;
     }
 
-    [[nodiscard]] static request_header_kind header_kind(
+    [[nodiscard]] static http_field_kind header_kind(
         const http_request& request, std::size_t index) noexcept {
         return request.headers_.kind_at(index);
     }
@@ -232,12 +232,12 @@ template <typename header_accessor_type>
     }
     if (synthesize_host &&
         !http_request_access::add_header(
-            request, http_header_view{"host", spec.authority_}, request_header_kind::host)) {
+            request, http_header_view{"host", spec.authority_}, http_field_kind::host)) {
         throw std::logic_error(spec.failure_message_);
     }
     if (spec.has_cookie_ &&
         !http_request_access::add_header(
-            request, http_header_view{"cookie", spec.cookie_}, request_header_kind::cookie)) {
+            request, http_header_view{"cookie", spec.cookie_}, http_field_kind::cookie)) {
         throw std::logic_error(spec.failure_message_);
     }
     return request;

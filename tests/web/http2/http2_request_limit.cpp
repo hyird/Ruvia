@@ -29,6 +29,8 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
+#include "app_run.h"
+#include "http2_wire_fixture.h"
 #include "tcp_port_reservation.h"
 
 namespace http2_request_limit_test {
@@ -59,31 +61,8 @@ public:
     }
 };
 
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
-    std::uint32_t stream, std::string_view payload) {
-    std::array<char, ruvia::http2_frame_header_bytes> header{};
-    if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream)) {
-        throw std::logic_error("invalid HTTP/2 test frame");
-    }
-    wire.append(header.data(), header.size());
-    wire.append(payload);
-}
-
-struct frame final {
-    ruvia::http2_frame_header header_;
-    std::string payload_;
-};
-frame read_frame(asio::ip::tcp::socket& socket) {
-    std::array<char, ruvia::http2_frame_header_bytes> bytes{};
-    asio::read(socket, asio::buffer(bytes));
-    const auto header = ruvia::parse_http2_frame_header(bytes);
-    if (!header || header->length_ > 64 * 1024) {
-        throw std::runtime_error("invalid HTTP/2 response frame");
-    }
-    frame value{*header, std::string(header->length_, '\0')};
-    asio::read(socket, asio::buffer(value.payload_));
-    return value;
-}
+using ruvia::test::append_frame;
+using ruvia::test::read_frame;
 std::uint32_t uint32(std::string_view bytes) {
     if (bytes.size() < 4) {
         throw std::runtime_error("truncated HTTP/2 frame");
@@ -174,14 +153,7 @@ TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_se
     const auto endpoint = reservation.endpoint();
     app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .max_requests_per_connection_ = 1});
     app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
-    std::exception_ptr failure;
-    std::thread thread([&app, &failure] {
-        try {
-            app.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
+    ruvia::test::app_run thread(app);
     if (!started().try_acquire_for(3s)) {
         app.stop();
         thread.join();
@@ -198,9 +170,6 @@ TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_se
     }
     app.stop();
     thread.join();
-    if (failure) {
-        std::rethrow_exception(failure);
-    }
     if (client_failure) {
         std::rethrow_exception(client_failure);
     }

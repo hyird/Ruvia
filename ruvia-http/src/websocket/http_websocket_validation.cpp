@@ -10,7 +10,7 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "field/http_connection_fields.h"
-#include "parser/http_parser_syntax.h"
+#include "field/http_field_kind.h"
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_handshake_fields.h"
@@ -89,13 +89,13 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto kind = detail::http_request_access::header_kind(request, i);
         const auto& header_value = headers[i];
-        if (kind == detail::request_header_kind::connection) {
+        if (kind == detail::http_field_kind::connection) {
             if (connection_options.parse_field(
                     header_value.value(), detail::http_connection_field_role::request_recipient) !=
                 detail::http_field_list_parse_status::ok) {
                 return websocket_handshake_validation_result::make_invalid_request();
             }
-        } else if (kind == detail::request_header_kind::upgrade) {
+        } else if (kind == detail::http_field_kind::upgrade) {
             if (upgrade_protocols.parse_field(header_value.value(), detail::http_field_list_role::recipient,
                     [&websocket_upgrade](const detail::http_upgrade_protocol& protocol) noexcept {
                         if (protocol.version_.empty() &&
@@ -106,7 +106,7 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
                     }) != detail::http_field_list_parse_status::ok) {
                 return websocket_handshake_validation_result::make_invalid_request();
             }
-        } else if (kind == detail::request_header_kind::sec_websocket_key) {
+        } else if (kind == detail::http_field_kind::sec_websocket_key) {
             key = header_value.value();
             ++key_count;
         } else if (!websocket_headers.observe_header(kind, header_value.value())) {

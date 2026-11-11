@@ -14,33 +14,12 @@
 
 #include "ruvia/http/http_io_buffer.h"
 
-#include "request_header_memory_fixture.h"
+#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
 
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t live_bytes_{0};
-    std::size_t allocations_{0};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        void* result_value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-        live_bytes_ += bytes_value;
-        ++allocations_;
-        return result_value;
-    }
-
-    void do_deallocate(void* address, std::size_t bytes_value, std::size_t alignment) override {
-        live_bytes_ -= bytes_value;
-        std::pmr::new_delete_resource()->deallocate(address, bytes_value, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
+using ruvia::test::counting_memory_resource;
 
 void write_text(std::span<char> target, std::string_view text) {
     std::memcpy(target.data(), text.data(), text.size());
@@ -80,7 +59,7 @@ enum class reallocation_operation { reserve,
 }  // namespace
 
 TEST(Ruvia, io_buffer_publishes_only_committed_bytes) {
-    counting_resource resource;
+    counting_memory_resource resource;
     {
         ruvia::http_io_buffer buffer(&resource);
         EXPECT_TRUE(buffer.empty());
@@ -91,14 +70,14 @@ TEST(Ruvia, io_buffer_publishes_only_committed_bytes) {
         buffer.commit(5);
         EXPECT_EQ(buffer.view(), "hello");
         EXPECT_TRUE(buffer.capacity() >= std::size_t{16});
-        EXPECT_TRUE(ruvia::testing::throws_on([&] { buffer.commit(buffer.capacity()); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { buffer.commit(buffer.capacity()); }));
         EXPECT_EQ(buffer.view(), "hello");
     }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, io_buffer_consume_keeps_views_until_room_is_needed) {
-    counting_resource resource;
+    counting_memory_resource resource;
     ruvia::http_io_buffer buffer(&resource);
     buffer.reserve(8);
     EXPECT_EQ(buffer.capacity(), std::size_t{8});
@@ -109,10 +88,10 @@ TEST(Ruvia, io_buffer_consume_keeps_views_until_room_is_needed) {
     EXPECT_EQ(consumed, "abcdef");
     EXPECT_EQ(buffer.view(), "ef");
     // The tail has 2 bytes; 4 more fit only by moving the unread tail forward.
-    const auto allocations = resource.allocations_;
+    const auto allocations = resource.allocation_count();
     write_text(buffer.prepare(4), "ghij");
     buffer.commit(4);
-    EXPECT_EQ(resource.allocations_, allocations);
+    EXPECT_EQ(resource.allocation_count(), allocations);
     EXPECT_EQ(buffer.capacity(), std::size_t{8});
     EXPECT_EQ(buffer.view(), "efghij");
     // Consuming past the end drops everything and rewinds the window.
@@ -120,12 +99,12 @@ TEST(Ruvia, io_buffer_consume_keeps_views_until_room_is_needed) {
     EXPECT_TRUE(buffer.empty());
     write_text(buffer.prepare(8), "12345678");
     buffer.commit(8);
-    EXPECT_EQ(resource.allocations_, allocations);
+    EXPECT_EQ(resource.allocation_count(), allocations);
     EXPECT_EQ(buffer.view(), "12345678");
 }
 
 TEST(Ruvia, io_buffer_grows_geometrically_and_keeps_readable_bytes) {
-    counting_resource resource;
+    counting_memory_resource resource;
     ruvia::http_io_buffer buffer(&resource);
     buffer.append("abc");
     EXPECT_EQ(buffer.capacity(), std::size_t{3});
@@ -136,7 +115,7 @@ TEST(Ruvia, io_buffer_grows_geometrically_and_keeps_readable_bytes) {
     const std::string large(100, 'x');
     buffer.append(large);
     EXPECT_EQ(buffer.view(), "abcd" + large);
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { (void)buffer.prepare(static_cast<std::size_t>(-1)); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)buffer.prepare(static_cast<std::size_t>(-1)); }));
     EXPECT_EQ(buffer.view(), "abcd" + large);
 }
 
@@ -162,7 +141,7 @@ TEST(Ruvia, io_buffer_append_accepts_its_own_bytes) {
 }
 
 TEST(Ruvia, io_buffer_releases_storage_by_policy) {
-    counting_resource resource;
+    counting_memory_resource resource;
     {
         ruvia::http_io_buffer buffer(&resource);
         buffer.reserve(64);
@@ -170,18 +149,18 @@ TEST(Ruvia, io_buffer_releases_storage_by_policy) {
         buffer.clear_retaining_small(64);
         EXPECT_TRUE(buffer.empty());
         EXPECT_EQ(buffer.capacity(), std::size_t{64});
-        EXPECT_EQ(resource.live_bytes_, std::size_t{64});
+        EXPECT_EQ(resource.live_bytes(), std::size_t{64});
         buffer.append("large");
         buffer.clear_retaining_small(32);
         EXPECT_EQ(buffer.capacity(), std::size_t{0});
-        EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+        EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 
         buffer.reserve(256);
         buffer.append("0123456789");
         buffer.consume(4);
         buffer.shrink_to(16);
         EXPECT_EQ(buffer.capacity(), std::size_t{16});
-        EXPECT_EQ(resource.live_bytes_, std::size_t{16});
+        EXPECT_EQ(resource.live_bytes(), std::size_t{16});
         EXPECT_EQ(buffer.view(), "456789");
         // Never below the readable bytes.
         buffer.shrink_to(0);
@@ -194,11 +173,11 @@ TEST(Ruvia, io_buffer_releases_storage_by_policy) {
         EXPECT_EQ(moved.view(), "456789");
         EXPECT_TRUE(moved.get_allocator().resource() == &resource);
     }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 }
 
 TEST(Ruvia, io_buffer_small_reads_preserve_the_sliding_window) {
-    counting_resource resource;
+    counting_memory_resource resource;
     for (const bool prepared : {false, true}) {
         {
             ruvia::http_io_buffer buffer(&resource);
@@ -228,12 +207,12 @@ TEST(Ruvia, io_buffer_small_reads_preserve_the_sliding_window) {
             expected.append(copied);
             EXPECT_EQ(buffer.view(), std::string_view(expected));
         }
-        EXPECT_EQ(resource.live_bytes_, std::size_t{0});
+        EXPECT_EQ(resource.live_bytes(), std::size_t{0});
     }
 }
 
 TEST(Ruvia, io_buffer_spare_read_cycles_preserve_content_without_growing) {
-    counting_resource resource;
+    counting_memory_resource resource;
     ruvia::http_io_buffer buffer(&resource);
     buffer.reserve(128);
     std::string expected(64, 'a');
@@ -245,7 +224,7 @@ TEST(Ruvia, io_buffer_spare_read_cycles_preserve_content_without_growing) {
         ASSERT_FALSE(spare.empty());
         EXPECT_EQ(buffer.view(), std::string_view(expected));
         if (round == 0) {
-            EXPECT_TRUE(ruvia::testing::throws_on([&] { buffer.commit(spare.size() + 1); }));
+            EXPECT_TRUE(ruvia::test::throws_on([&] { buffer.commit(spare.size() + 1); }));
             buffer.commit(0);
             EXPECT_EQ(buffer.view(), std::string_view(expected));
         }
@@ -256,18 +235,18 @@ TEST(Ruvia, io_buffer_spare_read_cycles_preserve_content_without_growing) {
         EXPECT_EQ(buffer.view(), std::string_view(expected));
         EXPECT_EQ(buffer.capacity(), std::size_t{128});
     }
-    EXPECT_EQ(resource.allocations_, std::size_t{1});
+    EXPECT_EQ(resource.allocation_count(), std::size_t{1});
 }
 
 TEST(Ruvia, io_buffer_spare_handles_empty_full_and_partial_windows) {
-    counting_resource resource;
+    counting_memory_resource resource;
     ruvia::http_io_buffer buffer(&resource);
     EXPECT_TRUE(buffer.prepare_spare().empty());
     EXPECT_TRUE(buffer.prepare(0).empty());
     buffer.commit(0);
     buffer.consume(0);
     buffer.append({});
-    EXPECT_EQ(resource.allocations_, std::size_t{0});
+    EXPECT_EQ(resource.allocation_count(), std::size_t{0});
 
     buffer.reserve(8);
     const auto spare = buffer.prepare_spare();
@@ -275,7 +254,7 @@ TEST(Ruvia, io_buffer_spare_handles_empty_full_and_partial_windows) {
     write_text(spare, "abcdefgh");
     buffer.commit(8);
     EXPECT_TRUE(buffer.prepare_spare().empty());
-    EXPECT_TRUE(ruvia::testing::throws_on([&] { buffer.commit(1); }));
+    EXPECT_TRUE(ruvia::test::throws_on([&] { buffer.commit(1); }));
     buffer.commit(0);
     EXPECT_EQ(buffer.view(), "abcdefgh");
 
@@ -286,7 +265,7 @@ TEST(Ruvia, io_buffer_spare_handles_empty_full_and_partial_windows) {
     buffer.commit(3);
     EXPECT_EQ(buffer.view(), "ghijk");
     EXPECT_EQ(buffer.capacity(), std::size_t{8});
-    EXPECT_EQ(resource.allocations_, std::size_t{1});
+    EXPECT_EQ(resource.allocation_count(), std::size_t{1});
 
     buffer.append(buffer.view().substr(0, 2));
     EXPECT_EQ(buffer.view(), "ghijkgh");
@@ -311,7 +290,7 @@ TEST(Ruvia, io_buffer_reader_prepares_when_no_spare_is_available) {
 }
 
 TEST(Ruvia, io_buffer_clear_detaches_storage_before_reentrant_refill) {
-    ruvia::test::header_memory resource;
+    ruvia::test::reentrant_memory_resource resource;
     retirement_observation observation;
     {
         ruvia::http_io_buffer buffer(&resource);
@@ -325,14 +304,14 @@ TEST(Ruvia, io_buffer_clear_detaches_storage_before_reentrant_refill) {
         EXPECT_TRUE(observation.committed_);
         EXPECT_EQ(buffer.view(), "new");
     }
-    EXPECT_EQ(resource.live_bytes_, 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
 }
 
 TEST(Ruvia, io_buffer_reallocation_commits_before_reentrant_refill) {
     for (const auto operation : {reallocation_operation::reserve, reallocation_operation::shrink,
              reallocation_operation::append, reallocation_operation::append_alias}) {
         SCOPED_TRACE(static_cast<int>(operation));
-        ruvia::test::header_memory resource;
+        ruvia::test::reentrant_memory_resource resource;
         retirement_observation observation;
         {
             ruvia::http_io_buffer buffer(&resource);
@@ -369,14 +348,14 @@ TEST(Ruvia, io_buffer_reallocation_commits_before_reentrant_refill) {
             EXPECT_TRUE(observation.committed_);
             EXPECT_EQ(buffer.view(), "new");
         }
-        EXPECT_EQ(resource.live_bytes_, 0U);
+        EXPECT_EQ(resource.live_bytes(), 0U);
     }
 }
 
 TEST(Ruvia, io_buffer_retirement_can_destroy_its_owner) {
     for (const bool release : {false, true}) {
         SCOPED_TRACE(release);
-        ruvia::test::header_memory resource;
+        ruvia::test::reentrant_memory_resource resource;
         retirement_observation observation;
         {
             auto owner = std::make_unique<ruvia::http_io_buffer>(&resource);
@@ -395,26 +374,26 @@ TEST(Ruvia, io_buffer_retirement_can_destroy_its_owner) {
             EXPECT_TRUE(observation.committed_);
             EXPECT_EQ(owner, nullptr);
         }
-        EXPECT_EQ(resource.live_bytes_, 0U);
+        EXPECT_EQ(resource.live_bytes(), 0U);
     }
 }
 
 TEST(Ruvia, io_buffer_allocation_failure_preserves_borrow_for_retry) {
-    ruvia::test::header_memory resource;
+    ruvia::test::counting_memory_resource resource;
     {
         ruvia::http_io_buffer buffer(&resource);
         buffer.reserve(4);
         buffer.append("seed");
         const auto borrowed = buffer.view();
-        resource.reject_ = true;
+        resource.reject_allocations(true);
 
         EXPECT_THROW(buffer.append(borrowed), std::bad_alloc);
         EXPECT_EQ(buffer.view(), "seed");
         EXPECT_EQ(borrowed, "seed");
 
-        resource.reject_ = false;
+        resource.reject_allocations(false);
         buffer.append(borrowed);
         EXPECT_EQ(buffer.view(), "seedseed");
     }
-    EXPECT_EQ(resource.live_bytes_, 0U);
+    EXPECT_EQ(resource.live_bytes(), 0U);
 }

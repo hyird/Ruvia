@@ -81,12 +81,12 @@ void append_body(std::pmr::string& wire, std::size_t bytes) {
 TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     std::pmr::unsynchronized_pool_resource resource;
     auto client = ruvia::http2_connection::client({.resource_ = &resource});
-    const auto receive_window = advertised_receive_window(ruvia::testing::drain_output(client));
+    const auto receive_window = advertised_receive_window(ruvia::test::drain_output(client));
     EXPECT_TRUE(receive_window != 0);
     const auto submitted = client.submit_request_head(
         ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
     EXPECT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
-    (void)ruvia::testing::drain_output(client);
+    (void)ruvia::test::drain_output(client);
 
     std::pmr::string wire(&resource);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
@@ -115,11 +115,11 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     // Received bytes are credited only on acknowledgement.
     std::pmr::string prefix(&resource);
     append_frame(prefix, ruvia::http2_frame_type::settings, 0x1, 0, {});
-    EXPECT_TRUE(ruvia::testing::drain_output(client) == std::string_view(prefix));
+    EXPECT_TRUE(ruvia::test::drain_output(client) == std::string_view(prefix));
     EXPECT_TRUE(client.acknowledge(std::move(*credit)) == ruvia::http2_received_data_acknowledge_status::acknowledged);
     EXPECT_TRUE(!credit->valid());
 
-    const auto output = ruvia::testing::drain_output(client);
+    const auto output = ruvia::test::drain_output(client);
     std::string_view updates(output);
     std::size_t connection_updates = 0;
     std::size_t stream_updates = 0;

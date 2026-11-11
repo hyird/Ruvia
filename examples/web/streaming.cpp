@@ -8,7 +8,6 @@
 
 #include "ruvia/web/streaming.h"
 
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -16,6 +15,7 @@
 #include <system_error>
 
 #include "ruvia/core/timer.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/multipart_parser.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
@@ -43,7 +43,7 @@ private:
 
         std::pmr::string body(c.allocator<char>());
         body.append("uploaded bytes=");
-        append_unsigned(body, bytes_value);
+        ruvia::http_append_unsigned(body, bytes_value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -62,9 +62,9 @@ private:
 
         std::pmr::string body(c.allocator<char>());
         body.append("multipart parts=");
-        append_unsigned(body, parts);
+        ruvia::http_append_unsigned(body, parts);
         body.append(" bytes=");
-        append_unsigned(body, bytes_value);
+        ruvia::http_append_unsigned(body, bytes_value);
         body.push_back('\n');
         co_return c.text(std::move(body));
     }
@@ -102,14 +102,6 @@ private:
                 .event_ = "tick",
                 .id_ = "2",
                 .retry_ = std::chrono::milliseconds{3000}});
-        }
-    }
-
-    static void append_unsigned(std::pmr::string& output, std::size_t value) {
-        char buffer[32]{};
-        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
-        if (ec == std::errc{}) {
-            output.append(buffer, static_cast<std::size_t>(ptr - buffer));
         }
     }
 };

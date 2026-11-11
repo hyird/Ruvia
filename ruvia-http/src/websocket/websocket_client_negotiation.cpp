@@ -72,14 +72,14 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(std:
     websocket_client_negotiation_result_view result;
     std::size_t selected = 0, extensions = 0;
     for (const auto& field : fields_value) {
-        const auto kind = detail::classify_request_header(field.name());
-        if (kind == detail::request_header_kind::sec_websocket_protocol) {
+        const auto kind = detail::classify_http_field(field.name());
+        if (kind == detail::http_field_kind::sec_websocket_protocol) {
             ++selected;
             result.selected_subprotocol_ = http_trim_ows(field.value());
             if (selected > 1 || !subprotocol_offered(offered_subprotocols, result.selected_subprotocol_)) {
                 return error_type::subprotocol;
             }
-        } else if (kind == detail::request_header_kind::sec_websocket_extensions) {
+        } else if (kind == detail::http_field_kind::sec_websocket_extensions) {
             ++extensions;
             if (extensions > 1) {
                 return error_type::extensions;

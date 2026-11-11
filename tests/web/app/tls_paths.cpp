@@ -32,6 +32,8 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
+#include "app_run.h"
+#include "scoped_temp_directory.h"
 #include "tcp_port_reservation.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -74,34 +76,18 @@ public:
 // Cyrillic and a character outside the Basic Multilingual Plane.
 class non_ascii_directory final {
 public:
-    non_ascii_directory() {
-        std::random_device random;
-        for (int attempt = 0; attempt < 100; ++attempt) {
-            auto candidate = std::filesystem::temp_directory_path() /
-                             std::filesystem::path(u8"ruvia-tls-\u8bc1\u4e66-\u0442\u0435\u0441\u0442-\U0001F512-");
-            candidate += std::to_string(random());
-            if (std::filesystem::create_directory(candidate)) {
-                path_ = std::move(candidate);
-                return;
-            }
-        }
-        throw std::runtime_error("cannot create non-ASCII TLS test directory");
-    }
-
-    ~non_ascii_directory() {
-        std::error_code ignored;
-        std::filesystem::remove_all(path_, ignored);
-    }
+    non_ascii_directory()
+        : directory_("ruvia-tls-\xe8\xaf\x81\xe4\xb9\xa6-\xd1\x82\xd0\xb5\xd1\x81\xd1\x82-\xf0\x9f\x94\x92") {}
 
     non_ascii_directory(const non_ascii_directory&) = delete;
     non_ascii_directory& operator=(const non_ascii_directory&) = delete;
 
     [[nodiscard]] std::filesystem::path file(std::u8string_view name) const {
-        return path_ / std::filesystem::path(name);
+        return directory_.path() / std::filesystem::path(name);
     }
 
 private:
-    std::filesystem::path path_;
+    ruvia::test::scoped_temp_directory directory_;
 };
 
 // Written through the native path API, independent of the server's loader.
@@ -498,19 +484,12 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
     EXPECT_TRUE(throws_system_error(
         [&] { app.listen(listener(password, directory.file(u8"\u7f3a\u5931.pem"))); }));
 
-    std::binary_semaphore started{0};
-    app.server({.worker_count_ = 1}).listen(listener(password, certificate)).on_start([&started] {
+    static std::binary_semaphore started{0};
+    app.server({.worker_count_ = 1}).listen(listener(password, certificate)).on_start([] {
         started.release();
     });
     for (int round = 0; round < 2; ++round) {
-        std::exception_ptr failure;
-        std::thread runner([&app, &failure] {
-            try {
-                app.run();
-            } catch (...) {
-                failure = std::current_exception();
-            }
-        });
+        ruvia::test::app_run runner(app);
         const bool ready = started.try_acquire_for(10s);
         EXPECT_TRUE(ready);
         if (ready) {
@@ -548,8 +527,5 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
         }
         app.stop();
         runner.join();
-        if (failure) {
-            std::rethrow_exception(failure);
-        }
     }
 }

@@ -1,5 +1,5 @@
 // Operational middleware, readiness, proxy trust, logging, statistics, and hooks.
-// Run ruvia_example_ops, then GET http://127.0.0.1:8080/admin/health,
+// Run ruvia_example_ops, then GET http://127.0.0.1:8098/admin/health,
 // /admin/ready?db=down (503), /admin/stats, or /admin/peer.
 // /admin/fail-after-head deliberately ends a stream with an error to demonstrate
 // on_connection_failure; it cannot be turned into a second HTTP response.
@@ -92,7 +92,7 @@ int main() {
             app.trusted_proxies({.cidrs_ = {"127.0.0.1", "::1"}, .trust_x_forwarded_proto_ = true});
         }
         app
-            .listen({.address_ = "0.0.0.0", .http_ = 8080})
+            .listen({.address_ = "0.0.0.0", .http_ = 8098})
             .server({.worker_count_ = 2,
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             // Each worker counts independently. Route-level limits additionally

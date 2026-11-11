@@ -19,7 +19,9 @@
 #include "ruvia/http/http_client_redirect.h"
 #include "ruvia/http/http_limits.h"
 
-namespace http_client_response_test {
+#include "memory_resource_fixture.h"
+
+namespace ruvia::test {
 
 using ruvia::http1_client_request_content_completion_status;
 using ruvia::http1_client_request_wire_policy;
@@ -176,33 +178,4 @@ inline http1_client_response_parse_error parse_failure_error(std::string_view me
     return *failure;
 }
 
-class counting_memory_resource final : public std::pmr::memory_resource {
-public:
-    counting_memory_resource() noexcept
-        : upstream_(std::pmr::get_default_resource()) {}
-
-    [[nodiscard]] std::size_t allocation_count() const noexcept {
-        return allocation_count_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        ++allocation_count_;
-        return upstream_->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        upstream_->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::pmr::memory_resource* upstream_;
-    std::size_t allocation_count_{0};
-};
-
-}  // namespace http_client_response_test
-
-using namespace http_client_response_test;  // NOLINT(google-build-using-namespace)
+}  // namespace ruvia::test

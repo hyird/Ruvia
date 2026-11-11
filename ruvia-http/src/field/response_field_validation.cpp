@@ -9,50 +9,55 @@
 #include "ruvia/http/http_response_server.h"
 
 #include "coding/http_content_coding.h"
+#include "field/field_value_scan.h"
 #include "field/http_connection_fields.h"
+#include "field/http_field_kind.h"
 #include "field/http_media_type.h"
-#include "parser/http_parser_syntax.h"
 #include "response/http_response_header_bits.h"
 
 namespace ruvia::detail {
 
+bool is_valid_long_http_field_value_bytes(const char* data, std::size_t size) noexcept {
+    return http_field_value_prefix_size({data, size}) == size;
+}
+
 bool is_forbidden_common_trailer_name(
-    std::string_view name, request_header_kind kind) noexcept {
+    std::string_view name, http_field_kind kind) noexcept {
     switch (kind) {
-        case request_header_kind::host:
-        case request_header_kind::content_length:
-        case request_header_kind::transfer_encoding:
-        case request_header_kind::connection:
-        case request_header_kind::content_encoding:
-        case request_header_kind::content_type:
-        case request_header_kind::cookie:
-        case request_header_kind::expect:
-        case request_header_kind::if_match:
-        case request_header_kind::if_modified_since:
-        case request_header_kind::if_none_match:
-        case request_header_kind::if_range:
-        case request_header_kind::if_unmodified_since:
-        case request_header_kind::range:
-        case request_header_kind::upgrade:
-        case request_header_kind::authorization:
-        case request_header_kind::te:
-        case request_header_kind::trailer:
-        case request_header_kind::proxy_authorization:
+        case http_field_kind::host:
+        case http_field_kind::content_length:
+        case http_field_kind::transfer_encoding:
+        case http_field_kind::connection:
+        case http_field_kind::content_encoding:
+        case http_field_kind::content_type:
+        case http_field_kind::cookie:
+        case http_field_kind::expect:
+        case http_field_kind::if_match:
+        case http_field_kind::if_modified_since:
+        case http_field_kind::if_none_match:
+        case http_field_kind::if_range:
+        case http_field_kind::if_unmodified_since:
+        case http_field_kind::range:
+        case http_field_kind::upgrade:
+        case http_field_kind::authorization:
+        case http_field_kind::te:
+        case http_field_kind::trailer:
+        case http_field_kind::proxy_authorization:
             return true;
-        case request_header_kind::other:
-        case request_header_kind::accept:
-        case request_header_kind::accept_encoding:
-        case request_header_kind::access_control_request_headers:
-        case request_header_kind::access_control_request_method:
-        case request_header_kind::origin:
-        case request_header_kind::user_agent:
-        case request_header_kind::sec_websocket_key:
-        case request_header_kind::sec_websocket_protocol:
-        case request_header_kind::sec_websocket_version:
-        case request_header_kind::forwarded:
-        case request_header_kind::x_forwarded_for:
-        case request_header_kind::x_forwarded_proto:
-        case request_header_kind::sec_websocket_extensions:
+        case http_field_kind::other:
+        case http_field_kind::accept:
+        case http_field_kind::accept_encoding:
+        case http_field_kind::access_control_request_headers:
+        case http_field_kind::access_control_request_method:
+        case http_field_kind::origin:
+        case http_field_kind::user_agent:
+        case http_field_kind::sec_websocket_key:
+        case http_field_kind::sec_websocket_protocol:
+        case http_field_kind::sec_websocket_version:
+        case http_field_kind::forwarded:
+        case http_field_kind::x_forwarded_for:
+        case http_field_kind::x_forwarded_proto:
+        case http_field_kind::sec_websocket_extensions:
             break;
     }
 
@@ -75,13 +80,13 @@ bool is_forbidden_common_trailer_name(
 }
 
 bool is_forbidden_http_request_trailer_name(std::string_view name) noexcept {
-    const auto kind = classify_request_header(name);
+    const auto kind = classify_http_field(name);
     if (is_forbidden_common_trailer_name(name, kind)) {
         return true;
     }
-    return kind == request_header_kind::access_control_request_headers ||
-           kind == request_header_kind::access_control_request_method ||
-           kind == request_header_kind::origin ||
+    return kind == http_field_kind::access_control_request_headers ||
+           kind == http_field_kind::access_control_request_method ||
+           kind == http_field_kind::origin ||
            http_ascii_equals_ignore_case(name, "Accept-Ranges");
 }
 
@@ -96,7 +101,7 @@ bool is_forbidden_response_trailer_name(std::string_view name) noexcept {
         return true;
     }
 
-    if (is_forbidden_common_trailer_name(name, classify_request_header(name))) {
+    if (is_forbidden_common_trailer_name(name, classify_http_field(name))) {
         return true;
     }
 
@@ -151,10 +156,10 @@ bool is_forbidden_http_binary_response_field(std::string_view name) noexcept {
            is_valid_http_header_value(value);
 }
 
-response_field_status validate_response_field(request_header_kind kind, std::string_view value,
+response_field_status validate_response_field(http_field_kind kind, std::string_view value,
     response_field_state& state) noexcept {
     switch (kind) {
-        case request_header_kind::content_type:
+        case http_field_kind::content_type:
             if (!is_valid_http_content_type_field_value(value)) {
                 return response_field_status::invalid;
             }
@@ -163,12 +168,12 @@ response_field_status validate_response_field(request_header_kind kind, std::str
             }
             state.content_type_seen_ = true;
             break;
-        case request_header_kind::content_encoding:
+        case http_field_kind::content_encoding:
             if (!is_valid_http_content_encoding_field_value(value, http_field_list_role::sender)) {
                 return response_field_status::invalid;
             }
             break;
-        case request_header_kind::trailer:
+        case http_field_kind::trailer:
             if (!is_valid_http_response_trailer_field_value(value, http_field_list_role::sender)) {
                 return response_field_status::invalid;
             }
@@ -188,7 +193,7 @@ bool is_valid_http_response_field(std::string_view name, std::string_view value)
         return false;
     }
     detail::response_field_state state;
-    return detail::validate_response_field(detail::classify_request_header(name), value, state) ==
+    return detail::validate_response_field(detail::classify_http_field(name), value, state) ==
            detail::response_field_status::ok;
 }
 

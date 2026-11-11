@@ -37,8 +37,9 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_cancellation.h"
-#include "ruvia/core/worker_runtime_context.h"
 #include "ruvia/core/worker_signal.h"
+
+#include "memory_resource_fixture.h"
 
 namespace ruvia::test::runtime_worker_tests {
 
@@ -144,41 +145,45 @@ TEST(Ruvia, WorkerRootMoveAssignmentCanTakeSourceOwnedByOldResult) {
 
 namespace {
 
-class counting_resource final : public std::pmr::memory_resource {
+class owning_memory_resource final : public std::pmr::memory_resource {
 public:
-    std::size_t allocations_{};
-    std::size_t deallocations_{};
-
     [[nodiscard]] bool owns(const void* pointer, std::size_t bytes_value) const noexcept {
         const auto block_record = live_blocks_.find(const_cast<void*>(pointer));
         return block_record != live_blocks_.end() && block_record->second >= bytes_value;
     }
 
+    [[nodiscard]] std::size_t allocation_count() const noexcept {
+        return resource_.allocation_count();
+    }
+
+    [[nodiscard]] std::size_t deallocation_count() const noexcept {
+        return resource_.deallocation_count();
+    }
+
     [[nodiscard]] std::size_t live_allocations() const noexcept {
-        return live_blocks_.size();
+        return resource_.live_allocations();
     }
 
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        auto* const block = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+        auto* const block = resource_.allocate(bytes_value, alignment);
         try {
             live_blocks_.emplace(block, bytes_value);
         } catch (...) {
-            std::pmr::new_delete_resource()->deallocate(block, bytes_value, alignment);
+            resource_.deallocate(block, bytes_value, alignment);
             throw;
         }
-        ++allocations_;
         return block;
     }
     void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
         live_blocks_.erase(pointer);
-        ++deallocations_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
+        resource_.deallocate(pointer, bytes_value, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 
+    ruvia::test::counting_memory_resource resource_;
     std::pmr::unordered_map<void*, std::size_t> live_blocks_{std::pmr::new_delete_resource()};
 };
 
@@ -368,7 +373,7 @@ bool test_worker_handle_callable_lifetime() {
         }
     }
 
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     {
         reentrant_worker_post_state state;
         state.pool_ = std::make_unique<ruvia::event_loop_pool>(
@@ -380,7 +385,7 @@ bool test_worker_handle_callable_lifetime() {
         input.reset();
         if (!state.retired_ || state.worker_ || state.pool_ ||
             !run_rejected(std::move(rejected), state.payload_valid_) ||
-            resource.allocations_ != resource.deallocations_) {
+            resource.allocation_count() != resource.deallocation_count()) {
             return false;
         }
     }
@@ -398,7 +403,7 @@ bool test_worker_handle_callable_lifetime() {
             return false;
         }
     }
-    if (resource.allocations_ != resource.deallocations_) {
+    if (resource.allocation_count() != resource.deallocation_count()) {
         return false;
     }
 
@@ -441,7 +446,7 @@ bool test_worker_handle_callable_lifetime() {
     asio::io_context exception_context;
     auto exception_attachment = ruvia::attach_event_loop(exception_context, {.queue_capacity_ = 1});
     const auto exception_handle = exception_attachment.loop().handle();
-    counting_resource exception_resource;
+    ruvia::test::counting_memory_resource exception_resource;
     // Keep failure injection observable at runtime, including under whole-program optimization.
     std::atomic<bool> fail_construction{true};
     {
@@ -467,7 +472,7 @@ bool test_worker_handle_callable_lifetime() {
             return false;
         }
     }
-    if (exception_resource.allocations_ != exception_resource.deallocations_) {
+    if (exception_resource.allocation_count() != exception_resource.deallocation_count()) {
         return false;
     }
 
@@ -478,7 +483,7 @@ bool test_worker_handle_callable_lifetime() {
         bool detach_;
         bool retired_{false};
         bool payload_valid_{false};
-        counting_resource* resource_;
+        ruvia::test::counting_memory_resource* resource_;
 
         void retire() noexcept {
             if (retired_) {
@@ -520,7 +525,7 @@ bool test_worker_handle_callable_lifetime() {
     };
 
     const auto exercise_reentry = [](bool detach, bool use_copy) {
-        counting_resource reentry_resource;
+        ruvia::test::counting_memory_resource reentry_resource;
         std::optional<asio::io_context> context;
         context.emplace();
         auto attachment = ruvia::attach_event_loop(*context, {.queue_capacity_ = 1});
@@ -548,7 +553,7 @@ bool test_worker_handle_callable_lifetime() {
         recovery.start();
         recovery.join();
         input.reset();
-        return state_value.payload_valid_ && reentry_resource.allocations_ == reentry_resource.deallocations_;
+        return state_value.payload_valid_ && reentry_resource.allocation_count() == reentry_resource.deallocation_count();
     };
     if (!exercise_reentry(false, true) || !exercise_reentry(true, false)) {
         return false;
@@ -557,7 +562,7 @@ bool test_worker_handle_callable_lifetime() {
     struct reserved_move_state final {
         const ruvia::worker_handle* worker_;
         ruvia::event_loop_attachment* attachment_;
-        counting_resource* resource_;
+        ruvia::test::counting_memory_resource* resource_;
         int moves_{0};
         bool reservation_observed_{false};
         bool ran_{false};
@@ -596,7 +601,7 @@ bool test_worker_handle_callable_lifetime() {
     // the context runs it; destroying the unrun context detaches the worker and
     // releases it without invoking it.
     const auto exercise_reserved_move = [](bool detach) {
-        counting_resource reserved_resource;
+        ruvia::test::counting_memory_resource reserved_resource;
         std::optional<asio::io_context> context;
         context.emplace();
         auto attachment = ruvia::attach_event_loop(*context, {.queue_capacity_ = 1});
@@ -606,28 +611,28 @@ bool test_worker_handle_callable_lifetime() {
         inline_reserved_move_callable input(state_value);
         const auto submitted = worker_value.post(std::move(input));
         if (submitted != ruvia::post_status::accepted || !state_value.reservation_observed_ ||
-            reserved_resource.allocations_ != 1) {
+            reserved_resource.allocation_count() != 1) {
             return false;
         }
         if (detach) {
             context.reset();
-            if (state_value.ran_ || worker_value.valid() || reserved_resource.deallocations_ != 1) {
+            if (state_value.ran_ || worker_value.valid() || reserved_resource.deallocation_count() != 1) {
                 return false;
             }
         } else {
             context->run();
-            if (!state_value.ran_ || worker_value.valid() || reserved_resource.deallocations_ != 1) {
+            if (!state_value.ran_ || worker_value.valid() || reserved_resource.deallocation_count() != 1) {
                 return false;
             }
         }
-        return reserved_resource.allocations_ == reserved_resource.deallocations_;
+        return reserved_resource.allocation_count() == reserved_resource.deallocation_count();
     };
     if (!exercise_reserved_move(false) || !exercise_reserved_move(true)) {
         return false;
     }
 
     constexpr std::size_t repeated_posts = 64;
-    counting_resource repeated_resource;
+    ruvia::test::counting_memory_resource repeated_resource;
     asio::io_context context;
     auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = repeated_posts + 2});
     const auto handle_value = attachment.loop().handle();
@@ -656,14 +661,14 @@ bool test_worker_handle_callable_lifetime() {
     // Stop drains every accepted post before the attachment retires.
     attachment.stop();
     context.run();
-    if (!accepted_payload_valid || repeated_resource.allocations_ != repeated_resource.deallocations_) {
+    if (!accepted_payload_valid || repeated_resource.allocation_count() != repeated_resource.deallocation_count()) {
         return false;
     }
 
     asio::io_context full_context;
     auto full_attachment = ruvia::attach_event_loop(full_context, {.queue_capacity_ = 1});
     const auto full_handle = full_attachment.loop().handle();
-    counting_resource rejected_resource;
+    ruvia::test::counting_memory_resource rejected_resource;
     bool retained_payload_valid = false;
     if (full_handle.post([] {}) != ruvia::post_status::accepted) {
         return false;
@@ -679,7 +684,7 @@ bool test_worker_handle_callable_lifetime() {
     for (int attempt_value = 0; attempt_value < 3; ++attempt_value) {
         auto again = full_handle.post(std::move(retained));
         if (again != ruvia::post_status::queue_full || again.rejected() == nullptr ||
-            rejected_resource.allocations_ == rejected_resource.deallocations_) {
+            rejected_resource.allocation_count() == rejected_resource.deallocation_count()) {
             return false;
         }
         retained = std::move(again).take_rejected();
@@ -691,7 +696,7 @@ bool test_worker_handle_callable_lifetime() {
     }
     full_attachment.stop();
     full_context.run();
-    if (!retained_payload_valid || rejected_resource.allocations_ != rejected_resource.deallocations_) {
+    if (!retained_payload_valid || rejected_resource.allocation_count() != rejected_resource.deallocation_count()) {
         return false;
     }
 
@@ -710,8 +715,8 @@ bool test_worker_handle_callable_lifetime() {
     ruvia::worker_handle invalid;
     return !invalid.valid() && !invalid.accepting() &&
            invalid.post([] {}) == ruvia::post_status::worker_stopping &&
-           repeated_resource.allocations_ > 0 &&
-           repeated_resource.allocations_ == repeated_resource.deallocations_;
+           repeated_resource.allocation_count() > 0 &&
+           repeated_resource.allocation_count() == repeated_resource.deallocation_count();
 }
 
 bool test_post_factory_keeps_endpoint_through_owner_retirement() {
@@ -904,19 +909,16 @@ bool test_cancellation_after_endpoint_detach_does_not_touch_retired_owner() {
     return observed.owner_destroyed_ && observed.calls_ == 0 && context.run() == 0;
 }
 
-bool test_worker_runtime_context_owns_stable_detached_endpoint() {
+bool test_attachment_escaped_handle_detaches_on_retirement() {
     asio::io_context context;
     std::optional<ruvia::worker_handle> escaped_handle;
     {
-        ruvia::worker_runtime_context runtime(context, 8);
-        if (&runtime.io_context() != &context || !runtime.handle().valid()) {
+        auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 8});
+        const auto loop = attachment.loop();
+        if (&loop.io_context() != &context || !loop.handle().valid()) {
             return false;
         }
-        escaped_handle.emplace(runtime.handle());
-        runtime.detach();
-        if (runtime.handle().valid() || escaped_handle->valid()) {
-            return false;
-        }
+        escaped_handle.emplace(loop.handle());
     }
     asio::post(context, [] {});
     context.run();
@@ -938,7 +940,7 @@ bool test_queue_callable_destruction_can_inspect_worker() {
 
 bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
     constexpr std::size_t repeated_posts = 64;
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     std::atomic_bool invalid_payload_valid{false};
     std::atomic_size_t repeated_valid{0};
     std::atomic_size_t repeated_invalid{0};
@@ -954,11 +956,11 @@ bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
                 std::memory_order_release);
         });
     if (invalid != ruvia::post_status::worker_stopping || invalid.rejected() == nullptr ||
-        resource.allocations_ == resource.deallocations_) {
+        resource.allocation_count() == resource.deallocation_count()) {
         return false;
     }
     auto invalid_task = std::move(invalid).take_rejected();
-    if (resource.allocations_ == resource.deallocations_ ||
+    if (resource.allocation_count() == resource.deallocation_count() ||
         loop.handle().post(std::move(invalid_task)) != ruvia::post_status::accepted) {
         return false;
     }
@@ -987,7 +989,7 @@ bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
     if (!invalid_payload_valid.load(std::memory_order_acquire) ||
         repeated_valid.load(std::memory_order_relaxed) != repeated_posts ||
         repeated_invalid.load(std::memory_order_relaxed) != 0 ||
-        resource.allocations_ != resource.deallocations_) {
+        resource.allocation_count() != resource.deallocation_count()) {
         return false;
     }
 
@@ -1005,11 +1007,11 @@ bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
                 std::memory_order_release);
         });
     if (rejected != ruvia::post_status::worker_stopping || rejected.rejected() == nullptr ||
-        resource.allocations_ == resource.deallocations_) {
+        resource.allocation_count() == resource.deallocation_count()) {
         return false;
     }
     auto retry = std::move(rejected).take_rejected();
-    if (resource.allocations_ == resource.deallocations_) {
+    if (resource.allocation_count() == resource.deallocation_count()) {
         return false;
     }
     std::promise<void> recovered;
@@ -1028,7 +1030,7 @@ bool test_event_loop_post_borrow_and_rejected_callable_ownership() {
     recovery.stop();
     recovery.join();
     return closed_payload_valid.load(std::memory_order_acquire) &&
-           resource.allocations_ == resource.deallocations_;
+           resource.allocation_count() == resource.deallocation_count();
 }
 
 bool test_event_loop_post_protects_reentrant_inline_move() {
@@ -1068,7 +1070,7 @@ bool test_event_loop_post_protects_reentrant_inline_move() {
 }
 
 bool test_event_loop_post_protects_reentrant_heap_copy() {
-    counting_resource resource;
+    ruvia::test::counting_memory_resource resource;
     std::promise<void> completed;
     auto completion = completed.get_future();
     std::atomic_bool payload_valid{false};
@@ -1081,7 +1083,7 @@ bool test_event_loop_post_protects_reentrant_heap_copy() {
         .payload_valid_ = &payload_valid};
     std::optional<heap_reentrant_post_callable> input;
     input.emplace(state_value, &resource);
-    const auto callable_storage = resource.allocations_ - resource.deallocations_;
+    const auto callable_storage = resource.allocation_count() - resource.deallocation_count();
     if (callable_storage == 0) {
         return false;
     }
@@ -1092,11 +1094,11 @@ bool test_event_loop_post_protects_reentrant_heap_copy() {
         return false;
     }
     input.reset();
-    if (resource.allocations_ - resource.deallocations_ != callable_storage) {
+    if (resource.allocation_count() - resource.deallocation_count() != callable_storage) {
         return false;
     }
     auto retry = std::move(rejected).take_rejected();
-    if (resource.allocations_ - resource.deallocations_ != callable_storage) {
+    if (resource.allocation_count() - resource.deallocation_count() != callable_storage) {
         return false;
     }
     ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
@@ -1112,7 +1114,7 @@ bool test_event_loop_post_protects_reentrant_heap_copy() {
     recovery.stop();
     recovery.join();
     return payload_valid.load(std::memory_order_acquire) &&
-           resource.allocations_ == resource.deallocations_;
+           resource.allocation_count() == resource.deallocation_count();
 }
 
 bool test_post_outcome_invariants_and_empty_callbacks() {
@@ -2549,7 +2551,7 @@ bool test_root_task_delivers_const_result() {
 bool test_root_task_result_owns_pmr_storage_past_pool_retirement() {
     ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 4});
     const auto loop = loops.loop(0);
-    counting_resource resource;
+    owning_memory_resource resource;
     auto root = loop.start(make_root_pmr_result(&resource));
     loops.start();
     root.wait();
@@ -2567,7 +2569,7 @@ bool test_root_task_result_owns_pmr_storage_past_pool_retirement() {
                    payload_retained && resource.live_allocations() > 0;
     }
     return retained && resource.live_allocations() == 0 &&
-           resource.allocations_ == resource.deallocations_;
+           resource.allocation_count() == resource.deallocation_count();
 }
 
 bool test_root_tasks_join_nested_scopes_during_stop() {
@@ -2643,8 +2645,8 @@ TEST(Ruvia, WorkerPostFactoryCloseDrainsAdmittedCallback) {
 TEST(Ruvia, WorkerPostOutcomeInvariantsAndEmptyCallbacks) {
     EXPECT_TRUE(test_post_outcome_invariants_and_empty_callbacks());
 }
-TEST(Ruvia, WorkerRuntimeContextOwnsStableDetachedEndpoint) {
-    EXPECT_TRUE(test_worker_runtime_context_owns_stable_detached_endpoint());
+TEST(Ruvia, WorkerAttachmentEscapedHandleDetachesOnRetirement) {
+    EXPECT_TRUE(test_attachment_escaped_handle_detaches_on_retirement());
 }
 TEST(Ruvia, WorkerQueueCallableDestructionCanInspectWorker) {
     EXPECT_TRUE(test_queue_callable_destruction_can_inspect_worker());

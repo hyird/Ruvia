@@ -13,7 +13,7 @@
 
 #include "ruvia/http/http_field_syntax.h"
 
-#include "server/http_date_cache.h"
+#include "field/http_date_calendar.h"
 
 namespace ruvia::detail {
 
@@ -123,6 +123,9 @@ std::string_view cached_date_value() noexcept {
 namespace ruvia {
 namespace {
 
+// IMF-fixdate day names (RFC 9110 section 5.6.7), indexed by tm_wday.
+constexpr std::array<std::string_view, 7> http_weekday_names{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+
 [[nodiscard]] int month_index(std::string_view value) noexcept {
     for (std::size_t i = 0; i < detail::http_month_names.size(); ++i) {
         if (value == detail::http_month_names[i]) {
@@ -133,9 +136,7 @@ namespace {
 }
 
 [[nodiscard]] bool is_short_weekday(std::string_view value) noexcept {
-    constexpr std::array<std::string_view, 7> weekdays{
-        "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-    return std::ranges::find(weekdays, value) != weekdays.end();
+    return std::ranges::find(http_weekday_names, value) != http_weekday_names.end();
 }
 
 [[nodiscard]] bool is_long_weekday(std::string_view value) noexcept {
@@ -261,8 +262,6 @@ std::optional<std::array<char, http_imf_fixdate_size>> format_http_date(std::tim
     if (!utc) {
         return std::nullopt;
     }
-    static constexpr std::array<std::string_view, 7> day_names{
-        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
     std::array<char, http_imf_fixdate_size> output{};
     auto* out = output.data();
     const long year = static_cast<long>(utc->tm_year) + 1900;
@@ -278,7 +277,7 @@ std::optional<std::array<char, http_imf_fixdate_size>> format_http_date(std::tim
         out[i++] = name[2];
     };
 
-    put3(day_names[static_cast<std::size_t>(utc->tm_wday)]);
+    put3(http_weekday_names[static_cast<std::size_t>(utc->tm_wday)]);
     out[i++] = ',';
     out[i++] = ' ';
     put2(utc->tm_mday);

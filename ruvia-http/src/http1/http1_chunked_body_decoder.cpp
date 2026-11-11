@@ -2,15 +2,142 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_limits.h"
 
-#include "parser/http_parser_syntax.h"
-
 namespace ruvia {
+
+namespace {
+
+struct http_chunk_size_line final {
+    std::size_t size_{0};
+    // Line bytes beyond the shortest hex spelling of size_: leading zeros and
+    // chunk-ext. A decoder charges them to a per-message framing budget.
+    std::size_t overhead_bytes_{0};
+};
+
+bool is_valid_http_chunk_extension(std::string_view value) noexcept {
+    if (value.empty()) {
+        return true;
+    }
+
+    std::size_t cursor_value = 0;
+    const auto skip_bws = [&value, &cursor_value]() noexcept {
+        while (cursor_value < value.size() && is_http_ows_char(value[cursor_value])) {
+            ++cursor_value;
+        }
+    };
+    const auto parse_token = [&value, &cursor_value]() noexcept {
+        const auto begin = cursor_value;
+        while (
+            cursor_value < value.size() && is_http_token_char(static_cast<unsigned char>(value[cursor_value]))) {
+            ++cursor_value;
+        }
+        return cursor_value != begin;
+    };
+
+    while (cursor_value < value.size()) {
+        skip_bws();
+        if (cursor_value == value.size()) {
+            // Reached end-of-line after consuming whitespace with no ";": the
+            // chunk-ext grammar (RFC 9112 7.1) permits BWS only before ";"/"=",
+            // never as trailing space before CRLF. Accepting "5 " is a
+            // request-smuggling differential of the same class as the leading-OWS
+            // case that parse_http_chunk_size_line already rejects.
+            return false;
+        }
+        if (value[cursor_value] != ';') {
+            return false;
+        }
+        ++cursor_value;
+        skip_bws();
+        if (!parse_token()) {
+            return false;
+        }
+        const auto after_name = cursor_value;
+        skip_bws();
+        if (cursor_value == value.size()) {
+            // Bare ext-name at end-of-line: valid only with no trailing BWS
+            // between the name and the CRLF (RFC 9112 7.1).
+            return cursor_value == after_name;
+        }
+        if (value[cursor_value] == ';') {
+            continue;
+        }
+        if (value[cursor_value] != '=') {
+            return false;
+        }
+        ++cursor_value;
+        skip_bws();
+        if (cursor_value == value.size()) {
+            return false;
+        }
+        if (value[cursor_value] == '"') {
+            const auto quoted_size = http_quoted_string_size(value.substr(cursor_value));
+            if (quoted_size == 0) {
+                return false;
+            }
+            cursor_value += quoted_size;
+        } else if (!parse_token()) {
+            return false;
+        }
+        const auto before_trailing_bws = cursor_value;
+        skip_bws();
+        if (cursor_value == value.size()) {
+            // End-of-line after a chunk-ext value is valid only if it lands
+            // exactly on the value; whitespace between the value and CRLF is
+            // rejected for the same reason as trailing space after the size.
+            return cursor_value == before_trailing_bws;
+        }
+        if (value[cursor_value] != ';') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Parses `chunk-size [ chunk-ext ]` (RFC 9112 7.1) without its CRLF; nullopt on
+// any malformed or overflowing line.
+std::optional<http_chunk_size_line> parse_http_chunk_size_line(std::string_view value) noexcept {
+    // RFC 9112: chunk-size starts at the first byte of the line. Leading OWS
+    // before the size is a known request-smuggling vector and is rejected,
+    // matching picohttpparser/llhttp strict parsing.
+    std::size_t cursor_value = 0;
+    std::size_t leading_zero_digits = 0;
+    std::size_t parsed_value = 0;
+    constexpr auto max_before_shift = std::numeric_limits<std::size_t>::max() >> 4U;
+    while (cursor_value < value.size()) {
+        const int nibble = http_decode_hex_nibble(value[cursor_value]);
+        if (nibble < 0) {
+            break;
+        }
+        if (parsed_value > max_before_shift) {
+            return std::nullopt;
+        }
+        if (parsed_value == 0 && nibble == 0) {
+            ++leading_zero_digits;
+        }
+        parsed_value = (parsed_value << 4U) | static_cast<std::size_t>(nibble);
+        ++cursor_value;
+    }
+    if (cursor_value == 0 || !is_valid_http_chunk_extension(value.substr(cursor_value))) {
+        return std::nullopt;
+    }
+
+    // The shortest spelling of a size drops its leading zeros but keeps one
+    // digit for a zero size.
+    const auto significant_digits = std::max<std::size_t>(cursor_value - leading_zero_digits, 1);
+    return http_chunk_size_line{.size_ = parsed_value, .overhead_bytes_ = value.size() - significant_digits};
+}
+
+}  // namespace
 
 http1_chunk_decode_result http1_chunk_decode_result::make_need_more(std::size_t consumed_bytes) noexcept {
     return http1_chunk_decode_result(http1_chunk_decode_need_more(consumed_bytes));
@@ -73,7 +200,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
                 }
                 size_line_search_offset_ = 0;
                 const auto line_end = line_feed - 1;
-                const auto size_line = detail::parse_http_chunk_size_line(line.substr(0, line_end));
+                const auto size_line = parse_http_chunk_size_line(line.substr(0, line_end));
                 if (!size_line) {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
                 }

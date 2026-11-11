@@ -13,6 +13,8 @@
 
 namespace ruvia {
 
+class http_request;
+
 struct http_accepted_encoding_quality {
     int explicit_quality_{-1};
     int wildcard_quality_{-1};
@@ -195,6 +197,10 @@ public:
         return index < scores_.size() && scores_[index] >= 0;
     }
 
+    // Extension tokens are evaluated from a borrowed request without retaining
+    // it or allocating extension storage in every negotiation snapshot.
+    [[nodiscard]] bool accepts(std::string_view coding, const http_request& request) const noexcept;
+
 private:
     // Client score per http_content_coding value; -1 marks an unacceptable coding.
     using scores_type = std::array<std::int16_t, 5>;
@@ -258,7 +264,26 @@ constexpr http_response_coding_selection http_response_coding_selection::rank(
     return http_response_coding_selection(best, found, scores);
 }
 
-class http_request;
+class http_response;
+
+// Custom-coding queries borrow the request only during the call; negotiation
+// snapshots never allocate storage for unknown extension tokens.
+[[nodiscard]] bool http_accepts_encoding(
+    const http_request& request, std::string_view coding) noexcept;
+
+enum class http_response_content_coding_status : std::uint8_t {
+    absent,
+    accepted,
+    not_acceptable,
+    invalid,
+};
+
+// Parses all Content-Encoding lines once and evaluates the required custom
+// codings together in one Accept-Encoding walk. Only stacks with more than
+// eight distinct extension codings require temporary storage.
+[[nodiscard]] http_response_content_coding_status evaluate_http_response_content_coding(
+    const http_response_coding_selection& selection, const http_response& response,
+    const http_request* request = nullptr);
 
 // Folds every Accept-Encoding field line of a received request into one
 // quality snapshot and selects among all producible codings. This is the one

@@ -335,9 +335,13 @@ private:
         std::string_view key, std::uint32_t known_bit) noexcept;
     [[nodiscard]] const http_response_header* find_header_for_read(
         std::string_view key, std::uint32_t known_bit) const noexcept;
+    // Owns lookup, duplicate collapse, and index publication for every upsert.
+    // Mutation receives the retained slot, or nullptr when it must append.
+    template <typename Mutation>
+    http_response_header& upsert_header(std::string_view key, std::uint32_t known_bit, Mutation&& mutate);
     http_response_header& prepare_header_value_storage(
         std::string_view key, std::size_t value_size, std::uint32_t known_bit);
-    void set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit);
+    void set_header_validated(std::string_view key, std::string_view value, std::uint32_t known_bit, bool stable_view = false);
     void append_header_validated(
         std::string_view key, std::string_view value, std::uint32_t known_bit);
     http_response_header& append_header_uninitialized_value(
@@ -363,22 +367,20 @@ private:
         std::string_view name, std::size_t value_size, std::uint32_t known_bit);
     [[nodiscard]] static std::optional<http_response_header> make_static_header(
         std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept;
+    [[nodiscard]] std::optional<http_response_header> make_shared_header(
+        std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view) const noexcept;
     [[nodiscard]] bool try_assign_owned_in_place(http_response_header& header, std::string_view name,
         std::string_view value, std::uint32_t known_bit) noexcept;
     [[nodiscard]] bool borrows_owned_header(std::string_view name, std::string_view value) const noexcept;
     http_response_header& append_header(http_response_header header);
-    http_response_header& add_stable_view(
-        std::string_view name, std::string_view value, std::uint32_t known_bit);
     http_response_header& add_uninitialized_value(
         std::string_view name, std::size_t value_size, std::uint32_t known_bit);
     http_response_header& add(
-        std::string_view name, std::string_view value, std::uint32_t known_bit);
+        std::string_view name, std::string_view value, std::uint32_t known_bit, bool stable_view = false);
     void assign(http_response_header& header, std::string_view name, std::string_view value,
-        std::uint32_t known_bit);
+        std::uint32_t known_bit, bool stable_view = false);
     http_response_header& assign_uninitialized_value(http_response_header& header, std::string_view name,
         std::size_t value_size, std::uint32_t known_bit);
-    void assign_stable_view(http_response_header& header, std::string_view name, std::string_view value,
-        std::uint32_t known_bit);
     void release_header(http_response_header& header) noexcept;
     // Drops every header from new_end onward; the dropped headers must
     // already be released.
