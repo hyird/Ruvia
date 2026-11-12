@@ -50,7 +50,7 @@ public:
     // Expires the facade once the handler returned. An operation the handler
     // left running is aborted first, so the join cannot wait on the peer.
     [[nodiscard]] task<void> join() {
-        if (facade_.running_operations_ != 0) {
+        if (facade_.read_active_ || facade_.write_active_) {
             abort();
         }
         co_await facade_.operations_.close_and_join();

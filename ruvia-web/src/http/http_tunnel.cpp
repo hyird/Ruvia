@@ -292,48 +292,31 @@ private:
 namespace ruvia {
 namespace {
 constexpr const char* tunnel_lane_in_progress = "HTTP tunnel operation already in progress on this direction";
-class running_tunnel_operation final {
-public:
-    explicit running_tunnel_operation(unsigned& count) noexcept
-        : count_(count) {
-        ++count_;
-    }
-    ~running_tunnel_operation() {
-        --count_;
-    }
-
-private:
-    unsigned& count_;
-};
 template <typename input_type>
 task<std::optional<input_type>> read_tunnel(void* target,
-    task<std::optional<input_type>> (*read)(void*), bool& read_active, unsigned& running) {
+    task<std::optional<input_type>> (*read)(void*), bool& read_active) {
     auto lease = detail::claim_operation_lane(read_active, tunnel_lane_in_progress);
-    running_tunnel_operation active(running);
     co_return co_await read(target);
 }
 task<void> write_tunnel(void* target, task<void> (*write)(void*, std::string_view),
-    std::pmr::string bytes_value, bool& write_active, bool& ended, unsigned& running) {
+    std::pmr::string bytes_value, bool& write_active, bool& ended) {
     auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
     if (ended) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
-    running_tunnel_operation active(running);
     co_await write(target, bytes_value);
 }
 task<bool> write_tunnel_datagram(void* target, task<bool> (*write)(void*, std::string_view),
-    std::string_view bytes, bool& write_active, bool& ended, unsigned& running) {
+    std::string_view bytes, bool& write_active, bool& ended) {
     auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
     if (ended) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
-    running_tunnel_operation active(running);
     co_return co_await write(target, bytes);
 }
 task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*),
-    bool& ended, bool& write_active, unsigned& running) {
+    bool& ended, bool& write_active) {
     auto lease = detail::claim_operation_lane(write_active, tunnel_lane_in_progress);
-    running_tunnel_operation active(running);
     if (!ended) {
         co_await finish_value(target);
         ended = true;
@@ -377,15 +360,15 @@ task<std::optional<std::pmr::string>> http_tunnel::read() & {
 }
 task<std::optional<std::pmr::string>> http_tunnel::read_raw() {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_, running_operations_));
+    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_));
 }
 task<std::optional<detail::http_tunnel_input>> http_tunnel::read_datagram_raw() {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_datagram_, read_active_, running_operations_));
+    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_datagram_, read_active_));
 }
 task<bool> http_tunnel::write_datagram_raw(std::string_view bytes) {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_, running_operations_));
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel_datagram(target_, write_datagram_, bytes, write_active_, send_ended_));
 }
 task<void> http_tunnel::write(std::string_view bytes_value) & {
     require_active();
@@ -409,11 +392,11 @@ task<void> http_tunnel::write_raw(std::pmr::string&& bytes_value) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     auto owned = detail::rebind_owned_storage(bytes_value, &resource_);
-    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, running_operations_));
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_));
 }
 task<void> http_tunnel::finish() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, running_operations_));
+    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_));
 }
 void http_tunnel::abort() noexcept {
     abort_input(false);

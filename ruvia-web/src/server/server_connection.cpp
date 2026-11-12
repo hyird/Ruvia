@@ -24,43 +24,24 @@ namespace {
 
 constexpr const char* connection_lane_in_progress = "server connection operation already in progress on this direction";
 
-class running_connection_operation final {
-public:
-    explicit running_connection_operation(unsigned& count) noexcept
-        : count_(count) {
-        ++count_;
-    }
-    ~running_connection_operation() {
-        --count_;
-    }
-    running_connection_operation(const running_connection_operation&) = delete;
-    running_connection_operation& operator=(const running_connection_operation&) = delete;
-
-private:
-    unsigned& count_;
-};
-
 task<std::optional<std::span<const std::byte>>> read_connection(
-    void* target, task<std::optional<std::span<const std::byte>>> (*read)(void*), bool& read_active, unsigned& running) {
+    void* target, task<std::optional<std::span<const std::byte>>> (*read)(void*), bool& read_active) {
     auto lease = detail::claim_operation_lane(read_active, connection_lane_in_progress);
-    running_connection_operation active(running);
     co_return co_await read(target);
 }
 
 task<void> write_connection(void* target, task<void> (*write)(void*, std::string_view), std::pmr::string bytes,
-    bool& write_active, const bool& send_ended, unsigned& running) {
+    bool& write_active, const bool& send_ended) {
     auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
     if (send_ended) {
         throw std::logic_error("server connection send direction has ended");
     }
-    running_connection_operation active(running);
     co_await write(target, bytes);
 }
 
 task<void> finish_connection(
-    void* target, task<void> (*finish_value)(void*), bool& send_ended, bool& write_active, unsigned& running) {
+    void* target, task<void> (*finish_value)(void*), bool& send_ended, bool& write_active) {
     auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
-    running_connection_operation active(running);
     if (!send_ended) {
         co_await finish_value(target);
         send_ended = true;
@@ -100,7 +81,7 @@ void server_connection::require_active() const {
 
 task<std::optional<std::span<const std::byte>>> server_connection::read() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_, running_operations_));
+    return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_));
 }
 
 task<void> server_connection::write(std::span<const std::byte> bytes) & {
@@ -109,14 +90,13 @@ task<void> server_connection::write(std::span<const std::byte> bytes) & {
         throw std::logic_error("server connection send direction has ended");
     }
     return ::ruvia::make_scoped_operation(operations_,
-        write_connection(target_, write_, std::pmr::string(as_chars(bytes), process_resource()), write_active_,
-            send_ended_, running_operations_));
+        write_connection(target_, write_, std::pmr::string(as_chars(bytes), process_resource()), write_active_, send_ended_));
 }
 
 task<void> server_connection::finish() & {
     require_active();
     return ::ruvia::make_scoped_operation(
-        operations_, finish_connection(target_, finish_, send_ended_, write_active_, running_operations_));
+        operations_, finish_connection(target_, finish_, send_ended_, write_active_));
 }
 
 void server_connection::abort() noexcept {

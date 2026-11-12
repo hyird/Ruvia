@@ -273,6 +273,8 @@ HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9
 
 HTTP/3 使用相同路由及隧道门面；WebSocket 经 RFC 9220 Extended CONNECT，普通 CONNECT 经 RFC 9114 §4.4。`finish()` 仅关闭发送方向，接收方向继续读到对端结束；隧道流与同连接的其他请求独立。
 
+- **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发ruviawebserver_connectionh)采用相同的在途操作与冷任务回收规则。
+
 TLS 隧道把对端未发送 `close_notify` 就关闭 TCP 视为输入结束，`tunnel.read()` 返回 `std::nullopt`（与 Go `crypto/tls` 在记录边界接受截断的策略一致）；HTTP/1.1 响应体等有消息定界的读取路径仍把该情形作为传输错误上报。
 
 ### 4.2 服务端 `CONNECT-UDP`（RFC 9298）与 Capsule 数据报隧道

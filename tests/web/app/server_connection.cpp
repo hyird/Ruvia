@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <semaphore>
@@ -16,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <asio/buffer.hpp>
@@ -166,6 +168,12 @@ void record_failure(const ruvia::connection_failure_record& record) noexcept {
 [[nodiscard]] std::span<const std::byte> bytes_of(std::string_view text) {
     return std::as_bytes(std::span(text.data(), text.size()));
 }
+
+struct unstarted_connection_operations final {
+    std::optional<ruvia::task<std::optional<std::span<const std::byte>>>> read_;
+    std::optional<ruvia::task<void>> write_;
+    std::optional<ruvia::task<void>> finish_;
+};
 
 // Echoes every chunk until the peer ends its direction. A cleartext peer then
 // gets "|eof" before the finish; a TLS peer's close_notify is answered by the
@@ -461,6 +469,62 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     ASSERT_EQ(failures().size(), 1U);
     EXPECT_EQ(failures()[0].remote_address_, "127.0.0.1");
     EXPECT_EQ(failures()[0].message_, "raw handler failed");
+}
+
+TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    const auto pending = std::make_shared<unstarted_connection_operations>();
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 1})
+        .listen(connection_listener(endpoint))
+        .on_start(nullptr)
+        .on_start([] { started().release(); })
+        .on_connection([pending](ruvia::server_connection& connection) -> ruvia::task<void> {
+            if (!pending->read_) {
+                pending->read_.emplace(connection.read());
+                pending->write_.emplace(connection.write(bytes_of("must-not-be-sent")));
+                pending->finish_.emplace(connection.finish());
+                co_return;
+            }
+            unsigned expired = 0;
+            try {
+                (void)co_await std::move(*pending->read_);
+            } catch (const std::logic_error&) {
+                ++expired;
+            }
+            try {
+                co_await std::move(*pending->write_);
+            } catch (const std::logic_error&) {
+                ++expired;
+            }
+            try {
+                co_await std::move(*pending->finish_);
+            } catch (const std::logic_error&) {
+                ++expired;
+            }
+            pending->read_.reset();
+            pending->write_.reset();
+            pending->finish_.reset();
+            co_await connection.write(bytes_of(expired == 3 ? "expired" : "invalid"));
+        });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    {
+        asio::ip::tcp::socket first(io);
+        first.connect(endpoint);
+        EXPECT_EQ(read_until_closed(first), "");
+    }
+    {
+        asio::ip::tcp::socket second(io);
+        second.connect(endpoint);
+        EXPECT_EQ(read_until_closed(second), "expired");
+    }
+    ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
+    EXPECT_EQ(app.http_stats().connection_failures_, 0U);
+    app.stop();
+    runner.join();
 }
 
 // A connection listener needs on_connection at run(); listen() rejects

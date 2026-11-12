@@ -343,8 +343,9 @@ ruvia::app()
 | `co_await finish()` | 半关闭发送方向：TCP `shutdown(send)`，TLS 发送 `close_notify`；之后仍可读取，再写抛 `std::logic_error`，重复调用无操作 |
 | `abort()` | 立即关闭连接，仍在运行的操作失败 |
 
-- **生命周期**：对象由服务器拥有、不可复制或移动，只在处理器任务运行期间、在该连接所属 worker 线程上有效；任务结束后再调用抛 `std::logic_error`。一个读操作与一个输出操作（`write` / `finish`）可并发运行，同方向重叠抛 `std::logic_error`。
-- **结束**：处理器任务正常返回后，服务器先结束仍打开的发送方向（TLS `close_notify`），再关闭 socket；任务抛出异常则立即断开，并经 `on_connection_failure()` 上报、计入 `connection_failures_`，对端复位或关闭及服务器取消的 I/O（超时、`stop()`）除外。
+- **生命周期**：对象由服务器拥有、不可复制或移动，只在处理器任务运行期间、在该连接所属 worker 线程上有效；任务结束后不得继续访问对象。一个读操作与一个输出操作（`write` / `finish`）可并发运行，同方向重叠抛 `std::logic_error`。
+- **操作回收**：`server_connection` 与 `http_tunnel` 只用读写通道租约判定在途操作；处理器退出时先中止仍活跃的 I/O，再等待回收。未启动的冷任务直接失效，随后 `co_await` 抛 `std::logic_error`。
+- **结束**：处理器任务正常返回且无在途操作时，服务器先结束仍打开的发送方向（TLS `close_notify`），再关闭 socket；任务抛出异常则立即断开，并经 `on_connection_failure()` 上报、计入 `connection_failures_`，对端复位或关闭及服务器取消的 I/O（超时、`stop()`）除外。
 - **服务器限制**：连接占用一个 `max_connections_per_worker_` 名额且不会为接纳新连接而被淘汰；读缓冲计入入站内存双预算（超限 `read()` 抛 `std::bad_alloc`）；`idle_timeout_` 在无读写完成时关闭连接，`write_timeout_` 在写入停滞时关闭连接；`stop()` 立即关闭全部连接并请求 `stop_token()`，`run()` 等待处理器任务退出后返回。连接被关闭后，在途与后续操作抛 `std::system_error`。
 - **平台**：Windows 与 POSIX 语义一致，连接同样经 Acceptor 交给业务 worker 后处理。
 

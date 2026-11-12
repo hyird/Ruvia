@@ -129,7 +129,6 @@ private:
     bool read_active_{false};
     bool write_active_{false};
     bool send_ended_{false};
-    unsigned running_operations_{0};
     ::ruvia::operation_scope operations_;
 };
 

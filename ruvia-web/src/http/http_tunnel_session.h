@@ -70,7 +70,7 @@ public:
     // The transport must be stopped before joining if an operation remains
     // suspended. Cold operations expire while their borrowed owner is alive.
     [[nodiscard]] task<void> join() {
-        if (facade_.running_operations_ != 0) {
+        if (facade_.read_active_ || facade_.write_active_) {
             abort();
         }
         co_await facade_.operations_.close_and_join();
