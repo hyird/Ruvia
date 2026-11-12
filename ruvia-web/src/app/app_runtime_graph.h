@@ -52,6 +52,7 @@ struct app_runtime_graph final {
         : blocking_pool_(nullptr, pmr_object_deleter<blocking_pool>{process_resource()}),
           document_root_(nullptr, pmr_object_deleter<document_root_publisher>{process_resource()}),
           route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{process_resource()}),
+          empty_route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{process_resource()}),
 #if defined(RUVIA_ENABLE_HTTP3)
           http3_directory_(nullptr, pmr_object_deleter<http3_worker_directory>{process_resource()}),
 #endif
@@ -70,6 +71,10 @@ struct app_runtime_graph final {
     std::unique_ptr<document_root_publisher, pmr_object_deleter<document_root_publisher>> document_root_;
     // Every worker's route_table binds its instances to this one immutable plan.
     compiled_route_plan_ptr_type route_plan_;
+    // A non-routed run keeps its original empty plan alive if its first routed
+    // listener is added while serving; a stopping worker may still borrow it.
+    compiled_route_plan_ptr_type empty_route_plan_;
+    bool routes_enabled_{false};
 #if defined(RUVIA_ENABLE_HTTP3)
     // Hands QUIC datagrams to the worker that owns their connection; null
     // without an HTTP/3 listener. Declared before the workers and the

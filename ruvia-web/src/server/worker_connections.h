@@ -89,7 +89,7 @@ public:
         const route_table& routes_value, worker_capabilities& capabilities,
         http_server_options& options, const stop_token& stop_token_value,
         http_server_worker_state& state_value, task_scope& tasks,
-        std::span<const http_server_listener_definition> listeners, worker_runtime& runtime, std::size_t worker_index
+        std::span<const http_server_listener_definition> listeners, worker_failure_sink failure, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_placement http3_placement
@@ -113,10 +113,11 @@ public:
     // or adopted sockets, the HTTP/3 endpoint in slot `http3_index` -- without
     // admitting, or throws with the slot left empty.
     void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
-        const http_server_listener_definition& definition
+        const http_server_listener_definition& definition,
+        bool externally_accepted = false
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
-        http3_worker_directory* directory
+        http3_worker_directory* directory = nullptr
 #endif
     );
     // Starts admitting a prepared listener. A failure to start fails the worker.
@@ -135,10 +136,21 @@ public:
     // admits.
     [[nodiscard]] listener_socket_duplicates duplicate_listener(std::size_t index);
 #endif
+    // Takes an already accepted native socket, including ownership on failure.
+    // It first binds that socket to this worker's execution context.
+    void adopt_connection(std::size_t index, native_socket socket);
     [[nodiscard]] http_server_stats stats() const noexcept;
 #if defined(_WIN32)
     // This worker as the acceptor's hand-over target.
     [[nodiscard]] windows_acceptor::business_worker acceptor_target() noexcept;
+    void bind_acceptor(windows_acceptor& acceptor) noexcept {
+#if defined(RUVIA_ENABLE_HTTP3)
+        http3_placement_.acceptor_ = &acceptor;
+        http3_services_.placement_.acceptor_ = &acceptor;
+#else
+        (void)acceptor;
+#endif
+    }
 #endif
 
 private:
@@ -182,6 +194,7 @@ private:
         bool prepared_{false};
         // From opening until removal or the worker's stop.
         bool admitting_{false};
+        bool externally_accepted_{false};
     };
 #if defined(RUVIA_ENABLE_HTTP3)
     void add_http3_endpoint(std::size_t listener_index, std::size_t http3_index);
@@ -235,7 +248,7 @@ private:
     const stop_token& stop_token_;
     http_server_worker_state& state_;
     task_scope& tasks_;
-    worker_runtime& runtime_;
+    worker_failure_sink failure_;
     // This worker's position among the application's workers: the inherited
     // socket of each listener it claims.
     std::size_t worker_index_;

@@ -85,6 +85,12 @@ public:
         return stop_token_;
     }
 
+    // Borrowed for this callback; copy the handle to retain its dispatcher.
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
+        return worker_;
+    }
+    const worker_handle& worker() const&& = delete;
+
     // The next bytes the peer sent, at most 4 KiB; std::nullopt once the peer
     // ended its send direction (TCP FIN or TLS close_notify, or TCP closed
     // without close_notify). The view stays valid until the next read starts.

@@ -81,14 +81,23 @@ std::optional<std::size_t> http3_connection_id_owner(
     return static_cast<std::size_t>(worker);
 }
 
-#if defined(_WIN32)
 std::size_t http3_initial_worker(
     const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept {
+    // Match the optional Linux cBPF selector, so software dispatch keeps the
+    // same owner when SO_REUSEPORT members change or no selector is available.
+    if (cid.size() == http3_connection_id_length) {
+        return connection_id_digest(secret, cid.data()) % worker_count;
+    }
+    if (cid.size() >= NGTCP2_MIN_INITIAL_DCIDLEN) {
+        const auto first = read_http3_be32(cid.data()) ^ read_http3_be32(secret.data());
+        const auto second = read_http3_be32(cid.data() + 4) ^ read_http3_be32(secret.data() + 4);
+        const auto mixed = ((first * http3_cid_mix_prime_1) ^ second) * http3_cid_mix_prime_2;
+        return (mixed >> 16) % worker_count;
+    }
     auto hash = fnv1a_accumulate(fnv1a_offset_basis, std::string_view(reinterpret_cast<const char*>(secret.data()), secret.size()));
     hash = fnv1a_accumulate(hash, std::string_view(reinterpret_cast<const char*>(cid.data()), cid.size()));
     return static_cast<std::size_t>(hash % worker_count);
 }
-#endif
 
 bool make_http3_stateless_reset_token(
     const http3_secret& secret, const ngtcp2_cid& cid, http3_quic_stateless_reset_token& token) noexcept {

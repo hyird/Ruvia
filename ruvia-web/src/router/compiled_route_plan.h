@@ -206,22 +206,26 @@ public:
             websocket_route_endpoint(pmr_resource_or_default(resource), invoke, options));
     }
 
-    [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
-        route_stream_handler::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
-        // Extended CONNECT protocols use HTTP/2; connect-udp also admits
-        // the HTTP/1.1 Upgrade form.
-        if (!protocol.empty() && !is_valid_http_header_name(protocol)) {
-            throw std::invalid_argument("CONNECT protocol must be an HTTP token");
-        }
-        if (protocol == "connect-udp") {
+    [[nodiscard]] static http_tunnel_route_config validate_tunnel_config(
+        bool upgrade_protocol, bool udp, http_tunnel_route_config config) {
+        if (udp) {
             config.datagrams_ = true;
         }
-        if (config.datagrams_ && protocol.empty()) {
+        if (config.datagrams_ && !upgrade_protocol) {
             throw std::invalid_argument("HTTP Datagrams require an upgrade-protocol tunnel route");
         }
         if (config.peer_transport_fin_timeout_.value() <= std::chrono::milliseconds::zero()) {
             throw std::invalid_argument("CONNECT peer transport FIN timeout must be greater than zero");
         }
+        return config;
+    }
+
+    [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
+        route_stream_handler::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
+        if (!protocol.empty() && !is_valid_http_header_name(protocol)) {
+            throw std::invalid_argument("CONNECT protocol must be an HTTP token");
+        }
+        config = validate_tunnel_config(!protocol.empty(), protocol == "connect-udp", config);
         return route_endpoint(
             tunnel_route_endpoint(pmr_resource_or_default(resource), invoke, protocol, config));
     }

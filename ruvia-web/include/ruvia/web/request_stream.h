@@ -1,7 +1,19 @@
 #pragma once
 
+#include <chrono>
+#include <memory_resource>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_push.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
@@ -16,7 +28,7 @@ class request_stream;
 namespace detail {
 struct request_stream_access;
 // Commits a tunnel request's success head and returns the established tunnel.
-using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code)>;
+using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>;
 using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 }  // namespace detail
 
@@ -63,6 +75,59 @@ public:
     [[nodiscard]] body_reader& body() & RUVIA_LIFETIMEBOUND;
     body_reader& body() && = delete;
 
+    // Available after body() reaches EOF; never replaces the initial fields.
+    [[nodiscard]] std::span<const http_header> trailers() const noexcept;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
+
+    // Sends a bodyless 1xx before the final head; copies fields before return.
+    [[nodiscard]] task<void> inform(const http_interim_response_head& response);
+    [[nodiscard]] bool early_data() const noexcept;
+    [[nodiscard]] bool push(http_push_request_view request);
+    void advertise_origins(std::span<const std::string_view> origins);
+    void advertise_alternative_service(std::string_view value);
+
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
+        return context_.worker();
+    }
+    const worker_handle& worker() const&& = delete;
+
+    template <typename state_type>
+    [[nodiscard]] state_type& worker_state() const {
+        return context_.worker_state<state_type>();
+    }
+
+    // Bound to this request's cancellation, including client abandonment.
+    template <typename callable_type>
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
+        return context_.run_blocking(std::move(callable));
+    }
+
+    template <typename rep_type, typename period_type, typename callable_type>
+    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
+        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
+        return context_.run_blocking(timeout, std::move(callable));
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* arena() const noexcept {
+        return context_.arena();
+    }
+    [[nodiscard]] std::pmr::memory_resource* pool() const noexcept {
+        return context_.pool();
+    }
+    [[nodiscard]] const ruvia::env& env() const noexcept {
+        return context_.env();
+    }
+    [[nodiscard]] http_client_handle client() const;
+    [[nodiscard]] http_client_handle client(std::string_view alias) const;
+#ifdef RUVIA_ENABLE_DATABASE
+    [[nodiscard]] db_handle db() const;
+    [[nodiscard]] db_handle db(std::string_view alias) const;
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+    [[nodiscard]] redis_handle redis() const;
+    [[nodiscard]] redis_handle redis(std::string_view alias) const;
+#endif
+
     // Edits the head the next response().commit() or accept_tunnel() sends:
     // status, header fields and cookies.
     [[nodiscard]] context_response_editor draft() & noexcept;
@@ -90,8 +155,11 @@ public:
     // response or tunnel was committed. The tunnel stays valid until the
     // callback returns; the server then ends its send direction and drains the
     // peer's for up to http_tunnel_route_config::peer_transport_fin_timeout_.
-    [[nodiscard]] task<http_tunnel*> accept_tunnel(http_status_code status = http_status::ok) &;
-    task<http_tunnel*> accept_tunnel(http_status_code = http_status::ok) && = delete;
+    // config.datagrams_ explicitly enables Capsule/HTTP Datagram semantics
+    // for an upgrade protocol; plain CONNECT rejects it. CONNECT-UDP enables
+    // them automatically and uses the protocol's existing handshake checks.
+    [[nodiscard]] task<http_tunnel*> accept_tunnel(http_status_code status = http_status::ok, http_tunnel_route_config config = {}) &;
+    task<http_tunnel*> accept_tunnel(http_status_code = http_status::ok, http_tunnel_route_config = {}) && = delete;
 
     // Requested when the application stops and, for a request that is not a
     // tunnel request, when the client abandons it (HTTP/1: the connection

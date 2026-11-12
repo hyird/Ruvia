@@ -110,6 +110,10 @@ public:
     rate_limiter(const rate_limiter&) = delete;
     rate_limiter& operator=(const rate_limiter&) = delete;
 
+    // Owner thread: adopts storage preallocated for the first routed listener.
+    // An already active table, including global-rate-limit counters, is kept.
+    void adopt_route_storage(rate_limiter& prepared) noexcept;
+
     [[nodiscard]] bool has_default_rule() const noexcept {
         return default_rule_per_worker_.has_value();
     }

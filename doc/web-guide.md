@@ -8,7 +8,7 @@
 
 ### 1.1 应用单例与启动主链（`"ruvia/web/app.h"`）
 
-生产环境使用进程级单例 `ruvia::app()`（返回 `ruvia::application&`）完成全部配置，最后调用 `run()` 启动服务：
+框架模式使用进程级单例 `ruvia::app()`（返回 `ruvia::application&`）完成配置，最后调用 `run()` 启动服务；嵌入其他项目的独立入站宿主见 [1.9](#19-独立入站宿主ruviawebhttp_serverh)。
 
 ```cpp
 #include "ruvia/web/app.h"
@@ -338,6 +338,7 @@ ruvia::app()
 | `local()` / `remote()` | 本端与对端地址端口（`conn_info::endpoint`） |
 | `tls()` | 明文监听器为 `nullptr`；否则为 `tls_connection_transport`（`alpn()`、`server_name()`、`client_certificate_subject()`） |
 | `stop_token()` | 应用停机时请求停止 |
+| `worker()` | 所属核心 `worker_handle`；可组合 `sleep_for`、`task_scope` 与 `run_blocking`，不会切换连接线程 |
 | `co_await read()` | 下一段至多 4 KiB 的入站字节；视图有效到下一次 `read()` 开始；对端结束发送方向（TCP FIN、TLS `close_notify`，或 TLS 对端未发 `close_notify` 直接关闭 TCP）后返回 `std::nullopt`，此后重复返回 |
 | `co_await write(bytes)` | 发送字节；调用时即复制输入 |
 | `co_await finish()` | 半关闭发送方向：TCP `shutdown(send)`，TLS 发送 `close_notify`；之后仍可读取，再写抛 `std::logic_error`，重复调用无操作 |
@@ -345,7 +346,7 @@ ruvia::app()
 
 - **生命周期**：对象由服务器拥有、不可复制或移动，只在处理器任务运行期间、在该连接所属 worker 线程上有效；任务结束后不得继续访问对象。一个读操作与一个输出操作（`write` / `finish`）可并发运行，同方向重叠抛 `std::logic_error`。
 - **操作回收**：`server_connection` 与 `http_tunnel` 只用读写通道租约判定在途操作；处理器退出时先中止仍活跃的 I/O，再等待回收。未启动的冷任务直接失效，随后 `co_await` 抛 `std::logic_error`。
-- **结束**：处理器任务正常返回且无在途操作时，服务器先结束仍打开的发送方向（TLS `close_notify`），再关闭 socket；任务抛出异常则立即断开，并经 `on_connection_failure()` 上报、计入 `connection_failures_`，对端复位或关闭及服务器取消的 I/O（超时、`stop()`）除外。
+- **结束**：处理器任务正常返回且无在途操作时，服务器先结束仍打开的发送方向（TLS `close_notify`），再关闭 socket；任务抛出异常则立即断开，并经 `on_connection_failure()` 上报、计入 `connection_failures_`。对端复位、关闭及服务器取消的 I/O（超时、`stop()`、`abort()`）均不计故障；应用自行抛出的异常不按传输取消过滤。
 - **服务器限制**：连接占用一个 `max_connections_per_worker_` 名额且不会为接纳新连接而被淘汰；读缓冲计入入站内存双预算（超限 `read()` 抛 `std::bad_alloc`）；`idle_timeout_` 在无读写完成时关闭连接，`write_timeout_` 在写入停滞时关闭连接；`stop()` 立即关闭全部连接并请求 `stop_token()`，`run()` 等待处理器任务退出后返回。连接被关闭后，在途与后续操作抛 `std::system_error`。
 - **平台**：Windows 与 POSIX 语义一致，连接同样经 Acceptor 交给业务 worker 后处理。
 
@@ -386,24 +387,79 @@ ruvia::app()
 | `request()` | 请求方法、目标与首部字段（`http_request`）；正文经 `body()` 读取 |
 | `conn()` | 连接元数据，`id()` 与 routes 监听器的 `c.conn().id()` 同一编号 |
 | `body()` | 流式请求正文（`body_reader`），首次读取时发送待发的 `100 Continue`；隧道请求抛 `std::logic_error`（首部之后的字节属于隧道） |
+| `trailers()` / `trailer(name)` | 正文读至 EOF 后读取请求尾部字段，与初始首部分开保存 |
+| `co_await inform(head)` | 最终响应提交前发送合法 1xx（如 `103 Early Hints`），字段在调用返回前拥有化 |
+| `early_data()` | 实际请求是否来自 HTTP/3 0-RTT；可据此返回 `425` 或转发 `Early-Data: 1` |
+| `push(request)` | 按对端设置与容量提交 HTTP/2 推送承诺 |
+| `advertise_origins(origins)` / `advertise_alternative_service(value)` | 复用连接的 ORIGIN / ALTSVC 输出能力及协议限制 |
+| `worker()` / `worker_state<T>()` | 所属核心 worker 与其注册状态，不依赖路由分发 |
+| `run_blocking(...)` | 绑定请求取消的阻塞卸载；参数及结果契约同 `context::run_blocking()` |
+| `client(alias)` / `db(alias)` / `redis(alias)` | 借用当前 worker 注册的出站能力；支持无参默认别名，后两者受构建特性控制 |
+| `arena()` / `pool()` / `env()` | 请求内存、进程 PMR 与宿主环境视图 |
 | `draft()` | 编辑下一次 `response().commit()` 或 `accept_tunnel()` 发送的响应头：状态、首部与 Cookie |
 | `response()` | 流式响应（`response_stream_writer`）：提交、写正文、以可选 Trailer 结束 |
 | `tunnel_requested()` | CONNECT / 扩展 CONNECT（RFC 9110 §9.3.6、RFC 8441、RFC 9220），或无正文且提供 `Upgrade` 的 HTTP/1.1 请求（RFC 9110 §7.8）时为 `true` |
-| `co_await accept_tunnel(status = http_status::ok)` | 提交成功头并返回其后的双向字节流（`http_tunnel*`）：CONNECT 须为 2xx，HTTP/1.1 Upgrade 须为 `101`，否则抛 `std::invalid_argument`；`101` 的 `Upgrade` 取 `draft()` 设置的值，未设置时取客户端提供的第一个协议，不得选择客户端未提供的协议。非隧道请求或响应已提交时抛 `std::logic_error` |
+| `co_await accept_tunnel(status = http_status::ok, config = {})` | 提交成功头并返回 `http_tunnel*`：CONNECT 须为 2xx，HTTP/1.1 Upgrade 须为 `101`；`101` 只能选择客户端提供的协议。非隧道请求或响应已提交时抛 `std::logic_error`。`config` 为 `http_tunnel_route_config`，复用路由隧道的协商校验 |
 | `stop_token()` | 应用停机时请求停止；非隧道请求还在客户端放弃时请求（HTTP/1 请求正文读完后连接断开，HTTP/2 / HTTP/3 流被重置） |
 
 - **保留的服务器语义**：分帧与目标校验、`421`（RFC 9110 §7.4）、不支持的 `Expect` 回 `417`、`max_stream_body_bytes_` 正文上限（声明长度超限回 `413`，读取超限时 `read()` 抛出）、流控信用、各阶段超时、请求数上限与 HTTP/3 0-RTT 的 `425` 照常生效；这些回答使用框架默认错误表示。
 - **跳过的应用层**：不经过路由、中间件、`document_root`、CORS、响应压缩、限流与 `on_error` / `on_not_found`；`Accept-Encoding` 不参与协商，响应表示完全由处理器决定。
+- **路由隔离**：仅有 `connection` / `request_stream` 的应用不构造控制器或中间件、不编译或封存全局路由；首次动态添加 `routes` 监听器时才准备并采纳路由与路由限流，失败保留原服务。
 - **生命周期**：对象由服务器拥有、不可复制或移动，只在处理器任务运行期间、在请求所属 worker 线程上有效；多个 worker 并发调用同一目标，目标须线程安全。
 - **提交与失败**：处理器须恰好提交一个响应（`response().commit()` / `end()`，或 `accept_tunnel()`）。已提交的响应流未 `end()` 时在处理器返回后正常结束。提交前抛出 `http_error` 时以其状态回答，正文读取失败以对应 4xx 回答；其他异常、或未提交任何响应即返回，回 `500` 并经 `on_connection_failure()` 上报。提交后抛出异常则按流式输出语义中止：HTTP/1 关闭连接，HTTP/2 / HTTP/3 重置该流，并上报。
-- **隧道请求**：拒绝隧道时经 `response()` 回答，该响应在处理器返回后整体发送、不携带 Trailer（非空 Trailer 抛 `std::logic_error`），HTTP/1.1 随后关闭连接；对 CONNECT 的 2xx 只能由 `accept_tunnel()` 发送。接受后隧道在处理器返回前有效；返回后服务器结束发送方向，并在 `http_tunnel_route_config::peer_transport_fin_timeout_` 默认的 5 秒内等待对端结束。HTTP/1 首部之后已到达的字节、HTTP/2 / HTTP/3 的 DATA 都属于隧道，受相同的入站预算与流控约束。
+- **隧道请求**：拒绝隧道时经 `response()` 回答，该响应在处理器返回后整体发送、不携带 Trailer（非空 Trailer 抛 `std::logic_error`），HTTP/1.1 随后关闭连接；对 CONNECT 的 2xx 只能由 `accept_tunnel()` 发送。接受后隧道在处理器返回前有效；返回后结束发送方向，按接受时 `config.peer_transport_fin_timeout_` 等待对端结束。已到达的隧道字节仍受入站预算与流控约束。
+- **Capsule 与 Datagram**：扩展 CONNECT / Upgrade 可通过 `config.datagrams_ = true` 声明 Capsule/HTTP Datagram 语义；普通 CONNECT 拒绝该配置。CONNECT-UDP 自动启用并执行现有 `Capsule-Protocol` 等握手校验；接受后可直接使用 `capsules()`、`datagrams()` 或 `udp()`，HTTP/3 支持原生 Datagram 与可靠 Capsule 回退。
 - **平台**：Windows 与 POSIX 语义一致，请求在接受连接（或 HTTP/3 连接）所属的业务 worker 上处理。
+
+### 1.9 独立入站宿主（`"ruvia/web/http_server.h"`）
+
+外部项目通过 `http_server(event_loop, http_server_callbacks, server_config = {})` 复用入站驱动，不创建 `application`、不接触全局控制器注册表、不接管进程信号。链接 `ruvia::web`；事件循环可来自 `event_loop_pool` 或 `attach_event_loop()`。
+
+| 方法 | 契约 |
+| --- | --- |
+| `listen(config)` | `start()` 前暂存监听配置，启动后原子新增；仅接受 `request_stream` / `connection` 分发，可包含 TLS、HTTP/3 与继承监听 socket |
+| `add_connection_service(config)` | 准备不绑定监听 socket 的 TCP/TLS 服务，以配置中的地址端口标识；供外部 Acceptor 交接连接 |
+| `adopt(endpoint, native_socket)` | 接管已连接 socket，失败也关闭句柄；首次绑定当前循环，执行相同的 TLS、HTTP、预算、超时与回收主链 |
+| `co_await start()` | 一次性准备全部服务后开放准入；失败先关闭并 join 已准备资源，再传播异常；允许先启动空宿主 |
+| `remove_listener(endpoint)` | 立即停止新准入，保留已建立会话；同端点可以重新添加 |
+| `replace_tls_identities(endpoint, config)` | 在所属循环替换 TLS 身份，保持既有客户端证书策略与记录上限 |
+| `duplicate_listener_sockets(endpoint)` | POSIX 上复制监听句柄，交接契约同应用入口 |
+| `close()` / `co_await shutdown()` | 前者任意线程请求关闭，后者在所属循环等待全部会话与后台操作回收；不停止循环或其他宿主 |
+| `worker()` / `stats()` | 核心 worker 与宿主统计；统计可跨线程读取 |
+
+```cpp
+#include "ruvia/core/timer.h"
+#include "ruvia/web/http_server.h"
+
+ruvia::task<void> answer(ruvia::request_stream& stream) {
+    if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
+        co_await stream.response().write(std::string_view("ready"));
+        co_await stream.response().end();
+    }
+}
+
+// 由调用方在其事件循环上启动，并用其停止令牌控制服务寿命。
+ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
+    ruvia::http_server server(loop, {.request_stream_ = &answer});
+    server.listen({.address_ = "127.0.0.1", .http_ = 8080,
+        .dispatch_ = ruvia::listener_dispatch::request_stream});
+    co_await server.start();
+    (void)co_await ruvia::sleep_until(server.worker(),
+        std::chrono::steady_clock::time_point::max(), stop);
+    co_await server.shutdown();
+}
+```
+
+- **线程归属**：除 `close()`、析构与 `stats()` 外，操作均在绑定循环执行；`server_config` 的调度字段由外部循环负责，其余限额作用于该宿主的单 worker。
+- **原生接管**：外部服务不接收 HTTP/3、继承监听 socket 或自动重定向配置；Windows 的接管 socket 不得已绑定其他 IOCP，绑定监听仍复用独立原生 Acceptor。
+- **销毁边界**：析构仅请求关闭；调用方须继续驱动循环，直到 `shutdown()` 完成或循环自身的停止回调完成 join。出站 `http_client`、`db_client`、`redis_client` 可独立绑定同一循环并捕获到处理器，无须全局注册。
+
 
 ---
 
 ## 2. 控制器与路由声明（`"ruvia/web/controller.h"`）
 
-控制器是不继承任何框架基类、可默认构造的 `final` 类。通过路由宏在类定义内声明路由，并在 `main` 启动前自动完成静态注册与去重封存。
+控制器是不继承任何框架基类、可默认构造的 `final` 类。通过路由宏在类定义内声明并静态注册；首次准备 `routes` 监听器时才构造控制器、编译并封存路由计划。
 
 ### 2.1 路由组与控制器宏
 

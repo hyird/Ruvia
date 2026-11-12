@@ -69,6 +69,9 @@ http3_endpoint::http3_endpoint(const http3_worker_services& services, http_serve
 
 http3_endpoint::~http3_endpoint() {
     close();
+    if (registered_) {
+        services_.placement_.directory_->unregister_endpoint(services_.placement_.worker_index_, *this);
+    }
 }
 
 void http3_endpoint::open([[maybe_unused]] inherited_listener_sockets* inherited) {
@@ -82,6 +85,9 @@ void http3_endpoint::open([[maybe_unused]] inherited_listener_sockets* inherited
         services_.placement_.worker_index_, listener_index_, configured_endpoint_, secret(), inherited, socket_);
     local_endpoint_ = socket_.local_endpoint();
 #endif
+    services_.placement_.directory_->register_endpoint(services_.placement_.worker_index_, *this,
+        local_endpoint_, session_.http3_->secret_, listener_index_);
+    registered_ = true;
     open_ = true;
 }
 
@@ -179,7 +185,7 @@ task<void> http3_endpoint::run_receive_loop() {
                 }
                 throw std::system_error(error, "HTTP/3 UDP receive failed");
             }
-            receive(std::span<const std::byte>(receive_buffer_.data(), completion.result()), remote, false);
+            receive(std::span<const std::byte>(receive_buffer_.data(), completion.result()), remote);
             for (std::size_t burst = 1; burst < receive_burst && socket_.is_open(); ++burst) {
                 std::error_code error;
                 const auto size = socket_.receive_from(
@@ -193,7 +199,7 @@ task<void> http3_endpoint::run_receive_loop() {
                     }
                     throw std::system_error(error, "HTTP/3 UDP receive failed");
                 }
-                receive(std::span<const std::byte>(receive_buffer_.data(), size), remote, false);
+                receive(std::span<const std::byte>(receive_buffer_.data(), size), remote);
             }
         }
     } catch (...) {
@@ -206,43 +212,73 @@ task<void> http3_endpoint::run_receive_loop() {
 #endif
 
 void http3_endpoint::receive_handoff(http3_handoff_datagram& datagram) noexcept {
-    if (!open_) {
-        return;
-    }
-    receive(std::span<const std::byte>(datagram.bytes_.data(), datagram.bytes_.size()), datagram.remote_, true);
+    receive(std::span<const std::byte>(datagram.bytes_.data(), datagram.bytes_.size()), datagram.remote_);
 }
 
 void http3_endpoint::receive(
-    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, bool handed_off) noexcept {
+    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote) noexcept {
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
     ngtcp2_version_cid header{};
     const auto decoded = ngtcp2_pkt_decode_version_cid(&header, data, bytes.size(), http3_connection_id_length);
-    if (decoded == NGTCP2_ERR_VERSION_NEGOTIATION) {
-        if (bytes.size() >= min_initial_datagram_bytes && admitting_) {
-            send_version_negotiation(header, remote);
-        }
-        return;
-    }
-    if (decoded != 0 || header.dcidlen > NGTCP2_MAX_CIDLEN) {
+    if ((decoded != 0 && decoded != NGTCP2_ERR_VERSION_NEGOTIATION) || header.dcidlen > NGTCP2_MAX_CIDLEN) {
         return;
     }
     const auto destination = std::span<const std::uint8_t>(header.dcid, header.dcidlen);
-    if (const auto found = connections_.find(http3_cid_key::from(destination)); found != connections_.end()) {
-        found->second->receive(bytes, remote);
-        return;
-    }
-    // A datagram another thread received was already steered to this worker.
+    const auto key = http3_cid_key::from(destination);
     const auto& placement = services_.placement_;
-    const auto owner = http3_connection_id_owner(secret(), destination, placement.directory_->worker_count());
-    // A datagram another thread received was already steered to this worker.
-    if (!handed_off && owner.has_value() && *owner != placement.worker_index_) {
-        (void)placement.directory_->hand_off(*owner, listener_index_, bytes, remote);
+    const http3_endpoint_registration* authenticated = nullptr;
+    http3_endpoint* admitting = nullptr;
+    std::optional<std::size_t> owner;
+    // SO_REUSEPORT may choose any socket, including a removed listener's.
+    // Search the one worker-local directory before interpreting an unknown
+    // CID with the receiving socket's (possibly obsolete) secret.
+    for (const auto& registration : placement.directory_->endpoints(placement.worker_index_)) {
+        if (registration.local_ != local_endpoint_) {
+            continue;
+        }
+        auto* endpoint = registration.endpoint_;
+        if (endpoint != nullptr && endpoint->open_) {
+            if (const auto found = endpoint->connections_.find(key); found != endpoint->connections_.end()) {
+                found->second->receive(bytes, remote);
+                return;
+            }
+            if (endpoint->admitting_) {
+                admitting = endpoint;
+            }
+        }
+    }
+    for (const auto& registration : placement.directory_->endpoints(placement.worker_index_)) {
+        if (registration.local_ != local_endpoint_) {
+            continue;
+        }
+        if (const auto candidate = http3_connection_id_owner(*registration.secret_, destination, placement.directory_->worker_count())) {
+            authenticated = &registration;
+            owner = candidate;
+        }
+    }
+    if (owner.has_value() && *owner != placement.worker_index_) {
+        (void)placement.directory_->hand_off(*owner, authenticated->listener_index_, bytes, remote);
         return;
     }
-    if (header.version != 0) {
-        accept(bytes, remote);
-    } else if (admitting_ && owner == placement.worker_index_) {
-        send_stateless_reset(destination, bytes.size(), remote);
+    auto* endpoint = authenticated != nullptr ? authenticated->endpoint_ : admitting;
+    if (endpoint == nullptr || !endpoint->open_) {
+        return;
+    }
+    if (!owner.has_value() && header.version != 0) {
+        owner = http3_initial_worker(endpoint->secret(), destination, placement.directory_->worker_count());
+        if (*owner != placement.worker_index_) {
+            (void)placement.directory_->hand_off(*owner, endpoint->listener_index_, bytes, remote);
+            return;
+        }
+    }
+    if (decoded == NGTCP2_ERR_VERSION_NEGOTIATION) {
+        if (bytes.size() >= min_initial_datagram_bytes && endpoint->admitting_) {
+            endpoint->send_version_negotiation(header, remote);
+        }
+    } else if (header.version != 0) {
+        endpoint->accept(bytes, remote);
+    } else if (endpoint->admitting_ && owner == placement.worker_index_) {
+        endpoint->send_stateless_reset(destination, bytes.size(), remote);
     }
 }
 

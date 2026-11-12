@@ -10,7 +10,20 @@
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 
+namespace ruvia {
+struct listen_config;
+}
+
 namespace ruvia::detail {
+
+// Owns every inherited socket and cleanses every TLS secret, including when
+// configuration validation or allocation fails.
+[[nodiscard]] std::pmr::vector<http_server_listener_definition> load_server_listeners(
+    std::span<const listen_config> configs);
+
+// Rejects collisions in their separate TCP and HTTP/3 UDP endpoint namespaces.
+void ensure_new_listener_endpoints(std::span<const http_server_listener_definition> existing,
+    std::span<const http_server_listener_definition> added);
 
 void validate_server_limits(const server_config& config);
 

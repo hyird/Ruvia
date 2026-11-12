@@ -28,6 +28,8 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/timer.h"
+#include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -41,6 +43,9 @@
 #include "test_io_context.h"
 #include "test_tls_identity.h"
 #include "udp_port_reservation.h"
+#if defined(RUVIA_ENABLE_HTTP3)
+#include "http3_test_client.h"
+#endif
 
 namespace request_stream_test {
 
@@ -131,6 +136,14 @@ constexpr std::string_view failure_message = "request stream failed before commi
 constexpr std::string_view silent_message = "request stream callback completed without a response";
 constexpr std::string_view abort_message = "request stream failed after commit";
 
+struct runtime_state final {
+    unsigned requests_{};
+};
+
+std::binary_semaphore blocking_entered{0};
+std::binary_semaphore blocking_release{0};
+std::binary_semaphore blocking_cancelled{0};
+
 // Echoes the tunnel until the peer ends its direction, then ends its own.
 ruvia::task<void> echo_tunnel(ruvia::http_tunnel& tunnel) {
     while (auto chunk = co_await tunnel.read()) {
@@ -145,6 +158,37 @@ ruvia::task<void> echo_tunnel(ruvia::http_tunnel& tunnel) {
 // paths fail before or after the response is committed.
 ruvia::task<void> serve(ruvia::request_stream& stream) {
     const auto& request = stream.request();
+    if (request.path() == "/runtime-cancel") {
+        while (co_await stream.body().read()) {
+        }
+        (void)co_await stream.response().commit();
+        const auto result = co_await stream.run_blocking([] {
+            blocking_entered.release();
+            blocking_release.acquire();
+        });
+        if (result.status() == ruvia::blocking_status::cancelled) {
+            blocking_cancelled.release();
+        }
+        co_return;
+    }
+    if (request.path() == "/runtime") {
+        EXPECT_TRUE(stream.worker().is_current());
+        EXPECT_EQ(co_await ruvia::sleep_for(stream.worker(), 1ms, stream.stop_token()), ruvia::timer_sleep_result::elapsed);
+        auto result = co_await stream.run_blocking([] { return 42; });
+        EXPECT_EQ(std::move(result).take_value(), 42);
+        const auto count = ++stream.worker_state<runtime_state>().requests_;
+        stream.draft().header("x-runtime-count", std::to_string(count));
+        stream.draft().header("x-worker", std::to_string(stream.worker().id()));
+        auto upstream = co_await stream.client().get("/ping").send();
+        auto body = co_await upstream.text();
+        EXPECT_EQ(body.text().size(), 2048);
+        const auto expired = co_await stream.run_blocking(0ms, [] { return 1; });
+        EXPECT_EQ(expired.status(), ruvia::blocking_status::timed_out);
+        (void)co_await stream.response().commit();
+        co_await stream.response().write(std::string_view("runtime-ready"));
+        co_await stream.response().end();
+        co_return;
+    }
     if (stream.tunnel_requested()) {
         if (request.target() == refused_authority) {
             stream.draft().status(ruvia::http_status::forbidden);
@@ -154,6 +198,38 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
             co_await stream.response().write(std::string_view("denied"));
             co_await stream.response().end();
             co_return;
+        }
+        const bool capsules = request.path() == "/capsules";
+        const bool udp = request.protocol() == "connect-udp" ||
+                         request.path().starts_with("/.well-known/masque/udp/");
+        if (capsules || udp) {
+            auto* tunnel = co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect
+                                                             ? ruvia::http_status::ok
+                                                             : ruvia::http_status::switching_protocols,
+                {.datagrams_ = capsules});
+            if (capsules) {
+                auto channel = tunnel->capsules();
+                while (auto capsule = co_await channel.read()) {
+                    co_await channel.write(capsule->type(), capsule->payload());
+                }
+                co_await channel.finish();
+            } else {
+                auto channel = tunnel->udp();
+                while (auto datagram = co_await channel.read()) {
+                    co_await channel.send(datagram->payload());
+                }
+                co_await channel.finish();
+            }
+            co_return;
+        }
+        bool invalid_datagrams = false;
+        if (request.known_method() == ruvia::http_known_method::connect && request.protocol().empty()) {
+            try {
+                (void)co_await stream.accept_tunnel(ruvia::http_status::ok, {.datagrams_ = true});
+            } catch (const std::invalid_argument&) {
+                invalid_datagrams = true;
+            }
+            EXPECT_TRUE(invalid_datagrams);
         }
         auto* tunnel = co_await stream.accept_tunnel(request.known_method() == ruvia::http_known_method::connect
                                                          ? ruvia::http_status::ok
@@ -175,6 +251,30 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
         co_await stream.response().write(std::string_view("partial"));
         throw std::runtime_error(std::string(abort_message));
     }
+    if (request.path() == "/push") {
+        const bool accepted = stream.push({.scheme_ = request.scheme(), .authority_ = request.authority(), .path_ = "/pushed"});
+        stream.draft().header("x-push", accepted ? "yes" : "no");
+    }
+    if (request.path() == "/pushed") {
+        (void)co_await stream.response().commit();
+        co_await stream.response().write(std::string_view("pushed-body"));
+        co_await stream.response().end();
+        co_return;
+    }
+    if (request.path() == "/advertise") {
+        const std::string origin = "https://" + std::string(request.authority());
+        const std::array<std::string_view, 1> origins{origin};
+        stream.advertise_origins(origins);
+        if (request.protocol_version() == ruvia::http_protocol_version::http2) {
+            stream.advertise_alternative_service("h2=\":8443\"; ma=60");
+        }
+        stream.draft().header("x-advertised-origin", origin);
+    }
+    if (request.path() == "/upload-trailer") {
+        EXPECT_TRUE(stream.trailers().empty());
+        const std::array fields{ruvia::http_header_view{"link", "</style.css>; rel=preload"}};
+        co_await stream.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, fields));
+    }
     bool not_a_tunnel = false;
     try {
         (void)co_await stream.accept_tunnel();
@@ -185,6 +285,11 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     while (auto chunk = co_await stream.body().read()) {
         body.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
     }
+    if (request.path() == "/upload-trailer") {
+        stream.draft().header("x-upload-checksum", stream.trailer("x-upload-checksum").value_or("missing"));
+        stream.draft().header("x-upload-trailers", std::to_string(stream.trailers().size()));
+    }
+    stream.draft().header("x-early-data", stream.early_data() ? "yes" : "no");
     stream.draft().header("x-connection-id", std::to_string(stream.conn().id()));
     stream.draft().header("x-not-a-tunnel", not_a_tunnel ? "yes" : "no");
     stream.draft().header("content-type", "text/plain");
@@ -209,7 +314,8 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     return payload;
 }
 
-ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protocol_version version, std::string label) {
+ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protocol_version version,
+    std::string label, ruvia::worker_handle worker) {
     const auto payload = large_payload();
     {
         auto response = co_await client.post("/echo")
@@ -232,6 +338,129 @@ ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protoco
         EXPECT_EQ(echoed.size(), payload.size()) << label;
         EXPECT_TRUE(echoed == payload) << label;
         EXPECT_EQ(response.trailer("x-body-bytes").value_or(""), std::to_string(payload.size())) << label;
+        EXPECT_EQ(response.header("x-early-data").value_or(""), "no") << label;
+    }
+    {
+        auto exchange = co_await client.post("/upload-trailer").header("trailer", "x-upload-checksum").upload({});
+        co_await exchange.body().write("uploaded:");
+        co_await exchange.body().write("content");
+        const std::array fields{ruvia::http_header_view{"x-upload-checksum", "verified"}};
+        co_await exchange.body().end(fields);
+        auto response = co_await exchange.response();
+        EXPECT_EQ(response.status(), ruvia::http_status::ok) << label;
+        const auto interim = response.informational_responses();
+        EXPECT_EQ(interim.size(), 1) << label;
+        if (!interim.empty()) {
+            EXPECT_EQ(interim.front().status(), ruvia::http_status::early_hints) << label;
+            EXPECT_FALSE(interim.front().headers().empty()) << label;
+            if (!interim.front().headers().empty()) {
+                EXPECT_EQ(interim.front().headers().front().value(), "</style.css>; rel=preload") << label;
+            }
+        }
+        EXPECT_EQ(response.header("x-upload-checksum").value_or(""), "verified") << label;
+        EXPECT_EQ(response.header("x-upload-trailers").value_or(""), "1") << label;
+        const auto content = co_await response.text();
+        EXPECT_EQ(content.text(), "uploaded:content") << label;
+    }
+    {
+        unsigned previous = 0;
+        std::string worker;
+        for (int repeat = 0; repeat != 2; ++repeat) {
+            auto response = co_await client.get("/runtime").send();
+            const auto count = static_cast<unsigned>(std::stoul(std::string(response.header("x-runtime-count").value_or("0"))));
+            const std::string current_worker(response.header("x-worker").value_or(""));
+            if (repeat != 0) {
+                EXPECT_EQ(count, previous + 1) << label;
+                EXPECT_EQ(current_worker, worker) << label;
+            }
+            previous = count;
+            worker = current_worker;
+            const auto content = co_await response.text();
+            EXPECT_EQ(content.text(), "runtime-ready") << label;
+        }
+    }
+    if (version == ruvia::http_protocol_version::http2) {
+        auto response = co_await client.get("/push").send();
+        EXPECT_EQ(response.header("x-push").value_or(""), "yes") << label;
+        (void)co_await response.text();
+        auto pushed = client.next_push();
+        for (int attempt = 0; !pushed && attempt != 5000; ++attempt) {
+            (void)co_await ruvia::sleep_for(worker, 1ms);
+            pushed = client.next_push();
+        }
+        EXPECT_TRUE(pushed.has_value()) << label;
+        if (pushed) {
+            EXPECT_EQ(pushed->request().path_, "/pushed") << label;
+            auto pushed_response = co_await pushed->response();
+            const auto body = co_await pushed_response.text();
+            EXPECT_EQ(body.text(), "pushed-body") << label;
+        }
+    }
+    if (version != ruvia::http_protocol_version::http11 && client.scheme() == ruvia::http_scheme::https) {
+        auto response = co_await client.get("/advertise").send();
+        const std::string origin(response.header("x-advertised-origin").value_or(""));
+        (void)co_await response.text();
+        bool origins_seen = false;
+        bool alternative_seen = false;
+        for (int attempt = 0; attempt != 5000 &&
+                              (!origins_seen || (version == ruvia::http_protocol_version::http2 && !alternative_seen));
+            ++attempt) {
+            while (auto advertisement = client.next_advertisement()) {
+                if (const auto* origins = advertisement->origins()) {
+                    EXPECT_EQ(origins->origins_.size(), 1) << label;
+                    if (!origins->origins_.empty()) {
+                        EXPECT_EQ(std::string_view(origins->origins_.front()), std::string_view(origin)) << label;
+                    }
+                    origins_seen = true;
+                }
+                if (const auto* alternative = advertisement->alternative_service()) {
+                    EXPECT_EQ(alternative->field_value_, "h2=\":8443\"; ma=60") << label;
+                    alternative_seen = true;
+                }
+            }
+            if (!origins_seen || (version == ruvia::http_protocol_version::http2 && !alternative_seen)) {
+                (void)co_await ruvia::sleep_for(worker, 1ms);
+            }
+        }
+        EXPECT_TRUE(origins_seen) << label;
+        if (version == ruvia::http_protocol_version::http2) {
+            EXPECT_TRUE(alternative_seen) << label;
+        }
+    }
+    {
+        auto opened = co_await client.udp("/.well-known/masque/udp/echo.test/53/").open();
+        auto* tunnel = opened.tunnel();
+        EXPECT_TRUE(tunnel != nullptr) << label;
+        if (tunnel != nullptr) {
+            auto channel = std::move(*tunnel).udp();
+            for (const auto message : {std::string_view{}, std::string_view("reliable-udp")}) {
+                co_await channel.send(message);
+                auto packet = co_await channel.read();
+                EXPECT_TRUE(packet.has_value()) << label;
+                if (packet.has_value()) {
+                    EXPECT_EQ(packet->text(), message) << label;
+                }
+            }
+            co_await channel.finish();
+            EXPECT_FALSE((co_await channel.read()).has_value()) << label;
+        }
+    }
+    if (version != ruvia::http_protocol_version::http11) {
+        auto opened = co_await client.connect("localhost").protocol("echo-capsules").target("/capsules").open();
+        auto* tunnel = opened.tunnel();
+        EXPECT_TRUE(tunnel != nullptr) << label;
+        if (tunnel != nullptr) {
+            auto channel = std::move(*tunnel).capsules();
+            co_await channel.write(17, "capsule-payload");
+            auto capsule = co_await channel.read();
+            EXPECT_TRUE(capsule.has_value()) << label;
+            if (capsule) {
+                EXPECT_EQ(capsule->type(), 17) << label;
+                EXPECT_EQ(capsule->payload(), "capsule-payload") << label;
+            }
+            co_await channel.finish();
+            EXPECT_FALSE((co_await channel.read()).has_value()) << label;
+        }
     }
     for (const auto& [path, status] : {std::pair<std::string_view, unsigned>{"/fail", 500},
              std::pair<std::string_view, unsigned>{"/silent", 500},
@@ -299,9 +528,12 @@ ruvia::task<void> exercise_all(ruvia::event_loop loop, std::vector<client_target
             config.protocol_ = target.protocol_;
             config.connect_timeout_ = 5s;
             config.request_timeout_ = 20s;
+            config.push_.enabled_ = true;
+            config.advertisements_.receive_origins_ = target.base_url_.starts_with("https://");
+            config.advertisements_.receive_alternative_services_ = true;
             config.tls_.ca_file_ = ca_file;
             owner.emplace(loop, config);
-            co_await exercise(owner->client(), target.version_, target.label_);
+            co_await exercise(owner->client(), target.version_, target.label_, loop.handle());
         } catch (...) {
             failure = std::current_exception();
         }
@@ -382,8 +614,10 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     ruvia::test::udp_port_reservation http3_reservation(io);
     const auto http3_port = http3_reservation.endpoint().port();
     stream_listener.http3_ = http3_port;
+    stream_listener.http3_early_data_ = true;
 #endif
     const ruvia::listen_config routes_listener{.address_ = "127.0.0.1", .http_ = routes_endpoint.port()};
+    const auto registered_client_url = "http://127.0.0.1:" + std::to_string(routes_endpoint.port());
 
     {
         std::lock_guard lock(failures_mutex());
@@ -392,6 +626,9 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2})
         .listen({stream_listener, routes_listener})
+        .blocking_pool({.thread_count_ = 2})
+        .use_worker_state<runtime_state>()
+        .client({.base_url_ = registered_client_url})
         .use<marking_middleware>()
         .cors(ruvia::cors_config{})
         .compression(ruvia::compression_config{})
@@ -436,6 +673,71 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
+    }
+
+#if defined(RUVIA_ENABLE_HTTP3)
+    {
+        const asio::ip::udp::endpoint endpoint(asio::ip::address_v4::loopback(), http3_port);
+        ruvia::test::http3_test_client initial(endpoint, identity.ca_file_, "localhost", 10s);
+        EXPECT_EQ(initial.request("GET", "/early").header("x-early-data").value_or(std::pmr::string{}), "no");
+        const auto ticket = initial.capture_resumption();
+        ASSERT_TRUE(ticket.permits_early_data());
+        ruvia::test::http3_test_client resumed(endpoint, identity.ca_file_, "localhost", 10s, &ticket, true);
+        const auto early = resumed.start_early_request("GET", "/early");
+        const auto response = resumed.finish_response(early);
+        EXPECT_EQ(response.status_, 200);
+        EXPECT_EQ(response.header("x-early-data").value_or(std::pmr::string{}), "yes");
+        EXPECT_TRUE(resumed.early_data_accepted());
+
+        constexpr std::array fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
+        const ruvia::http3_extended_connect_request_head_view udp{
+            .protocol_ = "connect-udp", .authority_ = "localhost", .target_ = "/.well-known/masque/udp/echo.test/53/", .headers_ = fields};
+        const auto stream = initial.start_tunnel(udp);
+        EXPECT_EQ(initial.wait_for_response_head(stream).status_, 200);
+        const std::string native("\0native", 7);
+        initial.send_datagram(stream, bytes_of(native));
+        EXPECT_EQ(std::string_view(initial.receive_datagram(stream)), std::string_view(native));
+        initial.send_stream_data(stream, {}, true);
+        EXPECT_FALSE(initial.finish_response(stream).reset_error_.has_value());
+
+        // Disabling H3 DATAGRAM forces reliable DATAGRAM capsules.
+        ruvia::test::http3_test_client reliable(endpoint, identity.ca_file_, "localhost", 10s, nullptr, false, false);
+        const auto fallback = reliable.start_tunnel(udp);
+        EXPECT_EQ(reliable.wait_for_response_head(fallback).status_, 200);
+        const std::string capsule("\0\x09\0reliable", 11);
+        reliable.send_stream_data(fallback, bytes_of(capsule), true);
+        const auto echoed = reliable.finish_response(fallback);
+        EXPECT_EQ(std::string_view(echoed.body_), std::string_view(capsule));
+        EXPECT_FALSE(echoed.reset_error_.has_value());
+    }
+#endif
+
+    // HTTP/1 Upgrade negotiates a custom Capsule Protocol independently of UDP.
+    {
+        asio::ip::tcp::socket socket(io);
+        socket.connect(plain_endpoint);
+        asio::write(socket, asio::buffer(std::string_view("GET /capsules HTTP/1.1\r\nHost: localhost\r\n"
+                                                          "Connection: Upgrade\r\nUpgrade: echo-capsules\r\n\r\n")));
+        std::string rest;
+        const auto head = lowercase(read_head(socket, rest));
+        EXPECT_TRUE(head.starts_with("http/1.1 101 ")) << head;
+        EXPECT_NE(head.find("\r\ncapsule-protocol: ?1\r\n"), std::string::npos);
+        const std::string capsule("\x11\x07payload", 9);
+        asio::write(socket, asio::buffer(capsule));
+        socket.shutdown(asio::ip::tcp::socket::shutdown_send);
+        rest += ruvia::test::read_to_end(socket);
+        EXPECT_EQ(rest, capsule);
+    }
+
+    // Cancellation ends the request's blocking wait before its callable ends.
+    {
+        asio::ip::tcp::socket socket(io);
+        socket.connect(plain_endpoint);
+        asio::write(socket, asio::buffer(std::string_view("GET /runtime-cancel HTTP/1.1\r\nHost: localhost\r\n\r\n")));
+        EXPECT_TRUE(blocking_entered.try_acquire_for(10s));
+        socket.close();
+        EXPECT_TRUE(blocking_cancelled.try_acquire_for(10s));
+        blocking_release.release();
     }
 
     // HTTP/1.1 Upgrade: the bytes behind the head already belong to the
@@ -483,7 +785,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     app.stop();
     runner.join();
     app.on_connection_failure(nullptr);
-    EXPECT_EQ(middleware_runs().load(), 1);
+    EXPECT_EQ(middleware_runs().load(), 2 * targets.size() + 1);
     EXPECT_EQ(error_handler_runs().load(), 0);
     EXPECT_EQ(failures_with(failure_message), targets.size());
     EXPECT_EQ(failures_with(silent_message), targets.size());

@@ -15,7 +15,14 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db_handle.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis_handle.h"
+#endif
 
 #include "context/context_access.h"
 #include "context/context_services.h"
@@ -245,6 +252,62 @@ body_reader& request_stream::body() & {
     return context_.req().body_reader();
 }
 
+std::span<const http_header> request_stream::trailers() const noexcept {
+    return context_.req().trailers();
+}
+
+std::optional<std::string_view> request_stream::trailer(std::string_view name) const noexcept {
+    return context_.req().trailer(name);
+}
+
+task<void> request_stream::inform(const http_interim_response_head& response) {
+    return context_.inform(response);
+}
+
+bool request_stream::early_data() const noexcept {
+    return context_.early_data();
+}
+
+bool request_stream::push(http_push_request_view request) {
+    return context_.push(request);
+}
+
+void request_stream::advertise_origins(std::span<const std::string_view> origins) {
+    context_.advertise_origins(origins);
+}
+
+void request_stream::advertise_alternative_service(std::string_view value) {
+    context_.advertise_alternative_service(value);
+}
+
+http_client_handle request_stream::client() const {
+    return context_.client();
+}
+
+http_client_handle request_stream::client(std::string_view alias) const {
+    return context_.client(alias);
+}
+
+#ifdef RUVIA_ENABLE_DATABASE
+db_handle request_stream::db() const {
+    return context_.db();
+}
+
+db_handle request_stream::db(std::string_view alias) const {
+    return context_.db(alias);
+}
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+redis_handle request_stream::redis() const {
+    return context_.redis();
+}
+
+redis_handle request_stream::redis(std::string_view alias) const {
+    return context_.redis(alias);
+}
+#endif
+
 context_response_editor request_stream::draft() & noexcept {
     return context_.draft();
 }
@@ -257,7 +320,7 @@ bool request_stream::tunnel_requested() const noexcept {
     return accept_tunnel_ != nullptr;
 }
 
-task<http_tunnel*> request_stream::accept_tunnel(http_status_code status) & {
+task<http_tunnel*> request_stream::accept_tunnel(http_status_code status, http_tunnel_route_config config) & {
     if (accept_tunnel_ == nullptr) {
         throw std::logic_error("accept_tunnel() requires a CONNECT or HTTP/1.1 Upgrade request");
     }
@@ -272,7 +335,7 @@ task<http_tunnel*> request_stream::accept_tunnel(http_status_code status) & {
     } else if (status != http_status::switching_protocols) {
         throw std::invalid_argument("an HTTP/1.1 Upgrade is accepted with 101 (Switching Protocols)");
     }
-    co_return co_await (*accept_tunnel_)(status);
+    co_return co_await (*accept_tunnel_)(status, config);
 }
 
 ::ruvia::stop_token request_stream::stop_token() const noexcept {

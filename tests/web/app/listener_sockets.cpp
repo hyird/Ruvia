@@ -97,10 +97,15 @@ public:
     RUVIA_ROUTES_BEGIN(listener_controller)
     RUVIA_GET("/hello", hello);
     RUVIA_GET("/control", control);
+    RUVIA_GET("/listener-worker", worker);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> hello(ruvia::context& context) {
         co_return context.text(std::string_view("hello"));
+    }
+
+    ruvia::task<ruvia::http_response> worker(ruvia::context& context) {
+        co_return context.text(std::to_string(context.worker().id()));
     }
 
     // A business worker cannot wait for every worker, itself included.
@@ -213,6 +218,135 @@ bool http3_serves(std::uint16_t port, const ruvia::test::tls_identity& identity,
     } catch (const std::exception&) {
         return false;
     }
+}
+#endif
+
+#if defined(RUVIA_ENABLE_HTTP3)
+// Retired SO_REUSEPORT sockets must route fresh Initials to the current
+// listener, and current sockets must still route older connection IDs.
+TEST(Ruvia, readded_http3_listener_serves_new_and_retired_connections_on_every_worker) {
+    const ruvia::test::tls_identity first("retired-quic", "DNS:localhost,IP:127.0.0.1");
+    const ruvia::test::tls_identity second("readded-quic", "DNS:localhost,IP:127.0.0.1");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation https_reservation(io);
+    ruvia::test::udp_port_reservation udp_reservation(io);
+    const auto https = https_reservation.endpoint();
+    const auto udp = udp_reservation.endpoint();
+    ruvia::listen_config config{
+        .address_ = "127.0.0.1", .https_ = https.port(), .http3_ = udp.port(), .tls_ = tls_of(first)};
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2}).listen(config).on_start(nullptr).on_start([] { started().release(); });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    wait_until_running(app);
+
+    std::array<std::unique_ptr<ruvia::test::http3_test_client>, 2> established;
+    std::string first_worker;
+    for (int attempt = 0; attempt < 32 && established[1] == nullptr; ++attempt) {
+        auto client = std::make_unique<ruvia::test::http3_test_client>(udp, first.ca_file_, "localhost", 5s);
+        const auto response = client->request("GET", "/listener-worker");
+        ASSERT_EQ(response.status_, 200);
+        const std::string worker(response.body_);
+        if (established[0] == nullptr) {
+            first_worker = worker;
+            established[0] = std::move(client);
+        } else if (worker != first_worker) {
+            established[1] = std::move(client);
+        }
+    }
+    ASSERT_NE(established[1], nullptr);
+    const ruvia::listener_endpoint endpoint{.address_ = "127.0.0.1", .port_ = https.port()};
+    app.remove_listener(endpoint);
+    config.tls_ = tls_of(second);
+    ASSERT_NO_THROW(app.add_listener(config));
+    std::vector<std::unique_ptr<ruvia::test::http3_test_client>> current;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        auto client = std::make_unique<ruvia::test::http3_test_client>(udp, second.ca_file_, "localhost", 5s);
+        EXPECT_TRUE(serves_hello(*client));
+        current.push_back(std::move(client));
+        for (auto& old : established) {
+            EXPECT_TRUE(serves_hello(*old));
+        }
+    }
+
+#if defined(__linux__) && defined(SO_DETACH_REUSEPORT_BPF)
+    // Exercise the same dispatch without the optional kernel CID selector.
+    auto duplicated = app.duplicate_listener_sockets(endpoint);
+    const int ignored = 0;
+    (void)::setsockopt(duplicated.http3_.front(), SOL_SOCKET, SO_DETACH_REUSEPORT_BPF, &ignored, sizeof(ignored));
+    for (const auto fd : duplicated.https_) {
+        (void)::close(fd);
+    }
+    for (const auto fd : duplicated.http3_) {
+        (void)::close(fd);
+    }
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        EXPECT_TRUE(http3_serves(udp.port(), second));
+        for (auto& old : established) {
+            EXPECT_TRUE(serves_hello(*old));
+        }
+        for (auto& client : current) {
+            EXPECT_TRUE(serves_hello(*client));
+        }
+    }
+#endif
+    for (auto& old : established) {
+        old.reset();
+    }
+    // Once the old workers release their endpoints, the current listener
+    // must still receive (Windows shares the old exclusive transport).
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        EXPECT_TRUE(http3_serves(udp.port(), second));
+        for (auto& client : current) {
+            EXPECT_TRUE(serves_hello(*client));
+        }
+    }
+    current.clear();
+    app.stop();
+    runner.join();
+}
+
+TEST(Ruvia, readded_http3_listener_without_connections_releases_its_udp_sockets) {
+    const ruvia::test::tls_identity identity("unused-quic", "DNS:localhost,IP:127.0.0.1");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation base_reservation(io);
+    ruvia::test::tcp_port_reservation https_reservation(io);
+    auto udp_reservation = std::make_unique<ruvia::test::udp_port_reservation>(io);
+    const auto udp = udp_reservation->endpoint();
+    const auto https = https_reservation.endpoint();
+    const ruvia::listen_config config{
+        .address_ = "127.0.0.1", .https_ = https.port(), .http3_ = udp.port(), .tls_ = tls_of(identity)};
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2})
+        .listen({.address_ = "127.0.0.1", .http_ = base_reservation.endpoint().port()})
+        .on_start(nullptr)
+        .on_start([] { started().release(); });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    wait_until_running(app);
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        ASSERT_NO_THROW(app.add_listener(config));
+#if !defined(_WIN32)
+        // The wildcard reservation would itself prevent an exclusive bind.
+        udp_reservation.reset();
+#endif
+        app.remove_listener({.address_ = "127.0.0.1", .port_ = https.port()});
+        // Windows releases the shared socket on its acceptor control queue.
+        const auto deadline = std::chrono::steady_clock::now() + 3s;
+        asio::ip::udp::socket exclusive(io);
+        exclusive.open(udp.protocol());
+        asio::error_code error;
+        do {
+            exclusive.bind(udp, error);
+            if (!error || (error != asio::error::address_in_use && error != asio::error::access_denied)) {
+                break;
+            }
+            std::this_thread::sleep_for(1ms);
+        } while (std::chrono::steady_clock::now() < deadline);
+        EXPECT_FALSE(error) << error.message();
+    }
+    app.stop();
+    runner.join();
 }
 #endif
 

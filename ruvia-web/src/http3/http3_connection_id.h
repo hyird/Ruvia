@@ -86,7 +86,6 @@ struct http3_cid_key_hash final {
 // ID of this listener (wrong length, bad tag) or names no running worker.
 [[nodiscard]] std::optional<std::size_t> http3_connection_id_owner(
     const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept;
-#if defined(_WIN32)
 // The worker that opens the connection whose client Initial carries the
 // client-chosen destination ID `cid`: a hash of it keyed by the listener
 // secret. Retransmissions of that Initial carry the same ID, so they reach
@@ -94,7 +93,6 @@ struct http3_cid_key_hash final {
 // does not know the secret cannot choose its worker.
 [[nodiscard]] std::size_t http3_initial_worker(
     const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept;
-#endif
 
 // The stateless reset token of `cid` (RFC 9000 §10.3.2), derived from the
 // listener secret so every worker computes the same token.

@@ -209,12 +209,13 @@ struct tunnel_upgrade_session_operation final {
     std::string_view pending_;
     commit_upgrade_type& commit_upgrade_;
     std::optional<session_type>& session_;
+    http_tunnel_route_config config_{endpoint_.config()};
 
     // Commits the upgrade head the context's draft describes and opens the
     // session over the transport that head hands over.
     [[nodiscard]] task<void> establish(context& context_value) {
         auto head_response = prepare_tunnel_upgrade_response_head(
-            context_value, request_.protocol_version(), udp_, endpoint_.config().datagrams_);
+            context_value, request_.protocol_version(), udp_, config_.datagrams_);
         std::optional<transport_type> transport;
         if constexpr (requires { commit_upgrade_(context_value, head_response).operator co_await(); }) {
             transport.emplace(co_await commit_upgrade_(context_value, head_response));
@@ -223,14 +224,16 @@ struct tunnel_upgrade_session_operation final {
         }
         try {
             session_.emplace(std::move(*transport), services_.worker(), *process_resource(), inbound_,
-                endpoint_.config().datagrams_, pending_);
+                config_.datagrams_, pending_);
         } catch (...) {
             transport->abort();
             throw;
         }
     }
 
-    [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value) {
+    [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {
+        config_ = route_endpoint::validate_tunnel_config(
+            !request_.protocol().empty() || request_.known_method() != http_known_method::connect, udp_, config);
         co_await establish(context_value);
         scanner_entry_.enter_long_lived();
         co_return &session_->tunnel();
@@ -240,10 +243,10 @@ struct tunnel_upgrade_session_operation final {
         if (is_request_stream_tunnel_route(resolved_.route())) {
             // The request stream callback commits the tunnel itself, through
             // request_stream::accept_tunnel(), or answers without one.
-            auto accept = [this, &context_value](http_status_code) {
-                return accept_request_stream_tunnel(context_value);
+            auto accept = [this, &context_value](http_status_code, http_tunnel_route_config config) {
+                return accept_request_stream_tunnel(context_value, config);
             };
-            const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code)>(accept);
+            const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>(accept);
             co_await serve_request_stream_tunnel(context_value, accept_ref);
             co_return;
         }
@@ -255,7 +258,7 @@ struct tunnel_upgrade_session_operation final {
     [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
         return finish_tunnel_session(session_value, std::move(failure),
             options_.connection_failure_, services_.get_conn_info().remote().address(),
-            scanner_entry_, endpoint_.config().peer_transport_fin_timeout_);
+            scanner_entry_, config_.peer_transport_fin_timeout_);
     }
 };
 

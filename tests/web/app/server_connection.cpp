@@ -29,6 +29,7 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
+#include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -369,6 +370,159 @@ TEST(Ruvia, connection_listeners_serve_byte_streams_beside_routes) {
     EXPECT_EQ(tls.server_name_, "localhost");
     EXPECT_FALSE(tls.client_certificate_);
     EXPECT_TRUE(tls.end_repeated_);
+}
+
+// Cancellation belongs to the connection's transport, not to the numeric
+// error code alone: application exceptions after abort() must still report.
+TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
+    struct observations final {
+        std::atomic<unsigned> closed_reads_{0};
+        std::atomic<unsigned> closed_writes_{0};
+        std::atomic<unsigned> canceled_finishes_{0};
+        std::atomic<unsigned> canceled_outputs_{0};
+        std::atomic<unsigned> application_cancellations_{0};
+        std::atomic<unsigned> application_failures_{0};
+        std::atomic<unsigned> unexpected_failures_{0};
+    };
+    const auto results = std::make_shared<observations>();
+    ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation plain_reservation(io);
+    ruvia::test::tcp_port_reservation tls_reservation(io);
+    const auto plain_endpoint = plain_reservation.endpoint();
+    const auto tls_endpoint = tls_reservation.endpoint();
+    auto listener = connection_listener(plain_endpoint);
+    listener.https_ = tls_endpoint.port();
+    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_,
+        .private_key_file_ = identity.private_key_file()};
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 1})
+        .listen(listener)
+        .on_start(nullptr)
+        .on_start([] { started().release(); })
+        .on_connection([results](ruvia::server_connection& connection) -> ruvia::task<void> {
+            const auto input = co_await connection.read();
+            if (!input || input->empty()) {
+                throw std::runtime_error("missing abort command");
+            }
+            const auto command = std::to_integer<char>((*input)[0]);
+            if (command == 'f') {
+                connection.abort();
+                try {
+                    (void)co_await connection.read();
+                } catch (const std::system_error&) {
+                    ++results->closed_reads_;
+                }
+                try {
+                    co_await connection.write(bytes_of("closed"));
+                } catch (const std::system_error&) {
+                    ++results->closed_writes_;
+                }
+                try {
+                    co_await connection.finish();
+                } catch (const std::system_error&) {
+                    ++results->canceled_finishes_;
+                    throw;
+                }
+                co_return;
+            }
+            if (command == 'w' || command == 'n') {
+                ruvia::task_scope outputs(connection.worker());
+                bool completed = false;
+                const auto send = [&]() -> ruvia::task<void> {
+                    try {
+                        if (command == 'w') {
+                            const std::string payload(256 * 1024, 'x');
+                            co_await connection.write(bytes_of(payload));
+                        } else {
+                            co_await connection.finish();
+                        }
+                    } catch (const std::system_error&) {
+                        completed = true;
+                        ++results->canceled_outputs_;
+                        throw;
+                    }
+                    completed = true;
+                };
+                outputs.spawn(send());
+                EXPECT_FALSE(completed);
+                connection.abort();
+                co_await outputs.join();
+                co_return;
+            }
+            connection.abort();
+            if (command == 'c') {
+                throw std::system_error(std::make_error_code(std::errc::operation_canceled), "raw application cancelled");
+            }
+            throw std::runtime_error("raw application failed after abort");
+        })
+        .on_connection_failure([results](const ruvia::connection_failure_record& record) noexcept {
+            try {
+                std::rethrow_exception(record.exception());
+            } catch (const std::system_error& error) {
+                if (error.code() == std::errc::operation_canceled &&
+                    std::string_view(error.what()).starts_with("raw application cancelled")) {
+                    ++results->application_cancellations_;
+                } else {
+                    ++results->unexpected_failures_;
+                }
+            } catch (const std::runtime_error& error) {
+                if (std::string_view(error.what()) == "raw application failed after abort") {
+                    ++results->application_failures_;
+                } else {
+                    ++results->unexpected_failures_;
+                }
+            } catch (...) {
+                ++results->unexpected_failures_;
+            }
+        });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    unsigned expected_faults = 0;
+    for (const bool tls : {false, true}) {
+        for (const char command : std::string_view("fwnac")) {
+            // Cleartext finish() is a synchronous shutdown; only TLS has an
+            // in-flight close_notify to cancel.
+            if (!tls && command == 'n') {
+                continue;
+            }
+            const auto exchange = [command](auto& stream) {
+                asio::write(stream, asio::buffer(&command, 1));
+                std::array<char, 1024> bytes;
+                asio::error_code error;
+                while (!error) {
+                    (void)stream.read_some(asio::buffer(bytes), error);
+                }
+            };
+            if (tls) {
+                asio::ssl::context client(asio::ssl::context::tls_client);
+                client.set_verify_mode(asio::ssl::verify_none);
+                asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+                stream.next_layer().connect(tls_endpoint);
+                stream.handshake(asio::ssl::stream_base::client);
+                exchange(stream);
+            } else {
+                asio::ip::tcp::socket socket(io);
+                socket.connect(plain_endpoint);
+                exchange(socket);
+            }
+            if (command == 'a' || command == 'c') {
+                ++expected_faults;
+            }
+            ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
+            EXPECT_EQ(app.http_stats().connection_failures_, expected_faults) << "TLS: " << tls << ", command: " << command;
+        }
+    }
+    app.stop();
+    runner.join();
+    app.on_connection_failure(nullptr);
+    EXPECT_EQ(results->closed_reads_.load(), 2U);
+    EXPECT_EQ(results->closed_writes_.load(), 2U);
+    EXPECT_EQ(results->canceled_finishes_.load(), 2U);
+    EXPECT_EQ(results->canceled_outputs_.load(), 3U);
+    EXPECT_EQ(results->application_cancellations_.load(), 2U);
+    EXPECT_EQ(results->application_failures_.load(), 2U);
+    EXPECT_EQ(results->unexpected_failures_.load(), 0U);
 }
 
 // idle_timeout_ closes a connection without I/O; its handler's pending read

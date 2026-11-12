@@ -155,6 +155,9 @@ if(RUVIA_BUILD_WEB)
     # Owns an application whose request-stream listeners hand every request to
     # on_request_stream beside an ordinary routes listener with middleware.
     ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/app/request_stream.cpp)
+    ruvia_add_web_standalone_test(ruvia_http_server 60 web/app/http_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/app/listener_transactions.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/app/route_dispatch_isolation.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
     # protocol token, makes every application in its executable fail startup, so
     # neither can share the process-wide controller registry.

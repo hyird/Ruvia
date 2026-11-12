@@ -274,6 +274,21 @@ void http3_worker_directory::detach(std::size_t index) noexcept {
     value.receive_ = nullptr;
 }
 
+void http3_worker_directory::register_endpoint(std::size_t worker_index, http3_endpoint& endpoint,
+    const asio::ip::udp::endpoint& local, std::shared_ptr<const http3_secret> secret,
+    std::size_t listener_index) {
+    slots_[worker_index]->endpoints_.push_back({&endpoint, local, std::move(secret), listener_index});
+}
+
+void http3_worker_directory::unregister_endpoint(std::size_t worker_index, http3_endpoint& endpoint) noexcept {
+    for (auto& registration : slots_[worker_index]->endpoints_) {
+        if (registration.endpoint_ == &endpoint) {
+            registration.endpoint_ = nullptr;
+            return;
+        }
+    }
+}
+
 #if !defined(_WIN32)
 void http3_worker_directory::open_listener_socket(std::size_t worker_index, std::size_t listener_index,
     const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
@@ -367,8 +382,26 @@ bool http3_worker_directory::hand_off(std::size_t owner, std::size_t listener_in
             };
             return [&target, listener_index, owned = std::move(datagram), token = std::move(token)]() mutable noexcept {
                 // The target pointer is confined to this, the owner's, thread.
-                if (target.receive_ != nullptr) {
-                    target.receive_(target.target_, listener_index, owned);
+                if (target.receive_ == nullptr) {
+                    return;
+                }
+                for (const auto& registration : target.endpoints_) {
+                    if (registration.listener_index_ != listener_index) {
+                        continue;
+                    }
+                    if (registration.endpoint_ != nullptr) {
+                        target.receive_(target.target_, listener_index, owned);
+                        return;
+                    }
+                    // This worker may already have released the old endpoint
+                    // while another worker still owns one of its connections.
+                    for (const auto& fallback : target.endpoints_) {
+                        if (fallback.endpoint_ != nullptr && fallback.local_ == registration.local_) {
+                            target.receive_(target.target_, fallback.listener_index_, owned);
+                            return;
+                        }
+                    }
+                    return;
                 }
             };
         });

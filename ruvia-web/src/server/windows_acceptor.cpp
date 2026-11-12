@@ -135,25 +135,45 @@ struct windows_acceptor::tcp_listener final {
 };
 
 #if defined(RUVIA_ENABLE_HTTP3)
+struct windows_acceptor::udp_transport final {
+    explicit udp_transport(asio::io_context& io)
+        : socket_(io) {}
+
+    asio::ip::udp::socket socket_;
+    std::size_t listeners_{0};
+    bool receiving_{false};
+};
+
 struct windows_acceptor::udp_listener final {
-    udp_listener(asio::io_context& io, asio::ip::udp::endpoint endpoint, std::shared_ptr<const http3_secret> secret,
+    udp_listener([[maybe_unused]] asio::io_context& io, asio::ip::udp::endpoint endpoint, std::shared_ptr<const http3_secret> secret,
         std::size_t index, std::shared_ptr<inherited_listener_sockets> inherited)
-        : socket_(io),
-          endpoint_(endpoint),
+        : endpoint_(endpoint),
           secret_(std::move(secret)),
           index_(index),
           inherited_(std::move(inherited)) {}
 
-    asio::ip::udp::socket socket_;
+    ~udp_listener() {
+        release_transport();
+    }
+
+    void release_transport() noexcept {
+        if (transport_ != nullptr && !std::exchange(transport_released_, true) && --transport_->listeners_ == 0) {
+            std::error_code ignored;
+            transport_->socket_.close(ignored);
+        }
+    }
+
+    std::shared_ptr<udp_transport> transport_;
     asio::ip::udp::endpoint endpoint_;
     std::shared_ptr<const http3_secret> secret_;
     // The HTTP/3 endpoint's index in every business worker.
     std::size_t index_;
     // Until opening claims its socket.
     std::shared_ptr<inherited_listener_sockets> inherited_;
-    // Business workers whose endpoint of this removed listener served its
-    // last connection; the socket closes with the last.
+    // The last worker releases this logical listener's transport claim.
+    // A re-added listener may still need the same exclusive UDP socket.
     std::size_t released_{0};
+    bool transport_released_{false};
 };
 #endif
 
@@ -216,9 +236,9 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
             close_admission();
 #if defined(RUVIA_ENABLE_HTTP3)
             for (auto& listener : udp_listeners_) {
-                if (listener != nullptr) {
+                if (listener != nullptr && listener->transport_ != nullptr) {
                     std::error_code ignored;
-                    listener->socket_.close(ignored);
+                    listener->transport_->socket_.close(ignored);
                 }
             }
 #endif
@@ -330,7 +350,20 @@ void windows_acceptor::open_tcp_listener(tcp_listener& listener) {
 
 #if defined(RUVIA_ENABLE_HTTP3)
 void windows_acceptor::open_udp_listener(udp_listener& listener) {
-    auto& socket = listener.socket_;
+    if (listener.inherited_ == nullptr || listener.inherited_->udp().empty()) {
+        for (const auto& existing : udp_listeners_) {
+            if (existing != nullptr && existing->endpoint_ == listener.endpoint_ &&
+                existing->transport_ != nullptr && existing->transport_->socket_.is_open()) {
+                listener.transport_ = existing->transport_;
+                ++listener.transport_->listeners_;
+                listener.inherited_.reset();
+                return;
+            }
+        }
+    }
+    auto transport = std::allocate_shared<udp_transport>(
+        std::pmr::polymorphic_allocator<udp_transport>(process_resource()), io_);
+    auto& socket = transport->socket_;
     const auto inherited = listener.inherited_ != nullptr ? listener.inherited_->claim_udp()
                                                           : std::pmr::vector<native_socket>(process_resource());
     listener.inherited_.reset();
@@ -350,6 +383,8 @@ void windows_acceptor::open_udp_listener(udp_listener& listener) {
     // Sending runs on this thread for every worker: a full send buffer
     // loses the datagram instead of blocking the acceptor.
     socket.non_blocking(true);
+    ++transport->listeners_;
+    listener.transport_ = std::move(transport);
 }
 #endif
 
@@ -370,7 +405,11 @@ void windows_acceptor::start_listener(tcp_listener& listener) {
     }
 #if defined(RUVIA_ENABLE_HTTP3)
     if (listener.http3_index_.has_value()) {
-        tasks_.spawn(run_receives(*udp_listeners_[*listener.http3_index_]));
+        auto& udp = *udp_listeners_[*listener.http3_index_];
+        if (!udp.transport_->receiving_) {
+            udp.transport_->receiving_ = true;
+            tasks_.spawn(run_receives(udp));
+        }
     }
 #endif
 }
@@ -467,9 +506,9 @@ void windows_acceptor::close_admission() noexcept {
 #if defined(RUVIA_ENABLE_HTTP3)
     // The sockets stay open for sending until request_stop().
     for (auto& listener : udp_listeners_) {
-        if (listener != nullptr) {
+        if (listener != nullptr && listener->transport_ != nullptr) {
             std::error_code ignored;
-            listener->socket_.cancel(ignored);
+            listener->transport_->socket_.cancel(ignored);
         }
     }
 #endif
@@ -586,16 +625,20 @@ std::size_t windows_acceptor::select_worker() noexcept {
 
 #if defined(RUVIA_ENABLE_HTTP3)
 task<void> windows_acceptor::run_receives(udp_listener& listener) {
+    // A removed logical listener can release its claim while another listener
+    // at this address continues receiving on the same exclusive socket.
+    const auto transport = listener.transport_;
+    auto& socket = transport->socket_;
     std::pmr::vector<std::byte> buffer(http3_max_udp_payload_bytes, process_resource());
     try {
-        while (admitting_ && listener.socket_.is_open()) {
+        while (admitting_ && socket.is_open()) {
             asio::ip::udp::endpoint remote;
             const auto completion = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
-                listener.socket_.async_receive_from(asio::buffer(buffer.data(), buffer.size()), remote,
+                socket.async_receive_from(asio::buffer(buffer.data(), buffer.size()), remote,
                     asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
             });
             // A stop, or the last worker's release of a removed listener.
-            if (!admitting_ || !listener.socket_.is_open()) {
+            if (!admitting_ || !socket.is_open()) {
                 co_return;
             }
             if (const auto error = completion.error_code()) {
@@ -622,16 +665,31 @@ void windows_acceptor::steer(
         return;
     }
     const auto destination = std::span<const std::uint8_t>(header.dcid, header.dcidlen);
-    auto owner = http3_connection_id_owner(*listener.secret_, destination, workers_.size());
+    std::optional<std::size_t> owner;
+    std::size_t listener_index = listener.index_;
+    const udp_listener* initial_listener = &listener;
+    for (const auto& candidate : udp_listeners_) {
+        if (candidate != nullptr && candidate->transport_ == listener.transport_) {
+            if (!candidate->transport_released_) {
+                initial_listener = candidate.get();
+            }
+            if (const auto identified = http3_connection_id_owner(*candidate->secret_, destination, workers_.size())) {
+                owner = identified;
+                listener_index = candidate->index_;
+                break;
+            }
+        }
+    }
     if (!owner.has_value()) {
         // Only a long header can open a connection or earn Version
         // Negotiation; a short header naming no worker is dropped.
         if (header.version == 0) {
             return;
         }
-        owner = http3_initial_worker(*listener.secret_, destination, workers_.size());
+        listener_index = initial_listener->index_;
+        owner = http3_initial_worker(*initial_listener->secret_, destination, workers_.size());
     }
-    (void)directory_->hand_off(*owner, listener.index_, bytes, remote);
+    (void)directory_->hand_off(*owner, listener_index, bytes, remote);
 }
 
 bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_listener_index,
@@ -658,9 +716,9 @@ void windows_acceptor::send_datagram(std::size_t http3_listener_index, const asi
     std::span<const std::byte> bytes) noexcept {
     // Errors (a full send buffer, a closed socket, an unreachable peer) lose
     // the datagram, as the network may; QUIC recovery handles the peer.
-    if (const auto& listener = udp_listeners_[http3_listener_index]; listener != nullptr) {
+    if (const auto& listener = udp_listeners_[http3_listener_index]; listener != nullptr && listener->transport_ != nullptr) {
         std::error_code ignored;
-        (void)listener->socket_.send_to(asio::buffer(bytes.data(), bytes.size()), remote, 0, ignored);
+        (void)listener->transport_->socket_.send_to(asio::buffer(bytes.data(), bytes.size()), remote, 0, ignored);
     }
 }
 
@@ -670,8 +728,7 @@ void windows_acceptor::release_http3_listener(std::size_t http3_listener_index) 
     (void)runtime_.post_control([this, http3_listener_index] {
         auto& listener = *udp_listeners_[http3_listener_index];
         if (++listener.released_ == workers_.size()) {
-            std::error_code ignored;
-            listener.socket_.close(ignored);
+            listener.release_transport();
         }
     });
 }

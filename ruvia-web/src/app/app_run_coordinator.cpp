@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/signal_set.hpp>
@@ -202,8 +203,16 @@ private:
     }
 
     void build_and_publish_runtime() {
-        const auto controller_registrars = detail::seal_controller_registrars();
+        const bool routes_enabled = std::ranges::any_of(state_.listeners_, [](const auto& listener) {
+            return !listener.connection_.has_value() && !listener.request_stream_ &&
+                   !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(listener.transport_);
+        });
+        std::pmr::vector<detail::controller_registrar> controller_registrars(process_resource());
+        if (routes_enabled) {
+            controller_registrars = detail::seal_controller_registrars();
+        }
         auto runtime = make_pmr_object<detail::app_runtime_graph>(process_resource());
+        runtime->routes_enabled_ = routes_enabled;
         auto prepared_options = state_.options_;
         prepared_options.env_ = &state_.env_;
         prepared_options.failure_ = detail::worker_failure_sink{
@@ -247,11 +256,15 @@ private:
         }
         runtime->tls_key_origin_ = validated_configuration.tls_key_origin();
 
-        // One immutable route plan per run, declared against the first worker's
-        // controller instances; every worker only binds its own instances.
+        // Non-routed listeners borrow an explicitly empty plan: unused global
+        // controllers, routes and middleware must neither be sealed nor built.
         detail::controller_store first_controllers(controller_registrars);
-        runtime->route_plan_ = detail::compile_route_plan(
-            controller_registrars, first_controllers, state_.configuration_);
+        if (routes_enabled) {
+            runtime->route_plan_ = detail::compile_route_plan(
+                controller_registrars, first_controllers, state_.configuration_);
+        } else {
+            runtime->route_plan_ = make_pmr_object<detail::compiled_route_plan>(process_resource());
+        }
 #if defined(RUVIA_ENABLE_HTTP3)
         if (std::ranges::any_of(validated_configuration.listeners(),
                 [](const auto& listener) { return listener.http3_.has_value(); })) {

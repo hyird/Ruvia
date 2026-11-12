@@ -11,6 +11,7 @@
 #include <random>
 #include <span>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
@@ -287,6 +288,13 @@ rate_limiter::rate_limiter(std::optional<rate_limit_rule> default_rule_per_worke
     if (default_rule_per_worker_.has_value() || route_rules == route_rate_limit_presence::present) {
         slots_.resize(capacity_value);
         hash_key_ = random_hash_key();
+    }
+}
+
+void rate_limiter::adopt_route_storage(rate_limiter& prepared) noexcept {
+    if (slots_.empty()) {
+        slots_.swap(prepared.slots_);
+        std::swap(hash_key_, prepared.hash_key_);
     }
 }
 

@@ -85,6 +85,11 @@ public:
     [[nodiscard]] worker_client_registry_view client_registries() noexcept;
     [[nodiscard]] const worker_state_registry& worker_states() const noexcept;
 
+    // Owner thread, together with adoption of the first routed table.
+    void adopt_route_rate_limiter(rate_limiter& prepared) noexcept {
+        rate_limiter_.adopt_route_storage(prepared);
+    }
+
 private:
     const worker_handle& worker_;
     redis_registry redis_;

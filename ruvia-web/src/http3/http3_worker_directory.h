@@ -20,6 +20,8 @@
 
 namespace ruvia::detail {
 
+class http3_endpoint;
+
 #if defined(_WIN32)
 class windows_acceptor;
 #endif
@@ -30,6 +32,16 @@ struct http3_handoff_datagram final {
     std::pmr::vector<std::byte> bytes_;
     asio::ip::udp::endpoint remote_;
     std::uint32_t ecn_{0};
+};
+
+// Slot identities outlive their worker-local endpoint. Another worker can
+// still own a connection issued under that slot's secret after this one has
+// released its last connection and socket.
+struct http3_endpoint_registration final {
+    http3_endpoint* endpoint_;
+    asio::ip::udp::endpoint local_;
+    std::shared_ptr<const http3_secret> secret_;
+    std::size_t listener_index_;
 };
 
 // Datagrams in flight from one producer to one worker, product limit. A
@@ -99,6 +111,16 @@ public:
     void attach(std::size_t index, void* target, receive_type receive) noexcept;
     void detach(std::size_t index) noexcept;
 
+    // Worker-local endpoint registrations share packet routing across removed
+    // and re-added listeners bound to the same UDP endpoint.
+    void register_endpoint(std::size_t worker_index, http3_endpoint& endpoint,
+        const asio::ip::udp::endpoint& local, std::shared_ptr<const http3_secret> secret,
+        std::size_t listener_index);
+    void unregister_endpoint(std::size_t worker_index, http3_endpoint& endpoint) noexcept;
+    [[nodiscard]] std::span<const http3_endpoint_registration> endpoints(std::size_t worker_index) const noexcept {
+        return slots_[worker_index]->endpoints_;
+    }
+
 #if !defined(_WIN32)
     // The first call for `listener_index` binds every worker's SO_REUSEPORT
     // socket in worker index order 0..N-1 -- or takes `inherited`'s UDP
@@ -124,6 +146,7 @@ private:
         void* target_{nullptr};
         receive_type receive_{nullptr};
         std::atomic<std::size_t> in_flight_{0};
+        std::pmr::vector<http3_endpoint_registration> endpoints_{process_resource()};
     };
 
     std::pmr::vector<std::unique_ptr<slot, pmr_object_deleter<slot>>> slots_;

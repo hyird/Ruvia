@@ -192,7 +192,8 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         return admission;
     }
     if (const auto* tunnel = endpoint->tunnel()) {
-        admission.udp_tunnel_ = tunnel->protocol() == "connect-udp";
+        admission.udp_tunnel_ = tunnel->protocol() == "connect-udp" ||
+                                (request_stream && (request.protocol() == "connect-udp" || is_http_connect_udp_upgrade_request(request)));
         if (admission.udp_tunnel_ && validate_http_connect_udp_request(request).has_value()) {
             return reject(http_request_rejection::error(http_error_info(
                 {.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));

@@ -59,6 +59,10 @@ public:
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] http_server_stats stats() const noexcept;
     [[nodiscard]] web_worker_handle web_worker() const;
+    // Owner thread, before admitting this run's first routed listener.
+    void adopt_route_rate_limiter(rate_limiter& prepared) noexcept {
+        capabilities_.adopt_route_rate_limiter(prepared);
+    }
     // Owner thread only, from a control posted to runtime(): listener
     // `listener_index` -- TLS over TCP and its HTTP/3 service alike --
     // selects every later handshake's identity from `identities`.
@@ -76,7 +80,7 @@ public:
         http3_worker_directory* directory
 #endif
     ) {
-        connections_.prepare_listener(index, http3_index, definition
+        connections_.prepare_listener(index, http3_index, definition, false
 #if defined(RUVIA_ENABLE_HTTP3)
             ,
             directory

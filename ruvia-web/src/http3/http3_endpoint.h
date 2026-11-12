@@ -140,7 +140,7 @@ private:
     task<void> run_receive_loop();
 #endif
     task<void> serve(session_pointer session);
-    void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, bool handed_off) noexcept;
+    void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote) noexcept;
     void accept(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote) noexcept;
     void send_version_negotiation(const ngtcp2_version_cid& header, const asio::ip::udp::endpoint& remote) noexcept;
     void send_retry(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote,
@@ -172,6 +172,7 @@ private:
     // Between open() and close(): datagrams are processed.
     bool open_{false};
     bool admitting_{false};
+    bool registered_{false};
     bool retiring_{false};
 };
 

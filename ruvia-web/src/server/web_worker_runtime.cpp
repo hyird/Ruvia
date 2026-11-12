@@ -64,15 +64,18 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .file_io_timeout_ = options_.server_.write_timeout_,
               .connection_failure_ = &options_.connection_failure_,
           }),
-      connections_(io_context_, runtime_.handle(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_, worker_index
+      connections_(io_context_, runtime_.handle(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners,
+          worker_failure_sink{.target_ = &runtime_,
+              .invoke_ = [](void* target, const std::exception_ptr& failure) noexcept {
+                  (void)static_cast<ruvia::worker_runtime*>(target)->fail(failure);
+              }},
+          worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
           ,
           http3_placement
 #endif
           ),
-      web_worker_dispatch_(std::allocate_shared<web_worker_dispatch>(
-          std::pmr::polymorphic_allocator<web_worker_dispatch>(process_resource()), runtime_,
-          capabilities_, background_tasks_, stop_token_)) {
+      web_worker_dispatch_(std::allocate_shared<web_worker_dispatch>(std::pmr::polymorphic_allocator<web_worker_dispatch>(process_resource()), runtime_, capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_budget_ = &inbound_budget_;
     options_.codecs_ = &codecs_;
     runtime_.configure({

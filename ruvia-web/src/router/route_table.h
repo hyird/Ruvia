@@ -78,6 +78,9 @@ public:
     route_table& operator=(const route_table&) = delete;
     route_table(route_table&&) = delete;
     route_table& operator=(route_table&&) = delete;
+    // Owner thread, before this worker admits its first routed listener.
+    // Both plans and controller stores retain their existing lifetimes.
+    void swap(route_table& other) noexcept;
 
     [[nodiscard]] bool has_route_rate_limit() const noexcept {
         return plan_->has_route_rate_limit_;

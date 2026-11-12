@@ -97,7 +97,7 @@ void name_remote_endpoint(
 worker_connections::worker_connections(asio::io_context& io, const worker_handle& worker_value,
     const route_table& routes_value, worker_capabilities& capabilities,
     http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value,
-    task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_runtime& runtime,
+    task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_failure_sink failure,
     std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
@@ -112,7 +112,7 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
       stop_token_(stop_token_value),
       state_(state_value),
       tasks_(tasks),
-      runtime_(runtime),
+      failure_(failure),
       worker_index_(worker_index),
       listeners_(process_resource()),
       scanner_(worker_value, make_connection_scanner_options(options)),
@@ -232,7 +232,7 @@ void worker_connections::prepare_listener_resources(std::size_t index) {
             close_native_socket(inherited);
             throw std::system_error(error, "failed to adopt an inherited TCP listener socket");
         }
-    } else {
+    } else if (!configured.externally_accepted_) {
         socket.open(configured.endpoint_.protocol());
         configure_listener_address(socket);
         socket.bind(configured.endpoint_);
@@ -273,7 +273,9 @@ void worker_connections::start_listener(std::size_t index) {
         tasks_.spawn(rotate_tls_ticket_keys());
     }
 #if !defined(_WIN32)
-    configured.tasks_.spawn(run_accept_loop(index));
+    if (!configured.externally_accepted_) {
+        configured.tasks_.spawn(run_accept_loop(index));
+    }
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
     if (configured.http3_index_.has_value()) {
@@ -289,7 +291,7 @@ void worker_connections::start_listener(std::size_t index) {
 #endif
 }
 void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index,
-    const http_server_listener_definition& definition
+    const http_server_listener_definition& definition, bool externally_accepted
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_directory* directory
@@ -303,6 +305,7 @@ void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] st
         listeners_.resize(index + 1);
     }
     listeners_[index] = make_pmr_object<listener>(process_resource(), io_, worker_, definition, process_resource());
+    listeners_[index]->externally_accepted_ = externally_accepted;
     try {
 #if defined(RUVIA_ENABLE_HTTP3)
         if (http3_index.has_value()) {
@@ -583,7 +586,7 @@ void worker_connections::report_accept_failure(std::exception_ptr failure, bool 
 #if !defined(_WIN32)
         close_listeners();
 #endif
-        (void)runtime_.fail(std::move(failure));
+        failure_.notify(std::move(failure));
     } else {
         ruvia::report_unhandled_failure("web accept", std::move(failure));
     }
@@ -746,6 +749,31 @@ void worker_connections::report_session_failure(
     // sink before the frame unwinds.
     ruvia::close_socket(socket);
     options_.connection_failure_.invoke(remote_address, std::move(failure));
+}
+
+void worker_connections::adopt_connection(std::size_t index, native_socket native) {
+    struct native_owner final {
+        native_socket socket_;
+        ~native_owner() {
+            close_native_socket(socket_);
+        }
+    } owner{native};
+    tcp_socket_type socket(io_);
+    if (!worker_.is_current() || index >= listeners_.size() || listeners_[index] == nullptr ||
+        !listeners_[index]->admitting_ || !http_server_worker_running(state_)) {
+        throw std::logic_error("connection service is not accepting on this worker");
+    }
+    std::error_code error;
+    socket.assign(listeners_[index]->endpoint_.protocol(), native, error);
+    if (error) {
+        throw std::system_error(error, "failed to adopt an accepted connection");
+    }
+    owner.socket_ = invalid_native_socket;
+    (void)socket.remote_endpoint(error);
+    if (error) {
+        throw std::invalid_argument("adopted connection must be a connected TCP socket");
+    }
+    accept_socket(index, std::move(socket));
 }
 
 void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {

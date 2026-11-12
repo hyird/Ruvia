@@ -163,8 +163,8 @@ public:
     [[nodiscard]] bool transmit(std::size_t worker_index, std::size_t http3_listener_index,
         const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes) noexcept;
     // Any thread: one business worker's endpoint of a removed HTTP/3
-    // listener served its last connection; the last worker's release closes
-    // the socket.
+    // listener served its last connection. The last worker releases this
+    // listener's claim; the socket closes once no listener still needs it.
     void release_http3_listener(std::size_t http3_listener_index) noexcept;
 #endif
 
@@ -172,6 +172,7 @@ private:
     struct tcp_listener;
     struct worker_slot;
 #if defined(RUVIA_ENABLE_HTTP3)
+    struct udp_transport;
     struct udp_listener;
 #endif
 

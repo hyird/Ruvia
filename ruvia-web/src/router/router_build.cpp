@@ -127,6 +127,13 @@ detail::route_table::~route_table() {
     }
 }
 
+void detail::route_table::swap(route_table& other) noexcept {
+    std::swap(plan_, other.plan_);
+    handler_targets_.swap(other.handler_targets_);
+    middleware_instances_.swap(other.middleware_instances_);
+    middleware_frames_.swap(other.middleware_frames_);
+}
+
 void detail::router::validate_no_dynamic_route_conflict() const {
     const auto& routes = plan_->routes_;
     for (std::size_t i = 0; i < routes.size(); ++i) {
