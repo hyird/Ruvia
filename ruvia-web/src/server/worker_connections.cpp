@@ -373,7 +373,7 @@ void worker_connections::discard_listener(std::size_t index, std::shared_ptr<voi
     close_listener_sockets(configured);
     configured.retired_.notify();
 }
-void worker_connections::remove_listener(std::size_t index, std::shared_ptr<void> receipt, listener_remove_options options) noexcept {
+void worker_connections::remove_listener(std::size_t index, [[maybe_unused]] std::shared_ptr<void> receipt, listener_remove_options options) noexcept {
     assert(worker_.is_current());
     // Not admitting: the worker's stop already retired it.
     if (index >= listeners_.size() || listeners_[index] == nullptr || !listeners_[index]->admitting_) {

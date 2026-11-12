@@ -1391,9 +1391,9 @@ ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attac
         EXPECT_TRUE(complete);
         EXPECT_TRUE(outcome.has_value());
         if (outcome) {
-            EXPECT_TRUE(*outcome == (mode == 0                   ? ruvia::http_client_error::code_type::cancelled
-                                        : mode == 3 || mode == 4 ? ruvia::http_client_error::code_type::closing
-                                                                 : ruvia::http_client_error::code_type::timeout));
+            EXPECT_EQ(*outcome, mode == 0                ? ruvia::http_client_error::code_type::cancelled
+                                : mode == 3 || mode == 4 ? ruvia::http_client_error::code_type::closing
+                                                         : ruvia::http_client_error::code_type::timeout);
         }
     } catch (...) {
         failure = std::current_exception();
@@ -1603,6 +1603,7 @@ TEST(Ruvia, http3_outbound_migration_cancellation_and_deadlines_cover_path_valid
     auto& server = http3_resumption_test::server::shared();
     ruvia::blocking_pool blocking;
     for (int mode = 0; mode != 5; ++mode) {
+        SCOPED_TRACE(mode);
         asio::io_context io;
         auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
         auto root = attachment.loop().start(http3_resumption_test::exercise_blocked_migration(

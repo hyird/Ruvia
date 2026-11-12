@@ -1972,10 +1972,11 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     cancellation.arm(stop);
     const auto check = [&] {
         if (self.migration_cancelled_ || stop.stop_requested() || timeout.expired() || !self.open_ || self.retired_) {
-            const auto code = self.migration_cancelled_ || stop.stop_requested() ? error_code::cancelled
-                              : self.retired_                                    ? error_code::closing
-                              : timeout.expired()                                ? error_code::timeout
-                                                                                 : error_code::io_error;
+            // Host shutdown also cancels the merged token; retirement takes precedence.
+            const auto code = self.retired_                                        ? error_code::closing
+                              : self.migration_cancelled_ || stop.stop_requested() ? error_code::cancelled
+                              : timeout.expired()                                  ? error_code::timeout
+                                                                                   : error_code::io_error;
             self.close(code);
             throw http_client_error(code, "HTTP/3 migration stopped");
         }

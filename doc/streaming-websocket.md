@@ -425,7 +425,9 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
 
-迁移沿用 ngtcp2 的路径验证机制；CID 容量见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。握手确认、CID 补充等待与路径验证共用 `connect_timeout_` 和 `with_options()` 中更紧的整体期限，同时响应用户、宿主与循环退出取消。迁移保持原连接，不自动重放失败请求。
+- **路径迁移**：沿用 ngtcp2 路径验证并保留原连接，不自动重放失败请求。CID 容量见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。
+- **迁移期限**：握手确认、CID 补充等待与路径验证共用 `connect_timeout_` 和 `with_options()` 中更紧的整体期限。
+- **迁移终止**：用户取消返回 `cancelled`，期限到期返回 `timeout`；客户端关闭或事件循环停止导致连接退役时，优先返回 `closing`。
 
 `client.next_advertisement()` 可观察 HTTP/2 与 HTTP/3 连接收到的 `ORIGIN` 帧（`advertisements_.receive_origins_ = true`）以及 HTTP/2 连接收到的 `ALTSVC` 帧（`advertisements_.receive_alternative_services_ = true`）。Server Push 仅适用于 HTTP/2；HTTP/3 的 Alt-Svc 发现从已验证源站的响应头获取。
 
