@@ -914,6 +914,66 @@ TEST(Ruvia, blocking_pool_callable_move_can_stop_before_publication) {
     EXPECT_TRUE(test_callable_move_can_stop_pool_before_publication());
 }
 
+TEST(Ruvia, blocking_pool_join_waits_for_discard_cleanup_and_allows_reentrant_join) {
+    thread_gate gate;
+    std::binary_semaphore discard_started{0};
+    std::binary_semaphore release_discard{0};
+    std::atomic_bool await_discard{false};
+    std::atomic_bool discarded{false};
+    std::atomic_bool ran{false};
+    blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 1});
+    gate.occupy(pool);
+    auto payload = std::shared_ptr<int>(new int(17), [&](int* value) {
+        if (await_discard.load()) {
+            discard_started.release();
+            release_discard.acquire();
+            pool.join();
+        }
+        delete value;
+        discarded = true;
+    });
+    const auto status = pool.submit([payload = std::move(payload), &ran] { ran = *payload == 17; });
+    if (status != blocking_submit_status::accepted) {
+        gate.release_.release();
+        pool.join();
+        FAIL() << "failed to queue the discard probe";
+    }
+    await_discard = true;
+    std::thread stopper([&] { pool.stop(); });
+    if (!discard_started.try_acquire_for(std::chrono::seconds(5))) {
+        await_discard = false;
+        release_discard.release();
+        gate.release_.release();
+        stopper.join();
+        pool.join();
+        FAIL() << "queued task destruction did not start";
+    }
+    gate.release_.release();
+    std::promise<void> join_started;
+    auto joining = join_started.get_future();
+    std::promise<void> join_finished;
+    auto joined = join_finished.get_future();
+    std::thread joiner([&] {
+        join_started.set_value();
+        pool.join();
+        join_finished.set_value();
+    });
+    joining.wait();
+    const bool waited_for_discard =
+        joined.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    release_discard.release();
+    stopper.join();
+    joiner.join();
+    EXPECT_TRUE(waited_for_discard);
+    EXPECT_TRUE(discarded.load());
+    EXPECT_FALSE(ran.load());
+    const auto finished = pool.stats();
+    EXPECT_EQ(finished.queued_, 0U);
+    EXPECT_EQ(finished.running_, 0U);
+    EXPECT_EQ(finished.completed_, 1U);
+    EXPECT_EQ(finished.discarded_, 1U);
+}
+
 TEST(Ruvia, blocking_pool_rejects_overflowing_capacity_options) {
     constexpr std::size_t wrapped_threads =
         std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 6);

@@ -92,12 +92,6 @@ struct blocking_pool::impl_type final {
         }
     }
 
-    void release_node(node_type& node) noexcept {
-        std::lock_guard lock(mutex_);
-        node.next_ = free_head_;
-        free_head_ = &node;
-    }
-
     void start(const std::shared_ptr<impl_type>& self) {
         threads_.reserve(thread_count_);
         try {
@@ -175,7 +169,6 @@ struct blocking_pool::impl_type final {
             discarded_ += queued_;
             dropped = std::exchange(queued_, 0);
             if (dropped != 0) {
-                stop_draining_ = true;
                 stop_drain_thread_ = std::this_thread::get_id();
             }
         }
@@ -188,17 +181,16 @@ struct blocking_pool::impl_type final {
         // so the first stop caller owns the remaining slots. Destroy them
         // outside the mutex so callable destructors may reenter stats(),
         // stop(), or submit() safely without recursion.
+        // Stopping permanently closes admission, so drained nodes need no recycling.
         node_type* node = nullptr;
         while (dropped-- != 0) {
             if (!queue_.try_pop(node)) {
                 std::terminate();
             }
             node->task_ = nullptr;
-            release_node(*node);
         }
         {
             std::lock_guard lock(mutex_);
-            stop_draining_ = false;
             stop_drain_thread_ = {};
         }
         condition_.notify_all();
@@ -243,7 +235,8 @@ struct blocking_pool::impl_type final {
                 condition_.notify_all();
             }
             condition_.wait(lock, [this] {
-                return (!stop_draining_ || stop_drain_thread_ == std::this_thread::get_id()) &&
+                return (stop_drain_thread_ == std::thread::id{} ||
+                           stop_drain_thread_ == std::this_thread::get_id()) &&
                        reserved_ == 0;
             });
         }
@@ -279,7 +272,7 @@ struct blocking_pool::impl_type final {
     std::uint64_t rejected_{0};
     std::uint64_t discarded_{0};
     bool stopping_{false};
-    bool stop_draining_{false};
+    // A nonempty ID owns the stop drain, including destructor reentry.
     std::thread::id stop_drain_thread_{};
     bool joining_{false};
     bool joined_{false};
@@ -356,8 +349,6 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
         bool notify = false;
         {
             std::lock_guard lock(owner.mutex_);
-            node->next_ = owner.free_head_;
-            owner.free_head_ = node;
             notify = (--owner.reserved_ == 0);
         }
         if (notify) {
