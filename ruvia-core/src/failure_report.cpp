@@ -182,7 +182,7 @@ std::pmr::string error_code_text(const std::error_code& error) {
         auto text = windows_system_message(error.value());
         if (text.empty()) {
             std::array<char, std::numeric_limits<int>::digits10 + 3> digits;
-            const auto* end = std::to_chars(digits.data(), digits.data() + digits.size(), error.value()).ptr;
+            const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), error.value()).ptr;
             text.assign(error.category().name()).append(":").append(digits.data(), end);
         }
         return text;
