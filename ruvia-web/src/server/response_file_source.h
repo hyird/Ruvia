@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -171,15 +172,17 @@ private:
     class read_buffer final {
     public:
         read_buffer() noexcept = default;
-        read_buffer(read_buffer&& other) noexcept;
-        read_buffer& operator=(read_buffer&& other) noexcept;
-        ~read_buffer();
 
-        [[nodiscard]] char* data();
+        [[nodiscard]] char* data() & RUVIA_LIFETIMEBOUND;
+        char* data() && = delete;
         void reset() noexcept;
 
     private:
-        char* data_{};
+        struct buffer_deleter {
+            void operator()(char* bytes) const noexcept;
+        };
+
+        std::unique_ptr<char, buffer_deleter> data_;
     };
 
     struct read_state final {

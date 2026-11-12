@@ -58,33 +58,20 @@ std::exception_ptr response_file_failure::response_error() const {
         .message_ = "file could not be read"}));
 }
 
-response_file_source::read_buffer::read_buffer(read_buffer&& other) noexcept
-    : data_(std::exchange(other.data_, nullptr)) {}
-
-response_file_source::read_buffer& response_file_source::read_buffer::operator=(read_buffer&& other) noexcept {
-    if (this != &other) {
-        reset();
-        data_ = std::exchange(other.data_, nullptr);
-    }
-    return *this;
-}
-
-response_file_source::read_buffer::~read_buffer() {
-    reset();
-}
-
-char* response_file_source::read_buffer::data() {
+char* response_file_source::read_buffer::data() & {
     if (data_ == nullptr) {
-        data_ = static_cast<char*>(
-            process_resource()->allocate(response_file_read_ahead_bytes, alignof(std::max_align_t)));
+        data_.reset(static_cast<char*>(
+            process_resource()->allocate(response_file_read_ahead_bytes, alignof(std::max_align_t))));
     }
-    return data_;
+    return data_.get();
 }
 
 void response_file_source::read_buffer::reset() noexcept {
-    if (auto* const data = std::exchange(data_, nullptr); data != nullptr) {
-        process_resource()->deallocate(data, response_file_read_ahead_bytes, alignof(std::max_align_t));
-    }
+    data_.reset();
+}
+
+void response_file_source::read_buffer::buffer_deleter::operator()(char* bytes) const noexcept {
+    process_resource()->deallocate(bytes, response_file_read_ahead_bytes, alignof(std::max_align_t));
 }
 
 // The path travels with the state to the pool thread, so it lives in the
