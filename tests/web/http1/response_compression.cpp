@@ -20,6 +20,8 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
+#include <asio/read_until.hpp>
+#include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -94,6 +96,7 @@ class response_compression_routes final {
     RUVIA_POST("/compression-echo-decoded", echo_decoded);
     RUVIA_GET("/compression-zero-declared", head_zero_declared);
     RUVIA_GET("/compression-stream", stream);
+    RUVIA_GET("/compression-stream-held", hold_stream);
     RUVIA_GET("/compression-stream-custom", stream_custom_coding);
     RUVIA_GET("/compression-stream-mixed", stream_mixed_coding);
     RUVIA_GET("/compression-stream-204", stream_no_content);
@@ -168,6 +171,14 @@ class response_compression_routes final {
         co_await writer.write(body.substr(0, body.size() / 2));
         co_await writer.write(body.substr(body.size() / 2));
         co_await writer.end();
+    }
+    ruvia::task<void> hold_stream(ruvia::context& context_value) {
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write(std::string_view(small_body));
+        static_cast<void>(co_await writer.sleep(std::chrono::hours(1)));
     }
 
     ruvia::task<void> stream_custom_coding(ruvia::context& context_value) {
@@ -352,6 +363,42 @@ TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) 
         }
     }
     server.finish();
+}
+
+TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        constexpr std::string_view request =
+            "GET /compression-stream-held HTTP/1.0\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n";
+        asio::write(client, asio::buffer(request));
+        std::pmr::string prefix(ruvia::process_resource());
+        asio::read_until(client, asio::dynamic_buffer(prefix), "\r\n\r\n");
+        ASSERT_TRUE(has_field(head_fields(prefix), "content-encoding: gzip"));
+        if (prefix.size() == prefix.find("\r\n\r\n") + 4) {
+            char byte;
+            asio::read(client, asio::buffer(&byte, 1));
+        }
+        client.set_option(asio::socket_base::linger(true, 0));
+        client.close();
+    }
+    server.finish();
+
+    const auto response = fetch_response(server.endpoint(),
+        "GET /compression-stream HTTP/1.0\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n");
+    ASSERT_TRUE(response.has_value());
+    EXPECT_TRUE(has_field(head_fields(*response), "content-encoding: gzip"));
+    const auto decoded = ruvia::decode_http_content(
+        std::array{ruvia::http_content_coding::gzip}, response_body(*response),
+        {.max_decoded_bytes_ = small_body.size(), .resource_ = ruvia::process_resource()});
+    const auto* body = std::get_if<std::pmr::string>(&decoded);
+    ASSERT_NE(body, nullptr);
+    EXPECT_EQ(*body, small_body);
+    server.finish();
+    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
 }
 
 TEST(Ruvia, http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {

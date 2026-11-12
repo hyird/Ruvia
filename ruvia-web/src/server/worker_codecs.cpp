@@ -18,7 +18,7 @@ worker_codecs::worker_codecs() noexcept
 worker_codecs::~worker_codecs() {
     for (auto* pool : {&gzip_.streaming_, &deflate_.streaming_, &brotli_.streaming_, &zstd_.streaming_}) {
         for (std::size_t i = 0; i < pool->count_; ++i) {
-            destroy_pmr_object(resolved_pmr_resource_tag{}, pool->free_[i], process_resource());
+            destroy_stream_encoder(*pool->free_[i]);
         }
         pool->count_ = 0;
     }

@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <utility>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_content_encoder.h"
@@ -31,9 +32,10 @@ public:
         release();
     }
 
-    [[nodiscard]] http_content_encoder& encoder() noexcept {
+    [[nodiscard]] http_content_encoder& encoder() & noexcept RUVIA_LIFETIMEBOUND {
         return *encoder_;
     }
+    http_content_encoder& encoder() && = delete;
 
     void discard() noexcept;
 
@@ -115,17 +117,18 @@ private:
     websocket_deflate_codecs websocket_deflate_;
 };
 
+// Detach the complete lease before reset or destruction; do not touch it afterward.
 inline void stream_encoder_lease::release() noexcept {
     if (encoder_ != nullptr) {
-        codecs_->release_stream_encoder(*std::exchange(encoder_, nullptr));
-        codecs_ = nullptr;
+        auto* const codecs = std::exchange(codecs_, nullptr);
+        codecs->release_stream_encoder(*std::exchange(encoder_, nullptr));
     }
 }
 
 inline void stream_encoder_lease::discard() noexcept {
     if (encoder_ != nullptr) {
-        codecs_->destroy_stream_encoder(*std::exchange(encoder_, nullptr));
-        codecs_ = nullptr;
+        auto* const codecs = std::exchange(codecs_, nullptr);
+        codecs->destroy_stream_encoder(*std::exchange(encoder_, nullptr));
     }
 }
 
