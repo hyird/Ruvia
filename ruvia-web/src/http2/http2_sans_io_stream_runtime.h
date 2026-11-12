@@ -15,13 +15,22 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_request_trailers.h"
+#include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/web/detail/router/route_handlers.h"
 
 #include "http2/http2_sans_io_request_body.h"
 #include "router/route_resolution.h"
 #include "server/multiplexed_stream_signal.h"
 
 namespace ruvia::detail {
+
+enum class http2_request_body_store_status : std::uint8_t {
+    stored,
+    too_large,
+    backlog_overflow,
+};
 
 class http2_sans_io_stream_runtime final {
 public:
