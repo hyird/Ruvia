@@ -56,10 +56,6 @@ document_root_publisher::mailbox& document_root_publisher::register_worker() noe
     return mailboxes_[registered_workers_++];
 }
 
-bool document_root_publisher::claim_refresh() noexcept {
-    return !std::exchange(refresh_claimed_, true);
-}
-
 void document_root_publisher::record_failure(std::exception_ptr failure) noexcept {
     failures_.fetch_add(1, std::memory_order_relaxed);
     ruvia::report_unhandled_failure("document root refresh", std::move(failure));
@@ -171,7 +167,7 @@ static_root_runtime::static_root_runtime(http_server_options& options, const wor
       pending_(nullptr, pmr_object_deleter<document_root_snapshot>{process_resource()}),
       current_(nullptr, pmr_object_deleter<document_root_generation>{process_resource()}),
       retired_(process_resource()),
-      refreshes_(publisher_ != nullptr && publisher_->claim_refresh()) {
+      refreshes_(publisher_ != nullptr && mailbox_ == publisher_->mailboxes_.data()) {
     if (publisher_ != nullptr) {
         // Worker construction is serialized before startup; no publisher can
         // replace this shared_ptr while its initial reference is copied.

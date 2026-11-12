@@ -60,12 +60,12 @@ private:
 class document_root_binding final {
 public:
     [[nodiscard]] static document_root_binding none() noexcept {
-        return document_root_binding(nullptr, nullptr);
+        return document_root_binding(nullptr);
     }
 
     [[nodiscard]] static document_root_binding configured(document_root_generation& generation) noexcept {
         ++generation.leases_;
-        return document_root_binding(generation.root_.get(), &generation.leases_);
+        return document_root_binding(&generation);
     }
 
     ~document_root_binding() {
@@ -76,43 +76,36 @@ public:
     document_root_binding& operator=(const document_root_binding&) = delete;
 
     document_root_binding(document_root_binding&& other) noexcept
-        : root_(std::exchange(other.root_, nullptr)),
-          leases_(std::exchange(other.leases_, nullptr)) {}
+        : generation_(std::exchange(other.generation_, nullptr)) {}
 
     document_root_binding& operator=(document_root_binding&& other) noexcept {
         if (this != &other) {
             reset();
-            root_ = std::exchange(other.root_, nullptr);
-            leases_ = std::exchange(other.leases_, nullptr);
+            generation_ = std::exchange(other.generation_, nullptr);
         }
         return *this;
     }
 
     [[nodiscard]] const static_root* root() const noexcept {
-        return root_;
+        return generation_ == nullptr ? nullptr : generation_->root();
     }
 
 private:
-    document_root_binding(const static_root* root, std::size_t* leases) noexcept
-        : root_(root),
-          leases_(leases) {}
+    explicit document_root_binding(document_root_generation* generation) noexcept
+        : generation_(generation) {}
 
     void reset() noexcept {
-        auto* const leases = std::exchange(leases_, nullptr);
-        root_ = nullptr;
-        if (leases != nullptr) {
-            if (*leases == 0) {
+        auto* const generation = std::exchange(generation_, nullptr);
+        if (generation != nullptr) {
+            if (generation->leases_ == 0) {
                 std::terminate();
             }
-            --*leases;
+            --generation->leases_;
         }
     }
 
-    const static_root* root_;
-    std::size_t* leases_;
+    document_root_generation* generation_;
 };
-
-static_assert(sizeof(document_root_binding) == 2 * sizeof(void*));
 
 }  // namespace detail
 }  // namespace ruvia

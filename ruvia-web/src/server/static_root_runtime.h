@@ -26,8 +26,8 @@ namespace ruvia::detail {
 
 struct http_server_options;
 
-// The application's one document-root refresher. A single claimed worker walks
-// the root, reads small files into the snapshot and precompresses changed files
+// The application's one document-root refresher. The first registered worker
+// walks the root, reads small files into the snapshot and precompresses changed files
 // once per interval; every worker adopts the published immutable snapshot on
 // its own thread. The runtime graph owns this object, so it outlives every
 // worker and their joined refresh tasks.
@@ -55,11 +55,7 @@ public:
     // stays published.
     void record_failure(std::exception_ptr failure) noexcept;
 
-    // The coordinator constructs workers one at a time before any of them
-    // starts, so a plain flag suffices: the first worker to ask owns the walk.
-    [[nodiscard]] bool claim_refresh() noexcept;
-
-    // One rebuild pass on the claiming worker. A changed tree is published; a
+    // One rebuild pass on the refresher. A changed tree is published; a
     // failed pass is counted and the last complete snapshot stays published.
     [[nodiscard]] task<void> refresh(
         const worker_handle& worker, const http_server_worker_state& state, const stop_token& stop = {});
@@ -82,6 +78,7 @@ private:
 
     // The coordinator registers every worker before starting any of them.
     // The fixed mailbox storage then outlives all workers and joined tasks.
+    // The first mailbox identifies the one refresher.
     [[nodiscard]] mailbox& register_worker() noexcept;
 
     void publish(document_root_snapshot snapshot);
@@ -94,11 +91,10 @@ private:
     std::chrono::milliseconds interval_;
     static_root_precompression_options precompression_;
     static_root_resident_options resident_;
-    // Only the claiming worker reads or replaces current_ after startup.
+    // Only the first registered worker reads or replaces current_ after startup.
     document_root_snapshot current_;
     std::pmr::vector<mailbox> mailboxes_;
     std::size_t registered_workers_{0};
-    bool refresh_claimed_{false};
     std::atomic<std::size_t> failures_{0};
 };
 
@@ -139,7 +135,7 @@ private:
     document_root_publisher::publication_owner pending_;
     generation_owner current_;
     std::pmr::vector<generation_owner> retired_;
-    bool refreshes_;
+    const bool refreshes_;
 };
 
 }  // namespace ruvia::detail

@@ -200,6 +200,9 @@ if(RUVIA_BUILD_WEB)
     # Owns a multi-worker application whose document root changes under it.
     ruvia_add_web_standalone_test(ruvia_document_root_refresh_tests 60
         web/http/document_root_refresh.cpp)
+    # Owns application stop/restart with a leased document-root generation.
+    ruvia_add_web_standalone_test(ruvia_document_root_shutdown_tests 30
+        web/http/document_root_shutdown.cpp)
     # Owns an application with a short write timeout, a one-thread blocking
     # pool and a connection-failure hook, then runs it without a pool.
     ruvia_add_web_standalone_test(ruvia_file_response_failure_tests 30
