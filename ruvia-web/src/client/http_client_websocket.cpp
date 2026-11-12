@@ -121,7 +121,7 @@ public:
                     if (state->heartbeat_decision() == websocket_liveness_decision::send_ping) {
                         write_guard lane(*state);
                         const auto challenge = ++state->heartbeat_sequence_;
-                        state->liveness_ = websocket_sending_ping(challenge);
+                        state->liveness_ = websocket_sending_ping{challenge};
                         const auto payload = websocket_heartbeat_payload(challenge);
                         if (state->protocol_.submit_frame(websocket_opcode::ping,
                                 std::string_view(payload.data(), payload.size())) != websocket_frame_submit_status::accepted) {
@@ -129,7 +129,7 @@ public:
                         }
                         co_await state->flush();
                         if (std::holds_alternative<websocket_sending_ping>(state->liveness_)) {
-                            state->liveness_ = websocket_awaiting_pong(steady_now_ms(), challenge);
+                            state->liveness_ = websocket_awaiting_pong{steady_now_ms(), challenge};
                         }
                         lane.commit();
                     }

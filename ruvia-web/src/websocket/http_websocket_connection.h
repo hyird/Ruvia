@@ -307,7 +307,6 @@ private:
     void finish_write(bool restart_pong = true) noexcept;
     void resume_pong_window_on_read_start() noexcept;
     [[nodiscard]] bool pong_observable() const noexcept;
-    void restart_pong_window(std::int64_t now) noexcept;
     void heartbeat_tick(std::int64_t now) noexcept;
     task<std::optional<websocket_message>> read_owned(read_guard_type read_guard);
     task<void> write_owned(
@@ -366,11 +365,6 @@ bool server_websocket_connection<stream_type>::pong_observable() const noexcept 
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::restart_pong_window(std::int64_t now) noexcept {
-    restart_websocket_pong_window(liveness_state_, now);
-}
-
-template <typename stream_type>
 void server_websocket_connection<stream_type>::resume_pong_window_on_read_start() noexcept {
     resume_websocket_pong_deadline(lifecycle_options_, liveness_state_, pong_observable());
 }
@@ -379,7 +373,7 @@ template <typename stream_type>
 void server_websocket_connection<stream_type>::finish_write(bool restart_pong) noexcept {
     write_lane_.release();
     if (restart_pong && std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
-        restart_pong_window(steady_now_ms());
+        restart_websocket_pong_window(liveness_state_, steady_now_ms());
     }
     write_lane_.notify();
 }
@@ -388,7 +382,7 @@ template <typename stream_type>
 void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
     const bool observable = pong_observable();
     if (!observable) {
-        restart_pong_window(now);
+        restart_websocket_pong_window(liveness_state_, now);
     }
     switch (evaluate_websocket_liveness(lifecycle_options_, protocol_.liveness_mode(), liveness_state_,
         write_lane_.write_in_progress(), observable, scanner_entry_.last_active_ms(), now)) {
@@ -407,7 +401,7 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
         return;
     }
 
-    liveness_state_ = websocket_sending_ping(++heartbeat_sequence_);
+    liveness_state_ = websocket_sending_ping{++heartbeat_sequence_};
     write_lane_.begin();
     try {
         background_tasks_.spawn(write_heartbeat_ping());
@@ -426,7 +420,7 @@ task<void> server_websocket_connection<stream_type>::write_heartbeat_ping() {
         if (sending == nullptr) {
             co_return;
         }
-        const auto challenge = sending->challenge();
+        const auto challenge = sending->challenge_;
         const auto payload_value = websocket_heartbeat_payload(challenge);
         if (accept_submitted_frame(protocol_.submit_frame(
                 websocket_opcode::ping, std::string_view(payload_value.data(), payload_value.size())))) {
@@ -438,7 +432,7 @@ task<void> server_websocket_connection<stream_type>::write_heartbeat_ping() {
         const auto ping_sent_at_ms = steady_now_ms();
         if (protocol_.liveness_mode() == websocket_liveness_mode::open &&
             std::holds_alternative<websocket_sending_ping>(liveness_state_)) {
-            liveness_state_ = websocket_awaiting_pong(ping_sent_at_ms, challenge);
+            liveness_state_ = websocket_awaiting_pong{ping_sent_at_ms, challenge};
         }
     } catch (...) {
         fail_background(std::current_exception());
@@ -650,7 +644,7 @@ task<void> server_websocket_connection<stream_type>::close_owned(::ruvia::websoc
                 case websocket_close_submit_status::accepted:
                     // The deadline covers the Close write too: a peer that stops
                     // reading must not hold the flush below open past the timeout.
-                    liveness_state_ = websocket_awaiting_peer_close(steady_now_ms());
+                    liveness_state_ = websocket_awaiting_peer_close{steady_now_ms()};
                     flush_output = true;
                     break;
                 case websocket_close_submit_status::already_closing:

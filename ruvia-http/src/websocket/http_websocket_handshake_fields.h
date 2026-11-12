@@ -1,6 +1,5 @@
 #pragma once
 #include <array>
-#include <cstddef>
 #include <span>
 #include <string_view>
 
@@ -50,7 +49,7 @@ private:
     websocket_subprotocol_set protocols_{};
     http_field_list_role role_;
     std::string_view version_{};
-    std::size_t version_count_{0};
+    bool version_present_{false};
     bool valid_{true};
     bool protocols_present_{false};
     bool extensions_present_{false};

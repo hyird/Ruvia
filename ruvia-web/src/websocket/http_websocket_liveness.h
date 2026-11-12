@@ -64,48 +64,16 @@ class websocket_liveness_idle final {};
 // soon as the transport accepts the bytes and before the write coroutine is
 // resumed, so the in-flight state must be visible to the reader without
 // starting the timeout prematurely.
-class websocket_sending_ping final {
-public:
-    explicit websocket_sending_ping(std::uint64_t challenge) noexcept
-        : challenge_(challenge) {}
-
-    [[nodiscard]] std::uint64_t challenge() const noexcept {
-        return challenge_;
-    }
-
-private:
+struct websocket_sending_ping final {
     std::uint64_t challenge_;
 };
 
-class websocket_awaiting_pong final {
-public:
-    explicit websocket_awaiting_pong(std::int64_t sent_at_ms, std::uint64_t challenge) noexcept
-        : sent_at_ms_(sent_at_ms),
-          challenge_(challenge) {}
-
-    [[nodiscard]] std::int64_t sent_at_ms() const noexcept {
-        return sent_at_ms_;
-    }
-
-    [[nodiscard]] std::uint64_t challenge() const noexcept {
-        return challenge_;
-    }
-
-private:
+struct websocket_awaiting_pong final {
     std::int64_t sent_at_ms_;
     std::uint64_t challenge_;
 };
 
-class websocket_awaiting_peer_close final {
-public:
-    explicit websocket_awaiting_peer_close(std::int64_t started_at_ms) noexcept
-        : started_at_ms_(started_at_ms) {}
-
-    [[nodiscard]] std::int64_t started_at_ms() const noexcept {
-        return started_at_ms_;
-    }
-
-private:
+struct websocket_awaiting_peer_close final {
     std::int64_t started_at_ms_;
 };
 
@@ -124,9 +92,9 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
     const websocket_liveness_state_type& state_value, std::string_view payload_value) noexcept {
     std::uint64_t challenge;
     if (const auto* sending = std::get_if<websocket_sending_ping>(&state_value)) {
-        challenge = sending->challenge();
+        challenge = sending->challenge_;
     } else if (const auto* awaiting = std::get_if<websocket_awaiting_pong>(&state_value)) {
-        challenge = awaiting->challenge();
+        challenge = awaiting->challenge_;
     } else {
         return false;
     }
@@ -141,7 +109,7 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
 inline void restart_websocket_pong_window(
     websocket_liveness_state_type& state_value, std::int64_t now) noexcept {
     if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value)) {
-        state_value = websocket_awaiting_pong(now, pong->challenge());
+        state_value = websocket_awaiting_pong{now, pong->challenge_};
     }
 }
 
@@ -150,8 +118,8 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
     if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value);
         pong != nullptr && pong_observable && options.heartbeat_.pong_timeout_.has_value()) {
         const auto now = steady_now_ms();
-        if (now - pong->sent_at_ms() >= options.heartbeat_.pong_timeout_->value().count()) {
-            state_value = websocket_awaiting_pong(now, pong->challenge());
+        if (now - pong->sent_at_ms_ >= options.heartbeat_.pong_timeout_->value().count()) {
+            state_value = websocket_awaiting_pong{now, pong->challenge_};
         }
     }
 }
@@ -169,7 +137,7 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
         const auto* close = std::get_if<websocket_awaiting_peer_close>(&state_value);
         return liveness_mode == websocket_liveness_mode::awaiting_peer_close && close != nullptr &&
                        options.close_handshake_timeout_.has_value() &&
-                       now - close->started_at_ms() >= options.close_handshake_timeout_->value().count()
+                       now - close->started_at_ms_ >= options.close_handshake_timeout_->value().count()
                    ? websocket_liveness_decision::abort_transport
                    : websocket_liveness_decision::idle;
     }
@@ -182,8 +150,8 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
     const auto pong_timeout = options.heartbeat_.pong_timeout_->value().count();
     const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value);
     if (pong != nullptr && pong_observable) {
-        return now - pong->sent_at_ms() >= pong_timeout ? websocket_liveness_decision::abort_transport
-                                                        : websocket_liveness_decision::idle;
+        return now - pong->sent_at_ms_ >= pong_timeout ? websocket_liveness_decision::abort_transport
+                                                       : websocket_liveness_decision::idle;
     }
     // A write that holds the lane (including a heartbeat Ping) blocks the next
     // Ping, so a peer that neither reads nor sends would never be probed. Give
@@ -226,7 +194,7 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
                         : until_ping + pong;
         }
     } else if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state)) {
-        delay = remaining(pong->sent_at_ms(), options.heartbeat_.pong_timeout_->value().count());
+        delay = remaining(pong->sent_at_ms_, options.heartbeat_.pong_timeout_->value().count());
     } else if (std::holds_alternative<websocket_liveness_idle>(state)) {
         delay = remaining(last_active_ms, options.heartbeat_.ping_interval_->value().count());
     }

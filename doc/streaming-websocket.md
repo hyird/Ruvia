@@ -168,7 +168,9 @@ ruvia::task<void> stream_subscription(
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
 
-握手校验遵循接收方规则：HTTP/2 Extended CONNECT 中出现的 `Sec-WebSocket-Key` / `Sec-WebSocket-Accept` 已被 `:protocol` 取代，按 [RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 不做处理（既不校验也不拒绝）；`Sec-WebSocket-Protocol` 提议中的重复子协议会被跳过（唯一性是 RFC 6455 §4.1 对发送方客户端的要求）。
+- **Extended CONNECT 字段**：HTTP/2 中的 `Sec-WebSocket-Key` / `Sec-WebSocket-Accept` 已被 `:protocol` 取代，按 [RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 不做处理，既不校验也不拒绝。
+- **子协议提议**：接收方跳过 `Sec-WebSocket-Protocol` 提议中的重复子协议；唯一性是 RFC 6455 §4.1 对发送方客户端的要求。
+- **版本字段**：`Sec-WebSocket-Version` 必须恰好出现一次，缺失或重复按无效握手拒绝。
 
 ### 3.1 路由注册与配置
 
@@ -215,6 +217,8 @@ private:
     }
 };
 ```
+
+- **心跳时序**：服务端与客户端复用心跳判定；Ping 完整写出后才开始 Pong 等待。
 
 ### 3.2 `ruvia::websocket` 与 `ruvia::websocket_message` API
 

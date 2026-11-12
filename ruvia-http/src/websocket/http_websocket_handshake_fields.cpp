@@ -200,10 +200,10 @@ bool websocket_request_header_validator::observe_header(
     http_field_kind kind, std::string_view value) noexcept {
     if (kind == http_field_kind::sec_websocket_version) {
         version_ = value;
-        ++version_count_;
-        if (version_count_ > 1) {
+        if (version_present_) {
             valid_ = false;
         }
+        version_present_ = true;
     } else if (kind == http_field_kind::sec_websocket_protocol) {
         protocols_present_ = true;
         if (valid_ && !(role_ == http_field_list_role::recipient ? protocols_.append_offered_list(value)
@@ -220,7 +220,7 @@ bool websocket_request_header_validator::observe_header(
 }
 
 bool websocket_request_header_validator::offers_valid() const noexcept {
-    return valid_ && version_count_ == 1 && (!protocols_present_ || !protocols_.empty()) &&
+    return valid_ && version_present_ && (!protocols_present_ || !protocols_.empty()) &&
            (!extensions_present_ || has_extension_);
 }
 
