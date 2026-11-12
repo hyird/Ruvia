@@ -328,27 +328,27 @@ static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
 // The type a parameter binds as, when the server reads it as it reads the
 // parameter's literal (see mariadb_statement_cache).
 [[nodiscard]] std::optional<unsigned int> bound_type(const db_value& param) noexcept {
-    switch (db_value_access::type(param)) {
+    switch (param.type()) {
         case db_value_type::null:
             return MYSQL_TYPE_NULL;
         case db_value_type::string:
-            if (db_value_access::text(param).find('\0') != std::string_view::npos) {
+            if (param.text().find('\0') != std::string_view::npos) {
                 return std::nullopt;
             }
             return MYSQL_TYPE_STRING;
         case db_value_type::signed_value:
-            if (db_value_access::signed_value(param) < 0) {
+            if (param.signed_value() < 0) {
                 return std::nullopt;
             }
             return MYSQL_TYPE_LONGLONG;
         case db_value_type::unsigned_value:
-            if (db_value_access::unsigned_value(param) >
+            if (param.unsigned_value() >
                 static_cast<std::uint64_t>((std::numeric_limits<long long>::max)())) {
                 return std::nullopt;
             }
             return MYSQL_TYPE_LONGLONG;
         case db_value_type::double_value: {
-            const auto value = db_value_access::get_double_value(param);
+            const auto value = param.double_value();
             if (!std::isfinite(value) || std::signbit(value)) {
                 return std::nullopt;
             }
@@ -692,35 +692,35 @@ using cache_state = mariadb_statement_cache;
         std::memset(&bind, 0, sizeof(bind));
         auto& value = cache.values_[index];
         const auto& param = params[index];
-        switch (db_value_access::type(param)) {
+        switch (param.type()) {
             case db_value_type::null:
                 bind.buffer_type = MYSQL_TYPE_NULL;
                 break;
             case db_value_type::string: {
-                const auto text = db_value_access::text(param);
+                const auto text = param.text();
                 bind.buffer_type = MYSQL_TYPE_STRING;
                 bind.buffer = const_cast<char*>(text.data());
                 bind.buffer_length = static_cast<unsigned long>(text.size());
                 break;
             }
             case db_value_type::signed_value:
-                value.integer_ = db_value_access::signed_value(param);
+                value.integer_ = param.signed_value();
                 bind.buffer_type = MYSQL_TYPE_LONGLONG;
                 bind.buffer = &value.integer_;
                 break;
             case db_value_type::unsigned_value:
                 // At most INT64_MAX: signed, as its literal reads.
-                value.integer_ = static_cast<long long>(db_value_access::unsigned_value(param));
+                value.integer_ = static_cast<long long>(param.unsigned_value());
                 bind.buffer_type = MYSQL_TYPE_LONGLONG;
                 bind.buffer = &value.integer_;
                 break;
             case db_value_type::double_value:
-                value.real_ = db_value_access::get_double_value(param);
+                value.real_ = param.double_value();
                 bind.buffer_type = MYSQL_TYPE_DOUBLE;
                 bind.buffer = &value.real_;
                 break;
             case db_value_type::bool_value:
-                value.flag_ = db_value_access::get_bool_value(param) ? 1 : 0;
+                value.flag_ = param.bool_value() ? 1 : 0;
                 bind.buffer_type = MYSQL_TYPE_TINY;
                 bind.buffer = &value.flag_;
                 break;

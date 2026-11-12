@@ -35,6 +35,53 @@ class redis_hash_scan_result;
 class redis_z_scan_result;
 class redis_x_read_group_result;
 
+class redis_search_mapping;
+
+// Owns every command argument, including binary text. Copies inherit the source
+// resource; assignment retains the destination resource.
+class redis_compiled_command final {
+public:
+    redis_compiled_command(const redis_compiled_command& other)
+        : arguments_(other.arguments_, other.resource()) {}
+    redis_compiled_command(redis_compiled_command&&) noexcept = default;
+    redis_compiled_command& operator=(const redis_compiled_command& other) {
+        if (this != &other) {
+            std::pmr::vector<std::pmr::string> replacement(other.arguments_, resource());
+            arguments_.swap(replacement);
+        }
+        return *this;
+    }
+    redis_compiled_command& operator=(redis_compiled_command&& other) {
+        if (this != &other) {
+            if (resource() == other.resource()) {
+                arguments_.swap(other.arguments_);
+                other.arguments_.clear();
+            } else {
+                *this = other;
+            }
+        }
+        return *this;
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return arguments_.get_allocator().resource();
+    }
+    [[nodiscard]] std::span<const std::pmr::string> arguments() const& noexcept RUVIA_LIFETIMEBOUND {
+        return arguments_;
+    }
+    std::span<const std::pmr::string> arguments() const&& = delete;
+    [[nodiscard]] std::pmr::vector<std::pmr::string> take_arguments() && noexcept {
+        return std::move(arguments_);
+    }
+
+private:
+    friend class redis_search_mapping;
+    explicit redis_compiled_command(std::pmr::vector<std::pmr::string>&& arguments) noexcept
+        : arguments_(std::move(arguments)) {}
+
+    std::pmr::vector<std::pmr::string> arguments_;
+};
+
 struct redis_config final {
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::pmr::string host_{"127.0.0.1", process_resource()};

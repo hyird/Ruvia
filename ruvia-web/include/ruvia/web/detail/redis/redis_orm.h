@@ -487,15 +487,15 @@ struct redis_index_definition final {
 // A repository's validated storage and index layout. Only
 // normalize_redis_mapping builds one, so every index column exists, is a safe
 // identifier outside the reserved __ruvia_ namespace, is unique, and has an
-// index kind that fits its value kind. `columns_` and `entity_prefix_` view the
-// entity's static schema: `entity_prefix_` is the declared prefix predicates
-// are bound to, `prefix_` names the index, and `storage_prefix_` is the
-// precomputed `"ruvia:orm:<hex(prefix_)>:"` hash-key prefix.
+// index kind that fits its value kind. `columns_` views the entity's static
+// schema; `entity_prefix_` owns the declared prefix predicates are bound to,
+// `prefix_` names the index, and `storage_prefix_` is the precomputed
+// `"ruvia:orm:<hex(prefix_)>:"` hash-key prefix.
 // `column_index_kinds_[i]` is the index kind of `columns_[i]` (none when the
 // column is not indexed), so writes address it by descriptor index.
 struct redis_mapping final {
     std::span<const redis_column_info> columns_;
-    std::string_view entity_prefix_;
+    std::pmr::string entity_prefix_;
     std::pmr::string prefix_;
     std::pmr::string storage_prefix_;
     std::pmr::vector<redis_index_definition> indexes_;
@@ -519,7 +519,7 @@ struct redis_mapping final {
     }
 };
 
-// `columns` and `entity_prefix` must outlive the mapping.
+// `columns` must be the entity's static descriptor table.
 [[nodiscard]] redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns,
     std::string_view entity_prefix, const redis_repository_config& config, std::pmr::memory_resource* resource);
 
@@ -527,16 +527,6 @@ struct redis_mapping final {
 // value distinct from a missing field, and hexadecimal encoding keeps every
 // byte outside RediSearch's TAG grammar.
 [[nodiscard]] std::pmr::string encode_redis_tag(std::string_view value, std::pmr::memory_resource* resource);
-
-[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mapping,
-    const redis_find_options& options, std::pmr::memory_resource* resource, bool count_only = false,
-    std::optional<std::uint64_t> take_override = {});
-
-[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_index(
-    const redis_mapping& mapping, std::pmr::memory_resource* resource);
-// Drops the index compile_redis_index creates; its documents are kept.
-[[nodiscard]] std::pmr::vector<std::pmr::string> compile_redis_drop_index(
-    const redis_mapping& mapping, std::pmr::memory_resource* resource);
 
 // The canonical ID when the predicate is exactly `primary key == literal`.
 [[nodiscard]] std::optional<std::string_view> redis_primary_key(

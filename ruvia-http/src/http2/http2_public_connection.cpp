@@ -252,7 +252,7 @@ http2_server_request_view http2_request_head_event::request_view() const& noexce
 }
 
 http_request http2_request_head_event::build_request(
-    std::pmr::memory_resource* resource, std::string_view body) const {
+    std::pmr::memory_resource* resource, borrowed_text body) const& {
     if (endpoint_ == nullptr || stream_id_ == 0) {
         throw std::logic_error("HTTP/2 request head event is not active");
     }
@@ -271,7 +271,7 @@ http_request http2_request_head_event::build_request(
         .path_ = stream->request_path(),
         .protocol_ = stream->request_protocol(),
         .cookie_ = stream->request_cookie(),
-        .body_ = body,
+        .body_ = body.view(),
         .regular_header_count_ = stream->remote_header_count(),
         .has_authority_ = stream->has_authority(),
         .has_host_ = stream->has_host(),

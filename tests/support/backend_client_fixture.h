@@ -100,6 +100,8 @@ public:
         // Non-empty: multi-column text metadata and row values replace column_/rows_.
         std::pmr::vector<std::pmr::string> columns_;
         std::pmr::vector<std::pmr::vector<std::pmr::string>> values_;
+        // Sends the first row before deferred_/hold_ gates the remaining rows.
+        bool first_row_before_hold_{false};
     };
 
     // One extended-protocol Parse message: the statement text, the parameter
@@ -726,6 +728,16 @@ private:
                 }
                 flights.push_back(std::move(*messages));
             }
+            std::size_t written_prefix = 0;
+            if (reply.first_row_before_hold_) {
+                if (flights.size() != 1 || (reply.rows_.empty() && reply.values_.empty())) {
+                    throw std::invalid_argument("a split PostgreSQL reply requires one flight and a row");
+                }
+                std::pmr::string first;
+                postgres_flight_response(first, flights.front(), reply, false);
+                co_await asio::async_write(socket, asio::buffer(first), asio::use_awaitable);
+                written_prefix = first.size();
+            }
             while (held(reply) && !closing_) {
                 std::error_code ignored;
                 co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
@@ -745,7 +757,8 @@ private:
                 }
                 postgres_flight_response(response, messages, replies[next++]);
             }
-            co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+            co_await asio::async_write(socket,
+                asio::buffer(response.data() + written_prefix, response.size() - written_prefix), asio::use_awaitable);
             if (reply.close_after_) {
                 close_idle_connection(socket);
                 co_return true;

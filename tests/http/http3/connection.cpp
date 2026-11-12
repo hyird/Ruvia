@@ -108,6 +108,60 @@ ruvia::http3_headers_event make_owned_headers_event(std::pmr::memory_resource* r
 
 }  // namespace
 
+TEST(Ruvia, http3_transport_feedback_blocks_and_resumes_request_output) {
+    ruvia::test::http3_peers peers;
+    ASSERT_TRUE(peers.bind());
+    ruvia::test::http3_event_log received;
+    ASSERT_TRUE(peers.to_server(received));
+    ASSERT_TRUE(peers.to_client(received));
+    ASSERT_EQ(peers.client_.submit_request_head(0, get_request_head), ruvia::http3_status::accepted);
+    ASSERT_EQ(peers.client_.block_stream(0), ruvia::http3_status::accepted);
+    ASSERT_TRUE(peers.to_server(received));
+    EXPECT_TRUE(received.headers_.empty());
+    ASSERT_EQ(peers.client_.unblock_stream(0), ruvia::http3_status::accepted);
+    ASSERT_TRUE(peers.to_server(received));
+    ASSERT_EQ(received.headers_.size(), std::size_t{1});
+    EXPECT_EQ(received.headers_[0].stream_id_, 0);
+    EXPECT_TRUE(received.ended(0));
+}
+
+TEST(Ruvia, http3_transport_feedback_preserves_direction_and_peer_error) {
+    for (const bool receive_reset : {false, true}) {
+        SCOPED_TRACE(receive_reset);
+        ruvia::test::http3_peers peers;
+        ASSERT_TRUE(peers.bind());
+        ruvia::test::http3_event_log received;
+        ASSERT_TRUE(peers.send_request(0, get_request_head, false, received));
+        auto& connection = peers.client_;
+        const auto status = receive_reset
+                                ? connection.shutdown_stream_read(0, request_cancelled)
+                                : connection.shutdown_stream_write(0, request_cancelled);
+        ASSERT_EQ(status, ruvia::http3_status::accepted);
+        bool local_action = true;
+        auto event = connection.next_event(local_action);
+        ASSERT_TRUE(event.has_value());
+        const auto* action = std::get_if<ruvia::http3_transport_action_event>(&*event);
+        ASSERT_NE(action, nullptr);
+        EXPECT_FALSE(local_action);
+        EXPECT_EQ(action->stream_id_, 0);
+        EXPECT_EQ(action->application_error_code_, request_cancelled);
+        EXPECT_EQ(action->action_, receive_reset ? ruvia::http3_transport_action::reset_stream : ruvia::http3_transport_action::stop_sending);
+        if (receive_reset) {
+            EXPECT_EQ(connection.finish_stream(0), ruvia::http3_status::accepted);
+        } else {
+            EXPECT_EQ(connection.finish_stream(0), ruvia::http3_status::invalid_state);
+            ASSERT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(
+                submit_no_content_response(peers.server_, 0)));
+            ruvia::test::http3_event_log response;
+            ASSERT_TRUE(peers.to_client(response));
+            EXPECT_TRUE(response.ended(0));
+        }
+        ASSERT_EQ(connection.shutdown_stream_read(0), ruvia::http3_status::accepted);
+        EXPECT_FALSE(connection.next_event(local_action).has_value());
+        EXPECT_EQ(connection.close_stream(0, std::nullopt, std::nullopt), ruvia::http3_status::accepted);
+    }
+}
+
 TEST(Ruvia, http3_nghttp3_client_server_exchange_headers_and_stream_end) {
     ruvia::test::http3_peers peers;
     EXPECT_TRUE(peers.bind());

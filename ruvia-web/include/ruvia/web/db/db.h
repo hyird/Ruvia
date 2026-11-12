@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_mapping.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_schema.h"

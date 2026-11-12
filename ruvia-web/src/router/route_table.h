@@ -73,6 +73,7 @@ public:
     // The plan and the controllers must outlive the table. Middleware
     // instances are created here and destroyed with the table.
     route_table(const compiled_route_plan& plan, const controller_store& controllers);
+    route_table(const compiled_route_plan& plan, std::span<void* const> targets);
     ~route_table();
     route_table(const route_table&) = delete;
     route_table& operator=(const route_table&) = delete;
@@ -144,6 +145,11 @@ public:
     // The not-found handler that applies to `path`: the tightest prefix scope
     // covering it, else the plan-wide one; null when neither is configured.
     [[nodiscard]] http_not_found_handler_ref not_found_handler_for(std::string_view path) const noexcept;
+    // Reuses the transport's already-bound context and response writer.
+    task<std::optional<http_response>> dispatch_bound_stream(const resolved_route& resolved,
+        context& context_value, route_stream_handler handler) const;
+    task<http_response> dispatch_bound_buffered(const resolved_route& resolved, context& context_value,
+        const std::optional<http_request_body_failure>* body_failure = nullptr) const;
 
 private:
     friend class router;
@@ -223,6 +229,8 @@ private:
         http_error_handler_ref error_handler) const;
 
     [[nodiscard]] http_error_handler_ref error_handler_for(std::string_view path) const noexcept;
+    explicit route_table(const compiled_route_plan& plan);
+    void build_middleware_instances();
 
     const compiled_route_plan* plan_;
     // Worker-bound, indexed like the plan: the controller instance behind each

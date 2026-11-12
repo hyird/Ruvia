@@ -215,21 +215,7 @@ task<bool> detail::route_table::dispatch_resolved_route(const http_request& requ
         auto& context_services_value = detail::context_access::services(context_value);
         context_services_value.bind_routes(*this);
         context_services_value.bind_route_body_limit(resolved.route().max_request_body_bytes());
-        std::exception_ptr exception;
-        try {
-            response = co_await invoke_route(resolved, context_value);
-            if (body_failed() && context_value.exception() == nullptr) {
-                throw http_request_body_protocol_error(**body_failure);
-            }
-            if (!resolved.route().has_middleware()) {
-                detail::context_access::apply_response_policy(context_value, response);
-            }
-        } catch (...) {
-            exception = std::current_exception();
-        }
-        if (exception != nullptr) {
-            response = co_await finalize_failure(context_value, exception);
-        }
+        response = co_await dispatch_bound_buffered(resolved, context_value, body_failure);
         body_failure_handled = body_failed() && context_value.exception() != nullptr;
     } catch (...) {
         dispatch_exception = std::current_exception();
@@ -241,6 +227,24 @@ task<bool> detail::route_table::dispatch_resolved_route(const http_request& requ
         response = co_await handle_exception(request, memory, dispatch_exception, services);
     }
     co_return body_failure_handled;
+}
+
+task<http_response> detail::route_table::dispatch_bound_buffered(const resolved_route& resolved,
+    context& context_value, const std::optional<http_request_body_failure>* body_failure) const {
+    std::exception_ptr exception;
+    try {
+        auto response = co_await invoke_route(resolved, context_value);
+        if (body_failure != nullptr && body_failure->has_value() && context_value.exception() == nullptr) {
+            throw http_request_body_protocol_error(**body_failure);
+        }
+        if (!resolved.route().has_middleware()) {
+            detail::context_access::apply_response_policy(context_value, response);
+        }
+        co_return response;
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    co_return co_await finalize_failure(context_value, exception);
 }
 
 }  // namespace ruvia

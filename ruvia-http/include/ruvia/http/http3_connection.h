@@ -336,6 +336,10 @@ public:
     http3_result read_stream(std::int64_t, bytes_type&&, bool, std::uint64_t) = delete;
     http3_result read_stream(std::int64_t, std::initializer_list<std::byte>, bool, std::uint64_t) = delete;
     [[nodiscard]] std::optional<http3_event> next_event();
+    // Transport drivers use this overload to distinguish codec commands
+    // (true: execute the transport action) from peer shutdown notifications
+    // (false: already applied; do not echo RESET_STREAM/STOP_SENDING).
+    [[nodiscard]] std::optional<http3_event> next_event(bool& local_transport_action);
 
     // Borrows at most max_bytes of one HTTP/3 stream without advancing
     // nghttp3. The buffers remain valid through commit_output() and QUIC keeps
@@ -347,7 +351,32 @@ public:
         std::int64_t stream_id, std::size_t bytes) noexcept;
     [[nodiscard]] http3_status acknowledge_output(
         std::int64_t stream_id, std::uint64_t bytes) noexcept;
+    // Suspend scheduling a local send half when QUIC stream credit is
+    // exhausted; unblock after QUIC grants credit. Neither changes credit,
+    // commits bytes nor resumes an application body source.
+    // Both return closed after a connection error.
+    [[nodiscard]] http3_status block_stream(std::int64_t stream_id) noexcept;
     [[nodiscard]] http3_status unblock_stream(std::int64_t stream_id) noexcept;
+
+    // Report termination of the local receive/send half, respectively.
+    // With a peer application error code, publish a RESET_STREAM/
+    // STOP_SENDING notification (next_event's local_transport_action=false).
+    // nullopt applies a local termination without publishing a notification.
+    // These calls do not send QUIC frames or close the opposite half;
+    // the driver still reports final retirement through close_stream().
+    // Both return closed after a connection error. A critical receive stream
+    // termination can return protocol_error; connection_error() carries its
+    // HTTP/3 application error code.
+    [[nodiscard]] http3_status shutdown_stream_read(
+        std::int64_t stream_id,
+        std::optional<std::uint64_t> application_error_code = std::nullopt) noexcept;
+    [[nodiscard]] http3_status shutdown_stream_write(
+        std::int64_t stream_id,
+        std::optional<std::uint64_t> application_error_code = std::nullopt) noexcept;
+    // Server only: absolute cumulative client-initiated bidirectional stream
+    // limit granted by QUIC, not an increment or concurrent-stream count.
+    // The transport supplies monotonically increasing limits; client is a no-op.
+    void set_max_client_streams_bidi(std::uint64_t max_streams) noexcept;
 
     // QUIC allocates client-initiated bidirectional request stream identifiers.
     // end_stream=false installs a pull source: submit_data()/finish_stream()
@@ -463,16 +492,7 @@ private:
     void mark_early_data(std::int64_t stream_id);
     void remember_peer_settings(http3_peer_settings settings) noexcept;
     [[nodiscard]] bool events_pending() const noexcept;
-    [[nodiscard]] std::optional<http3_event> next_event(bool& local_transport_action);
     void rethrow_if_failed();
-    [[nodiscard]] http3_status block_stream(std::int64_t stream_id) noexcept;
-    [[nodiscard]] http3_status shutdown_stream_read(
-        std::int64_t stream_id,
-        std::optional<std::uint64_t> application_error_code = std::nullopt) noexcept;
-    [[nodiscard]] http3_status shutdown_stream_write(
-        std::int64_t stream_id,
-        std::optional<std::uint64_t> application_error_code = std::nullopt) noexcept;
-    void set_max_client_streams_bidi(std::uint64_t max_streams) noexcept;
     class impl;
     explicit http3_connection(http3_role role,
         const http3_connection_options& options);

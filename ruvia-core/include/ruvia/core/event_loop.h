@@ -13,6 +13,7 @@
 
 #include "ruvia/core/detail/io/asio_await.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/root_task.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -72,7 +73,8 @@ public:
 
     // Reports a terminal runtime failure without throwing on the caller's
     // thread. Pool owners retain the first failure for join(); attachments
-    // route it to the existing unhandled-failure diagnostic.
+    // route it to their configured failure callback or the unhandled-failure
+    // diagnostic, then retire without throwing from the host's run().
     void report_failure(std::exception_ptr failure) const noexcept;
 
     template <typename fn_type>
@@ -162,6 +164,19 @@ struct event_loop_attachment_options final {
     // Borrowed pool for run_blocking() and client host lookups on this loop;
     // it must outlive the attachment. Null leaves the loop without one.
     blocking_pool* blocking_pool_{nullptr};
+    // Owns the receiver for each reported failure (including abandoned root
+    // tasks and failed stop callbacks). Empty uses report_unhandled_failure.
+    // Invoked synchronously, outside runtime locks, on the reporting thread:
+    // normally the context thread, but report_failure() or abandoning an
+    // already-completed root may report from another thread. Calls may overlap
+    // or reenter; the receiver must synchronize any shared mutable state.
+    // Requests attachment stop before invocation. The receiver may destroy
+    // the attachment or loop handles; its target stays alive through invocation
+    // and is retained until the last loop-state owner releases it. Borrowed
+    // captures must remain alive that long; do not capture an owning loop.
+    // Receiver exceptions go to report_unhandled_failure, never escape run(),
+    // and do not interrupt retirement or recursively invoke this receiver.
+    move_only_function<void(std::exception_ptr)> failure_{};
 };
 
 // Binds a worker to an io_context the caller owns. The caller drives that
@@ -204,7 +219,8 @@ public:
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] event_loop loop() const noexcept;
     // Runs the attached context on the current thread with Ruvia's worker
-    // identity installed. The attachment object must outlive this call.
+    // identity installed. A callback may destroy the attachment during run();
+    // the caller-owned context must remain alive until this call returns.
     void run();
     void stop() noexcept;
 

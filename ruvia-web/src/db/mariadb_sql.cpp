@@ -84,11 +84,11 @@ void append_string_literal(std::pmr::string& output, std::string_view value, boo
 }
 
 [[nodiscard]] std::size_t value_literal_size_hint(const db_value& value) {
-    switch (db_value_access::type(value)) {
+    switch (value.type()) {
         case db_value_type::null:
             return 4;
         case db_value_type::string:
-            return mariadb_string_literal_size_hint(db_value_access::text(value).size());
+            return mariadb_string_literal_size_hint(value.text().size());
         case db_value_type::signed_value:
         case db_value_type::unsigned_value:
             return 32;
@@ -102,24 +102,24 @@ void append_string_literal(std::pmr::string& output, std::string_view value, boo
 
 void append_value_literal(
     std::pmr::string& output, const db_value& value, bool backslash_escapes, const MARIADB_CHARSET_INFO* charset) {
-    switch (db_value_access::type(value)) {
+    switch (value.type()) {
         case db_value_type::null:
             output.append("NULL");
             break;
         case db_value_type::string:
-            append_string_literal(output, db_value_access::text(value), backslash_escapes, charset);
+            append_string_literal(output, value.text(), backslash_escapes, charset);
             break;
         case db_value_type::signed_value:
-            append_db_number(output, db_value_access::signed_value(value));
+            append_db_number(output, value.signed_value());
             break;
         case db_value_type::unsigned_value:
-            append_db_number(output, db_value_access::unsigned_value(value));
+            append_db_number(output, value.unsigned_value());
             break;
         case db_value_type::double_value:
-            append_db_double_literal(output, db_value_access::get_double_value(value), db_driver::mariadb);
+            append_db_double_literal(output, value.double_value(), db_driver::mariadb);
             break;
         case db_value_type::bool_value:
-            output.push_back(db_value_access::get_bool_value(value) ? '1' : '0');
+            output.push_back(value.bool_value() ? '1' : '0');
             break;
     }
 }
@@ -359,10 +359,10 @@ void free_stored_result(void* result_value) noexcept {
 mariadb_parameter_traits inspect_mariadb_parameters(std::span<const db_value> params) noexcept {
     mariadb_parameter_traits result{};
     for (const auto& param : params) {
-        if (db_value_access::type(param) != db_value_type::string) {
+        if (param.type() != db_value_type::string) {
             continue;
         }
-        const auto value = db_value_access::text(param);
+        const auto value = param.text();
         for (auto backslash = value.find('\\'); backslash != std::string_view::npos;
             backslash = value.find('\\', backslash + 1)) {
             result.has_backslash_ = true;
@@ -420,8 +420,8 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
             inline_placeholders[i] = placeholder;
         }
         scan_offset = placeholder + 1;
-        if (db_value_access::type(param) == db_value_type::string) {
-            const auto value = db_value_access::text(param);
+        if (param.type() == db_value_type::string) {
+            const auto value = param.text();
             if (value.find('\0') != std::string_view::npos) {
                 throw std::invalid_argument("MariaDB string parameter must not contain NUL bytes");
             }

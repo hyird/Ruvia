@@ -11,7 +11,7 @@
 
 ## 1. SQL 数据库连接池、直接查询与事务
 
-聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_handle.h"`、`"ruvia/web/db/db_rows.h"`、`"ruvia/web/db/db_schema.h"`）。
+聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_handle.h"`、`"ruvia/web/db/db_rows.h"`、`"ruvia/web/db/db_mapping.h"`、`"ruvia/web/db/db_schema.h"`）。
 参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
@@ -113,7 +113,8 @@ co_await stream.close();
 
 `query_stream()` 在读取期间独占连接。持续调用 `read()` 直到返回 `std::nullopt`，才算完整消费结果（空结果集也需要读取一次）；此时流已结束，连接可用于后续普通查询或事务，PostgreSQL 的单行读取模式不会影响后续缓冲结果集。结束后 `close()` 可重复调用；提前关闭 PostgreSQL 流会关闭底层连接，而不是继续排空未读结果。MariaDB 的 `close()` 则异步读取并丢弃剩余行，解析行尾状态及后续结果后才归还连接，并受操作取消和超时约束。
 
-- **流启动所有权**：MariaDB 原生结果仅在列元数据构造完成后移交连接槽位；构造失败先释放结果，再关闭连接并归还租约。
+- **列元数据**：`stream.column_names() const&` 在行结果集启动完成时即可读取，包含零行结果；EOF、失败和 `close()` 不清除列名。视图借用流的地址稳定状态，资源及状态必须保持存活；逐行字段仍只借用至下一次读取或关闭。
+- **流启动所有权**：两种驱动均在列元数据构造完成后移交原生结果；失败先释放结果，再关闭连接并归还租约。PostgreSQL 启动会等待首个原生结果，保留首行供第一次 `read()` 消费，不额外复制它。
 
 连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
 
@@ -178,6 +179,8 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 `db_query` 可脱离数据库连接独立构建并编译为目标方言的参数化语句（`auto stmt = query.compile(driver, resource);`，再通过 `db.query(stmt.sql(), stmt.params())` 执行）：
 
 - **参数复制**：`db_value` 的拥有型文本副本沿用源 PMR，资源须覆盖副本寿命；借用型参数复制后仍借用原文，不隐式转为拥有型。
+- **外部驱动绑定**：`db_statement::params()` 可直接读取 `db_value::type()`（`db_value_type`）及 `text()`、`signed_value()`、`unsigned_value()`、`double_value()`、`bool_value()`；不做隐式类型转换，读取错误分支抛 `std::bad_variant_access`。`null` 通过类型判别，无需取值。
+- **编译参数寿命**：语句拥有编译后的参数文本；`text()` 仅允许左值借用，视图不得超过语句及其 PMR 资源寿命。外部项目可交给自己的数据库驱动，无须使用 Repository 或连接池。
 
 `db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
@@ -347,6 +350,23 @@ mixed.with("samples", samples).from_cte("samples")
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
 - 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
+### 3.5 独立字段与实体映射（`"ruvia/web/db/db_mapping.h"`）
+
+| 公开入口 | 结果与边界 |
+| --- | --- |
+| `decode_db_field<T>(field, resource = nullptr)` | 解码标量、可选值及 PostgreSQL 一维数组；文本与数组元素递归拥有，禁止 `string_view` 结果 |
+| `decode_db_row<Entity>(row, resource = nullptr)` | 映射任意直接查询或流式行；同样接受 `db_projection` |
+| `decode_db_rows<Entity>(rows, resource = nullptr)` | 批量映射并在该结果集内复用列索引，返回 `entity_rows<Entity>` |
+
+- **形状与错误**：映射类型声明的列全部必需且须唯一，额外列忽略；子集用投影声明。缺列、重名、NULL 与数值错误沿用 `db_conversion_error`，不依赖 Repository。
+- **资源所有权**：默认使用 `process_resource()`；指定资源须覆盖解码结果寿命。解码结果可独立于原始行存储存活。
+
+```cpp
+auto raw = co_await db.query("SELECT id, name FROM users");
+auto users = ruvia::decode_db_rows<user_projection>(raw, resource);
+// 流式路径：每次 read() 后立即 decode_db_row<user_projection>(*row, resource)。
+```
+
 ---
 
 ## 4. Redis 客户端、Pub/Sub、Streams 与 RediSearch ORM
@@ -498,6 +518,27 @@ auto rows = co_await repo.find({
 ORM 写入和删除先按脚本摘要执行；收到 `NOSCRIPT` 后释放该错误回复，再以脚本正文重试。两次执行共享同一操作超时与取消边界。
 
 NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类型；比较、`between`、`in` / `not_in` 共用该规则。`0.1f` 与 float 字段写入使用同一 float 十进制编码，向其他数值列比较时只提升为 double；`0.1` 则始终保留 double 编码，两者可能不同。索引比较的对象仍是 RediSearch 解析 HASH 十进制文本得到的 double，而非未序列化的宿主浮点位模式。需要 float 精度边界时须显式传入 float；窄列不能吞掉 `16777216.5` 等更宽的范围边界。
+
+### 4.5 离线查询与索引编译
+
+`redis_search_mapping::create<Entity>(config, resource = nullptr)` 校验并拥有映射配置，不需要 Redis 连接、`context` 或 `application`。Repository 与独立编译入口共用字段校验、转义与索引规则。
+
+| 入口 | 契约 |
+| --- | --- |
+| `compile_find(options, redis_search_mode::rows)` | 编译普通查询；模式还可选 `first` 或 `count` |
+| `compile_create_index()` | 编译匹配映射的 `FT.CREATE` |
+| `compile_drop_index()` | 仅删除索引，不删除文档 |
+| `redis_compiled_command::arguments() const&` | 只读借用全部二进制安全参数，可交给其他 Redis 驱动 |
+| `std::move(command).take_arguments()` | 提取拥有型 PMR 参数容器 |
+| `redis_handle::command(std::move(command))` | 同步接管编译结果，复用现有命令执行、取消及超时主链 |
+
+```cpp
+const auto mapping = ruvia::redis_search_mapping::create<cached_user>(user_repo_config, resource);
+auto command = mapping.compile_find({.where_ = cached_user::column<"role">() == "admin"});
+auto reply = co_await redis.command(std::move(command));
+```
+
+- **资源寿命**：编译结果拥有参数，不借用配置、谓词或 mapping；所选 PMR 资源仍须存活。mapping 与 command 复制继承源资源，赋值保留目标资源。
 
 ---
 

@@ -35,8 +35,7 @@ struct redis_predicate_access;
 
 // An owning Redis filter. Literal text is copied into the process resource when
 // the filter is built, so the filter may outlive the strings used to build it.
-// Compilers normalize their output into the destination worker pool before
-// returning an operation.
+// Compilation copies every argument into the schema mapping's memory resource.
 // NUMERIC predicates retain literal precision: float operands keep float's
 // stored encoding for float32 columns and widen for other numeric columns;
 // double operands never narrow. Cast explicitly when float rounding is intended.
@@ -373,6 +372,55 @@ struct redis_repository_config final {
     std::pmr::vector<redis_index_config> indexes_{process_resource()};
 };
 
+enum class redis_search_mode : std::uint8_t {
+    rows,
+    first,
+    count,
+};
+
+// Validated, owning schema configuration; no connection or worker is required.
+// Only immutable entity descriptors have static lifetime. The supplied memory
+// resource must outlive the mapping and commands compiled from it.
+class redis_search_mapping final {
+public:
+    template <typename entity_type>
+        requires detail::redis_entity_schema<entity_type>
+    [[nodiscard]] static redis_search_mapping create(
+        const redis_repository_config& config = {}, std::pmr::memory_resource* resource = nullptr) {
+        return redis_search_mapping(detail::normalize_redis_mapping(
+            detail::redis_query_columns<entity_type>, entity_type::prefix(), config, resource));
+    }
+
+    redis_search_mapping(const redis_search_mapping& other);
+    redis_search_mapping(redis_search_mapping&&) noexcept = default;
+    redis_search_mapping& operator=(const redis_search_mapping& other);
+    redis_search_mapping& operator=(redis_search_mapping&& other);
+
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return mapping_.prefix_.get_allocator().resource();
+    }
+
+    // rows uses take_ or redis_find_default_take; first caps that page at one.
+    // count validates all options but counts all matches, ignoring pagination.
+    // Commands own all arguments in this mapping's resource.
+    [[nodiscard]] redis_compiled_command compile_find(
+        const redis_find_options& options = {}, redis_search_mode mode = redis_search_mode::rows) const;
+    [[nodiscard]] redis_compiled_command compile_create_index() const;
+    // Drops only the index, never its documents.
+    [[nodiscard]] redis_compiled_command compile_drop_index() const;
+
+private:
+    template <typename>
+    friend class redis_repository;
+    explicit redis_search_mapping(detail::redis_mapping&& mapping) noexcept
+        : mapping_(std::move(mapping)) {}
+    redis_search_mapping(const redis_search_mapping& other, std::pmr::memory_resource* resource);
+    void swap(redis_search_mapping& other) noexcept;
+    void require_valid() const;
+
+    detail::redis_mapping mapping_;
+};
+
 // Omitted expiration preserves an existing TTL; new entities are persistent.
 struct redis_write_options final {
     std::optional<std::chrono::milliseconds> ttl_{};
@@ -434,8 +482,8 @@ public:
 
     [[nodiscard]] task<entity_rows<entity_type>> find(
         const redis_find_options& options = {}) const {
-        const auto memory = resource();
-        auto args = detail::compile_redis_find(mapping(), options, memory);
+        (void)resource();
+        auto args = mapping_->compile_find(options).take_arguments();
         detail::redis_map_many<entity_type> mapper{{mapping().storage_prefix_},
             options.take_.has_value()
                 ? std::nullopt
@@ -464,8 +512,7 @@ public:
                 return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
             }
         }
-        const auto take = options.take_.has_value() ? (std::min)(options.take_->value(), std::uint64_t{1}) : std::uint64_t{1};
-        auto args = detail::compile_redis_find(mapping(), options, memory, false, take);
+        auto args = mapping_->compile_find(options, redis_search_mode::first).take_arguments();
         detail::redis_map_first<entity_type> mapper{{mapping().storage_prefix_}};
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
@@ -476,8 +523,8 @@ public:
     }
     [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(
         const redis_find_options& options = {}) const {
-        const auto memory = resource();
-        auto args = detail::compile_redis_find(mapping(), options, memory);
+        (void)resource();
+        auto args = mapping_->compile_find(options).take_arguments();
         detail::redis_map_search<entity_type> mapper{mapping().storage_prefix_};
         return handle_.template command_mapped<std::pair<entity_rows<entity_type>, std::uint64_t>>(
             std::move(args), std::move(mapper));
@@ -485,9 +532,9 @@ public:
 
     [[nodiscard]] task<std::uint64_t> count(
         const redis_find_options& options = {}) const {
-        const auto memory = resource();
+        (void)resource();
         return handle_.template command_mapped<std::uint64_t>(
-            detail::compile_redis_find(mapping(), options, memory, true), detail::redis_orm_count_result);
+            mapping_->compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_count_result);
     }
 
     template <std::same_as<redis_predicate> predicate_type>
@@ -506,7 +553,7 @@ public:
             }
         }
         return handle_.template command_mapped<bool>(
-            detail::compile_redis_find(mapping(), options, memory, true),
+            mapping_->compile_find(options, redis_search_mode::count).take_arguments(),
             detail::redis_orm_exists_result);
     }
 
@@ -549,15 +596,15 @@ public:
     // Explicit schema management. Repository acquisition never creates an
     // index, and an existing index is reported by Redis.
     [[nodiscard]] task<void> create_index() const {
-        const auto memory = resource();
+        (void)resource();
         return handle_.template command_mapped<void>(
-            detail::compile_redis_index(mapping(), memory), detail::redis_orm_status_result);
+            mapping_->compile_create_index().take_arguments(), detail::redis_orm_status_result);
     }
 
     [[nodiscard]] task<void> drop_index() const {
-        const auto memory = resource();
+        (void)resource();
         return handle_.template command_mapped<void>(
-            detail::compile_redis_drop_index(mapping(), memory), detail::redis_orm_status_result);
+            mapping_->compile_drop_index().take_arguments(), detail::redis_orm_status_result);
     }
 
 private:
@@ -565,7 +612,7 @@ private:
 
     explicit redis_repository(const redis_handle& handle, const redis_repository_config& config)
         : handle_(handle),
-          mapping_(detail::normalize_redis_mapping(columns, entity_type::prefix(), config, handle.resource_)),
+          mapping_(redis_search_mapping::create<entity_type>(config, handle.resource_)),
           registration_(handle.registration_.scope(), this, &redis_repository::expire_capability) {}
 
     [[nodiscard]] std::pmr::memory_resource* resource() const {
@@ -581,7 +628,7 @@ private:
         if (!mapping_) {
             throw std::logic_error("Redis repository mapping has expired");
         }
-        return *mapping_;
+        return mapping_->mapping_;
     }
 
     static void expire_capability(void* target) noexcept {
@@ -684,10 +731,8 @@ private:
             detail::redis_orm_write_script(), std::move(args), detail::redis_orm_exec_result);
     }
 
-    static constexpr const auto& columns = detail::redis_query_columns<entity_type>;
-
     redis_handle handle_;
-    std::optional<detail::redis_mapping> mapping_;
+    std::optional<redis_search_mapping> mapping_;
     scoped_capability_registration registration_;
 };
 

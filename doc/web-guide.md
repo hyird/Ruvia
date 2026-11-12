@@ -582,6 +582,43 @@ int main() {
 - **并发与失败**：读、写可并行，同方向重叠抛 `std::logic_error`。I/O 错误、超时或取消关闭整条流；`std::system_error` 分别携带底层错误、`timed_out` 或 `operation_canceled`。
 - **寿命**：构造、析构与 `close()` 可在其他线程执行；冷任务保留拥有化输入及状态，`shutdown()` 和循环退出使未启动操作失效并收束在途操作。
 
+### 1.11 显式路由组合（`"ruvia/web/router.h"`）
+
+`router(worker_handle)` 直接复用路由编译与分发引擎，不依赖 `application`、控制器宏或全局注册表。
+
+| 入口 | 契约 |
+| --- | --- |
+| `add<Modifiers...>(method, path, handler)` | 拥有缓冲响应处理器 `task<http_response>(context&)`，同步复制路径 |
+| `stream<Modifiers...>(method, path, handler)` | 拥有流式响应处理器 `task<void>(context&)` |
+| `use<T>(args...)` / `use_at<T>(options, args...)` | 注册 worker-local 中间件；前缀按完整路径段匹配 |
+| `on_error(...)` / `on_not_found(...)` | 注册全局或路径作用域的错误处理器 |
+| `freeze()` | 原子编译并构造中间件；失败保留可编辑配置，成功后拒绝注册及再次封存 |
+| `co_await dispatch(stream)` | 在 `request_stream` 回调中执行；每请求仅一次，且须早于其他输出选择 |
+
+```cpp
+#include "ruvia/web/context.h"
+#include "ruvia/web/http_server.h"
+#include "ruvia/web/router.h"
+
+// 位于所属 loop 的服务协程内；server.shutdown() 完成前保持 routes 存活。
+ruvia::router routes(loop.handle());
+routes.add("GET", "/items/:id", [](ruvia::context& c) -> ruvia::task<ruvia::http_response> {
+    co_return c.text(c.req().param("id").value());
+});
+routes.freeze();
+ruvia::http_server server(loop, {
+    .request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); },
+});
+server.listen({.address_ = "127.0.0.1", .http_ = 8080,
+    .dispatch_ = ruvia::listener_dispatch::request_stream});
+co_await server.start();
+// 服务寿命与 shutdown() 的完整驱动见 1.9。
+```
+
+- **线程与寿命**：配置、封存和分发均在绑定 worker 上执行；多 worker 各自拥有 router。处理器捕获的引用须覆盖全部请求，冷 dispatch 保留路由状态但不能脱离请求作用域。
+- **共享语义**：参数、HEAD 回退、OPTIONS／405／501、single-shot 中间件、限流、错误处理、URL 生成与缓冲子请求使用原主链；提交后的异常仍关闭连接或重置流。
+- **正文策略**：`body_limit<N>` 由 `middleware.h` 提供，可与 `stream_body` 组合；只收紧宿主预算。协议 I/O、取消、正文与响应输出继续借用请求流服务。
+
 ---
 
 ## 2. 控制器与路由声明（`"ruvia/web/controller.h"`）

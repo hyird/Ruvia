@@ -260,26 +260,26 @@ std::pmr::string db_cache_key(std::string_view prefix, std::string_view id, db_c
     digest_text(input, sql);
     input.update_u64_le(params.size());
     for (const auto& value : params) {
-        const auto type = db_value_access::type(value);
+        const auto type = value.type();
         const auto type_byte = static_cast<char>(type);
         input.update({&type_byte, 1});
         switch (type) {
             case db_value_type::null:
                 break;
             case db_value_type::string:
-                digest_text(input, db_value_access::text(value));
+                digest_text(input, value.text());
                 break;
             case db_value_type::signed_value:
-                input.update_u64_le(static_cast<std::uint64_t>(db_value_access::signed_value(value)));
+                input.update_u64_le(static_cast<std::uint64_t>(value.signed_value()));
                 break;
             case db_value_type::unsigned_value:
-                input.update_u64_le(db_value_access::unsigned_value(value));
+                input.update_u64_le(value.unsigned_value());
                 break;
             case db_value_type::double_value:
-                input.update_u64_le(std::bit_cast<std::uint64_t>(db_value_access::get_double_value(value)));
+                input.update_u64_le(std::bit_cast<std::uint64_t>(value.double_value()));
                 break;
             case db_value_type::bool_value:
-                input.update_u64_le(db_value_access::get_bool_value(value));
+                input.update_u64_le(value.bool_value());
                 break;
         }
     }

@@ -30,6 +30,23 @@
 
 namespace {
 
+template <typename head_type, typename body_type>
+constexpr bool can_build_http2_request = requires(head_type&& head, body_type&& body) {
+    std::forward<head_type>(head).build_request(nullptr, std::forward<body_type>(body));
+};
+
+static_assert(can_build_http2_request<ruvia::http2_request_head_event&, std::string&>);
+static_assert(can_build_http2_request<const ruvia::http2_request_head_event&, const std::string&>);
+static_assert(can_build_http2_request<ruvia::http2_request_head_event&, std::pmr::string&>);
+static_assert(can_build_http2_request<ruvia::http2_request_head_event&, std::string_view>);
+static_assert(can_build_http2_request<ruvia::http2_request_head_event&, const char (&)[5]>);
+static_assert(!can_build_http2_request<ruvia::http2_request_head_event&, std::string>);
+static_assert(!can_build_http2_request<ruvia::http2_request_head_event&, const std::string>);
+static_assert(!can_build_http2_request<ruvia::http2_request_head_event&, std::pmr::string>);
+static_assert(!can_build_http2_request<ruvia::http2_request_head_event&, const std::pmr::string>);
+static_assert(!can_build_http2_request<ruvia::http2_request_head_event, std::string_view>);
+static_assert(!can_build_http2_request<const ruvia::http2_request_head_event, std::string_view>);
+
 class accounting_allocation_resource final : public std::pmr::memory_resource {
 public:
     explicit accounting_allocation_resource(
@@ -1489,7 +1506,10 @@ TEST(Ruvia, http2_public_request_views_survive_connection_move_assignment) {
     const auto* request_head = escaped_request ? escaped_request->request_head() : nullptr;
     EXPECT_TRUE(request_head != nullptr);
     if (request_head != nullptr) {
-        const auto materialized = request_head->build_request(resource);
+        const std::string buffered_body = "x";
+        const auto materialized = request_head->build_request(resource, buffered_body);
+        EXPECT_EQ(materialized.body(), buffered_body);
+        EXPECT_EQ(materialized.body().data(), buffered_body.data());
         EXPECT_TRUE(materialized.method() == "POST");
         EXPECT_TRUE(materialized.target() == "/upload");
         EXPECT_TRUE(materialized.authority() == "example.test");

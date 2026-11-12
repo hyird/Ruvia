@@ -27,7 +27,7 @@ class app_configuration;
     std::span<const controller_registrar> registrars, const controller_store& controllers,
     const app_configuration& configuration);
 
-// The plan under construction. Lives only inside compile_route_plan().
+// Startup builder shared by controller declarations and owned public routes.
 class router final {
 public:
     router();
@@ -56,6 +56,12 @@ public:
     // only for an extension method, with `method` unknown.
     void register_endpoint(http_known_method method, std::string_view method_token, std::string_view path,
         route_endpoint endpoint, void* handler_target,
+        std::span<const controller_middleware_descriptor> controller_middlewares,
+        std::span<const controller_middleware_descriptor> route_middlewares);
+    // Explicit, owned handler slots use the same registration and compilation
+    // path without a controller declaration in progress.
+    void register_owned_endpoint(std::size_t slot, http_known_method method, std::string_view method_token,
+        std::string_view path, route_endpoint endpoint,
         std::span<const controller_middleware_descriptor> controller_middlewares,
         std::span<const controller_middleware_descriptor> route_middlewares);
 

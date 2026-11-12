@@ -19,6 +19,53 @@ class context_websocket_binding;
 class context_tunnel_binding;
 
 struct context_access final {
+    [[nodiscard]] static request_memory& memory(context& value) noexcept {
+        return value.memory_;
+    }
+
+    // A request-stream router borrows the already-bound transport context.
+    // Restore every borrowed route view before its resolution frame retires;
+    // retain the output state, since a stream may have committed in that scope.
+    class route_binding final {
+    public:
+        route_binding(context& value, std::string_view path, std::span<const std::string_view> names,
+            std::span<const std::string_view> values, std::uintptr_t scope)
+            : context_(value),
+              services_(value.services()),
+              path_(value.route_path_),
+              names_(value.param_names_),
+              values_(value.param_values_),
+              count_(value.param_count_),
+              scope_(value.route_rate_limit_scope_) {
+            value.route_path_ = path;
+            value.param_names_ = names.data();
+            value.param_values_ = values.data();
+            value.param_count_ = values.size();
+            value.route_rate_limit_scope_ = scope;
+        }
+        route_binding(const route_binding&) = delete;
+        route_binding& operator=(const route_binding&) = delete;
+        ~route_binding() {
+            const auto output = context_.services().response_output();
+            context_.services() = services_;
+            context_.services().response_output() = output;
+            context_.route_path_ = path_;
+            context_.param_names_ = names_;
+            context_.param_values_ = values_;
+            context_.param_count_ = count_;
+            context_.route_rate_limit_scope_ = scope_;
+        }
+
+    private:
+        context& context_;
+        context_services services_;
+        std::string_view path_;
+        const std::string_view* names_;
+        const std::string_view* values_;
+        std::size_t count_;
+        std::uintptr_t scope_;
+    };
+
     [[nodiscard]] static context make(
         request_memory& memory, const http_request& request, const context_services& services) {
         return context(memory, request, services);

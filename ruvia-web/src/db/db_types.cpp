@@ -37,56 +37,49 @@ db_value::db_value(const db_value& other)
 db_value::db_value(bool value)
     : storage_(std::in_place_type<bool>, value) {}
 
-detail::db_value_type db_value::type() const noexcept {
+db_value_type db_value::type() const noexcept {
     return std::visit(
         [](const auto& value) noexcept {
             using value_type = std::remove_cvref_t<decltype(value)>;
             if constexpr (std::is_same_v<value_type, std::monostate>) {
-                return detail::db_value_type::null;
+                return db_value_type::null;
             } else if constexpr (std::is_same_v<value_type, borrowed_text> ||
                                  std::is_same_v<value_type, std::pmr::string>) {
-                return detail::db_value_type::string;
+                return db_value_type::string;
             } else if constexpr (std::is_same_v<value_type, std::int64_t>) {
-                return detail::db_value_type::signed_value;
+                return db_value_type::signed_value;
             } else if constexpr (std::is_same_v<value_type, std::uint64_t>) {
-                return detail::db_value_type::unsigned_value;
+                return db_value_type::unsigned_value;
             } else if constexpr (std::is_same_v<value_type, double>) {
-                return detail::db_value_type::double_value;
+                return db_value_type::double_value;
             } else {
-                return detail::db_value_type::bool_value;
+                return db_value_type::bool_value;
             }
         },
         storage_);
 }
 
-std::string_view db_value::text() const& noexcept {
+std::string_view db_value::text() const& {
     if (const auto* borrowed = std::get_if<borrowed_text>(&storage_)) {
         return borrowed->view();
     }
-    if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
-        return *owned;
-    }
-    return {};
+    return std::get<std::pmr::string>(storage_);
 }
 
-std::int64_t db_value::signed_value() const noexcept {
-    const auto* value = std::get_if<std::int64_t>(&storage_);
-    return value == nullptr ? 0 : *value;
+std::int64_t db_value::signed_value() const {
+    return std::get<std::int64_t>(storage_);
 }
 
-std::uint64_t db_value::unsigned_value() const noexcept {
-    const auto* value = std::get_if<std::uint64_t>(&storage_);
-    return value == nullptr ? 0 : *value;
+std::uint64_t db_value::unsigned_value() const {
+    return std::get<std::uint64_t>(storage_);
 }
 
-double db_value::get_double_value() const noexcept {
-    const auto* value = std::get_if<double>(&storage_);
-    return value == nullptr ? 0.0 : *value;
+double db_value::double_value() const {
+    return std::get<double>(storage_);
 }
 
-bool db_value::get_bool_value() const noexcept {
-    const auto* value = std::get_if<bool>(&storage_);
-    return value != nullptr && *value;
+bool db_value::bool_value() const {
+    return std::get<bool>(storage_);
 }
 
 db_field::db_field(std::pmr::memory_resource* resource)

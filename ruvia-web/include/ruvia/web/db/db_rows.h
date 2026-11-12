@@ -310,6 +310,10 @@ public:
     ~db_stream_result();
 
     [[nodiscard]] bool active() const noexcept;
+    // Available when query_stream() completes, including empty row sets.
+    // Names remain valid through reads, EOF and close, until this state dies.
+    [[nodiscard]] std::span<const std::pmr::string> column_names() const& RUVIA_LIFETIMEBOUND;
+    std::span<const std::pmr::string> column_names() const&& = delete;
     // Each read has one operation deadline, including any EOF/trailing-result
     // drain needed before returning nullopt. A separate close starts its own
     // deadline. Both end no later than the stream's overall deadline
@@ -330,7 +334,7 @@ private:
     // The driver's result handle lives in the pool slot, so the pool alone
     // frees it, including when the stream's deadline expires between reads.
     struct lease_type final {
-        lease_type(detail::db_pool_ref_type client, std::size_t slot, std::pmr::vector<std::pmr::string> column_names,
+        lease_type(detail::db_pool_ref_type client, std::size_t slot,
             std::pmr::memory_resource* resource, operation_options options) noexcept;
         void abort() noexcept;
 
@@ -338,14 +342,18 @@ private:
         std::size_t slot_;
         std::pmr::memory_resource* resource_;
         std::pmr::vector<db_field> fields_;
-        std::pmr::vector<std::pmr::string> column_names_;
         operation_options options_;
     };
 
     using operation_state_type = detail::db_operation_state<lease_type>;
     using operation_guard_type = detail::db_operation_guard<lease_type>;
 
-    using state_owner_type = std::unique_ptr<operation_state_type, pmr_object_deleter<operation_state_type>>;
+    struct state_type final {
+        state_type(lease_type lease, std::pmr::vector<std::pmr::string> column_names) noexcept;
+        std::pmr::vector<std::pmr::string> column_names_;
+        operation_state_type operation_;
+    };
+    using state_owner_type = std::unique_ptr<state_type, pmr_object_deleter<state_type>>;
 
     db_stream_result() noexcept = default;
     db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::pmr::vector<std::pmr::string> column_names,
@@ -354,7 +362,8 @@ private:
     // `io_metrics` is the request's counter block, or null outside a request.
     void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     static void expire_capability(void* target) noexcept;
-    static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics,
+        operation_guard_type operation, std::pmr::vector<std::pmr::string>& column_names);
     static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
 
     state_owner_type state_;

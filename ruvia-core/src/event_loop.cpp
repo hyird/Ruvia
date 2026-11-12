@@ -122,10 +122,12 @@ void external_context_claim::release(event_loop_state* state_value) noexcept {
     service_->release_state(state_value);
 }
 
-attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool)
+attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool,
+    move_only_function<void(std::exception_ptr)> failure)
     : claim_(io_context),
       runtime_(io_context, queue_capacity, pool),
-      stop_(runtime_) {
+      stop_(runtime_),
+      failure_(std::move(failure)) {
     worker_handle_access::enable_external_runner(runtime_.handle());
 }
 
@@ -254,8 +256,9 @@ event_loop_state::event_loop_state(std::size_t queue_capacity, blocking_pool* po
       executor_(io_context_->get_executor()),
       runtime_(owned_runtime().context()) {}
 
-event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool)
-    : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, pool),
+event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool,
+    move_only_function<void(std::exception_ptr)> failure)
+    : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, pool, std::move(failure)),
       io_context_(std::addressof(external_context)),
       executor_(external_context.get_executor()),
       runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
@@ -313,8 +316,17 @@ void event_loop_state::route_failure(std::exception_ptr failure, const char* unb
 }
 
 void event_loop_state::report_attached_failure(std::exception_ptr failure) noexcept {
-    report_unhandled_failure("attached event loop failure", failure);
     stop();
+    auto& receiver = std::get_if<attached_context>(&context_ownership_)->failure_;
+    if (!receiver) {
+        report_unhandled_failure("attached event loop failure", std::move(failure));
+        return;
+    }
+    try {
+        receiver(std::move(failure));
+    } catch (...) {
+        report_unhandled_failure("attached event loop failure callback", std::current_exception());
+    }
 }
 
 void event_loop_state::fail_teardown_start(std::exception_ptr failure) noexcept {
@@ -472,8 +484,8 @@ void event_loop::report_failure(std::exception_ptr failure) const noexcept {
     if (!failure) {
         return;
     }
-    if (state_) {
-        state_->route_failure(std::move(failure), "event loop failure");
+    if (const auto state_value = state_) {
+        state_value->route_failure(std::move(failure), "event loop failure");
     } else {
         report_unhandled_failure("invalid event loop failure", std::move(failure));
     }
@@ -577,7 +589,7 @@ event_loop_attachment attach_event_loop(
     asio::io_context& io_context, event_loop_attachment_options options) {
     auto state_value = std::allocate_shared<detail::event_loop_state>(
         std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
-        io_context, options.queue_capacity_, options.blocking_pool_);
+        io_context, options.queue_capacity_, options.blocking_pool_, std::move(options.failure_));
     const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
     // root_task uses this sink directly; it must not call event_loop_state::route_failure,
     // which would route back through this same sink.

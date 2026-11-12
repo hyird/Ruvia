@@ -558,13 +558,13 @@ postgresql_params::postgresql_params(std::span<const db_value> params)
     const bool inline_params = params.size() <= inline_capacity;
     std::size_t numeric_count = 0;
     for (const auto& param : params) {
-        const auto type = db_value_access::type(param);
+        const auto type = param.type();
         if (type == db_value_type::string) {
             validate_postgresql_string_param(db_value_access::owned_text(param));
         } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value ||
                    type == db_value_type::double_value) {
             if (type == db_value_type::double_value) {
-                validate_postgresql_double_param(db_value_access::get_double_value(param));
+                validate_postgresql_double_param(param.double_value());
             }
             ++numeric_count;
         }
@@ -581,7 +581,7 @@ postgresql_params::postgresql_params(std::span<const db_value> params)
     std::size_t numeric_index = 0;
     for (std::size_t i = 0; i < params.size(); ++i) {
         const auto& param = params[i];
-        const auto type = db_value_access::type(param);
+        const auto type = param.type();
         const unsigned int oid = type == db_value_type::double_value ? postgresql_float8_oid : 0U;
         const char* text = nullptr;
         switch (type) {
@@ -591,7 +591,7 @@ postgresql_params::postgresql_params(std::span<const db_value> params)
                 text = db_value_access::owned_text(param).c_str();
                 break;
             case db_value_type::bool_value:
-                text = db_value_access::get_bool_value(param) ? "true" : "false";
+                text = param.bool_value() ? "true" : "false";
                 break;
             case db_value_type::signed_value:
             case db_value_type::unsigned_value:
@@ -602,11 +602,11 @@ postgresql_params::postgresql_params(std::span<const db_value> params)
                 ++numeric_index;
                 std::to_chars_result formatted{};
                 if (type == db_value_type::signed_value) {
-                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, db_value_access::signed_value(param));
+                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, param.signed_value());
                 } else if (type == db_value_type::unsigned_value) {
-                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, db_value_access::unsigned_value(param));
+                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, param.unsigned_value());
                 } else {
-                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, db_value_access::get_double_value(param));
+                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, param.double_value());
                 }
                 if (formatted.ec != std::errc{}) {
                     throw std::logic_error("failed to format PostgreSQL numeric parameter");
@@ -850,23 +850,38 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
     return run_cached_statement<db_exec_result>(pool, index, sql, params, resource, deadline_value);
 }
 
-// Single-row mode reports whether the statement produced rows only with its
-// first result, so the stream starts optimistically and read_stream_row()
-// refuses a statement without a row set.
+// Retain the first libpq result so column metadata is available even for an
+// empty row set, without consuming or copying the first row.
 task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     if (send_stream_query(pool, index, sql, params)) {
         co_await flush_output(pool, index, deadline_value);
     }
-    co_return db_stream_start(resource);
+    co_await wait_until_result_ready(pool, index, deadline_value);
+    postgresql_result_owner first(PQgetResult(pool.slot(index).connection_));
+    if (first.get() == nullptr) {
+        throw postgresql_protocol_failure("PostgreSQL stream ended without its result");
+    }
+    db_stream_start result(resource);
+    const auto status = PQresultStatus(first.get());
+    if (status == PGRES_SINGLE_TUPLE || status == PGRES_TUPLES_OK) {
+        const auto count = static_cast<std::size_t>(PQnfields(first.get()));
+        result.column_names_.reserve(count);
+        populate_postgresql_column_names(result.column_names_, *first, count);
+    }
+    result.result_ = first.release();
+    co_return result;
 }
 
-task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*&,
+task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*& pending_result,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     auto* connection = pool.slot(index).connection_;
-    co_await wait_until_result_ready(pool, index, deadline_value);
-    postgresql_result_owner result_value(PQgetResult(connection));
+    postgresql_result_owner result_value(static_cast<PGresult*>(std::exchange(pending_result, nullptr)));
+    if (result_value.get() == nullptr) {
+        co_await wait_until_result_ready(pool, index, deadline_value);
+        result_value.reset(PQgetResult(connection));
+    }
     if (result_value.get() == nullptr) {
         throw postgresql_protocol_failure("PostgreSQL stream ended without its result");
     }
@@ -898,11 +913,14 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
 // Abandoning a libpq single-row result still requires draining the whole
 // command. Closing the connection instead is bounded and keeps the worker
 // non-blocking.
-task<void> postgresql_driver::close_stream(pool_type& pool, std::size_t index, void*&, const operation_timeout&) {
+task<void> postgresql_driver::close_stream(pool_type& pool, std::size_t index, void*& pending_result, const operation_timeout&) {
+    discard_stream(std::exchange(pending_result, nullptr));
     pool.close_slot(index);
     co_return;
 }
 
-void postgresql_driver::discard_stream(void*) noexcept {}
+void postgresql_driver::discard_stream(void* pending_result) noexcept {
+    PQclear(static_cast<PGresult*>(pending_result));
+}
 
 }  // namespace ruvia::detail

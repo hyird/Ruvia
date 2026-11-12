@@ -76,6 +76,9 @@ pool.join();
 | `"ruvia/core/worker_group.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
 | `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_handle, [operation_options], fn)` | 固定大小阻塞卸载线程池，由调用方拥有：通过 `event_loop_pool_options`、`attach_event_loop` 的选项或 `worker_runtime_options` 的 `blocking_pool_` 交给事件循环借用，须比事件循环存活更久；core 不持有隐式进程级池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 借用的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（`worker_handle::has_blocking_pool()` / `event_loop::has_blocking_pool()` 可预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待，非正超时或已停止的令牌同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 或 `take_value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
 
+- **外部循环失败出口**：`event_loop_attachment_options::failure_` 拥有接收 `std::exception_ptr` 的回调；未配置时保留默认诊断。具名 options 通过 `std::move` 交给 `attach_event_loop()`。
+- **失败交付线程**：先请求停止，再在报告线程锁外同步调用；可能跨线程并发或重入，接收器负责自身同步。回调异常仅进入诊断，不逃出宿主 `run()`，不打断清理。
+- **失败出口寿命**：回调保留到最后一个 loop-state owner 释放；借用捕获须覆盖该寿命，禁止捕获 owning loop 形成环。全部 owner 消失后的迟到根任务异常回落默认诊断。
 - **停机回调退役**：`event_loop_stop_registration` 的析构、覆盖与 `reset()` 取消尚未启动的回调；已启动回调的捕获保留至异步清理完成。
 - **停机注册移交**：移动赋值先接管新注册，再退役旧回调；旧捕获析构重入写入的注册最终生效。
 - **退休池诊断**：已 `join()` 的池经保留的 loop 上报异常时，在池锁外读取异常诊断；非 Worker 线程上的 `what()` 可重入 `join()`。
@@ -328,6 +331,7 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **输出窗口 `take_output_batch()`**：部分批次只推进消费游标；在下一次追加或完整尾批存储交接时按摊销条件压缩前缀。
 - **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后，通过析构凭证或调用 `conn.acknowledge(std::move(credit))` 才把这部分字节计入 `nghttp2` 的接收窗口并按需发送连接与流级 `WINDOW_UPDATE`（关闭了 `nghttp2` 的自动窗口更新），实现精确背压。本端通告的 1 MiB 初始流窗口在对端确认本端 `SETTINGS` 后才生效，此前对端只能使用 RFC 默认的 65535 字节（RFC 9113 §6.9.2）；对端按协议先回 `SETTINGS` ACK 再发数据时不受影响。
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
+- **请求视图借用**：`build_request(..., borrowed_text body, ...) const&` 同时借用 head 租约与正文；两者均须覆盖返回请求的使用期。临时拥有型正文与右值 head 在编译期拒绝。
 - **Web 流资源**：运行时表统一确定元数据与入站正文 PMR；资源通过每流容器的 allocator 保留，不额外缓存指针。
 - **Web 正文队列**：待消费缓冲大小是积压额度的唯一计数来源，已交付的活跃缓冲不重复计入。
 - **DATA 部分消费 `submit_data(stream_id, bytes, end_stream, max_payload_bytes)`**：返回 `http2_data_submit_result{consumed_bytes_, status_}`，本次只编码 `min(bytes.size(), max_payload_bytes, 连接窗口, 流窗口)` 字节；帧头开销另计。`complete` 只表示这次输入全部消费，不表示 socket 已写完；`backpressured` 可以消费零字节或一个前缀。协议层既不借用也不复制未消费后缀，调用方必须保存后缀并按实际消费量推进，取得输出预算或收到 `WINDOW_UPDATE` / `SETTINGS` 后显式重试。窗口更新不会自动产生 DATA；调用方须显式重试提交。`expectation_pending` 和 `closed` 均消费零字节；前者等待 `100 Continue` 或显式 `release_request_content()`，后者停止发送。`pending_data_output_bytes()` 与输出批次 observer 仍用于已编码 DATA 和 socket 写完成记账；它们不能代替应用层输出预算。
@@ -376,6 +380,18 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 #### 4.3 HTTP/3、QPACK 与 QUIC（`"ruvia/http/http3_connection.h"`, `"ruvia/http/http3_quic_connection.h"`）
 
 `http3_connection` 用 `nghttp3` 封装请求流、控制流与 QPACK。`read_stream()` 消费输入，`peek_output()` / `commit_output()` / `acknowledge_output()` 管理借用输出与确认；正文块和动态 ORIGIN 帧在确认前保持地址稳定。RFC 9412 通告通过 `origins_` / `submit_origin_advertisement()` 提交，RFC 9218 优先级通过客户端 `submit_priority_update()`、服务端响应 `Priority` 字段与 `stream_priority()` 访问。
+
+独立传输驱动可直接使用 `http3_connection`，不必采用 `http3_quic_connection`：
+
+| 传输反馈 | 契约 |
+| --- | --- |
+| `block_stream(id)` / `unblock_stream(id)` | QUIC 流信用耗尽／恢复时暂停／恢复发送调度；不提交字节，也不恢复应用正文源 |
+| `shutdown_stream_read(id, error)` | 对端 RESET_STREAM 终止本地接收半边；不关闭发送半边 |
+| `shutdown_stream_write(id, error)` | 对端 STOP_SENDING 终止本地发送半边；不关闭接收半边 |
+| `set_max_client_streams_bidi(limit)` | 服务端接收 QUIC 单调递增的累计双向流上限，不是增量或并发流数 |
+| `next_event(local_transport_action)` | 对 RESET_STREAM／STOP_SENDING 事件，仅 `true` 表示须执行的传输命令；`false` 是已应用的对端通知，禁止回显 |
+
+- **终止收尾**：`shutdown_stream_*` 的 `std::nullopt` 表示不发布通知的本地终止；两者均不发送 QUIC 帧。最终退役仍由驱动调用 `close_stream()`。
 
 - **请求构造**：客户端 `submit_request_head()` 分别接受普通、CONNECT 与 extended CONNECT 视图；核心校验目标、字段、期望与对端能力，统一生成伪首部及 Content-Length，凭据始终 never-index。字段节预算按每个名称、值加 32 字节计算，受本地与已知对端限制共同约束。
 - **响应事件**：客户端 `http3_headers_event::status_` 保留收到的状态码，`status_->status()` 提供语义状态；`fields_` 仅含已验证的普通字段。600–999 按 5xx 处理，101 拒绝；保持官方 `nghttp3`，其在应用回调前拒绝 000–099，这是当前实现例外。

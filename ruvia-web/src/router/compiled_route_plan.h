@@ -30,6 +30,8 @@
 
 namespace ruvia::detail {
 
+class router;
+
 // What a registered route runs, as one closed set of alternatives. Each
 // alternative carries the handler's invoke thunk together with the route
 // metadata only that shape may have, so a route cannot claim a streaming or
@@ -395,7 +397,6 @@ private:
     bool conditional_middleware_{false};
 };
 class route_table;
-class router;
 
 // The one immutable route plan of a process run, compiled once at startup and
 // shared by every worker: every route with its endpoint metadata, limits and

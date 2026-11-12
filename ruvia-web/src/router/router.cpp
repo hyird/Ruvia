@@ -196,6 +196,14 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
     if (handler_target != controller_target_) {
         throw std::logic_error("route handler must be bound to the controller declaring it");
     }
+    register_owned_endpoint(controller_slot_, method, method_token, path, std::move(endpoint),
+        controller_middlewares, route_middlewares);
+}
+
+void detail::router::register_owned_endpoint(std::size_t slot, http_known_method method, std::string_view method_token,
+    std::string_view path, route_endpoint endpoint,
+    std::span<const controller_middleware_descriptor> controller_middlewares,
+    std::span<const controller_middleware_descriptor> route_middlewares) {
     if (!method_token.empty()) {
         if (!is_valid_http_method_token(method_token)) {
             throw std::invalid_argument("extension route method must be a valid HTTP method token");
@@ -241,7 +249,7 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
         append_route_middlewares(controller_middlewares, route_middlewares);
     routes.emplace_back(process_resource(),
         route_entry::init_type{.index_ = index,
-            .controller_ = controller_slot_,
+            .controller_ = slot,
             .method_ = method,
             .method_token_ = method_token,
             .path_ = path,

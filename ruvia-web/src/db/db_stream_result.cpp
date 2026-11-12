@@ -12,24 +12,27 @@
 
 namespace ruvia {
 db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot,
-    std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
-    operation_options options) noexcept
+    std::pmr::memory_resource* resource, operation_options options) noexcept
     : client_(client),
       slot_(slot),
       resource_(pmr_resource_or_default(resource)),
       fields_(resource_),
-      column_names_(std::move(column_names)),
       options_(std::move(options)) {}
 
 void db_stream_result::lease_type::abort() noexcept {
     detail::visit_db_pool_if_present(client_, [&](auto& client) noexcept { client.abort_stream(slot_); });
 }
 
+db_stream_result::state_type::state_type(
+    lease_type lease, std::pmr::vector<std::pmr::string> column_names) noexcept
+    : column_names_(std::move(column_names)),
+      operation_(std::move(lease)) {}
+
 db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t slot,
     std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
     operation_options options)
-    : state_(make_pmr_object<operation_state_type>(
-          resource, lease_type{client, slot, std::move(column_names), resource, std::move(options)})) {}
+    : state_(make_pmr_object<state_type>(
+          resource, lease_type{client, slot, resource, std::move(options)}, std::move(column_names))) {}
 
 db_stream_result::db_stream_result(db_stream_result&& other) noexcept
     : state_(std::move(other.state_)),
@@ -39,7 +42,13 @@ db_stream_result::db_stream_result(db_stream_result&& other) noexcept
 db_stream_result::~db_stream_result() = default;
 
 bool db_stream_result::active() const noexcept {
-    return state_ != nullptr && state_->active();
+    return state_ != nullptr && state_->operation_.active();
+}
+
+std::span<const std::pmr::string> db_stream_result::column_names() const& {
+    registration_.require_active();
+    return state_ != nullptr ? std::span<const std::pmr::string>(state_->column_names_)
+                             : std::span<const std::pmr::string>{};
 }
 
 void db_stream_result::bind_operation_scope(
@@ -56,18 +65,19 @@ void db_stream_result::expire_capability(void* target) noexcept {
 task<std::optional<db_row>> db_stream_result::read() & {
     registration_.require_active();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), read_task(io_metrics_, operation_guard_type(*state_)));
+        registration_.scope(), read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_));
 }
 
 task<std::optional<db_row>> db_stream_result::read_task(
-    detail::request_io_metrics* io_metrics, operation_guard_type pending) {
+    detail::request_io_metrics* io_metrics, operation_guard_type pending,
+    std::pmr::vector<std::pmr::string>& column_names) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
     auto row = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
         return client.read_stream_row(
-            lease_value.slot_, lease_value.fields_, lease_value.column_names_, lease_value.resource_, lease_value.options_);
+            lease_value.slot_, lease_value.fields_, column_names, lease_value.resource_, lease_value.options_);
     });
     if (row) {
         operation.finish_active();
@@ -80,7 +90,7 @@ task<std::optional<db_row>> db_stream_result::read_task(
 task<void> db_stream_result::close() & {
     registration_.require_active();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), close_task(io_metrics_, operation_guard_type(*state_)));
+        registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_)));
 }
 
 task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, operation_guard_type pending) {
@@ -98,7 +108,7 @@ task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, 
 
 void db_stream_result::reset() noexcept {
     if (state_ != nullptr) {
-        state_->reset();
+        state_->operation_.reset();
     }
 }
 

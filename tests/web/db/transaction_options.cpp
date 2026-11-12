@@ -219,13 +219,19 @@ TEST(Ruvia, db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) 
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource()), std::pmr::string("second", ruvia::process_resource())}, ruvia::process_resource()), .command_ = std::pmr::string("SELECT 2", ruvia::process_resource()), .deferred_ = true}}, ruvia::process_resource()));
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = {"prefetched", "first", "second"},
+                                                                                .command_ = "SELECT 3",
+                                                                                .deferred_ = true,
+                                                                                .first_row_before_hold_ = true}},
+            ruvia::process_resource()));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto handle = connected.handle();
         auto stream = co_await handle.query_stream("SELECT v FROM records");
+        const auto prefetched = co_await stream.read();
+        EXPECT_TRUE(prefetched && (*prefetched)["v"].as<std::string_view>() == "prefetched");
         bool first_completed = false;
         task_scope reading(connected.worker());
         const auto first = [&]() -> task<void> {

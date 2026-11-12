@@ -27,9 +27,11 @@
 namespace ruvia {
 
 class request_stream;
+class router;
 
 namespace detail {
 struct request_stream_access;
+class router_state;
 // Commits a tunnel request's success head and returns the established tunnel.
 using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>;
 using request_stream_websocket_accept = callback_ref<task<websocket*>(websocket_route_config)>;
@@ -48,7 +50,8 @@ using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 // flow control, the server timeouts and the HTTP/3 0-RTT 425 rule; these
 // answers use the framework's default error representation. No route,
 // middleware, document root, CORS policy, response compression, rate limit
-// or on_error handler takes part.
+// or on_error handler takes part automatically. A callback may explicitly
+// await router::dispatch() to apply its own frozen routes and middleware.
 //
 // The callback selects exactly one response: respond(), response().commit(),
 // accept_tunnel(), or accept_websocket(). respond() transfers a complete
@@ -210,6 +213,8 @@ public:
 
 private:
     friend struct detail::request_stream_access;
+    friend class router;
+    friend class detail::router_state;
 
     request_stream(context& context_value, response_stream_writer& response,
         const detail::request_stream_tunnel_accept* accept_tunnel,
@@ -230,6 +235,7 @@ private:
     const detail::request_stream_tunnel_accept* accept_tunnel_;
     const detail::request_stream_websocket_accept* accept_websocket_;
     ::ruvia::operation_scope operation_scope_;
+    bool routed_{false};
 };
 
 // application-owned handler of every listener_dispatch::request_stream

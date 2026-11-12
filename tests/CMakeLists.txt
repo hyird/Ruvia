@@ -157,6 +157,7 @@ if(RUVIA_BUILD_WEB)
     # on_request_stream beside an ordinary routes listener with middleware.
     ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/app/request_stream.cpp)
     ruvia_add_web_standalone_test(ruvia_http_server 60 web/app/http_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_router 60 web/app/router.cpp)
     ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/app/http_server_group.cpp)
     ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/app/connection_lifecycle.cpp)
     ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/websocket/standalone_server.cpp)

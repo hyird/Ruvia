@@ -272,14 +272,14 @@ class db_migration_runner;
 struct db_value_access;
 struct db_result_access;
 
+}  // namespace detail
+
 enum class db_value_type : std::uint8_t { null,
     string,
     signed_value,
     unsigned_value,
     double_value,
     bool_value };
-
-}  // namespace detail
 
 class db_conversion_error final : public std::runtime_error {
 public:
@@ -380,20 +380,23 @@ public:
     db_value(t_type value)
         : storage_(std::in_place_type<double>, detail::checked_model_float<double>(value)) {}
 
+    // Reading a different alternative throws std::bad_variant_access; values
+    // are never coerced. Text borrows this value and, for borrowed inputs,
+    // the original source. Compiled statements own their parameter text.
+    [[nodiscard]] db_value_type type() const noexcept;
+    [[nodiscard]] std::string_view text() const& RUVIA_LIFETIMEBOUND;
+    std::string_view text() const&& = delete;
+    [[nodiscard]] std::int64_t signed_value() const;
+    [[nodiscard]] std::uint64_t unsigned_value() const;
+    [[nodiscard]] double double_value() const;
+    [[nodiscard]] bool bool_value() const;
+
 private:
     friend struct detail::db_value_access;
 
     // Tagged so it never competes with the public borrowing constructors: a
     // std::pmr::string lvalue argument still borrows through string_view.
     db_value(std::in_place_type_t<std::pmr::string>, std::pmr::string value);
-
-    [[nodiscard]] detail::db_value_type type() const noexcept;
-    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::string_view text() const&& = delete;
-    [[nodiscard]] std::int64_t signed_value() const noexcept;
-    [[nodiscard]] std::uint64_t unsigned_value() const noexcept;
-    [[nodiscard]] double get_double_value() const noexcept;
-    [[nodiscard]] bool get_bool_value() const noexcept;
 
     template <typename t_type>
     [[nodiscard]] static storage_type make_integer_storage(t_type value) {
@@ -414,36 +417,12 @@ struct db_value_access final {
         return db_value(std::in_place_type<std::pmr::string>, std::move(value));
     }
 
-    [[nodiscard]] static db_value_type type(const db_value& value) noexcept {
-        return value.type();
-    }
-
-    [[nodiscard]] static std::string_view text(const db_value& value) noexcept {
-        return value.text();
-    }
-
     // Prepared statement parameters own their text. Requiring that alternative
     // gives native text protocols a checked, NUL-terminated borrowing boundary.
     [[nodiscard]] static const std::pmr::string& owned_text(const db_value& value) {
         return std::get<std::pmr::string>(value.storage_);
     }
     static const std::pmr::string& owned_text(const db_value&&) = delete;
-
-    [[nodiscard]] static std::int64_t signed_value(const db_value& value) noexcept {
-        return value.signed_value();
-    }
-
-    [[nodiscard]] static std::uint64_t unsigned_value(const db_value& value) noexcept {
-        return value.unsigned_value();
-    }
-
-    [[nodiscard]] static double get_double_value(const db_value& value) noexcept {
-        return value.get_double_value();
-    }
-
-    [[nodiscard]] static bool get_bool_value(const db_value& value) noexcept {
-        return value.get_bool_value();
-    }
 };
 
 template <typename t_type>
@@ -470,8 +449,8 @@ template <typename param_type>
     requires db_parameter<param_type>
 [[nodiscard]] db_value make_immediate_db_parameter(param_type&& param) {
     if constexpr (std::same_as<std::remove_cvref_t<param_type>, db_value>) {
-        if (db_value_access::type(param) == db_value_type::string) {
-            return db_value(db_value_access::text(param));
+        if (param.type() == db_value_type::string) {
+            return db_value(param.text());
         }
         return db_value(std::forward<param_type>(param));
     } else if constexpr (db_owning_char_string<std::remove_cvref_t<param_type>>) {

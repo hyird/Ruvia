@@ -174,11 +174,13 @@ private:
 // A caller-owned io_context bound to one loop: its claim, the worker endpoint,
 // and the same worker stop chain that a pool loop's worker_runtime owns.
 struct attached_context final {
-    attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool);
+    attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool,
+        move_only_function<void(std::exception_ptr)> failure);
 
     external_context_claim claim_;
     worker_runtime_context runtime_;
     worker_stop_chain stop_;
+    move_only_function<void(std::exception_ptr)> failure_;
 };
 
 // One loop's runtime and retirement. A pool loop owns a worker_runtime; an
@@ -190,7 +192,8 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     using context_ownership_type = std::variant<worker_runtime, attached_context>;
 
     event_loop_state(std::size_t queue_capacity, blocking_pool* pool);
-    event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool);
+    event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool,
+        move_only_function<void(std::exception_ptr)> failure);
 
     [[nodiscard]] worker_runtime& owned_runtime() noexcept {
         return *std::get_if<worker_runtime>(&context_ownership_);

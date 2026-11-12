@@ -66,6 +66,7 @@ struct context_connection_services final {
     conn_info info_;
     std::pmr::memory_resource* inbound_buffer_pool_{};
     const route_table* routes_{};
+    rate_limiter* route_rate_limiter_{};
     // Whether the peer is a configured trusted proxy. Decided once per
     // connection: the peer address never changes, so its IP parse and block
     // match are not repeated per request.
@@ -127,7 +128,9 @@ public:
     }
 
     [[nodiscard]] detail::rate_limiter* rate_limiter() const noexcept {
-        return worker_services_->rate_limiter_;
+        return connection_services_.route_rate_limiter_ != nullptr
+                   ? connection_services_.route_rate_limiter_
+                   : worker_services_->rate_limiter_;
     }
 
     [[nodiscard]] const ruvia::env* env() const noexcept {
@@ -207,6 +210,9 @@ public:
         connection_services_.routes_ = &routes_value;
     }
     void bind_routes(route_table&&) = delete;
+    void bind_route_rate_limiter(detail::rate_limiter& limiter) noexcept {
+        connection_services_.route_rate_limiter_ = &limiter;
+    }
 
     [[nodiscard]] constexpr const context_request_body_source& request_body_source() const noexcept {
         return request_services_.body_source_;
@@ -278,6 +284,7 @@ public:
         services.connection_services_.info_ = connection_services_.info_;
         services.connection_services_.inbound_buffer_pool_ = connection_services_.inbound_buffer_pool_;
         services.connection_services_.routes_ = connection_services_.routes_;
+        services.connection_services_.route_rate_limiter_ = connection_services_.route_rate_limiter_;
         services.connection_services_.lifecycle_ = connection_services_.lifecycle_;
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
         services.request_services_.io_metrics_ = request_services_.io_metrics_;

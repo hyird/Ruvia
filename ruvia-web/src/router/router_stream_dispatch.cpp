@@ -55,6 +55,15 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     if (bound_writer != nullptr) {
         detail::streaming_access::bind_context(*bound_writer, context_value, context_value.stop_token());
     }
+    co_return co_await dispatch_bound_stream(resolved, context_value, handler);
+}
+
+task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(
+    const resolved_route& resolved, context& context_value, route_stream_handler handler) const {
+    const auto& route = resolved.route();
+    auto& context_services_value = detail::context_access::services(context_value);
+    const auto* response_stream_output = context_services_value.response_output().response_stream();
+    auto* const bound_writer = response_stream_output != nullptr ? &response_stream_output->writer() : nullptr;
 
     // Records that next() reached the handler even when it emitted no bytes.
     bool handler_invoked = false;

@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client_response_head.h"
@@ -116,8 +117,11 @@ public:
     const http2_server_request_snapshot& snapshot() const&& = delete;
     [[nodiscard]] http2_server_request_view request_view() const& noexcept RUVIA_LIFETIMEBOUND;
     http2_server_request_view request_view() const&& = delete;
+    // Head fields borrow this lease; body borrows its caller-owned storage.
     [[nodiscard]] http_request build_request(
-        std::pmr::memory_resource* resource = nullptr, std::string_view body = {}) const;
+        std::pmr::memory_resource* resource = nullptr, borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
+    http_request build_request(
+        std::pmr::memory_resource* resource = nullptr, borrowed_text body = {}) const&& = delete;
     [[nodiscard]] http_server_expectation_plan expectation_plan(
         http_unsupported_expectation_policy policy) const noexcept {
         return expectations_.server_plan(content_, policy);

@@ -213,6 +213,9 @@ TEST(Ruvia, db_mariadb_stream_completion_preserves_result_boundaries_and_pipelin
                 const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
                 const auto kept = co_await handle.query("SELECT v FROM retained");
                 auto stream = co_await handle.query_stream("CALL streamed_rows()");
+                const auto names = stream.column_names();
+                EXPECT_EQ(names.size(), std::size_t{1});
+                EXPECT_TRUE(!names.empty() && names.front() == "v");
                 if (close_early) {
                     co_await stream.close();
                 } else {
@@ -225,6 +228,8 @@ TEST(Ruvia, db_mariadb_stream_completion_preserves_result_boundaries_and_pipelin
                 }
                 EXPECT_TRUE(!stream.active());
                 co_await stream.close();
+                EXPECT_EQ(stream.column_names().data(), names.data());
+                EXPECT_TRUE(!names.empty() && names.front() == "v");
                 task_scope statements(connected.worker());
                 statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_a", outcomes[0]));
                 statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_b", outcomes[1]));

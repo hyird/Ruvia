@@ -532,6 +532,13 @@ public:
     [[nodiscard]] task<redis_value> command(std::span<const std::string_view> args) const;
     task<redis_value> command(
         std::initializer_list<std::string_view> args) const = delete;
+    // Takes ownership synchronously, before the returned cold task can suspend.
+    [[nodiscard]] task<redis_value> command(redis_compiled_command command) const {
+        if (command.arguments().empty()) {
+            throw std::invalid_argument("Redis compiled command has been consumed");
+        }
+        return scoped(command_owned(std::move(command).take_arguments()));
+    }
 
     [[nodiscard]] task<void> ping() const;
     [[nodiscard]] task<std::pmr::string> ping(std::string_view message) const;

@@ -22,8 +22,8 @@
 
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_mapping.h"
 #include "ruvia/web/db/db_query.h"
-#include "ruvia/web/detail/db/db_entity_codec.h"
 #include "ruvia/web/detail/db/db_relation_metadata.h"
 
 namespace ruvia {
@@ -930,9 +930,7 @@ struct db_map_scalar final {
         if (rows.empty() || !rows.front()[std::size_t{0}].value()) {
             return std::nullopt;
         }
-        auto out = entity_value_slot<scalar_type>::make_value(resource);
-        decode_db_field(rows.front()[std::size_t{0}], out, resource);
-        return out;
+        return ::ruvia::decode_db_field<scalar_type>(rows.front()[std::size_t{0}], resource);
     }
 };
 template <db_mapped_value scalar_type>
@@ -945,9 +943,7 @@ struct db_map_scalars final {
                 throw db_conversion_error(
                     db_conversion_error::code_type::unexpected_null, "database scalar column is NULL");
             }
-            auto out = entity_value_slot<scalar_type>::make_value(resource);
-            decode_db_field(row[std::size_t{0}], out, resource);
-            result.push_back(std::move(out));
+            result.push_back(::ruvia::decode_db_field<scalar_type>(row[std::size_t{0}], resource));
         }
         return result;
     }

@@ -14,6 +14,16 @@ namespace ruvia {
 
 class context;
 
+// Declared before body admission, not executed as middleware. Route and
+// controller ceilings can only tighten the server limit; the strictest wins.
+// Global use()/use_at() reject this route-only policy.
+template <std::size_t max_bytes>
+class body_limit final {
+public:
+    static_assert(max_bytes > 0, "body limit must be greater than 0");
+    static constexpr std::size_t ruvia_request_body_limit_bytes = max_bytes;
+};
+
 struct middleware_scope_options final {
     borrowed_text prefix_{};
 };
@@ -167,9 +177,8 @@ private:
 //
 // application::use<T>() instantiates the descriptor at the call site. Built-in
 // middleware headers already include that machinery. A custom middleware's
-// use<T>() call site needs controller.h, testing.h, or
-// detail/middleware/middleware_registration.h. This header stays free of
-// context so app.h does not pull it in.
+// use<T>() call site needs router.h, controller.h, or testing.h.
+// This header stays free of context so app.h does not pull it in.
 template <typename middleware_type>
 concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> &&
                      (requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle); } || requires { static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::handle); });

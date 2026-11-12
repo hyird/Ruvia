@@ -125,24 +125,24 @@ inline void append_db_double_literal(std::pmr::string& output, double value, db_
 
 inline void append_db_literal(std::pmr::string& output, const db_value& value, db_driver driver) {
     require_db_dialect(driver);
-    switch (db_value_access::type(value)) {
+    switch (value.type()) {
         case db_value_type::null:
             output += "NULL";
             return;
         case db_value_type::string:
-            append_db_string_literal(output, db_value_access::text(value), driver);
+            append_db_string_literal(output, value.text(), driver);
             return;
         case db_value_type::signed_value:
-            append_db_number(output, db_value_access::signed_value(value));
+            append_db_number(output, value.signed_value());
             return;
         case db_value_type::unsigned_value:
-            append_db_number(output, db_value_access::unsigned_value(value));
+            append_db_number(output, value.unsigned_value());
             return;
         case db_value_type::double_value:
-            append_db_double_literal(output, db_value_access::get_double_value(value), driver);
+            append_db_double_literal(output, value.double_value(), driver);
             return;
         case db_value_type::bool_value:
-            output += db_value_access::get_bool_value(value) ? "TRUE" : "FALSE";
+            output += value.bool_value() ? "TRUE" : "FALSE";
             return;
     }
     std::terminate();

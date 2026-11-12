@@ -660,7 +660,7 @@ struct expression_nodes final {
         if (op == db_binary_operator::equal || op == db_binary_operator::not_equal) {
             const auto is_null = [&](std::size_t index) {
                 const auto& node = nodes_[index];
-                return node.kind_ == db_node_kind::value && db_value_access::type(node.value_) == db_value_type::null;
+                return node.kind_ == db_node_kind::value && node.value_.type() == db_value_type::null;
             };
             const bool null_left = is_null(left);
             if (null_left || is_null(right)) {
@@ -1037,25 +1037,25 @@ db_owned_expression db_owned_expression::make_static_excluded(std::string_view n
 
 db_owned_expression db_owned_expression::make_value(const db_value& value) {
     db_owned_expression result;
-    switch (db_value_access::type(value)) {
+    switch (value.type()) {
         case db_value_type::null:
             result.kind_ = leaf_kind::null_value;
             return result;
         case db_value_type::signed_value:
             result.kind_ = leaf_kind::signed_value;
-            result.scalar_.signed_value_ = db_value_access::signed_value(value);
+            result.scalar_.signed_value_ = value.signed_value();
             return result;
         case db_value_type::unsigned_value:
             result.kind_ = leaf_kind::unsigned_value;
-            result.scalar_.unsigned_value_ = db_value_access::unsigned_value(value);
+            result.scalar_.unsigned_value_ = value.unsigned_value();
             return result;
         case db_value_type::double_value:
             result.kind_ = leaf_kind::double_value;
-            result.scalar_.double_value_ = db_value_access::get_double_value(value);
+            result.scalar_.double_value_ = value.double_value();
             return result;
         case db_value_type::bool_value:
             result.kind_ = leaf_kind::bool_value;
-            result.scalar_.bool_value_ = db_value_access::get_bool_value(value);
+            result.scalar_.bool_value_ = value.bool_value();
             return result;
         case db_value_type::string: {
             auto tree = allocate_tree();

@@ -93,14 +93,34 @@ enum class middleware_scope_coverage : std::uint8_t {
 
 detail::route_table::route_table(
     const compiled_route_plan& plan, const controller_store& controllers)
-    : plan_(&plan),
-      handler_targets_(process_resource()),
-      middleware_instances_(process_resource()),
-      middleware_frames_(process_resource()) {
+    : route_table(plan) {
     handler_targets_.reserve(plan.routes_.size());
     for (const auto& route : plan.routes_) {
         handler_targets_.push_back(controllers.instance(route.controller()));
     }
+    build_middleware_instances();
+}
+
+detail::route_table::route_table(const compiled_route_plan& plan, std::span<void* const> targets)
+    : route_table(plan) {
+    handler_targets_.reserve(plan.routes_.size());
+    for (const auto& route : plan.routes_) {
+        if (route.controller() >= targets.size() || targets[route.controller()] == nullptr) {
+            throw std::invalid_argument("route handler slot is not bound");
+        }
+        handler_targets_.push_back(targets[route.controller()]);
+    }
+    build_middleware_instances();
+}
+
+detail::route_table::route_table(const compiled_route_plan& plan)
+    : plan_(&plan),
+      handler_targets_(process_resource()),
+      middleware_instances_(process_resource()),
+      middleware_frames_(process_resource()) {}
+
+void detail::route_table::build_middleware_instances() {
+    const auto& plan = *plan_;
 
     middleware_instances_.reserve(plan.middleware_instances_.size());
     middleware_frames_.reserve(plan.middleware_frame_instances_.size());
@@ -112,6 +132,7 @@ detail::route_table::route_table(
         for (std::size_t i = middleware_instances_.size(); i != 0; --i) {
             plan.middleware_instances_[i - 1].destroy()(middleware_instances_[i - 1]);
         }
+        middleware_instances_.clear();
         throw;
     }
 

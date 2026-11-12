@@ -66,22 +66,22 @@ bool is_mariadb_bare_function_name(std::string_view name) noexcept {
 }
 
 [[nodiscard]] bool same_db_value(const db_value& a, const db_value& b) noexcept {
-    if (db_value_access::type(a) != db_value_access::type(b)) {
+    if (a.type() != b.type()) {
         return false;
     }
-    switch (db_value_access::type(a)) {
+    switch (a.type()) {
         case db_value_type::null:
             return true;
         case db_value_type::string:
-            return db_value_access::text(a) == db_value_access::text(b);
+            return a.text() == b.text();
         case db_value_type::signed_value:
-            return db_value_access::signed_value(a) == db_value_access::signed_value(b);
+            return a.signed_value() == b.signed_value();
         case db_value_type::unsigned_value:
-            return db_value_access::unsigned_value(a) == db_value_access::unsigned_value(b);
+            return a.unsigned_value() == b.unsigned_value();
         case db_value_type::double_value:
-            return db_value_access::get_double_value(a) == db_value_access::get_double_value(b);
+            return a.double_value() == b.double_value();
         case db_value_type::bool_value:
-            return db_value_access::get_bool_value(a) == db_value_access::get_bool_value(b);
+            return a.bool_value() == b.bool_value();
     }
     return false;
 }
@@ -293,17 +293,17 @@ static_assert(std::ranges::is_sorted(pg_function_parameter_cast_table, {}, &pg_f
 
 // A bound non-NULL value: it has no SQL type until a cast or its context gives one.
 [[nodiscard]] bool is_untyped_value(const db_query_node& node) noexcept {
-    return node.kind_ == db_node_kind::value && db_value_access::type(node.value_) != db_value_type::null;
+    return node.kind_ == db_node_kind::value && node.value_.type() != db_value_type::null;
 }
 
 // Only bare integers acquire the bitwise range contract. Other numeric and
 // boolean values retain their category; strings retain SQL context because a
 // reused parameter may already have been typed by an earlier reference.
 [[nodiscard]] pg_parameter_cast pg_operator_operand_cast(const db_query_node& node, pg_parameter_cast cast) noexcept {
-    if (!is_untyped_value(node) || db_value_access::type(node.value_) == db_value_type::string) {
+    if (!is_untyped_value(node) || node.value_.type() == db_value_type::string) {
         return pg_parameter_cast::context;
     }
-    const auto type = db_value_access::type(node.value_);
+    const auto type = node.value_.type();
     return cast == pg_parameter_cast::bitwise_integer &&
                    type != db_value_type::signed_value && type != db_value_type::unsigned_value
                ? pg_parameter_cast::value_category
@@ -407,11 +407,11 @@ public:
 private:
     void append_parameter(const db_value& value, std::uint32_t* position, pg_parameter_cast cast) {
         const bool bitwise_integer = pg() && cast == pg_parameter_cast::bitwise_integer;
-        if (bitwise_integer && db_value_access::type(value) == db_value_type::unsigned_value &&
-            db_value_access::unsigned_value(value) > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+        if (bitwise_integer && value.type() == db_value_type::unsigned_value &&
+            value.unsigned_value() > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
             throw std::invalid_argument("PostgreSQL integer bitwise operand exceeds bigint range");
         }
-        if (mode_ == db_parameter_mode::literal || db_value_access::type(value) == db_value_type::null) {
+        if (mode_ == db_parameter_mode::literal || value.type() == db_value_type::null) {
             if (bitwise_integer) {
                 sql_ += '(';
             }
@@ -460,7 +460,7 @@ private:
     void pg_parameter(std::size_t position, const db_value& value, pg_parameter_cast cast) {
         sql_ += '$';
         append_db_number(sql_, static_cast<std::uint64_t>(position));
-        const auto type = db_value_access::type(value);
+        const auto type = value.type();
         const bool integer = type == db_value_type::signed_value || type == db_value_type::unsigned_value;
         if (cast == pg_parameter_cast::bitwise_integer) {
             sql_ += "::int8";
@@ -848,7 +848,7 @@ private:
             case db_node_kind::excluded:
                 return false;
             case db_node_kind::value:
-                return db_value_access::type(n.value_) != db_value_type::null;
+                return n.value_.type() != db_value_type::null;
             default:
                 break;
         }

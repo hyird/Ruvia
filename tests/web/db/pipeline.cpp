@@ -57,12 +57,19 @@ TEST(Ruvia, db_postgresql_exhausted_stream_preserves_buffered_results_and_connec
             const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
             for (int iteration = 0; iteration < 3; ++iteration) {
                 auto stream = co_await handle.query_stream("SELECT v FROM streamed WHERE id > $1", iteration);
+                const auto names = stream.column_names();
+                EXPECT_EQ(names.size(), std::size_t{1});
+                EXPECT_TRUE(!names.empty() && names.front() == "v");
                 std::pmr::vector<std::pmr::string> values{ruvia::process_resource()};
                 while (auto row = co_await stream.read()) {
                     values.emplace_back((*row)["v"].as<std::string_view>().value_or(""));
                 }
                 EXPECT_TRUE((values == (empty ? std::pmr::vector<std::pmr::string>(ruvia::process_resource()) : std::pmr::vector<std::pmr::string>({std::pmr::string("stream-a", ruvia::process_resource()), std::pmr::string("stream-b", ruvia::process_resource())}, ruvia::process_resource()))));
                 EXPECT_TRUE(!stream.active());
+                EXPECT_EQ(stream.column_names().data(), names.data());
+                EXPECT_TRUE(!names.empty() && names.front() == "v");
+                co_await stream.close();
+                EXPECT_EQ(stream.column_names().data(), names.data());
                 const auto rows = co_await handle.query("SELECT v FROM buffered WHERE id > $1", iteration);
                 EXPECT_EQ(rows.size(), std::size_t{2});
                 if (rows.size() == 2) {

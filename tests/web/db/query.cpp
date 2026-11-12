@@ -12,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -28,6 +29,35 @@ using ruvia::test::failing_memory_resource;
 namespace testing = ::ruvia::test;
 using op_type = db_binary_operator;
 RUVIA_DB_ENTITY(entity_type, "device", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>)
+
+TEST(Ruvia, db_public_parameters_preserve_types_and_own_compiled_text) {
+    const auto statement = [] {
+        db_query query;
+        const std::string text(128, 'x');
+        query.select({query.value(text), query.value(-42),
+            query.value((std::numeric_limits<std::uint64_t>::max)()), query.value(1.25), query.value(true)});
+        return query.compile(db_driver::postgresql, nullptr);
+    }();
+    const db_value null_value(nullptr);
+    EXPECT_EQ(null_value.type(), db_value_type::null);
+    EXPECT_THROW((void)null_value.text(), std::bad_variant_access);
+    const auto parameters = statement.params();
+    ASSERT_EQ(parameters.size(), std::size_t{5});
+    EXPECT_EQ(parameters[0].type(), db_value_type::string);
+    EXPECT_EQ(parameters[0].text(), std::string(128, 'x'));
+    EXPECT_EQ(parameters[1].type(), db_value_type::signed_value);
+    EXPECT_EQ(parameters[1].signed_value(), -42);
+    EXPECT_EQ(parameters[2].type(), db_value_type::unsigned_value);
+    EXPECT_EQ(parameters[2].unsigned_value(), (std::numeric_limits<std::uint64_t>::max)());
+    EXPECT_EQ(parameters[3].type(), db_value_type::double_value);
+    EXPECT_EQ(parameters[3].double_value(), 1.25);
+    EXPECT_EQ(parameters[4].type(), db_value_type::bool_value);
+    EXPECT_TRUE(parameters[4].bool_value());
+    EXPECT_THROW((void)parameters[0].signed_value(), std::bad_variant_access);
+    EXPECT_THROW((void)parameters[1].unsigned_value(), std::bad_variant_access);
+    EXPECT_THROW((void)parameters[2].double_value(), std::bad_variant_access);
+    EXPECT_THROW((void)parameters[3].bool_value(), std::bad_variant_access);
+}
 
 TEST(Ruvia, db_query_sql_expression_import_preserves_syntax_and_parameter_binding) {
     test::counting_memory_resource source_resource, target_resource;

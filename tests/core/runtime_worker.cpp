@@ -1710,9 +1710,19 @@ bool test_pool_failure_report_works_after_queue_closure() {
 }
 
 bool test_attachment_report_failure_keeps_native_run_ownership() {
-    const auto run = [](bool wrapped_run) {
+    const auto run = [](bool wrapped_run, bool receive_failure) {
         asio::io_context io_context;
-        auto attachment = ruvia::attach_event_loop(io_context);
+        const auto expected = std::make_exception_ptr(std::runtime_error("attached report"));
+        std::exception_ptr received;
+        int reports = 0;
+        ruvia::event_loop_attachment_options options;
+        if (receive_failure) {
+            options.failure_ = [&](std::exception_ptr failure) {
+                received = std::move(failure);
+                ++reports;
+            };
+        }
+        auto attachment = ruvia::attach_event_loop(io_context, std::move(options));
         const auto loop = attachment.loop();
         std::atomic_bool cleanup_finished{false};
         auto cleanup = loop.on_stop([&]() -> ruvia::task<void> {
@@ -1721,7 +1731,7 @@ bool test_attachment_report_failure_keeps_native_run_ownership() {
         bool report_returned = false;
         bool unrelated_work_ran = false;
         asio::post(io_context, [&] {
-            loop.report_failure(std::make_exception_ptr(std::runtime_error("attached report")));
+            loop.report_failure(expected);
             report_returned = true;
             asio::post(io_context, [&] { unrelated_work_ran = true; });
         });
@@ -1736,9 +1746,10 @@ bool test_attachment_report_failure_keeps_native_run_ownership() {
             native_run_threw = true;
         }
         return cleanup.valid() && report_returned && unrelated_work_ran &&
-               cleanup_finished.load(std::memory_order_acquire) && !native_run_threw && !loop.handle().valid();
+               cleanup_finished.load(std::memory_order_acquire) && !native_run_threw && !loop.handle().valid() &&
+               reports == (receive_failure ? 1 : 0) && received == (receive_failure ? expected : nullptr);
     };
-    return run(true) && run(false);
+    return run(true, false) && run(false, false) && run(true, true) && run(false, true);
 }
 
 ruvia::task<void> failed_abandoned_attachment_root() {
@@ -1748,8 +1759,30 @@ ruvia::task<void> failed_abandoned_attachment_root() {
 
 bool test_abandoned_attachment_root_failure_retires(bool wrapped_run) {
     asio::io_context io_context;
-    auto attachment = ruvia::attach_event_loop(io_context);
+    int root_reports = 0;
+    int stop_reports = 0;
+    bool reports_on_runner = true;
+    const auto runner = std::this_thread::get_id();
+    auto attachment = ruvia::attach_event_loop(io_context, {
+                                                               .failure_ = [&](std::exception_ptr failure) {
+                                                                   reports_on_runner = reports_on_runner && std::this_thread::get_id() == runner;
+                                                                   try {
+                                                                       std::rethrow_exception(failure);
+                                                                   } catch (const std::runtime_error& error) {
+                                                                       if (std::string_view(error.what()) == "abandoned attachment root failed") {
+                                                                           ++root_reports;
+                                                                       } else if (std::string_view(error.what()) == "attachment stop failed") {
+                                                                           ++stop_reports;
+                                                                       }
+                                                                   }
+                                                               },
+                                                           });
     const auto loop = attachment.loop();
+    std::atomic_bool cleanup_finished{false};
+    auto cleanup = loop.on_stop([&]() -> ruvia::task<void> {
+        co_await finish_shutdown_cleanup(loop.handle(), cleanup_finished);
+        throw std::runtime_error("attachment stop failed");
+    });
     std::atomic_bool unrelated_work_ran{false};
     asio::post(io_context, [&] { unrelated_work_ran.store(true, std::memory_order_release); });
     {
@@ -1769,7 +1802,8 @@ bool test_abandoned_attachment_root_failure_retires(bool wrapped_run) {
         context_access_rejected = true;
     }
     return unrelated_work_ran.load(std::memory_order_acquire) && !attachment.valid() &&
-           !loop.handle().valid() && context_access_rejected;
+           !loop.handle().valid() && context_access_rejected && root_reports == 1 && stop_reports == 1 &&
+           reports_on_runner && cleanup.valid() && cleanup_finished.load(std::memory_order_acquire);
 }
 
 bool test_attachment_run_failure_retires_through_async_cleanup() {
@@ -2718,6 +2752,89 @@ TEST(Ruvia, WorkerPoolFailureReportWorksAfterQueueClosure) {
 TEST(Ruvia, WorkerAttachmentReportFailurePreservesNativeRunOwnership) {
     EXPECT_TRUE(test_attachment_report_failure_keeps_native_run_ownership());
 }
+TEST(Ruvia, WorkerAttachmentOnlyReportsUnconsumedRootFailures) {
+    asio::io_context context;
+    int reports = 0;
+    std::thread::id reporting_thread;
+    std::exception_ptr received;
+    auto attachment = ruvia::attach_event_loop(context, {
+                                                            .failure_ = [&](std::exception_ptr failure) {
+                                                                ++reports;
+                                                                reporting_thread = std::this_thread::get_id();
+                                                                received = std::move(failure);
+                                                            },
+                                                        });
+    const auto loop = attachment.loop();
+    {
+        auto consumed = loop.start(failed_abandoned_attachment_root());
+        context.poll();
+        EXPECT_THROW(consumed.get(), std::runtime_error);
+    }
+    EXPECT_EQ(reports, 0);
+    EXPECT_TRUE(loop.accepting());
+
+    auto abandoned = std::make_optional(loop.start(failed_abandoned_attachment_root()));
+    context.poll();
+    std::thread::id abandoning_thread;
+    std::thread reporter([&] {
+        abandoning_thread = std::this_thread::get_id();
+        abandoned.reset();
+    });
+    reporter.join();
+    EXPECT_EQ(reports, 1);
+    EXPECT_EQ(reporting_thread, abandoning_thread);
+    EXPECT_NE(received, nullptr);
+    EXPECT_FALSE(loop.accepting());
+    context.run();
+    EXPECT_FALSE(attachment.valid());
+}
+
+TEST(Ruvia, WorkerAttachmentFailureReceiverSurvivesReentrantOwnerDestructionAndThrow) {
+    asio::io_context context;
+    std::optional<ruvia::event_loop_attachment> attachment;
+    std::optional<ruvia::event_loop> loop;
+    auto lifetime = std::make_shared<int>(42);
+    const std::weak_ptr<int> observed = lifetime;
+    auto diagnostic_calls = std::make_shared<std::atomic_size_t>(0);
+    const auto first = std::make_exception_ptr(std::runtime_error("first attached failure"));
+    const auto nested = std::make_exception_ptr(std::runtime_error("nested attached failure"));
+    int reports = 0;
+    bool target_survived = false;
+    bool unrelated_work_ran = false;
+    std::atomic_bool cleanup_finished{false};
+    attachment.emplace(ruvia::attach_event_loop(context, {
+                                                             .failure_ = [&, owned = std::make_unique<int>(42), lifetime = std::move(lifetime)](std::exception_ptr failure) {
+                                                                 ++reports;
+                                                                 if (failure == first) {
+                                                                     loop->report_failure(nested);
+                                                                     target_survived = !attachment && !loop && !observed.expired() && *owned == *lifetime;
+                                                                 } else {
+                                                                     EXPECT_EQ(failure, nested);
+                                                                     attachment.reset();
+                                                                     loop.reset();
+                                                                     throw counted_failure(diagnostic_calls);
+                                                                 }
+                                                             },
+                                                         }));
+    loop.emplace(attachment->loop());
+    const auto worker = loop->handle();
+    auto cleanup = loop->on_stop([&]() -> ruvia::task<void> {
+        co_await finish_shutdown_cleanup(worker, cleanup_finished);
+    });
+    asio::post(context, [&] {
+        loop->report_failure(first);
+        asio::post(context, [&] { unrelated_work_ran = true; });
+    });
+    attachment->run();
+    EXPECT_EQ(reports, 2);
+    EXPECT_TRUE(target_survived);
+    EXPECT_EQ(diagnostic_calls->load(std::memory_order_relaxed), 1);
+    EXPECT_TRUE(cleanup_finished.load(std::memory_order_acquire));
+    EXPECT_TRUE(unrelated_work_ran);
+    EXPECT_FALSE(worker.valid());
+    EXPECT_TRUE(observed.expired());
+}
+
 TEST(Ruvia, WorkerExternalAttachmentRetainsStateUntilCleanup) {
     EXPECT_TRUE(test_external_attachment_retains_state_until_context_cleanup());
 }
