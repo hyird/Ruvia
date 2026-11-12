@@ -24,6 +24,7 @@
 #include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
@@ -97,19 +98,19 @@ public:
 using ruvia::test::app_run;
 
 using ruvia::test::append_frame;
-std::string request(std::uint32_t stream, std::string_view path, std::string_view method = "GET") {
-    std::pmr::string block;
+std::pmr::string request(std::uint32_t stream, std::string_view path, std::string_view method = "GET") {
+    std::pmr::string block{ruvia::process_resource()};
     ruvia::hpack_encoder::encode_header(block, ":method", method);
     ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
     ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
     ruvia::hpack_encoder::encode_header(block, ":path", path);
-    std::string wire;
+    std::pmr::string wire{ruvia::process_resource()};
     // END_HEADERS, and END_STREAM unless a request body follows.
     append_frame(wire, ruvia::http2_frame_type::headers, method == "GET" ? 0x5 : 0x4, stream, block);
     return wire;
 }
-std::string data_frame(std::uint32_t stream, std::string_view payload, bool end_stream) {
-    std::string wire;
+std::pmr::string data_frame(std::uint32_t stream, std::string_view payload, bool end_stream) {
+    std::pmr::string wire{ruvia::process_resource()};
     append_frame(wire, ruvia::http2_frame_type::data, end_stream ? 0x1 : 0x0, stream, payload);
     return wire;
 }
@@ -190,7 +191,7 @@ void check_stop_closes_connection() {
     }
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
-    std::string opening(ruvia::http2_client_preface);
+    std::pmr::string opening(ruvia::http2_client_preface, ruvia::process_resource());
     append_frame(opening, ruvia::http2_frame_type::settings, 0, 0, {});
     opening.append(request(1, "/held"));
     asio::write(socket, asio::buffer(opening));
@@ -234,7 +235,7 @@ public:
             throw std::runtime_error("HTTP/2 drain app did not start");
         }
         socket_.connect(endpoint_);
-        std::string opening(ruvia::http2_client_preface);
+        std::pmr::string opening(ruvia::http2_client_preface, ruvia::process_resource());
         if (settings_payload.has_value()) {
             append_frame(opening, ruvia::http2_frame_type::settings, 0, 0, *settings_payload);
         }
@@ -291,7 +292,7 @@ void check_idle_timeout_drain(bool stalled_stream) {
     state.cancelled_ = false;
     silent_peer_run run(
         {.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms},
-        stalled_stream ? request(1, "/stalled") : std::string());
+        stalled_stream ? request(1, "/stalled") : std::pmr::string(ruvia::process_resource()));
     peer client(run.socket());
     expect_round_trip_start(client);
     // Without the ACK the drain still ends within its round-trip bound
@@ -313,12 +314,12 @@ void check_idle_timeout_drain(bool stalled_stream) {
 
 // Pings the server and returns the frames it sent up to the ACK, or up to a
 // GOAWAY (a drain may never answer).
-std::vector<frame> ping_round_trip(asio::ip::tcp::socket& socket, peer& client, std::uint8_t tag) {
-    const std::string opaque(8, static_cast<char>(tag));
-    std::string wire;
+std::pmr::vector<frame> ping_round_trip(asio::ip::tcp::socket& socket, peer& client, std::uint8_t tag) {
+    const std::pmr::string opaque(8, static_cast<char>(tag), ruvia::process_resource());
+    std::pmr::string wire{ruvia::process_resource()};
     append_frame(wire, ruvia::http2_frame_type::ping, 0, 0, opaque);
     asio::write(socket, asio::buffer(wire));
-    std::vector<frame> frames;
+    std::pmr::vector<frame> frames{ruvia::process_resource()};
     for (;;) {
         auto value = client.next();
         const bool ack = is_frame(value, ruvia::http2_frame_type::ping, 0) && (value.header_.flags_ & 0x1) != 0 &&
@@ -335,10 +336,10 @@ std::vector<frame> ping_round_trip(asio::ip::tcp::socket& socket, peer& client, 
 // connection-wide inactivity clock -- until the server sends a frame `done`
 // accepts. Returns every frame received; fails after 3 s.
 template <typename predicate_type>
-std::vector<frame> keep_busy_until(peer& client, asio::ip::tcp::socket& socket, std::string_view traffic,
+std::pmr::vector<frame> keep_busy_until(peer& client, asio::ip::tcp::socket& socket, std::string_view traffic,
     predicate_type done) {
     const auto deadline = std::chrono::steady_clock::now() + 3s;
-    std::vector<frame> seen;
+    std::pmr::vector<frame> seen{ruvia::process_resource()};
     for (std::uint8_t tag = 1;; ++tag) {
         if (std::chrono::steady_clock::now() >= deadline) {
             throw std::runtime_error("HTTP/2 deadline did not fire under peer traffic");
@@ -372,7 +373,7 @@ void expect_stream_end(peer& client, std::uint32_t stream_id) {
 
 // The RST_STREAM error code the server sent for `stream_id`; also checks
 // that no GOAWAY ended the connection meanwhile.
-std::uint32_t reset_code(const std::vector<frame>& frames,
+std::uint32_t reset_code(const std::pmr::vector<frame>& frames,
     std::uint32_t stream_id) {
     std::uint32_t code = 0xffffffffU;
     for (const auto& value : frames) {
@@ -473,7 +474,7 @@ TEST(Ruvia, http2_send_window_wait_is_bounded_by_write_timeout) {
         return is_frame(value, ruvia::http2_frame_type::rst_stream, 1);
     });
     EXPECT_EQ(reset_code(frames, 1), 8U);
-    std::string reopened;
+    std::pmr::string reopened{ruvia::process_resource()};
     append_frame(reopened, ruvia::http2_frame_type::settings, 0, 0, std::string_view("\x00\x04\x00\x00\xff\xff", 6));
     reopened.append(request(3, "/brief"));
     asio::write(run.socket(), asio::buffer(reopened));

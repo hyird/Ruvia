@@ -29,8 +29,8 @@ TEST(Ruvia, response_cookie_plan_and_raw_headers_share_replacement_semantics) {
 
 TEST(Ruvia, response_cookie_plan_replaces_itself_at_parser_limits) {
     ruvia::http_response response;
-    const std::string path(1024, '/');
-    const std::string value(4096 - 9 - 3, 'v');
+    const std::pmr::string path(1024, '/');
+    const std::pmr::string value(4096 - 9 - 3, 'v');
     ruvia::cookie_options options;
     options.secure_ = ruvia::cookie_attribute_policy::emit;
     options.prefix_ = ruvia::cookie_prefix::secure;
@@ -160,7 +160,7 @@ TEST(Ruvia, response_cookie_plan_alias_allocation_failure_preserves_each_input_f
                 .path_ = alias == 2 ? parsed_value->path() : std::string_view("/"),
                 .domain_ = alias == 3 ? parsed_value->domain() : std::string_view("example.test")};
             const ruvia::set_cookie_plan plan(name, value, options);
-            const auto expected = std::string("sid=") + std::string(value) + "; Path=/; Domain=example.test";
+            const auto expected = std::pmr::string("sid=") + std::pmr::string(value) + "; Path=/; Domain=example.test";
             const auto live = resource.live_allocations();
             resource.fail_after(0);
             bool failed = false;
@@ -189,13 +189,13 @@ TEST(Ruvia, response_cookie_plan_keeps_prefixed_keys_with_large_values) {
     {
         ruvia::http_response response(&resource);
         response.header("Set-Cookie", "__Host-sid=first; Path=/; Secure");
-        const std::string value(4096 - 10, 'v');
+        const std::pmr::string value(4096 - 10, 'v');
         const ruvia::cookie_options options{
             .path_ = "/", .prefix_ = ruvia::cookie_prefix::host, .secure_ = ruvia::cookie_attribute_policy::emit};
         const ruvia::set_cookie_plan plan("sid", value, options);
         response.set_cookie(plan);
         EXPECT_EQ(response.headers().size(), std::size_t{1});
-        EXPECT_EQ(response.header("Set-Cookie").value_or(""), std::string("__Host-sid=") + value + "; Path=/; Secure");
+        EXPECT_EQ(response.header("Set-Cookie").value_or(""), std::pmr::string("__Host-sid=") + value + "; Path=/; Secure");
     }
     EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }

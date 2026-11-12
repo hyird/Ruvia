@@ -29,8 +29,8 @@ bool zero_mask(void*, websocket_mask_key_type& key) noexcept {
 }
 
 // Compressible text that is not a single repeated byte.
-[[nodiscard]] std::string sample_message(std::size_t size, unsigned seed) {
-    std::string message(size, '\0');
+[[nodiscard]] std::pmr::string sample_message(std::size_t size, unsigned seed) {
+    std::pmr::string message(size, '\0');
     unsigned state_value = seed * 2654435761U + 7U;
     for (std::size_t i = 0; i < size; ++i) {
         state_value = state_value * 1103515245U + 12345U;
@@ -40,8 +40,8 @@ bool zero_mask(void*, websocket_mask_key_type& key) noexcept {
 }
 
 // Bytes DEFLATE cannot shrink.
-[[nodiscard]] std::string noise_message(std::size_t size) {
-    std::string message(size, '\0');
+[[nodiscard]] std::pmr::string noise_message(std::size_t size) {
+    std::pmr::string message(size, '\0');
     std::uint32_t state_value = 1234567;
     for (auto& byte : message) {
         state_value ^= state_value << 13;
@@ -65,9 +65,9 @@ struct client_endpoint final {
 
 // Takes every pending output byte of a sender.
 template <typename sender_type>
-[[nodiscard]] std::string drain(sender_type& sender) {
+[[nodiscard]] std::pmr::string drain(sender_type& sender) {
     const auto plan = sender.output_plan();
-    std::string bytes_value(plan.bytes());
+    std::pmr::string bytes_value(plan.bytes());
     bytes_value.append(plan.borrowed_bytes());
     EXPECT_TRUE(sender.consume_output(bytes_value.size()) == websocket_output_consume_status::drained);
     return bytes_value;
@@ -78,7 +78,7 @@ template <typename sender_type>
 }
 
 // Delivers one client frame to a server protocol and returns its message.
-[[nodiscard]] std::optional<std::string> receive(
+[[nodiscard]] std::optional<std::pmr::string> receive(
     http_io_buffer& input, websocket_connection& protocol, std::string_view wire) {
     input.append(wire);
     const auto event = protocol.next_event();
@@ -86,7 +86,7 @@ template <typename sender_type>
     if (!event || !event->message()) {
         return std::nullopt;
     }
-    return std::string(event->message()->payload());
+    return std::pmr::string(event->message()->payload());
 }
 
 struct server_endpoint final {
@@ -108,8 +108,8 @@ struct server_endpoint final {
 // it borrows the shared codecs or owns a per-connection codec, and with the
 // shared codecs the connection's resource never holds codec state.
 TEST(Ruvia, ws_shared_deflate_matches_private_no_context_takeover_bytes) {
-    const std::string messages[]{sample_message(600, 1), sample_message(70'000, 2), std::string(20, 'a'),
-        std::string(4096, 'x'), sample_message(3000, 3)};
+    const std::pmr::string messages[]{sample_message(600, 1), sample_message(70'000, 2), std::pmr::string(20, 'a'),
+        std::pmr::string(4096, 'x'), sample_message(3000, 3)};
     for (const int window : {8, 11, 15}) {
         for (const int level : {1, 6, 9}) {
             const websocket_compression compression{.enabled_ = true, .server_max_window_bits_ = window};
@@ -171,7 +171,7 @@ TEST(Ruvia, ws_shared_deflate_resets_after_a_failed_connection_message) {
     EXPECT_EQ(drain(failing.protocol_), expected);
 
     // A corrupt compressed message fails only its own connection.
-    const std::string garbage("\xc2\x84\x00\x00\x00\x00\xff\xff\xff\xff", 10);
+    const std::pmr::string garbage("\xc2\x84\x00\x00\x00\x00\xff\xff\xff\xff", 10);
     failing.input_.append(garbage);
     const auto failure = failing.protocol_.next_event();
     EXPECT_TRUE(failure && failure->protocol_error() && failure->protocol_error()->close_code() == 1002);
@@ -187,7 +187,7 @@ TEST(Ruvia, ws_connection_buffers_keep_bounded_storage_after_a_large_message) {
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
     server_endpoint server({.compression_ = compression, .shared_deflate_ = &codecs});
     client_endpoint peer(compression);
-    const auto exchange = [&](const std::string& inbound, bool compress_inbound, const std::string& outbound) {
+    const auto exchange = [&](const std::pmr::string& inbound, bool compress_inbound, const std::pmr::string& outbound) {
         EXPECT_TRUE(peer.protocol_.submit_frame(websocket_opcode::binary, inbound, compress_inbound) == websocket_frame_submit_status::accepted);
         EXPECT_TRUE(receive(server.input_, server.protocol_, drain(peer.protocol_)) == inbound);
         EXPECT_TRUE(server.protocol_.submit_frame(websocket_opcode::binary, outbound) == websocket_frame_submit_status::accepted);
@@ -298,7 +298,7 @@ TEST(Ruvia, ws_deflate_mem_level_is_validated) {
     for (const int mem_level : {1, 9}) {
         http_io_buffer input;
         websocket_connection valid(input, {.compression_ = {.enabled_ = true}, .deflater_ = {.mem_level_ = mem_level}});
-        EXPECT_TRUE(valid.submit_frame(websocket_opcode::text, std::string(1000, 'v')) == websocket_frame_submit_status::accepted);
+        EXPECT_TRUE(valid.submit_frame(websocket_opcode::text, std::pmr::string(1000, 'v')) == websocket_frame_submit_status::accepted);
     }
 }
 

@@ -47,7 +47,7 @@ TEST(Ruvia, allow_header_lists_methods_in_canonical_order) {
     one.allow_methods(method_bit(http_known_method::delete_value));
     EXPECT_EQ(one.header("Allow").value_or(""), std::string_view("DELETE"));
 
-    std::string extension = "PROPFIND";
+    std::pmr::string extension = "PROPFIND";
     const std::string_view extension_methods[]{extension};
     one.allow_methods(method_bit(http_known_method::get), extension_methods);
     extension.assign("CHANGED!");

@@ -36,6 +36,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
@@ -94,10 +95,10 @@ public:
     }
 
     // Every later GET answers `value`, whatever the key, until the peer ends.
-    void poison_reads(std::string value) {
+    void poison_reads(std::string_view value) {
         std::promise<void> poisoned;
         auto result = poisoned.get_future();
-        asio::post(io_, [this, &poisoned, value = std::move(value)]() mutable {
+        asio::post(io_, [this, &poisoned, value = std::pmr::string(value, ruvia::process_resource())]() mutable {
             poison_ = std::move(value);
             poisoned.set_value();
         });
@@ -158,27 +159,27 @@ private:
         }
     }
 
-    static asio::awaitable<std::string> read_line(socket_type& socket, std::string& buffer) {
+    static asio::awaitable<std::pmr::string> read_line(socket_type& socket, std::pmr::string& buffer) {
         const auto size = co_await asio::async_read_until(socket, asio::dynamic_buffer(buffer), "\r\n", asio::use_awaitable);
-        std::string line = buffer.substr(0, size - 2);
+        std::pmr::string line(std::string_view(buffer).substr(0, size - 2), ruvia::process_resource());
         buffer.erase(0, size);
         co_return line;
     }
 
-    static asio::awaitable<std::vector<std::string>> read_command(socket_type& socket, std::string& buffer) {
+    static asio::awaitable<std::pmr::vector<std::pmr::string>> read_command(socket_type& socket, std::pmr::string& buffer) {
         const auto header = co_await read_line(socket, buffer);
         if (header.size() < 2 || header.front() != '*') {
             throw std::runtime_error("invalid RESP command array");
         }
-        const auto count = std::stoull(header.substr(1));
-        std::vector<std::string> arguments;
+        const auto count = std::stoull(std::string(std::string_view(header).substr(1)));
+        std::pmr::vector<std::pmr::string> arguments{ruvia::process_resource()};
         arguments.reserve(count);
         for (std::size_t index = 0; index != count; ++index) {
             const auto length_line = co_await read_line(socket, buffer);
             if (length_line.size() < 2 || length_line.front() != '$') {
                 throw std::runtime_error("invalid RESP bulk string");
             }
-            const auto length = static_cast<std::size_t>(std::stoull(length_line.substr(1)));
+            const auto length = static_cast<std::size_t>(std::stoull(std::string(std::string_view(length_line).substr(1))));
             if (buffer.size() < length + 2) {
                 co_await asio::async_read(socket, asio::dynamic_buffer(buffer),
                     asio::transfer_exactly(length + 2 - buffer.size()), asio::use_awaitable);
@@ -186,7 +187,7 @@ private:
             if (buffer.compare(length, 2, "\r\n") != 0) {
                 throw std::runtime_error("invalid RESP bulk ending");
             }
-            arguments.push_back(buffer.substr(0, length));
+            arguments.emplace_back(std::string_view(buffer).substr(0, length));
             buffer.erase(0, length + 2);
         }
         co_return arguments;
@@ -194,9 +195,9 @@ private:
 
     // Expiration options after a SET value are accepted and not enforced; the
     // scenario completes well within the cache lifetime.
-    [[nodiscard]] std::string execute(std::vector<std::string>& arguments) {
+    [[nodiscard]] std::pmr::string execute(std::pmr::vector<std::pmr::string>& arguments) {
         if (arguments.empty()) {
-            return "-ERR empty command\r\n";
+            return std::pmr::string("-ERR empty command\r\n", ruvia::process_resource());
         }
         auto& name = arguments.front();
         std::ranges::transform(name, name.begin(), [](unsigned char value) {
@@ -204,44 +205,44 @@ private:
         });
         if (name == "GET" && arguments.size() == 2) {
             if (poison_) {
-                return "$" + std::to_string(poison_->size()) + "\r\n" + *poison_ + "\r\n";
+                return "$" + std::pmr::string(std::to_string(poison_->size()), ruvia::process_resource()) + "\r\n" + *poison_ + "\r\n";
             }
             const auto found = store_.find(arguments[1]);
             if (found == store_.end()) {
-                return "$-1\r\n";
+                return std::pmr::string("$-1\r\n", ruvia::process_resource());
             }
-            return "$" + std::to_string(found->second.size()) + "\r\n" + found->second + "\r\n";
+            return "$" + std::pmr::string(std::to_string(found->second.size()), ruvia::process_resource()) + std::pmr::string("\r\n", ruvia::process_resource()) + found->second + "\r\n";
         }
         if (name == "SET" && arguments.size() >= 3) {
             store_.insert_or_assign(std::move(arguments[1]), std::move(arguments[2]));
-            return "+OK\r\n";
+            return std::pmr::string("+OK\r\n", ruvia::process_resource());
         }
         if (name == "DEL" && arguments.size() >= 2) {
             std::size_t removed = 0;
             for (std::size_t index = 1; index != arguments.size(); ++index) {
                 removed += store_.erase(arguments[index]);
             }
-            return ":" + std::to_string(removed) + "\r\n";
+            return ":" + std::pmr::string(std::to_string(removed), ruvia::process_resource()) + "\r\n";
         }
         if (name == "SCAN" && arguments.size() == 6 && arguments[1] == "0" &&
             arguments[2] == "MATCH" && arguments[3].ends_with('*') && arguments[4] == "COUNT") {
             const auto prefix = std::string_view(arguments[3]).substr(0, arguments[3].size() - 1);
-            std::string values;
+            std::pmr::string values{ruvia::process_resource()};
             std::size_t count = 0;
             for (const auto& [key, value] : store_) {
                 (void)value;
                 if (key.starts_with(prefix)) {
-                    values.append("$").append(std::to_string(key.size())).append("\r\n").append(key).append("\r\n");
+                    values.append("$").append(std::pmr::string(std::to_string(key.size()), ruvia::process_resource())).append("\r\n").append(key).append("\r\n");
                     ++count;
                 }
             }
-            return "*2\r\n$1\r\n0\r\n*" + std::to_string(count) + "\r\n" + values;
+            return "*2\r\n$1\r\n0\r\n*" + std::pmr::string(std::to_string(count), ruvia::process_resource()) + std::pmr::string("\r\n", ruvia::process_resource()) + values;
         }
-        return "-ERR unsupported command\r\n";
+        return std::pmr::string("-ERR unsupported command\r\n", ruvia::process_resource());
     }
 
     asio::awaitable<void> serve(std::shared_ptr<socket_type> socket) {
-        std::string buffer;
+        std::pmr::string buffer{ruvia::process_resource()};
         try {
             for (;;) {
                 auto arguments = co_await read_command(*socket, buffer);
@@ -263,9 +264,9 @@ private:
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
-    std::vector<std::shared_ptr<socket_type>> sockets_;
-    std::map<std::string, std::string, std::less<>> store_;
-    std::optional<std::string> poison_;
+    std::pmr::vector<std::shared_ptr<socket_type>> sockets_{ruvia::process_resource()};
+    std::pmr::map<std::pmr::string, std::pmr::string, std::less<>> store_{ruvia::process_resource()};
+    std::optional<std::pmr::string> poison_;
     std::function<void()> on_read_;
     std::exception_ptr failure_;
     bool closing_{false};
@@ -273,10 +274,10 @@ private:
 };
 
 // Every read names the same cache id; each result shape stores its own entry.
-ruvia::task<std::string> read_one(const ruvia::db_handle& handle) {
+ruvia::task<std::pmr::string> read_one(const ruvia::db_handle& handle) {
     const auto row =
         co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_one();
-    co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
+    co_return row ? std::pmr::string(std::string_view(row->get<"v">()), ruvia::process_resource()) : std::pmr::string("missing", ruvia::process_resource());
 }
 
 ruvia::task<bool> read_exists(const ruvia::db_handle& handle) {
@@ -287,21 +288,21 @@ ruvia::task<std::uint64_t> read_count(const ruvia::db_handle& handle) {
     co_return co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_count();
 }
 
-ruvia::task<std::vector<std::string>> read_many(const ruvia::db_handle& handle, std::string_view id = cache_id) {
+ruvia::task<std::pmr::vector<std::pmr::string>> read_many(const ruvia::db_handle& handle, std::string_view id = cache_id) {
     const auto rows =
         co_await handle.repository<record>().query_builder().cache(id, cache_lifetime).get_many();
-    std::vector<std::string> values;
+    std::pmr::vector<std::pmr::string> values{ruvia::process_resource()};
     for (std::size_t index = 0; index < rows.size(); ++index) {
         values.emplace_back(std::string_view(rows[index].get<"v">()));
     }
     co_return values;
 }
 
-ruvia::task<std::string> read_sql_cached(const ruvia::db_handle& handle, std::string_view parameter) {
+ruvia::task<std::pmr::string> read_sql_cached(const ruvia::db_handle& handle, std::string_view parameter) {
     auto query = handle.repository<record>().query_builder();
     query.where(record::column<"v">() == parameter).cache(cache_lifetime);
     const auto row = co_await query.get_one();
-    co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
+    co_return row ? std::pmr::string(std::string_view(row->get<"v">()), ruvia::process_resource()) : std::pmr::string("missing", ruvia::process_resource());
 }
 
 }  // namespace
@@ -311,7 +312,7 @@ namespace query_cache_test {
 // What one concurrent cached read observed. Failures are recorded rather than
 // thrown so every reader in a scope finishes on its own.
 struct read_outcome final {
-    std::string value_;
+    std::pmr::string value_{ruvia::process_resource()};
     std::optional<ruvia::db_error::code_type> error_;
     bool done_{false};
 };
@@ -328,7 +329,7 @@ ruvia::task<void> read_sql_into(ruvia::db_handle handle, std::string_view parame
 ruvia::task<void> read_many_into(ruvia::db_handle handle, read_outcome& outcome) {
     try {
         const auto values = co_await read_many(handle);
-        outcome.value_ = values.empty() ? std::string("missing") : values.front();
+        outcome.value_ = values.empty() ? std::pmr::string("missing", ruvia::process_resource()) : values.front();
     } catch (const ruvia::db_error& error) {
         outcome.error_ = error.code();
     }
@@ -402,18 +403,19 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
     // as the previous value and an unexpected database read as the next one.
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
         ruvia::test::backend_startup_peer::after_startup::idle,
-        {
-            {.rows_ = {"one", "two", "three"}},
-            {.rows_ = {"alpha"}},
-            {.column_ = "exists", .rows_ = {"t"}},
-            {.column_ = "count", .rows_ = {"3"}},
-            {.rows_ = {"gamma"}},
-            {.rows_ = {"beta"}},
-            {.column_ = "exists", .rows_ = {"f"}},
-            {.column_ = "count", .rows_ = {"5"}},
-            {.rows_ = {"delta"}},
-            {.rows_ = {"epsilon"}},
-        });
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("one", ruvia::process_resource()), std::pmr::string("two", ruvia::process_resource()), std::pmr::string("three", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("alpha", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.column_ = std::pmr::string("exists", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("t", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.column_ = std::pmr::string("count", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("3", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("gamma", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("beta", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.column_ = std::pmr::string("exists", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("f", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.column_ = std::pmr::string("count", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("5", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("delta", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("epsilon", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                            },
+            ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
@@ -431,16 +433,16 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 co_await database.connect();
                 const auto handle = database.handle();
                 // First reads come from the database and fill the cache.
-                const std::vector<std::string> many{"one", "two", "three"};
+                const std::pmr::vector<std::pmr::string> many({std::pmr::string("one", ruvia::process_resource()), std::pmr::string("two", ruvia::process_resource()), std::pmr::string("three", ruvia::process_resource())}, ruvia::process_resource());
                 EXPECT_TRUE(co_await read_many(handle) == many);
-                EXPECT_EQ(co_await read_one(handle), std::string("alpha"));
+                EXPECT_EQ(co_await read_one(handle), std::pmr::string("alpha", ruvia::process_resource()));
                 EXPECT_TRUE(co_await read_exists(handle));
                 EXPECT_EQ(co_await read_count(handle), std::uint64_t{3});
                 EXPECT_TRUE(redis_peer.key_count() != 0);
                 // Repeated reads are served from the cache; every decoded row
                 // resolves its column through the result's shared names.
                 EXPECT_TRUE(co_await read_many(handle) == many);
-                EXPECT_EQ(co_await read_one(handle), std::string("alpha"));
+                EXPECT_EQ(co_await read_one(handle), std::pmr::string("alpha", ruvia::process_resource()));
                 EXPECT_TRUE(co_await read_exists(handle));
                 EXPECT_EQ(co_await read_count(handle), std::uint64_t{3});
                 auto raw_query = handle.repository<record>().query_builder();
@@ -456,20 +458,20 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 // A user id that spells another id plus a shape name is its own
                 // entry: it reads the database instead of the "one" result.
                 constexpr std::string_view suffixed_id = "item-one";
-                const std::vector<std::string> gamma{"gamma"};
+                const std::pmr::vector<std::pmr::string> gamma({std::pmr::string("gamma", ruvia::process_resource())}, ruvia::process_resource());
                 EXPECT_TRUE(co_await read_many(handle, suffixed_id) == gamma);
                 // Removing the caller's id drops every result shape cached under
                 // it and leaves the independent id's entry alone.
                 co_await handle.query_result_cache().remove(cache_id);
                 EXPECT_EQ(redis_peer.key_count(), std::size_t{1});
-                EXPECT_EQ(co_await read_one(handle), std::string("beta"));
+                EXPECT_EQ(co_await read_one(handle), std::pmr::string("beta", ruvia::process_resource()));
                 EXPECT_TRUE(!(co_await read_exists(handle)));
                 EXPECT_EQ(co_await read_count(handle), std::uint64_t{5});
                 EXPECT_TRUE(co_await read_many(handle, suffixed_id) == gamma);
                 // A multi-id removal drops every shape for each id.
                 co_await handle.query_result_cache().remove(cache_id, suffixed_id);
                 EXPECT_EQ(redis_peer.key_count(), std::size_t{0});
-                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"delta"});
+                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == std::pmr::vector<std::pmr::string>({std::pmr::string("delta", ruvia::process_resource())}, ruvia::process_resource()));
                 // Clear uses the same cached namespace prefix without touching
                 // an unrelated Redis key.
                 (void)co_await store.set("outside-cache", "keep");
@@ -477,7 +479,7 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 EXPECT_EQ(redis_peer.key_count(), std::size_t{1});
                 const auto outside = co_await store.get("outside-cache");
                 EXPECT_TRUE(outside.has_value() && *outside == "keep");
-                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"epsilon"});
+                EXPECT_TRUE(co_await read_many(handle, suffixed_id) == std::pmr::vector<std::pmr::string>({std::pmr::string("epsilon", ruvia::process_resource())}, ruvia::process_resource()));
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -504,7 +506,7 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
 TEST(Ruvia, db_query_result_cache_distinguishes_sql_parameter_values) {
     redis_store_peer redis_peer;
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle, {{.rows_ = {"first"}}, {.rows_ = {"second"}}});
+        ruvia::test::backend_startup_peer::after_startup::idle, std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("second", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
@@ -520,13 +522,13 @@ TEST(Ruvia, db_query_result_cache_distinguishes_sql_parameter_values) {
             try {
                 co_await database.connect();
                 const auto handle = database.handle();
-                const std::string large_parameter(8192, 'x');
-                std::string different_parameter = large_parameter;
+                const std::pmr::string large_parameter(8192, 'x', ruvia::process_resource());
+                std::pmr::string different_parameter(large_parameter, ruvia::process_resource());
                 different_parameter.back() = 'y';
-                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
-                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
-                EXPECT_EQ(co_await read_sql_cached(handle, different_parameter), std::string("second"));
-                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
+                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::pmr::string("first", ruvia::process_resource()));
+                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::pmr::string("first", ruvia::process_resource()));
+                EXPECT_EQ(co_await read_sql_cached(handle, different_parameter), std::pmr::string("second", ruvia::process_resource()));
+                EXPECT_EQ(co_await read_sql_cached(handle, large_parameter), std::pmr::string("first", ruvia::process_resource()));
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -553,13 +555,13 @@ TEST(Ruvia, db_query_result_cache_distinguishes_sql_parameter_values) {
 TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
     redis_store_peer redis_peer;
     // The entry magic, then little-endian 64-bit row and column counts.
-    std::string empty(cache_entry_magic);
+    std::pmr::string empty(cache_entry_magic, ruvia::process_resource());
     const auto row_count_offset = cache_entry_magic.size();
     const auto column_count_offset = row_count_offset + 8;
     empty.append(16, '\0');
     redis_peer.poison_reads(empty);
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle, {});
+        ruvia::test::backend_startup_peer::after_startup::idle, std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>(ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
@@ -578,7 +580,7 @@ TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
                 query.cache(cache_id, cache_lifetime);
                 auto empty_rows = co_await query.get_raw_many();
                 EXPECT_TRUE(empty_rows.empty());
-                auto empty_with_schema = empty;
+                auto empty_with_schema = decltype(empty)(empty, ruvia::process_resource());
                 empty_with_schema[column_count_offset] = 1;
                 empty_with_schema.push_back('\1');
                 empty_with_schema.append(7, '\0');
@@ -586,7 +588,7 @@ TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
                 redis_peer.poison_reads(std::move(empty_with_schema));
                 auto named_empty_rows = co_await query.get_raw_many();
                 EXPECT_TRUE(named_empty_rows.empty());
-                auto zero_columns = empty;
+                auto zero_columns = decltype(empty)(empty, ruvia::process_resource());
                 zero_columns[row_count_offset] = 2;
                 zero_columns.append(2, '\2');
                 redis_peer.poison_reads(std::move(zero_columns));
@@ -624,12 +626,12 @@ TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
 // that ignores errors reads the database instead.
 TEST(Ruvia, db_query_result_cache_rejects_corrupt_zero_column_entries) {
     redis_store_peer redis_peer;
-    std::string corrupt(cache_entry_magic);
+    std::pmr::string corrupt(cache_entry_magic, ruvia::process_resource());
     corrupt.append(8, '\xff');
     corrupt.append(8, '\0');
     redis_peer.poison_reads(std::move(corrupt));
     ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
-        ruvia::test::backend_startup_peer::after_startup::idle, {{.rows_ = {"fresh"}}});
+        ruvia::test::backend_startup_peer::after_startup::idle, std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("fresh", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
@@ -646,7 +648,7 @@ TEST(Ruvia, db_query_result_cache_rejects_corrupt_zero_column_entries) {
                 attachment.loop(), database_peer.config(), store, ruvia::db_cache_config{.ignore_errors_ = true});
             try {
                 co_await database.connect();
-                const std::vector<std::string> fresh{"fresh"};
+                const std::pmr::vector<std::pmr::string> fresh({std::pmr::string("fresh", ruvia::process_resource())}, ruvia::process_resource());
                 EXPECT_TRUE(co_await read_many(database.handle()) == fresh);
             } catch (...) {
                 failure = std::current_exception();
@@ -730,17 +732,17 @@ TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_r
 TEST(Ruvia, db_query_result_cache_skips_entries_beyond_the_redis_reply_limit) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
-    const std::string large(512, 'x');
-    const std::string larger(513, 'y');
+    const std::pmr::string large(512, 'x', ruvia::process_resource());
+    const std::pmr::string larger(513, 'y', ruvia::process_resource());
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        {{.rows_ = {large}}, {.rows_ = {larger}}, {.rows_ = {"small"}}});
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(large, ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(larger, ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("small", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle&) -> ruvia::task<void> {
         const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
         EXPECT_EQ(co_await read_sql_cached(handle, "large"), large);
         EXPECT_EQ(redis_peer.key_count(), std::size_t{0});
         EXPECT_EQ(co_await read_sql_cached(handle, "large"), larger);
-        EXPECT_EQ(co_await read_sql_cached(handle, "small"), std::string("small"));
-        EXPECT_EQ(co_await read_sql_cached(handle, "small"), std::string("small"));
+        EXPECT_EQ(co_await read_sql_cached(handle, "small"), std::pmr::string("small", ruvia::process_resource()));
+        EXPECT_EQ(co_await read_sql_cached(handle, "small"), std::pmr::string("small", ruvia::process_resource()));
         EXPECT_EQ(redis_peer.key_count(), std::size_t{1});
     };
     query_cache_test::run_with_query_cache(redis_peer, database_peer.config(), scenario, std::size_t{256});
@@ -752,7 +754,7 @@ TEST(Ruvia, db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        {{.rows_ = {"first"}, .deferred_ = true}});
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}}, ruvia::process_resource()));
     std::array<query_cache_test::read_outcome, 3> outcomes;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle& store) -> ruvia::task<void> {
         const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
@@ -784,7 +786,7 @@ TEST(Ruvia, db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-        {{.rows_ = {"abandoned"}, .deferred_ = true}, {.rows_ = {"taken over"}}});
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("abandoned", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("taken over", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
     query_cache_test::read_outcome leader;
     query_cache_test::read_outcome waiter;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle& store) -> ruvia::task<void> {
@@ -816,7 +818,7 @@ TEST(Ruvia, db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        {{.rows_ = {"first"}, .deferred_ = true}});
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}}, ruvia::process_resource()));
     query_cache_test::read_outcome leader;
     query_cache_test::read_outcome waiter;
     bool waiter_finished_first = false;
@@ -846,7 +848,7 @@ TEST(Ruvia, db_query_result_cache_remove_detaches_inflight_fills) {
     using peer_type = ruvia::test::backend_startup_peer;
     redis_store_peer redis_peer;
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        {{.rows_ = {"stale"}, .deferred_ = true}, {.rows_ = {"fresh"}}});
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("stale", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("fresh", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
     query_cache_test::read_outcome before;
     query_cache_test::read_outcome after;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle& store) -> ruvia::task<void> {

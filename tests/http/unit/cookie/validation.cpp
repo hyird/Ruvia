@@ -39,7 +39,7 @@ TEST(Ruvia, cookie_public_validation_and_prefix_parsing) {
     EXPECT_TRUE(!ruvia::is_valid_cookie_value("\""));
     const ruvia::cookie_options no_attributes{.path_ = ""};
     const ruvia::set_cookie_plan quoted("sid", "\"abc\"", no_attributes);
-    std::string quoted_wire(quoted.size(), '\0');
+    std::pmr::string quoted_wire(quoted.size(), '\0');
     quoted.write(quoted_wire.data());
     EXPECT_EQ(quoted_wire, "sid=\"abc\"");
     EXPECT_TRUE(ruvia::cookie_name_prefix("__secure-id") == ruvia::cookie_prefix::secure);
@@ -65,10 +65,10 @@ TEST(Ruvia, cookie_borrowed_text_accepts_stable_string_owners) {
     EXPECT_TRUE(!rejects(options));
 
     const ruvia::set_cookie_plan plan(name, value, options);
-    std::string wire(plan.size(), '\0');
+    std::pmr::string wire(plan.size(), '\0');
     plan.write(wire.data());
     name.assign("changed");
-    EXPECT_EQ(wire, std::string("sid=value; Path=/account; Domain=example.com"));
+    EXPECT_EQ(wire, std::pmr::string("sid=value; Path=/account; Domain=example.com"));
     const auto parsed_value = ruvia::parse_set_cookie(wire);
     EXPECT_TRUE(parsed_value.has_value());
     if (parsed_value) {
@@ -87,15 +87,15 @@ TEST(Ruvia, cookie_expires_formats_historical_dates_at_second_resolution) {
     options.expires_ = system_clock::time_point{seconds{-315619200}};
     EXPECT_TRUE(!rejects(options));
     const ruvia::set_cookie_plan historical("sid", "value", options);
-    std::string wire(historical.size(), '\0');
+    std::pmr::string wire(historical.size(), '\0');
     historical.write(wire.data());
-    EXPECT_EQ(wire, std::string("sid=value; Path=/; Expires=Fri, 01 Jan 1960 00:00:00 GMT"));
+    EXPECT_EQ(wire, std::pmr::string("sid=value; Path=/; Expires=Fri, 01 Jan 1960 00:00:00 GMT"));
 
     options.expires_ = system_clock::time_point{} - system_clock::duration{1};
     const ruvia::set_cookie_plan fractional("sid", "value", options);
     wire.resize(fractional.size());
     fractional.write(wire.data());
-    EXPECT_EQ(wire, std::string("sid=value; Path=/; Expires=Wed, 31 Dec 1969 23:59:59 GMT"));
+    EXPECT_EQ(wire, std::pmr::string("sid=value; Path=/; Expires=Wed, 31 Dec 1969 23:59:59 GMT"));
 }
 
 TEST(Ruvia, cookie_expires_rejects_dates_before_the_cookie_calendar_range) {
@@ -108,9 +108,9 @@ TEST(Ruvia, cookie_expires_rejects_dates_before_the_cookie_calendar_range) {
         options.expires_ = system_clock::time_point{duration_cast<system_clock::duration>(cutoff)};
         EXPECT_TRUE(!rejects(options));
         const ruvia::set_cookie_plan first("sid", "value", options);
-        std::string wire(first.size(), '\0');
+        std::pmr::string wire(first.size(), '\0');
         first.write(wire.data());
-        EXPECT_TRUE(wire.find("01 Jan 1601") != std::string::npos);
+        EXPECT_TRUE(wire.find("01 Jan 1601") != std::pmr::string::npos);
         options.expires_ = *options.expires_ - system_clock::duration{1};
         EXPECT_TRUE(rejects(options));
         bool rejected = false;
@@ -176,7 +176,7 @@ TEST(Ruvia, cookie_domain_requires_dns_subdomain_syntax) {
     EXPECT_TRUE(!accepts_domain("bad-.example"));
     EXPECT_TRUE(!accepts_domain("bad..example"));
     EXPECT_TRUE(!accepts_domain("caf\xc3\xa9.example"));
-    EXPECT_TRUE(!accepts_domain(std::string(64, 'a') + ".example"));
+    EXPECT_TRUE(!accepts_domain(std::pmr::string(64, 'a') + ".example"));
 }
 
 TEST(Ruvia, cookie_validation_rejects_injection_and_bad_options) {
@@ -203,13 +203,13 @@ TEST(Ruvia, cookie_validation_rejects_injection_and_bad_options) {
         spaced_path.path_ = path;
         EXPECT_TRUE(rejects_cookie("sid", "value", spaced_path));
     }
-    const std::string long_path(1025, 'p');
+    const std::pmr::string long_path(1025, 'p');
     ruvia::cookie_options oversized_path;
     oversized_path.path_ = long_path;
     EXPECT_TRUE(rejects_cookie("sid", "value", oversized_path));
     oversized_path.path_ = std::string_view(long_path).substr(1);
     EXPECT_TRUE(!rejects_cookie("sid", "value", oversized_path));
-    const std::string long_value(4093, 'v');
+    const std::pmr::string long_value(4093, 'v');
     EXPECT_TRUE(!rejects_cookie("sid", long_value, clean));
     EXPECT_TRUE(rejects_cookie("sidx", long_value, clean));
     ruvia::cookie_options typed_prefix;
@@ -336,22 +336,22 @@ TEST(Ruvia, cookie_writer_leaves_lifetime_caps_to_user_agents) {
 
 TEST(Ruvia, cookie_request_pair_keeps_equals_for_empty_names) {
     const auto pair = [&](std::string_view name, std::string_view value) {
-        std::string wire(ruvia::cookie_request_pair_size(name, value), '\0');
+        std::pmr::string wire(ruvia::cookie_request_pair_size(name, value), '\0');
         const auto* const end = ruvia::write_cookie_request_pair(wire.data(), name, value);
         EXPECT_TRUE(end == wire.data() + wire.size());
         return wire;
     };
-    EXPECT_EQ(pair("sid", "abc"), std::string("sid=abc"));
+    EXPECT_EQ(pair("sid", "abc"), std::pmr::string("sid=abc"));
     // A nameless value that looks like a cookie-pair must stay behind '='.
-    EXPECT_EQ(pair("", "session=forged"), std::string("=session=forged"));
-    EXPECT_EQ(pair("", "sid"), std::string("=sid"));
-    EXPECT_EQ(pair("sid", ""), std::string("sid="));
-    EXPECT_EQ(pair(std::string_view("\0", 1), std::string_view("\0", 1)), std::string("\0=\0", 3));
+    EXPECT_EQ(pair("", "session=forged"), std::pmr::string("=session=forged"));
+    EXPECT_EQ(pair("", "sid"), std::pmr::string("=sid"));
+    EXPECT_EQ(pair("sid", ""), std::pmr::string("sid="));
+    EXPECT_EQ(pair(std::string_view("\0", 1), std::string_view("\0", 1)), std::pmr::string("\0=\0", 3));
 }
 
 TEST(Ruvia, cookie_request_pair_accepts_inputs_inside_the_written_bytes) {
     // Each input is consumed before an output byte overwrites it.
-    std::string buffer("valuename");
+    std::pmr::string buffer("valuename");
     buffer.resize(16, '#');
     const std::string_view value(buffer.data(), 5);
     const std::string_view name(buffer.data() + 5, 4);
@@ -361,18 +361,18 @@ TEST(Ruvia, cookie_request_pair_accepts_inputs_inside_the_written_bytes) {
 }
 
 TEST(Ruvia, cookie_request_pair_preserves_aliased_inputs_and_terminators) {
-    std::string header = "a";
+    std::pmr::string header = "a";
     header.reserve(16);
     const std::string_view terminator(header.data() + header.size(), 1);
     ruvia::append_cookie_request_pair(header, "b", terminator);
-    EXPECT_EQ(header, std::string("a; b=\0", 6));
+    EXPECT_EQ(header, std::pmr::string("a; b=\0", 6));
 
     std::pmr::string empty;
     const std::string_view empty_terminator(empty.data(), 1);
     ruvia::append_cookie_request_pair(empty, empty_terminator, empty_terminator);
     EXPECT_EQ(std::string_view(empty), std::string_view("\0=\0", 3));
 
-    std::string growing = "sid=abc";
+    std::pmr::string growing = "sid=abc";
     growing.resize(growing.capacity(), 'x');
     const auto original = growing;
     const std::string_view name(growing.data(), 3);
@@ -388,8 +388,8 @@ TEST(Ruvia, cookie_request_pair_preserves_contents_when_allocations_are_rejected
     {
         std::pmr::string header(&memory);
         header.reserve(1024);
-        const std::string value(300, 'v');
-        const auto expected = std::string("\0=", 2) + value;
+        const std::pmr::string value(300, 'v');
+        const auto expected = std::pmr::string("\0=", 2) + value;
         memory.reject_allocations(true);
         try {
             ruvia::append_cookie_request_pair(header, std::string_view(header.data(), 1), value);
@@ -408,10 +408,10 @@ TEST(Ruvia, cookie_request_pair_snapshots_only_overlapping_inputs) {
         for (const auto aliased_size : {3U, 300U}) {
             SCOPED_TRACE(alias_name);
             SCOPED_TRACE(aliased_size);
-            const std::string aliased(aliased_size, alias_name ? 'n' : 'v');
-            const std::string independent(300, alias_name ? 'v' : 'n');
+            const std::pmr::string aliased(aliased_size, alias_name ? 'n' : 'v');
+            const std::pmr::string independent(300, alias_name ? 'v' : 'n');
             const auto expected = alias_name ? aliased + "=" + independent : independent + "=" + aliased;
-            std::string output = aliased;
+            std::pmr::string output = aliased;
             output.resize(expected.size());
             const std::string_view borrowed(output.data(), aliased.size());
             ruvia::test::counting_memory_resource memory;
@@ -427,9 +427,9 @@ TEST(Ruvia, cookie_request_pair_snapshots_only_overlapping_inputs) {
 }
 
 TEST(Ruvia, cookie_request_pair_preserves_both_long_aliased_inputs_on_failure_and_retry) {
-    const std::string name(300, 'n');
-    const std::string value(300, 'v');
-    std::string output = value + name;
+    const std::pmr::string name(300, 'n');
+    const std::pmr::string value(300, 'v');
+    std::pmr::string output = value + name;
     output.resize(name.size() + 1 + value.size());
     const auto original = output;
     const std::string_view borrowed_name(output.data() + value.size(), name.size());

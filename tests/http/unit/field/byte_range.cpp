@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -216,15 +217,15 @@ TEST(Ruvia, byte_range_set_preserves_disjoint_order_and_coalesces_touching_range
 TEST(Ruvia, byte_range_set_never_repeats_representation_bytes) {
     // Descending open-ended and suffix ranges each overlap every earlier one;
     // as separate parts they would multiply the response size.
-    std::string open_ended = "bytes=";
-    std::string suffixes = "bytes=";
+    std::pmr::string open_ended = "bytes=";
+    std::pmr::string suffixes = "bytes=";
     for (std::size_t index = 0; index < http_byte_range_set::capacity; ++index) {
         if (index != 0) {
             open_ended.push_back(',');
             suffixes.push_back(',');
         }
         open_ended.append(std::to_string(http_byte_range_set::capacity - 1 - index) + "-");
-        suffixes.append("-" + std::to_string(1000 - index));
+        suffixes.append(std::pmr::string("-") + std::to_string(1000 - index).c_str());
     }
     for (const auto& field : {open_ended, suffixes}) {
         const auto ranges = resolve_http_byte_range_set(field, 1000);
@@ -261,7 +262,7 @@ TEST(Ruvia, byte_range_set_tolerates_bounded_empty_members) {
 }
 
 TEST(Ruvia, byte_range_set_counts_only_received_empty_members) {
-    const auto prefix = std::string("bytes=") + std::string(32, ',');
+    const auto prefix = std::pmr::string("bytes=") + std::pmr::string(32, ',');
     for (const auto tail : {"100-", "100-199", "-0"}) {
         const auto ranges = resolve_http_byte_range_set(prefix + tail, 100);
         EXPECT_TRUE(!ranges.ignored());
@@ -278,7 +279,7 @@ TEST(Ruvia, byte_range_set_counts_only_received_empty_members) {
 }
 
 TEST(Ruvia, byte_range_set_ignores_malformed_and_over_limit_sets) {
-    std::string ranges = "bytes=";
+    std::pmr::string ranges = "bytes=";
     for (std::size_t index = 0; index <= http_byte_range_set::capacity; ++index) {
         if (index != 0) {
             ranges.push_back(',');

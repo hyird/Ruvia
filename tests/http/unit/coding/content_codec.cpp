@@ -140,7 +140,7 @@ TEST(Ruvia, http_content_decode_handles_deterministic_arbitrary_compressed_bytes
     };
 
     for (std::size_t sample = 0; sample < 1024; ++sample) {
-        std::string input(static_cast<std::size_t>(next_value() % 513U), '\0');
+        std::pmr::string input(static_cast<std::size_t>(next_value() % 513U), '\0');
         for (auto& byte : input) {
             byte = static_cast<char>(next_value());
         }
@@ -231,7 +231,7 @@ TEST(Ruvia, http_content_coding_field_mapping_is_protocol_generic) {
 }
 
 TEST(Ruvia, http_content_coding_field_bounds_the_coding_stack) {
-    std::string value("identity");
+    std::pmr::string value("identity");
     for (std::size_t index = 0; index < ruvia::max_content_codings; ++index) {
         value += ", gzip, identity";
     }
@@ -295,7 +295,7 @@ TEST(Ruvia, http_content_coding_field_bounds_the_coding_stack) {
 }
 
 TEST(Ruvia, http_deflate_content_uses_the_rfc9110_zlib_wrapper) {
-    const std::string input(4096, 'd');
+    const std::pmr::string input(4096, 'd');
     auto encoded = encode_http_content(
         http_content_coding::deflate, input, {.max_encoded_bytes_ = input.size()});
     EXPECT_TRUE(encoded.has_value());
@@ -312,7 +312,7 @@ TEST(Ruvia, http_deflate_content_uses_the_rfc9110_zlib_wrapper) {
 TEST(Ruvia, http_content_encoding_stack_round_trips_in_protocol_order) {
     constexpr std::array codings{http_content_coding::gzip, http_content_coding::deflate,
         http_content_coding::brotli};
-    const std::string input(8192, 's');
+    const std::pmr::string input(8192, 's');
     peak_allocation_resource resource;
     {
         auto encoded = encode_http_content(codings, input,
@@ -332,7 +332,7 @@ TEST(Ruvia, http_content_encoding_stack_round_trips_in_protocol_order) {
                 EXPECT_TRUE(*failure ==
                             http_content_decode_error::decoded_size_exceeded);
             }
-            std::string truncated(*encoded);
+            std::pmr::string truncated(*encoded);
             truncated.pop_back();
             auto incomplete = decode_http_content(codings, truncated,
                 {.max_decoded_bytes_ = input.size(), .resource_ = &resource});
@@ -350,7 +350,7 @@ TEST(Ruvia, http_content_encoding_stack_round_trips_in_protocol_order) {
 }
 
 TEST(Ruvia, http_content_encoding_stack_skips_identity_stages_without_copying) {
-    const std::string input(8192, 'i');
+    const std::pmr::string input(8192, 'i');
     constexpr std::array stacked{http_content_coding::gzip, http_content_coding::identity};
     peak_allocation_resource single_resource;
     peak_allocation_resource stacked_resource;
@@ -375,7 +375,7 @@ TEST(Ruvia, http_content_encoding_stack_skips_identity_stages_without_copying) {
 }
 
 TEST(Ruvia, http_content_encoder_reset_starts_an_equivalent_fresh_stream) {
-    const std::string input(16384, 'e');
+    const std::pmr::string input(16384, 'e');
     for (const auto coding : {http_content_coding::identity, http_content_coding::gzip, http_content_coding::deflate,
              http_content_coding::brotli, http_content_coding::zstd}) {
         peak_allocation_resource resource;
@@ -414,8 +414,8 @@ TEST(Ruvia, http_content_encoder_reset_starts_an_equivalent_fresh_stream) {
 }
 
 TEST(Ruvia, http_zstd_content_rejects_window_above_rfc9659_limit) {
-    const std::string plain(9 * 1024 * 1024, 'w');
-    const std::string encoded = zstd_compress_with_window(plain, 24);
+    const std::pmr::string plain(9 * 1024 * 1024, 'w');
+    const std::pmr::string encoded = zstd_compress_with_window(plain, 24);
     EXPECT_TRUE(!encoded.empty());
     EXPECT_TRUE(decode_error(http_content_coding::zstd, encoded, plain.size()) ==
                 http_content_decode_error::invalid_content);
@@ -429,7 +429,7 @@ TEST(Ruvia, http_zstd_content_rejects_window_above_rfc9659_limit) {
 }
 
 TEST(Ruvia, http_content_encode_enforces_exact_cap_without_partial_output) {
-    const std::string input(2048, 'e');
+    const std::pmr::string input(2048, 'e');
     for (const auto coding :
         {http_content_coding::gzip, http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
         const auto full = encode_http_content(coding, input,
@@ -469,7 +469,7 @@ TEST(Ruvia, http_content_encode_enforces_exact_cap_without_partial_output) {
 }
 
 TEST(Ruvia, http_content_encoding_stack_caps_each_stage_and_throws_for_unknown_coding) {
-    const std::string input(2048, 's');
+    const std::pmr::string input(2048, 's');
     constexpr std::array codings{http_content_coding::gzip, http_content_coding::gzip};
     const auto first = encode_http_content(codings.front(), input, {.max_encoded_bytes_ = input.size()});
     const auto full = encode_http_content(codings, input, {.max_encoded_bytes_ = input.size()});
@@ -497,7 +497,7 @@ TEST(Ruvia, http_content_encoding_stack_caps_each_stage_and_throws_for_unknown_c
 }
 
 TEST(Ruvia, http_content_codec_error_is_thrown_only_when_a_codec_cannot_run) {
-    const std::string input(2048, 's');
+    const std::pmr::string input(2048, 's');
     const auto unknown = static_cast<http_content_coding>(255);
     peak_allocation_resource resource;
     bool threw = false;
@@ -520,7 +520,7 @@ TEST(Ruvia, http_content_codec_error_is_thrown_only_when_a_codec_cannot_run) {
 TEST(Ruvia, http_content_encode_round_trips_across_output_block_boundaries) {
     for (const std::size_t size : {std::size_t{0}, std::size_t{8191}, std::size_t{8192},
              std::size_t{8193}, std::size_t{65537}, std::size_t{(4u << 20) + 1}}) {
-        std::string input;
+        std::pmr::string input;
         input.reserve(size);
         std::uint32_t state_value = 0x12345678;
         for (std::size_t i = 0; i < size; ++i) {
@@ -555,7 +555,7 @@ TEST(Ruvia, http_content_encode_round_trips_across_output_block_boundaries) {
 }
 
 TEST(Ruvia, http_content_whole_buffer_results_keep_their_memory_resource_and_release_failures) {
-    const std::string plain(1024, 'r');
+    const std::pmr::string plain(1024, 'r');
     constexpr std::array codings{http_content_coding::identity, http_content_coding::gzip,
         http_content_coding::brotli, http_content_coding::zstd};
 
@@ -667,7 +667,7 @@ TEST(Ruvia, http_content_whole_buffer_results_keep_their_memory_resource_and_rel
 TEST(Ruvia, http_content_codecs_rethrow_allocator_exceptions_and_release_partial_state) {
     const struct {
         http_content_coding coding_;
-        std::string encoded_;
+        std::pmr::string encoded_;
     } cases[] = {
         {http_content_coding::gzip, gzip_compress({})},
         {http_content_coding::brotli, brotli_compress({})},
@@ -716,7 +716,7 @@ TEST(Ruvia, http_content_codecs_rethrow_allocator_exceptions_and_release_partial
 TEST(Ruvia, http_content_decoder_state_uses_the_callers_memory_resource) {
     const struct {
         http_content_coding coding_;
-        std::string encoded_;
+        std::pmr::string encoded_;
     } cases[] = {
         {http_content_coding::gzip, gzip_compress({})},
         {http_content_coding::brotli, brotli_compress({})},
@@ -735,10 +735,10 @@ TEST(Ruvia, http_content_decoder_state_uses_the_callers_memory_resource) {
 }
 
 TEST(Ruvia, http_content_encoder_round_trips_incremental_chunks) {
-    const std::string input =
+    const std::pmr::string input =
         "incremental HTTP response data with enough repetition to exercise "
         "each encoder's pending output and finalization state. ";
-    const std::string repeated = input + input + input + input + input;
+    const std::pmr::string repeated = input + input + input + input + input;
 
     for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
              http_content_coding::brotli, http_content_coding::zstd}) {
@@ -785,7 +785,7 @@ TEST(Ruvia, http_content_encoder_failure_is_terminal) {
     http_content_encoder encoder(http_content_coding::identity, std::pmr::get_default_resource());
     failing_memory_resource resource;
     std::pmr::string output(&resource);
-    const std::string input(128, 'f');
+    const std::pmr::string input(128, 'f');
     bool allocation_failed = false;
     resource.fail_after(0);
     try {
@@ -800,7 +800,7 @@ TEST(Ruvia, http_content_encoder_failure_is_terminal) {
 }
 
 TEST(Ruvia, http_content_encoder_brotli_reset_recovers_after_output_allocation_failure) {
-    const std::string input(4096, 'b');
+    const std::pmr::string input(4096, 'b');
     for (const bool fail_on_finish : {false, true}) {
         http_content_encoder encoder(http_content_coding::brotli, std::pmr::get_default_resource());
         failing_memory_resource resource;
@@ -834,7 +834,7 @@ TEST(Ruvia, http_content_encoder_brotli_reset_recovers_after_output_allocation_f
 }
 
 TEST(Ruvia, http_content_encoder_flushes_each_incremental_chunk) {
-    const std::string input(4096, 's');
+    const std::pmr::string input(4096, 's');
 
     for (const auto coding :
         {http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd}) {
@@ -869,18 +869,18 @@ TEST(Ruvia, http_content_encoder_accepts_empty_flushes_between_chunks) {
         encoder.write({}, encoded, true);
         encoder.write({}, encoded, true);
         encoder.finish(encoded);
-        EXPECT_EQ(decoded(coding, encoded, 11), std::string("firstsecond"));
+        EXPECT_EQ(decoded(coding, encoded, 11), std::pmr::string("firstsecond"));
     }
 }
 
 TEST(Ruvia, http_content_encoder_results_survive_subsequent_writes_and_encoder_destruction) {
-    const std::string input(16385, 'x');
+    const std::pmr::string input(16385, 'x');
     for (const auto coding : {http_content_coding::gzip, http_content_coding::brotli, http_content_coding::zstd}) {
         peak_allocation_resource resource;
         {
             std::pmr::string first(&resource);
             std::pmr::string rest(&resource);
-            std::string saved;
+            std::pmr::string saved;
             {
                 http_content_encoder encoder(coding, &resource);
                 encoder.write(input, first, true);
@@ -893,7 +893,7 @@ TEST(Ruvia, http_content_encoder_results_survive_subsequent_writes_and_encoder_d
             }
             EXPECT_EQ(std::string_view(first), std::string_view(saved));
             saved.append(rest);
-            EXPECT_EQ(decoded(coding, saved, input.size() * 17), std::string(input.size() * 17, 'x'));
+            EXPECT_EQ(decoded(coding, saved, input.size() * 17), std::pmr::string(input.size() * 17, 'x'));
             EXPECT_TRUE(resource.live_bytes() != 0);
         }
         EXPECT_EQ(resource.live_bytes(), std::size_t{0});
@@ -901,7 +901,7 @@ TEST(Ruvia, http_content_encoder_results_survive_subsequent_writes_and_encoder_d
 }
 
 TEST(Ruvia, http_content_encoder_rethrows_codec_allocations_and_reclaims_partial_state) {
-    const std::string input(4096, 'x');
+    const std::pmr::string input(4096, 'x');
     // Brotli's default encoder build exits on internal OOM instead of returning
     // through its C API. Exercise its recoverable constructor path separately.
     // This resource owns only raw codec state. Output and its STL metadata use
@@ -966,7 +966,7 @@ TEST(Ruvia, http_content_encoder_rejects_unsupported_coding_and_reclaims_owner) 
 }
 
 TEST(Ruvia, http_brotli_decode_checks_limits_and_complete_stream_after_output_blocks) {
-    const std::string input(65537, 'b');
+    const std::pmr::string input(65537, 'b');
     const auto encoded = brotli_compress(input);
     for (const std::size_t cap : {std::size_t{0}, std::size_t{1}, std::size_t{16383},
              std::size_t{16384}, std::size_t{65536}}) {
@@ -978,7 +978,7 @@ TEST(Ruvia, http_brotli_decode_checks_limits_and_complete_stream_after_output_bl
 }
 
 TEST(Ruvia, http_brotli_encode_does_not_reserve_the_output_cap) {
-    const std::string input(1u << 20, 'b');
+    const std::pmr::string input(1u << 20, 'b');
     reject_output_cap_allocation_resource resource;
     bool completed = false;
     bool round_tripped = false;
@@ -997,7 +997,7 @@ TEST(Ruvia, http_brotli_encode_does_not_reserve_the_output_cap) {
 }
 
 TEST(Ruvia, http_identity_content_uses_the_default_resource_when_none_is_supplied) {
-    const std::string input(1024, 'i');
+    const std::pmr::string input(1024, 'i');
 
     auto decoded = decode_http_content(std::array{http_content_coding::identity}, input,
         {.max_decoded_bytes_ = input.size(), .resource_ = nullptr});
@@ -1019,7 +1019,7 @@ TEST(Ruvia, http_identity_content_uses_the_default_resource_when_none_is_supplie
 }
 
 TEST(Ruvia, http_identity_content_rejects_oversize_before_allocating) {
-    const std::string input(1024, 'i');
+    const std::pmr::string input(1024, 'i');
 
     const auto decoded = decode_http_content(std::array{http_content_coding::identity}, input,
         {.max_decoded_bytes_ = input.size() - 1, .resource_ = std::pmr::null_memory_resource()});
@@ -1036,7 +1036,7 @@ TEST(Ruvia, http_identity_content_rejects_oversize_before_allocating) {
 TEST(Ruvia, http_content_decode_accepts_empty_encoded_input_as_empty_content) {
     for (const auto coding : {http_content_coding::identity, http_content_coding::gzip,
              http_content_coding::deflate, http_content_coding::brotli, http_content_coding::zstd}) {
-        EXPECT_EQ(decoded(coding, {}, 0), std::string{});
+        EXPECT_EQ(decoded(coding, {}, 0), std::pmr::string{});
     }
 
     constexpr std::array codings{http_content_coding::gzip, http_content_coding::brotli,
@@ -1052,7 +1052,7 @@ TEST(Ruvia, http_content_decode_accepts_empty_encoded_input_as_empty_content) {
 TEST(Ruvia, http_content_decode_zero_cap_allows_only_empty_content) {
     const struct {
         http_content_coding coding_;
-        std::string encoded_;
+        std::pmr::string encoded_;
     } empty_cases[] = {
         {http_content_coding::gzip, gzip_compress({})},
         {http_content_coding::brotli, brotli_compress({})},
@@ -1071,7 +1071,7 @@ TEST(Ruvia, http_content_decode_zero_cap_allows_only_empty_content) {
 }
 
 TEST(Ruvia, zstd_decode_full_frame_succeeds) {
-    const std::string plain(4096, 'z');  // compressible payload spanning a block
+    const std::pmr::string plain(4096, 'z');  // compressible payload spanning a block
     const auto decoded = zstd_round_trip(plain, 0);
     EXPECT_TRUE(decoded.has_value());
     if (decoded) {
@@ -1080,7 +1080,7 @@ TEST(Ruvia, zstd_decode_full_frame_succeeds) {
 }
 
 TEST(Ruvia, zstd_decode_truncated_frame_rejected) {
-    const std::string plain(4096, 'z');
+    const std::pmr::string plain(4096, 'z');
     // Dropping the final bytes yields an incomplete frame that must be rejected,
     // matching the zlib/brotli decoders (regression guard for silent-truncation).
     EXPECT_TRUE(!zstd_round_trip(plain, 4).has_value());
@@ -1090,7 +1090,7 @@ TEST(Ruvia, http_content_encoder_stream_state_stays_below_the_maximum_windows) {
     // A long-lived response stream must not hold the largest window the codec
     // supports: brotli streams use a 512 KiB window and zstd its level default
     // (2 MiB), not the 4 MiB brotli default or a pinned 8 MiB zstd window.
-    std::string input(16 * 1024, '\0');
+    std::pmr::string input(16 * 1024, '\0');
     unsigned state_value = 17;
     for (auto& byte_value : input) {
         state_value = state_value * 1103515245U + 12345U;
@@ -1114,7 +1114,7 @@ TEST(Ruvia, http_content_encoder_stream_state_stays_below_the_maximum_windows) {
 TEST(Ruvia, http_brotli_decoder_memory_is_bounded_by_the_decoded_size_cap) {
     // WBITS 24, one non-last uncompressed metablock declaring MLEN 2^24, then
     // a few content bytes: the header alone asks for a 16 MiB ring buffer.
-    std::string encoded("\xCF\xFF\xFF\xFF", 4);
+    std::pmr::string encoded("\xCF\xFF\xFF\xFF", 4);
     encoded.append(8, 'x');
     peak_allocation_resource resource;
     const auto result_value = decode_http_content(std::array{http_content_coding::brotli}, encoded,
@@ -1127,7 +1127,7 @@ TEST(Ruvia, http_brotli_decoder_memory_is_bounded_by_the_decoded_size_cap) {
     EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 
     // Content that fits the cap is never refused by the bound.
-    std::string plain(300 * 1024, '\0');
+    std::pmr::string plain(300 * 1024, '\0');
     for (std::size_t i = 0; i < plain.size(); ++i) {
         plain[i] = static_cast<char>('a' + (i * 7 + i / 97) % 26);
     }

@@ -7,6 +7,7 @@
 #include <exception>
 #include <future>
 #include <memory>
+#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -20,6 +21,7 @@
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -94,7 +96,7 @@ public:
 
     ruvia::task<ruvia::http_response> connection(ruvia::context& context) {
         const auto info = context.conn();
-        std::string result(info.client().address());
+        std::pmr::string result(info.client().address(), ruvia::process_resource());
         result += info.via_trusted_proxy() ? ":proxy" : ":direct";
         result += info.scheme() == ruvia::http_scheme::https ? ":https" : ":http";
         co_return context.text(std::string_view(result));
@@ -153,15 +155,15 @@ private:
     bool joined_{};
 };
 
-std::string read_response(asio::ip::tcp::socket& socket) {
-    std::string response;
+std::pmr::string read_response(asio::ip::tcp::socket& socket) {
+    std::pmr::string response{ruvia::process_resource()};
     std::array<char, 1024> buffer;
     const auto deadline_value = std::chrono::steady_clock::now() + 3s;
     while (std::chrono::steady_clock::now() < deadline_value) {
         asio::error_code error;
         const auto size = socket.read_some(asio::buffer(buffer), error);
         response.append(buffer.data(), size);
-        if (response.find("initialized") != std::string::npos ||
+        if (response.find("initialized") != std::pmr::string::npos ||
             (error && error != asio::error::would_block && error != asio::error::try_again)) {
             break;
         }
@@ -174,13 +176,13 @@ bool forwarded_connection_matches(asio::io_context& io, const asio::ip::tcp::end
     std::string_view forwarding, std::string_view expected) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
-    const std::string request = "GET /connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" +
-                                std::string(forwarding) + "\r\n";
+    const std::pmr::string request = "GET /connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" +
+                                     std::pmr::string(forwarding, ruvia::process_resource()) + "\r\n";
     asio::write(socket, asio::buffer(request));
     socket.non_blocking(true);
     const auto response = read_response(socket);
     const auto body_start = response.find("\r\n\r\n");
-    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
+    return response.starts_with("HTTP/1.1 200 ") && body_start != std::pmr::string::npos &&
            std::string_view(response).substr(body_start + 4) == expected;
 }
 
@@ -277,11 +279,11 @@ bool tls_keep_alive_serves_decrypted_and_later_requests(
     if (!error) {
         stream.handshake(asio::ssl::stream_base::client, error);
     }
-    const auto request = "GET /missing HTTP/1.1\r\nHost: localhost\r\nX-Padding: " + std::string(1024, 'p') + "\r\n\r\n";
+    const auto request = "GET /missing HTTP/1.1\r\nHost: localhost\r\nX-Padding: " + std::pmr::string(1024, 'p', ruvia::process_resource()) + "\r\n\r\n";
     if (!error) {
-        asio::write(stream, asio::buffer(request + request), error);
+        asio::write(stream, asio::buffer(std::pmr::string(request, ruvia::process_resource()) + request), error);
     }
-    std::string received;
+    std::pmr::string received{ruvia::process_resource()};
     std::array<char, 4096> buffer;
     while (!error && count_occurrences(received, "HTTP/1.1 404 ") < 2) {
         const auto size = stream.read_some(asio::buffer(buffer), error);
@@ -318,8 +320,8 @@ bool rejected_expect_upload_closes_without_body(asio::io_context& io, const asio
     }
     asio::error_code end;
     const auto response = read_to_end(socket, end);
-    return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::string::npos &&
-           response.find("HTTP/1.1 100 ") == std::string::npos && end == asio::error::eof;
+    return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::pmr::string::npos &&
+           response.find("HTTP/1.1 100 ") == std::pmr::string::npos && end == asio::error::eof;
 }
 
 // A TLS peer that drops TCP without close_notify ends the server websocket
@@ -344,7 +346,7 @@ bool tls_websocket_truncation_ends_read(
     if (!error) {
         asio::write(stream, asio::buffer(upgrade), error);
     }
-    std::string head;
+    std::pmr::string head{ruvia::process_resource()};
     char byte{};
     while (!error && !head.ends_with("\r\n\r\n")) {
         if (stream.read_some(asio::buffer(&byte, 1), error) == 1) {
@@ -406,7 +408,7 @@ TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
              "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1%12", "::ffff:192.0.2.1"}) {
         bool accepted = true;
         try {
-            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
+            app.trusted_proxies({.cidrs_ = {std::pmr::string(literal, ruvia::process_resource())}});
         } catch (const std::invalid_argument&) {
             accepted = false;
         }
@@ -426,7 +428,7 @@ TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
              std::string_view("fe80::1%nonexistent_ruvia_zone_id")}) {
         bool rejected = false;
         try {
-            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
+            app.trusted_proxies({.cidrs_ = {std::pmr::string(literal, ruvia::process_resource())}});
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
@@ -638,7 +640,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             state_value->release_hook_.release();
         }
         if (outcome == startup_outcome::serve) {
-            EXPECT_TRUE(read_response(socket).find("initialized") != std::string::npos);
+            EXPECT_TRUE(read_response(socket).find("initialized") != std::pmr::string::npos);
             // A final response lingers only until the peer ends its input
             // (RFC 9112 §9.6); the peer's close then releases server capacity.
             socket.close();
@@ -697,7 +699,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
                 try {
                     std::rethrow_exception(run.failure_);
                 } catch (const std::runtime_error& failure) {
-                    EXPECT_EQ(std::string(failure.what()), std::string("startup hook failed"));
+                    EXPECT_EQ(std::pmr::string(failure.what(), ruvia::process_resource()), std::pmr::string("startup hook failed", ruvia::process_resource()));
                 }
             }
         } else {

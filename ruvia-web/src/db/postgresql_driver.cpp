@@ -289,7 +289,7 @@ task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, con
 }
 
 [[nodiscard]] db_error postgresql_protocol_failure(std::string_view message) {
-    return db_error(db_error::code_type::protocol_error, db_driver::postgresql, std::string(message));
+    return db_error(db_error::code_type::protocol_error, db_driver::postgresql, message);
 }
 
 // Feeds the next PQgetResult() of a flight into its results; true once the
@@ -525,7 +525,7 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
             message_view.remove_suffix(1);
         }
     }
-    std::string error;
+    std::pmr::string error(process_resource());
     error.reserve(operation.size() + 7U + (state_view.empty() ? 0U : 12U + state_view.size()) +
                   (message_view.empty() ? 0U : 2U + message_view.size()));
     error.append(operation);

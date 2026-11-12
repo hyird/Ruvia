@@ -21,7 +21,7 @@ struct http1_request_message final {
     std::optional<std::size_t> message_bytes_{};
     // Decoded body of a complete message: the Content-Length bytes or the
     // concatenated chunk payloads.
-    std::string body_{};
+    std::pmr::string body_{};
     std::optional<http1_chunk_decode_error> chunk_error_{};
 
     [[nodiscard]] bool complete() const noexcept {

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <memory_resource>
 #include <random>
 #include <semaphore>
 #include <stdexcept>
@@ -27,6 +28,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -99,7 +101,7 @@ void write_file(const std::filesystem::path& path, std::string_view bytes) {
     }
 }
 
-std::string encrypted_private_key(ruvia::test::tls_identity& identity, std::string_view password) {
+std::pmr::string encrypted_private_key(ruvia::test::tls_identity& identity, std::string_view password) {
     const std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new(BIO_s_mem()), BIO_free);
     if (!output || ruvia::test::write_tls_private_key(output.get(),
                        SSL_CTX_get0_privatekey(identity.context_.native_handle()), password, true) != 1) {
@@ -110,7 +112,7 @@ std::string encrypted_private_key(ruvia::test::tls_identity& identity, std::stri
     if (size <= 0 || data == nullptr) {
         throw std::runtime_error("cannot read encrypted TLS test private key");
     }
-    return std::string(data, static_cast<std::size_t>(size));
+    return std::pmr::string(data, static_cast<std::size_t>(size), ruvia::process_resource());
 }
 
 // A verified identity may have no Subject attributes (RFC 5280 section 4.1.2.6).
@@ -192,7 +194,7 @@ bool throws_system_error(fn_type&& fn) {
 
 // Verifies the server chain against the test CA; `host` is both the SNI name
 // and, when `verify_host` is set, the name the certificate must match.
-std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+std::pmr::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
     const std::filesystem::path& ca_file, const char* host, bool verify_host,
     std::string_view target = "/tls", SSL_CTX* client_identity = nullptr) {
     asio::ssl::context client(asio::ssl::context::tls_client);
@@ -206,18 +208,18 @@ std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpo
     }
     if (SSL_set_tlsext_host_name(stream.native_handle(), host) != 1 ||
         (verify_host && SSL_set1_host(stream.native_handle(), host) != 1)) {
-        return {};
+        return std::pmr::string{ruvia::process_resource()};
     }
     asio::error_code error;
     stream.next_layer().connect(endpoint, error);
     if (!error) {
         stream.handshake(asio::ssl::stream_base::client, error);
     }
-    const auto request = std::string("GET ") + std::string(target) + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+    const auto request = std::pmr::string("GET ", ruvia::process_resource()) + std::pmr::string(target, ruvia::process_resource()) + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
     if (!error) {
         asio::write(stream, asio::buffer(request), error);
     }
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::array<char, 1024> buffer;
     while (!error) {
         const auto size = stream.read_some(asio::buffer(buffer), error);
@@ -226,9 +228,9 @@ std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpo
     return response;
 }
 
-bool serves_secure_body(const std::string& response, std::string_view expected = "secure") {
+bool serves_secure_body(const std::pmr::string& response, std::string_view expected = "secure") {
     const auto body_start = response.find("\r\n\r\n");
-    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
+    return response.starts_with("HTTP/1.1 200 ") && body_start != std::pmr::string::npos &&
            std::string_view(response).substr(body_start + 4) == expected;
 }
 
@@ -251,7 +253,7 @@ bool truncated_close_delimited_stream_lacks_close_notify(asio::io_context& io, c
     if (error) {
         return false;
     }
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::array<char, 1024> buffer;
     while (!error) {
         const auto size = stream.read_some(asio::buffer(buffer), error);
@@ -263,7 +265,7 @@ bool truncated_close_delimited_stream_lacks_close_notify(asio::io_context& io, c
 
 struct alpn_handshake final {
     asio::error_code error_;
-    std::string selected_;
+    std::pmr::string selected_{ruvia::process_resource()};
 };
 
 // Handshakes offering `protocols` (ALPN wire format) and reports the protocol
@@ -327,7 +329,7 @@ bool bounded_tls_connection_ends(asio::io_context& io, const asio::ip::tcp::endp
             return completed != 0;
         }
         bool done = false;
-        std::string response;
+        std::pmr::string response{ruvia::process_resource()};
         asio::async_read_until(stream, asio::dynamic_buffer(response), "\r\n\r\nsecure",
             [&](const std::error_code& result, std::size_t) { error = result; done = true; });
         io.restart();
@@ -358,7 +360,7 @@ asio::ssl::context tls12_client(const char* cipher_suites = nullptr) {
 
 // The TLS 1.2 suite the server selects from `offer`, in the client's order of
 // preference; empty when the handshake fails.
-std::string tls12_selected_cipher(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* offer) {
+std::pmr::string tls12_selected_cipher(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* offer) {
     auto client = tls12_client(offer);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
     asio::error_code error;
@@ -367,9 +369,9 @@ std::string tls12_selected_cipher(asio::io_context& io, const asio::ip::tcp::end
         stream.handshake(asio::ssl::stream_base::client, error);
     }
     if (error) {
-        return {};
+        return std::pmr::string{ruvia::process_resource()};
     }
-    return SSL_get_cipher_name(stream.native_handle());
+    return std::pmr::string(SSL_get_cipher_name(stream.native_handle()), ruvia::process_resource());
 }
 
 // 在指定 TLS 版本下建立会话，再以第二个 SNI 尝试恢复。
@@ -401,7 +403,7 @@ bool resumes_tls_session_under(asio::io_context& io, const asio::ip::tcp::endpoi
         }
         if (version == TLS1_3_VERSION) {
             // TLS 1.3 的 ticket 在握手后发送；读取实际响应以处理 NewSessionTicket。
-            const auto request = std::string("GET /tls HTTP/1.1\r\nHost: ") + name + "\r\nConnection: close\r\n\r\n";
+            const auto request = std::pmr::string("GET /tls HTTP/1.1\r\nHost: ", ruvia::process_resource()) + name + "\r\nConnection: close\r\n\r\n";
             asio::write(stream, asio::buffer(request), error);
             std::array<char, 1024> buffer;
             while (!error) {
@@ -442,7 +444,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
     const auto certificate = directory.file(u8"\u8bc1\u4e66.pem");
     const auto private_key = directory.file(u8"\u79c1\u94a5-\U0001F511.pem");
     const auto client_ca = directory.file(u8"\u4fe1\u4efb-\u0434\u043e\u0432\u0435\u0440\u0438\u0435.pem");
-    const std::string password = "correct horse battery staple";
+    const std::pmr::string password{"correct horse battery staple", ruvia::process_resource()};
     std::filesystem::copy_file(identity.ca_file_, certificate);
     std::filesystem::copy_file(identity.ca_file_, client_ca);
     write_file(private_key, encrypted_private_key(identity, password));
@@ -453,7 +455,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
     const auto endpoint = reservation.endpoint();
 
     auto& app = ruvia::app();
-    const auto listener = [&](std::string key_password, std::filesystem::path chain) {
+    const auto listener = [&](std::string_view key_password, std::filesystem::path chain) {
         return ruvia::listen_config{
             .address_ = "127.0.0.1",
             .https_ = endpoint.port(),
@@ -463,7 +465,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
                         {
                             .certificate_chain_file_ = std::move(chain),
                             .private_key_file_ = private_key,
-                            .private_key_password_ = std::move(key_password),
+                            .private_key_password_ = std::pmr::string(key_password, ruvia::process_resource()),
                         },
                     .client_certificates_ = {.ca_file_ = client_ca},
                     .sni_ = {{
@@ -505,18 +507,18 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
                                                "/tls-peer", empty_client.native_handle()),
                 "present-empty"));
             EXPECT_TRUE(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x04h2xx")));
-            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x02h2").selected_, std::string("h2"));
+            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x02h2").selected_, std::pmr::string("h2", ruvia::process_resource()));
             const auto negotiated = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1");
             EXPECT_TRUE(!negotiated.error_);
-            EXPECT_EQ(negotiated.selected_, std::string("h2"));
+            EXPECT_EQ(negotiated.selected_, std::pmr::string("h2", ruvia::process_resource()));
             EXPECT_TRUE(truncated_close_delimited_stream_lacks_close_notify(io, endpoint));
-            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0").selected_, std::string("http/1.0"));
-            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0\x08http/1.1").selected_, std::string("http/1.1"));
+            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0").selected_, std::pmr::string("http/1.0", ruvia::process_resource()));
+            EXPECT_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0\x08http/1.1").selected_, std::pmr::string("http/1.1", ruvia::process_resource()));
             EXPECT_TRUE(tls12_selected_cipher(io, endpoint, "AES128-SHA").empty());
             EXPECT_EQ(tls12_selected_cipher(io, endpoint, "AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"),
-                std::string("ECDHE-RSA-AES128-GCM-SHA256"));
+                std::pmr::string("ECDHE-RSA-AES128-GCM-SHA256", ruvia::process_resource()));
             EXPECT_EQ(tls12_selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"),
-                std::string("ECDHE-RSA-AES128-GCM-SHA256"));
+                std::pmr::string("ECDHE-RSA-AES128-GCM-SHA256", ruvia::process_resource()));
             for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
                 EXPECT_TRUE(bounded_tls_connection_ends(io, endpoint, version));
                 EXPECT_TRUE(resumes_tls_session_under(io, endpoint, version, "localhost", "localhost"));

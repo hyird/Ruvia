@@ -260,18 +260,18 @@ std::string_view default_error_code(http_status_code status) noexcept {
     }
 }
 
-std::string exception_text(const std::exception_ptr& exception) {
+std::pmr::string exception_text(const std::exception_ptr& exception) {
     if (exception == nullptr) {
-        return {};
+        return std::pmr::string(process_resource());
     }
     try {
         std::rethrow_exception(exception);
     } catch (const std::system_error& error) {
         return system_error_text(error);
     } catch (const std::exception& error) {
-        return error.what();
+        return std::pmr::string(error.what(), process_resource());
     } catch (...) {
-        return "non-standard exception";
+        return std::pmr::string("non-standard exception", process_resource());
     }
 }
 

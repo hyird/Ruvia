@@ -237,7 +237,7 @@ TEST(Ruvia, http_client_response_unfolds_fields_before_framing_and_owns_values) 
     request.method_ = "GET";
     http1_client_response_parser parser =
         exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request);
-    std::string wire =
+    std::pmr::string wire =
         "HTTP/1.1 200 OK\r\n"
         "Content-Length: 0,\r\n \t0\r\n"
         "X-Trace: one \t\r\n\t two\r\n\r\n";
@@ -283,7 +283,7 @@ TEST(Ruvia, http_client_response_unfolding_preserves_framing_validation) {
         {"\tContent-Length: 0\r\nX-Trace: one\r\n two", http1_client_response_parse_error::invalid_header},
     };
     for (const auto& [fields, expected_error] : invalid) {
-        const std::string head = "HTTP/1.1 200 OK\r\n" + std::string(fields);
+        const std::pmr::string head = "HTTP/1.1 200 OK\r\n" + std::pmr::string(fields);
         EXPECT_TRUE(parse_failure_error("GET", head) == expected_error);
     }
 }
@@ -436,8 +436,8 @@ TEST(Ruvia, http_client_transfer_encoding_ignores_empty_recipient_list_items) {
              "Transfer-Encoding: chunked\r\nTransfer-Encoding: , ,",
              "Transfer-Encoding: ,\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: \r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: ,",
          }) {
-        const std::string head = "HTTP/1.1 200 OK\r\n" + std::string(fields) + "\r\n\r\n";
-        const std::string wire = head + "0\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n";
+        const std::pmr::string head = "HTTP/1.1 200 OK\r\n" + std::pmr::string(fields) + "\r\n\r\n";
+        const std::pmr::string wire = head + "0\r\n\r\nHTTP/1.1 204 No Content\r\n\r\n";
         const auto result = parse_wire("GET", wire);
         const auto* parsed = result.parsed();
         EXPECT_TRUE(parsed != nullptr);
@@ -523,12 +523,12 @@ TEST(Ruvia, http_client_trailer_declaration_metadata_preserves_framed_body_and_n
     for (const std::string_view declaration :
         {"Content-Length", "Host", "Bad Field", "\"x-name\"", ",", "X-One,,X-Two"}) {
         for (const bool chunked : {false, true}) {
-            std::string head = "HTTP/1.1 200 OK\r\nTrailer: \t";
+            std::pmr::string head = "HTTP/1.1 200 OK\r\nTrailer: \t";
             head.append(declaration);
             head.append(" \t\r\n");
             head.append(chunked ? "Transfer-Encoding: chunked\r\n\r\n" : "Content-Length: 3\r\n\r\n");
-            const std::string wire = head + (chunked ? "3\r\nabc\r\n0\r\n\r\n" : "abc") +
-                                     "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+            const std::pmr::string wire = head + (chunked ? "3\r\nabc\r\n0\r\n\r\n" : "abc") +
+                                          "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
             const auto result = parse_wire("GET", wire);
             EXPECT_TRUE(result.parsed() != nullptr);
             if (const auto* parsed = result.parsed()) {
@@ -543,7 +543,7 @@ TEST(Ruvia, http_client_trailer_declaration_metadata_preserves_framed_body_and_n
                     parsed->plan(), std::pmr::get_default_resource());
                 std::array<char, 8> scratch{};
                 auto remaining = std::string_view(wire).substr(parsed->consumed_bytes());
-                std::string body;
+                std::pmr::string body;
                 bool complete = false;
                 for (int step = 0; step < 8; ++step) {
                     const auto decoded = decoder.decode(remaining, scratch);
@@ -580,7 +580,7 @@ TEST(Ruvia, http_client_bodyless_trailer_declarations_preserve_message_boundarie
         ruvia::http_client_request_view request;
         request.method_ = method;
         for (const bool transfer_encoding : {false, true}) {
-            std::string head(status_line);
+            std::pmr::string head(status_line);
             head.append("\r\n");
             if (transfer_encoding) {
                 head.append("Transfer-Encoding: chunked\r\n");
@@ -589,7 +589,7 @@ TEST(Ruvia, http_client_bodyless_trailer_declarations_preserve_message_boundarie
             // that trailer fields follow. RFC 9112 section 6.3 ends both of
             // these responses at the empty line regardless of their fields.
             head.append("Trailer: Content-Length, Bad Field, \"x-name\"\r\n\r\n");
-            const std::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+            const std::pmr::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
             http1_client_response_parser parser =
                 exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request);
             for (std::size_t size = 1; size < head.size(); ++size) {
@@ -646,11 +646,11 @@ TEST(Ruvia, http_client_auxiliary_response_fields_do_not_change_content_framing)
              std::string_view("Transfer-Encoding: gzip\r\n"),
              std::string_view{},
          }) {
-        std::string head("HTTP/1.1 200 OK\r\n");
+        std::pmr::string head("HTTP/1.1 200 OK\r\n");
         head.append(auxiliary);
         head.append(framing);
         head.append("\r\n");
-        const std::string wire = head + "body bytes";
+        const std::pmr::string wire = head + "body bytes";
         const auto result = parse_wire("GET", wire);
         EXPECT_TRUE(result.parsed() != nullptr);
         if (const auto* parsed = result.parsed()) {
@@ -673,7 +673,7 @@ TEST(Ruvia, http_client_auxiliary_response_fields_do_not_change_content_framing)
              std::string_view("Transfer-Encoding: chunked, gzip\r\n"),
              std::string_view("Transfer-Encoding: custom-coding\r\n"),
          }) {
-        std::string head("HTTP/1.1 200 OK\r\n");
+        std::pmr::string head("HTTP/1.1 200 OK\r\n");
         head.append(auxiliary);
         head.append(malformed);
         EXPECT_TRUE(parse_fails("GET", head));
@@ -684,13 +684,13 @@ TEST(Ruvia, http_client_informational_auxiliary_fields_preserve_the_final_respon
     for (const std::string_view status_line :
         {"HTTP/1.1 100 Continue\r\n", "HTTP/1.1 103 Early Hints\r\n"}) {
         ruvia::http_client_request_view request;
-        std::string head(status_line);
+        std::pmr::string head(status_line);
         head.append(
             "Content-Length: ignored\r\nTransfer-Encoding: ignored\r\n"
             "Trailer: Content-Length, Bad Field\r\nTE: trailers\r\nUpgrade: websocket\r\n"
             "Content-Type: text/plain\r\nContent-Type: application/json\r\n"
             "Server: first\r\nServer: second\r\n\r\n");
-        const std::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        const std::pmr::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
         http1_client_response_parser parser =
             exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request);
         for (std::size_t size = 1; size < head.size(); ++size) {
@@ -758,7 +758,7 @@ TEST(Ruvia, http_client_bodyless_framing_fields_do_not_desynchronize_the_connect
     // A smuggled body after a bodyless head is the next response, not content.
     constexpr std::string_view no_content_head =
         "HTTP/1.1 204 No Content\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n";
-    std::string wire(no_content_head);
+    std::pmr::string wire(no_content_head);
     wire.append("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
     const auto no_content = parse_wire("GET", wire);
     EXPECT_TRUE(no_content.parsed() != nullptr);
@@ -778,7 +778,7 @@ TEST(Ruvia, http_client_bodyless_framing_fields_do_not_desynchronize_the_connect
     http1_client_response_parser parser =
         exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request);
     constexpr std::string_view interim_head = "HTTP/1.1 103 Early Hints\r\nContent-Length: 5\r\n\r\n";
-    std::string interim_wire(interim_head);
+    std::pmr::string interim_wire(interim_head);
     interim_wire.append("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
     const auto interim = parser.parse(interim_wire);
     EXPECT_TRUE(interim.parsed() != nullptr);
@@ -856,7 +856,7 @@ TEST(Ruvia, http_client_processes_out_of_range_status_as_server_error) {
     for (const auto& [line, value] : {std::pair{std::string_view("HTTP/1.1 600 Odd"), 600},
              std::pair{std::string_view("HTTP/1.1 999 "), 999}, std::pair{std::string_view("HTTP/1.1 099 Low"), 99},
              std::pair{std::string_view("HTTP/1.1 000 "), 0}}) {
-        std::string response(line);
+        std::pmr::string response(line);
         response.append("\r\nContent-Length: 2");
         const auto head = parse_head("GET", response);
         EXPECT_TRUE(head.head().status() == ruvia::http_status::internal_server_error);
@@ -864,7 +864,7 @@ TEST(Ruvia, http_client_processes_out_of_range_status_as_server_error) {
         EXPECT_EQ(require_known_length(head.plan()).content_length(), std::size_t{2});
     }
     for (const std::string_view line : {"HTTP/1.1 -00 Signed", "HTTP/1.1 +99 Signed", "HTTP/1.1 0x1 Hex"}) {
-        std::string response(line);
+        std::pmr::string response(line);
         response.append("\r\nContent-Length: 0");
         EXPECT_TRUE(parse_fails("GET", response));
     }

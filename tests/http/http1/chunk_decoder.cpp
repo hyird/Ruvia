@@ -155,10 +155,10 @@ TEST(Ruvia, chunked_body_decoder_separates_body_and_framing_limits) {
 
     // Size-line overhead has its own per-message budget, independent of the
     // body limit: three large lines that together stay within it all decode.
-    std::string size_line = "1;x=";
+    std::pmr::string size_line = "1;x=";
     size_line.append(ruvia::max_http_header_bytes / 4 - size_line.size() - 2, 'a');
     size_line.append("\r\n");
-    std::string wire;
+    std::pmr::string wire;
     for (const char payload : std::string_view("xyz")) {
         wire.append(size_line);
         wire.push_back(payload);
@@ -167,7 +167,7 @@ TEST(Ruvia, chunked_body_decoder_separates_body_and_framing_limits) {
     wire.append("0\r\n\r\nNEXT");
 
     http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(3)});
-    std::string decoded;
+    std::pmr::string decoded;
     std::string_view remaining = wire;
     for (std::size_t step = 0; step < 8; ++step) {
         const auto result_value = decoder.decode(remaining);
@@ -185,7 +185,7 @@ TEST(Ruvia, chunked_body_decoder_separates_body_and_framing_limits) {
 
 TEST(Ruvia, chunked_body_decoder_accepts_unbounded_chunk_count) {
     constexpr std::size_t chunk_count = 20000;
-    std::string wire;
+    std::pmr::string wire;
     wire.reserve(chunk_count * 6 + 9);
     for (std::size_t index = 0; index < chunk_count; ++index) {
         wire.append("1\r\n");
@@ -224,7 +224,7 @@ TEST(Ruvia, chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) 
         "0\r\nX-Trace: abc\r\n\r\nNEXT";
 
     std::size_t consumed = 0;
-    std::string body;
+    std::pmr::string body;
     for (;;) {
         const auto result_value = decoder.decode(wire.substr(consumed));
         consumed += result_value.consumed_bytes();
@@ -240,15 +240,15 @@ TEST(Ruvia, chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) 
         break;
     }
 
-    EXPECT_EQ(body, std::string("hello world"));
+    EXPECT_EQ(body, std::pmr::string("hello world"));
     EXPECT_EQ(wire.substr(consumed), std::string_view("NEXT"));
 }
 
 TEST(Ruvia, chunked_body_decoder_handles_single_byte_input_fragmentation) {
     http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(1024)});
-    const std::string wire = "3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
-    std::string pending;
-    std::string body;
+    const std::pmr::string wire = "3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
+    std::pmr::string pending;
+    std::pmr::string body;
     bool complete_value = false;
 
     for (const char byte : wire) {
@@ -272,16 +272,16 @@ TEST(Ruvia, chunked_body_decoder_handles_single_byte_input_fragmentation) {
     }
 
     EXPECT_TRUE(complete_value);
-    EXPECT_EQ(body, std::string("abcde"));
+    EXPECT_EQ(body, std::pmr::string("abcde"));
     EXPECT_TRUE(pending.empty());
 }
 
 TEST(Ruvia, chunked_request_trailer_names_preserve_fragment_and_pipeline_boundaries) {
     for (const std::size_t length : {1U, 3U, 4U, 9U, 128U}) {
-        const std::string name(length, 'X');
-        const std::string trailers = name + ": \tfirst:second\t \r\nX-Next: done";
-        const std::string message = "0\r\n" + trailers + "\r\n\r\n";
-        const std::string wire = message + "NEXT";
+        const std::pmr::string name(length, 'X');
+        const std::pmr::string trailers = name + ": \tfirst:second\t \r\nX-Next: done";
+        const std::pmr::string message = "0\r\n" + trailers + "\r\n\r\n";
+        const std::pmr::string wire = message + "NEXT";
         for (std::size_t split = 0; split < message.size(); ++split) {
             http1_chunked_body_decoder decoder;
             const auto first = decoder.decode(std::string_view(wire).substr(0, split));
@@ -309,13 +309,13 @@ TEST(Ruvia, chunked_body_decoder_handles_deterministic_arbitrary_fragmented_byte
     };
 
     for (std::size_t sample = 0; sample < 2048; ++sample) {
-        std::string input(static_cast<std::size_t>(next_value() % 513U), '\0');
+        std::pmr::string input(static_cast<std::size_t>(next_value() % 513U), '\0');
         for (auto& byte : input) {
             byte = static_cast<char>(next_value());
         }
 
         http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(1024)});
-        std::string pending;
+        std::pmr::string pending;
         bool terminal = false;
         for (const auto byte : input) {
             pending.push_back(byte);
@@ -330,7 +330,7 @@ TEST(Ruvia, chunked_body_decoder_handles_deterministic_arbitrary_fragmented_byte
 
                 if (const auto* body = result_value.body_chunk()) {
                     EXPECT_TRUE(!body->bytes().empty());
-                    EXPECT_TRUE(pending.find(body->bytes()) != std::string::npos);
+                    EXPECT_TRUE(pending.find(body->bytes()) != std::pmr::string::npos);
                 }
                 if (result_value.consumed_bytes() != 0) {
                     pending.erase(0, result_value.consumed_bytes());
@@ -371,7 +371,7 @@ TEST(Ruvia, chunked_body_decoder_completes_with_fields_not_permitted_as_trailers
              std::string_view("Accept-Ranges: bytes"), std::string_view("Date: Sun, 06 Nov 1994 08:49:37 GMT"),
              std::string_view("Cache-Control: no-cache\r\nX-Trace: abc")}) {
         http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(1024)});
-        const std::string wire = "0\r\n" + std::string(trailers) + "\r\n\r\nNEXT";
+        const std::pmr::string wire = "0\r\n" + std::pmr::string(trailers) + "\r\n\r\nNEXT";
         const auto result_value = decoder.decode(wire);
         EXPECT_TRUE(result_value.complete() != nullptr);
         if (const auto* complete = result_value.complete()) {
@@ -415,7 +415,7 @@ TEST(Ruvia, chunked_body_decoder_trailer_obs_fold_follows_the_configured_policy)
 // counts folded fields once while the request policy still rejects them.
 TEST(Ruvia, chunked_body_decoder_counts_each_folded_trailer_as_one_field) {
     const auto wire_with = [](std::size_t fields) {
-        std::string wire = "0\r\n";
+        std::pmr::string wire = "0\r\n";
         for (std::size_t field = 0; field < fields; ++field) {
             wire.append("X: a\r\n b\r\n");
         }
@@ -493,7 +493,7 @@ TEST(Ruvia, chunked_body_decoder_decodes_without_pmr_allocation) {
 
 TEST(Ruvia, chunked_body_decoder_caps_each_size_line_at_exact_boundary) {
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
-        std::string wire = "1;x=";
+        std::pmr::string wire = "1;x=";
         // The size line including its CRLF is exactly max_http_header_bytes.
         wire.append(ruvia::max_http_header_bytes + excess - wire.size() - 2, 'a');
         wire.append("\r\nx\r\n0\r\n\r\nNEXT");
@@ -530,7 +530,7 @@ TEST(Ruvia, chunked_body_decoder_caps_each_size_line_at_exact_boundary) {
     }
 
     http1_chunked_body_decoder unterminated;
-    std::string oversized = "1;x=";
+    std::pmr::string oversized = "1;x=";
     oversized.append(ruvia::max_http_header_bytes, 'a');
     const auto result_value = unterminated.decode(oversized);
     EXPECT_TRUE(result_value.failure() != nullptr);
@@ -544,7 +544,7 @@ TEST(Ruvia, chunked_body_decoder_bounds_cumulative_size_line_overhead_per_messag
     // max_http_header_bytes budget across all size lines of a message.
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
         constexpr auto leading_zeros = ruvia::max_http_header_bytes / 2;
-        std::string wire(leading_zeros, '0');
+        std::pmr::string wire(leading_zeros, '0');
         wire.append("1\r\nx\r\n");
         const auto second_line_offset = wire.size();
         wire.append("1;x=");
@@ -555,7 +555,7 @@ TEST(Ruvia, chunked_body_decoder_bounds_cumulative_size_line_overhead_per_messag
         http1_chunked_body_decoder decoder;
         std::string_view rest(wire);
         std::size_t consumed = 0;
-        std::string body;
+        std::pmr::string body;
         for (;;) {
             const auto result = decoder.decode(rest);
             consumed += result.consumed_bytes();
@@ -624,7 +624,7 @@ TEST(Ruvia, chunked_body_decoder_rejects_bare_lf_without_waiting_for_crlf) {
 }
 
 TEST(Ruvia, chunked_body_decoder_accepts_many_trailer_fields_within_byte_budget) {
-    std::string fields_value = "0\r\n";
+    std::pmr::string fields_value = "0\r\n";
     for (std::size_t index = 0; index < 80; ++index) {
         fields_value.append("X-Trace: ok\r\n");
     }
@@ -636,10 +636,10 @@ TEST(Ruvia, chunked_body_decoder_accepts_many_trailer_fields_within_byte_budget)
 
 TEST(Ruvia, chunked_body_decoder_bounds_trailers_independently_of_input_segmentation) {
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
-        std::string trailers = "X-Trace: ";
+        std::pmr::string trailers = "X-Trace: ";
         trailers.append(ruvia::max_http_header_bytes + excess - trailers.size() - 5, ' ');
         trailers.append("x\r\n\r\n");
-        const std::string wire = "0\r\n" + trailers + "NEXT";
+        const std::pmr::string wire = "0\r\n" + trailers + "NEXT";
         const auto message_end = 3 + trailers.size();
         for (const auto split : {wire.size(), message_end - 1}) {
             http1_chunked_body_decoder decoder;
@@ -673,7 +673,7 @@ TEST(Ruvia, chunked_body_decoder_bounds_trailers_independently_of_input_segmenta
 
 TEST(Ruvia, chunked_body_decoder_reports_byte_cap_before_later_invalid_framing) {
     for (const bool trailer : {false, true}) {
-        std::string wire = trailer ? "0\r\nX-Trace: " : "1;x=";
+        std::pmr::string wire = trailer ? "0\r\nX-Trace: " : "1;x=";
         wire.append(ruvia::max_http_header_bytes, 'a');
         wire.append("\n\r\n\r\n");
         http1_chunked_body_decoder decoder;

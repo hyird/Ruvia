@@ -72,14 +72,14 @@ TEST(Ruvia, http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
 }
 TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;
-    const std::string payload = "udp";
+    const std::pmr::string payload = "udp";
     const auto plan = session.prepare_udp_datagram(payload);
     EXPECT_TRUE(plan.index() == 0);
-    std::string wire(std::get<0>(plan).prefix());
+    std::pmr::string wire(std::get<0>(plan).prefix());
     wire.append(payload);
-    std::string capsule;
+    std::pmr::string capsule;
     struct capsule_capture final {
-        std::string& bytes_;
+        std::pmr::string& bytes_;
         bool datagram_{true};
     } captured{capsule};
     ruvia::http_capsule_decoder decoder;
@@ -101,7 +101,7 @@ TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
     capsule[0] = 2;
     const auto dropped = session.receive_udp_datagram(value);
     EXPECT_TRUE(dropped.index() == 0 && !std::get<0>(dropped));
-    const std::string too_large(65528, 'x');
+    const std::pmr::string too_large(65528, 'x');
     EXPECT_TRUE(session.prepare_udp_datagram(too_large).index() != 0);
     session.close_send();
     session.close_receive();
@@ -508,7 +508,7 @@ TEST(Ruvia, http_connect_udp_target_construction_inherits_resource) {
         auto parsed = ruvia::parse_http_connect_udp_path(
             "/.well-known/masque/udp/copy-resource-source.example.test/443/", &memory);
         auto& source = std::get<ruvia::http_connect_udp_target>(parsed);
-        const auto expected_host = std::string(source.host_);
+        const auto expected_host = std::pmr::string(source.host_);
         ruvia::http_connect_udp_target copied(source);
         EXPECT_EQ(copied.host_.get_allocator().resource(), &memory);
         source.host_.assign("changed.test");

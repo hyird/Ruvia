@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
@@ -18,8 +19,8 @@ namespace ruvia {
 
 class context;
 struct security_header final {
-    std::string name_{};
-    std::string value_{};
+    std::pmr::string name_{process_resource()};
+    std::pmr::string value_{process_resource()};
 };
 
 // Legacy browser XSS filters can introduce vulnerabilities in otherwise safe
@@ -50,11 +51,11 @@ struct security_headers_config final {
         default_security_header_policy::emit_default;
     xss_protection_header_policy xss_protection_header_ = xss_protection_header_policy::emit_disabled;
 
-    std::string content_security_policy_{"default-src 'self'"};
-    std::string referrer_policy_{"strict-origin-when-cross-origin"};
-    std::string permissions_policy_{"geolocation=(), microphone=(), camera=()"};
+    std::pmr::string content_security_policy_{"default-src 'self'", process_resource()};
+    std::pmr::string referrer_policy_{"strict-origin-when-cross-origin", process_resource()};
+    std::pmr::string permissions_policy_{"geolocation=(), microphone=(), camera=()", process_resource()};
 
-    std::vector<security_header> custom_headers_{};
+    std::pmr::vector<security_header> custom_headers_{process_resource()};
     security_header_conflict_policy existing_headers_ = security_header_conflict_policy::preserve_existing;
 };
 

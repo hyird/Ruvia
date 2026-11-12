@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_number_format.h"
@@ -88,14 +89,14 @@ enum class db_data_type : unsigned char { inferred,
 struct db_config final {
     db_driver driver_{db_driver::unspecified};
     // Host name or unbracketed address only; keep the port in port.
-    std::string host_{"127.0.0.1"};
+    std::pmr::string host_{"127.0.0.1", process_resource()};
     // Absence selects the driver's standard port: 3306 or 5432. Explicit values
     // are checked before narrowing and must be non-zero.
     std::optional<port_number> port_{};
-    std::string username_{};
-    std::string password_{};
+    std::pmr::string username_{process_resource()};
+    std::pmr::string password_{process_resource()};
     client_tls_config tls_{};
-    std::string database_{};
+    std::pmr::string database_{process_resource()};
     // Opened at startup; must be positive. Total application connections per
     // alias are worker_count * pool_size_per_worker. A transaction or streaming
     // result holds its connection until completed or released.
@@ -136,12 +137,12 @@ struct db_cache_config final {
     bool always_enabled_{false};
     bool ignore_errors_{false};
     // Use a distinct namespace for databases sharing one Redis database.
-    std::string key_prefix_{"ruvia:query-result-cache"};
+    std::pmr::string key_prefix_{"ruvia:query-result-cache", process_resource()};
 };
 
 // application startup resolves this alias to its existing worker-local Redis capability.
 struct db_query_cache_registration final {
-    std::string redis_alias_{"default"};
+    std::pmr::string redis_alias_{"default", process_resource()};
     db_cache_config policy_{};
 };
 
@@ -212,8 +213,19 @@ public:
           code_(code),
           driver_(driver),
           native_code_(native_code),
-          sql_state_(sql_state),
-          constraint_name_(constraint_name) {}
+          sql_state_(sql_state, process_resource()),
+          constraint_name_(constraint_name, process_resource()) {}
+
+    db_error(const db_error& other)
+        : std::runtime_error(other),
+          code_(other.code_),
+          driver_(other.driver_),
+          native_code_(other.native_code_),
+          sql_state_(other.sql_state_, other.sql_state_.get_allocator()),
+          constraint_name_(other.constraint_name_, other.constraint_name_.get_allocator()) {}
+    db_error(db_error&&) = default;
+    db_error& operator=(const db_error&) = default;
+    db_error& operator=(db_error&&) = default;
 
     [[nodiscard]] code_type code() const noexcept {
         return code_;
@@ -249,8 +261,8 @@ private:
     code_type code_;
     std::optional<db_driver> driver_;
     std::optional<std::int64_t> native_code_;
-    std::string sql_state_;
-    std::string constraint_name_;
+    std::pmr::string sql_state_;
+    std::pmr::string constraint_name_;
 };
 
 namespace detail {

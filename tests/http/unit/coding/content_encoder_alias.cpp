@@ -17,7 +17,7 @@ namespace {
 using ruvia::test::poisoned_retirement_resource;
 
 void check_encoder_alias(ruvia::http_content_coding coding) {
-    std::string input(8 * 1024 * 1024 + 37, '\0');
+    std::pmr::string input(8 * 1024 * 1024 + 37, '\0');
     std::uint64_t random = 0x2b19ab247313fc6dULL;
     for (auto& byte : input) {
         random ^= random << 13;
@@ -41,9 +41,9 @@ void check_encoder_alias(ruvia::http_content_coding coding) {
                 encoder.finish(output);
             }
             EXPECT_TRUE(resource.retired(original_storage));
-            EXPECT_EQ(std::string_view(output).substr(0, input_offset), std::string(input_offset, 'p'));
+            EXPECT_EQ(std::string_view(output).substr(0, input_offset), std::pmr::string(input_offset, 'p'));
             EXPECT_EQ(std::string_view(output).substr(input_offset, input.size()), std::string_view(input));
-            EXPECT_EQ(std::string_view(output).substr(padding_offset, prefix_size - padding_offset), std::string(prefix_size - padding_offset, '#'));
+            EXPECT_EQ(std::string_view(output).substr(padding_offset, prefix_size - padding_offset), std::pmr::string(prefix_size - padding_offset, '#'));
 
             const auto decoded = ruvia::decode_http_content(std::array{coding},
                 std::string_view(output).substr(prefix_size),

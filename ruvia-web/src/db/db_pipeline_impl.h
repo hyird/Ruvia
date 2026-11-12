@@ -65,7 +65,7 @@ namespace ruvia::detail {
 inline void check_db_socket_wait(const db_socket_wait_result& result, db_driver driver, std::string_view name) {
     if (result.error_ && result.error_ != asio::error::operation_aborted) {
         throw db_error(db_error::code_type::io_error, driver,
-            std::string(name).append(" socket wait failed: ").append(error_code_text(result.error_)),
+            std::pmr::string(name, process_resource()).append(" socket wait failed: ").append(error_code_text(result.error_)),
             result.error_.value());
     }
 }

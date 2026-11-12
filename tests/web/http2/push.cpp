@@ -5,12 +5,14 @@
 #include <chrono>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
@@ -20,10 +22,10 @@
 #include "test_io_context.h"
 
 namespace {
-ruvia::task<std::string> collect_text(ruvia::http_client_response& response) {
+ruvia::task<std::pmr::string> collect_text(ruvia::http_client_response& response) {
     const auto bytes_value = co_await response.stream().read_all();
     const auto view = bytes_value.bytes();
-    co_return std::string(reinterpret_cast<const char*>(view.data()), view.size());
+    co_return std::pmr::string(reinterpret_cast<const char*>(view.data()), view.size(), ruvia::process_resource());
 }
 struct push_observation final {
     std::atomic<unsigned> promised_{};
@@ -77,7 +79,7 @@ public:
     }
     ruvia::task<void> large(ruvia::context& context_value) {
         auto& owner_value = *context_value.worker_state<std::shared_ptr<push_observation>>();
-        std::string chunk(16384, 'p');
+        std::pmr::string chunk(16384, 'p', ruvia::process_resource());
         if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
@@ -100,7 +102,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
         std::optional<ruvia::http_client_push> retained;
         std::optional<ruvia::http_client_response> retained_response;
         {
-            const std::string client_url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
+            const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(server.endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                              .protocol_ = ruvia::http_client_protocol::http2_only,
                                                              .push_ = {.enabled_ = true}});
@@ -198,7 +200,7 @@ TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_respon
         const auto observed = prepare_observation();
         ruvia::test::http_server_fixture server(io);
         auto run = [&]() -> ruvia::task<void> {
-            const std::string client_url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
+            const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(server.endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                              .protocol_ = ruvia::http_client_protocol::http2_only,
                                                              .push_ = {.enabled_ = enabled, .max_queued_pushes_ = 1}});

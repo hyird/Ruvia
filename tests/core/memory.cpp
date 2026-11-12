@@ -73,7 +73,7 @@ TEST(Ruvia, collect_thread_heap_preserves_live_storage) {
 // Non-multiple sizes must still honor every requested alignment.
 TEST(Ruvia, process_resource_aligns_small_blocks) {
     auto* const resource = ruvia::process_resource();
-    std::vector<std::pair<void*, std::pair<std::size_t, std::size_t>>> live;
+    std::pmr::vector<std::pair<void*, std::pair<std::size_t, std::size_t>>> live(resource);
     for (const std::size_t alignment : {std::size_t{8}, std::size_t{16}, std::size_t{32}, std::size_t{64}}) {
         for (std::size_t bytes_value = 1; bytes_value <= 300; ++bytes_value) {
             for (unsigned repeat = 0; repeat < 3; ++repeat) {

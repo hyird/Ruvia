@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -86,7 +87,7 @@ std::size_t env::size() const noexcept {
 
 std::filesystem::path detail::dotenv_executable_directory() {
 #ifdef _WIN32
-    std::wstring buffer(260, L'\0');
+    std::pmr::wstring buffer(260, L'\0', process_resource());
     for (;;) {
         const auto length =
             ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));

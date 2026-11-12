@@ -14,9 +14,12 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -25,7 +28,7 @@
 
 namespace {
 
-void assign_if_present(std::string& target, std::optional<std::string_view> value) {
+void assign_if_present(std::pmr::string& target, std::optional<std::string_view> value) {
     if (value) {
         target.assign(value->data(), value->size());
     }
@@ -47,8 +50,8 @@ public:
 
 class scoped_header_middleware final {
 public:
-    explicit scoped_header_middleware(std::string value)
-        : value_(std::move(value)) {}
+    explicit scoped_header_middleware(std::string_view value)
+        : value_(value, ruvia::process_resource()) {}
 
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
@@ -56,7 +59,7 @@ public:
     }
 
 private:
-    std::string value_;
+    std::pmr::string value_;
 };
 
 class runtime_controller final {
@@ -116,7 +119,7 @@ int main() {
         const auto cert = env_value.path("RUVIA_TLS_CERT");
         const auto key = env_value.path("RUVIA_TLS_KEY");
         if (cert && key) {
-            std::string password;
+            std::pmr::string password(ruvia::process_resource());
             assign_if_present(password, env_value.get("RUVIA_TLS_PASSWORD"));
             ruvia::listen_config listener_value{
                 .address_ = "0.0.0.0",
@@ -144,7 +147,7 @@ int main() {
                 // Each SNI entry has its own certificate/key. The default listener
                 // certificate remains the fallback for other server names.
                 listener_value.tls_.sni_.push_back({
-                    .host_ = std::string(*host),
+                    .host_ = std::pmr::string(*host, ruvia::process_resource()),
                     .identity_ =
                         {
                             .certificate_chain_file_ = env_value.path("RUVIA_SNI_CERT").value_or(std::filesystem::path{}),

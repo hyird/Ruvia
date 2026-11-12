@@ -1,3 +1,4 @@
+#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
@@ -80,10 +81,10 @@ blocking_pool_stats application::blocking_pool_stats() const {
     return state_value.runtime_->blocking_pool_->stats();
 }
 
-std::vector<web_worker_handle> application::workers() const {
+std::pmr::vector<web_worker_handle> application::workers() const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
-    std::vector<web_worker_handle> result;
+    std::pmr::vector<web_worker_handle> result(process_resource());
     if (!state_value.runtime_ || !state_value.runtime_->workers_ready_) {
         return result;
     }

@@ -122,8 +122,8 @@ TEST(Ruvia, http3_request_head_parses_get_received_over_nghttp3) {
 }
 
 TEST(Ruvia, http3_request_head_keeps_cookie_crumbs_after_moving) {
-    const std::string long_cookie = "session=" + std::string(128, 'x');
-    const std::string long_joined = long_cookie + "; b=2";
+    const std::pmr::string long_cookie = "session=" + std::pmr::string(128, 'x');
+    const std::pmr::string long_joined = long_cookie + "; b=2";
     struct cookie_case final {
         std::array<std::string_view, 3> crumbs_;
         std::string_view expected_;
@@ -170,7 +170,7 @@ TEST(Ruvia, http3_request_head_bounds_single_and_joined_cookie_values) {
     for (const bool split : {false, true}) {
         for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
             std::pmr::unsynchronized_pool_resource resource;
-            const std::string first = "a=" + std::string(ruvia::max_http_header_bytes - 2 - (split ? 5 : 0) + excess, 'x');
+            const std::pmr::string first = "a=" + std::pmr::string(ruvia::max_http_header_bytes - 2 - (split ? 5 : 0) + excess, 'x');
             auto event = make_headers_event(&resource,
                 {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"},
                     {"cookie", first}},
@@ -197,7 +197,7 @@ TEST(Ruvia, http3_request_head_cookie_merge_releases_resources_after_allocation_
     ruvia::test::failing_memory_resource field_resource;
     ruvia::test::failing_memory_resource projection_resource;
     {
-        const std::string first = "a=" + std::string(128, 'x');
+        const std::pmr::string first = "a=" + std::pmr::string(128, 'x');
         auto event = make_headers_event(&field_resource,
             {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"},
                 {"cookie", first}, {"cookie", "b=2"}},
@@ -463,7 +463,7 @@ TEST(Ruvia, http3_all_request_head_forms_obey_local_and_negotiated_section_budge
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log client;
         ASSERT_TRUE(peers.to_client(client));
-        const std::string large_value(1024, 'x');
+        const std::pmr::string large_value(1024, 'x');
         const std::array oversized{ruvia::http_header_view{"x-large", large_value}};
         ruvia::http3_regular_request_head_view ordinary{
             .authority_ = "example.test", .headers_ = oversized};

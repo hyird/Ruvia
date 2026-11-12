@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -241,8 +242,8 @@ private:
     }
 };
 
-[[nodiscard]] std::multiset<std::string_view> allow_methods(std::string_view value) {
-    std::multiset<std::string_view> methods;
+[[nodiscard]] std::pmr::multiset<std::string_view> allow_methods(std::string_view value) {
+    std::pmr::multiset<std::string_view> methods{ruvia::process_resource()};
     while (!value.empty()) {
         const auto comma = value.find(',');
         auto token = value.substr(0, comma);
@@ -262,21 +263,21 @@ private:
 }
 
 // A non-200 answer reads as its own value so a mismatch is visible in the check.
-[[nodiscard]] std::string body_of(ruvia::test_app& app, std::string_view path) {
+[[nodiscard]] std::pmr::string body_of(ruvia::test_app& app, std::string_view path) {
     const auto response = app.request(ruvia::test_request::get(path));
     if (response.status() != ruvia::http_status::ok) {
-        return "unexpected status";
+        return std::pmr::string("unexpected status", ruvia::process_resource());
     }
-    return std::string(response.body());
+    return std::pmr::string(response.body(), ruvia::process_resource());
 }
 
-[[nodiscard]] std::string scope_of(ruvia::test_app& app, std::string_view path) {
+[[nodiscard]] std::pmr::string scope_of(ruvia::test_app& app, std::string_view path) {
     const auto response = app.request(ruvia::test_request::get(path));
     if (response.status() != ruvia::http_status::ok) {
-        return "unexpected status";
+        return std::pmr::string("unexpected status", ruvia::process_resource());
     }
     const auto scope = response.header("X-Route-Scope");
-    return scope.has_value() ? std::string(*scope) : std::string("none");
+    return scope.has_value() ? std::pmr::string(*scope, ruvia::process_resource()) : std::pmr::string("none", ruvia::process_resource());
 }
 
 ruvia::task<ruvia::http_response> route_shapes_api_miss(ruvia::context& c) {
@@ -290,19 +291,19 @@ TEST(Ruvia, route_shapes_static_side_wins_over_parameter_pair) {
     // "/shapes/a/*" and "/shapes/b/:z" both overlap "/shapes/:x/:y"; the literal
     // branch is tried first and the parameter pair serves everything else.
     ruvia::test_app app;
-    EXPECT_EQ(body_of(app, "/shapes/a/b"), std::string("a-wild:b"));
-    EXPECT_EQ(body_of(app, "/shapes/a/b/c"), std::string("a-wild:b/c"));
-    EXPECT_EQ(body_of(app, "/shapes/a"), std::string("a-wild:"));
-    EXPECT_EQ(body_of(app, "/shapes/b/q"), std::string("b-param:q"));
-    EXPECT_EQ(body_of(app, "/shapes/c/d"), std::string("pair:c/d"));
+    EXPECT_EQ(body_of(app, "/shapes/a/b"), std::pmr::string("a-wild:b", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/shapes/a/b/c"), std::pmr::string("a-wild:b/c", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/shapes/a"), std::pmr::string("a-wild:", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/shapes/b/q"), std::pmr::string("b-param:q", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/shapes/c/d"), std::pmr::string("pair:c/d", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_parameter_wins_over_sibling_wildcard) {
     // A parameter is tried before the wildcard at the same node and the
     // wildcard takes over once the parameter branch fails.
     ruvia::test_app app;
-    EXPECT_EQ(body_of(app, "/shapes/w/1"), std::string("w-param:1"));
-    EXPECT_EQ(body_of(app, "/shapes/w/1/2"), std::string("w-wild:1/2"));
+    EXPECT_EQ(body_of(app, "/shapes/w/1"), std::pmr::string("w-param:1", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/shapes/w/1/2"), std::pmr::string("w-wild:1/2", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_scoped_middleware_follows_the_request_path) {
@@ -310,53 +311,53 @@ TEST(Ruvia, route_shapes_scoped_middleware_follows_the_request_path) {
     app.use_at<route_shapes_scope>({.prefix_ = "/admin"}, "admin");
 
     // One parameterized route serves paths on both sides of the scope.
-    EXPECT_EQ(body_of(app, "/admin/panel"), std::string("panel:admin"));
-    EXPECT_EQ(scope_of(app, "/admin/panel"), std::string("admin"));
-    EXPECT_EQ(body_of(app, "/admin/panel/"), std::string("panel-slash:admin"));
-    EXPECT_EQ(scope_of(app, "/admin/panel/"), std::string("admin"));
-    EXPECT_EQ(body_of(app, "/other/panel"), std::string("panel:other"));
-    EXPECT_EQ(scope_of(app, "/other/panel"), std::string("none"));
+    EXPECT_EQ(body_of(app, "/admin/panel"), std::pmr::string("panel:admin", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/admin/panel"), std::pmr::string("admin", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/admin/panel/"), std::pmr::string("panel-slash:admin", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/admin/panel/"), std::pmr::string("admin", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/other/panel"), std::pmr::string("panel:other", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/other/panel"), std::pmr::string("none", ruvia::process_resource()));
     // Whole segments only.
-    EXPECT_EQ(scope_of(app, "/administrator/panel"), std::string("none"));
+    EXPECT_EQ(scope_of(app, "/administrator/panel"), std::pmr::string("none", ruvia::process_resource()));
     // Scope segments compare percent-decoded, the form the handler reads its
     // parameter in, so an encoded spelling cannot step around the scope; an
     // encoded slash stays inside its segment.
-    EXPECT_EQ(body_of(app, "/%61dmin/panel"), std::string("panel:admin"));
-    EXPECT_EQ(scope_of(app, "/%61dmin/panel"), std::string("admin"));
-    EXPECT_EQ(scope_of(app, "/admin%2Fx/panel"), std::string("none"));
+    EXPECT_EQ(body_of(app, "/%61dmin/panel"), std::pmr::string("panel:admin", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/%61dmin/panel"), std::pmr::string("admin", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/admin%2Fx/panel"), std::pmr::string("none", ruvia::process_resource()));
 
     // A route entirely inside the scope and one entirely outside it.
-    EXPECT_EQ(scope_of(app, "/admin/settings"), std::string("admin"));
-    EXPECT_EQ(scope_of(app, "/shapes/c/d"), std::string("none"));
+    EXPECT_EQ(scope_of(app, "/admin/settings"), std::pmr::string("admin", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/shapes/c/d"), std::pmr::string("none", ruvia::process_resource()));
     // An encoded spelling of a static route is that route, under its scope.
-    EXPECT_EQ(body_of(app, "/%61dmin/s%65ttings"), std::string("settings:admin"));
-    EXPECT_EQ(scope_of(app, "/%61dmin/s%65ttings"), std::string("admin"));
+    EXPECT_EQ(body_of(app, "/%61dmin/s%65ttings"), std::pmr::string("settings:admin", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/%61dmin/s%65ttings"), std::pmr::string("admin", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_scoped_middleware_checks_wildcard_captures) {
     ruvia::test_app app;
     app.use_at<route_shapes_scope>({.prefix_ = "/assets/public"}, "public");
 
-    EXPECT_EQ(scope_of(app, "/assets/public"), std::string("public"));
-    EXPECT_EQ(scope_of(app, "/assets/public/app.js"), std::string("public"));
-    EXPECT_EQ(scope_of(app, "/assets/private/key"), std::string("none"));
-    EXPECT_EQ(scope_of(app, "/assets/publicity"), std::string("none"));
-    EXPECT_EQ(scope_of(app, "/assets"), std::string("none"));
+    EXPECT_EQ(scope_of(app, "/assets/public"), std::pmr::string("public", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/assets/public/app.js"), std::pmr::string("public", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/assets/private/key"), std::pmr::string("none", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/assets/publicity"), std::pmr::string("none", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/assets"), std::pmr::string("none", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_trailing_slash_is_a_distinct_path_for_every_route_kind) {
     // RFC 3986 path identity: "/a" and "/a/" name different resources, so
     // static and dynamic routes alike neither alias nor shadow each other.
     ruvia::test_app app;
-    EXPECT_EQ(body_of(app, "/slash/static"), std::string("static:bare"));
-    EXPECT_EQ(body_of(app, "/slash/static/"), std::string("static:slash"));
-    EXPECT_EQ(body_of(app, "/slash/42"), std::string("dyn:42"));
-    EXPECT_EQ(body_of(app, "/slash/42/"), std::string("dyn-slash:42"));
-    EXPECT_EQ(body_of(app, "/slash/42//"), std::string("unexpected status"));
+    EXPECT_EQ(body_of(app, "/slash/static"), std::pmr::string("static:bare", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/slash/static/"), std::pmr::string("static:slash", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/slash/42"), std::pmr::string("dyn:42", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/slash/42/"), std::pmr::string("dyn-slash:42", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/slash/42//"), std::pmr::string("unexpected status", ruvia::process_resource()));
 
-    EXPECT_EQ(body_of(app, "/only/1"), std::string("only:1"));
+    EXPECT_EQ(body_of(app, "/only/1"), std::pmr::string("only:1", ruvia::process_resource()));
     EXPECT_EQ(app.request(ruvia::test_request::get("/only/1/")).status(), ruvia::http_status::not_found);
-    EXPECT_EQ(body_of(app, "/only-static"), std::string("only:static"));
+    EXPECT_EQ(body_of(app, "/only-static"), std::pmr::string("only:static", ruvia::process_resource()));
     EXPECT_EQ(app.request(ruvia::test_request::get("/only-static/")).status(), ruvia::http_status::not_found);
 }
 
@@ -365,8 +366,8 @@ TEST(Ruvia, route_shapes_url_for_keeps_the_registered_trailing_slash) {
     const auto links = app.request(ruvia::test_request::get("/slash-links"));
     EXPECT_EQ(links.status(), ruvia::http_status::ok);
     EXPECT_EQ(links.body(), "/slash/static/ /slash/7/ /slash/7");
-    EXPECT_EQ(body_of(app, "/slash/7/"), std::string("dyn-slash:7"));
-    EXPECT_EQ(body_of(app, "/slash/7"), std::string("dyn:7"));
+    EXPECT_EQ(body_of(app, "/slash/7/"), std::pmr::string("dyn-slash:7", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/slash/7"), std::pmr::string("dyn:7", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_non_http_absolute_target_is_rejected) {
@@ -390,8 +391,8 @@ TEST(Ruvia, route_shapes_dot_segments_match_no_route) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::not_found);
     }
     // Dots inside a segment are ordinary names.
-    EXPECT_EQ(body_of(app, "/assets/..key/.env"), std::string("asset:..key/.env"));
-    EXPECT_EQ(scope_of(app, "/assets/private/key"), std::string("private"));
+    EXPECT_EQ(body_of(app, "/assets/..key/.env"), std::pmr::string("asset:..key/.env", ruvia::process_resource()));
+    EXPECT_EQ(scope_of(app, "/assets/private/key"), std::pmr::string("private", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_conditional_frames_keep_chain_order_and_neighbours) {
@@ -463,10 +464,10 @@ TEST(Ruvia, route_shapes_encoded_spellings_select_the_literal_route_and_its_midd
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
     // Other names still reach the parameter route, decoded.
-    EXPECT_EQ(body_of(app, "/equiv/users/%41dmin"), std::string("user:Admin"));
-    EXPECT_EQ(body_of(app, "/equiv/users/bob/x"), std::string("user:bob"));
+    EXPECT_EQ(body_of(app, "/equiv/users/%41dmin"), std::pmr::string("user:Admin", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/equiv/users/bob/x"), std::pmr::string("user:bob", ruvia::process_resource()));
     // An encoded slash stays inside its segment: it names no literal route.
-    EXPECT_EQ(body_of(app, "/equiv/users/admin%2Fx"), std::string("user:admin/x"));
+    EXPECT_EQ(body_of(app, "/equiv/users/admin%2Fx"), std::pmr::string("user:admin/x", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_hex_case_does_not_change_the_route) {
@@ -475,7 +476,7 @@ TEST(Ruvia, route_shapes_hex_case_does_not_change_the_route) {
     for (const std::string_view path : {"/equiv/files/caf%C3%A9", "/equiv/files/caf%c3%a9", "/equiv/files/caf%C3%a9"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
-    EXPECT_EQ(body_of(app, "/equiv/files/caf%C3%A8"), std::string("file:caf\xC3\xA8"));
+    EXPECT_EQ(body_of(app, "/equiv/files/caf%C3%A8"), std::pmr::string("file:caf\xC3\xA8", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_encoded_colon_or_star_literal_is_not_a_parameter_or_wildcard) {
@@ -486,15 +487,15 @@ TEST(Ruvia, route_shapes_encoded_colon_or_star_literal_is_not_a_parameter_or_wil
     for (const std::string_view path : {"/equiv/colon/%3Aid", "/equiv/colon/%3aid", "/equiv/star/%2A"}) {
         EXPECT_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
-    EXPECT_EQ(body_of(app, "/equiv/colon/42"), std::string("user:42"));
-    EXPECT_EQ(body_of(app, "/equiv/star/x"), std::string("user:-"));
+    EXPECT_EQ(body_of(app, "/equiv/colon/42"), std::pmr::string("user:42", ruvia::process_resource()));
+    EXPECT_EQ(body_of(app, "/equiv/star/x"), std::pmr::string("user:-", ruvia::process_resource()));
 }
 
 TEST(Ruvia, route_shapes_allow_names_every_extension_method_of_a_resource) {
     // RFC 9110 15.5.6: Allow lists the resource's supported methods, however
     // many extension methods it has and however each route spelled the path.
-    const std::multiset<std::string_view> expected{
-        "OPTIONS", "EXT-A", "EXT-B", "EXT-C", "EXT-D", "EXT-E", "EXT-F", "EXT-G", "EXT-H", "EXT-I", "EXT-J"};
+    const std::pmr::multiset<std::string_view> expected{
+        {"OPTIONS", "EXT-A", "EXT-B", "EXT-C", "EXT-D", "EXT-E", "EXT-F", "EXT-G", "EXT-H", "EXT-I", "EXT-J"}, ruvia::process_resource()};
     ruvia::test_app app;
     const auto options = app.request(ruvia::test_request::options("/equiv/many"));
     EXPECT_EQ(options.status(), ruvia::http_status::no_content);
@@ -532,7 +533,7 @@ TEST(Ruvia, extension_routes_keep_method_and_canonical_path_identity) {
         {"A-INDEX-TAIL", "/indexed/m", "file:-"}};
     ruvia::test_app app;
     for (const auto& item : cases) {
-        SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
+        SCOPED_TRACE(std::pmr::string(item.method_, ruvia::process_resource()) + " " + std::pmr::string(item.path_, ruvia::process_resource()));
         const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
         EXPECT_EQ(response.status(), ruvia::http_status::ok);
         EXPECT_EQ(response.body(), item.body_);
@@ -556,7 +557,7 @@ TEST(Ruvia, extension_route_misses_distinguish_method_and_resource_identity) {
         {"ZZZ-NOT-REGISTERED-INDEX", "/indexed/a", ruvia::http_status::not_implemented}};
     ruvia::test_app app;
     for (const auto& item : cases) {
-        SCOPED_TRACE(std::string(item.method_) + " " + std::string(item.path_));
+        SCOPED_TRACE(std::pmr::string(item.method_, ruvia::process_resource()) + " " + std::pmr::string(item.path_, ruvia::process_resource()));
         const auto response = app.request(ruvia::test_request::method(item.method_, item.path_));
         EXPECT_EQ(response.status(), item.status_);
         if (item.status_ != ruvia::http_status::method_not_allowed) {
@@ -570,13 +571,13 @@ TEST(Ruvia, extension_route_allow_groups_only_canonical_equivalent_paths) {
     const auto encoded = app.request(ruvia::test_request::options("/indexed/a%2Fb"));
     EXPECT_EQ(encoded.status(), ruvia::http_status::no_content);
     EXPECT_EQ(allow_methods(encoded.header("Allow").value_or("")),
-        (std::multiset<std::string_view>{"OPTIONS", "A-INDEX", "Z-INDEX"}));
+        (std::pmr::multiset<std::string_view>{{"OPTIONS", "A-INDEX", "Z-INDEX"}, ruvia::process_resource()}));
     const auto split = app.request(ruvia::test_request::method("A-INDEX", "/indexed/a/b"));
     EXPECT_EQ(split.status(), ruvia::http_status::method_not_allowed);
     EXPECT_EQ(allow_methods(split.header("Allow").value_or("")),
-        (std::multiset<std::string_view>{"OPTIONS", "Z-INDEX"}));
+        (std::pmr::multiset<std::string_view>{{"OPTIONS", "Z-INDEX"}, ruvia::process_resource()}));
     const auto plain = app.request(ruvia::test_request::options("/indexed/%61"));
     EXPECT_EQ(plain.status(), ruvia::http_status::no_content);
     EXPECT_EQ(allow_methods(plain.header("Allow").value_or("")),
-        (std::multiset<std::string_view>{"OPTIONS", "A-INDEX"}));
+        (std::pmr::multiset<std::string_view>{{"OPTIONS", "A-INDEX"}, ruvia::process_resource()}));
 }

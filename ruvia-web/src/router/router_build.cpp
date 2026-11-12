@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdint>
+#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -81,8 +82,8 @@ enum class middleware_scope_coverage : std::uint8_t {
     }
 }
 
-[[nodiscard]] std::string describe_route(http_known_method method, std::string_view path) {
-    std::string text(known_http_method_token(method));
+[[nodiscard]] std::pmr::string describe_route(http_known_method method, std::string_view path) {
+    std::pmr::string text(known_http_method_token(method), process_resource());
     text.push_back(' ');
     text.append(path);
     return text;
@@ -148,9 +149,10 @@ void detail::router::validate_no_dynamic_route_conflict() const {
                 continue;
             }
             if (route_patterns_equivalent(left.path(), right.path(), /*compare_param_names=*/false)) {
-                throw std::invalid_argument("conflicting dynamic routes match the same requests with equal precedence: " +
-                                            describe_route(left.method(), left.path()) + " and " +
-                                            describe_route(right.method(), right.path()));
+                throw std::invalid_argument(("conflicting dynamic routes match the same requests with equal precedence: " +
+                                             describe_route(left.method(), left.path()) + " and " +
+                                             describe_route(right.method(), right.path()))
+                        .c_str());
             }
         }
     }

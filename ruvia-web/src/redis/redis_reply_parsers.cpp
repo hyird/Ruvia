@@ -10,6 +10,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/decimal_number.h"
@@ -92,7 +93,7 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
     }
     std::array<char, http_max_unsigned_decimal_size> index_digits;
     const auto index_text = http_format_unsigned(index_digits, index);
-    std::string message;
+    std::pmr::string message(process_resource());
     message.reserve(26 + index_text.size() + value.error().size());
     message.append("redis transaction reply ");
     message.append(index_text);

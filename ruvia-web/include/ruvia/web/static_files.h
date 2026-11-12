@@ -4,10 +4,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 
 namespace ruvia {
@@ -27,7 +29,7 @@ struct static_file_type_policy final {
     };
 
     kind kind_{kind::defaults};
-    std::vector<std::string> extensions_{};
+    std::pmr::vector<std::pmr::string> extensions_{process_resource()};
 };
 
 enum class static_range_request_policy : std::uint8_t {
@@ -49,7 +51,7 @@ struct static_root_options final {
     borrowed_text cache_control_{};
     borrowed_text index_file_{"index.html"};
     borrowed_text default_content_type_{"application/octet-stream"};
-    std::vector<static_mime_type> mime_types_{};
+    std::pmr::vector<static_mime_type> mime_types_{process_resource()};
     static_file_type_policy file_types_{};
     static_range_request_policy range_requests_{static_range_request_policy::honor};
     static_response_validator_policy response_validators_{static_response_validator_policy::emit};

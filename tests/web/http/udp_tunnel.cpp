@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -163,7 +164,7 @@ class udp_tunnel_routes final {
         auto original = c.tunnel().udp(config);
         try {
             try {
-                co_await original.send(std::string(13, 'x'));
+                co_await original.send(std::pmr::string(13, 'x', ruvia::process_resource()));
             } catch (const std::length_error&) {
                 observation.capsule_bound_rejected_ = true;
             }
@@ -238,19 +239,19 @@ class udp_tunnel_routes final {
 // A raw HTTP/1.1 peer: the response head and any input already read after it.
 struct upgraded_connection {
     asio::ip::tcp::socket socket_;
-    std::string head_;
-    std::string input_;
+    std::pmr::string head_{ruvia::process_resource()};
+    std::pmr::string input_{ruvia::process_resource()};
 };
 
 [[nodiscard]] upgraded_connection open_upgrade(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target, std::string_view fields) {
-    upgraded_connection connection{asio::ip::tcp::socket(io), {}, {}};
+    upgraded_connection connection{asio::ip::tcp::socket(io)};
     connection.socket_.connect(endpoint);
-    std::string request = "GET ";
+    std::pmr::string request{"GET ", ruvia::process_resource()};
     request.append(target).append(" HTTP/1.1\r\nHost: localhost\r\n").append(fields).append("\r\n");
     asio::write(connection.socket_, asio::buffer(request));
     const auto head_size = asio::read_until(connection.socket_, asio::dynamic_buffer(connection.input_), "\r\n\r\n");
-    connection.head_ = connection.input_.substr(0, head_size);
+    connection.head_.assign(connection.input_.data(), head_size);
     connection.input_.erase(0, head_size);
     return connection;
 }
@@ -261,7 +262,7 @@ struct upgraded_connection {
 }
 
 // Appends a capsule; a DATAGRAM capsule (type 0) carries context ID 0 first.
-void append_capsule(std::string& output, std::uint64_t type, std::string_view payload) {
+void append_capsule(std::pmr::string& output, std::uint64_t type, std::string_view payload) {
     const bool datagram = type == 0;
     std::array<char, 16> header{};
     const auto encoded = ruvia::encode_http_capsule_header(header, type, payload.size() + (datagram ? 1 : 0));
@@ -287,7 +288,7 @@ void append_capsule(std::string& output, std::uint64_t type, std::string_view pa
 }
 
 // The payload of the next UDP datagram the server tunnels, or nullopt at EOF.
-[[nodiscard]] std::optional<std::string> read_datagram(upgraded_connection& connection) {
+[[nodiscard]] std::optional<std::pmr::string> read_datagram(upgraded_connection& connection) {
     for (;;) {
         std::string_view view = connection.input_;
         if (has_varint(view)) {
@@ -298,7 +299,7 @@ void append_capsule(std::string& output, std::uint64_t type, std::string_view pa
                     if (type != 0 || length == 0 || view.front() != '\0') {
                         throw std::runtime_error("unexpected capsule");
                     }
-                    std::string payload(view.substr(1, length - 1));
+                    std::pmr::string payload(view.substr(1, length - 1), ruvia::process_resource());
                     connection.input_.erase(0, connection.input_.size() - view.size() + length);
                     return payload;
                 }
@@ -321,17 +322,18 @@ void append_capsule(std::string& output, std::uint64_t type, std::string_view pa
 }
 
 // One GET on its own connection; returns the whole response.
-[[nodiscard]] std::string get_response(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
+[[nodiscard]] std::pmr::string get_response(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
     auto connection = open_upgrade(io, endpoint, target, "Connection: close\r\n");
     std::error_code ec;
     asio::read(connection.socket_, asio::dynamic_buffer(connection.input_), ec);
-    return connection.head_ + connection.input_;
+    connection.head_.append(connection.input_);
+    return std::move(connection.head_);
 }
 
 // A masked client WebSocket frame (RFC 6455 section 5.3) with a short payload.
-[[nodiscard]] std::string client_frame(std::uint8_t opcode, std::string_view payload) {
+[[nodiscard]] std::pmr::string client_frame(std::uint8_t opcode, std::string_view payload) {
     constexpr std::array<char, 4> mask{'\x12', '\x34', '\x56', '\x78'};
-    std::string frame;
+    std::pmr::string frame{ruvia::process_resource()};
     frame.push_back(static_cast<char>(0x80 | opcode));
     frame.push_back(static_cast<char>(0x80 | payload.size()));
     frame.append(mask.data(), mask.size());
@@ -343,7 +345,7 @@ void append_capsule(std::string& output, std::uint64_t type, std::string_view pa
 
 struct server_frame {
     std::uint8_t opcode_{};
-    std::string payload_;
+    std::pmr::string payload_{ruvia::process_resource()};
 };
 
 [[nodiscard]] server_frame read_frame(upgraded_connection& connection) {
@@ -353,7 +355,7 @@ struct server_frame {
         connection.input_.append(input.data(), connection.socket_.read_some(asio::buffer(input)));
     }
     const auto length = static_cast<std::size_t>(static_cast<unsigned char>(connection.input_[1]) & 0x7f);
-    server_frame frame{static_cast<std::uint8_t>(connection.input_[0] & 0x0f), connection.input_.substr(2, length)};
+    server_frame frame{static_cast<std::uint8_t>(connection.input_[0] & 0x0f), std::pmr::string(std::string_view(connection.input_).substr(2, length), ruvia::process_resource())};
     connection.input_.erase(0, 2 + length);
     return frame;
 }
@@ -379,13 +381,13 @@ TEST(Ruvia, http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime)
     {
         auto tunnel = open_udp_tunnel(io, server.endpoint(), "/.well-known/masque/udp/target.test/53/");
         EXPECT_TRUE(tunnel.head_.starts_with("HTTP/1.1 101 "));
-        EXPECT_TRUE(tunnel.head_.find("\r\ncapsule-protocol: ?1\r\n") != std::string::npos ||
-                    tunnel.head_.find("\r\nCapsule-Protocol: ?1\r\n") != std::string::npos);
+        EXPECT_TRUE(tunnel.head_.find("\r\ncapsule-protocol: ?1\r\n") != std::pmr::string::npos ||
+                    tunnel.head_.find("\r\nCapsule-Protocol: ?1\r\n") != std::pmr::string::npos);
         for (const auto expected : {std::string_view("ready"), std::string_view("second-ready")}) {
             const auto ready = read_datagram(tunnel);
             EXPECT_TRUE(ready.has_value() && *ready == expected);
         }
-        std::string query;
+        std::pmr::string query{ruvia::process_resource()};
         append_capsule(query, 0, "dns-query");
         asio::write(tunnel.socket_, asio::buffer(query));
         EXPECT_TRUE(get_response(io, server.endpoint(), "/udp-tunnel-sibling").ends_with("\r\n\r\nsibling"));
@@ -418,11 +420,11 @@ TEST(Ruvia, http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
     const auto exchange = [&](std::string_view path) {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        const auto request = std::string("GET ") + std::string(path) +
+        const auto request = std::pmr::string("GET ", ruvia::process_resource()) + std::pmr::string(path, ruvia::process_resource()) +
                              " HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade, close\r\n"
                              "Upgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n\r\n";
         asio::write(client, asio::buffer(request));
-        std::string response;
+        std::pmr::string response{ruvia::process_resource()};
         std::array<char, 1024> input{};
         std::error_code ec;
         while (!ec) {
@@ -446,7 +448,7 @@ TEST(Ruvia, http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
             "GET /udp-tunnel/target.test/53 HTTP/1.0\r\nHost: localhost\r\n"
             "Connection: Upgrade, close\r\nUpgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n\r\n";
         asio::write(client, asio::buffer(h10_request));
-        std::string response;
+        std::pmr::string response{ruvia::process_resource()};
         std::array<char, 1024> input{};
         std::error_code ec;
         while (!ec) {
@@ -470,7 +472,7 @@ TEST(Ruvia, http1_udp_tunnel_upgrade_with_continue_expectation_sends_100_before_
         "GET /udp-tunnel/target.test/53 HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade, close\r\n"
         "Upgrade: connect-udp\r\nCapsule-Protocol: ?1\r\nExpect: 100-continue\r\n\r\n";
     asio::write(client, asio::buffer(request));
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::array<char, 1024> input{};
     std::error_code ec;
     while (!ec) {
@@ -494,9 +496,9 @@ TEST(Ruvia, server_capsule_and_udp_results_outlive_unread_input_and_connections)
             EXPECT_TRUE(tunnel.head_.starts_with("HTTP/1.1 101 "));
             // One transport write includes a second complete capsule. The
             // handler reads only the first, never advancing to EOF.
-            std::string batch;
+            std::pmr::string batch{ruvia::process_resource()};
             for (const char fill : {'r', 's'}) {
-                append_capsule(batch, capsule ? 42 : 0, std::string(1024, fill));
+                append_capsule(batch, capsule ? 42 : 0, std::pmr::string(1024, fill, ruvia::process_resource()));
             }
             asio::write(tunnel.socket_, asio::buffer(batch));
             tunnel.socket_.shutdown(asio::ip::tcp::socket::shutdown_send);
@@ -505,8 +507,8 @@ TEST(Ruvia, server_capsule_and_udp_results_outlive_unread_input_and_connections)
         // Wait for actual connection retirement, not just the peer FIN.
         // Worker state must keep the result alive through this barrier.
         server.finish();
-        for (const auto& expected : {std::string(1024, 'r'), std::string("empty")}) {
-            EXPECT_TRUE(get_response(io, server.endpoint(), "/udp-tunnel-retained").ends_with("\r\n\r\n" + expected));
+        for (const auto& expected : {std::pmr::string(1024, 'r', ruvia::process_resource()), std::pmr::string("empty", ruvia::process_resource())}) {
+            EXPECT_TRUE(get_response(io, server.endpoint(), "/udp-tunnel-retained").ends_with(std::pmr::string("\r\n\r\n", ruvia::process_resource()) + expected));
         }
         server.finish();
     }
@@ -523,7 +525,7 @@ TEST(Ruvia, server_websocket_exposes_negotiated_subprotocol_and_peer_close) {
             "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: chat.v1, chat.v2\r\n");
         EXPECT_TRUE(ws.head_.starts_with("HTTP/1.1 101 "));
-        EXPECT_TRUE(ws.head_.find(": chat.v2\r\n") != std::string::npos);
+        EXPECT_TRUE(ws.head_.find(": chat.v2\r\n") != std::pmr::string::npos);
         const auto text = client_frame(0x1, "ping-echo");
         asio::write(ws.socket_, asio::buffer(text));
         auto frame = read_frame(ws);
@@ -531,7 +533,7 @@ TEST(Ruvia, server_websocket_exposes_negotiated_subprotocol_and_peer_close) {
             frame = read_frame(ws);
         }
         EXPECT_TRUE(frame.opcode_ == 0x1 && frame.payload_ == "ping-echo");
-        const auto close_frame = client_frame(0x8, std::string("\x0f\xa1", 2) + "client-done");
+        const auto close_frame = client_frame(0x8, std::pmr::string("\x0f\xa1", 2, ruvia::process_resource()) + "client-done");
         asio::write(ws.socket_, asio::buffer(close_frame));
         const auto close_reply = read_frame(ws);
         EXPECT_TRUE(close_reply.opcode_ == 0x8);

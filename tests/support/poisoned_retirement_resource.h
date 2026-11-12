@@ -71,7 +71,7 @@ private:
         return this == &other;
     }
 
-    std::vector<allocation> allocations_;
+    std::pmr::vector<allocation> allocations_;
     std::size_t live_bytes_{};
 };
 

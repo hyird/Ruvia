@@ -5,6 +5,7 @@
 #include <chrono>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,7 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -76,7 +78,7 @@ class interim_phase_routes final {
     }
 
     ruvia::task<void> bulk(ruvia::context& c) {
-        const std::string bytes(bulk_bytes, 'b');
+        const std::pmr::string bytes(bulk_bytes, 'b', ruvia::process_resource());
         const auto started = std::chrono::steady_clock::now();
         if (co_await c.stream().commit() == ruvia::stream_commit_result::completed) {
             co_return;
@@ -93,7 +95,7 @@ class interim_phase_routes final {
 // TLS record can leave a raw socket write pending for over 100 ms while the
 // kernel drains its large send queue, which legitimately expires write_timeout.
 // The receive window bounds read-ahead; it does not bound the server send queue.
-std::string exchange_tls(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view requests,
+std::pmr::string exchange_tls(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view requests,
     std::chrono::milliseconds read_pause = 0ms, std::chrono::milliseconds initial_read_pause = 0ms) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
@@ -108,7 +110,7 @@ std::string exchange_tls(asio::io_context& io, const asio::ip::tcp::endpoint& en
     if (!error) {
         asio::write(stream, asio::buffer(requests), error);
     }
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::array<char, 64 * 1024> buffer;
     std::this_thread::sleep_for(initial_read_pause);
     while (!error) {
@@ -159,13 +161,13 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
             "GET /interim-phase/hinted HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         const auto item = output.find("item");
         const auto interim = output.find("HTTP/1.1 103 ");
-        EXPECT_TRUE(item != std::string::npos && interim != std::string::npos && item < interim);
+        EXPECT_TRUE(item != std::pmr::string::npos && interim != std::pmr::string::npos && item < interim);
         EXPECT_TRUE(output.ends_with("hinted"));
 
         const auto streamed = exchange_tls(io, endpoint,
             "GET /interim-phase/stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-        EXPECT_TRUE(streamed.find("first-chunk") != std::string::npos);
-        EXPECT_TRUE(streamed.find("second-chunk") != std::string::npos);
+        EXPECT_TRUE(streamed.find("first-chunk") != std::pmr::string::npos);
+        EXPECT_TRUE(streamed.find("second-chunk") != std::pmr::string::npos);
         EXPECT_TRUE(streamed.ends_with("0\r\n\r\n"));
 
         // A steadily draining single write is not inactivity. Paced batches
@@ -183,7 +185,7 @@ TEST(Ruvia, a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) 
         const auto stalled = exchange_tls(io, endpoint,
             "GET /interim-phase/bulk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", 0ms, handler_pause);
         EXPECT_TRUE(stalled.starts_with("HTTP/1.1 200 "));
-        EXPECT_TRUE(stalled.find("\r\n\r\n") != std::string::npos);
+        EXPECT_TRUE(stalled.find("\r\n\r\n") != std::pmr::string::npos);
         EXPECT_TRUE(stalled.size() < bulk_bytes);
         EXPECT_TRUE(!stalled.ends_with("0\r\n\r\n"));
 

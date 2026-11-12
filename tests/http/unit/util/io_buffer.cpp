@@ -112,7 +112,7 @@ TEST(Ruvia, io_buffer_grows_geometrically_and_keeps_readable_bytes) {
     buffer.commit(1);
     EXPECT_EQ(buffer.capacity(), std::size_t{6});
     EXPECT_EQ(buffer.view(), "abcd");
-    const std::string large(100, 'x');
+    const std::pmr::string large(100, 'x');
     buffer.append(large);
     EXPECT_EQ(buffer.view(), "abcd" + large);
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)buffer.prepare(static_cast<std::size_t>(-1)); }));
@@ -181,7 +181,7 @@ TEST(Ruvia, io_buffer_small_reads_preserve_the_sliding_window) {
     for (const bool prepared : {false, true}) {
         {
             ruvia::http_io_buffer buffer(&resource);
-            std::string expected(64, '\0');
+            std::pmr::string expected(64, '\0');
             for (std::size_t index = 0; index < expected.size(); ++index) {
                 expected[index] = static_cast<char>(index);
             }
@@ -215,7 +215,7 @@ TEST(Ruvia, io_buffer_spare_read_cycles_preserve_content_without_growing) {
     counting_memory_resource resource;
     ruvia::http_io_buffer buffer(&resource);
     buffer.reserve(128);
-    std::string expected(64, 'a');
+    std::pmr::string expected(64, 'a');
     buffer.append(expected);
     for (std::size_t round = 0; round < 4096; ++round) {
         buffer.consume(1);

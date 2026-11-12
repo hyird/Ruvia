@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <new>
 #include <optional>
 #include <span>
@@ -692,7 +693,7 @@ TEST(Ruvia, http1_client_request_writer_preserves_metadata_borrowed_from_output)
                            : writer.prepare(origin,
                                  {.method_ = method, .target_ = target, .headers_ = fields}, output);
             };
-            std::string expected = "HEAD / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\n";
+            std::pmr::string expected = "HEAD / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\n";
             if (streaming) {
                 expected += "Content-Length: 0\r\n";
             }
@@ -729,8 +730,8 @@ TEST(Ruvia, http1_client_request_writer_preserves_borrowed_fields_at_head_size_l
                  ruvia::max_http_header_bytes + 1}) {
             constexpr std::string_view prefix = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Test: ";
             const std::string_view suffix = streaming ? "\r\nContent-Length: 0\r\n\r\n" : "\r\n\r\n";
-            const std::string value(head_bytes - prefix.size() - suffix.size(), 'v');
-            const std::string expected = std::string(prefix) + value + std::string(suffix);
+            const std::pmr::string value(head_bytes - prefix.size() - suffix.size(), 'v');
+            const std::pmr::string expected = std::pmr::string(prefix) + value + std::pmr::string(suffix);
             std::array<char, ruvia::max_http_header_bytes + 8> buffer;
             buffer.fill('#');
             constexpr std::string_view field_name = "X-Test";
@@ -791,7 +792,7 @@ TEST(Ruvia, http1_client_request_writer_consumes_header_descriptors_before_overw
                            ? writer.prepare_streaming(origin, {.headers_ = fields, .content_length_ = 0}, output)
                            : writer.prepare(origin, {.headers_ = fields}, output);
             };
-            std::string expected = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\n";
+            std::pmr::string expected = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\n";
             if (streaming) {
                 expected += "Content-Length: 0\r\n";
             }
@@ -834,7 +835,7 @@ TEST(Ruvia, http1_client_request_writer_preserves_borrowed_content_beyond_emitte
         if (prepared == nullptr) {
             continue;
         }
-        std::string expected = "POST / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\nContent-Length: 4\r\n";
+        std::pmr::string expected = "POST / HTTP/1.1\r\nHost: example.test\r\nX-Test: retained\r\nContent-Length: 4\r\n";
         if (expectation == ruvia::http_client_request_expectation::continue_value) {
             expected += "Expect: 100-continue\r\n";
             const auto* gated = prepared->content_plan().continue_gated();
@@ -917,7 +918,7 @@ TEST(Ruvia, http1_client_request_writer_enforces_header_size_transactionally) {
         http_origin_view::https({.host_ = "example.test"}), many, many_output);
     EXPECT_TRUE(std::holds_alternative<prepared_http1_client_request>(many_prepared));
     http_client_request_view oversized;
-    std::string target(ruvia::max_http_header_bytes, 'a');
+    std::pmr::string target(ruvia::max_http_header_bytes, 'a');
     target.front() = '/';
     oversized.target_ = target;
     EXPECT_TRUE(prepare_error(oversized) == http1_client_request_prepare_error::header_too_large);
@@ -1003,7 +1004,7 @@ TEST(Ruvia, http1_client_request_writer_prepare_connect_udp_preserves_specific_p
     const std::array expect_headers{valid_capsule[0], ruvia::http_header_view{"Expect", "100-continue"}};
     expect_error("/udp", expect_headers, http1_client_request_prepare_error::expect_header_managed_by_writer);
 
-    std::string huge_target(ruvia::max_http_header_bytes, 'a');
+    std::pmr::string huge_target(ruvia::max_http_header_bytes, 'a');
     huge_target.front() = '/';
     expect_error(huge_target, valid_capsule, http1_client_request_prepare_error::header_too_large);
 
@@ -1028,7 +1029,7 @@ TEST(Ruvia, http1_client_forwards_received_application_fields_without_regenerati
         ruvia::http_header_view{"Content-Encoding", ", gzip,, br,"},
         ruvia::http_header_view{"Content-Encoding", ", unknown-coding,,"}};
     for (const auto& field : cases) {
-        std::string wire = "GET / HTTP/1.1\r\nHost: example.test\r\n";
+        std::pmr::string wire = "GET / HTTP/1.1\r\nHost: example.test\r\n";
         wire.append(field.name()).append(": ").append(field.value()).append("\r\n\r\n");
         ruvia::http1_server_request_parse_state incoming;
         incoming.parse_head(wire);
@@ -1214,7 +1215,7 @@ TEST(Ruvia, http1_client_forwards_options_content_without_inventing_media_type) 
         if (!prepared) {
             continue;
         }
-        std::string wire(prepared->head());
+        std::pmr::string wire(prepared->head());
         if (entry == 0) {
             wire.append(prepared->content_plan().immediate()->bytes());
         } else {

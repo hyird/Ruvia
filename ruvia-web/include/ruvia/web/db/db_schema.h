@@ -36,8 +36,8 @@ enum class db_migration_atomicity : std::uint8_t {
 };
 
 struct db_migration_options final {
-    std::string id_{};
-    std::string sql_{};
+    std::pmr::string id_{process_resource()};
+    std::pmr::string sql_{process_resource()};
     db_migration_atomicity atomicity_{db_migration_atomicity::transactional};
 };
 
@@ -59,9 +59,17 @@ struct db_migration_options final {
 class db_migration final {
 public:
     explicit db_migration(db_migration_options options)
-        : id_(std::move(options.id_)),
-          sql_(std::move(options.sql_)),
+        : id_(std::move(options.id_), process_resource()),
+          sql_(std::move(options.sql_), process_resource()),
           atomicity_(options.atomicity_) {}
+
+    db_migration(const db_migration& other)
+        : id_(other.id_, other.id_.get_allocator()),
+          sql_(other.sql_, other.sql_.get_allocator()),
+          atomicity_(other.atomicity_) {}
+    db_migration(db_migration&&) = default;
+    db_migration& operator=(const db_migration&) = default;
+    db_migration& operator=(db_migration&&) = default;
 
     [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND {
         return id_;
@@ -78,8 +86,8 @@ public:
     }
 
 private:
-    std::string id_;
-    std::string sql_;
+    std::pmr::string id_;
+    std::pmr::string sql_;
     db_migration_atomicity atomicity_;
 };
 

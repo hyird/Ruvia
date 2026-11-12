@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/http_content_codec.h"
 
@@ -29,8 +30,8 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
 
 // Compressible but not trivially repetitive, so encoders emit several output
 // blocks for the larger sizes.
-[[nodiscard]] std::string sample_body(std::size_t size, unsigned seed) {
-    std::string body(size, '\0');
+[[nodiscard]] std::pmr::string sample_body(std::size_t size, unsigned seed) {
+    std::pmr::string body(size, '\0');
     unsigned state_value = seed * 2654435761U + 1U;
     for (std::size_t i = 0; i < size; ++i) {
         state_value = state_value * 1103515245U + 12345U;
@@ -39,18 +40,18 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
     return body;
 }
 
-[[nodiscard]] std::string one_shot(http_content_coding coding, std::string_view input, std::size_t cap) {
-    const auto result_value = encode_http_content(coding, input, {.max_encoded_bytes_ = cap});
-    return result_value.has_value() ? std::string(*result_value) : std::string();
+[[nodiscard]] std::pmr::string one_shot(http_content_coding coding, std::string_view input, std::size_t cap) {
+    auto result_value = encode_http_content(coding, input, {.max_encoded_bytes_ = cap});
+    return result_value.has_value() ? std::move(*result_value) : std::pmr::string();
 }
 
-[[nodiscard]] std::optional<std::string> encode_with(http_content_encode_context& context,
+[[nodiscard]] std::optional<std::pmr::string> encode_with(http_content_encode_context& context,
     std::string_view input, std::size_t cap, std::pmr::memory_resource* output_resource = nullptr) {
     auto result_value = context.encode(input, {.max_encoded_bytes_ = cap, .resource_ = output_resource});
     if (!result_value.has_value()) {
         return std::nullopt;
     }
-    return std::string(*result_value);
+    return std::pmr::string(*result_value);
 }
 
 }  // namespace
@@ -70,9 +71,9 @@ TEST(Ruvia, http_content_encode_context_reuse_matches_one_shot_bytes) {
                 const auto expected = one_shot(coding, input, input.size() + 1024);
                 const auto actual = encode_with(context, input, input.size() + 1024);
                 EXPECT_TRUE(actual.has_value());
-                EXPECT_TRUE(actual.value_or(std::string()) == expected);
+                EXPECT_TRUE(actual.value_or(std::pmr::string()) == expected);
                 const auto decoded = decode_http_content(
-                    std::array{coding}, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
+                    std::array{coding}, actual.value_or(std::pmr::string()), {.max_decoded_bytes_ = size});
                 EXPECT_TRUE(std::holds_alternative<std::pmr::string>(decoded));
                 if (const auto* content = std::get_if<std::pmr::string>(&decoded)) {
                     EXPECT_TRUE(std::string_view(*content) == input);
@@ -91,7 +92,7 @@ TEST(Ruvia, http_content_encode_context_keeps_state_apart_from_output) {
             http_content_encode_context context(coding, &state_resource);
             EXPECT_EQ(state_resource.allocation_count(), 0U);
 
-            std::optional<std::string> first;
+            std::optional<std::pmr::string> first;
             {
                 auto result_value =
                     context.encode(input, {.max_encoded_bytes_ = input.size(), .resource_ = &output_resource});
@@ -203,7 +204,7 @@ TEST(Ruvia, http_content_encode_context_recovers_from_state_allocation_failure) 
 TEST(Ruvia, http_content_encode_context_identity_follows_the_one_shot_contract) {
     counting_memory_resource state_resource;
     http_content_encode_context context(http_content_coding::identity, &state_resource);
-    EXPECT_TRUE(encode_with(context, "plain", 5) == std::optional<std::string>("plain"));
+    EXPECT_TRUE(encode_with(context, "plain", 5) == std::optional<std::pmr::string>("plain"));
     const auto oversized = context.encode("plain", {.max_encoded_bytes_ = 4});
     EXPECT_TRUE(!oversized.has_value());
     EXPECT_EQ(state_resource.allocation_count(), 0U);
@@ -223,7 +224,7 @@ TEST(Ruvia, http_content_encode_context_reuses_after_zero_and_exact_budgets) {
         const auto exact = context.encode(input, {.max_encoded_bytes_ = expected->size()});
         EXPECT_TRUE(exact.has_value() && *exact == *expected);
         EXPECT_TRUE(!context.encode(input, {.max_encoded_bytes_ = expected->size() - 1}).has_value());
-        EXPECT_TRUE(encode_with(context, input, input.size()) == std::string(*expected));
+        EXPECT_TRUE(encode_with(context, input, input.size()) == std::pmr::string(*expected));
     }
 }
 

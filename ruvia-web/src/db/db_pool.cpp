@@ -269,7 +269,7 @@ db_pool<driver_type>::~db_pool() {
 template <typename driver_type>
 db_error db_pool<driver_type>::timed_out() const {
     return db_error(db_error::code_type::timeout, driver_type::driver,
-        std::string(driver_type::name).append(" operation timed out"));
+        std::pmr::string(driver_type::name, process_resource()).append(" operation timed out"));
 }
 
 template <typename driver_type>
@@ -377,7 +377,7 @@ void db_pool<driver_type>::expire_idle_lease(std::size_t index) noexcept {
 template <typename driver_type>
 db_error db_pool<driver_type>::lease_timed_out() const {
     return db_error(db_error::code_type::timeout, driver_type::driver,
-        std::string(driver_type::name).append(" transaction or stream exceeded transaction_timeout"));
+        std::pmr::string(driver_type::name, process_resource()).append(" transaction or stream exceeded transaction_timeout"));
 }
 
 // Nothing has been sent on a fresh lease, so replacing the connection is
@@ -469,7 +469,7 @@ template <typename driver_type>
 task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation_timeout& timeout) {
     if (!config_.reconnect_ && !slot(index).connected_ && !leases_.closing()) {
         throw db_error(db_error::code_type::io_error, driver_type::driver,
-            std::string(driver_type::name).append(" session ended, and this pool does not reconnect"));
+            std::pmr::string(driver_type::name, process_resource()).append(" session ended, and this pool does not reconnect"));
     }
     co_await open_slot(index, timeout);
 }
@@ -504,7 +504,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
     std::size_t index, const operation_timeout& deadline_value) {
     const auto resolve_timed_out = [] {
         return db_error(db_error::code_type::timeout, driver_type::driver,
-            std::string(driver_type::name).append(" host resolve timed out"));
+            std::pmr::string(driver_type::name, process_resource()).append(" host resolve timed out"));
     };
 
     leases_.throw_if_aborted(index);
@@ -534,7 +534,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
         }
         if (resolve_error) {
             throw db_error(db_error::code_type::resolve_failed, driver_type::driver,
-                std::string("resolving ").append(driver_type::name).append(" host failed: ").append(error_code_text(resolve_error)),
+                std::pmr::string("resolving ", process_resource()).append(driver_type::name).append(" host failed: ").append(error_code_text(resolve_error)),
                 resolve_error.value());
         }
         co_return collect_db_resolved_addresses(completion, driver_type::driver, process_resource());
@@ -571,7 +571,7 @@ bool db_pool<driver_type>::slot_wait::await_ready() {
     if (kind_ == db_deadline_kind::socket) {
         if (const auto error = slot.wait_socket_.attach(native_); error) {
             throw db_error(db_error::code_type::io_error, driver_type::driver,
-                std::string("registering ").append(driver_type::name).append(" connection socket: ").append(error_code_text(error)),
+                std::pmr::string("registering ", process_resource()).append(driver_type::name).append(" connection socket: ").append(error_code_text(error)),
                 error.value());
         }
     }

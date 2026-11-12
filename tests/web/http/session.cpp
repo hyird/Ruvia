@@ -9,11 +9,14 @@
 #include <exception>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/buffer.hpp>
@@ -27,8 +30,10 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/integer.h"
 #include "ruvia/web/testing.h"
 
 #include "http_server_fixture.h"
@@ -127,7 +132,7 @@ public:
         // Revoke after middleware loaded the session but before response commit.
         const auto id = c.req().cookie("sid_b");
         if (id) {
-            const std::string key = "sess:a" + std::string(*id);
+            const std::pmr::string key = "sess:a" + std::pmr::string(*id, ruvia::process_resource());
             (void)co_await c.redis().del(key);
         }
         c.session().regenerate();
@@ -136,7 +141,7 @@ public:
 
     ruvia::task<ruvia::http_response> stored(ruvia::context& c) {
         const auto id = c.req().query("id");
-        const std::string key = "sess:" + std::string(id.value_or(""));
+        const std::pmr::string key = "sess:" + std::pmr::string(id.value_or(""), ruvia::process_resource());
         const auto value = co_await c.redis().get(key);
         co_return c.text(value ? std::string_view(*value) : "empty");
     }
@@ -150,10 +155,10 @@ public:
         : acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
           work_(asio::make_work_guard(io_)) {
         for (const auto size : {47, 48, 49, 128}) {
-            store_.emplace("sess:" + std::string(size, 'b'), "existing");
+            store_.emplace("sess:" + std::pmr::string(size, 'b', ruvia::process_resource()), "existing");
         }
-        store_.emplace("sess:" + std::string(48, 'B'), "existing");
-        store_.emplace("sess:" + std::string(48, 'g'), "existing");
+        store_.emplace("sess:" + std::pmr::string(48, 'B', ruvia::process_resource()), "existing");
+        store_.emplace("sess:" + std::pmr::string(48, 'g', ruvia::process_resource()), "existing");
         asio::co_spawn(io_, accept(), [this](std::exception_ptr failure) { fail(failure); });
         thread_ = std::thread([this] { io_.run(); });
     }
@@ -209,65 +214,65 @@ private:
         }
     }
 
-    static asio::awaitable<std::string> line(socket_type& socket, std::string& buffer) {
+    static asio::awaitable<std::pmr::string> line(socket_type& socket, std::pmr::string& buffer) {
         const auto size = co_await asio::async_read_until(socket, asio::dynamic_buffer(buffer), "\r\n", asio::use_awaitable);
-        auto result = buffer.substr(0, size - 2);
+        auto result = std::pmr::string(std::string_view(buffer).substr(0, size - 2), ruvia::process_resource());
         buffer.erase(0, size);
         co_return result;
     }
 
-    static asio::awaitable<std::vector<std::string>> command(socket_type& socket, std::string& buffer) {
+    static asio::awaitable<std::pmr::vector<std::pmr::string>> command(socket_type& socket, std::pmr::string& buffer) {
         const auto header = co_await line(socket, buffer);
         if (header.empty() || header.front() != '*') {
             throw std::runtime_error("expected RESP array");
         }
-        const auto count = std::stoull(header.substr(1));
-        std::vector<std::string> args;
+        const auto count = std::get<0>(ruvia::parse_integer<std::size_t>(std::string_view(header).substr(1)));
+        std::pmr::vector<std::pmr::string> args{ruvia::process_resource()};
         for (std::size_t index = 0; index < count; ++index) {
             const auto bulk = co_await line(socket, buffer);
             if (bulk.empty() || bulk.front() != '$') {
                 throw std::runtime_error("expected RESP bulk string");
             }
-            const auto size = std::stoull(bulk.substr(1));
+            const auto size = std::get<0>(ruvia::parse_integer<std::size_t>(std::string_view(bulk).substr(1)));
             if (buffer.size() < size + 2) {
                 co_await asio::async_read(socket, asio::dynamic_buffer(buffer),
                     asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
             }
-            args.push_back(buffer.substr(0, size));
+            args.emplace_back(buffer.data(), size);
             buffer.erase(0, size + 2);
         }
         co_return args;
     }
 
-    std::string execute(const std::vector<std::string>& args) {
+    std::pmr::string execute(const std::pmr::vector<std::pmr::string>& args) {
         if (failure_) {
             std::rethrow_exception(failure_);
         }
         if (args.size() == 2 && args[0] == "GET") {
             const auto found = store_.find(args[1]);
-            return found == store_.end() ? "$-1\r\n" : "$" + std::to_string(found->second.size()) + "\r\n" + found->second + "\r\n";
+            return found == store_.end() ? std::pmr::string("$-1\r\n", ruvia::process_resource()) : std::move(std::pmr::string("$", ruvia::process_resource()).append(std::to_string(found->second.size()))) + "\r\n" + found->second + "\r\n";
         }
         if (args.size() >= 3 && args[0] == "SET") {
             // Session creation uses NX; an existing key must remain unchanged.
-            return store_.emplace(args[1], args[2]).second ? "+OK\r\n" : "$-1\r\n";
+            return std::pmr::string(store_.emplace(args[1], args[2]).second ? "+OK\r\n" : "$-1\r\n", ruvia::process_resource());
         }
         if (args.size() == 2 && args[0] == "DEL") {
-            return ":" + std::to_string(store_.erase(args[1])) + "\r\n";
+            return std::move(std::pmr::string(":", ruvia::process_resource()).append(std::to_string(store_.erase(args[1])))) + "\r\n";
         }
         if (args.size() == 7 && args[0] == "EVAL" && args[2] == "2") {
             // Atomic compare-and-replace of an existing identity, not a canned
             // script response: missing sources and occupied targets cannot rotate.
             if (!store_.contains(args[3]) || !store_.emplace(args[4], args[5]).second) {
-                return ":0\r\n";
+                return std::pmr::string(":0\r\n", ruvia::process_resource());
             }
             store_.erase(args[3]);
-            return ":1\r\n";
+            return std::pmr::string(":1\r\n", ruvia::process_resource());
         }
         throw std::runtime_error("unsupported session store command");
     }
 
     asio::awaitable<void> serve(std::shared_ptr<socket_type> socket) {
-        std::string buffer;
+        std::pmr::string buffer{ruvia::process_resource()};
         try {
             for (;;) {
                 const auto args = co_await command(*socket, buffer);
@@ -284,8 +289,8 @@ private:
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
-    std::map<std::string, std::string> store_;
-    std::vector<std::shared_ptr<socket_type>> sockets_;
+    std::pmr::map<std::pmr::string, std::pmr::string> store_{ruvia::process_resource()};
+    std::pmr::vector<std::shared_ptr<socket_type>> sockets_{ruvia::process_resource()};
     std::exception_ptr failure_;
     bool closing_{false};
     std::thread thread_;
@@ -293,18 +298,18 @@ private:
 
 struct session_response final {
     unsigned status_;
-    std::string body_;
-    std::string cookie_;
+    std::pmr::string body_{ruvia::process_resource()};
+    std::pmr::string cookie_{ruvia::process_resource()};
 };
 
 [[nodiscard]] session_response request(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
     std::string_view target, std::string_view cookie = {}) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
-    const std::string wire = "GET " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nCookie: " + std::string(cookie) + "\r\n\r\n";
+    const std::pmr::string wire = "GET " + std::pmr::string(target, ruvia::process_resource()) + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nCookie: " + std::pmr::string(cookie, ruvia::process_resource()) + "\r\n\r\n";
     asio::write(socket, asio::buffer(wire));
     socket.non_blocking(true);
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::array<char, 4096> buffer;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     for (;;) {
@@ -325,14 +330,14 @@ struct session_response final {
         }
     }
     const auto head_end = response.find("\r\n\r\n");
-    if (!response.starts_with("HTTP/1.1 ") || head_end == std::string::npos) {
+    if (!response.starts_with("HTTP/1.1 ") || head_end == std::pmr::string::npos) {
         throw std::runtime_error("invalid session HTTP response");
     }
-    session_response result{static_cast<unsigned>(std::stoul(response.substr(9, 3))), response.substr(head_end + 4), {}};
+    session_response result{static_cast<unsigned>(std::get<0>(ruvia::parse_integer<unsigned>(std::string_view(response).substr(9, 3)))), std::pmr::string(std::string_view(response).substr(head_end + 4), ruvia::process_resource()), std::pmr::string{ruvia::process_resource()}};
     const auto cookie_start = response.find("\r\nSet-Cookie: ");
-    if (cookie_start != std::string::npos && cookie_start < head_end) {
+    if (cookie_start != std::pmr::string::npos && cookie_start < head_end) {
         const auto start = cookie_start + std::string_view("\r\nSet-Cookie: ").size();
-        result.cookie_ = response.substr(start, response.find(';', start) - start);
+        result.cookie_.assign(std::string_view(response).substr(start, response.find(';', start) - start));
     }
     return result;
 }
@@ -389,14 +394,14 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     // These IDs have actual stored values. Rejection must hide the data and
     // leave it unchanged across both clear and regenerate, not merely avoid a
     // backend error. Uppercase and non-hex IDs still remain invalid at length 48.
-    for (const auto& id : {std::string(47, 'b'), std::string(49, 'b'), std::string(128, 'b'),
-             std::string(48, 'B'), std::string(48, 'g')}) {
-        const auto cookie = "sid_a=" + id;
+    for (const auto& id : {std::pmr::string(47, 'b', ruvia::process_resource()), std::pmr::string(49, 'b', ruvia::process_resource()), std::pmr::string(128, 'b', ruvia::process_resource()),
+             std::pmr::string(48, 'B', ruvia::process_resource()), std::pmr::string(48, 'g', ruvia::process_resource())}) {
+        const auto cookie = std::pmr::string("sid_a=", ruvia::process_resource()) + id;
         expect("/session-ids/a/read", cookie, "empty");
         expect("/session-ids/a/clear", cookie, "clear");
         const auto rotated = expect("/session-ids/a/rotate", cookie, "rotate");
         EXPECT_TRUE(rotated.cookie_.empty());
-        expect("/session-store?id=" + id, {}, "existing");
+        expect(std::pmr::string("/session-store?id=", ruvia::process_resource()) + id, {}, "existing");
     }
 
     // A freshly minted B session must not be loadable or mutable through A's
@@ -405,8 +410,8 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
         const auto created = expect("/session-ids/b/set", {}, "set");
         EXPECT_TRUE(created.cookie_.starts_with("sid_b="));
         EXPECT_EQ(created.cookie_.size(), std::size_t{6 + 48});
-        const auto alias = "sid_a=a" + created.cookie_.substr(6);
-        const auto response = expect(std::string("/session-ids/a/") + action, alias,
+        const auto alias = "sid_a=a" + std::pmr::string(std::string_view(created.cookie_).substr(6), ruvia::process_resource());
+        const auto response = expect(std::pmr::string("/session-ids/a/", ruvia::process_resource()) + action, alias,
             std::string_view(action) == "read" ? "empty" : action);
         if (std::string_view(action) != "clear") {
             EXPECT_TRUE(response.cookie_.empty());
@@ -417,7 +422,7 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     }
 
     // An already-stored 48-character ID retains the same raw key format.
-    const auto existing = "sid_a=" + std::string(48, 'b');
+    const auto existing = "sid_a=" + std::pmr::string(48, 'b', ruvia::process_resource());
     const auto loaded = expect("/session-ids/a/read", existing, "existing");
     EXPECT_TRUE(loaded.cookie_.empty());
     const auto rotated = expect("/session-ids/a/rotate", existing, "rotate");

@@ -29,8 +29,8 @@ int main() {
         // Every model/result using this allocator must die before the pool.
         // In a handler, use c.arena() for request data and process_resource()
         // for individually reclaimable storage.
-        std::pmr::unsynchronized_pool_resource memory;
-        std::string input = R"({"name":"sample","count":7,"ratio":1.25,"enabled":true,"labels":["a","b"],"metadata":{"revision":2}})";
+        std::pmr::unsynchronized_pool_resource memory(ruvia::process_resource());
+        std::pmr::string input(R"({"name":"sample","count":7,"ratio":1.25,"enabled":true,"labels":["a","b"],"metadata":{"revision":2}})", &memory);
         auto owned = ruvia::from_json<import_record>(input, {.resource_ = &memory});
         {
             // parse() borrows input even when a PMR resource is supplied.

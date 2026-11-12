@@ -137,7 +137,7 @@ TEST(Ruvia, http3_nghttp3_client_server_exchange_headers_and_stream_end) {
     EXPECT_TRUE(response.headers_[0].stream_ended_);
     EXPECT_TRUE(response.headers_[0].status_ && response.headers_[0].status_->value() == 204);
     EXPECT_TRUE(response.ended(0));
-    EXPECT_EQ(response.sequence_, std::string("HE"));
+    EXPECT_EQ(response.sequence_, std::pmr::string("HE"));
 }
 
 TEST(Ruvia, http3_owned_event_copies_inherit_source_resource) {
@@ -163,7 +163,7 @@ TEST(Ruvia, http3_owned_event_copies_inherit_source_resource) {
                 EXPECT_EQ(copied.fields_[1].name(), "x-second");
                 EXPECT_EQ(copied.fields_[1].value(), "two");
             }
-            const std::string payload(empty ? 0 : 128, 'd');
+            const std::pmr::string payload(empty ? 0 : 128, 'd');
             ruvia::http3_datagram_event datagram(8, std::pmr::string(payload, &resource));
             const auto copied_datagram = datagram;
             datagram.payload_.clear();
@@ -283,8 +283,8 @@ TEST(Ruvia, http3_headers_event_assignment_rolls_back_each_allocation_failure) {
 }
 
 TEST(Ruvia, http3_datagram_event_assignment_retains_resource_and_allows_retry) {
-    const std::string previous(64, 'p');
-    const std::string incoming(2048, 'n');
+    const std::pmr::string previous(64, 'p');
+    const std::pmr::string incoming(2048, 'n');
     for (const bool move : {false, true}) {
         SCOPED_TRACE(move);
         ruvia::test::failing_memory_resource source_resource;
@@ -321,7 +321,7 @@ TEST(Ruvia, http3_datagram_event_assignment_retains_resource_and_allows_retry) {
 
 TEST(Ruvia, http3_owned_events_move_storage_within_one_resource) {
     ruvia::test::failing_memory_resource resource;
-    const std::string expected_payload(128, 'd');
+    const std::pmr::string expected_payload(128, 'd');
     {
         auto source = make_owned_headers_event(&resource);
         ruvia::http3_headers_event target(8, std::pmr::vector<ruvia::http3_field>(&resource));
@@ -347,7 +347,7 @@ TEST(Ruvia, http3_owned_events_move_storage_within_one_resource) {
 }
 
 TEST(Ruvia, http3_data_event_borrows_or_copies_named_input) {
-    std::string input = "abc";
+    std::pmr::string input = "abc";
     ruvia::http3_data_event borrowed(0, input, nullptr, false);
     ruvia::http3_data_event owned(4, input, nullptr, true);
 
@@ -365,7 +365,7 @@ TEST(Ruvia, http3_data_event_move_assignment_preserves_self_aliased_body) {
             ruvia::test::reentrant_memory_resource resource;
             bool retired = false;
             {
-                const std::string original(length, 'x');
+                const std::pmr::string original(length, 'x');
                 const auto expected = slice ? original.substr(1, length - 2) : original;
                 ruvia::http3_data_event target(4, original, &resource, true);
                 const auto old_address = reinterpret_cast<std::uintptr_t>(target.bytes_.data());
@@ -395,7 +395,7 @@ TEST(Ruvia, http3_data_event_move_assignment_preserves_self_aliased_body) {
 TEST(Ruvia, http3_data_event_self_alias_snapshot_failure_preserves_both_events) {
     ruvia::test::failing_memory_resource resource;
     {
-        const std::string original(256, 'x');
+        const std::pmr::string original(256, 'x');
         ruvia::http3_data_event target(4, original, &resource, true);
         const auto bytes = target.bytes_;
         ruvia::http3_data_event source(8, bytes, &resource, false);
@@ -427,9 +427,9 @@ TEST(Ruvia, http3_data_event_self_alias_snapshot_failure_preserves_both_events) 
 
 TEST(Ruvia, http3_data_event_move_assignment_keeps_external_body_borrowed) {
     ruvia::test::failing_memory_resource resource;
-    const std::string external(256, 'e');
+    const std::pmr::string external(256, 'e');
     {
-        const std::string original(256, 'x');
+        const std::pmr::string original(256, 'x');
         ruvia::http3_data_event target(4, original, &resource, true);
         ruvia::http3_data_event source(8, external, &resource, false);
         resource.fail_after_stl_operation(0);
@@ -443,8 +443,8 @@ TEST(Ruvia, http3_data_event_move_assignment_keeps_external_body_borrowed) {
 }
 
 TEST(Ruvia, http3_data_event_move_assignment_preserves_state_on_allocation_failure) {
-    const std::string previous(64, 'p');
-    const std::string incoming(2048, 'n');
+    const std::pmr::string previous(64, 'p');
+    const std::pmr::string incoming(2048, 'n');
     for (const bool owned_target : {false, true}) {
         SCOPED_TRACE(owned_target);
         ruvia::test::failing_memory_resource source_resource;
@@ -506,9 +506,9 @@ TEST(Ruvia, http3_nghttp3_streaming_body_is_owned_until_acknowledged) {
 
     EXPECT_EQ(request.headers_.size(), std::size_t{1});
     EXPECT_TRUE(retained.has_value() && retained->stream_id_ == 0 && retained->bytes_ == "abc");
-    EXPECT_EQ(request.data(0), std::string("abc"));
+    EXPECT_EQ(request.data(0), std::pmr::string("abc"));
     EXPECT_TRUE(request.ended(0));
-    EXPECT_EQ(request.sequence_, std::string("HDE"));
+    EXPECT_EQ(request.sequence_, std::pmr::string("HDE"));
 }
 
 // A request stream that QUIC reports closed is published once, with the
@@ -548,7 +548,7 @@ TEST(Ruvia, http3_close_stream_publishes_stream_close_event) {
         EXPECT_EQ(closed.closes_[0].stream_id_, std::int64_t{4});
         EXPECT_TRUE(closed.closes_[0].application_error_code_ == std::optional<std::uint64_t>(request_cancelled));
     }
-    EXPECT_EQ(closed.sequence_, std::string("C"));
+    EXPECT_EQ(closed.sequence_, std::pmr::string("C"));
 
     // A closed stream accepts no further response.
     EXPECT_TRUE(std::holds_alternative<ruvia::http3_response_head_error>(
@@ -614,7 +614,7 @@ TEST(Ruvia, http3_settings_and_datagrams_are_negotiated_and_stream_scoped) {
     EXPECT_TRUE(peers.send_request(0, get_request_head, false, log));
     const auto prefix = peers.client_.datagram_prefix(0);
     EXPECT_TRUE(prefix && prefix->size_ == 1 && prefix->bytes_[0] == std::byte{0});
-    const std::string wire("\0\0echo", 6);
+    const std::pmr::string wire("\0\0echo", 6);
     EXPECT_TRUE(peers.server_.read_datagram(ruvia::test::http3_bytes(wire)).status_ == ruvia::http3_status::accepted);
     // Public input calls must drain the prior owned event before appending more.
     EXPECT_TRUE(peers.server_.read_datagram(ruvia::test::http3_bytes(wire)).status_ == ruvia::http3_status::events_pending);
@@ -623,7 +623,7 @@ TEST(Ruvia, http3_settings_and_datagrams_are_negotiated_and_stream_scoped) {
     EXPECT_TRUE(datagram && datagram->stream_id_ == 0 && datagram->payload_ == std::string_view("\0echo", 5));
     EXPECT_TRUE(!peers.server_.next_event());
     // An unknown request stream is dropped, not retained for future streams.
-    const std::string unknown("\1\0echo", 6);
+    const std::pmr::string unknown("\1\0echo", 6);
     EXPECT_TRUE(peers.server_.read_datagram(ruvia::test::http3_bytes(unknown)).status_ == ruvia::http3_status::accepted);
     EXPECT_TRUE(!peers.server_.next_event());
     EXPECT_TRUE(peers.server_.close_stream(0, request_cancelled, request_cancelled) == ruvia::http3_status::accepted);
@@ -640,7 +640,7 @@ TEST(Ruvia, http3_datagram_truncated_prefix_and_disabled_setting_are_connection_
     EXPECT_TRUE(truncated.status_ == ruvia::http3_status::protocol_error);
     EXPECT_EQ(truncated.error_code_, static_cast<std::uint64_t>(ruvia::http3_error_code::datagram_error));
     auto disabled = ruvia::http3_connection::server();
-    const std::string wire("\0hello", 6);
+    const std::pmr::string wire("\0hello", 6);
     EXPECT_TRUE(disabled.read_datagram(ruvia::test::http3_bytes(wire)).status_ == ruvia::http3_status::protocol_error);
 }
 
@@ -658,8 +658,8 @@ TEST(Ruvia, http3_origin_frame_advertises_initial_and_dynamic_origins) {
     if (client_log.origins_.size() == 1) {
         EXPECT_EQ(client_log.origins_[0].size(), std::size_t{2});
         if (client_log.origins_[0].size() == 2) {
-            EXPECT_EQ(client_log.origins_[0][0], std::string("https://example.test"));
-            EXPECT_EQ(client_log.origins_[0][1], std::string("https://api.example.test:8443"));
+            EXPECT_EQ(client_log.origins_[0][0], std::pmr::string("https://example.test"));
+            EXPECT_EQ(client_log.origins_[0][1], std::pmr::string("https://api.example.test:8443"));
         }
     }
 
@@ -680,7 +680,7 @@ TEST(Ruvia, http3_origin_frame_advertises_initial_and_dynamic_origins) {
     if (client_log.origins_.size() == 2) {
         EXPECT_EQ(client_log.origins_[0].size(), std::size_t{1});
         if (!client_log.origins_[0].empty()) {
-            EXPECT_EQ(client_log.origins_[0][0], std::string("https://cdn.example.test"));
+            EXPECT_EQ(client_log.origins_[0][0], std::pmr::string("https://cdn.example.test"));
         }
         EXPECT_TRUE(client_log.origins_[1].empty());
     }
@@ -791,8 +791,8 @@ TEST(Ruvia, http3_concurrent_streams_interleave_partial_header_blocks) {
     EXPECT_TRUE(peers.client_.submit_request_head(0, get_request_head) == ruvia::http3_status::accepted);
     EXPECT_TRUE(peers.client_.submit_request_head(4, get_request_head) == ruvia::http3_status::accepted);
 
-    std::vector<std::byte> stream0;
-    std::vector<std::byte> stream4;
+    std::pmr::vector<std::byte> stream0;
+    std::pmr::vector<std::byte> stream4;
     ruvia::http3_stream_output out;
     while (peers.client_.peek_output(64 * 1024, out).status_ == ruvia::http3_status::accepted) {
         const auto size = out.size();

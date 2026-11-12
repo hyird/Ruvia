@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -153,7 +154,7 @@ TEST(Ruvia, ws_public_subprotocol_set_validates_unique_tokens) {
 
 TEST(Ruvia, ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
     const auto with_protocols = [](std::string_view fields_value) {
-        std::string request(valid_handshake());
+        std::pmr::string request(valid_handshake());
         request.insert(request.size() - 2, fields_value);
         return request;
     };
@@ -178,7 +179,7 @@ TEST(Ruvia, ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
     const auto selected = ruvia::make_websocket_server_handshake(repeated, {.supported_subprotocols_ = supported});
     EXPECT_TRUE(selected.subprotocol() == "chat");
 
-    std::string too_many = "Sec-WebSocket-Protocol: ";
+    std::pmr::string too_many = "Sec-WebSocket-Protocol: ";
     for (std::size_t i = 0; i <= ruvia::max_websocket_subprotocols; ++i) {
         if (i != 0) {
             too_many.append(", ");
@@ -192,7 +193,7 @@ TEST(Ruvia, ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
 
 TEST(Ruvia, ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     const auto with_protocols = [](std::string_view fields_value) {
-        std::string request(valid_handshake());
+        std::pmr::string request(valid_handshake());
         request.insert(request.size() - 2, fields_value);
         return request;
     };
@@ -232,7 +233,7 @@ TEST(Ruvia, ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
 
 TEST(Ruvia, ws_extension_offers_must_match_the_rfc6455_abnf) {
     const auto with_extensions = [](std::string_view fields_value) {
-        std::string request(valid_handshake());
+        std::pmr::string request(valid_handshake());
         request.insert(request.size() - 2, fields_value);
         return request;
     };
@@ -353,28 +354,28 @@ TEST(Ruvia, ws_server_handshake_response_serialization_is_http_owned) {
         "Sec-WebSocket-Protocol: chat, superchat\r\n"
         "Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n"
         "\r\n");
-    std::string supported = "chat";
+    std::pmr::string supported = "chat";
     const std::array<std::string_view, 1> supported_views{supported};
     const auto handshake =
         ruvia::make_websocket_server_handshake(request, {.supported_subprotocols_ = supported_views});
     supported.front() = 'X';
 
-    std::vector<std::string_view> response_parts;
+    std::pmr::vector<std::string_view> response_parts;
     handshake.for_each_response_part(
         [&response_parts](std::string_view part) { response_parts.push_back(part); });
-    std::string response;
+    std::pmr::string response;
     for (const auto part : response_parts) {
         response.append(part);
     }
-    EXPECT_EQ(response, std::string("HTTP/1.1 101 Switching Protocols\r\n"
-                                    "Upgrade: websocket\r\n"
-                                    "Connection: Upgrade\r\n"
-                                    "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
-                                    "Sec-WebSocket-Protocol: chat\r\n"
-                                    "Sec-WebSocket-Extensions: permessage-deflate; "
-                                    "server_no_context_takeover; client_no_context_takeover; "
-                                    "server_max_window_bits=15\r\n"
-                                    "\r\n"));
+    EXPECT_EQ(response, std::pmr::string("HTTP/1.1 101 Switching Protocols\r\n"
+                                         "Upgrade: websocket\r\n"
+                                         "Connection: Upgrade\r\n"
+                                         "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
+                                         "Sec-WebSocket-Protocol: chat\r\n"
+                                         "Sec-WebSocket-Extensions: permessage-deflate; "
+                                         "server_no_context_takeover; client_no_context_takeover; "
+                                         "server_max_window_bits=15\r\n"
+                                         "\r\n"));
     EXPECT_TRUE(handshake.compression() ==
                 (ruvia::websocket_compression{.enabled_ = true, .server_max_window_bits_ = 15}));
     EXPECT_EQ(handshake.subprotocol(), "chat");
@@ -399,14 +400,14 @@ TEST(Ruvia, ws_server_handshake_negotiates_directional_context_takeover_independ
 
 TEST(Ruvia, ws_handshake_copies_application_headers_and_preserves_multiple_cookies) {
     const auto request = parse_request(valid_handshake());
-    std::string cookie = "sid=0123456789abcdef; HttpOnly";
+    std::pmr::string cookie = "sid=0123456789abcdef; HttpOnly";
     const std::array fields_value{ruvia::http_header_view("Set-Cookie", cookie),
         ruvia::http_header_view("Set-Cookie", "theme=dark"),
         ruvia::http_header_view("X-Request-Id", "request-1"),
         ruvia::http_header_view("Alt-Svc", "h3=\":443\"; ma=86400")};
     const auto handshake = ruvia::make_websocket_server_handshake(request, {.response_headers_ = fields_value});
     cookie.assign(cookie.size(), 'x');
-    std::string response;
+    std::pmr::string response;
     handshake.for_each_response_part([&](std::string_view part) { response.append(part); });
     EXPECT_TRUE((response.find("set-cookie: sid=0123456789abcdef; HttpOnly\r\n") != std::string_view::npos));
     EXPECT_TRUE((response.find("set-cookie: theme=dark\r\n") != std::string_view::npos));
@@ -440,9 +441,9 @@ TEST(Ruvia, ws_handshake_rejects_application_framing_and_invalid_fields) {
 
 TEST(Ruvia, ws_handshake_bounds_application_header_size) {
     const auto request = parse_request(valid_handshake());
-    const std::vector<ruvia::http_header_view> many(80, {"x", "v"});
+    const std::pmr::vector<ruvia::http_header_view> many(80, {"x", "v"});
     (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = many});
-    const std::string oversized(ruvia::max_http_header_bytes, 'a');
+    const std::pmr::string oversized(ruvia::max_http_header_bytes, 'a');
     const std::array fields_value{ruvia::http_header_view("x", oversized)};
     bool size_rejected = false;
     try {
@@ -456,16 +457,16 @@ TEST(Ruvia, ws_handshake_bounds_application_header_size) {
 TEST(Ruvia, ws_handshake_budget_covers_status_line_and_final_empty_line) {
     const auto request = parse_request(valid_handshake());
     const auto serialize = [](const ruvia::websocket_server_handshake& handshake) {
-        std::string response;
+        std::pmr::string response;
         handshake.for_each_response_part([&](std::string_view part) { response.append(part); });
         return response;
     };
     const auto base_size = serialize(ruvia::make_websocket_server_handshake(request, {})).size();
     // "x: " + value + CRLF fills the head to exactly max_http_header_bytes.
-    const std::string largest(ruvia::max_http_header_bytes - base_size - 5, 'a');
+    const std::pmr::string largest(ruvia::max_http_header_bytes - base_size - 5, 'a');
     const std::array fitting{ruvia::http_header_view("x", largest)};
     EXPECT_EQ(serialize(ruvia::make_websocket_server_handshake(request, {.response_headers_ = fitting})).size(), ruvia::max_http_header_bytes);
-    const std::string oversized = largest + 'a';
+    const std::pmr::string oversized = largest + 'a';
     const std::array too_large{ruvia::http_header_view("x", oversized)};
     bool rejected = false;
     try {
@@ -490,7 +491,7 @@ TEST(Ruvia, ws_handshake_application_values_are_valid_for_both_http_versions) {
     }
     const std::array headers{ruvia::http_header_view("X-Test", "")};
     const auto handshake = ruvia::make_websocket_server_handshake(request, {.response_headers_ = headers});
-    std::string response;
+    std::pmr::string response;
     handshake.for_each_response_part([&](std::string_view part) { response.append(part); });
     EXPECT_TRUE((response.find("x-test: \r\n") != std::string_view::npos));
 }

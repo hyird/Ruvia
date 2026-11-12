@@ -25,8 +25,8 @@ constexpr std::string_view retained_head = "HTTP/1.1 200 OK\r\nX-Test: kept\r\nC
 constexpr std::string_view replacement_head = "HTTP/1.1 200 OK\r\nX-Test: replacement\r\nContent-Length: 0";
 constexpr std::size_t repeated_field_count = 160;
 
-std::string repeated_response_wire(std::string_view status_line, std::string_view trailing_fields) {
-    std::string wire(status_line);
+std::pmr::string repeated_response_wire(std::string_view status_line, std::string_view trailing_fields) {
+    std::pmr::string wire(status_line);
     wire.append("\r\n");
     for (std::size_t index = 0; index < repeated_field_count; ++index) {
         wire.append("X-Repeat: value-");
@@ -46,7 +46,7 @@ void check_repeated_response_fields(const http_client_response_head& head, std::
     }
     for (std::size_t index = 0; index < repeated_field_count; ++index) {
         EXPECT_EQ(fields[index].name(), std::string_view("X-Repeat"));
-        EXPECT_EQ(fields[index].value(), "value-" + std::to_string(index));
+        EXPECT_EQ(fields[index].value(), std::pmr::string("value-") + std::to_string(index).c_str());
     }
 }
 
@@ -294,7 +294,7 @@ TEST(Ruvia, http_client_upgrade_after_many_response_fields_validates_offered_pro
 }
 
 TEST(Ruvia, http_client_many_response_fields_retry_every_allocation_failure_without_phase_commit) {
-    const std::array<std::string, 2> wires{
+    const std::array<std::pmr::string, 2> wires{
         repeated_response_wire("HTTP/1.1 100 Continue", ""),
         repeated_response_wire("HTTP/1.1 200 OK", "Content-Length: 3\r\n")};
     ruvia::http_client_request_view request;
@@ -376,7 +376,7 @@ TEST(Ruvia, http_client_response_parser_handles_deterministic_arbitrary_bytes) {
     };
 
     for (std::size_t sample = 0; sample < 4096; ++sample) {
-        std::string input(static_cast<std::size_t>(next_value() % 1025U), '\0');
+        std::pmr::string input(static_cast<std::size_t>(next_value() % 1025U), '\0');
         for (auto& byte : input) {
             byte = static_cast<char>(next_value());
         }
@@ -416,14 +416,14 @@ TEST(Ruvia, http_client_rejects_malformed_status_and_length_fields) {
                 http1_client_response_parse_error::invalid_status_code);
     // RFC 9110 section 15: 600..999 is processed as 5xx, not rejected.
     for (const std::string_view invalid : {"HTTP/1.1 600 Invalid", "HTTP/1.1 999 Invalid"}) {
-        std::string response(invalid);
+        std::pmr::string response(invalid);
         response.append("\r\nContent-Length: 0");
         const auto parsed = parse_head("GET", response);
         EXPECT_TRUE(parsed.head().status() == ruvia::http_status::internal_server_error);
     }
     EXPECT_TRUE(parse_failure_error("GET", "HTTP/1.1 200") ==
                 http1_client_response_parse_error::invalid_status_code);
-    std::string invalid_reason("HTTP/1.1 200 ");
+    std::pmr::string invalid_reason("HTTP/1.1 200 ");
     invalid_reason.push_back('\x01');
     EXPECT_TRUE(parse_failure_error("GET", invalid_reason) ==
                 http1_client_response_parse_error::invalid_reason_phrase);
@@ -455,7 +455,7 @@ TEST(Ruvia, http_client_preserves_repeated_content_type_without_selecting_media_
 
 TEST(Ruvia, http_client_opaque_content_type_owns_metadata_without_changing_body_boundary) {
     for (const std::string_view value : {"", "not a media type", "text/plain; charset=\"unfinished"}) {
-        std::string wire = "HTTP/1.1 200 OK\r\nContent-Type: ";
+        std::pmr::string wire = "HTTP/1.1 200 OK\r\nContent-Type: ";
         wire.append(value);
         wire.append("\r\nContent-Length: 3\r\n\r\nabcNEXT");
         const auto result = parse_wire("GET", wire);
@@ -492,7 +492,7 @@ TEST(Ruvia, http_client_response_parser_need_more_is_distinct) {
 }
 
 TEST(Ruvia, http_client_response_parser_owns_exact_head_boundary) {
-    std::string wire =
+    std::pmr::string wire =
         "HTTP/1.1 200 OK\r\nX-Owner: response\r\nContent-Length: 4\r\n\r\n"
         "bodyHTTP/1.1 500 ignored\r\n\r\n";
     const auto expected_consumed = wire.find("\r\n\r\n") + 4;
@@ -527,7 +527,7 @@ TEST(Ruvia, http_client_response_parser_failure_is_typed_and_allocation_free) {
 }
 
 TEST(Ruvia, http_client_response_parser_enforces_the_complete_head_limit) {
-    std::string oversized(ruvia::max_http_header_bytes, 'x');
+    std::pmr::string oversized(ruvia::max_http_header_bytes, 'x');
     const auto result_value = parse_wire("GET", oversized);
     EXPECT_TRUE(result_value.failure() != nullptr);
     EXPECT_TRUE(*result_value.failure() == http1_client_response_parse_error::header_too_large);
@@ -536,7 +536,7 @@ TEST(Ruvia, http_client_response_parser_enforces_the_complete_head_limit) {
 TEST(Ruvia, http_client_response_parser_caps_header_field_count) {
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
         const auto field_count = ruvia::max_http_header_fields + excess;
-        std::string head = "HTTP/1.1 200 OK\r\nContent-Length: 0";
+        std::pmr::string head = "HTTP/1.1 200 OK\r\nContent-Length: 0";
         for (std::size_t index = 1; index < field_count; ++index) {
             head.append("\r\nX:a");
         }
@@ -565,7 +565,7 @@ TEST(Ruvia, http_client_response_parser_fails_invalid_status_line_before_the_hea
              std::pair{std::string_view("HTTP/1.1 200 OK\n"), http1_client_response_parse_error::invalid_status_line},
          }) {
         for (const std::string_view suffix : {std::string_view{}, std::string_view("X-A: b\r\n\r\n")}) {
-            const std::string wire = std::string(line) + std::string(suffix);
+            const std::pmr::string wire = std::pmr::string(line) + std::pmr::string(suffix);
             const auto result_value = parse_wire("GET", wire);
             EXPECT_TRUE(result_value.failure() != nullptr);
             if (const auto* failure = result_value.failure()) {

@@ -29,7 +29,7 @@ ruvia::http_client_response_head accepted_head(std::string_view fields) {
         ruvia::http_origin_view::https({.host_ = "example.test"}), {.method_ = "GET", .target_ = "/ws"}, request_buffer);
     ruvia::http1_client_response_parser parser(
         std::move(std::get<ruvia::prepared_http1_client_request>(prepared)).take_exchange_state());
-    auto parsed = parser.parse("HTTP/1.1 200 OK\r\n" + std::string(fields) + "\r\n");
+    auto parsed = parser.parse("HTTP/1.1 200 OK\r\n" + std::pmr::string(fields) + "\r\n");
     if (parsed.parsed() == nullptr) {
         throw std::runtime_error("expected parsed response");
     }
@@ -130,7 +130,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
              {"transfer-encoding", "chunked"},
              {"te", "trailers"},
          }}) {
-        const auto head = accepted_head(std::string(name) + ": " + std::string(value) + "\r\n");
+        const auto head = accepted_head(std::pmr::string(name) + ": " + std::pmr::string(value) + "\r\n");
         const auto res = open_stream_selection(ws_neg, head);
         EXPECT_TRUE(std::holds_alternative<ruvia::websocket_client_handshake_error>(res) &&
                     std::get<ruvia::websocket_client_handshake_error>(res) ==

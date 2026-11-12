@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <memory_resource>
+
 // Two dynamic routes of one method that differ only in parameter names occupy
 // the same lookup slot: neither can take precedence, so startup must fail
 // instead of letting registration order pick a handler. The controller
@@ -10,6 +12,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -38,12 +41,12 @@ private:
 
 TEST(Ruvia, route_conflict_rejects_equal_precedence_dynamic_routes_at_startup) {
     ruvia::test_app app;
-    std::string message;
+    std::pmr::string message{ruvia::process_resource()};
     try {
         (void)app.request(ruvia::test_request::get("/conflict/1/files"));
     } catch (const std::invalid_argument& error) {
         message = error.what();
     }
-    EXPECT_TRUE(message.find("GET /conflict/:id/files") != std::string::npos);
-    EXPECT_TRUE(message.find("GET /conflict/:name/files") != std::string::npos);
+    EXPECT_TRUE(message.find("GET /conflict/:id/files") != std::pmr::string::npos);
+    EXPECT_TRUE(message.find("GET /conflict/:name/files") != std::pmr::string::npos);
 }

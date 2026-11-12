@@ -23,6 +23,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/timer.h"
 
@@ -502,9 +503,9 @@ public:
     }
 
     // Restores stderr and returns everything written while redirected.
-    [[nodiscard]] std::string finish() {
+    [[nodiscard]] std::pmr::string finish() {
         restore();
-        std::string text;
+        std::pmr::string text(ruvia::process_resource());
         if (sink_ == nullptr) {
             return text;
         }
@@ -546,8 +547,8 @@ bool verify_additional_child_failures_are_reported() {
     ruvia::test::run_worker_tasks(attachment, join_distinct_failures(attachment.loop().handle(), first_rethrown));
     const auto text = capture.finish();
     return first_rethrown &&
-           text.find("ruvia: additional task scope child failed: second child failed") != std::string::npos &&
-           text.find("additional task scope child failed: child failed") == std::string::npos;
+           text.find("ruvia: additional task scope child failed: second child failed") != std::string_view::npos &&
+           text.find("additional task scope child failed: child failed") == std::string_view::npos;
 }
 #endif
 

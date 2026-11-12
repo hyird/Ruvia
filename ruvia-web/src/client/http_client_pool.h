@@ -6,6 +6,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -108,7 +109,7 @@ public:
     void release_response_data(http_client_response_state& state_value) noexcept;
     // Authenticated origin responses alone update this pool's bounded Alt-Svc cache.
     void observe_alt_svc(std::span<const http_header> fields);
-    [[nodiscard]] task<void> migrate_http3(std::string local_address, std::uint16_t port);
+    [[nodiscard]] task<void> migrate_http3(std::pmr::string local_address, std::uint16_t port);
 #ifdef RUVIA_ENABLE_HTTP3
     [[nodiscard]] task<std::optional<http_tunnel_input>> read_http3_tunnel_input(http_client_response_state& state);
     [[nodiscard]] task<bool> send_http3_datagram(http_client_response_state& state, std::string_view payload);

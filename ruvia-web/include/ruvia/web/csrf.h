@@ -3,6 +3,7 @@
 #include <memory_resource>
 #include <string>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
@@ -12,12 +13,12 @@ namespace ruvia {
 
 class context;
 struct csrf_protection_config final {
-    std::string cookie_name_{"XSRF-TOKEN"};
+    std::pmr::string cookie_name_{"XSRF-TOKEN", process_resource()};
     // 必须为脚本主动提交 token 的自定义字段；构造时拒绝 CORS-safelisted、
     // 浏览器保留及已知自动生成/代理字段（名称不区分大小写）。
     // 部署方还须保证代理不注入所选字段，且仅向可信 origin 授予携带凭据的
     // CORS 权限。不能用 Accept、Origin、Host 等环境信息代替主动提交的 token。
-    std::string header_name_{"X-XSRF-TOKEN"};
+    std::pmr::string header_name_{"X-XSRF-TOKEN", process_resource()};
 };
 
 // Stateless CSRF protection using the double-submit-cookie pattern (no

@@ -54,7 +54,7 @@ int main() {
 | `void stop()` | 线程安全地请求停机，直接断连、不设排空阶段：停止接入（取消待决 accept 与 QUIC 接收）→ 立即关闭全部连接（HTTP/1、HTTP/2、WebSocket、隧道不发送响应、`GOAWAY` 或关闭握手；HTTP/3 立即发送 `CONNECTION_CLOSE(H3_NO_ERROR)`），在途处理器观察到 `c.stop_token()` → 先停 I/O 再 join 后台操作 |
 | `http_server_stats http_stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
 | `blocking_pool_stats blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
-| `std::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄 |
+| `std::pmr::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄；结果绑定 `process_resource()` |
 | `web_worker_handle worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 句柄 |
 
 应用回调（`app_hook`、访问/故障日志回调、错误/404 处理器）独占目标；空函数指针与 `nullptr` 一样构造空回调。清空、替换或析构时先将 owner 置空，再析构目标，因此目标的资源释放可以再次清空同一 owner。目标析构中的重入仅支持清空，不得向该 owner 安装新目标。
@@ -165,7 +165,7 @@ ruvia::app().listen({
 - `cors_config`：
   - `origin_`：`cors_origin_config{.mode_ = cors_origin_mode::any | exact | credentialed_exact, .value_ = "..."}`
   - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`
-  - `expose_headers_`：`std::vector<std::string>`
+  - `expose_headers_`：`std::pmr::vector<std::pmr::string>`
   - `max_age_`：`std::optional<std::chrono::seconds>`
   - **预检判定**：仅 `OPTIONS` 同时携带合法 `Origin` 与 `Access-Control-Request-Method` 时才进入预检分支；缺少任一项仍按普通 CORS 响应处理。
   - **完整校验**：策略在新增授权头前校验 `Origin` 与 `OPTIONS` 的预检字段；请求首部列表即使采用固定授权模式也须完整合法。
@@ -205,7 +205,7 @@ ruvia::app().listen({
   - `on_not_found` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c)`。
   - 支持通过 `{.prefix_ = "/api", .handler_ = &api_error}` 注册前缀作用域处理器，按最长完整路径段匹配（例如 `"/api"` 匹配 `"/api/users"` 但不匹配 `"/apix"`）。等价前缀重复注册或前缀 `"/"`（全局只用无前缀形式）抛出 `std::invalid_argument`。
 - **异常文本格式化**：
-  - `std::string ruvia::exception_text(const std::exception_ptr& exception)`：将任意捕获的异常安全格式化为 UTF-8 描述文本。
+  - `std::pmr::string ruvia::exception_text(const std::exception_ptr& exception)`：将任意捕获的异常安全格式化为 UTF-8 描述文本；结果绑定 `process_resource()`。
 
 ---
 
@@ -378,7 +378,7 @@ auto sub = co_await c.dispatch({
 阻塞任务在 worker 事件循环借用的应用阻塞池上执行（默认启用，可通过 `app().blocking_pool({...})` 调整；`blocking_pool(nullptr)` 禁用后返回 `blocking_status::unavailable`）。在请求中卸载耗时同步计算：
 
 ```cpp
-std::string input_copy(c.req().query("data").value_or(""));
+std::pmr::string input_copy(c.req().query("data").value_or(""), ruvia::process_resource());
 auto result = co_await c.run_blocking(
     std::chrono::milliseconds(500),
     [owned = std::move(input_copy)]() {

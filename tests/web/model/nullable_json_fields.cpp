@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 
 #include "test_exceptions.h"
@@ -109,7 +110,7 @@ TEST(Ruvia, json_object_model_field_rejects_non_objects) {
 TEST(Ruvia, json_value_model_fields_own_tokens_for_from_json) {
     std::pmr::monotonic_buffer_resource resource;
     auto parsed_value = ruvia::from_json<json_bag_request>(
-        std::string(R"({"payload":{"keep":true}})"), {.resource_ = &resource});
+        std::pmr::string(R"({"payload":{"keep":true}})", ruvia::process_resource()), {.resource_ = &resource});
     if (!parsed_value.get<"payload">()) {
         return;
     }
@@ -152,7 +153,7 @@ TEST(Ruvia, model_json_emission_options_write_expected_output_for_all_states) {
         assign.template operator()<"emitted">((combination >> 4) & 3);
         assign.template operator()<"both">((combination >> 6) & 3);
 
-        std::string expected("{");
+        std::pmr::string expected("{", ruvia::process_resource());
         for (unsigned index = 0; index != 4; ++index) {
             const auto state_value = (combination >> (index * 2)) & 3;
             if ((state_value == 0 && index < 2) || (state_value == 2 && (index == 1 || index == 3))) {

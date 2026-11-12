@@ -21,6 +21,7 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
@@ -78,7 +79,7 @@ std::uint32_t uint32(std::string_view bytes) {
 // frame, or "RST_STREAM:<code>" when the stream was reset first. GOAWAY frames
 // seen on the way record their last stream id.
 struct stream_outcome final {
-    std::string answer_;
+    std::pmr::string answer_{ruvia::process_resource()};
     std::optional<std::uint32_t> goaway_last_stream_id_;
 };
 stream_outcome first_outcome(asio::ip::tcp::socket& socket, ruvia::hpack_decoder& decoder) {
@@ -93,7 +94,7 @@ stream_outcome first_outcome(asio::ip::tcp::socket& socket, ruvia::hpack_decoder
             continue;
         }
         if (value.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
-            outcome.answer_ = "RST_STREAM:" + std::to_string(uint32(value.payload_));
+            outcome.answer_ = "RST_STREAM:" + std::pmr::string(std::to_string(uint32(value.payload_)), ruvia::process_resource());
             return outcome;
         }
         if (value.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
@@ -121,7 +122,7 @@ stream_outcome open_upgrade(const asio::ip::tcp::endpoint& endpoint, upgrade_kin
     ruvia::hpack_decoder decoder({.resource_ = &resource});
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
-    std::string wire(ruvia::http2_client_preface);
+    std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
     std::pmr::string block(&resource);
     ruvia::hpack_encoder::encode_header(block, ":method", "CONNECT");
@@ -175,10 +176,10 @@ TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_se
     }
     // The limit was reached by this very request: the drain's first GOAWAY
     // (2^31-1) precedes its response, and the upgrade still completes on it.
-    EXPECT_EQ(tunnel->answer_, std::string("200"));
+    EXPECT_EQ(tunnel->answer_, std::pmr::string("200", ruvia::process_resource()));
     EXPECT_TRUE(tunnel->goaway_last_stream_id_.has_value());
     EXPECT_EQ(tunnel->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
-    EXPECT_EQ(websocket->answer_, std::string("200"));
+    EXPECT_EQ(websocket->answer_, std::pmr::string("200", ruvia::process_resource()));
     EXPECT_TRUE(websocket->goaway_last_stream_id_.has_value());
     EXPECT_EQ(websocket->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
 }

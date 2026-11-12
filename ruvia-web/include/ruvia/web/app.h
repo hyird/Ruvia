@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -234,7 +235,7 @@ public:
     [[nodiscard]] ::ruvia::blocking_pool_stats blocking_pool_stats() const;
     // Worker handles, published once every worker is ready (before on_start
     // hooks run) and until run() returns. Empty or invalid otherwise.
-    [[nodiscard]] std::vector<web_worker_handle> workers() const;
+    [[nodiscard]] std::pmr::vector<web_worker_handle> workers() const;
     [[nodiscard]] web_worker_handle worker_for(std::uint64_t key) const;
     [[nodiscard]] web_worker_handle worker_for(std::string_view key) const;
 

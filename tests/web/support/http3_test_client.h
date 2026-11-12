@@ -11,9 +11,11 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -35,15 +37,16 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http3_quic_connection.h"
 
 namespace ruvia::test {
 
-using http3_test_fields = std::vector<std::pair<std::string, std::string>>;
+using http3_test_fields = std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>>;
 
 struct http3_test_resumption final {
     std::shared_ptr<SSL_SESSION> session_;
-    std::vector<std::byte> transport_parameters_;
+    std::pmr::vector<std::byte> transport_parameters_{ruvia::process_resource()};
     http3_peer_settings settings_;
 
     [[nodiscard]] bool permits_early_data() const noexcept {
@@ -54,21 +57,21 @@ struct http3_test_response final {
     // The final status; zero until the final response head arrives.
     int status_{0};
     // Regular fields of the final head, as received (lowercase names).
-    http3_test_fields headers_;
-    std::string body_;
-    http3_test_fields trailers_;
-    std::vector<int> interim_statuses_;
+    http3_test_fields headers_{ruvia::process_resource()};
+    std::pmr::string body_{ruvia::process_resource()};
+    http3_test_fields trailers_{ruvia::process_resource()};
+    std::pmr::vector<int> interim_statuses_{ruvia::process_resource()};
     // The application error code of a stream that ended by RESET_STREAM or
     // STOP_SENDING instead of completing (RFC 9114 §4.1.1).
     std::optional<std::uint64_t> reset_error_;
 
     // The first field named `name`, compared ASCII case-insensitively.
-    [[nodiscard]] std::optional<std::string> header(std::string_view name) const {
+    [[nodiscard]] std::optional<std::pmr::string> header(std::string_view name) const {
         for (const auto& [field_name, value] : headers_) {
             if (std::equal(field_name.begin(), field_name.end(), name.begin(), name.end(), [](char left, char right) {
                     return ascii_lower(left) == ascii_lower(right);
                 })) {
-                return value;
+                return std::pmr::string(value, ruvia::process_resource());
             }
         }
         return std::nullopt;
@@ -130,8 +133,9 @@ inline int http3_test_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_st
 // host names only; a literal is matched against an IP subjectAltName).
 class http3_test_client_tls final {
 public:
-    http3_test_client_tls(const std::filesystem::path& ca_file, const std::string& server_name,
+    http3_test_client_tls(const std::filesystem::path& ca_file, std::string_view server_name,
         const http3_test_resumption* resumption = nullptr, bool early_data = false) {
+        const std::pmr::string server_name_text(server_name, ruvia::process_resource());
         context_.reset(SSL_CTX_new(TLS_client_method()));
         if (!context_ || SSL_CTX_set_min_proto_version(context_.get(), TLS1_3_VERSION) != 1 ||
             SSL_CTX_load_verify_locations(context_.get(), ca_file.string().c_str(), nullptr) != 1) {
@@ -149,12 +153,12 @@ public:
         SSL_set_connect_state(tls_.get());
         static constexpr std::array<unsigned char, 3> h3_alpn{2, 'h', '3'};
         std::error_code literal_error;
-        static_cast<void>(asio::ip::make_address(server_name, literal_error));
+        static_cast<void>(asio::ip::make_address(server_name_text.c_str(), literal_error));
         const bool configured =
             SSL_set_alpn_protos(tls_.get(), h3_alpn.data(), static_cast<unsigned int>(h3_alpn.size())) == 0 &&
-            (literal_error ? SSL_set_tlsext_host_name(tls_.get(), server_name.c_str()) == 1 &&
-                                 SSL_set1_host(tls_.get(), server_name.c_str()) == 1
-                           : X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(tls_.get()), server_name.c_str()) == 1);
+            (literal_error ? SSL_set_tlsext_host_name(tls_.get(), server_name_text.c_str()) == 1 &&
+                                 SSL_set1_host(tls_.get(), server_name_text.c_str()) == 1
+                           : X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(tls_.get()), server_name_text.c_str()) == 1);
         ngtcp2_crypto_ossl_ctx* crypto = nullptr;
         if (!configured || ngtcp2_crypto_ossl_ctx_new(&crypto, tls_.get()) != 0) {
             throw std::runtime_error("HTTP/3 test client cannot configure TLS");
@@ -270,14 +274,14 @@ private:
 class http3_test_client final {
 public:
     http3_test_client(asio::ip::udp::endpoint server, const std::filesystem::path& ca_file,
-        std::string server_name, std::chrono::milliseconds timeout,
+        std::string_view server_name, std::chrono::milliseconds timeout,
         const http3_test_resumption* resumption = nullptr, bool early_data = false, bool datagrams = true)
         : timeout_(timeout),
-          server_name_(std::move(server_name)),
+          server_name_(server_name, ruvia::process_resource()),
           server_(server),
           socket_(io_),
           tls_(ca_file, server_name_, resumption, early_data),
-          input_(64 * 1024) {
+          input_(64 * 1024, ruvia::process_resource()) {
         // A connected socket receives only the server's datagrams and reports
         // ICMP port-unreachable, so a missing server fails fast.
         socket_.open(server_.protocol());
@@ -318,9 +322,10 @@ public:
             },
                 timeout_)) {
             const auto verify = tls_.verify_result();
-            throw std::runtime_error(std::string("HTTP/3 test client handshake failed: ") +
-                                     (verify != X509_V_OK ? X509_verify_cert_error_string(verify)
-                                                          : describe_wait_failure()));
+            throw std::runtime_error((std::pmr::string("HTTP/3 test client handshake failed: ", ruvia::process_resource()) +
+                                      (verify != X509_V_OK ? std::pmr::string(X509_verify_cert_error_string(verify), ruvia::process_resource())
+                                                           : describe_wait_failure()))
+                    .c_str());
         }
         if (!tls_.h3_selected()) {
             throw std::runtime_error("HTTP/3 test client: server did not select ALPN h3");
@@ -375,7 +380,7 @@ public:
     // server_name:port. Nonempty content gets an exact typed Content-Length;
     // headers contain only application fields, not managed framing fields.
     [[nodiscard]] http3_test_response request(std::string_view method, std::string_view path,
-        const http3_test_fields& headers = {}, std::string_view body = {}) {
+        std::initializer_list<std::pair<std::string_view, std::string_view>> headers = {}, std::string_view body = {}) {
         return finish_response(open_request(method, path, headers, body, true));
     }
 
@@ -383,14 +388,14 @@ public:
     // for the response; read it with wait_for_response_head(),
     // read_body_chunk() and finish_response().
     [[nodiscard]] std::int64_t start_request(std::string_view method, std::string_view path,
-        const http3_test_fields& headers = {}, std::string_view body = {}) {
+        std::initializer_list<std::pair<std::string_view, std::string_view>> headers = {}, std::string_view body = {}) {
         return open_request(method, path, headers, body, false);
     }
 
     // Raw field sections are reserved for malformed-request wire regressions.
-    [[nodiscard]] std::int64_t start_raw_request(const http3_test_fields& headers) {
+    [[nodiscard]] std::int64_t start_raw_request(std::initializer_list<std::pair<std::string_view, std::string_view>> headers) {
         const auto stream_id = open_stream(false);
-        std::vector<http3_field_view> fields;
+        std::pmr::vector<http3_field_view> fields{ruvia::process_resource()};
         fields.reserve(headers.size());
         for (const auto& [name, value] : headers) {
             fields.push_back({name, value});
@@ -494,7 +499,7 @@ public:
         flush();
     }
 
-    [[nodiscard]] std::string receive_datagram(std::int64_t stream_id) {
+    [[nodiscard]] std::pmr::string receive_datagram(std::int64_t stream_id) {
         auto& stream = tracked_stream(stream_id);
         wait_or_throw([&] { return !stream.datagrams_.empty() || response_complete(stream); },
             "HTTP/3 DATAGRAM did not arrive");
@@ -568,17 +573,17 @@ public:
     // The body bytes received since the last take, at least one, returning
     // their flow credit; nullopt once the response ended or was reset with
     // nothing left to read. Throws when neither happens within `wait`.
-    [[nodiscard]] std::optional<std::string> read_body_chunk(
+    [[nodiscard]] std::optional<std::pmr::string> read_body_chunk(
         std::int64_t stream_id, std::chrono::milliseconds wait) {
         auto& stream = tracked_stream(stream_id);
         if (!wait_until([&] { return !stream.unread_body_.empty() || response_complete(stream); }, wait) &&
             stream.unread_body_.empty()) {
-            throw std::runtime_error("HTTP/3 response body did not progress: " + describe_wait_failure());
+            throw std::runtime_error(("HTTP/3 response body did not progress: " + describe_wait_failure()).c_str());
         }
         if (stream.unread_body_.empty()) {
             return std::nullopt;
         }
-        auto chunk = std::exchange(stream.unread_body_, {});
+        auto chunk = std::exchange(stream.unread_body_, std::pmr::string{ruvia::process_resource()});
         connection_->consume_stream_data(stream_id, chunk.size());
         flush();
         return chunk;
@@ -629,7 +634,7 @@ public:
 
     // Every GOAWAY identifier received, in order; NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID
     // marks a shutdown notice (RFC 9114 §5.2).
-    [[nodiscard]] const std::vector<std::int64_t>& goaway_ids() const noexcept {
+    [[nodiscard]] const std::pmr::vector<std::int64_t>& goaway_ids() const noexcept {
         return goaway_ids_;
     }
 
@@ -653,8 +658,8 @@ public:
 private:
     struct stream_state final {
         http3_test_response response_;
-        std::string unread_body_;
-        std::vector<std::string> datagrams_;
+        std::pmr::string unread_body_{ruvia::process_resource()};
+        std::pmr::vector<std::pmr::string> datagrams_{ruvia::process_resource()};
         bool consume_on_arrival_{false};
         bool ended_{false};
         bool closed_{false};
@@ -725,31 +730,37 @@ private:
         return path(local_);
     }
 
-    [[nodiscard]] std::string authority() const {
+    [[nodiscard]] std::pmr::string authority() const {
         std::error_code literal_error;
-        const auto address = asio::ip::make_address(server_name_, literal_error);
-        const auto host = !literal_error && address.is_v6() ? "[" + server_name_ + "]" : server_name_;
-        return host + ":" + std::to_string(server_.port());
+        const auto address = asio::ip::make_address(server_name_.c_str(), literal_error);
+        std::pmr::string host(server_name_, ruvia::process_resource());
+        if (!literal_error && address.is_v6()) {
+            host.insert(host.begin(), '[');
+            host.push_back(']');
+        }
+        host.push_back(':');
+        host.append(std::to_string(server_.port()));
+        return host;
     }
 
-    [[nodiscard]] std::string describe_wait_failure() const {
+    [[nodiscard]] std::pmr::string describe_wait_failure() const {
         if (!connection_->closed()) {
-            return "timed out";
+            return std::pmr::string("timed out", ruvia::process_resource());
         }
         const auto error = connection_->connection_error();
         if (error) {
-            return "connection closed with error " + std::to_string(*error);
+            return "connection closed with error " + std::pmr::string(std::to_string(*error), ruvia::process_resource());
         }
         const auto* remote = ngtcp2_conn_get_ccerr2(connection_->native_handle());
-        return remote == nullptr ? "connection closed"
-                                 : "connection closed (QUIC type " + std::to_string(remote->type) +
-                                       ", error " + std::to_string(remote->error_code) + ")";
+        return remote == nullptr ? std::pmr::string("connection closed", ruvia::process_resource())
+                                 : "connection closed (QUIC type " + std::pmr::string(std::to_string(remote->type), ruvia::process_resource()) +
+                                       ", error " + std::pmr::string(std::to_string(remote->error_code), ruvia::process_resource()) + ")";
     }
 
     template <typename predicate_type>
     void wait_or_throw(predicate_type&& done, const char* what) {
         if (!wait_until(std::forward<predicate_type>(done), timeout_)) {
-            throw std::runtime_error(std::string(what) + ": " + describe_wait_failure());
+            throw std::runtime_error((std::pmr::string(what, ruvia::process_resource()) + ": " + describe_wait_failure()).c_str());
         }
     }
 
@@ -791,12 +802,12 @@ private:
     }
 
     [[nodiscard]] std::int64_t open_request(std::string_view method, std::string_view request_path,
-        const http3_test_fields& headers, std::string_view body, bool consume_on_arrival) {
+        std::initializer_list<std::pair<std::string_view, std::string_view>> headers, std::string_view body, bool consume_on_arrival) {
         const auto stream_id = open_stream(consume_on_arrival);
         auto& stream = streams_.at(stream_id);
 
         const auto request_authority = authority();
-        std::vector<http_header_view> fields;
+        std::pmr::vector<http_header_view> fields{ruvia::process_resource()};
         fields.reserve(headers.size());
         for (const auto& [name, value] : headers) {
             fields.emplace_back(name, value);
@@ -996,10 +1007,10 @@ private:
             return;
         }
         auto& stream = found->second;
-        http3_test_fields fields;
+        http3_test_fields fields{ruvia::process_resource()};
         fields.reserve(event.fields_.size());
         for (const auto& field : event.fields_) {
-            fields.emplace_back(std::string(field.name()), std::string(field.value()));
+            fields.emplace_back(field.name(), field.value());
         }
         if (event.trailers_) {
             stream.response_.trailers_ = std::move(fields);
@@ -1015,7 +1026,7 @@ private:
     }
 
     std::chrono::milliseconds timeout_;
-    std::string server_name_;
+    std::pmr::string server_name_{ruvia::process_resource()};
     asio::ip::udp::endpoint server_;
     asio::ip::udp::endpoint local_;
     asio::io_context io_;
@@ -1026,9 +1037,9 @@ private:
     // Destroyed before the TLS session it uses.
     std::optional<http3_quic_connection> connection_;
     http3_quic_datagram output_;
-    std::vector<std::byte> input_;
-    std::map<std::int64_t, stream_state> streams_;
-    std::vector<std::int64_t> goaway_ids_;
+    std::pmr::vector<std::byte> input_{ruvia::process_resource()};
+    std::pmr::map<std::int64_t, stream_state> streams_{ruvia::process_resource()};
+    std::pmr::vector<std::int64_t> goaway_ids_{ruvia::process_resource()};
     bool early_attempted_{false};
     bool early_rejected_{false};
     bool early_rejection_pending_{false};

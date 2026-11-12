@@ -21,7 +21,7 @@ TEST(Ruvia, http_client_content_encoding_has_one_authoritative_path) {
 
     struct case_value final {
         std::string_view headers_;
-        std::vector<http_content_coding> expected_;
+        std::pmr::vector<http_content_coding> expected_;
         bool unsupported_{false};
     };
     const case_value cases[] = {
@@ -77,7 +77,7 @@ TEST(Ruvia, http_client_content_encoding_ignores_empty_list_members) {
 
 TEST(Ruvia, http_client_coding_metadata_preserves_framing_without_decoder_fallback) {
     for (const std::string_view value : {"gzip;level=9", "bad coding", "gzip/deflate", "future-coding"}) {
-        std::string wire = "HTTP/1.1 200 OK\r\nContent-Encoding: ";
+        std::pmr::string wire = "HTTP/1.1 200 OK\r\nContent-Encoding: ";
         wire.append(value);
         wire.append("\r\nContent-Encoding: identity\r\nContent-Length: 3\r\n\r\nabcNEXT");
         const auto result = parse_wire("GET", wire);

@@ -132,6 +132,8 @@ ruvia_link_controllers(my_service user_controllers)
 ### 3.4 配置结构体与错误处理约定
 
 - **配置结构体字段命名**：所有配置/选项结构体（`*_config`、`*_options`、`*_rule` 等）的公开成员变量均以**下划线 `_` 结尾**（例如 `listen_config{.address_ = "0.0.0.0", .http_ = 8080}`），支持 C++20 指定初始化器（designated initializers）。
+- **配置容器**：拥有型文本与集合使用 `std::pmr::string` / `std::pmr::vector`；Core/Web 默认成员初始化绑定 `process_resource()`。
+- **聚合复制**：指定初始化器直接提供容器、隐式复制聚合配置时遵循标准 PMR 分配器规则。需要确定资源时显式构造字段，复制原生容器时提供 allocator；资源须覆盖配置及异步消费者寿命。
 - **错误处理形状**：
   - **正常协议/队列状态推进**：通过状态枚举或结果类型表示（如 `post_status::queue_full`、`channel_send_status::full`、`blocking_status::timed_out`、`worker_wait_status::closed`）。
   - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error`（可携带校验 issues）由错误处理器转换为对应 HTTP 响应；协议原语抛出 `ruvia::http_protocol_error`，携带状态码与稳定机器码 `code()`；客户端抛出 `db_error`、`redis_error`）。

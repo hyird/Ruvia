@@ -65,7 +65,7 @@ std::size_t advertised_receive_window(std::string_view output) {
 }
 
 void append_body(std::pmr::string& wire, std::size_t bytes) {
-    const std::string chunk(16384, 'x');
+    const std::pmr::string chunk(16384, 'x');
     while (bytes != 0) {
         const auto count = std::min(bytes, chunk.size());
         append_frame(wire, ruvia::http2_frame_type::data, 0, 1,

@@ -157,7 +157,7 @@ TEST(Ruvia, response_header_clone_rejects_overflow_without_changing_source) {
         {
             ruvia::http_response response(&resource);
             for (std::size_t index = 0; index < count; ++index) {
-                response.header("X-Clone-" + std::to_string(index), "original");
+                response.header(std::pmr::string("X-Clone-") + std::to_string(index).c_str(), "original");
             }
             const auto additional = (std::numeric_limits<std::size_t>::max)() - count + 1;
             bool rejected = false;
@@ -169,7 +169,7 @@ TEST(Ruvia, response_header_clone_rejects_overflow_without_changing_source) {
             EXPECT_TRUE(rejected);
             EXPECT_EQ(response.headers().size(), count);
             for (std::size_t index = 0; index < count; ++index) {
-                EXPECT_EQ(response.header("X-Clone-" + std::to_string(index)).value_or(""), "original");
+                EXPECT_EQ(response.header(std::pmr::string("X-Clone-") + std::to_string(index).c_str()).value_or(""), "original");
             }
             auto staged = response.headers().clone(1);
             staged.header("X-Clone-0", "changed");
@@ -255,7 +255,7 @@ TEST(Ruvia, response_vary_merge_preserves_borrowed_token_and_fields_on_failure) 
     {
         ruvia::http_response response(&resource);
         const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
-        const std::string long_value = std::string(300, 'x') + ",\tOrigin";
+        const std::pmr::string long_value = std::pmr::string(300, 'x') + ",\tOrigin";
         response.header("X-Before", "before");
         response.header("Vary", long_value, append);
         response.header("X-Between", "between");
@@ -290,7 +290,7 @@ TEST(Ruvia, response_vary_merge_preserves_borrowed_token_and_fields_on_failure) 
 
 TEST(Ruvia, response_vary_later_membership_and_wildcards_need_no_temporary_storage) {
     const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
-    const std::string long_value(300, 'x');
+    const std::pmr::string long_value(300, 'x');
     for (const auto tail : {"aCcEpT", "*"}) {
         failing_memory_resource resource;
         ruvia::http_response response(&resource);

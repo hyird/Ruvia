@@ -242,7 +242,7 @@ private:
 // message is replaced with its UTF-8 form. Any other std::exception yields
 // what(), a non-standard exception a fixed description, and null an empty
 // string.
-[[nodiscard]] std::string exception_text(const std::exception_ptr& exception);
+[[nodiscard]] std::pmr::string exception_text(const std::exception_ptr& exception);
 
 namespace detail {
 using http_error_handler_ref = callback_ref<task<http_response>(context&, http_error_info)>;

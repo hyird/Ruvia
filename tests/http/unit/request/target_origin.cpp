@@ -47,8 +47,8 @@ static_assert(!target_origin_allows_address<http_target_origin>);
 }  // namespace
 
 TEST(Ruvia, target_origin_dns_reference_names_follow_label_and_full_name_boundaries) {
-    const auto maximal = std::string(63, 'a') + "." + std::string(63, 'b') + "." +
-                         std::string(63, 'c') + "." + std::string(61, 'd');
+    const auto maximal = std::pmr::string(63, 'a') + "." + std::pmr::string(63, 'b') + "." +
+                         std::pmr::string(63, 'c') + "." + std::pmr::string(61, 'd');
     for (const std::string_view host : {std::string_view(maximal), std::string_view("7.example"),
              std::string_view("xn--bcher-kva.example")}) {
         const auto origin = decide("GET", "/", host, secured);
@@ -61,7 +61,7 @@ TEST(Ruvia, target_origin_dns_reference_names_follow_label_and_full_name_boundar
     EXPECT_TRUE(rooted.action() == http_target_origin_action::verify_certificate);
     EXPECT_EQ(rooted.host(), std::string_view(maximal));
 
-    for (const auto& host : {maximal + "d", std::string(64, 'a') + ".example"}) {
+    for (const auto& host : {maximal + "d", std::pmr::string(64, 'a') + ".example"}) {
         EXPECT_TRUE(decide("GET", "/", host, secured).action() == http_target_origin_action::misdirected);
     }
 }

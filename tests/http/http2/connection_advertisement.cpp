@@ -76,7 +76,7 @@ TEST(Ruvia, http_connection_advertisement_origin_frames_preserve_results_and_rel
 TEST(Ruvia, http_connection_advertisement_alternative_service_respects_protocol_payload_limit) {
     // The length field is always 24 bits, even when the caller supplies a larger
     // limit. An impossible frame must report limit before allocating its output.
-    const std::string field_value(ruvia::http2_max_frame_size - 1, 'a');
+    const std::pmr::string field_value(ruvia::http2_max_frame_size - 1, 'a');
     advertisement_resource resource;
     resource.fail_ = true;
     for (const auto maximum : {ruvia::http2_max_frame_size, (std::numeric_limits<std::uint32_t>::max)()}) {

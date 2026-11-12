@@ -12,12 +12,14 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -73,7 +75,7 @@ private:
     // blocking_operation_rejected, which the default error path answers with 503.
     ruvia::task<ruvia::http_response> offload(ruvia::context& c) {
         auto result_value = co_await c.run_blocking(
-            [input = std::string(c.req().query("input").value_or("default"))] {
+            [input = std::pmr::string(c.req().query("input").value_or("default"), ruvia::process_resource())] {
                 return slow_checksum(input);
             });
         const auto checksum = std::move(result_value).take_value();
@@ -89,7 +91,7 @@ private:
     // forever.
     ruvia::task<ruvia::http_response> offload_or_shed(ruvia::context& c) {
         auto result_value = co_await c.run_blocking(std::chrono::seconds(2),
-            [input = std::string("expensive input")] { return slow_checksum(input); });
+            [input = std::pmr::string("expensive input", ruvia::process_resource())] { return slow_checksum(input); });
         if (!result_value.completed()) {
             co_return c.error({.status_ = ruvia::http_status::service_unavailable,
                 .code_ = "busy",

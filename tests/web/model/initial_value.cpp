@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 
 #include "memory_resource_fixture.h"
@@ -44,7 +45,7 @@ RUVIA_MODEL(initial_model,
     RUVIA_OPTIONAL_FIELD(name, ruvia::string, RUVIA_INITIAL(initial_name())));
 
 RUVIA_MODEL(failing_initial_model,
-    RUVIA_OPTIONAL_FIELD(name, ruvia::string, RUVIA_INITIAL(std::string(128, 'n'))),
+    RUVIA_OPTIONAL_FIELD(name, ruvia::string, RUVIA_INITIAL(std::pmr::string(128, 'n', ruvia::process_resource()))),
     RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_INITIAL(failing_initial())));
 
 RUVIA_MODEL(required_initial_model,
@@ -64,7 +65,7 @@ RUVIA_MODEL(counted_lifecycle,
 constexpr std::size_t initial_payload_size = 4096;
 
 RUVIA_MODEL(payload_initial_model,
-    RUVIA_OPTIONAL_FIELD(payload, ruvia::string, RUVIA_INITIAL(std::string(initial_payload_size, 'p'))));
+    RUVIA_OPTIONAL_FIELD(payload, ruvia::string, RUVIA_INITIAL(std::pmr::string(initial_payload_size, 'p', ruvia::process_resource()))));
 
 // Counts only allocations large enough to hold an INITIAL payload.
 class payload_counting_resource final : public std::pmr::memory_resource {

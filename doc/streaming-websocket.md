@@ -116,6 +116,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 最小接入：把 `c.stop_token()` 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端：
 
 ```cpp
+#include <memory_resource>
 #include <string>
 #include "ruvia/core/channel.h"
 #include "ruvia/web/context.h"
@@ -123,7 +124,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 ruvia::task<void> stream_subscription(
     ruvia::context& c,
-    ruvia::channel_receiver<std::string>& subscription,
+    ruvia::channel_receiver<std::pmr::string>& subscription,
     std::string_view initial_snapshot) {
     auto sse = c.stream_sse();
     if (co_await sse.commit() == ruvia::stream_commit_result::completed) {

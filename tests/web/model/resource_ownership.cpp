@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 
 #include "memory_resource_fixture.h"
@@ -61,7 +62,7 @@ private:
 
 TEST(Ruvia, model_resource_assignment_recursively_outlives_source_owner) {
     ruvia::test::counting_memory_resource target_resource;
-    const std::string text(160, 'a');
+    const std::pmr::string text(160, 'a', ruvia::process_resource());
     {
         resource_parent target({.resource_ = &target_resource});
         {
@@ -94,7 +95,7 @@ TEST(Ruvia, model_resource_assignment_recursively_outlives_source_owner) {
 
 TEST(Ruvia, model_resource_array_construction_and_mutable_assignment_keep_owner) {
     ruvia::test::counting_memory_resource target_resource;
-    const std::string text(160, 'b');
+    const std::pmr::string text(160, 'b', ruvia::process_resource());
     {
         ruvia::array<ruvia::string> strings({.resource_ = &target_resource});
         strings.emplace_back(text);
@@ -122,7 +123,7 @@ TEST(Ruvia, model_resource_array_construction_and_mutable_assignment_keep_owner)
 
 TEST(Ruvia, model_resource_array_resize_accepts_its_own_fill_element) {
     ruvia::test::counting_memory_resource resource;
-    const std::string text(160, 'd');
+    const std::pmr::string text(160, 'd', ruvia::process_resource());
     {
         ruvia::array<ruvia::string> values({.resource_ = &resource});
         values.emplace_back(text);
@@ -138,7 +139,7 @@ TEST(Ruvia, model_resource_array_resize_accepts_its_own_fill_element) {
 
 TEST(Ruvia, model_resource_recursive_assignment_can_promote_an_owned_child) {
     ruvia::test::counting_memory_resource resource;
-    const std::string text(160, 'e');
+    const std::pmr::string text(160, 'e', ruvia::process_resource());
     {
         resource_node root({.resource_ = &resource});
         root.set<"name">("parent");
@@ -168,8 +169,8 @@ TEST(Ruvia, model_resource_recursive_assignment_can_promote_an_owned_child) {
 TEST(Ruvia, model_resource_failed_rebind_preserves_destination_and_reclaims_temporaries) {
     reject_after_resource target_resource;
     ruvia::test::counting_memory_resource source_resource;
-    const std::string old_text(160, 'o');
-    const std::string new_text(160, 'n');
+    const std::pmr::string old_text(160, 'o', ruvia::process_resource());
+    const std::pmr::string new_text(160, 'n', ruvia::process_resource());
     {
         resource_pair target({.resource_ = &target_resource});
         target.set<"first">(old_text);
@@ -207,7 +208,7 @@ TEST(Ruvia, model_resource_failed_rebind_preserves_destination_and_reclaims_temp
 }
 
 TEST(Ruvia, model_dynamic_token_failed_move_keeps_source_destination_and_resources) {
-    const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
+    const std::pmr::string input("{\"payload\":\"" + std::pmr::string(160, 'x', ruvia::process_resource()) + "\"}", ruvia::process_resource());
     const bool inject = ruvia::test::stl_allocation_failure_injection_enabled();
     const auto check = [&]<typename token_type>(std::string_view empty) {
         reject_after_resource target_resource;
@@ -242,7 +243,7 @@ TEST(Ruvia, model_dynamic_token_failed_move_keeps_source_destination_and_resourc
 
 TEST(Ruvia, model_resource_moves_reject_a_source_that_owns_the_destination) {
     ruvia::test::counting_memory_resource resource;
-    const std::string text(160, 'f');
+    const std::pmr::string text(160, 'f', ruvia::process_resource());
     const auto rejects = [](auto&& operation) {
         try {
             operation();
@@ -300,8 +301,8 @@ TEST(Ruvia, model_resource_self_field_rebind_failure_preserves_owned_elements) {
     if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
         GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
     }
-    const std::string first(160, 'a');
-    const std::string second(160, 'b');
+    const std::pmr::string first(160, 'a', ruvia::process_resource());
+    const std::pmr::string second(160, 'b', ruvia::process_resource());
     const auto check = [&]<ruvia::fixed_string field>() {
         bool reached_success = false;
         bool failed_after_preparation = false;
@@ -361,7 +362,7 @@ TEST(Ruvia, model_resource_insertion_failure_preserves_moved_strings_and_aliases
     if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
         GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
     }
-    const std::string text(160, 's');
+    const std::pmr::string text(160, 's', ruvia::process_resource());
     const auto check = [&]<typename sequence_type>(bool alias) {
         bool succeeded = false;
         bool rejected = false;
@@ -419,8 +420,8 @@ TEST(Ruvia, model_resource_nested_insertion_failure_preserves_source_until_commi
     if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
         GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
     }
-    const std::string first(160, 'a');
-    const std::string second(160, 'b');
+    const std::pmr::string first(160, 'a', ruvia::process_resource());
+    const std::pmr::string second(160, 'b', ruvia::process_resource());
     const auto check = [&]<typename sequence_type>() {
         bool succeeded = false;
         bool rejected_after_preparation = false;

@@ -5,6 +5,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/testing.h"
 
@@ -127,12 +128,12 @@ TEST(Ruvia, request_binding_form_keeps_malformed_percent_sequences_literally) {
     ruvia::test_app app;
     for (const std::string_view invalid : {"%", "%G0", "%0G"}) {
         for (const auto& body : {
-                 std::string("name=Al").append(invalid) + "&unknown=" + std::string(invalid),
-                 std::string("unknown=").append(invalid) + "&name=Al" + std::string(invalid)}) {
+                 std::move(std::pmr::string("name=Al", ruvia::process_resource()).append(invalid)) + "&unknown=" + std::pmr::string(invalid, ruvia::process_resource()),
+                 std::move(std::pmr::string("unknown=", ruvia::process_resource()).append(invalid)) + "&name=Al" + std::pmr::string(invalid, ruvia::process_resource())}) {
             const auto response = app.request(
                 ruvia::test_request::post("/request-binding-form").form(body));
             EXPECT_TRUE(response.status() == ruvia::http_status::ok);
-            EXPECT_EQ(response.body(), std::string(R"({"name":"Al)").append(invalid) + R"("})");
+            EXPECT_EQ(response.body(), std::move(std::pmr::string(R"({"name":"Al)", ruvia::process_resource()).append(invalid)) + R"("})");
         }
     }
     const auto valid = app.request(ruvia::test_request::post("/request-binding-form")
@@ -174,7 +175,7 @@ TEST(Ruvia, request_binding_dynamic_json_distinguishes_syntax_from_field_type_er
 }
 
 TEST(Ruvia, request_binding_large_wrong_type_arrays_report_field_validation) {
-    std::string elements;
+    std::pmr::string elements{ruvia::process_resource()};
     for (std::size_t index = 0; index < 40000; ++index) {
         if (index != 0) {
             elements.push_back(',');
@@ -183,8 +184,8 @@ TEST(Ruvia, request_binding_large_wrong_type_arrays_report_field_validation) {
     }
     ruvia::test_app app;
     for (const auto& body : {
-             "{\"object\":[" + elements + "]}",
-             "{\"numbers\":[" + elements + ",\"wrong type\"]}"}) {
+             std::pmr::string("{\"object\":[", ruvia::process_resource()) + elements + "]}",
+             std::pmr::string("{\"numbers\":[", ruvia::process_resource()) + elements + ",\"wrong type\"]}"}) {
         const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
         EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
         EXPECT_TRUE(response.body().find("validation_failed") != std::string_view::npos);

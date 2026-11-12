@@ -21,10 +21,10 @@ TEST(Ruvia, request_trailers_own_fields_preserve_duplicates_and_bound_section_si
     counting_memory_resource resource;
     {
         ruvia::http_request_trailers trailers(&resource);
-        std::string source_value(512, 'a');
+        std::pmr::string source_value(512, 'a');
         EXPECT_TRUE(!trailers.append("X-Checksum", source_value).has_value());
         source_value.assign("mutated");
-        EXPECT_EQ(trailers.field("x-checksum").value_or(""), std::string(512, 'a'));
+        EXPECT_EQ(trailers.field("x-checksum").value_or(""), std::pmr::string(512, 'a'));
         EXPECT_TRUE(!trailers.append_http1("x-checksum: final\r\nx-extra: yes\r\n\r\n").has_value());
         EXPECT_EQ(trailers.field("X-Checksum").value_or(""), "final");
         EXPECT_EQ(trailers.fields().size(), std::size_t{3});
@@ -39,7 +39,7 @@ TEST(Ruvia, request_trailers_own_fields_preserve_duplicates_and_bound_section_si
             ruvia::http_header_view{"x-ok", "bad\r\nvalue"},
         };
         EXPECT_TRUE(trailers.append(invalid_batch) == ruvia::http_request_trailer_error::invalid_field);
-        const std::string large_value(65536, 'x');
+        const std::pmr::string large_value(65536, 'x');
         const std::array oversized_batch{
             ruvia::http_header_view{"X-Batch", "1"},
             ruvia::http_header_view{"x-large", large_value},
@@ -81,7 +81,7 @@ TEST(Ruvia, request_trailers_append_http1_is_atomic_and_discards_fields_not_perm
     EXPECT_EQ(trailers.fields().size(), std::size_t{2});
 
     // A block that would exceed the remaining byte budget leaves no partial fields behind.
-    std::string block = "X-Fill: v\r\nX-Oversize: ";
+    std::pmr::string block = "X-Fill: v\r\nX-Oversize: ";
     block.append(ruvia::max_http_header_bytes, 'x');
     block.append("\r\n");
     const auto too_large = trailers.append_http1(block);
@@ -90,7 +90,7 @@ TEST(Ruvia, request_trailers_append_http1_is_atomic_and_discards_fields_not_perm
     // X-First used 12 normalized bytes, X-Second 13, the discarded received
     // fields 19 + 25 and the terminating empty line 2; the remaining budget is
     // intact only if the failed block rolled back.
-    EXPECT_TRUE(!trailers.append("X-Last", std::string(ruvia::max_http_header_bytes - 81, 'z')).has_value());
+    EXPECT_TRUE(!trailers.append("X-Last", std::pmr::string(ruvia::max_http_header_bytes - 81, 'z')).has_value());
 }
 
 TEST(Ruvia, request_trailers_append_http1_retains_lowercase_names) {
@@ -108,11 +108,11 @@ TEST(Ruvia, request_trailers_append_http1_retains_lowercase_names) {
 
 TEST(Ruvia, request_trailers_cap_field_count) {
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
-        std::string block;
+        std::pmr::string block;
         for (std::size_t index = 0; index < ruvia::max_http_header_fields + excess; ++index) {
             block.append("X:a\r\n");
         }
-        const std::string wire = "0\r\n" + block + "\r\n";
+        const std::pmr::string wire = "0\r\n" + block + "\r\n";
         ruvia::http1_chunked_body_decoder decoder;
         const auto decoded = decoder.decode(wire);
         ruvia::http_request_trailers trailers(std::pmr::new_delete_resource());
@@ -142,13 +142,13 @@ TEST(Ruvia, request_trailers_enforce_normalized_section_limit_during_chunk_decod
             // Each "X:a" field costs 6 normalized bytes and the last field 5 plus
             // its value; the section also pays 2 for its terminating empty line.
             const auto value_size = ruvia::max_http_header_bytes - 6 * (field_count - 1) - 5 - 2 + excess;
-            std::string block;
+            std::pmr::string block;
             for (std::size_t index = 1; index < field_count; ++index) {
                 block.append("X:a\r\n");
             }
             block.append("X:");
             block.append(value_size, 'z');
-            const std::string wire = "0\r\n" + block + "\r\n\r\n";
+            const std::pmr::string wire = "0\r\n" + block + "\r\n\r\n";
             ruvia::http1_chunked_body_decoder decoder;
             const auto decoded = decoder.decode(wire);
             ruvia::http_request_trailers trailers(nullptr);
@@ -157,7 +157,7 @@ TEST(Ruvia, request_trailers_enforce_normalized_section_limit_during_chunk_decod
                 if (const auto* complete = decoded.complete()) {
                     EXPECT_TRUE(!trailers.append_http1(complete->trailers()).has_value());
                     EXPECT_EQ(trailers.fields().size(), field_count);
-                    EXPECT_EQ(trailers.field("X").value_or(""), std::string(value_size, 'z'));
+                    EXPECT_EQ(trailers.field("X").value_or(""), std::pmr::string(value_size, 'z'));
                 }
             } else {
                 EXPECT_TRUE(decoded.failure() != nullptr);
@@ -175,9 +175,9 @@ TEST(Ruvia, request_and_response_trailer_sections_share_one_byte_rule) {
     // Two fields named "X-A": each costs name + value + 4 normalized bytes, and
     // the section pays 2 for its terminating empty line.
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
-        const auto first_value = std::string(1000, 'a');
+        const auto first_value = std::pmr::string(1000, 'a');
         const auto second_value =
-            std::string(ruvia::max_http_header_bytes - 2 * (3 + 4) - 2 - first_value.size() + excess, 'b');
+            std::pmr::string(ruvia::max_http_header_bytes - 2 * (3 + 4) - 2 - first_value.size() + excess, 'b');
         ruvia::http_request_trailers received(std::pmr::new_delete_resource());
         EXPECT_TRUE(!received.append("X-A", first_value).has_value());
         const auto appended = received.append("X-A", second_value);
@@ -205,7 +205,7 @@ TEST(Ruvia, largest_accepted_response_trailer_section_decodes) {
     // is accepted for sending and decoded by a chunk decoder; one more value
     // byte is rejected before anything is emitted.
     for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
-        const std::string value(ruvia::max_http_header_bytes - 1 - 4 - 2 + excess, 'v');
+        const std::pmr::string value(ruvia::max_http_header_bytes - 1 - 4 - 2 + excess, 'v');
         const std::array trailers{ruvia::http_header_view{"X", value}};
         bool rejected = false;
         try {
@@ -217,7 +217,7 @@ TEST(Ruvia, largest_accepted_response_trailer_section_decodes) {
         if (excess != 0) {
             continue;
         }
-        const std::string wire = "0\r\nX: " + value + "\r\n\r\n";
+        const std::pmr::string wire = "0\r\nX: " + value + "\r\n\r\n";
         ruvia::http1_chunked_body_decoder decoder;
         const auto decoded = decoder.decode(wire);
         EXPECT_TRUE(decoded.complete() != nullptr);
@@ -228,7 +228,7 @@ TEST(Ruvia, largest_accepted_response_trailer_section_decodes) {
 }
 
 TEST(Ruvia, received_response_trailers_discard_fields_not_permitted_as_trailers) {
-    std::string visited;
+    std::pmr::string visited;
     const auto visit = [&visited](std::string_view name, std::string_view value) {
         visited.append(name).append("=").append(value).append(";");
         return true;

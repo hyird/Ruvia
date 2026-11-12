@@ -10,6 +10,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/model.h"
 
@@ -210,7 +211,7 @@ TEST(Ruvia, context_body_sets_body_and_status) {
 
 TEST(Ruvia, context_dynamic_body_owns_input_and_preserves_lvalue) {
     (void)ruvia::test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        std::string source_value("dynamic body");
+        std::pmr::string source_value("dynamic body", ruvia::process_resource());
 
         const auto response = context.body(std::string_view(source_value));
         source_value[0] = 'X';
@@ -356,7 +357,7 @@ TEST(Ruvia, context_response_header_transactions_preserve_owned_body_storage) {
         ruvia::http_response response;
         response.header("Content-Type", "application/octet-stream");
         response.header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
-        response.body(std::string(4096, 'x'));
+        response.body(std::pmr::string(4096, 'x', ruvia::process_resource()));
         context.respond(std::move(response));
         EXPECT_EQ(context.response()->body_bytes().size(), std::size_t{4096});
         EXPECT_TRUE(!context.response()->header("X-Added").has_value());
@@ -375,9 +376,9 @@ TEST(Ruvia, context_response_header_transactions_preserve_cookie_policy_and_spil
         response.header("Content-Type", "application/octet-stream");
         response.header("Cache-Control", "private");
         for (int i = 0; i < 12; ++i) {
-            response.header("X-Field-" + std::to_string(i), "value");
+            response.header(std::move(std::pmr::string("X-Field-", ruvia::process_resource()).append(std::to_string(i))), "value");
         }
-        response.body(std::string(4096, 'x'));
+        response.body(std::pmr::string(4096, 'x', ruvia::process_resource()));
         context.respond(std::move(response));
         const auto& result_value = *context.response();
         EXPECT_EQ(result_value.header("Content-Type"), std::string_view("application/octet-stream"));
@@ -391,7 +392,7 @@ TEST(Ruvia, context_response_header_transactions_preserve_cookie_policy_and_spil
         }
         EXPECT_EQ(cookies, std::size_t{2});
         for (int i = 0; i < 12; ++i) {
-            EXPECT_EQ(result_value.header("X-Field-" + std::to_string(i)), std::string_view("value"));
+            EXPECT_EQ(result_value.header(std::move(std::pmr::string("X-Field-", ruvia::process_resource()).append(std::to_string(i)))), std::string_view("value"));
         }
         co_return;
     });

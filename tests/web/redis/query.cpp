@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "memory_resource_fixture.h"
@@ -26,7 +27,7 @@ TEST(Ruvia, redis_predicate_composition_moves_source_and_preserves_range) {
         }
     } guard_value{std::pmr::set_default_resource(&resource)};
     {
-        std::string text(200, 'x');
+        std::pmr::string text(200, 'x', ruvia::process_resource());
         auto filter = redis_query_user::column<"email">() == text;
         text.assign(200, 'y');
         auto range = redis_query_user::column<"age">().between(18, 65);

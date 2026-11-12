@@ -6,6 +6,7 @@
 #include <exception>
 #include <future>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -20,6 +21,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_ascii.h"
@@ -107,7 +109,7 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
     std::exception_ptr peer_failure;
     const auto serve = [&]() -> asio::awaitable<void> {
         auto socket = co_await peer.async_accept(asio::use_awaitable);
-        std::string request;
+        std::pmr::string request{ruvia::process_resource()};
         co_await asio::async_read_until(
             socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
         constexpr std::string_view response =
@@ -118,7 +120,7 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
 
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.local_endpoint().port());
+        const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(),
             {.base_url_ = client_url,
                 .request_timeout_ = std::chrono::seconds(5)});
@@ -177,10 +179,10 @@ RUVIA_MODEL(fluent_client_observation,
 namespace fluent_client_tests {
 
 struct redirect_destinations final {
-    std::string source_;
-    std::string destination_;
-    std::string secure_;
-    std::string unregistered_;
+    std::pmr::string source_{ruvia::process_resource()};
+    std::pmr::string destination_{ruvia::process_resource()};
+    std::pmr::string secure_{ruvia::process_resource()};
+    std::pmr::string unregistered_{ruvia::process_resource()};
 };
 
 class fluent_routes final {
@@ -234,7 +236,7 @@ public:
         const auto& target = mode == "unregistered" ? targets.unregistered_ : targets.destination_;
         auto origin = c.client(mode == "downgrade" ? "secure" : "source");
         auto response = co_await origin.post("/fluent/redirect")
-                            .query("location", target + "/fluent/inspect")
+                            .query("location", std::pmr::string(target, ruvia::process_resource()) + "/fluent/inspect")
                             .header("authorization", "Bearer source-secret")
                             .header("proxy-authorization", "Basic proxy-secret")
                             .header("cookie", "explicit=source-secret")
@@ -277,7 +279,7 @@ public:
             throw std::runtime_error("WebSocket builder did not retain its fields");
         }
         if (c.req().query("oversize")) {
-            const std::string payload(64, 'm');
+            const std::pmr::string payload(64, 'm', ruvia::process_resource());
             co_await c.websocket().text(payload);
         }
         while (auto message = co_await c.websocket().read()) {
@@ -295,10 +297,10 @@ public:
           unknown_port_(io_),
           identity_("localhost"),
           targets_(std::make_shared<redirect_destinations>()) {
-        targets_->source_ = "http://127.0.0.1:" + std::to_string(source_port_.endpoint().port());
-        targets_->destination_ = "http://127.0.0.1:" + std::to_string(destination_port_.endpoint().port());
-        targets_->secure_ = "https://localhost:" + std::to_string(secure_port_.endpoint().port());
-        targets_->unregistered_ = "http://127.0.0.1:" + std::to_string(unknown_port_.endpoint().port());
+        targets_->source_ = "http://127.0.0.1:" + std::pmr::string(std::to_string(source_port_.endpoint().port()), ruvia::process_resource());
+        targets_->destination_ = "http://127.0.0.1:" + std::pmr::string(std::to_string(destination_port_.endpoint().port()), ruvia::process_resource());
+        targets_->secure_ = "https://localhost:" + std::pmr::string(std::to_string(secure_port_.endpoint().port()), ruvia::process_resource());
+        targets_->unregistered_ = "http://127.0.0.1:" + std::pmr::string(std::to_string(unknown_port_.endpoint().port()), ruvia::process_resource());
         const auto& key = identity_.private_key_file();
         const std::array listeners{
             ruvia::listen_config{.address_ = "127.0.0.1", .http_ = source_port_.endpoint().port(), .https_ = secure_port_.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity_.ca_file_, .private_key_file_ = key}}},
@@ -362,13 +364,13 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
         try {
             const auto origin = client.client();
             auto cold = [&] {
-                std::string path = "/fluent/inspect";
-                std::string name = "x-owned";
-                std::string value = "owned-value";
-                std::string query_name = "escaped name";
-                std::string query_value = "a &b=+/%?#\xc3\xa9";
-                std::string span_value = "span-value";
-                std::string payload = "owned-payload";
+                std::pmr::string path("/fluent/inspect", ruvia::process_resource());
+                std::pmr::string name("x-owned", ruvia::process_resource());
+                std::pmr::string value("owned-value", ruvia::process_resource());
+                std::pmr::string query_name("escaped name", ruvia::process_resource());
+                std::pmr::string query_value("a &b=+/%?#\xc3\xa9", ruvia::process_resource());
+                std::pmr::string span_value("span-value", ruvia::process_resource());
+                std::pmr::string payload("owned-payload", ruvia::process_resource());
                 const std::array fields{ruvia::http_header_view{"x-span", span_value}};
                 auto request = origin.post(path);
                 request.header(name, value).headers(fields).query(query_name, query_value).body(std::as_bytes(std::span(payload)));
@@ -404,8 +406,8 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 (void)consumed.send();
             }));
 
-            auto temporary = origin.post(std::string("/fluent/inspect"))
-                                 .body(std::string("temporary-body"))
+            auto temporary = origin.post(std::pmr::string("/fluent/inspect", ruvia::process_resource()))
+                                 .body(std::pmr::string("temporary-body", ruvia::process_resource()))
                                  .send();
             auto temporary_response = co_await std::move(temporary);
             auto temporary_observed = co_await temporary_response.json<fluent_client_observation>();
@@ -534,9 +536,9 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 std::exception_ptr websocket_failure;
                 try {
                     auto connecting = [&] {
-                        const std::string path = "/fluent/websocket";
-                        const std::string value = "pooled";
-                        const std::string subprotocol = "echo.v1";
+                        const std::pmr::string path("/fluent/websocket", ruvia::process_resource());
+                        const std::pmr::string value("pooled", ruvia::process_resource());
+                        const std::pmr::string subprotocol("echo.v1", ruvia::process_resource());
                         const std::array fields{ruvia::http_header_view{"x-owned", value}};
                         return websocket_client.client().websocket(path).headers(fields).subprotocol(subprotocol).deflate({.compression_ = {.enabled_ = true}}).connect();
                     }();
@@ -552,10 +554,10 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     EXPECT_TRUE(co_await ruvia::sleep_for(session.worker(), std::chrono::milliseconds(1250)) ==
                                 ruvia::timer_sleep_result::elapsed);
                     EXPECT_TRUE(session.connected());
-                    const std::string payload(32768, 'w');
+                    const std::pmr::string payload(32768, 'w', ruvia::process_resource());
                     for (const bool compress : {false, true}) {
                         auto writing = [&] {
-                            const std::string owned = payload;
+                            const std::pmr::string owned(payload, ruvia::process_resource());
                             return compress ? session.send(std::as_bytes(std::span(owned)), {.compress_ = true})
                                             : session.send(owned, {.compress_ = false});
                         }();
@@ -585,7 +587,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         auto limited = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
                         bool rejected = false;
                         try {
-                            co_await limited.send(std::string(33, 'm'));
+                            co_await limited.send(std::pmr::string(33, 'm', ruvia::process_resource()));
                         } catch (const ruvia::http_client_error& error) {
                             rejected = error.code() == ruvia::http_client_error::code_type::message_too_large;
                         }
@@ -658,17 +660,17 @@ TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage)
         {
             ruvia::http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:1"});
             {
-                const std::string path = "/" + std::string(2048, 'p');
-                const std::string value(16384, 'v');
-                const std::string body(32768, 'b');
-                const std::string authority = std::string(63, 'a') + "." + std::string(63, 'b') + ".test:443";
+                const std::pmr::string path("/" + std::pmr::string(2048, 'p', ruvia::process_resource()), ruvia::process_resource());
+                const std::pmr::string value(16384, 'v', ruvia::process_resource());
+                const std::pmr::string body(32768, 'b', ruvia::process_resource());
+                const std::pmr::string authority(std::pmr::string(63, 'a', ruvia::process_resource()) + "." + std::pmr::string(63, 'b', ruvia::process_resource()) + ".test:443", ruvia::process_resource());
                 const auto origin = client.client();
                 request.emplace(origin.post(path));
                 request->header("x-owned", value).query("owned", path).body(body);
                 connect.emplace(origin.connect(authority));
                 connect->protocol("owned-protocol").target(path).header("x-owned", value);
                 websocket.emplace(origin.websocket(path));
-                websocket->header("x-owned", value).subprotocol(std::string(256, 's'));
+                websocket->header("x-owned", value).subprotocol(std::pmr::string(256, 's', ruvia::process_resource()));
             }
             co_await client.shutdown();
         }

@@ -72,7 +72,7 @@ struct received_log final {
     std::array<received_record, 16> records_{};
     std::size_t count_{0};
     bool overflow_{false};
-    std::vector<ruvia::http2_request_head_event> requests_;
+    std::pmr::vector<ruvia::http2_request_head_event> requests_;
 
     void drain(ruvia::http2_connection& connection) {
         while (auto event = connection.next_event()) {
@@ -138,7 +138,7 @@ private:
     }
 };
 
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
+void append_frame(std::pmr::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
     std::uint32_t stream_id, std::string_view payload = {}) {
     std::array<char, ruvia::http2_frame_header_bytes> header{};
     if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
@@ -148,20 +148,20 @@ void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t 
     wire.append(payload);
 }
 
-void append_setting(std::string& payload, std::uint16_t id, std::uint32_t value) {
+void append_setting(std::pmr::string& payload, std::uint16_t id, std::uint32_t value) {
     const std::array<char, 6> entry{static_cast<char>(id >> 8), static_cast<char>(id),
         static_cast<char>(value >> 24), static_cast<char>(value >> 16),
         static_cast<char>(value >> 8), static_cast<char>(value)};
     payload.append(entry.data(), entry.size());
 }
 
-std::string window_payload(std::uint32_t increment) {
+std::pmr::string window_payload(std::uint32_t increment) {
     const std::array<char, 4> bytes{static_cast<char>(increment >> 24), static_cast<char>(increment >> 16),
         static_cast<char>(increment >> 8), static_cast<char>(increment)};
-    return std::string(bytes.data(), bytes.size());
+    return std::pmr::string(bytes.data(), bytes.size());
 }
 
-std::string priority_payload(std::uint32_t dependency, unsigned weight, bool exclusive) {
+std::pmr::string priority_payload(std::uint32_t dependency, unsigned weight, bool exclusive) {
     auto payload = window_payload(dependency | (exclusive ? 0x80000000U : 0));
     payload.push_back(static_cast<char>(weight - 1));
     return payload;
@@ -176,8 +176,8 @@ std::pmr::string request_block() {
     return block;
 }
 
-std::string server_preface() {
-    std::string wire(ruvia::http2_client_preface);
+std::pmr::string server_preface() {
+    std::pmr::string wire(ruvia::http2_client_preface);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0);
     return wire;
 }
@@ -188,10 +188,10 @@ TEST(Ruvia, http2_receive_frame_metadata_off_produces_no_metadata_events) {
     for (const auto role : {ruvia::http2_role::server, ruvia::http2_role::client}) {
         auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server()
                                                             : ruvia::http2_connection::client();
-        std::string settings;
+        std::pmr::string settings;
         append_setting(settings, 3, 13);
         append_setting(settings, 0xfefe, 1);
-        std::string wire = role == ruvia::http2_role::server ? std::string(ruvia::http2_client_preface) : std::string{};
+        std::pmr::string wire = role == ruvia::http2_role::server ? std::pmr::string(ruvia::http2_client_preface) : std::pmr::string{};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, settings);
         append_frame(wire, ruvia::http2_frame_type::priority, 0, 7, priority_payload(0, 16, false));
         append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(5));
@@ -225,12 +225,12 @@ TEST(Ruvia, http2_receive_settings_fold_known_duplicates_and_keep_unknown_entrie
         const ruvia::http2_connection_options options{.receive_frame_metadata_ = true};
         auto connection = role == ruvia::http2_role::server ? ruvia::http2_connection::server(options)
                                                             : ruvia::http2_connection::client(options);
-        std::string payload;
+        std::pmr::string payload;
         append_setting(payload, 0xfefe, 0xabcdef01);
         append_setting(payload, 3, 13);
         append_setting(payload, 3, 7);
         append_setting(payload, 0xfefe, 0);
-        std::string wire = role == ruvia::http2_role::server ? std::string(ruvia::http2_client_preface) : std::string{};
+        std::pmr::string wire = role == ruvia::http2_role::server ? std::pmr::string(ruvia::http2_client_preface) : std::pmr::string{};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, payload);
         append_frame(wire, ruvia::http2_frame_type::settings, 1, 0);
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0);
@@ -266,8 +266,8 @@ TEST(Ruvia, http2_receive_settings_fold_known_duplicates_and_keep_unknown_entrie
 
 TEST(Ruvia, http2_receive_invalid_later_setting_does_not_publish_partial_frame) {
     auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
-    std::string wire = server_preface();
-    std::string payload;
+    std::pmr::string wire = server_preface();
+    std::pmr::string payload;
     append_setting(payload, 3, 19);
     append_setting(payload, 4, 0x80000000U);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, payload);
@@ -284,7 +284,7 @@ TEST(Ruvia, http2_receive_invalid_later_setting_does_not_publish_partial_frame) 
 TEST(Ruvia, http2_receive_byte_fragments_publish_only_complete_frames) {
     auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
     received_log log;
-    std::string wire = server_preface();
+    std::pmr::string wire = server_preface();
     const auto settings_end = wire.size();
     append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(5));
     const auto first_window_end = wire.size();
@@ -312,11 +312,11 @@ TEST(Ruvia, http2_receive_padded_headers_priority_precedes_continued_request_and
         received_log log;
         auto block = request_block();
         const auto split = continued ? block.size() / 2 : block.size();
-        std::string payload(1, '\x03');
+        std::pmr::string payload(1, '\x03');
         payload += priority_payload(0, 256, true);
         payload.append(block.data(), split);
         payload.append(3, '\0');
-        std::string wire = server_preface();
+        std::pmr::string wire = server_preface();
         append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(3));
         append_frame(wire, ruvia::http2_frame_type::headers, continued ? 0x29 : 0x2d, 1, payload);
         if (continued) {
@@ -362,7 +362,7 @@ TEST(Ruvia, http2_receive_window_updates_only_report_applied_credit) {
     auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
     received_log log;
     auto block = request_block();
-    std::string wire = server_preface();
+    std::pmr::string wire = server_preface();
     append_frame(wire, ruvia::http2_frame_type::headers, 5, 3, block);
     EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
     log.drain(server);
@@ -396,7 +396,7 @@ TEST(Ruvia, http2_receive_window_updates_only_report_applied_credit) {
 TEST(Ruvia, http2_receive_rejected_connection_window_and_malformed_priority_are_not_published) {
     for (const auto type : {ruvia::http2_frame_type::window_update, ruvia::http2_frame_type::priority}) {
         auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
-        std::string wire = server_preface();
+        std::pmr::string wire = server_preface();
         append_frame(wire, type, 0, type == ruvia::http2_frame_type::window_update ? 0 : 1, window_payload(0));
         EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::protocol_failure);
         received_log log;
@@ -419,9 +419,9 @@ TEST(Ruvia, http2_receive_control_metadata_needs_no_dynamic_allocation) {
         EXPECT_TRUE(server.feed(preface) == ruvia::http2_feed_result::accepted);
         log.drain(server);
         log.count_ = 0;
-        std::string priority;
+        std::pmr::string priority;
         append_frame(priority, ruvia::http2_frame_type::priority, 0, 13, priority_payload(5, 19, false));
-        std::string window;
+        std::pmr::string window;
         append_frame(window, ruvia::http2_frame_type::window_update, 0, 0, window_payload(7));
         const auto allocations = resource.allocations_;
         resource.allocation_budget_ = 0;
@@ -441,8 +441,8 @@ TEST(Ruvia, http2_receive_malformed_headers_do_not_publish_priority_or_request) 
     // reported by nghttp2 as connection PROTOCOL_ERROR.
     for (const bool missing_priority : {false, true}) {
         auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
-        std::string wire = server_preface();
-        std::string payload(1, missing_priority ? '\0' : '\x08');
+        std::pmr::string wire = server_preface();
+        std::pmr::string payload(1, missing_priority ? '\0' : '\x08');
         payload += priority_payload(0, 1, false);
         if (missing_priority) {
             payload.pop_back();
@@ -459,7 +459,7 @@ TEST(Ruvia, http2_receive_malformed_headers_do_not_publish_priority_or_request) 
 
 TEST(Ruvia, http2_receive_window_overflow_does_not_publish_rejected_credit) {
     auto server = ruvia::http2_connection::server({.receive_frame_metadata_ = true});
-    std::string wire = server_preface();
+    std::pmr::string wire = server_preface();
     append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(0x7fffffffU));
     EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::protocol_failure);
     received_log log;

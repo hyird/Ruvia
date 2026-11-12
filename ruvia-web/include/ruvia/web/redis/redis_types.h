@@ -37,11 +37,11 @@ class redis_x_read_group_result;
 
 struct redis_config final {
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
-    std::string host_{"127.0.0.1"};
+    std::pmr::string host_{"127.0.0.1", process_resource()};
     // Checked before narrowing; must be non-zero.
     port_number port_{6379};
-    std::string username_{};
-    std::string password_{};
+    std::pmr::string username_{process_resource()};
+    std::pmr::string password_{process_resource()};
     client_tls_config tls_{};
     std::uint32_t database_{0};
     // Must be greater than zero.

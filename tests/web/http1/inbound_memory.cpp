@@ -68,7 +68,7 @@ class inbound_memory_routes final {
     // whether a read ran out of inbound budget.
     ruvia::task<void> tunnel(ruvia::context& context_value) {
         auto& tunnel_value = context_value.tunnel();
-        std::vector<std::pmr::string> retained;
+        std::pmr::vector<std::pmr::string> retained{ruvia::process_resource()};
         bool limited = false;
         for (;;) {
             std::optional<std::pmr::string> chunk;
@@ -106,7 +106,7 @@ public:
 
     // Everything up to and including `delimiter`, or nullopt when the stream
     // ends or 5 s pass first.
-    [[nodiscard]] std::optional<std::string> read_until(std::string_view delimiter) {
+    [[nodiscard]] std::optional<std::pmr::string> read_until(std::string_view delimiter) {
         std::optional<std::size_t> found;
         asio::async_read_until(socket_, asio::dynamic_buffer(input_), delimiter,
             [&found](const std::error_code& error, std::size_t bytes) {
@@ -118,16 +118,16 @@ public:
         if (!found) {
             return std::nullopt;
         }
-        std::string result = input_.substr(0, *found);
+        std::pmr::string result(std::string_view(input_).substr(0, *found), ruvia::process_resource());
         input_.erase(0, *found);
         return result;
     }
 
     // Everything until the server ends the stream (or 5 s pass).
-    [[nodiscard]] std::string read_to_end() {
+    [[nodiscard]] std::pmr::string read_to_end() {
         asio::async_read(socket_, asio::dynamic_buffer(input_), [](const std::error_code&, std::size_t) {});
         run();
-        return std::exchange(input_, {});
+        return std::exchange(input_, std::pmr::string{ruvia::process_resource()});
     }
 
     void close() {
@@ -149,7 +149,7 @@ private:
 
     asio::io_context& io_;
     asio::ip::tcp::socket socket_;
-    std::string input_;
+    std::pmr::string input_{ruvia::process_resource()};
 };
 
 constexpr std::string_view connect_request =
@@ -182,10 +182,10 @@ TEST(Ruvia, streamed_request_body_reads_count_against_the_connection_inbound_bud
         test_client client(io, server.endpoint());
         client.send(
             "POST /inbound-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n" +
-            std::string(20000, 'b'));
+            std::pmr::string(20000, 'b', ruvia::process_resource()));
         const auto response = client.read_to_end();
         EXPECT_TRUE(response.starts_with("HTTP/1.1 503 "));
-        EXPECT_TRUE(response.find("inbound_buffer_limit") != std::string::npos);
+        EXPECT_TRUE(response.find("inbound_buffer_limit") != std::pmr::string::npos);
         client.close();
     }
     server.finish();
@@ -196,7 +196,7 @@ TEST(Ruvia, tunnel_reads_count_against_the_connection_inbound_budget) {
     ruvia::test::http_server_fixture server(io, inbound_memory_config());
     test_client client(io, server.endpoint());
     EXPECT_TRUE(open_tunnel(client));
-    client.send(std::string(20000, 't'));
+    client.send(std::pmr::string(20000, 't', ruvia::process_resource()));
     client.finish_sending();
     const auto output = client.read_to_end();
     EXPECT_TRUE(output.ends_with("limited\n"));
@@ -214,7 +214,7 @@ TEST(Ruvia, tunnel_reads_count_against_the_worker_inbound_budget) {
     for (auto* const client : {&first, &second}) {
         EXPECT_TRUE(open_tunnel(*client));
         client->send("a");
-        EXPECT_TRUE(client->read_until("\n") == std::optional<std::string>("ok\n"));
+        EXPECT_TRUE(client->read_until("\n") == std::optional<std::pmr::string>(std::in_place, "ok\n", ruvia::process_resource()));
     }
     test_client third(io, server.endpoint());
     EXPECT_TRUE(open_tunnel(third));

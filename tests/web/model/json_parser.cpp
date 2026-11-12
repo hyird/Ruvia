@@ -3,6 +3,9 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
+
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "model_field_fixture.h"
 #include "test_exceptions.h"
@@ -23,8 +26,8 @@ TEST(Ruvia, model_json_parser_dispatches_decoded_keys) {
 TEST(Ruvia, model_public_parsers_own_string_fields) {
     std::pmr::monotonic_buffer_resource resource;
     auto json = ruvia::from_json<accessor_surface_request>(
-        std::string(R"({"message":"json-owned"})"), {.resource_ = &resource});
-    std::string form_input("message=form-owned");
+        std::pmr::string(R"({"message":"json-owned"})", ruvia::process_resource()), {.resource_ = &resource});
+    std::pmr::string form_input("message=form-owned", ruvia::process_resource());
     auto form = ruvia::from_form<accessor_surface_request>(form_input, {.resource_ = &resource});
     form_input.assign(form_input.size(), 'x');
 
@@ -38,9 +41,9 @@ TEST(Ruvia, model_public_parsers_own_string_fields) {
 TEST(Ruvia, model_form_parser_keeps_malformed_percent_sequences_literally) {
     for (const std::string_view invalid : {"%", "%G0", "%0G"}) {
         for (const auto& body : {
-                 std::string("message=ready&unknown=").append(invalid),
-                 std::string("unknown=").append(invalid) + "&message=ready",
-                 std::string("message=ready&").append(invalid) + "=ignored"}) {
+                 std::move(std::pmr::string("message=ready&unknown=", ruvia::process_resource()).append(invalid)),
+                 std::move(std::pmr::string("unknown=", ruvia::process_resource()).append(invalid)) + "&message=ready",
+                 std::move(std::pmr::string("message=ready&", ruvia::process_resource()).append(invalid)) + "=ignored"}) {
             const auto parsed = ruvia::from_form<accessor_surface_request>(body);
             EXPECT_TRUE(parsed.get<"message">().has_value());
         }
@@ -100,7 +103,7 @@ TEST(Ruvia, model_json_parser_rejects_nested_structure_recursively) {
 }
 
 TEST(Ruvia, model_json_parser_enforces_depth_while_skipping_unknown_values) {
-    std::string input = R"({"message":"ready","unknown":)";
+    std::pmr::string input(R"({"message":"ready","unknown":)", ruvia::process_resource());
     input.append(70, '[');
     input.append(70, ']');
     input.push_back('}');

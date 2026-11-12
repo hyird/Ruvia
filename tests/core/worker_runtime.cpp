@@ -8,6 +8,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <semaphore>
 #include <stdexcept>
@@ -19,6 +20,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_group.h"
 #include "ruvia/core/worker_signal.h"
 
@@ -173,7 +175,7 @@ TEST(Ruvia, worker_runtime_keeps_owner_until_external_producers_quiesce) {
     std::atomic<bool> stopped_on_owner{};
     bool finalized_on_owner{};
     bool shutdown_on_owner{};
-    std::vector<int> phases;
+    std::pmr::vector<int> phases(ruvia::process_resource());
     runtime.configure({
         .startup_ = [&] {
             phases.push_back(1);
@@ -202,7 +204,7 @@ TEST(Ruvia, worker_runtime_keeps_owner_until_external_producers_quiesce) {
     runtime.join();
     EXPECT_TRUE(finalized_on_owner);
     EXPECT_TRUE(shutdown_on_owner);
-    EXPECT_EQ(phases, (std::vector<int>{1, 2, 3, 4}));
+    EXPECT_EQ(phases, (std::pmr::vector<int>{{1, 2, 3, 4}, ruvia::process_resource()}));
     EXPECT_TRUE(!worker_value.valid());
 }
 
@@ -214,7 +216,7 @@ TEST(Ruvia, worker_runtime_failure_cancels_then_drains_io_before_shutdown) {
     bool completion_on_owner{};
     bool shutdown_after_completion{};
     std::exception_ptr reported;
-    std::vector<int> phases;
+    std::pmr::vector<int> phases(ruvia::process_resource());
     runtime.configure({
         .startup_ = [&] {
             timer.expires_after(std::chrono::hours(1));
@@ -240,7 +242,7 @@ TEST(Ruvia, worker_runtime_failure_cancels_then_drains_io_before_shutdown) {
     EXPECT_TRUE(failure_on_owner);
     EXPECT_TRUE(shutdown_after_completion);
     EXPECT_EQ(reported, runtime.failure());
-    EXPECT_EQ(phases, (std::vector<int>{1, 2, 3, 4}));
+    EXPECT_EQ(phases, (std::pmr::vector<int>{{1, 2, 3, 4}, ruvia::process_resource()}));
     EXPECT_TRUE(runtime.failure() != nullptr);
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)runtime.start(); }));
 }
@@ -386,14 +388,14 @@ TEST(Ruvia, worker_runtime_first_failure_wakes_waiters_and_reaches_hook_once) {
         .failure_ = [&](std::exception_ptr) noexcept { ++reports; },
     });
     EXPECT_TRUE(runtime.start());
-    std::string message;
+    std::pmr::string message(ruvia::process_resource());
     try {
         (void)runtime.wait_until_ready();
     } catch (const std::runtime_error& failure) {
         message = failure.what();
     }
     runtime.join();
-    EXPECT_EQ(message, std::string("first"));
+    EXPECT_EQ(message, "first");
     EXPECT_EQ(reports.load(), 1);
     EXPECT_EQ(runtime.state(), state::stopped);
 }
@@ -416,10 +418,10 @@ TEST(Ruvia, worker_group_coordinates_startup_serving_and_retirement) {
     ruvia::worker_runtime first;
     ruvia::worker_runtime second;
     std::mutex order_mutex;
-    std::vector<std::string> order;
-    const auto record = [&](std::string event) {
+    std::pmr::vector<std::pmr::string> order(ruvia::process_resource());
+    const auto record = [&](std::string_view event) {
         const std::lock_guard lock(order_mutex);
-        order.push_back(std::move(event));
+        order.emplace_back(event);
     };
     std::atomic<int> ready_count{};
     first.configure({
@@ -570,7 +572,7 @@ TEST(Ruvia, worker_group_external_failure_preserves_cause_while_hook_reenters_st
     failure_started.acquire();
     group.request_stop();
     const bool admissions_closed = !producer.handle().accepting() && !consumer.handle().accepting();
-    std::string message;
+    std::pmr::string message(ruvia::process_resource());
     try {
         (void)group.start();
     } catch (const std::runtime_error& failure) {
@@ -581,7 +583,7 @@ TEST(Ruvia, worker_group_external_failure_preserves_cause_while_hook_reenters_st
     const auto failure = group.join();
     EXPECT_TRUE(stop_observed);
     EXPECT_TRUE(admissions_closed);
-    EXPECT_EQ(message, std::string("external producer failure"));
+    EXPECT_EQ(message, "external producer failure");
     EXPECT_EQ(failure, error);
     EXPECT_TRUE(accepted_work_ran);
     EXPECT_TRUE(shutdown_on_owner);
@@ -596,13 +598,13 @@ TEST(Ruvia, worker_group_rethrows_the_first_member_failure) {
     ruvia::worker_group group;
     group.add(healthy);
     group.add(failing);
-    std::string message;
+    std::pmr::string message(ruvia::process_resource());
     try {
         (void)group.start();
     } catch (const std::runtime_error& failure) {
         message = failure.what();
     }
-    EXPECT_EQ(message, std::string("member startup failed"));
+    EXPECT_EQ(message, "member startup failed");
     const auto failure = group.join();
     EXPECT_TRUE(failure != nullptr);
     EXPECT_EQ(healthy.state(), state::stopped);
@@ -650,7 +652,7 @@ TEST(Ruvia, worker_group_serve_failure_closes_every_members_admission) {
     group.add(consumer);
     group.add(producer);
     const bool started = group.start();
-    std::string message;
+    std::pmr::string message(ruvia::process_resource());
     try {
         (void)group.serve();
     } catch (const std::runtime_error& failure) {
@@ -667,7 +669,7 @@ TEST(Ruvia, worker_group_serve_failure_closes_every_members_admission) {
 
     EXPECT_TRUE(started);
     EXPECT_TRUE(consumer_served.load());
-    EXPECT_EQ(message, std::string("producer serve failed"));
+    EXPECT_EQ(message, "producer serve failed");
     EXPECT_TRUE(group_stopping);
     EXPECT_TRUE(producer_state == state::stopping || producer_state == state::stopped);
     EXPECT_EQ(consumer_state, state::stopping);
@@ -726,7 +728,7 @@ TEST(Ruvia, worker_group_member_exit_wakes_an_earlier_asynchronous_startup) {
                 group.request_stop();
             }
         });
-        std::string message;
+        std::pmr::string message(ruvia::process_resource());
         bool started = false;
         try {
             started = group.start();
@@ -741,7 +743,7 @@ TEST(Ruvia, worker_group_member_exit_wakes_an_earlier_asynchronous_startup) {
 
         EXPECT_TRUE(!watchdog_fired.load());
         EXPECT_TRUE(!started);
-        EXPECT_EQ(message, std::string(with_failure ? "peer startup failed" : "worker stopped before the group was ready"));
+        EXPECT_EQ(message, with_failure ? "peer startup failed" : "worker stopped before the group was ready");
         EXPECT_TRUE(group_stopping);
         EXPECT_TRUE(!pending_accepting);
         EXPECT_EQ(failure != nullptr, with_failure);

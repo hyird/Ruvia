@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -15,7 +16,7 @@
 
 namespace {
 struct capture {
-    std::string body_;
+    std::pmr::string body_;
     std::uint64_t type_{0};
     std::size_t ends_{0};
 };
@@ -68,7 +69,7 @@ TEST(Ruvia, http_udp_datagram_context_prefix_roundtrips) {
 TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
     std::array<char, 16> prefix{};
     auto count = ruvia::encode_http_capsule_header(prefix, 0x1234, 5);
-    std::string wire(prefix.data(), std::get<0>(count));
+    std::pmr::string wire(prefix.data(), std::get<0>(count));
     wire += "hello";
     auto empty = ruvia::encode_http_capsule_header(prefix, 0, 0);
     wire.append(prefix.data(), std::get<0>(empty));
@@ -77,7 +78,7 @@ TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
     for (const char& byte : wire) {
         EXPECT_TRUE(decoder.feed({&byte, 1}, false, capsule, &capture_state) == ruvia::http_capsule_status::need_more_data);
     }
-    EXPECT_EQ(capture_state.body_, std::string("hello"));
+    EXPECT_EQ(capture_state.body_, std::pmr::string("hello"));
     EXPECT_EQ(capture_state.ends_, 2u);
     EXPECT_TRUE(decoder.feed({}, true, capsule, &capture_state) == ruvia::http_capsule_status::end);
     ruvia::http_capsule_decoder lambda_decoder;
@@ -85,7 +86,7 @@ TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
     EXPECT_TRUE(lambda_decoder.feed(wire, true, [&](ruvia::http_capsule_event event) {
         capsule(&lambda_capture, event);
     }) == ruvia::http_capsule_status::end);
-    EXPECT_EQ(lambda_capture.body_, std::string("hello"));
+    EXPECT_EQ(lambda_capture.body_, std::pmr::string("hello"));
     EXPECT_EQ(lambda_capture.ends_, 2u);
     ruvia::http_capsule_decoder pull_lambda_decoder;
     capture pull_lambda_capture;
@@ -93,7 +94,7 @@ TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
         capsule(&pull_lambda_capture, event);
     });
     EXPECT_TRUE(pull_first.capsule_complete_);
-    EXPECT_EQ(pull_lambda_capture.body_, std::string("hello"));
+    EXPECT_EQ(pull_lambda_capture.body_, std::pmr::string("hello"));
 }
 TEST(Ruvia, http_capsule_truncated_and_length_limit_are_terminal) {
     const std::array prefix{char(0), char(3)};
@@ -105,7 +106,7 @@ TEST(Ruvia, http_capsule_truncated_and_length_limit_are_terminal) {
 
 TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after_the_suffix) {
     std::array<char, 16> header;
-    std::string wire;
+    std::pmr::string wire;
     for (const auto& item : std::array<std::pair<std::uint64_t, std::string_view>, 3>{{{0x123456789ULL, "first"}, {0, ""}, {7, "last"}}}) {
         const auto encoded = ruvia::encode_http_capsule_header(header, item.first, item.second.size());
         wire.append(header.data(), std::get<0>(encoded));
@@ -115,7 +116,7 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
         ruvia::http_capsule_decoder decoder;
         capture captured;
         std::size_t offset{}, complete_value{};
-        std::string all_payload;
+        std::pmr::string all_payload;
         while (offset != wire.size()) {
             const auto count = std::min(block, wire.size() - offset);
             const auto result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured);
@@ -147,21 +148,21 @@ TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_afte
 // the RFC 9298 Context ID shows the datagram is kept).
 TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limit) {
     std::array<char, 16> header;
-    const auto append_capsule = [&](std::string& wire, std::uint64_t type, std::string_view value) {
+    const auto append_capsule = [&](std::pmr::string& wire, std::uint64_t type, std::string_view value) {
         const auto encoded = ruvia::encode_http_capsule_header(header, type, value.size());
         wire.append(header.data(), std::get<0>(encoded));
         wire.append(value);
     };
-    std::string wire;
-    append_capsule(wire, 0x17, std::string(200, 'u'));
-    append_capsule(wire, 0, std::string("\x03", 1) + std::string(200, 'c'));
-    append_capsule(wire, 0, std::string("\x40\x00", 2) + "two-byte-zero");
-    append_capsule(wire, 0, std::string("\0", 1) + "after");
-    append_capsule(wire, 0, std::string("\x41", 1));
+    std::pmr::string wire;
+    append_capsule(wire, 0x17, std::pmr::string(200, 'u'));
+    append_capsule(wire, 0, std::pmr::string("\x03", 1) + std::pmr::string(200, 'c'));
+    append_capsule(wire, 0, std::pmr::string("\x40\x00", 2) + "two-byte-zero");
+    append_capsule(wire, 0, std::pmr::string("\0", 1) + "after");
+    append_capsule(wire, 0, std::pmr::string("\x41", 1));
     for (const std::size_t block : {std::size_t{1}, std::size_t{7}, wire.size()}) {
         ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
         capture captured;
-        std::vector<std::string> kept;
+        std::pmr::vector<std::pmr::string> kept;
         std::size_t offset{};
         ruvia::http_capsule_feed_result result_value{};
         while (offset != wire.size()) {
@@ -178,27 +179,27 @@ TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limi
         EXPECT_TRUE(result_value.status_ == ruvia::http_capsule_status::end);
         // Context ID 0 in either encoding, and a value too short for its
         // Context ID (left to the reader as malformed), are kept.
-        EXPECT_TRUE(kept == (std::vector<std::string>{std::string("\x40\x00", 2) + "two-byte-zero",
-                                std::string("\0", 1) + "after", std::string("\x41", 1)}));
+        EXPECT_TRUE(kept == (std::pmr::vector<std::pmr::string>{std::pmr::string("\x40\x00", 2) + "two-byte-zero",
+                                std::pmr::string("\0", 1) + "after", std::pmr::string("\x41", 1)}));
         EXPECT_EQ(captured.ends_, std::size_t{3});
     }
 
-    std::string datagrams;
-    append_capsule(datagrams, 0x17, std::string(200, 'u'));
+    std::pmr::string datagrams;
+    append_capsule(datagrams, 0x17, std::pmr::string(200, 'u'));
     append_capsule(datagrams, 0, "\x03kept");
     ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
     capture captured;
     EXPECT_TRUE(decoder.feed(datagrams, true, capsule, &captured, ruvia::http_capsule_retention::datagrams) ==
                 ruvia::http_capsule_status::end);
-    EXPECT_EQ(captured.body_, std::string("\x03kept"));
+    EXPECT_EQ(captured.body_, std::pmr::string("\x03kept"));
     EXPECT_EQ(captured.ends_, std::size_t{1});
 
     // Kept capsules over the limit stay terminal: every type for a generic
     // reader, and a CONNECT-UDP payload once its Context ID is known.
     for (const auto retention : {ruvia::http_capsule_retention::all, ruvia::http_capsule_retention::udp_payloads}) {
-        std::string oversized;
+        std::pmr::string oversized;
         append_capsule(oversized, retention == ruvia::http_capsule_retention::all ? 0x17 : 0,
-            std::string("\0", 1) + std::string(200, 'o'));
+            std::pmr::string("\0", 1) + std::pmr::string(200, 'o'));
         ruvia::http_capsule_decoder limited({.max_capsule_length_ = 100});
         EXPECT_TRUE(limited.feed(oversized, false, nullptr, nullptr, retention) == ruvia::http_capsule_status::limit);
     }

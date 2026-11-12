@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -13,6 +14,7 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -55,7 +57,7 @@ class document_root_routes final {
     }
 
     ruvia::task<ruvia::http_response> post_slug(ruvia::context& c) {
-        co_return c.text("posted:" + std::string(c.req().param("slug").value_or("")));
+        co_return c.text("posted:" + std::pmr::string(c.req().param("slug").value_or(""), ruvia::process_resource()));
     }
 
     ruvia::task<ruvia::http_response> get_space_route(ruvia::context& c) {
@@ -77,9 +79,9 @@ void populate_document_root(const fs::path& dir) {
 }
 
 // Sends one request on a fresh connection and returns the complete response.
-[[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+[[nodiscard]] std::pmr::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
     std::string_view target, std::string_view method = "GET") {
-    std::string request(method);
+    std::pmr::string request(method, ruvia::process_resource());
     request.append(" ");
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
@@ -125,13 +127,13 @@ TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
             "//private/file.txt", "/admin//panel/secret.txt", "//public.txt", "/public.txt/"}) {
         const auto response = exchange(io, server.endpoint(), target);
         EXPECT_TRUE(has_status(response, "404"));
-        EXPECT_TRUE(response.find("secret") == std::string::npos);
-        EXPECT_TRUE(response.find("public") == std::string::npos);
+        EXPECT_TRUE(response.find("secret") == std::pmr::string::npos);
+        EXPECT_TRUE(response.find("public") == std::pmr::string::npos);
     }
     // Another method on an encoded spelling answers for the route, never the file.
     const auto encoded_post = exchange(io, server.endpoint(), "/%70rivate/file.txt", "POST");
     EXPECT_TRUE(has_status(encoded_post, "405"));
-    EXPECT_TRUE(encoded_post.find("secret") == std::string::npos);
+    EXPECT_TRUE(encoded_post.find("secret") == std::pmr::string::npos);
     EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/%70rivate/file.txt", "OPTIONS"), "204"));
 
     // The request path is decoded exactly once into the file name, and no
@@ -142,7 +144,7 @@ TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
     for (const std::string_view target : {"/my%2520report.txt", "/private%2Ffile.txt", "/private%5Cfile.txt"}) {
         const auto response = exchange(io, server.endpoint(), target);
         EXPECT_TRUE(has_status(response, "404"));
-        EXPECT_TRUE(response.find("secret") == std::string::npos);
+        EXPECT_TRUE(response.find("secret") == std::pmr::string::npos);
     }
 
     // RFC 9110 15.5.6 and 9.3.7: a document-root file exists for every method,
@@ -150,17 +152,17 @@ TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
     // missing file stays 404 and an unregistered token stays 501.
     const auto options = exchange(io, server.endpoint(), "/public.txt", "OPTIONS");
     EXPECT_TRUE(has_status(options, "204"));
-    EXPECT_TRUE(options.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(options.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::pmr::string::npos);
     const auto post = exchange(io, server.endpoint(), "/my%20report.txt", "POST");
     EXPECT_TRUE(has_status(post, "405"));
-    EXPECT_TRUE(post.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(post.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::pmr::string::npos);
     EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/missing.txt", "POST"), "404"));
     EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/missing.txt", "OPTIONS"), "404"));
     EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/public.txt", "BREW"), "501"));
     // A registered extension token is known here, so the file answers 405 too.
     const auto propfind = exchange(io, server.endpoint(), "/public.txt", "PROPFIND");
     EXPECT_TRUE(has_status(propfind, "405"));
-    EXPECT_TRUE(propfind.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(propfind.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::pmr::string::npos);
 
     // Percent-encoded document-root paths alongside a sibling method route on the same path pattern.
     const auto encoded_readme = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "GET");
@@ -171,10 +173,10 @@ TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
     EXPECT_TRUE(encoded_space.ends_with("hello-world-from-disk"));
     const auto encoded_options = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "OPTIONS");
     EXPECT_TRUE(has_status(encoded_options, "204"));
-    EXPECT_TRUE(encoded_options.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(encoded_options.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::pmr::string::npos);
     const auto delete_encoded = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "DELETE");
     EXPECT_TRUE(has_status(delete_encoded, "405"));
-    EXPECT_TRUE(delete_encoded.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(delete_encoded.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::pmr::string::npos);
     const auto literal_percent = exchange(io, server.endpoint(), "/a%2520b.txt", "GET");
     EXPECT_TRUE(has_status(literal_percent, "200"));
     EXPECT_TRUE(literal_percent.ends_with("literal-percent"));

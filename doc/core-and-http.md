@@ -124,6 +124,7 @@ pool.join();
 - **透明大页**：Linux 的 `x64-linux` 与 `x64-linux-musl` triplet 为 mimalloc 设置 `-DMI_NO_THP=ON`，由分配器初始化时关闭进程 THP；外部依赖构建须采用相同选项，不在 Ruvia 中重复调用 `prctl` 或覆盖 `allow_thp`。
 - **musl 构建**：`x64-linux-musl` triplet 另设 mimalloc 官方选项 `-DMI_LIBC_MUSL=ON`，由 mimalloc 选择适配 musl 的 TLS 模型与线程指针访问；外部 musl 依赖构建须采用相同选项。
 - **失败与检测**：分配失败抛 `std::bad_alloc`；sanitizer 构建使用系统分配器，不保留自建缓存。
+- **错误文本资源**：`error_code_text()` 与 `system_error_text()` 返回绑定 `process_resource()` 的 `std::pmr::string`；标准异常构造、`std::error_category::message()` 与第三方固定类型接口仍保留必要的 `std::string` 边界。
 
 非 Windows 构建启用 mimalloc 普通 `override`，在最终链接中保留静态库，对标准 `malloc` / `free` 与全局 `new` / `delete` 使用 mimalloc；不得叠加另一套全局 allocator replacement。Windows 保持原静态 CRT 与普通 mimalloc 依赖，仅通过显式 API 承载框架资源和协程帧，不替换宿主标准分配接口。两种接入都不替换 `std::pmr::get_default_resource()` 对象，也不改变显式 PMR 的优先级。独立 `ruvia::http` 不依赖 core 或 mimalloc，未显式指定 PMR 时仍遵循调用方的标准 PMR 默认资源。
 

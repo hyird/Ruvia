@@ -19,13 +19,13 @@ using ruvia::decode_url_component;
 using ruvia::has_url_encoding;
 using mode_type = ruvia::url_decode_mode;
 
-std::optional<std::string> url_decode(std::string_view in, ruvia::url_decode_mode mode) {
+std::optional<std::pmr::string> url_decode(std::string_view in, ruvia::url_decode_mode mode) {
     std::pmr::string storage;
     const auto decoded = ruvia::decode_url_component(in, storage, mode);
     if (!decoded.has_value()) {
         return std::nullopt;
     }
-    return std::string(*decoded);
+    return std::pmr::string(*decoded);
 }
 
 }  // namespace
@@ -35,18 +35,18 @@ std::optional<std::string> url_decode(std::string_view in, ruvia::url_decode_mod
 
 TEST(Ruvia, url_decode_percent) {
     using m_type = ruvia::url_decode_mode;
-    EXPECT_EQ(url_decode("hello", m_type::percent).value(), std::string("hello"));
-    EXPECT_EQ(url_decode("%41%42%43", m_type::percent).value(), std::string("ABC"));
-    EXPECT_EQ(url_decode("a%2Fb", m_type::percent).value(), std::string("a/b"));
-    EXPECT_EQ(url_decode("%00", m_type::percent).value(), std::string(1, '\0'));
+    EXPECT_EQ(url_decode("hello", m_type::percent).value(), std::pmr::string("hello"));
+    EXPECT_EQ(url_decode("%41%42%43", m_type::percent).value(), std::pmr::string("ABC"));
+    EXPECT_EQ(url_decode("a%2Fb", m_type::percent).value(), std::pmr::string("a/b"));
+    EXPECT_EQ(url_decode("%00", m_type::percent).value(), std::pmr::string(1, '\0'));
     // '+' is literal in percent mode
-    EXPECT_EQ(url_decode("a+b", m_type::percent).value(), std::string("a+b"));
+    EXPECT_EQ(url_decode("a+b", m_type::percent).value(), std::pmr::string("a+b"));
 }
 
 TEST(Ruvia, url_decode_form) {
     using m_type = ruvia::url_decode_mode;
-    EXPECT_EQ(url_decode("a+b", m_type::form).value(), std::string("a b"));
-    EXPECT_EQ(url_decode("a+b%20c", m_type::form).value(), std::string("a b c"));
+    EXPECT_EQ(url_decode("a+b", m_type::form).value(), std::pmr::string("a b"));
+    EXPECT_EQ(url_decode("a+b%20c", m_type::form).value(), std::pmr::string("a b c"));
 }
 
 TEST(Ruvia, percent_byte_decoding_rejects_out_of_range_and_truncated_triplets) {
@@ -66,7 +66,7 @@ TEST(Ruvia, percent_byte_append_allocation_failure_preserves_output) {
             std::pmr::string output(&resource);
             output.reserve(128);
             output.assign(output.capacity() - spare, 'x');
-            const std::string original(output);
+            const std::pmr::string original(output);
             resource.fail_after(0);
             EXPECT_THROW(ruvia::http_append_percent_byte(output, 0xaf), std::bad_alloc);
             EXPECT_EQ(output, std::string_view(original));
@@ -120,8 +120,8 @@ TEST(Ruvia, uri_reference_encoding_borrows_or_writes_storage) {
 }
 
 TEST(Ruvia, uri_reference_encoding_allocation_failure_preserves_output_and_allows_retry) {
-    const std::string input = "prefix/" + std::string(1024, ' ') + "%2F?x=%yy#first#second";
-    std::string expected = "prefix/";
+    const std::pmr::string input = "prefix/" + std::pmr::string(1024, ' ') + "%2F?x=%yy#first#second";
+    std::pmr::string expected = "prefix/";
     for (std::size_t index = 0; index != 1024; ++index) {
         expected += "%20";
     }
@@ -140,7 +140,7 @@ TEST(Ruvia, uri_reference_encoding_allocation_failure_preserves_output_and_allow
                 } else if (state == 2) {
                     output.assign(input);
                 }
-                const std::string original(output);
+                const std::pmr::string original(output);
                 const std::string_view reference = state == 2 ? std::string_view(output) : std::string_view(input);
                 resource.fail_after_stl_operation(budget);
                 try {
@@ -190,16 +190,16 @@ TEST(Ruvia, url_decode_invalid) {
 
 TEST(Ruvia, url_decode_form_keeps_lone_percent_literally) {
     using m_type = ruvia::url_decode_mode;
-    EXPECT_EQ(url_decode("100%", m_type::form).value_or("<none>"), std::string("100%"));
-    EXPECT_EQ(url_decode("%zz+%41", m_type::form).value_or("<none>"), std::string("%zz A"));
-    EXPECT_EQ(url_decode("%4%41", m_type::form).value_or("<none>"), std::string("%4A"));
+    EXPECT_EQ(url_decode("100%", m_type::form).value_or("<none>"), std::pmr::string("100%"));
+    EXPECT_EQ(url_decode("%zz+%41", m_type::form).value_or("<none>"), std::pmr::string("%zz A"));
+    EXPECT_EQ(url_decode("%4%41", m_type::form).value_or("<none>"), std::pmr::string("%4A"));
 }
 
 TEST(Ruvia, url_decode_all_bytes_and_malformed_suffix) {
     using m_type = ruvia::url_decode_mode;
     constexpr std::string_view hex = "0123456789aBcDeF";
-    std::string encoded;
-    std::string expected;
+    std::pmr::string encoded;
+    std::pmr::string expected;
     for (unsigned int byte = 0; byte < 256; ++byte) {
         encoded.push_back('%');
         encoded.push_back(hex[byte >> 4]);
@@ -213,12 +213,12 @@ TEST(Ruvia, url_decode_all_bytes_and_malformed_suffix) {
             EXPECT_EQ(*result_value, expected);
         }
         for (const std::string_view suffix : {"%", "%0", "%xz"}) {
-            const auto suffixed = url_decode(encoded + std::string(suffix), mode);
+            const auto suffixed = url_decode(encoded + std::pmr::string(suffix), mode);
             if (mode == m_type::percent) {
                 EXPECT_TRUE(!suffixed.has_value());
             } else {
                 // WHATWG percent-decode keeps a '%' that starts no valid escape.
-                EXPECT_TRUE(suffixed.has_value() && *suffixed == expected + std::string(suffix));
+                EXPECT_TRUE(suffixed.has_value() && *suffixed == expected + std::pmr::string(suffix));
             }
         }
     }
@@ -258,15 +258,15 @@ TEST(Ruvia, url_uri_paths_equivalent_and_ordered_by_canonical_form) {
 }
 
 TEST(Ruvia, url_visit_pairs_count) {
-    std::vector<std::pair<std::string, std::string>> pairs;
+    std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> pairs;
     (void)ruvia::visit_url_encoded_pairs(
         "x=1&y=2&z=3", [&](std::string_view n, std::string_view v) {
-            pairs.emplace_back(std::string(n), std::string(v));
+            pairs.emplace_back(std::pmr::string(n), std::pmr::string(v));
         });
     EXPECT_EQ(pairs.size(), std::size_t(3));
     if (pairs.size() == 3) {
-        EXPECT_EQ(pairs[0].first, std::string("x"));
-        EXPECT_EQ(pairs[2].second, std::string("3"));
+        EXPECT_EQ(pairs[0].first, std::pmr::string("x"));
+        EXPECT_EQ(pairs[2].second, std::pmr::string("3"));
     }
 }
 
@@ -281,21 +281,21 @@ TEST(Ruvia, url_visit_pairs_stops_early) {
 }
 
 TEST(Ruvia, url_visit_pairs_skips_empty_segments) {
-    std::vector<std::pair<std::string, std::string>> pairs;
+    std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> pairs;
     // Leading, doubled, and trailing '&' produce empty segments that must NOT yield ("","") pairs.
     (void)ruvia::visit_url_encoded_pairs(
         "&a=1&&b=2&", [&](std::string_view n, std::string_view v) {
-            pairs.emplace_back(std::string(n), std::string(v));
+            pairs.emplace_back(std::pmr::string(n), std::pmr::string(v));
         });
     EXPECT_EQ(pairs.size(), std::size_t(2));
     if (pairs.size() == 2) {
-        EXPECT_EQ(pairs[0].first, std::string("a"));
-        EXPECT_EQ(pairs[1].first, std::string("b"));
+        EXPECT_EQ(pairs[0].first, std::pmr::string("a"));
+        EXPECT_EQ(pairs[1].first, std::pmr::string("b"));
     }
     // A key with an empty value ("k=") is still a real field and must be kept.
-    std::vector<std::pair<std::string, std::string>> kept;
+    std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> kept;
     (void)ruvia::visit_url_encoded_pairs("k=&=v", [&](std::string_view n, std::string_view v) {
-        kept.emplace_back(std::string(n), std::string(v));
+        kept.emplace_back(std::pmr::string(n), std::pmr::string(v));
     });
     EXPECT_EQ(kept.size(), std::size_t(2));  // "k=" (name k, empty value) and "=v" (empty name, value v)
 }
@@ -313,7 +313,7 @@ TEST(Ruvia, has_url_encoding_detection) {
 }
 
 TEST(Ruvia, has_url_encoding_handles_binary_components) {
-    std::string value(129, 'a');
+    std::pmr::string value(129, 'a');
     for (std::size_t position = 0; position < value.size(); ++position) {
         for (unsigned int byte = 0; byte < 256; ++byte) {
             value[position] = static_cast<char>(byte);
@@ -325,7 +325,7 @@ TEST(Ruvia, has_url_encoding_handles_binary_components) {
 }
 
 TEST(Ruvia, has_url_encoding_respects_component_bounds) {
-    const std::string storage = "%+" + std::string(129, 'a') + "+%";
+    const std::pmr::string storage = "%+" + std::pmr::string(129, 'a') + "+%";
     const auto value = std::string_view(storage).substr(2, 129);
     for (const auto mode : {mode_type::percent, mode_type::form}) {
         EXPECT_TRUE(!has_url_encoding(value, mode));

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
@@ -147,7 +149,7 @@ struct server_config final {
 struct trusted_proxy_config final {
     // CIDR lengths count bits in the literal's address family. For example,
     // 127.0.0.0/8 and ::ffff:127.0.0.0/104 describe the same mapped network.
-    std::vector<std::string> cidrs_{};
+    std::pmr::vector<std::pmr::string> cidrs_{process_resource()};
     // Enable only when every trusted proxy sanitizes and appends matching
     // X-Forwarded-For / X-Forwarded-Proto elements.
     bool trust_x_forwarded_proto_{false};
@@ -261,7 +263,7 @@ enum class cors_request_headers_mode : std::uint8_t {
 struct cors_request_headers_config final {
     cors_request_headers_mode mode_{cors_request_headers_mode::reflect};
     // Required in fixed mode and empty in reflect mode.
-    std::vector<std::string> names_{};
+    std::pmr::vector<std::pmr::string> names_{process_resource()};
 };
 
 // CORS metadata does not establish HTTP message framing. Invalid origin,
@@ -271,7 +273,7 @@ struct cors_request_headers_config final {
 struct cors_config final {
     cors_origin_config origin_{};
     cors_request_headers_config request_headers_{};
-    std::vector<std::string> expose_headers_{};
+    std::pmr::vector<std::pmr::string> expose_headers_{process_resource()};
     std::optional<std::chrono::seconds> max_age_{};
 };
 

@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 
 #include "memory_resource_fixture.h"
@@ -45,7 +46,7 @@ TEST(Ruvia, ip_address_parsing_returns_long_input_pmr_storage) {
         ruvia::test::default_resource_guard scope(resource);
         // Only a lexically plausible literal reaches the platform parser;
         // temporary storage uses process_resource() rather than the global default.
-        return ruvia::parse_ip_address("fe80::1%" + std::string(1024, 'x'));
+        return ruvia::parse_ip_address("fe80::1%" + std::pmr::string(1024, 'x', ruvia::process_resource()));
     }();
 
     // An unknown zone name is a platform decision; the storage must round-trip either way.

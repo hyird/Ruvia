@@ -28,6 +28,9 @@
 
 #include <gtest/gtest.h>
 
+#include <memory_resource>
+
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/web/context.h"
@@ -39,13 +42,13 @@
 
 namespace static_file_test {
 
-[[nodiscard]] std::string read_file_response_body(const ruvia::http_response_file_view& file) {
+[[nodiscard]] std::pmr::string read_file_response_body(const ruvia::http_response_file_view& file) {
     std::ifstream input(file.to_path(), std::ios::binary);
     if (!input) {
         throw std::runtime_error("file response path could not be opened");
     }
     input.seekg(static_cast<std::streamoff>(file.offset()));
-    std::string body;
+    std::pmr::string body{ruvia::process_resource()};
     body.resize(static_cast<std::size_t>(file.length()));
     input.read(body.data(), static_cast<std::streamsize>(body.size()));
     if (static_cast<std::size_t>(input.gcount()) != body.size()) {
@@ -77,9 +80,9 @@ public:
     }
 
 private:
-    std::string method_{"GET"};
-    std::string target_{"/"};
-    std::vector<std::pair<std::string, std::string>> headers_;
+    std::pmr::string method_{"GET", ruvia::process_resource()};
+    std::pmr::string target_{"/", ruvia::process_resource()};
+    std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> headers_{ruvia::process_resource()};
 };
 
 template <typename callback_type>
@@ -191,7 +194,7 @@ TEST(Ruvia, static_root_serves_utf8_file_and_directory_urls) {
     };
     for (const auto& item : cases) {
         static_file_test_request request;
-        const std::string target = "/" + std::string(item.relative_url_);
+        const std::pmr::string target = "/" + std::pmr::string(item.relative_url_, ruvia::process_resource());
         request.set_target(target);
         with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
             const auto response = co_await context_value.static_file(root, {.relative_path_ = item.relative_path_});
@@ -243,14 +246,14 @@ TEST(Ruvia, static_root_serves_every_default_file_type_with_its_media_type) {
         {"xsl", "text/xml; charset=utf-8"},
     };
     for (const auto& [extension, content_type] : cases) {
-        std::ofstream(dir / ("file." + std::string(extension)), std::ios::binary) << "body";
+        std::ofstream(dir / ("file." + std::pmr::string(extension, ruvia::process_resource())), std::ios::binary) << "body";
     }
 
     ruvia::static_root root(dir, {});
     for (const auto& [extension, content_type] : cases) {
-        const auto relative_path = "file." + std::string(extension);
+        const auto relative_path = "file." + std::pmr::string(extension, ruvia::process_resource());
         static_file_test_request request;
-        request.set_target("/" + relative_path);
+        request.set_target(std::pmr::string("/", ruvia::process_resource()) + relative_path);
         with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
             const auto response = co_await context_value.static_file(root, {.relative_path_ = relative_path});
             EXPECT_EQ(response.status(), ruvia::http_status::ok);
@@ -345,7 +348,7 @@ TEST(Ruvia, static_file_response_owns_path_after_handler_local_root_is_destroyed
         const auto file = response->file_body();
         EXPECT_TRUE(file.has_value());
         if (file.has_value()) {
-            EXPECT_EQ(read_file_response_body(*file), std::string("owned-static-path"));
+            EXPECT_EQ(read_file_response_body(*file), std::pmr::string("owned-static-path", ruvia::process_resource()));
         }
     });
 }
@@ -371,7 +374,7 @@ TEST(Ruvia, static_file_type_policy_has_closed_exact_alternatives) {
         try {
             ruvia::static_root rejected_root(dir,
                 {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only,
-                     .extensions_ = {std::string(invalid)}}});
+                     .extensions_ = {std::pmr::string(invalid, ruvia::process_resource())}}});
         } catch (const std::invalid_argument&) {
             invalid_type_threw = true;
         }
@@ -407,7 +410,7 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
     const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
-        const std::string content(100, 'a');
+        const std::pmr::string content(100, 'a', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     {
@@ -425,12 +428,12 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
         if (!range.empty()) {
             request.add_header(http_header_view{"Range", range});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::pmr::string>> {
             const auto response =
                 co_await context_value.static_file(root, {.relative_path_ = path, .content_type_ = "text/plain"});
             // Copy out before the request arena unwinds.
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("Content-Range").value_or("")));
+            co_return std::pair<ruvia::http_status_code, std::pmr::string>(
+                response.status(), std::pmr::string(response.header("Content-Range").value_or(""), ruvia::process_resource()));
         });
     };
     const auto serve_file = [&serve_method](std::string_view path, std::string_view range) {
@@ -442,7 +445,7 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
     // A valid single range -> 206 with the byte range echoed.
     const auto ok = serve("bytes=0-4");
     EXPECT_EQ(ok.first, ruvia::http_status::partial_content);
-    EXPECT_EQ(ok.second, std::string("bytes 0-4/100"));
+    EXPECT_EQ(ok.second, std::pmr::string("bytes 0-4/100", ruvia::process_resource()));
 
     // Multiple ranges produce a multipart representation without a top-level Content-Range.
     const auto multi = serve("bytes=0-9,20-29");
@@ -452,7 +455,7 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
     // A wholly unsatisfiable range -> 416 with "bytes */size".
     const auto bad = serve("bytes=1000-2000");
     EXPECT_EQ(bad.first, ruvia::http_status::range_not_satisfiable);
-    EXPECT_EQ(bad.second, std::string("bytes */100"));
+    EXPECT_EQ(bad.second, std::pmr::string("bytes */100", ruvia::process_resource()));
 
     // An unknown range unit MUST be ignored (RFC 9110 §14.2) -> full 200, not 416.
     const auto unknown_unit = serve("items=0-9");
@@ -465,7 +468,7 @@ TEST(Ruvia, static_file_range_serving_status_and_content_range) {
     // Range units are case-insensitive (RFC 9110 §14.1); this is still a 206.
     const auto case_insensitive_unit = serve("Bytes=5-9");
     EXPECT_EQ(case_insensitive_unit.first, ruvia::http_status::partial_content);
-    EXPECT_EQ(case_insensitive_unit.second, std::string("bytes 5-9/100"));
+    EXPECT_EQ(case_insensitive_unit.second, std::pmr::string("bytes 5-9/100", ruvia::process_resource()));
 
     // RFC 9110 §14.2 defines Range handling only for GET. A HEAD request
     // carrying the same field must describe the full representation with 200,
@@ -490,7 +493,7 @@ TEST(Ruvia, static_file_takes_decoded_path_and_stays_traversal_safe) {
     const auto& dir = directory.path();
     {
         std::ofstream out(dir / "my report.txt", std::ios::binary | std::ios::trunc);
-        const std::string content(20, 'z');
+        const std::pmr::string content(20, 'z', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     fs::create_directories(dir / "sub");
@@ -554,7 +557,7 @@ TEST(Ruvia, static_file_declares_vary_accept_encoding_but_context_file_does_not)
     const auto file_path = dir / "app.js";
     {
         std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
-        const std::string content(50, 'x');
+        const std::pmr::string content(50, 'x', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
@@ -605,9 +608,9 @@ TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
         out << "borrowed";
     }
     const auto utf8 = file_path.u8string();
-    const std::string text(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+    const std::pmr::string text(reinterpret_cast<const char*>(utf8.data()), utf8.size(), ruvia::process_resource());
     // A view that is not NUL-terminated: the bytes after it must not be read.
-    const std::string padded = text + "-not-part-of-the-path";
+    const std::pmr::string padded = std::pmr::string(text, ruvia::process_resource()) + "-not-part-of-the-path";
 
     static_file_test_request request;
     request.set_method("GET");
@@ -647,12 +650,12 @@ TEST(Ruvia, context_file_serves_borrowed_utf8_text_paths) {
         EXPECT_TRUE(matches_borrowed_body(from_path));
 
         // Text that cannot name the file is a miss, not a truncated lookup.
-        const std::string with_nul = text + std::string(1, '\0') + "x";
+        const std::pmr::string with_nul = text + std::pmr::string(1, '\0', ruvia::process_resource()) + "x";
         EXPECT_EQ(co_await status_of(with_nul), ruvia::http_status::not_found);
         EXPECT_EQ(co_await status_of(""), ruvia::http_status::not_found);
         EXPECT_EQ(co_await status_of(nullptr), ruvia::http_status::not_found);
         EXPECT_EQ(co_await status_of(ruvia::borrowed_file_path{}), ruvia::http_status::not_found);
-        const std::string invalid_utf8 = text + "\xff";
+        const std::pmr::string invalid_utf8 = std::pmr::string(text, ruvia::process_resource()) + "\xff";
         EXPECT_EQ(co_await status_of(invalid_utf8), ruvia::http_status::not_found);
     });
 }
@@ -689,11 +692,11 @@ TEST(Ruvia, file_and_static_file_own_their_options_before_returning) {
         {
             auto path = dir / "data.txt";
             const auto utf8 = path.u8string();
-            std::string text(reinterpret_cast<const char*>(utf8.data()), utf8.size());
-            std::string path_type("text/x-owned-path");
-            std::string text_type("text/x-owned-text");
-            std::string relative("data.txt");
-            std::string root_type("text/x-owned-root");
+            std::pmr::string text(reinterpret_cast<const char*>(utf8.data()), utf8.size(), ruvia::process_resource());
+            std::pmr::string path_type("text/x-owned-path", ruvia::process_resource());
+            std::pmr::string text_type("text/x-owned-text", ruvia::process_resource());
+            std::pmr::string relative("data.txt", ruvia::process_resource());
+            std::pmr::string root_type("text/x-owned-root", ruvia::process_resource());
             from_path.emplace(context_value.file({.path_ = path, .content_type_ = path_type}));
             from_text.emplace(context_value.file({.path_ = text, .content_type_ = text_type}));
             from_root.emplace(
@@ -764,7 +767,7 @@ TEST(Ruvia, static_file_if_range_dates_do_not_authorize_partial_responses) {
     const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
-        const std::string content(100, 'a');
+        const std::pmr::string content(100, 'a', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
@@ -780,11 +783,11 @@ TEST(Ruvia, static_file_if_range_dates_do_not_authorize_partial_responses) {
         if (if_range.has_value()) {
             request.add_header(http_header_view{"If-Range", *if_range});
         }
-        return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+        return with_static_context(request, [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::pmr::string>> {
             const auto response =
                 co_await ctx.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("Last-Modified").value_or("")));
+            co_return std::pair<ruvia::http_status_code, std::pmr::string>(
+                response.status(), std::pmr::string(response.header("Last-Modified").value_or(""), ruvia::process_resource()));
         });
     };
 
@@ -820,13 +823,13 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
     // The bytes a response carries: in memory, or the file range it names.
     const auto served_bytes = [](const ruvia::http_response& response) {
         const auto file = response.file_body();
-        return file ? static_file_test::read_file_response_body(*file) : std::string(response.body_bytes());
+        return file ? static_file_test::read_file_response_body(*file) : std::pmr::string(response.body_bytes(), ruvia::process_resource());
     };
     struct observation {
         ruvia::http_status_code status{ruvia::http_status::internal_server_error};
-        std::string last_modified;
-        std::string etag;
-        std::string bytes;
+        std::pmr::string last_modified{ruvia::process_resource()};
+        std::pmr::string etag{ruvia::process_resource()};
+        std::pmr::string bytes{ruvia::process_resource()};
     };
     for (const bool use_static : {false, true}) {
         std::optional<ruvia::static_root> root;
@@ -845,8 +848,8 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
                                           : co_await context.file({.path_ = path});
                 result = observation{
                     response.status(),
-                    std::string(response.header("Last-Modified").value_or("")),
-                    std::string(response.header("ETag").value_or("")),
+                    std::pmr::string(response.header("Last-Modified").value_or(""), ruvia::process_resource()),
+                    std::pmr::string(response.header("ETag").value_or(""), ruvia::process_resource()),
                     served_bytes(response),
                 };
                 co_return;
@@ -870,11 +873,11 @@ TEST(Ruvia, file_if_range_same_second_updates_require_an_etag) {
         EXPECT_TRUE(before.etag != after.etag);
         const auto date_range = serve(true, before.last_modified);
         EXPECT_EQ(date_range.status, ruvia::http_status::ok);
-        EXPECT_EQ(date_range.bytes, std::string("0123456789"));
+        EXPECT_EQ(date_range.bytes, std::pmr::string("0123456789", ruvia::process_resource()));
         EXPECT_EQ(serve(true, before.etag).status, ruvia::http_status::ok);
         const auto etag_range = serve(true, after.etag);
         EXPECT_EQ(etag_range.status, ruvia::http_status::partial_content);
-        EXPECT_EQ(etag_range.bytes, std::string("45678"));
+        EXPECT_EQ(etag_range.bytes, std::pmr::string("45678", ruvia::process_resource()));
     }
 }
 
@@ -892,13 +895,13 @@ TEST(Ruvia, file_partial_responses_to_if_range_omit_repeated_representation_fiel
     }
     struct observation {
         ruvia::http_status_code status{ruvia::http_status::internal_server_error};
-        std::optional<std::string> content_type;
-        std::optional<std::string> last_modified;
-        std::optional<std::string> etag;
-        std::optional<std::string> content_range;
+        std::optional<std::pmr::string> content_type;
+        std::optional<std::pmr::string> last_modified;
+        std::optional<std::pmr::string> etag;
+        std::optional<std::pmr::string> content_range;
     };
     const auto copy = [](std::optional<std::string_view> value) {
-        return value ? std::optional<std::string>(std::string(*value)) : std::nullopt;
+        return value ? std::optional<std::pmr::string>(std::pmr::string(*value, ruvia::process_resource())) : std::nullopt;
     };
     std::optional<ruvia::static_root> root;
     root.emplace(dir);
@@ -925,20 +928,20 @@ TEST(Ruvia, file_partial_responses_to_if_range_omit_repeated_representation_fiel
         EXPECT_TRUE(plain.content_type.has_value());
         EXPECT_TRUE(plain.last_modified.has_value());
         EXPECT_TRUE(plain.etag.has_value());
-        const auto etag = plain.etag.value_or("");
+        const auto etag = plain.etag ? std::string_view(*plain.etag) : std::string_view{};
 
         const auto conditional = serve("bytes=4-8", etag);
         EXPECT_EQ(conditional.status, ruvia::http_status::partial_content);
         EXPECT_TRUE(!conditional.content_type.has_value());
         EXPECT_TRUE(!conditional.last_modified.has_value());
-        EXPECT_TRUE(conditional.etag == std::optional<std::string>(etag));
-        EXPECT_TRUE(conditional.content_range == std::optional<std::string>("bytes 4-8/10"));
+        EXPECT_TRUE(conditional.etag == std::optional<std::string_view>(etag));
+        EXPECT_TRUE(conditional.content_range == std::optional<std::pmr::string>(std::pmr::string("bytes 4-8/10", ruvia::process_resource())));
 
         const auto multipart = serve("bytes=0-1,4-5", etag);
         EXPECT_EQ(multipart.status, ruvia::http_status::partial_content);
-        EXPECT_TRUE(multipart.content_type.value_or("").starts_with("multipart/byteranges; boundary="));
+        EXPECT_TRUE(multipart.content_type.has_value() && multipart.content_type->starts_with("multipart/byteranges; boundary="));
         EXPECT_TRUE(!multipart.last_modified.has_value());
-        EXPECT_TRUE(multipart.etag == std::optional<std::string>(etag));
+        EXPECT_TRUE(multipart.etag == std::optional<std::string_view>(etag));
     }
     root.reset();
 }
@@ -970,11 +973,11 @@ TEST(Ruvia, static_file_historical_last_modified_supports_date_preconditions) {
         if (since) {
             request.add_header(ruvia::http_header_view{"If-Modified-Since", *since});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::pmr::string>> {
             const auto response = snapshot
                                       ? co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"})
                                       : co_await context_value.file({.path_ = path, .content_type_ = "text/plain"});
-            co_return std::pair(response.status(), std::string(response.header("Last-Modified").value_or("")));
+            co_return std::pair(response.status(), std::pmr::string(response.header("Last-Modified").value_or(""), ruvia::process_resource()));
         });
     };
     for (const auto snapshot : {false, true}) {
@@ -1019,11 +1022,11 @@ TEST(Ruvia, static_file_clamps_future_last_modified_and_rejects_it_for_if_range)
         if (if_range.has_value()) {
             request.add_header(http_header_view{"If-Range", *if_range});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::pmr::string>> {
             const auto response =
                 co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("Last-Modified").value_or("")));
+            co_return std::pair<ruvia::http_status_code, std::pmr::string>(
+                response.status(), std::pmr::string(response.header("Last-Modified").value_or(""), ruvia::process_resource()));
         });
     };
 
@@ -1054,7 +1057,7 @@ TEST(Ruvia, static_file_without_response_validators_still_enforces_preconditions
     const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
-        const std::string content(100, 'a');
+        const std::pmr::string content(100, 'a', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
@@ -1152,7 +1155,7 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
     const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
-        const std::string content(100, 'a');
+        const std::pmr::string content(100, 'a', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
@@ -1171,9 +1174,9 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
         for (const auto& header : headers) {
             request.add_header(http_header_view{header.name_, header.value_});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::pmr::string>> {
             ruvia::http_status_code status = ruvia::http_status::internal_server_error;
-            std::string etag;
+            std::pmr::string etag{ruvia::process_resource()};
             try {
                 const auto response =
                     co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
@@ -1182,7 +1185,7 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
             } catch (const ruvia::http_error& error) {
                 status = error.info().status();
             }
-            co_return std::pair<ruvia::http_status_code, std::string>(status, std::move(etag));
+            co_return std::pair<ruvia::http_status_code, std::pmr::string>(status, std::move(etag));
         });
     };
     const auto serve = [&serve_method](std::initializer_list<header> headers) {
@@ -1192,7 +1195,7 @@ TEST(Ruvia, static_file_if_match_takes_precedence_over_if_unmodified_since) {
     // Discover the current strong ETag with a bare request.
     const auto base = serve({});
     EXPECT_EQ(base.first, ruvia::http_status::ok);
-    const std::string etag = base.second;
+    const std::pmr::string etag(base.second, ruvia::process_resource());
     EXPECT_TRUE(!etag.empty());
     // A compact strong validator: a quoted 64-bit digest, not the raw size,
     // timestamp and volume/file index it is derived from.
@@ -1286,7 +1289,7 @@ TEST(Ruvia, static_file_conditional_request_serving) {
     const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
-        const std::string content(100, 'a');
+        const std::pmr::string content(100, 'a', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
@@ -1301,11 +1304,11 @@ TEST(Ruvia, static_file_conditional_request_serving) {
         if (!header_name.empty()) {
             request.add_header(http_header_view{header_name, header_value});
         }
-        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+        return with_static_context(request, [&](ruvia::context& context_value) -> ruvia::task<std::pair<ruvia::http_status_code, std::pmr::string>> {
             const auto response =
                 co_await context_value.static_file(root, {.relative_path_ = "data.txt", .content_type_ = "text/plain"});
-            co_return std::pair<ruvia::http_status_code, std::string>(
-                response.status(), std::string(response.header("ETag").value_or("")));
+            co_return std::pair<ruvia::http_status_code, std::pmr::string>(
+                response.status(), std::pmr::string(response.header("ETag").value_or(""), ruvia::process_resource()));
         });
     };
 
@@ -1313,7 +1316,7 @@ TEST(Ruvia, static_file_conditional_request_serving) {
     const auto plain = serve("", "");
     EXPECT_EQ(plain.first, ruvia::http_status::ok);
     EXPECT_TRUE(!plain.second.empty());
-    const std::string etag = plain.second;
+    const std::pmr::string etag(plain.second, ruvia::process_resource());
 
     // If-None-Match with the current ETag -> 304; a stale one falls through to 200.
     EXPECT_EQ(
@@ -1342,7 +1345,7 @@ TEST(Ruvia, static_file_conditional_request_serving) {
     // A comma inside an opaque tag is data, not a list separator. This malformed
     // value closes that tag immediately before the current ETag and must not let
     // the apparent suffix satisfy the condition.
-    const std::string malformed_list = std::string("\"stale, ") + etag;
+    const std::pmr::string malformed_list = std::pmr::string("\"stale, ", ruvia::process_resource()) + etag;
     EXPECT_EQ(
         serve("If-None-Match", malformed_list)
             .first,
@@ -1488,7 +1491,7 @@ TEST(Ruvia, static_file_if_modified_since_serving) {
     const auto& dir = directory.path();
     {
         std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
-        const std::string content(50, 'a');
+        const std::pmr::string content(50, 'a', ruvia::process_resource());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     static_root_options options;
@@ -1588,12 +1591,12 @@ TEST(Ruvia, static_file_directory_indexes_survive_path_normalization_storage_gro
             SCOPED_TRACE(path);
             static_file_test_request request;
             const auto response = with_static_context(request,
-                [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::string>> {
+                [&](ruvia::context& ctx) -> ruvia::task<std::pair<ruvia::http_status_code, std::pmr::string>> {
                     try {
                         const auto result = co_await ctx.static_file(root, {.relative_path_ = path});
-                        co_return std::pair(result.status(), std::string(result.body_bytes()));
+                        co_return std::pair(result.status(), std::pmr::string(result.body_bytes(), ruvia::process_resource()));
                     } catch (const ruvia::http_error& error) {
-                        co_return std::pair(error.info().status(), std::string{});
+                        co_return std::pair(error.info().status(), std::pmr::string{ruvia::process_resource()});
                     }
                 });
             EXPECT_EQ(response.first, ruvia::http_status::ok);

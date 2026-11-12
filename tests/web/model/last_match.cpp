@@ -1,5 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <memory_resource>
+#include <string>
+#include <string_view>
+
+#include "ruvia/core/memory/pmr_object.h"
+
 #include "model_field_fixture.h"
 #include "test_exceptions.h"
 
@@ -27,7 +33,7 @@ TEST(Ruvia, model_public_parser_accepts_valid_strings_and_rejects_invalid_input)
 
 TEST(Ruvia, request_and_response_models_support_nested_arrays_and_optional_fields) {
     std::pmr::monotonic_buffer_resource resource;
-    std::string input = R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})";
+    std::pmr::string input(R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})", ruvia::process_resource());
     const auto parsed_value = ruvia::from_json<nested_model_envelope>(input, {.resource_ = &resource});
     input.assign(input.size(), 'x');
 
@@ -53,6 +59,6 @@ TEST(Ruvia, request_and_response_models_support_nested_arrays_and_optional_field
         .set<"label">("two");
     response.ensure<"tags">().emplace_back("a", ruvia::model_options{.resource_ = &resource});
     response.ensure<"tags">().emplace_back("b", ruvia::model_options{.resource_ = &resource});
-    EXPECT_EQ(std::string(ruvia::to_json(response, {.resource_ = &resource})),
-        std::string(R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})"));
+    EXPECT_EQ(std::string_view(ruvia::to_json(response, {.resource_ = &resource})),
+        std::string_view(R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})"));
 }

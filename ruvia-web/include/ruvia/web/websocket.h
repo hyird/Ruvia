@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -43,7 +44,7 @@ struct websocket_lifecycle_options final {
 
 struct websocket_route_config final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
-    std::vector<std::string> subprotocols_{};
+    std::pmr::vector<std::pmr::string> subprotocols_{process_resource()};
     // By default a client offering none of subprotocols_ is still accepted,
     // with no Sec-WebSocket-Protocol response field (RFC 6455 4.2.2). When
     // set, such an upgrade is refused with 400 before any middleware or

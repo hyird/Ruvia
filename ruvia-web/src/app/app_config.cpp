@@ -44,7 +44,7 @@ application& application::load_dotenv(const std::filesystem::path& path, dotenv_
 }
 
 namespace {
-void cleanse_password(std::string& password) noexcept {
+void cleanse_password(std::pmr::string& password) noexcept {
     OPENSSL_cleanse(password.data(), password.size());
     password.clear();
 }

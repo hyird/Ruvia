@@ -55,31 +55,31 @@ std::uint32_t read_u32(std::string_view bytes) {
 
 struct wire_frame final {
     ruvia::http2_frame_header header_;
-    std::string payload_;
+    std::pmr::string payload_;
 
     [[nodiscard]] bool is(ruvia::http2_frame_type type) const noexcept {
         return header_.type_ == static_cast<std::uint8_t>(type);
     }
 };
 
-std::vector<wire_frame> parse_frames(std::string_view output) {
-    std::vector<wire_frame> frames;
+std::pmr::vector<wire_frame> parse_frames(std::string_view output) {
+    std::pmr::vector<wire_frame> frames;
     while (!output.empty()) {
         const auto header = ruvia::parse_http2_frame_header(std::span(output.data(), output.size()));
         if (!header || output.size() < ruvia::http2_frame_header_bytes + header->length_) {
             throw std::logic_error("invalid HTTP/2 test output");
         }
-        frames.push_back({*header, std::string(output.substr(ruvia::http2_frame_header_bytes, header->length_))});
+        frames.push_back({*header, std::pmr::string(output.substr(ruvia::http2_frame_header_bytes, header->length_))});
         output.remove_prefix(ruvia::http2_frame_header_bytes + header->length_);
     }
     return frames;
 }
 
-std::vector<wire_frame> take_frames(ruvia::http2_connection& connection) {
+std::pmr::vector<wire_frame> take_frames(ruvia::http2_connection& connection) {
     return parse_frames(ruvia::test::drain_output(connection));
 }
 
-bool has_frame(const std::vector<wire_frame>& frames, ruvia::http2_frame_type type, std::uint32_t stream_id) {
+bool has_frame(const std::pmr::vector<wire_frame>& frames, ruvia::http2_frame_type type, std::uint32_t stream_id) {
     for (const auto& frame : frames) {
         if (frame.is(type) && frame.header_.stream_id_ == stream_id) {
             return true;
@@ -90,8 +90,8 @@ bool has_frame(const std::vector<wire_frame>& frames, ruvia::http2_frame_type ty
 
 // Last stream ids of the NO_ERROR GOAWAY frames; any other error code is
 // reported as 0xffffffff so a comparison with expected ids fails.
-std::vector<std::uint32_t> goaway_last_stream_ids(const std::vector<wire_frame>& frames) {
-    std::vector<std::uint32_t> ids;
+std::pmr::vector<std::uint32_t> goaway_last_stream_ids(const std::pmr::vector<wire_frame>& frames) {
+    std::pmr::vector<std::uint32_t> ids;
     for (const auto& frame : frames) {
         if (frame.is(ruvia::http2_frame_type::goaway)) {
             const bool no_error = read_u32(std::string_view(frame.payload_).substr(4)) == 0;
@@ -169,8 +169,8 @@ TEST(Ruvia, http2_connect_data_before_accept_is_held_and_delivered_as_tunnel_dat
         const std::string_view capsule("\x00\x05\x00ping", 7);
         append_frame(wire, ruvia::http2_frame_type::data, 0, 1, capsule);
         // Enough held bytes to cross the half-window WINDOW_UPDATE threshold.
-        const std::string bulk(16384, 'e');
-        std::string expected(capsule);
+        const std::pmr::string bulk(16384, 'e');
+        std::pmr::string expected(capsule);
         for (int frame = 0; frame != 33; ++frame) {
             append_frame(wire, ruvia::http2_frame_type::data, 0, 1, bulk);
             expected.append(bulk);
@@ -179,7 +179,7 @@ TEST(Ruvia, http2_connect_data_before_accept_is_held_and_delivered_as_tunnel_dat
 
         std::optional<ruvia::http2_request_head_event> head;
         std::optional<ruvia::http2_received_data_credit> credit;
-        std::string received;
+        std::pmr::string received;
         while (auto event = server.next_event()) {
             if (auto* request = event->request_head()) {
                 EXPECT_TRUE(request->snapshot().connect_pending_);
@@ -241,7 +241,7 @@ TEST(Ruvia, http2_connect_data_with_end_stream_before_accept_ends_tunnel_after_a
     append_frame(wire, ruvia::http2_frame_type::data, end_stream_flag, 1, "hello");
     EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
     std::optional<ruvia::http2_request_head_event> head;
-    std::string received;
+    std::pmr::string received;
     while (auto event = server.next_event()) {
         if (auto* request = event->request_head()) {
             head.emplace(std::move(*request));
@@ -284,7 +284,7 @@ TEST(Ruvia, http2_connect_data_after_rejection_is_discarded_with_credit) {
     (void)take_frames(server);
 
     std::pmr::string late(&resource);
-    const std::string bulk(16384, 'l');
+    const std::pmr::string bulk(16384, 'l');
     for (int frame = 0; frame != 33; ++frame) {
         append_frame(late, ruvia::http2_frame_type::data, 0, 1, bulk);
     }
@@ -360,14 +360,14 @@ TEST(Ruvia, http2_connect_tunnel_ignores_alternative_service_and_origin_frames) 
     EXPECT_TRUE(!server.connection_error().has_value());
     EXPECT_TRUE(!server.stream_aborted(1));
     EXPECT_TRUE(!has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 1));
-    std::string received;
+    std::pmr::string received;
     while (auto event = server.next_event()) {
         EXPECT_TRUE(event->stream_closed() == nullptr);
         if (auto* data = event->tunnel_data()) {
             received.append(data->bytes());
         }
     }
-    EXPECT_EQ(received, std::string("after"));
+    EXPECT_EQ(received, std::pmr::string("after"));
     (void)server.release(std::move(*head));
 }
 
@@ -387,9 +387,9 @@ TEST(Ruvia, http2_server_graceful_drain_admits_in_flight_streams_until_ping_ack)
     EXPECT_TRUE(server.draining());
     EXPECT_TRUE(!server.drain_final());
     const auto initial = take_frames(server);
-    EXPECT_TRUE(goaway_last_stream_ids(initial) == std::vector<std::uint32_t>{0x7fffffffU});
+    EXPECT_TRUE(goaway_last_stream_ids(initial) == std::pmr::vector<std::uint32_t>{0x7fffffffU});
     // The PING's ACK proves the client read the GOAWAY only if it follows it.
-    std::optional<std::string> ping_payload;
+    std::optional<std::pmr::string> ping_payload;
     bool goaway_seen = false;
     for (const auto& frame : initial) {
         goaway_seen = goaway_seen || frame.is(ruvia::http2_frame_type::goaway);
@@ -415,7 +415,7 @@ TEST(Ruvia, http2_server_graceful_drain_admits_in_flight_streams_until_ping_ack)
     append_frame(ack, ruvia::http2_frame_type::ping, 0x1, 0, *ping_payload);
     EXPECT_TRUE(server.feed(ack) == ruvia::http2_feed_result::accepted);
     EXPECT_TRUE(server.drain_final());
-    EXPECT_TRUE(goaway_last_stream_ids(take_frames(server)) == std::vector<std::uint32_t>{3});
+    EXPECT_TRUE(goaway_last_stream_ids(take_frames(server)) == std::pmr::vector<std::uint32_t>{3});
 
     // RFC 9113 §6.8: a stream above the final boundary is discarded unanswered;
     // the GOAWAY already tells the client it was not processed.
@@ -464,7 +464,7 @@ TEST(Ruvia, http2_server_graceful_drain_bounds_streams_opened_before_ping_ack) {
     EXPECT_TRUE(!server.next_event().has_value());
     EXPECT_TRUE(server.drain_final());
     const auto frames = take_frames(server);
-    EXPECT_TRUE(goaway_last_stream_ids(frames) == std::vector<std::uint32_t>{255});
+    EXPECT_TRUE(goaway_last_stream_ids(frames) == std::pmr::vector<std::uint32_t>{255});
     EXPECT_TRUE(has_frame(frames, ruvia::http2_frame_type::rst_stream, stream_id));
 }
 
@@ -476,7 +476,7 @@ TEST(Ruvia, http2_client_graceful_drain_sends_final_goaway_at_once) {
     client.begin_drain();
     EXPECT_TRUE(client.drain_final());
     const auto frames = take_frames(client);
-    EXPECT_TRUE(goaway_last_stream_ids(frames) == std::vector<std::uint32_t>{0});
+    EXPECT_TRUE(goaway_last_stream_ids(frames) == std::pmr::vector<std::uint32_t>{0});
     for (const auto& frame : frames) {
         EXPECT_TRUE(!frame.is(ruvia::http2_frame_type::ping));
     }
@@ -494,7 +494,7 @@ TEST(Ruvia, http2_server_finish_drain_ends_round_trip_without_ping_ack) {
     EXPECT_TRUE(first.has_value());
     (void)take_frames(server);
     server.begin_drain();
-    EXPECT_TRUE(goaway_last_stream_ids(take_frames(server)) == std::vector<std::uint32_t>{0x7fffffffU});
+    EXPECT_TRUE(goaway_last_stream_ids(take_frames(server)) == std::pmr::vector<std::uint32_t>{0x7fffffffU});
     std::pmr::string in_flight(&resource);
     append_frame(in_flight, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 3, get_block(&resource));
     EXPECT_TRUE(server.feed(in_flight) == ruvia::http2_feed_result::accepted);
@@ -504,7 +504,7 @@ TEST(Ruvia, http2_server_finish_drain_ends_round_trip_without_ping_ack) {
 
     server.finish_drain();
     EXPECT_TRUE(server.drain_final());
-    EXPECT_TRUE(goaway_last_stream_ids(take_frames(server)) == std::vector<std::uint32_t>{3});
+    EXPECT_TRUE(goaway_last_stream_ids(take_frames(server)) == std::pmr::vector<std::uint32_t>{3});
     server.finish_drain();
     EXPECT_TRUE(take_frames(server).empty());
 
@@ -531,7 +531,7 @@ TEST(Ruvia, http2_server_finish_drain_without_round_trip_sends_final_goaway) {
     EXPECT_TRUE(server.draining());
     EXPECT_TRUE(server.drain_final());
     const auto frames = take_frames(server);
-    EXPECT_TRUE(goaway_last_stream_ids(frames) == std::vector<std::uint32_t>{1});
+    EXPECT_TRUE(goaway_last_stream_ids(frames) == std::pmr::vector<std::uint32_t>{1});
     for (const auto& frame : frames) {
         EXPECT_TRUE(!frame.is(ruvia::http2_frame_type::ping));
     }
@@ -561,7 +561,7 @@ TEST(Ruvia, http2_server_drain_after_peer_goaway_is_final_at_once) {
         }
         EXPECT_TRUE(server.drain_final());
         const auto frames = take_frames(server);
-        EXPECT_TRUE(goaway_last_stream_ids(frames) == std::vector<std::uint32_t>{1});
+        EXPECT_TRUE(goaway_last_stream_ids(frames) == std::pmr::vector<std::uint32_t>{1});
         for (const auto& frame : frames) {
             EXPECT_TRUE(!frame.is(ruvia::http2_frame_type::ping));
         }

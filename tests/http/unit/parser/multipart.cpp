@@ -22,12 +22,12 @@ TEST(Ruvia, multipart_part_assignment_failure_preserves_all_fields) {
     if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
         GTEST_SKIP() << "STL debug metadata allocation cannot be fault-injected safely";
     }
-    const std::string old_wire =
+    const std::pmr::string old_wire =
         "--b\r\nContent-Disposition: form-data; name=old; filename=\"a\\\"b\"\r\n"
         "Content-Type: text/plain\r\n\r\nold-body\r\n--b--\r\n";
-    const std::string new_wire =
+    const std::pmr::string new_wire =
         "--b\r\nContent-Disposition: form-data; name=new; filename=\"" +
-        std::string(4096, 'f') +
+        std::pmr::string(4096, 'f') +
         "\\\"b\"\r\nContent-Type: application/octet-stream\r\n\r\nnew-body\r\n--b--\r\n";
     for (const bool move : {false, true}) {
         failing_memory_resource target_resource;
@@ -52,7 +52,7 @@ TEST(Ruvia, multipart_part_assignment_failure_preserves_all_fields) {
             EXPECT_EQ(destination[0].body(), "old-body");
             EXPECT_TRUE(destination[0].has_filename());
             EXPECT_EQ(source[0].name(), "new");
-            EXPECT_EQ(source[0].filename(), std::string(4096, 'f') + "\"b");
+            EXPECT_EQ(source[0].filename(), std::pmr::string(4096, 'f') + "\"b");
             EXPECT_EQ(source[0].body(), "new-body");
         }
         EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
@@ -61,11 +61,11 @@ TEST(Ruvia, multipart_part_assignment_failure_preserves_all_fields) {
 }
 
 TEST(Ruvia, multipart_part_assignment_owns_decoded_fields_on_destination_resource) {
-    const std::string plain_wire = "--b\r\nContent-Disposition: form-data; name=old\r\n\r\nold-body\r\n--b--\r\n";
-    const std::string text(160, 'x');
-    const std::string owned_wire = "--b\r\nContent-Disposition: form-data;\r\n name=\"" + text +
-                                   "\"; filename=\"" + text + "\"\r\nContent-Type:\r\n application/" +
-                                   text + "\r\n\r\nnew-body\r\n--b--\r\n";
+    const std::pmr::string plain_wire = "--b\r\nContent-Disposition: form-data; name=old\r\n\r\nold-body\r\n--b--\r\n";
+    const std::pmr::string text(160, 'x');
+    const std::pmr::string owned_wire = "--b\r\nContent-Disposition: form-data;\r\n name=\"" + text +
+                                        "\"; filename=\"" + text + "\"\r\nContent-Type:\r\n application/" +
+                                        text + "\r\n\r\nnew-body\r\n--b--\r\n";
     for (const bool move : {false, true}) {
         failing_memory_resource target_resource;
         failing_memory_resource source_resource;
@@ -105,10 +105,10 @@ TEST(Ruvia, multipart_part_assignment_owns_decoded_fields_on_destination_resourc
 
 TEST(Ruvia, multipart_part_same_resource_move_and_borrowed_replacement_do_not_allocate) {
     failing_memory_resource resource;
-    const std::string plain_wire = "--b\r\nContent-Disposition: form-data; name=plain\r\n\r\nbody\r\n--b--\r\n";
-    const std::string filename(160, 'f');
-    const std::string owned_wire = "--b\r\nContent-Disposition: form-data; name=owned; filename=\"" +
-                                   filename + "\\\"\"\r\n\r\nupload\r\n--b--\r\n";
+    const std::pmr::string plain_wire = "--b\r\nContent-Disposition: form-data; name=plain\r\n\r\nbody\r\n--b--\r\n";
+    const std::pmr::string filename(160, 'f');
+    const std::pmr::string owned_wire = "--b\r\nContent-Disposition: form-data; name=owned; filename=\"" +
+                                        filename + "\\\"\"\r\n\r\nupload\r\n--b--\r\n";
     {
         auto destination = ruvia::parse_multipart_body(plain_wire,
             {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = &resource});
@@ -131,13 +131,13 @@ TEST(Ruvia, multipart_part_same_resource_move_and_borrowed_replacement_do_not_al
 }
 
 TEST(Ruvia, multipart_parser_retries_owned_metadata_without_consuming_limits) {
-    const std::string name(160, 'n');
-    const std::string filename(160, 'f');
-    const std::string content_type_value = "application/" + std::string(160, 't');
-    const std::string headers = "Content-Disposition: form-data;\r\n name=\"" + name +
-                                "\";\r\n\tfilename=\"" + filename + "\"\r\nContent-Type:\r\n " +
-                                content_type_value + "\r\n\r\n";
-    const std::string body = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
+    const std::pmr::string name(160, 'n');
+    const std::pmr::string filename(160, 'f');
+    const std::pmr::string content_type_value = "application/" + std::pmr::string(160, 't');
+    const std::pmr::string headers = "Content-Disposition: form-data;\r\n name=\"" + name +
+                                     "\";\r\n\tfilename=\"" + filename + "\"\r\nContent-Type:\r\n " +
+                                     content_type_value + "\r\n\r\n";
+    const std::pmr::string body = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
 
     for (const bool limit_parts : {false, true}) {
         bool reached_success = false;
@@ -198,7 +198,7 @@ TEST(Ruvia, multipart_parser_handles_deterministic_arbitrary_bytes) {
     };
 
     for (std::size_t sample = 0; sample < 2048; ++sample) {
-        std::string input(static_cast<std::size_t>(next_value() % 1025U), '\0');
+        std::pmr::string input(static_cast<std::size_t>(next_value() % 1025U), '\0');
         for (auto& byte : input) {
             byte = static_cast<char>(next_value());
         }
@@ -249,11 +249,11 @@ TEST(Ruvia, multipart_parser_feed_preserves_borrowed_body_after_allocation_failu
             failing_memory_resource resource;
             {
                 ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc"), .resource_ = &resource});
-                std::string payload(128 * 1024, 'a');
+                std::pmr::string payload(128 * 1024, 'a');
                 for (std::size_t index = 0; index < payload.size(); ++index) {
                     payload[index] = static_cast<char>('a' + (index * 29 + index / 17) % 26);
                 }
-                std::string wire = with_preamble ? std::string(64 * 1024 - 2, 'p') + "\r\n" : std::string{};
+                std::pmr::string wire = with_preamble ? std::pmr::string(64 * 1024 - 2, 'p') + "\r\n" : std::pmr::string{};
                 wire += "--abc\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n";
                 wire += payload;
                 parser.feed(wire);
@@ -264,8 +264,8 @@ TEST(Ruvia, multipart_parser_feed_preserves_borrowed_body_after_allocation_failu
                     continue;
                 }
                 EXPECT_TRUE(part->phase() == ruvia::multipart_chunk_phase::first);
-                const std::string copied(part->body());
-                std::string received = copied;
+                const std::pmr::string copied(part->body());
+                std::pmr::string received = copied;
                 resource.fail_after(failure_index);
                 bool failed = false;
                 try {
@@ -320,7 +320,7 @@ TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
 
     const auto spaced = ruvia::multipart_boundary("a b");
     EXPECT_EQ(spaced.value(), std::string_view("a b"));
-    const auto maximum = ruvia::multipart_boundary(std::string(70, 'x'));
+    const auto maximum = ruvia::multipart_boundary(std::pmr::string(70, 'x'));
     EXPECT_EQ(maximum.value().size(), std::size_t{70});
     const auto created = ruvia::multipart_boundary::try_create("a b");
     EXPECT_TRUE(created.has_value());
@@ -328,7 +328,7 @@ TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
         EXPECT_EQ(created->value(), std::string_view("a b"));
     }
     EXPECT_TRUE(rejected(""));
-    EXPECT_TRUE(rejected(std::string(71, 'x')));
+    EXPECT_TRUE(rejected(std::pmr::string(71, 'x')));
     EXPECT_TRUE(rejected("trailing "));
     EXPECT_TRUE(rejected("semi;colon"));
     EXPECT_TRUE(rejected("bad\r\nvalue"));
@@ -488,7 +488,7 @@ TEST(Ruvia, multipart_parser_reports_typed_incomplete_body) {
 }
 
 TEST(Ruvia, multipart_part_preserves_empty_filename_parameter_presence) {
-    const std::string body =
+    const std::pmr::string body =
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"upload\"; filename=\"\"\r\n"
         "\r\n"
@@ -527,7 +527,7 @@ TEST(Ruvia, multipart_part_header_rejects_ambiguous_disposition_parameters) {
              " filename=shadow.txt",
              "Content-Disposition: form-data; name=field\r\n"
              "Content-Disposition: form-data; name=shadow"}) {
-        std::string body = "--BOUNDARY\r\n";
+        std::pmr::string body = "--BOUNDARY\r\n";
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
         bool rejected = false;
@@ -551,7 +551,7 @@ TEST(Ruvia, multipart_part_header_rejects_ambiguous_header_blocks) {
              "Content-Disposition: form-data; name=field\r\n"
              "Content-Type: text/plain\r\n"
              "Content-Type: application/json"}) {
-        std::string body = "--BOUNDARY\r\n";
+        std::pmr::string body = "--BOUNDARY\r\n";
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
         bool rejected = false;
@@ -568,7 +568,7 @@ TEST(Ruvia, multipart_part_header_rejects_ambiguous_header_blocks) {
 }
 
 TEST(Ruvia, multipart_complete_body_parser_returns_borrowed_part_bodies) {
-    const std::string body =
+    const std::pmr::string body =
         "preamble\r\n"
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name = \"field\"\r\n\r\n"
@@ -614,8 +614,8 @@ TEST(Ruvia, multipart_complete_body_parser_rejects_malformed_body) {
 }
 
 TEST(Ruvia, multipart_complete_body_parser_shares_incremental_limits) {
-    std::string oversized_preamble(64 * 1024 + 1, 'x');
-    std::string complete_error_message;
+    std::pmr::string oversized_preamble(64 * 1024 + 1, 'x');
+    std::pmr::string complete_error_message;
     bool rejected = false;
     try {
         (void)ruvia::parse_multipart_body(
@@ -655,7 +655,7 @@ TEST(Ruvia, multipart_complete_limits_cannot_be_bypassed_by_terminators) {
             body, {.boundary_ = ruvia::test::make_multipart_boundary("BOUNDARY"), .resource_ = resource});
     };
     const auto check_failure = [&parse, resource](
-                                   const std::string& body, std::string_view message) {
+                                   const std::pmr::string& body, std::string_view message) {
         bool rejected = false;
         try {
             (void)parse(body);
@@ -680,13 +680,13 @@ TEST(Ruvia, multipart_complete_limits_cannot_be_bypassed_by_terminators) {
 
     // A complete boundary used to skip the preamble cap because the limit was
     // checked only while the parser was still searching for that boundary.
-    std::string preamble(64 * 1024 + 1, 'p');
+    std::pmr::string preamble(64 * 1024 + 1, 'p');
     preamble.append("\r\n--BOUNDARY--\r\n");
     check_failure(preamble, "multipart preamble exceeds limit");
 
     // Likewise, finding CRLF CRLF in the same input bypassed the part-header
     // check, even when the complete block was already larger than 64 KiB.
-    std::string headers =
+    std::pmr::string headers =
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"field\"\r\n"
         "X-Large: ";
@@ -698,7 +698,7 @@ TEST(Ruvia, multipart_complete_limits_cannot_be_bypassed_by_terminators) {
 
     // A completed delimiter line with excessive transport-padding must be
     // bounded too; the previous check ran only while the line was incomplete.
-    std::string delimiter = "--BOUNDARY";
+    std::pmr::string delimiter = "--BOUNDARY";
     delimiter.append(64 * 1024, ' ');
     delimiter.append("\r\n");
     check_failure(delimiter, "multipart delimiter line exceeds limit");
@@ -706,7 +706,7 @@ TEST(Ruvia, multipart_complete_limits_cannot_be_bypassed_by_terminators) {
     // Exercise the same completed-line check after a part body, where the
     // delimiter is discovered by the streaming body scanner rather than the
     // initial-boundary path.
-    std::string body_delimiter =
+    std::pmr::string body_delimiter =
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"field\"\r\n"
         "\r\n"
@@ -719,7 +719,7 @@ TEST(Ruvia, multipart_complete_limits_cannot_be_bypassed_by_terminators) {
 
 TEST(Ruvia, multipart_part_and_metadata_limits_are_cumulative) {
     constexpr std::string_view header_value = "Content-Disposition: form-data; name=\"field\"\r\n\r\n";
-    std::string body;
+    std::pmr::string body;
     for (std::size_t index = 0; index < 3; ++index) {
         body += "--abc\r\n";
         body += header_value;
@@ -761,7 +761,7 @@ TEST(Ruvia, multipart_part_and_metadata_limits_are_cumulative) {
 }
 
 TEST(Ruvia, multipart_streaming_handles_bytewise_long_syntax_and_false_delimiters) {
-    std::string body(16 * 1024, 'p');
+    std::pmr::string body(16 * 1024, 'p');
     body += "\r\n--abc";
     body.append(16 * 1024, ' ');
     body += "\r\nContent-Disposition: form-data; name=\"field\"\r\nX-Long: ";
@@ -775,7 +775,7 @@ TEST(Ruvia, multipart_streaming_handles_bytewise_long_syntax_and_false_delimiter
     const auto expected = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::test::make_multipart_boundary("abc")});
     EXPECT_TRUE(!expected.empty());
     ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc")});
-    std::string received;
+    std::pmr::string received;
     std::size_t ended = 0;
     bool done = false;
     for (std::size_t offset = 0; offset < body.size(); ++offset) {
@@ -828,7 +828,7 @@ TEST(Ruvia, multipart_part_may_end_at_its_header_block) {
 
     for (const std::size_t step : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{7}}) {
         ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("b")});
-        std::string received;
+        std::pmr::string received;
         std::size_t ended = 0;
         bool done = false;
         const auto drain = [&]() {
@@ -871,7 +871,7 @@ TEST(Ruvia, multipart_preamble_limit_is_independent_of_input_chunking) {
     constexpr std::string_view expected_body = "value\r\n--abx\r\n--ab-X\r\nstill data";
     for (const auto preamble_bytes : {std::size_t{0}, preamble_limit - 1, preamble_limit, preamble_limit + 1}) {
         for (const std::string_view close_ending : {"\r\n", ""}) {
-            std::string wire;
+            std::pmr::string wire;
             if (preamble_bytes != 0) {
                 wire.assign(preamble_bytes - 2, 'p');
                 wire += "\r\n";
@@ -900,7 +900,7 @@ TEST(Ruvia, multipart_preamble_limit_is_independent_of_input_chunking) {
                 failing_memory_resource resource;
                 {
                     ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc"), .resource_ = &resource});
-                    std::string received;
+                    std::pmr::string received;
                     std::size_t ended = 0;
                     bool done = false;
                     bool failed = false;
@@ -949,7 +949,7 @@ TEST(Ruvia, multipart_preamble_limit_is_independent_of_input_chunking) {
 TEST(Ruvia, multipart_preamble_limit_counts_misleading_and_incomplete_marker_bytes) {
     constexpr std::size_t preamble_limit = 64 * 1024;
     for (const std::string_view misleading : {"-x", "--abx\r\n", "-"}) {
-        std::string wire(preamble_limit - 2, 'p');
+        std::pmr::string wire(preamble_limit - 2, 'p');
         wire += "\r\n";
         wire += misleading;
         if (misleading != "-") {
@@ -989,8 +989,8 @@ TEST(Ruvia, multipart_preamble_limit_counts_misleading_and_incomplete_marker_byt
 }
 
 TEST(Ruvia, multipart_truncated_body_at_eof_fails_without_emitting_partial_part) {
-    const std::string truncated =
-        "--abc\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n" + std::string(64, 'x');
+    const std::pmr::string truncated =
+        "--abc\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n" + std::pmr::string(64, 'x');
     ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc")});
     parser.feed(truncated);
     parser.finish_input();
@@ -1000,7 +1000,7 @@ TEST(Ruvia, multipart_truncated_body_at_eof_fails_without_emitting_partial_part)
 }
 
 TEST(Ruvia, multipart_part_ignores_filename_star_parameter) {
-    const std::string body =
+    const std::pmr::string body =
         "--b\r\n"
         "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"; filename*=UTF-8''b.txt\r\n"
         "\r\n"
@@ -1057,7 +1057,7 @@ TEST(Ruvia, multipart_boundary_quoted_with_mime_special) {
 }
 
 TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
-    std::string wire =
+    std::pmr::string wire =
         "--abc\r\n"
         "Content-Disposition: form-data;\r\n name=\"first\";\r\n\tfilename=\"first \r\n\tfile.txt\"\r\n"
         "Content-Type:\r\n text/plain\r\n\r\n"
@@ -1088,7 +1088,7 @@ TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
     }
 
     ruvia::multipart_parser parser({.boundary_ = ruvia::test::make_multipart_boundary("abc")});
-    std::array<std::string, 3> streamed;
+    std::array<std::pmr::string, 3> streamed;
     std::size_t part_index = 0;
     bool done = false;
     for (std::size_t offset = 0; offset < wire.size() && !done; ++offset) {
@@ -1130,10 +1130,10 @@ TEST(Ruvia, multipart_part_fields_unfold_mime_continuations) {
 }
 
 TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
-    const std::string headers =
+    const std::pmr::string headers =
         "Content-Disposition: form-data;\r\n name=field\r\n"
         "Content-Type: text/plain;\r\n charset=utf-8\r\n\r\n";
-    const std::string wire = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
+    const std::pmr::string wire = "--abc\r\n" + headers + "value\r\n--abc--\r\n";
     const auto accepted = ruvia::parse_multipart_body(wire,
         {.boundary_ = ruvia::test::make_multipart_boundary("abc"), .max_metadata_bytes_ = headers.size()});
     EXPECT_EQ(accepted.size(), std::size_t{1});
@@ -1162,7 +1162,7 @@ TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
              "Content-Disposition: form-data;\r name=field",
              "Content-Disposition: form-data; name=field\r\n Content-Type: text/plain",
              "Content-Disposition: form-data; name=field\r\nContent-Disposition:\r\n form-data; name=other"}) {
-        const std::string malformed = "--abc\r\n" + std::string(invalid) + "\r\n\r\nvalue\r\n--abc--\r\n";
+        const std::pmr::string malformed = "--abc\r\n" + std::pmr::string(invalid) + "\r\n\r\nvalue\r\n--abc--\r\n";
         bool rejected = false;
         try {
             (void)ruvia::parse_multipart_body(malformed,

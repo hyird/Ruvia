@@ -1,11 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <initializer_list>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 
 #include "context_request_fixture.h"
@@ -136,12 +139,12 @@ TEST(Ruvia, context_request_cookie_fields_preserve_literal_syntax_and_case_sensi
 }
 
 TEST(Ruvia, context_request_cookie_fields_keep_all_values_across_growth_and_cache_reads) {
-    std::string value;
+    std::pmr::string value{ruvia::process_resource()};
     for (std::size_t i = 0; i != 128; ++i) {
         if (!value.empty()) {
             value.append("; ");
         }
-        value.append("c" + std::to_string(i) + "=v" + std::to_string(i));
+        value.append(std::move(std::pmr::string("c", ruvia::process_resource()).append(std::to_string(i))) + std::move(std::pmr::string("=v", ruvia::process_resource()).append(std::to_string(i))));
     }
     auto request = make_request("/",
         {http_header_view{"Cookie", value}, http_header_view{"Cookie", "c0=latest; tail=end"}});
@@ -156,8 +159,8 @@ TEST(Ruvia, context_request_cookie_fields_keep_all_values_across_growth_and_cach
                 EXPECT_EQ(fields.size(), std::size_t{130});
                 if (fields.size() == 130) {
                     for (std::size_t i = 0; i != 128; ++i) {
-                        EXPECT_EQ(fields[i].name(), "c" + std::to_string(i));
-                        EXPECT_EQ(fields[i].value(), "v" + std::to_string(i));
+                        EXPECT_EQ(fields[i].name(), std::move(std::pmr::string("c", ruvia::process_resource()).append(std::to_string(i))));
+                        EXPECT_EQ(fields[i].value(), std::move(std::pmr::string("v", ruvia::process_resource()).append(std::to_string(i))));
                     }
                     EXPECT_EQ(fields[128].name(), "c0");
                     EXPECT_EQ(fields[128].value(), "latest");
@@ -336,8 +339,8 @@ TEST(Ruvia, context_request_queries_use_empty_span_only_for_missing_name) {
 }
 
 TEST(Ruvia, context_request_negotiate_merges_multiple_accept_field_lines) {
-    const auto accepts = [](std::vector<std::string_view> accept_lines, std::string_view media_type) {
-        std::vector<http_header_view> headers;
+    const auto accepts = [](std::initializer_list<std::string_view> accept_lines, std::string_view media_type) {
+        std::pmr::vector<http_header_view> headers{ruvia::process_resource()};
         headers.reserve(accept_lines.size());
         for (const auto line : accept_lines) {
             headers.emplace_back("Accept", line);
@@ -588,12 +591,12 @@ TEST(Ruvia, context_request_query_decodes_names_and_values_in_wire_order) {
 
 TEST(Ruvia, context_request_query_preserves_many_decoded_values) {
     constexpr std::size_t count = 257;
-    std::string target = "/?";
+    std::pmr::string target{"/?", ruvia::process_resource()};
     for (std::size_t i = 0; i < count; ++i) {
         if (i != 0) {
             target += '&';
         }
-        target += "%74ag=v+" + std::to_string(i);
+        target += std::move(std::pmr::string("%74ag=v+", ruvia::process_resource()).append(std::to_string(i)));
     }
 
     auto request = make_request(target);
@@ -605,7 +608,7 @@ TEST(Ruvia, context_request_query_preserves_many_decoded_values) {
         EXPECT_EQ(values.size(), count);
         if (fields_value.size() == count && values.size() == count) {
             for (std::size_t i = 0; i < count; ++i) {
-                const auto expected = "v " + std::to_string(i);
+                const auto expected = std::move(std::pmr::string("v ", ruvia::process_resource()).append(std::to_string(i)));
                 EXPECT_EQ(fields_value[i].name(), std::string_view("tag"));
                 EXPECT_EQ(fields_value[i].value(), std::string_view(expected));
                 EXPECT_EQ(values[i], std::string_view(expected));

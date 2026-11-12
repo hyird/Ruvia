@@ -23,6 +23,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_stream.h"
@@ -54,7 +55,7 @@ class stream_early_respond_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& context_value, ruvia::next&) {
         const auto body = co_await context_value.req().text();
-        context_value.respond(context_value.text("early:" + std::string(body)));
+        context_value.respond(context_value.text("early:" + std::pmr::string(body, ruvia::process_resource())));
     }
 };
 
@@ -101,7 +102,7 @@ class stream_lane_routes final {
                 ++observed.committed_metadata_rejected_;
             }
         }
-        std::string payload = "first";
+        std::pmr::string payload{"first", ruvia::process_resource()};
         auto first = writer.write(payload);
         auto last = writer.writeln("second");
         auto end = writer.end();
@@ -140,7 +141,7 @@ class stream_lane_routes final {
         if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
             co_return;
         }
-        const std::string chunk(16384, 'x');
+        const std::pmr::string chunk(16384, 'x', ruvia::process_resource());
         try {
             for (;;) {
                 co_await writer.write(chunk);
@@ -251,7 +252,7 @@ TEST(Ruvia, response_stream_cold_outputs_share_a_lane_only_when_started) {
     stream_lane_observed->write_overlap_rejected_ = false;
     stream_lane_observed->end_overlap_rejected_ = false;
     stream_lane_observed->completed_ = false;
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
@@ -268,8 +269,8 @@ TEST(Ruvia, response_stream_cold_outputs_share_a_lane_only_when_started) {
     server.finish();
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     const auto first = response.find("first");
-    EXPECT_TRUE(first != std::string::npos);
-    EXPECT_TRUE(response.find("second\n", first) != std::string::npos);
+    EXPECT_TRUE(first != std::pmr::string::npos);
+    EXPECT_TRUE(response.find("second\n", first) != std::pmr::string::npos);
     EXPECT_TRUE(stream_lane_observed->write_overlap_rejected_);
     EXPECT_TRUE(stream_lane_observed->end_overlap_rejected_);
     EXPECT_TRUE(stream_lane_observed->completed_);
@@ -319,7 +320,7 @@ TEST(Ruvia, response_stream_handler_failure_with_a_transport_code_is_a_connectio
         const std::string_view request = "GET /server-upstream-timeout-stream HTTP/1.1\r\nHost: localhost\r\n\r\n";
         asio::write(client, asio::buffer(request));
         // The server closes the connection of the truncated response.
-        std::string response;
+        std::pmr::string response{ruvia::process_resource()};
         std::array<char, 1024> input{};
         std::error_code ec;
         while (!ec) {
@@ -338,7 +339,7 @@ TEST(Ruvia, response_stream_handler_failure_with_a_transport_code_is_a_connectio
 TEST(Ruvia, response_stream_body_read_after_commit_sends_no_continue) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
@@ -350,7 +351,7 @@ TEST(Ruvia, response_stream_body_read_after_commit_sends_no_continue) {
         std::error_code ec;
         // The body goes out only once the first chunk shows the response has
         // started, so the handler's read has to wait for it on the socket.
-        while (!ec && response.find("\r\n\r\n1\r\nx\r\n") == std::string::npos) {
+        while (!ec && response.find("\r\n\r\n1\r\nx\r\n") == std::pmr::string::npos) {
             const auto read = client.read_some(asio::buffer(input), ec);
             response.append(input.data(), read);
         }
@@ -362,7 +363,7 @@ TEST(Ruvia, response_stream_body_read_after_commit_sends_no_continue) {
     }
     server.finish();
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
-    EXPECT_TRUE(response.find("100 Continue") == std::string::npos);
+    EXPECT_TRUE(response.find("100 Continue") == std::pmr::string::npos);
     EXPECT_TRUE(response.ends_with("\r\n\r\n1\r\nx\r\n4\r\nabcd\r\n0\r\n\r\n"));
 }
 
@@ -372,7 +373,7 @@ TEST(Ruvia, response_stream_completed_head_preserves_transfer_coded_request_cons
         if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
             throw std::runtime_error("deflateInit2 failed");
         }
-        std::string out(deflateBound(&zs, static_cast<uLong>(input.size())) + 64, '\0');
+        std::pmr::string out(deflateBound(&zs, static_cast<uLong>(input.size())) + 64, '\0', ruvia::process_resource());
         zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
         zs.avail_in = static_cast<uInt>(input.size());
         zs.next_out = reinterpret_cast<Bytef*>(out.data());
@@ -388,19 +389,19 @@ TEST(Ruvia, response_stream_completed_head_preserves_transfer_coded_request_cons
     const auto make_chunk = [](std::string_view data) {
         char hex[32];
         std::snprintf(hex, sizeof(hex), "%zx\r\n", data.size());
-        std::string out(hex);
+        std::pmr::string out(hex, ruvia::process_resource());
         out.append(data);
         out.append("\r\n");
         return out;
     };
 
-    const std::string payload1(8000, 'X');
-    const std::string payload2(100000, 'A');
-    const std::string chunk1a = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
-    const std::string chunk1b = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
-    const std::string chunk2 = make_chunk(gzip_member(payload2, Z_BEST_COMPRESSION));
-    const std::string chunk3a = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
-    const std::string chunk3b = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION)) + "0\r\n\r\n";
+    const std::pmr::string payload1(8000, 'X', ruvia::process_resource());
+    const std::pmr::string payload2(100000, 'A', ruvia::process_resource());
+    const std::pmr::string chunk1a = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
+    const std::pmr::string chunk1b = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
+    const std::pmr::string chunk2 = make_chunk(gzip_member(payload2, Z_BEST_COMPRESSION));
+    const std::pmr::string chunk3a = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
+    const std::pmr::string chunk3b = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION)) + "0\r\n\r\n";
 
     stream_lane_observed->uaf_phase_.store(0);
     stream_lane_observed->uaf_route_done_.store(false);
@@ -414,12 +415,11 @@ TEST(Ruvia, response_stream_completed_head_preserves_transfer_coded_request_cons
 
     asio::ip::tcp::socket sock(io);
     sock.connect(server.endpoint());
-    std::string initial_wire =
-        "HEAD /server-uaf-head-stream HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: gzip, chunked\r\n\r\n";
+    std::pmr::string initial_wire{"HEAD /server-uaf-head-stream HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", ruvia::process_resource()};
     initial_wire.append(chunk1a);
     asio::write(sock, asio::buffer(initial_wire));
 
-    std::string resp_head;
+    std::pmr::string resp_head{ruvia::process_resource()};
     asio::read_until(sock, asio::dynamic_buffer(resp_head), "\r\n\r\n");
     EXPECT_TRUE(resp_head.starts_with("HTTP/1.1 200 "));
 
@@ -431,7 +431,7 @@ TEST(Ruvia, response_stream_completed_head_preserves_transfer_coded_request_cons
     while (stream_lane_observed->uaf_phase_.load() < 2) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    asio::write(sock, asio::buffer(chunk2 + chunk3a));
+    asio::write(sock, asio::buffer(std::pmr::string(chunk2, ruvia::process_resource()) + chunk3a));
 
     while (stream_lane_observed->uaf_phase_.load() < 3) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -457,12 +457,12 @@ TEST(Ruvia, response_stream_middleware_short_circuit_after_body_read_preserves_p
         "POST /server-stream-early-respond HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"
         "GET /server-stream-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
     asio::write(client, asio::buffer(wire));
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::error_code ec;
     asio::read(client, asio::dynamic_buffer(response), ec);
     client.close();
     server.finish();
 
-    EXPECT_TRUE(response.find("early:hello") != std::string::npos);
-    EXPECT_TRUE(response.find("plain-ok") != std::string::npos);
+    EXPECT_TRUE(response.find("early:hello") != std::pmr::string::npos);
+    EXPECT_TRUE(response.find("plain-ok") != std::pmr::string::npos);
 }

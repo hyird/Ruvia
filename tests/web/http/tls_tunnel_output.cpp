@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -14,6 +15,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/web/http_client.h"
@@ -22,9 +24,9 @@
 
 namespace {
 
-ruvia::task<std::string> read_to_end(asio::ip::tcp::socket& stream) {
+ruvia::task<std::pmr::string> read_to_end(asio::ip::tcp::socket& stream) {
     std::array<char, 4096> bytes_value{};
-    std::string received;
+    std::pmr::string received{ruvia::process_resource()};
     for (;;) {
         const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
             stream.async_read_some(asio::buffer(bytes_value), std::move(handler));
@@ -39,12 +41,12 @@ ruvia::task<std::string> read_to_end(asio::ip::tcp::socket& stream) {
     }
 }
 
-ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned mode, std::string& received_value) {
+ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned mode, std::pmr::string& received_value) {
     if (mode == 3) {
         received_value = co_await read_to_end(stream);
         co_return;
     }
-    std::string head;
+    std::pmr::string head{ruvia::process_resource()};
     char byte{};
     while (!head.ends_with("\r\n\r\n")) {
         const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) { stream.async_read_some(asio::buffer(&byte, 1), std::move(h)); });
@@ -82,18 +84,18 @@ ruvia::task<void> serve_client_connect(asio::ip::tcp::socket& stream, unsigned m
     }
     co_await send("HTTP/1.1 200 Connection Established\r\nX-Tunnel: owned-metadata\r\n\r\n");
     if (mode == 1) {
-        co_await send(std::string(100003, 's'), true);
+        co_await send(std::pmr::string(100003, 's', ruvia::process_resource()), true);
     }
     received_value = co_await read_to_end(stream);
     if (mode == 0) {
-        co_await send(std::string(100003, 's'), true);
+        co_await send(std::pmr::string(100003, 's', ruvia::process_resource()), true);
     }
 }
 
 void exercise_client_connect(unsigned mode) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    std::string received;
+    std::pmr::string received{ruvia::process_resource()};
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         const auto& worker_value = attachment.loop().handle();
@@ -108,7 +110,7 @@ void exercise_client_connect(unsigned mode) {
             co_await serve_client_connect(socket, mode, received);
         };
         tasks.spawn(serve());
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http1_only});
         try {
             if (mode == 3) {
@@ -127,7 +129,7 @@ void exercise_client_connect(unsigned mode) {
                         throw std::runtime_error("missing CONNECT rejection");
                     }
                     EXPECT_TRUE(result_value.response()->status().value() == 407);
-                    std::string text;
+                    std::pmr::string text{ruvia::process_resource()};
                     while (auto bytes = co_await result_value.response()->stream().text()) {
                         text.append(*bytes);
                     }
@@ -140,17 +142,17 @@ void exercise_client_connect(unsigned mode) {
                     auto tunnel = std::move(*result_value.tunnel());
                     EXPECT_TRUE(tunnel.header("x-tunnel") == "owned-metadata");
                     const auto read_greeting = [&]() -> ruvia::task<void> {
-                        std::string greeting;
+                        std::pmr::string greeting{ruvia::process_resource()};
                         while (auto bytes = co_await tunnel.read()) {
                             greeting.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
                         }
-                        EXPECT_TRUE(greeting == std::string(100003, 's'));
+                        EXPECT_TRUE(greeting == std::pmr::string(100003, 's', ruvia::process_resource()));
                     };
                     if (mode == 1) {
                         co_await read_greeting();
                     }
                     for (unsigned part = 0; part != 8; ++part) {
-                        std::string payload_value(16384, 't');
+                        std::pmr::string payload_value(16384, 't', ruvia::process_resource());
                         auto write = tunnel.write(std::string_view(payload_value));
                         payload_value.assign("mutated");
                         co_await std::move(write);
@@ -186,7 +188,7 @@ void exercise_client_connect(unsigned mode) {
     if (mode == 3) {
         EXPECT_TRUE(received.empty());
     } else if (mode != 2) {
-        EXPECT_TRUE(received == std::string(8 * 16384, 't'));
+        EXPECT_TRUE(received == std::pmr::string(8 * 16384, 't', ruvia::process_resource()));
     }
 }
 
@@ -200,8 +202,8 @@ TEST(Ruvia, http1_client_tunnel_and_rejections_preserve_ownership_and_tcp_half_c
 
 namespace {
 
-ruvia::task<std::string> read_head(asio::ip::tcp::socket& stream) {
-    std::string head;
+ruvia::task<std::pmr::string> read_head(asio::ip::tcp::socket& stream) {
+    std::pmr::string head{ruvia::process_resource()};
     char byte{};
     while (!head.ends_with("\r\n\r\n")) {
         const auto read = co_await ruvia::async_asio<std::size_t>([&](auto h) { stream.async_read_some(asio::buffer(&byte, 1), std::move(h)); });
@@ -231,7 +233,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     unsigned accepted = 0;
-    std::string after_rejection;
+    std::pmr::string after_rejection{ruvia::process_resource()};
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         const auto& worker_value = attachment.loop().handle();
@@ -268,7 +270,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
             }
         };
         tasks.spawn(serve());
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5)});
         try {
             {
@@ -278,7 +280,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
                     throw std::runtime_error("missing CONNECT rejection");
                 }
                 EXPECT_TRUE(result_value.response()->status().value() == 407);
-                std::string text;
+                std::pmr::string text{ruvia::process_resource()};
                 while (auto bytes = co_await result_value.response()->stream().text()) {
                     text.append(*bytes);
                 }
@@ -286,7 +288,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
             }
             auto response = co_await client.client().get("/after").send();
             EXPECT_TRUE(response.status().value() == 200);
-            std::string text;
+            std::pmr::string text{ruvia::process_resource()};
             while (auto bytes = co_await response.stream().text()) {
                 text.append(*bytes);
             }

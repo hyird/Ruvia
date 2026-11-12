@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_schema.h"
 
 #include "failing_memory_resource.h"
@@ -782,8 +783,8 @@ TEST(Ruvia, db_procedure_begin_block_failure_preserves_control_state_and_allows_
 
 TEST(Ruvia, db_procedure_apply_failure_preserves_complete_statements_and_allows_retry) {
     db_schema schema({.driver_ = db_driver::postgresql});
-    const std::string first_name(63, 'a');
-    const std::string second_name(63, 'b');
+    const std::pmr::string first_name(63, 'a', ruvia::process_resource());
+    const std::pmr::string second_name(63, 'b', ruvia::process_resource());
     schema.create_schema(first_name);
     schema.create_schema(second_name);
     db_procedure expected;

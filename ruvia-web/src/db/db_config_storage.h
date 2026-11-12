@@ -116,9 +116,8 @@ struct db_cache_config_storage final {
 };
 #endif
 
-// Worker/app-owned copy of the public startup configuration. Public db_config
-// deliberately uses ordinary value types; retained runtime state is rebound to
-// its owning PMR domain here.
+// Worker/app-owned copy of the public startup configuration. Retained runtime
+// state is explicitly rebound to its owning PMR domain here.
 struct db_config_storage final {
     db_config_storage(const db_config& source_value, std::pmr::memory_resource* resource)
         : db_config_storage(validated_db_config(source_value), pmr_resource_or_default(resource)) {}

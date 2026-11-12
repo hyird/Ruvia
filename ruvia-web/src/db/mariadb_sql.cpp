@@ -314,7 +314,7 @@ db_error mariadb_error(std::string_view operation, unsigned int native_code, con
     std::array<char, http_max_unsigned_decimal_size> digits;
     const std::string_view code_view =
         native_code != 0 ? http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
-    std::string error;
+    std::pmr::string error(process_resource());
     error.reserve(operation.size() + 7U + (code_view.empty() ? 0U : 9U + code_view.size()) +
                   (state_view.empty() ? 0U : 12U + state_view.size()) +
                   (message_view.empty() ? 0U : 2U + message_view.size()));
@@ -385,12 +385,13 @@ const MARIADB_CHARSET_INFO& mariadb_queried_charset(MYSQL_RES& result) {
     if (row == nullptr || row[0] == nullptr || lengths == nullptr || mysql_num_fields(&result) != 1) {
         throw std::invalid_argument("MariaDB did not name the session's character set");
     }
-    const std::string name(row[0], lengths[0]);
+    const std::pmr::string name(row[0], lengths[0], process_resource());
     const auto* charset = mariadb_get_charset_by_name(name.c_str());
     if (charset == nullptr) {
-        throw std::invalid_argument("MariaDB session character set " + name +
-                                    " is unknown to the client library, so a string parameter with a backslash "
-                                    "cannot be escaped for it");
+        throw std::invalid_argument(
+            (std::pmr::string("MariaDB session character set ", process_resource()).append(name).append(" is unknown to the client library, so a string parameter with a backslash "
+                                                                                                        "cannot be escaped for it"))
+                .c_str());
     }
     return *charset;
 }

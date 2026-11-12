@@ -23,8 +23,8 @@ using namespace ruvia;
 
 using ruvia::test::counting_memory_resource;
 
-[[nodiscard]] std::string sample_message(std::size_t size, unsigned seed) {
-    std::string message(size, '\0');
+[[nodiscard]] std::pmr::string sample_message(std::size_t size, unsigned seed) {
+    std::pmr::string message(size, '\0');
     unsigned state_value = seed * 2654435761U + 7U;
     for (std::size_t i = 0; i < size; ++i) {
         state_value = state_value * 1103515245U + 12345U;
@@ -33,29 +33,29 @@ using ruvia::test::counting_memory_resource;
     return message;
 }
 
-[[nodiscard]] std::string deflate(websocket_deflate_codecs& codecs, std::string_view payload, int level, int window) {
+[[nodiscard]] std::pmr::string deflate(websocket_deflate_codecs& codecs, std::string_view payload, int level, int window) {
     std::pmr::string out;
     EXPECT_TRUE(codecs.deflate_message(payload, out, level, window));
-    return std::string(out);
+    return out;
 }
 
-[[nodiscard]] std::string inflate(websocket_deflate_codecs& codecs, std::string_view payload) {
+[[nodiscard]] std::pmr::string inflate(websocket_deflate_codecs& codecs, std::string_view payload) {
     std::pmr::string out;
     EXPECT_TRUE(codecs.inflate_message(payload, out, protocol_byte_limit::unlimited()) ==
                 websocket_inflate_result::ok);
-    return std::string(out);
+    return out;
 }
 
 // The payload of the one unmasked server data frame in `frame`; empty unless
 // it carries RSV1 (a compressed message).
-[[nodiscard]] std::string compressed_frame_payload(std::string_view frame) {
+[[nodiscard]] std::pmr::string compressed_frame_payload(std::string_view frame) {
     if (frame.size() < 2 || (static_cast<unsigned char>(frame[0]) & 0x40U) == 0) {
         return {};
     }
     const auto length_code = static_cast<unsigned char>(frame[1]) & 0x7FU;
     const std::size_t header_bytes = length_code == 126U ? 4 : length_code == 127U ? 10
                                                                                    : 2;
-    return std::string(frame.substr(header_bytes));
+    return std::pmr::string(frame.substr(header_bytes));
 }
 
 }  // namespace
@@ -239,7 +239,7 @@ TEST(Ruvia, websocket_deflate_codecs_reject_invalid_parameters) {
 
 TEST(Ruvia, websocket_deflate_codecs_support_input_aliasing_output_across_reallocation) {
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
-    const std::string payload(16384, 'a');
+    const std::pmr::string payload(16384, 'a');
     std::pmr::string buffer(std::pmr::new_delete_resource());
     EXPECT_TRUE(codecs.deflate_message(payload, buffer, 6, 15));
     const auto compressed_size = buffer.size();

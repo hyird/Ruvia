@@ -52,6 +52,7 @@ private:
 
 #ifdef RUVIA_ENABLE_REDIS
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
@@ -66,9 +67,9 @@ namespace ruvia {
 // or deletes the session. A new session mints a random ID in an HttpOnly cookie.
 // The blob format is the application's; pair it with JSON if desired.
 struct session_config final {
-    std::string redis_alias_{"default"};
-    std::string cookie_name_{"sid"};
-    std::string key_prefix_{"sess:"};
+    std::pmr::string redis_alias_{"default", process_resource()};
+    std::pmr::string cookie_name_{"sid", process_resource()};
+    std::pmr::string key_prefix_{"sess:", process_resource()};
     // Must be positive and representable in std::chrono::milliseconds;
     // otherwise construction throws std::invalid_argument.
     std::chrono::seconds ttl_{std::chrono::hours(24)};

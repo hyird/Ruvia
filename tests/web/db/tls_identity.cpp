@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <future>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -13,6 +14,7 @@
 #include <asio.hpp>
 #include <asio/ssl.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db.h"
 
 #include "test_tls_identity.h"
@@ -63,7 +65,7 @@ private:
         } guard{*this};
         co_await acceptor_.async_accept(stream_.next_layer(), asio::use_awaitable);
         if (maria_) {
-            std::string greeting(1, '\x0a');
+            std::pmr::string greeting(1, '\x0a', ruvia::process_resource());
             greeting.append("8.0.0-test", 11);
             greeting.append("\x01\0\0\0", 4);
             greeting.append("12345678\0", 9);
@@ -76,7 +78,7 @@ private:
             greeting.append(10, '\0');
             greeting.append("abcdefghijkl\0", 13);
             greeting.append("mysql_native_password", 22);
-            std::string packet(1, static_cast<char>(greeting.size()));
+            std::pmr::string packet(1, static_cast<char>(greeting.size()), ruvia::process_resource());
             packet.append(3, '\0');
             packet.append(greeting);
             co_await asio::async_write(stream_.next_layer(), asio::buffer(packet), asio::use_awaitable);
@@ -86,7 +88,7 @@ private:
             if (size != 32) {
                 throw std::runtime_error("expected MariaDB SSLRequest");
             }
-            std::vector<unsigned char> request(size);
+            std::pmr::vector<unsigned char> request(size, ruvia::process_resource());
             co_await asio::async_read(stream_.next_layer(), asio::buffer(request), asio::use_awaitable);
         } else {
             std::array<unsigned char, 8> request{};

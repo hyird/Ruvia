@@ -12,12 +12,15 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/dotenv.h"
@@ -133,9 +136,17 @@ int main() {
         const example::environment env(&app.env());
         const bool tls = env.get<bool>("RUVIA_UPSTREAM_TLS").value_or(false);
         const std::string_view host = env.get("RUVIA_UPSTREAM_HOST").value_or("localhost");
-        const std::string authority = host.find(':') == std::string_view::npos ? std::string(host) : "[" + std::string(host) + "]";
-        const std::string base_url = std::string(tls ? "https://" : "http://") + authority + ":" +
-                                     std::to_string(env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093));
+        std::pmr::string base_url(tls ? "https://" : "http://", ruvia::process_resource());
+        const bool ipv6 = host.find(':') != std::string_view::npos;
+        if (ipv6) {
+            base_url.push_back('[');
+        }
+        base_url.append(host);
+        if (ipv6) {
+            base_url.push_back(']');
+        }
+        base_url.push_back(':');
+        ruvia::http_append_unsigned(base_url, env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093));
         app
             .listen({.address_ = "0.0.0.0", .http_ = 8099})
             .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})

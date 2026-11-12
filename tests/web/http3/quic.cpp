@@ -43,6 +43,7 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http3_quic_connection.h"
@@ -206,7 +207,7 @@ private:
     std::optional<ruvia::http3_quic_connection> connection_;
 };
 
-void drain_events(ruvia::http3_quic_connection& connection, std::vector<ruvia::http3_event>& events) {
+void drain_events(ruvia::http3_quic_connection& connection, std::pmr::vector<ruvia::http3_event>& events) {
     while (auto event = connection.next_event()) {
         events.push_back(std::move(*event));
     }
@@ -294,14 +295,14 @@ public:
     ruvia::test::http3_test_client_tls client_tls_;
     std::optional<ruvia::http3_quic_connection> client_;
     std::optional<quic_server_session> server_;
-    std::vector<ruvia::http3_event> client_events_;
-    std::vector<ruvia::http3_event> server_events_;
+    std::pmr::vector<ruvia::http3_event> client_events_{ruvia::process_resource()};
+    std::pmr::vector<ruvia::http3_event> server_events_{ruvia::process_resource()};
     ruvia::http3_quic_status last_client_receive_{ruvia::http3_quic_status::accepted};
     ruvia::http3_quic_status last_server_receive_{ruvia::http3_quic_status::accepted};
 
 private:
-    std::size_t relay(ruvia::http3_quic_connection& from, std::vector<ruvia::http3_event>& from_events,
-        ruvia::http3_quic_connection& to, const ngtcp2_path& to_path, std::vector<ruvia::http3_event>& to_events,
+    std::size_t relay(ruvia::http3_quic_connection& from, std::pmr::vector<ruvia::http3_event>& from_events,
+        ruvia::http3_quic_connection& to, const ngtcp2_path& to_path, std::pmr::vector<ruvia::http3_event>& to_events,
         ruvia::http3_quic_status& last_receive) {
         std::size_t moved = 0;
         ruvia::http3_quic_datagram datagram;
@@ -318,7 +319,7 @@ private:
     }
 };
 
-std::optional<ruvia::http3_headers_event> take_headers(std::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
+std::optional<ruvia::http3_headers_event> take_headers(std::pmr::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
     for (auto& event : events) {
         if (auto* headers = std::get_if<ruvia::http3_headers_event>(&event); headers != nullptr && headers->stream_id_ == stream_id) {
             auto taken = std::move(*headers);
@@ -338,8 +339,8 @@ std::optional<std::string_view> field(const ruvia::http3_headers_event& headers,
     return std::nullopt;
 }
 
-std::string take_body(std::vector<ruvia::http3_event>& events, ruvia::http3_quic_connection& connection, std::int64_t stream_id) {
-    std::string body;
+std::pmr::string take_body(std::pmr::vector<ruvia::http3_event>& events, ruvia::http3_quic_connection& connection, std::int64_t stream_id) {
+    std::pmr::string body{ruvia::process_resource()};
     for (const auto& event : events) {
         if (const auto* data = std::get_if<ruvia::http3_data_event>(&event); data != nullptr && data->stream_id_ == stream_id) {
             body.append(data->bytes_);
@@ -349,15 +350,15 @@ std::string take_body(std::vector<ruvia::http3_event>& events, ruvia::http3_quic
     return body;
 }
 
-bool stream_ended(const std::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
+bool stream_ended(const std::pmr::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
     return std::any_of(events.begin(), events.end(), [stream_id](const ruvia::http3_event& event) {
         const auto* end = std::get_if<ruvia::http3_stream_end_event>(&event);
         return end != nullptr && end->stream_id_ == stream_id;
     });
 }
 
-std::vector<std::int64_t> goaway_ids(const std::vector<ruvia::http3_event>& events) {
-    std::vector<std::int64_t> ids;
+std::pmr::vector<std::int64_t> goaway_ids(const std::pmr::vector<ruvia::http3_event>& events) {
+    std::pmr::vector<std::int64_t> ids{ruvia::process_resource()};
     for (const auto& event : events) {
         if (const auto* goaway = std::get_if<ruvia::http3_goaway_event>(&event)) {
             ids.push_back(goaway->id_);
@@ -393,7 +394,7 @@ struct served_get final {
     bool request_parsed_{false};
     bool response_submitted_{false};
     std::optional<ruvia::http3_headers_event> response_head_;
-    std::string response_body_;
+    std::pmr::string response_body_{ruvia::process_resource()};
     bool response_ended_{false};
 };
 
@@ -412,7 +413,7 @@ served_get serve_get(in_memory_h3_pair& pair, std::int64_t stream_id, std::strin
     if (!request_headers) {
         return result;
     }
-    auto* resource = std::pmr::get_default_resource();
+    auto* resource = ruvia::process_resource();
     const auto head = ruvia::http3_request_head::parse(std::move(*request_headers), resource);
     if (!head) {
         return result;
@@ -554,7 +555,7 @@ TEST(Ruvia, http3_quic_server_accepts_a_client_initial_and_serves_a_request_in_m
     EXPECT_TRUE(served.response_head_.has_value());
     if (served.response_head_) {
         EXPECT_TRUE(served.response_head_->status_ && served.response_head_->status_->status() == ruvia::http_status::ok);
-        EXPECT_TRUE(field(*served.response_head_, "content-length") == std::to_string(body.size()));
+        EXPECT_TRUE(field(*served.response_head_, "content-length") == std::pmr::string(std::to_string(body.size()), ruvia::process_resource()));
         EXPECT_TRUE(field(*served.response_head_, "x-served-by") == std::string_view("ruvia-http3"));
         EXPECT_TRUE(field(*served.response_head_, "date").has_value());
     }
@@ -585,12 +586,12 @@ TEST(Ruvia, http3_quic_server_drains_with_goaway_then_closes_the_connection_grac
     // later naming the first request stream that was not processed.
     EXPECT_TRUE(pair.server().http3().begin_drain() == ruvia::http3_status::accepted);
     pair.exchange();
-    EXPECT_TRUE(goaway_ids(pair.client_events_) == std::vector<std::int64_t>{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID});
+    EXPECT_TRUE(goaway_ids(pair.client_events_) == (std::pmr::vector<std::int64_t>{{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID}, ruvia::process_resource()}));
     EXPECT_TRUE(pair.server().http3().finish_drain() == ruvia::http3_status::accepted);
     pair.exchange();
     EXPECT_TRUE(pair.server().http3().drain_final());
     EXPECT_TRUE(goaway_ids(pair.client_events_) ==
-                (std::vector<std::int64_t>{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID, *stream_id + 4}));
+                (std::pmr::vector<std::int64_t>{{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID, *stream_id + 4}, ruvia::process_resource()}));
 
     pair.server().close(NGHTTP3_H3_NO_ERROR);
     ruvia::http3_quic_datagram close_datagram;
@@ -660,18 +661,18 @@ public:
     udp_h3_test_server& operator=(const udp_h3_test_server&) = delete;
 
     // Waits for the server thread; returns its failure, empty when none.
-    [[nodiscard]] std::string join() {
+    [[nodiscard]] std::pmr::string join() {
         if (thread_.joinable()) {
             thread_.join();
         }
-        return failure_;
+        return std::pmr::string(failure_, ruvia::process_resource());
     }
 
 private:
     struct served_stream final {
         std::optional<ruvia::http3_request_head> head_;
-        std::string request_body_;
-        std::string response_body_;
+        std::pmr::string request_body_{ruvia::process_resource()};
+        std::pmr::string response_body_{ruvia::process_resource()};
         std::size_t response_offset_{0};
         bool responding_{false};
         bool finished_{false};
@@ -798,7 +799,7 @@ private:
                     continue;
                 }
                 const auto stream_id = headers->stream_id_;
-                auto head = ruvia::http3_request_head::parse(std::move(*headers), std::pmr::get_default_resource());
+                auto head = ruvia::http3_request_head::parse(std::move(*headers), ruvia::process_resource());
                 if (!head) {
                     connection.reset_stream(stream_id, NGHTTP3_H3_MESSAGE_ERROR);
                     streams_.erase(stream_id);
@@ -897,16 +898,16 @@ private:
     asio::ip::udp::endpoint peer_;
     asio::io_context io_;
     asio::ip::udp::socket socket_;
-    std::vector<std::byte> input_ = std::vector<std::byte>(64 * 1024);
+    std::pmr::vector<std::byte> input_ = std::pmr::vector<std::byte>(64 * 1024, ruvia::process_resource());
     ruvia::http3_quic_datagram output_;
     std::optional<quic_server_session> session_;
-    std::map<std::int64_t, served_stream> streams_;
+    std::pmr::map<std::int64_t, served_stream> streams_{ruvia::process_resource()};
     bool drain_requested_{false};
     bool drain_begun_{false};
     bool drain_notice_pending_flush_{false};
     bool drain_notice_sent_{false};
     std::atomic<bool> stop_{false};
-    std::string failure_;
+    std::pmr::string failure_{ruvia::process_resource()};
     // Started last: every member above is ready before the thread runs.
     std::thread thread_;
 };
@@ -928,28 +929,28 @@ TEST(Ruvia, http3_test_client_exchanges_requests_with_a_udp_loopback_server) {
         const auto hello = client.request("GET", "/hello");
         EXPECT_TRUE(hello.status_ == 200);
         EXPECT_TRUE(hello.body_ == "hello over http/3");
-        EXPECT_TRUE(hello.header("Content-Length") == std::string("17"));
-        EXPECT_TRUE(hello.header("x-request-method") == std::string("GET"));
+        EXPECT_TRUE(hello.header("Content-Length") == std::pmr::string("17", ruvia::process_resource()));
+        EXPECT_TRUE(hello.header("x-request-method") == std::pmr::string("GET", ruvia::process_resource()));
         EXPECT_TRUE(!hello.reset_error_.has_value());
 
         // Larger than both the client's and the server's per-stream output
         // budget (256 KiB) and the initial stream window (1 MiB): the upload
         // and the echo only complete if DATA credit is returned as consumed.
-        std::string upload(1536 * 1024, '\0');
+        std::pmr::string upload(1536 * 1024, '\0', ruvia::process_resource());
         for (std::size_t index = 0; index < upload.size(); ++index) {
             upload[index] = static_cast<char>('a' + index % 23);
         }
         const auto echo = client.request("POST", "/echo", {{"content-type", "application/octet-stream"}}, upload);
         EXPECT_TRUE(echo.status_ == 200);
-        EXPECT_TRUE(echo.header("content-length") == std::to_string(upload.size()));
+        EXPECT_TRUE(echo.header("content-length") == std::pmr::string(std::to_string(upload.size()), ruvia::process_resource()));
         EXPECT_TRUE(echo.body_ == upload);
 
         // Incremental reading: chunks taken one at a time reassemble the body.
-        const std::string streamed_upload(96 * 1024, 's');
+        const std::pmr::string streamed_upload(96 * 1024, 's', ruvia::process_resource());
         const auto stream_id = client.start_request(
             "POST", "/echo", {{"content-type", "application/octet-stream"}}, streamed_upload);
         EXPECT_TRUE(client.wait_for_response_head(stream_id).status_ == 200);
-        std::string streamed;
+        std::pmr::string streamed{ruvia::process_resource()};
         while (auto chunk = client.read_body_chunk(stream_id, 5s)) {
             EXPECT_TRUE(!chunk->empty());
             streamed += *chunk;
@@ -967,7 +968,7 @@ TEST(Ruvia, http3_test_client_exchanges_requests_with_a_udp_loopback_server) {
         EXPECT_TRUE(shutdown.body_ == "draining");
         EXPECT_TRUE(client.wait_until([&] { return client.closed(); }, 5s));
         // Streams 0, 4, 8, 12 and 16 were processed; 20 is the first that was not.
-        EXPECT_TRUE(client.goaway_ids() == (std::vector<std::int64_t>{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID, 20}));
+        EXPECT_TRUE(client.goaway_ids() == (std::pmr::vector<std::int64_t>{{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID, 20}, ruvia::process_resource()}));
         const auto* close_error = ngtcp2_conn_get_ccerr2(client.native_handle());
         EXPECT_TRUE(close_error->type == NGTCP2_CCERR_TYPE_APPLICATION);
         EXPECT_TRUE(close_error->error_code == NGHTTP3_H3_NO_ERROR);
@@ -1045,7 +1046,7 @@ public:
     }
 
     ruvia::task<ruvia::http_response> worker(ruvia::context& context) {
-        const auto id = std::to_string(context.worker().id());
+        const auto id = std::pmr::string(std::to_string(context.worker().id()), ruvia::process_resource());
         co_return context.text(std::pmr::string(id.data(), id.size(), context.arena()));
     }
 
@@ -1057,7 +1058,7 @@ public:
         context.advertise_origins(origins);
         context.draft().priority({.urgency_ = ruvia::http_priority_urgency(2), .incremental_ = true});
         const auto pri = context.req().priority();
-        std::string text = "u=" + std::to_string(pri.urgency_.value()) + ",i=" + (pri.incremental_ ? "1" : "0");
+        std::pmr::string text("u=" + std::pmr::string(std::to_string(pri.urgency_.value()), ruvia::process_resource()) + ",i=" + (pri.incremental_ ? "1" : "0"), ruvia::process_resource());
         co_return context.text(std::pmr::string(text.data(), text.size(), context.arena()));
     }
 
@@ -1067,7 +1068,7 @@ public:
             co_return;
         }
         const auto initial = context.req().priority();
-        std::string first = "u=" + std::to_string(initial.urgency_.value()) + ",i=" + (initial.incremental_ ? "1" : "0") + "\n";
+        std::pmr::string first("u=" + std::pmr::string(std::to_string(initial.urgency_.value()), ruvia::process_resource()) + ",i=" + (initial.incremental_ ? "1" : "0") + "\n", ruvia::process_resource());
         co_await stream.write(first);
         for (int poll = 0; poll < 50; ++poll) {
             const auto current = context.req().priority();
@@ -1077,7 +1078,7 @@ public:
             (void)co_await ruvia::sleep_for(context.worker(), 10ms, context.stop_token());
         }
         const auto updated = context.req().priority();
-        std::string second = "u=" + std::to_string(updated.urgency_.value()) + ",i=" + (updated.incremental_ ? "1" : "0");
+        std::pmr::string second("u=" + std::pmr::string(std::to_string(updated.urgency_.value()), ruvia::process_resource()) + ",i=" + (updated.incremental_ ? "1" : "0"), ruvia::process_resource());
         co_await stream.write(second);
         co_await stream.end();
     }
@@ -1094,8 +1095,8 @@ public:
           enabled_udp_(io_),
           disabled_udp_(io_),
           retry_udp_(io_),
-          base_url_("https://localhost:" + std::to_string(enabled_udp_.endpoint().port())),
-          retry_base_url_("https://localhost:" + std::to_string(retry_udp_.endpoint().port())),
+          base_url_("https://localhost:" + std::pmr::string(std::to_string(enabled_udp_.endpoint().port()), ruvia::process_resource())),
+          retry_base_url_("https://localhost:" + std::pmr::string(std::to_string(retry_udp_.endpoint().port()), ruvia::process_resource())),
           identity_("localhost"),
           app_(ruvia::app()) {
         const auto& key = identity_.private_key_file();
@@ -1195,8 +1196,8 @@ private:
     ruvia::test::udp_port_reservation enabled_udp_;
     ruvia::test::udp_port_reservation disabled_udp_;
     ruvia::test::udp_port_reservation retry_udp_;
-    std::string base_url_;
-    std::string retry_base_url_;
+    std::pmr::string base_url_{ruvia::process_resource()};
+    std::pmr::string retry_base_url_{ruvia::process_resource()};
     ruvia::test::tls_identity identity_;
     ruvia::application& app_;
     std::promise<void> started_;
@@ -1267,7 +1268,7 @@ ruvia::task<void> exercise_outbound_migration(ruvia::event_loop loop,
     std::exception_ptr failure;
     try {
         auto client = owner.client();
-        std::string worker;
+        std::pmr::string worker{ruvia::process_resource()};
         for (int change = 0; change <= 16; ++change) {
             if (change != 0) {
                 co_await client.migrate("127.0.0.1");
@@ -1331,7 +1332,7 @@ ruvia::task<void> exercise_outbound_features(ruvia::event_loop loop,
             auto first = co_await response.stream().text();
             EXPECT_TRUE(first.has_value() && *first == "u=6,i=0\n");
             response.reprioritize({.urgency_ = ruvia::http_priority_urgency(1), .incremental_ = true});
-            std::string remainder;
+            std::pmr::string remainder{ruvia::process_resource()};
             while (auto chunk = co_await response.stream().text()) {
                 remainder.append(*chunk);
             }
@@ -1362,11 +1363,11 @@ ruvia::task<void> run_resumption_lane(ruvia::http_client_handle c,
         auto t1 = co_await r1.text();
         EXPECT_EQ(t1.text(), "retried");
 
-        const std::string payload = "payload-" + std::to_string(lane) + "-" + std::to_string(round);
+        const std::pmr::string payload("payload-" + std::pmr::string(std::to_string(lane), ruvia::process_resource()) + "-" + std::pmr::string(std::to_string(round), ruvia::process_resource()), ruvia::process_resource());
         auto r2 = co_await c.get("/resumption/body").body(payload).send();
         EXPECT_TRUE(r2.ok());
         auto t2 = co_await r2.text();
-        EXPECT_TRUE(t2.text() == "early:" + payload || t2.text() == "one-rtt:" + payload);
+        EXPECT_TRUE(t2.text() == std::pmr::string("early:", ruvia::process_resource()) + payload || t2.text() == std::pmr::string("one-rtt:", ruvia::process_resource()) + payload);
 
         auto r3 = co_await rc.get("/resumption/safe").send();
         EXPECT_TRUE(r3.ok());
@@ -1626,7 +1627,7 @@ TEST(Ruvia, http3_outbound_concurrent_early_data_retry_and_goaway_drain_stress) 
     ruvia::event_loop_pool loops({.loop_count_ = 4, .blocking_pool_ = &blocking});
     loops.start();
     try {
-        std::vector<ruvia::root_task<void>> futures;
+        std::pmr::vector<ruvia::root_task<void>> futures{ruvia::process_resource()};
         futures.reserve(4);
         for (std::size_t idx = 0; idx < 4; ++idx) {
             auto loop = loops.loop(idx);

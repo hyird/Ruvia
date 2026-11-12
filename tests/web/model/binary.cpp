@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 
 #include "memory_resource_fixture.h"
@@ -53,7 +54,7 @@ void check_bytes(const ruvia::bytes& actual, std::span<const std::uint8_t> expec
 }  // namespace
 
 TEST(Ruvia, model_json_bytes_roundtrip_empty_and_all_octets) {
-    std::vector<std::uint8_t> octets(256);
+    std::pmr::vector<std::uint8_t> octets(256, ruvia::process_resource());
     for (std::size_t i = 0; i < octets.size(); ++i) {
         octets[i] = static_cast<std::uint8_t>(i);
     }
@@ -149,10 +150,11 @@ TEST(Ruvia, model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
 }
 
 TEST(Ruvia, model_bytes_partial_parse_and_output_failures_release_storage) {
-    const std::vector<std::uint8_t> first(256, 1);
-    const std::vector<std::uint8_t> second(256, 2);
-    const std::string input = "[" + std::string(ruvia::to_json(ruvia::bytes(first))) + "," +
-                              std::string(ruvia::to_json(ruvia::bytes(second))) + "] ";
+    const std::pmr::vector<std::uint8_t> first(256, 1, ruvia::process_resource());
+    const std::pmr::vector<std::uint8_t> second(256, 2, ruvia::process_resource());
+    const std::pmr::string input("[" + std::pmr::string(ruvia::to_json(ruvia::bytes(first)), ruvia::process_resource()) + "," +
+                                     std::pmr::string(ruvia::to_json(ruvia::bytes(second)), ruvia::process_resource()) + "] ",
+        ruvia::process_resource());
     binary_failing_resource reference((std::numeric_limits<std::size_t>::max)());
     {
         auto parsed_value = ruvia::from_json<ruvia::array<ruvia::bytes>>(input, {.resource_ = &reference});
@@ -178,7 +180,7 @@ TEST(Ruvia, model_bytes_partial_parse_and_output_failures_release_storage) {
             EXPECT_EQ(memory.allocations_.allocation_count(), memory.allocations_.deallocation_count());
         }
     }
-    const std::vector<std::uint8_t> octets(256, 1);
+    const std::pmr::vector<std::uint8_t> octets(256, 1, ruvia::process_resource());
     const ruvia::bytes retained(octets);
     binary_failing_resource successful_output((std::numeric_limits<std::size_t>::max)());
     {

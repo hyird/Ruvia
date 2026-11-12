@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <memory_resource>
 #include <stdexcept>
 
 #include "ruvia/http/hpack.h"
@@ -76,7 +77,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
     ruvia::hpack_encoder::encode_header(partial_block, ":scheme", "https");
     ruvia::hpack_encoder::encode_header(partial_block, ":authority", "example.test");
     ruvia::hpack_encoder::encode_header(partial_block, ":path", "/");
-    std::string partial_frame(ruvia::http2_frame_header_bytes, '\0');
+    std::pmr::string partial_frame(ruvia::http2_frame_header_bytes, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(partial_frame).first(9),
         static_cast<std::uint32_t>(partial_block.size()), ruvia::http2_frame_type::headers, 0x1, 1));
     partial_frame.append(partial_block);
@@ -159,7 +160,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
     while (client.next_event()) {
     }
 
-    std::string altsvc_on_tunnel(ruvia::http2_frame_header_bytes + 8, '\0');
+    std::pmr::string altsvc_on_tunnel(ruvia::http2_frame_header_bytes + 8, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(altsvc_on_tunnel).first(9),
         8, ruvia::http2_frame_type::alternative_service, 0, connect_id));
     EXPECT_TRUE(client.feed(altsvc_on_tunnel) == ruvia::http2_feed_result::accepted);
@@ -180,7 +181,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
         relay.transfer(server, client);
         while (client.next_event()) {
         }
-        std::string altsvc_on_reserved(ruvia::http2_frame_header_bytes + 8, '\0');
+        std::pmr::string altsvc_on_reserved(ruvia::http2_frame_header_bytes + 8, '\0');
         EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(altsvc_on_reserved).first(9),
             8, ruvia::http2_frame_type::alternative_service, 0, pushed2_id));
         EXPECT_TRUE(client.feed(altsvc_on_reserved) == ruvia::http2_feed_result::accepted);

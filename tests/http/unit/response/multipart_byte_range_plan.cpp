@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -19,8 +20,8 @@ using ruvia::test::failing_memory_resource;
 
 namespace {
 
-std::string materialize_multipart(const ruvia::http_multipart_byte_range_plan& plan, std::string_view payload_value) {
-    std::string body;
+std::pmr::string materialize_multipart(const ruvia::http_multipart_byte_range_plan& plan, std::string_view payload_value) {
+    std::pmr::string body;
     for (const auto& segment : plan.segments()) {
         if (segment.kind_ == ruvia::http_multipart_byte_range_plan::segment_kind::metadata) {
             const auto metadata = plan.metadata();
@@ -45,8 +46,8 @@ std::string materialize_multipart(const ruvia::http_multipart_byte_range_plan& p
 
 TEST(Ruvia, multipart_range_plan_serializes_owned_inputs_and_every_segment_exactly) {
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=8-9,0-1", 10);
-    std::string media_type = "text/plain; charset=utf-8";
-    std::string boundary = "range boundary";
+    std::pmr::string media_type = "text/plain; charset=utf-8";
+    std::pmr::string boundary = "range boundary";
     auto plan = ruvia::make_http_multipart_byte_range_plan(
         ranges, 10, media_type, boundary, std::pmr::new_delete_resource());
     media_type.assign(media_type.size(), 'x');
@@ -63,17 +64,19 @@ TEST(Ruvia, multipart_range_plan_serializes_owned_inputs_and_every_segment_exact
 }
 
 TEST(Ruvia, multipart_range_plan_preserves_all_ranges_across_metadata_growth) {
-    std::string field = "bytes=";
-    std::string expected;
+    std::pmr::string field = "bytes=";
+    std::pmr::string expected;
     constexpr std::string_view payload_value = "0123456789abcdefghijklmnopqrstuv";
     for (std::size_t index = 0; index < ruvia::http_byte_range_set::capacity; ++index) {
-        const auto offset = std::to_string(index * 2);
+        char offset_buffer[20];
+        const auto offset_end = std::to_chars(offset_buffer, offset_buffer + sizeof(offset_buffer), index * 2).ptr;
+        const std::string_view offset(offset_buffer, offset_end);
         if (index != 0) {
             field.push_back(',');
         }
-        field.append(offset + "-" + offset);
+        field.append(offset).append("-").append(offset);
         expected.append("--all_ranges\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes ");
-        expected.append(offset + "-" + offset + "/32\r\n\r\n");
+        expected.append(offset).append("-").append(offset).append("/32\r\n\r\n");
         expected.push_back(payload_value[index * 2]);
         expected.append("\r\n");
     }
@@ -123,7 +126,7 @@ TEST(Ruvia, multipart_range_plan_retains_cloned_storage_until_owner_destruction)
 
 TEST(Ruvia, multipart_range_plan_allocation_failures_release_partial_storage_and_allow_retry) {
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
-    const std::string boundary(70, 'b');
+    const std::pmr::string boundary(70, 'b');
     failing_memory_resource resource;
     bool succeeded = false;
     for (std::size_t failure = 0; failure < 64 && !succeeded; ++failure) {
@@ -167,7 +170,7 @@ TEST(Ruvia, multipart_range_plan_formats_uint64_edges_and_reclaims_error_storage
     failing_memory_resource resource;
     const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=18446744073709551613-18446744073709551613,0-0", maximum);
-    const std::string boundary(70, 'b');
+    const std::pmr::string boundary(70, 'b');
     {
         const auto plan = ruvia::make_http_multipart_byte_range_plan(
             ranges, maximum, "text/plain", boundary, &resource);

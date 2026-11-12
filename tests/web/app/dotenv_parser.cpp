@@ -3,10 +3,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 
 #include "scoped_temp_directory.h"
@@ -142,16 +144,16 @@ TEST(Ruvia, dotenv_duplicate_name_in_one_file_is_rejected) {
         "DOTENV_DUP_OTHER=kept\nDOTENV_DUP=first\n\n# comment\nexport DOTENV_DUP = second\n");
     const auto utf8_path = [](const std::filesystem::path& path) {
         const auto text = path.u8string();
-        return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+        return std::pmr::string(reinterpret_cast<const char*>(text.data()), text.size(), ruvia::process_resource());
     };
     auto& app = ruvia::app();
     const auto failure = [&app, &duplicate](ruvia::dotenv_options options) {
         try {
             app.load_dotenv(duplicate, options);
         } catch (const std::invalid_argument& error) {
-            return std::string(error.what());
+            return std::pmr::string(error.what(), ruvia::process_resource());
         }
-        return std::string{};
+        return std::pmr::string{ruvia::process_resource()};
     };
     const auto expected = "invalid dotenv entry in " + utf8_path(duplicate) + ":5: duplicate variable name";
     const auto& env = app.env();
@@ -182,16 +184,16 @@ TEST(Ruvia, dotenv_errors_name_non_ascii_paths_in_utf8) {
     }
     const auto utf8_path = [](const std::filesystem::path& path) {
         const auto text = path.u8string();
-        return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+        return std::pmr::string(reinterpret_cast<const char*>(text.data()), text.size(), ruvia::process_resource());
     };
     auto& app = ruvia::app();
     const auto failure = [&app](const std::filesystem::path& path, ruvia::dotenv_options options) {
         try {
             app.load_dotenv(path, options);
         } catch (const std::exception& error) {
-            return std::string(error.what());
+            return std::pmr::string(error.what(), ruvia::process_resource());
         }
-        return std::string{};
+        return std::pmr::string{ruvia::process_resource()};
     };
 
     EXPECT_EQ(failure(missing, {.missing_file_ = ruvia::dotenv_missing_file_policy::require}),
@@ -238,8 +240,8 @@ TEST(Ruvia, dotenv_invalid_utf8_rejects_all_entries_without_changing_prior_state
     };
     for (const auto value : invalid_values) {
         const auto invalid = write_temp_env(directory.path(), "ruvia_dotenv_utf8_invalid.env",
-            std::string("DOTENV_UTF8_ROLLBACK=changed\nDOTENV_UTF8_PARTIAL=not_committed\nDOTENV_UTF8_INVALID=") +
-                std::string(value) + '\n');
+            std::pmr::string("DOTENV_UTF8_ROLLBACK=changed\nDOTENV_UTF8_PARTIAL=not_committed\nDOTENV_UTF8_INVALID=", ruvia::process_resource()) +
+                std::pmr::string(value, ruvia::process_resource()) + '\n');
         for (const auto policy : policies) {
             EXPECT_THROW(app.load_dotenv(invalid, {.existing_variables_ = policy}), std::invalid_argument);
             EXPECT_EQ(env.get("DOTENV_UTF8_ROLLBACK").value_or(""), "original");

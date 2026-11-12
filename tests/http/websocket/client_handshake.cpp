@@ -71,11 +71,11 @@ public:
 private:
     std::array<char, 24> key_{};
     ruvia::websocket_client_negotiation negotiation_;
-    std::vector<ruvia::http_header> headers_;
+    std::pmr::vector<ruvia::http_header> headers_;
 };
 
-std::string valid_response(std::string_view extra = {}) {
-    std::string wire =
+std::pmr::string valid_response(std::string_view extra = {}) {
+    std::pmr::string wire =
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Accept: ";
@@ -109,14 +109,14 @@ TEST(Ruvia, websocket_client_handshake_prepares_rfc_request) {
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/chat", buffer);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     EXPECT_TRUE(prepared_req != nullptr);
-    const std::string wire(prepared_req->head());
+    const std::pmr::string wire(prepared_req->head());
     EXPECT_TRUE(wire.find("GET /chat HTTP/1.1\r\n") == 0);
-    EXPECT_TRUE(wire.find("Host: example.com\r\n") != std::string::npos);
+    EXPECT_TRUE(wire.find("Host: example.com\r\n") != std::pmr::string::npos);
     EXPECT_TRUE(wire.find("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") !=
-                std::string::npos);
-    EXPECT_TRUE(wire.find("sec-websocket-protocol: chat\r\n") != std::string::npos);
-    EXPECT_TRUE(wire.find("User-Agent: RuviaTest/1\r\n") != std::string::npos);
-    EXPECT_TRUE(wire.find("X-Trace: one\r\n") != std::string::npos);
+                std::pmr::string::npos);
+    EXPECT_TRUE(wire.find("sec-websocket-protocol: chat\r\n") != std::pmr::string::npos);
+    EXPECT_TRUE(wire.find("User-Agent: RuviaTest/1\r\n") != std::pmr::string::npos);
+    EXPECT_TRUE(wire.find("X-Trace: one\r\n") != std::pmr::string::npos);
 }
 
 TEST(Ruvia, websocket_client_handshake_matches_subprotocol_case_exactly) {
@@ -134,10 +134,10 @@ TEST(Ruvia, websocket_client_handshake_rejects_unoffered_or_duplicate_protocol) 
     const std::array protocols{std::string_view{"chat"}};
     const client_handshake handshake({}, protocols);
     for (const auto response_protocol : {std::string_view{"Chat"}, std::string_view{"chat"}}) {
-        const std::string extra = response_protocol == "chat"
-                                      ? "Sec-WebSocket-Protocol: chat\r\n"
-                                        "Sec-WebSocket-Protocol: chat\r\n"
-                                      : "Sec-WebSocket-Protocol: Chat\r\n";
+        const std::pmr::string extra = response_protocol == "chat"
+                                           ? "Sec-WebSocket-Protocol: chat\r\n"
+                                             "Sec-WebSocket-Protocol: chat\r\n"
+                                           : "Sec-WebSocket-Protocol: Chat\r\n";
         const auto response = handshake.parse(valid_response(extra));
         const auto result_value = handshake.validate(response);
         EXPECT_TRUE(!(result_value.index() == 0));
@@ -160,7 +160,7 @@ TEST(Ruvia, websocket_client_handshake_rejects_bad_accept_and_extensions) {
     }
 
     const auto duplicate =
-        handshake.parse(valid_response("Sec-WebSocket-Accept: " + std::string(accept) + "\r\n"));
+        handshake.parse(valid_response("Sec-WebSocket-Accept: " + std::pmr::string(accept) + "\r\n"));
     const auto duplicate_result = handshake.validate(duplicate);
     EXPECT_TRUE(!(duplicate_result.index() == 0));
     if (!(duplicate_result.index() == 0)) {
@@ -229,8 +229,8 @@ TEST(Ruvia, websocket_client_handshake_prepares_ipv6_host) {
         ruvia::http_origin_view::https({.host_ = "[2001:db8::1]", .port_ = 8443}), "/before", buffer);
     const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     EXPECT_TRUE(prepared_req != nullptr);
-    const std::string wire(prepared_req->head());
-    EXPECT_TRUE(wire.find("Host: [2001:db8::1]:8443\r\n") != std::string::npos);
+    const std::pmr::string wire(prepared_req->head());
+    EXPECT_TRUE(wire.find("Host: [2001:db8::1]:8443\r\n") != std::pmr::string::npos);
 }
 
 TEST(Ruvia, websocket_client_handshake_result_view_is_used_while_response_lives) {

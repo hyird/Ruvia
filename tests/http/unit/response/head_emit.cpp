@@ -47,14 +47,14 @@ ruvia::http1_request_connection_plan connection_plan_for(
                : ruvia::plan_http11_request_connection(false);
 }
 
-std::string emit_head(http_response& response, const http1_response_head_plan& plan) {
+std::pmr::string emit_head(http_response& response, const http1_response_head_plan& plan) {
     ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
     ruvia::append_http1_response_head(response, buffer, plan);
     const auto view = buffer.view();
-    return std::string(view.data(), view.size());
+    return std::pmr::string(view.data(), view.size());
 }
 
-std::string emit_buffered_head(http_response& response,
+std::pmr::string emit_buffered_head(http_response& response,
     http_known_method request_method = http_known_method::get,
     ruvia::http_protocol_version protocol_version = ruvia::http_protocol_version::http11) {
     const auto write_plan = ruvia::plan_buffered_http_response_write(request_method, response);
@@ -63,7 +63,7 @@ std::string emit_buffered_head(http_response& response,
     return emit_head(response, response_plan.head_plan());
 }
 
-std::string emit_chunked_stream_head(http_response& response,
+std::pmr::string emit_chunked_stream_head(http_response& response,
     http_known_method request_method = http_known_method::get,
     ruvia::http_protocol_version protocol_version = ruvia::http_protocol_version::http11) {
     return emit_head(response,
@@ -71,7 +71,7 @@ std::string emit_chunked_stream_head(http_response& response,
             connection_plan_for(protocol_version)));
 }
 
-std::string emit_close_delimited_stream_head(http_response& response,
+std::pmr::string emit_close_delimited_stream_head(http_response& response,
     http_known_method request_method = http_known_method::get,
     ruvia::http_protocol_version protocol_version = ruvia::http_protocol_version::http11) {
     return emit_head(response, http1_close_delimited_response_stream_head_plan(
@@ -115,18 +115,18 @@ TEST(Ruvia, http1_head_metadata_body_preserves_declared_or_unknown_representatio
         http_response response;
         response.head_metadata_body();
         const auto unknown = emit_buffered_head(response, http_known_method::head, version);
-        EXPECT_TRUE(unknown.find("Content-Length:") == std::string::npos);
+        EXPECT_TRUE(unknown.find("Content-Length:") == std::pmr::string::npos);
 
         response.header("Content-Length", "256");
         const auto declared = emit_buffered_head(response, http_known_method::head, version);
-        EXPECT_TRUE(declared.find("Content-Length: 256\r\n") != std::string::npos);
+        EXPECT_TRUE(declared.find("Content-Length: 256\r\n") != std::pmr::string::npos);
         const auto get = emit_buffered_head(response, http_known_method::get, version);
-        EXPECT_TRUE(get.find("Content-Length: 0\r\n") != std::string::npos);
+        EXPECT_TRUE(get.find("Content-Length: 0\r\n") != std::pmr::string::npos);
 
         response.remove_header("Content-Length");
         response.body("");
         const auto empty = emit_buffered_head(response, http_known_method::head, version);
-        EXPECT_TRUE(empty.find("Content-Length: 0\r\n") != std::string::npos);
+        EXPECT_TRUE(empty.find("Content-Length: 0\r\n") != std::pmr::string::npos);
     }
 }
 
@@ -136,7 +136,7 @@ TEST(Ruvia, http1_response_head_reserve_preserves_inline_capacity_and_failed_gro
         std::array<std::byte, 256> allocation_storage{};
         std::pmr::monotonic_buffer_resource resource(allocation_storage.data(), allocation_storage.size(), std::pmr::null_memory_resource());
         ruvia::http_response_head_buffer buffer(&resource);
-        const std::string prefix(used, 'p');
+        const std::pmr::string prefix(used, 'p');
         buffer.append(prefix);
         const auto remaining = ruvia::response_head_stack_bytes - used;
         buffer.reserve_additional(0);
@@ -151,9 +151,9 @@ TEST(Ruvia, http1_response_head_reserve_preserves_inline_capacity_and_failed_gro
         }
         EXPECT_TRUE(rejected);
         EXPECT_EQ(buffer.view(), std::string_view(prefix));
-        const std::string suffix(remaining, 's');
+        const std::pmr::string suffix(remaining, 's');
         buffer.append(suffix);
-        const std::string expected = prefix + suffix;
+        const std::pmr::string expected = prefix + suffix;
         EXPECT_EQ(buffer.view(), std::string_view(expected));
         buffer.reset();
         buffer.append("reusable");
@@ -165,7 +165,7 @@ TEST(Ruvia, http1_response_head_reset_preserves_reentrant_refill) {
     ruvia::test::reentrant_memory_resource resource;
     {
         ruvia::http_response_head_buffer buffer(&resource);
-        buffer.append(std::string(ruvia::response_head_retained_heap_bytes + 1, 'h'));
+        buffer.append(std::pmr::string(ruvia::response_head_retained_heap_bytes + 1, 'h'));
         resource.deallocation_context_ = &buffer;
         resource.before_deallocate_ = [](void* context) noexcept {
             static_cast<ruvia::http_response_head_buffer*>(context)->append("next");
@@ -193,12 +193,12 @@ TEST(Ruvia, http1_response_head_assignment_preserves_both_buffers_on_allocation_
                 ruvia::http_response_head_buffer source(&source_resource);
                 target.append("old");
                 if (target_on_heap) {
-                    target.append(std::string(1024, 'o'));
+                    target.append(std::pmr::string(1024, 'o'));
                 }
                 source.append("new");
-                source.append(std::string(4096, 'n'));
-                const std::string previous(target.view());
-                const std::string replacement(source.view());
+                source.append(std::pmr::string(4096, 'n'));
+                const std::pmr::string previous(target.view());
+                const std::pmr::string replacement(source.view());
                 const auto assign = [&] {
                     if (move) {
                         target = std::move(source);
@@ -292,13 +292,13 @@ TEST(Ruvia, http1_response_head_constructors_preserve_content_and_inherit_source
             ruvia::http_response_head_buffer source(&resource);
             source.append("committed");
             if (source_on_heap) {
-                source.append(std::string(4096, 's'));
+                source.append(std::pmr::string(4096, 's'));
             } else {
                 auto* const cursor = source.stack_cursor(1);
                 ASSERT_NE(cursor, nullptr);
                 *cursor = 'x';
             }
-            const std::string expected(source.view());
+            const std::pmr::string expected(source.view());
             auto copy = source;
             EXPECT_EQ(copy.view(), expected);
             EXPECT_EQ(source.view(), expected);
@@ -341,9 +341,9 @@ TEST(Ruvia, http1_response_head_growing_assignment_commits_before_retirement) {
         {
             ruvia::http_response_head_buffer target(&target_resource);
             ruvia::http_response_head_buffer source(&source_resource);
-            target.append(std::string(1024, 'o'));
-            source.append(std::string(ruvia::response_head_retained_heap_bytes + 1, 'n'));
-            const std::string expected(source.view());
+            target.append(std::pmr::string(1024, 'o'));
+            source.append(std::pmr::string(ruvia::response_head_retained_heap_bytes + 1, 'n'));
+            const std::pmr::string expected(source.view());
             assignment_observation observation{&target, &source, expected, move};
             target_resource.deallocation_context_ = &observation;
             target_resource.before_deallocate_ = [](void* context) noexcept {
@@ -383,13 +383,13 @@ TEST(Ruvia, http1_response_head_same_resource_move_does_not_allocate) {
                 ruvia::http_response_head_buffer source(&resource);
                 target.append("old");
                 if (target_on_heap) {
-                    target.append(std::string(1024, 'o'));
+                    target.append(std::pmr::string(1024, 'o'));
                 }
                 source.append("new");
                 if (source_on_heap) {
-                    source.append(std::string(4096, 'n'));
+                    source.append(std::pmr::string(4096, 'n'));
                 }
-                const std::string expected(source.view());
+                const std::pmr::string expected(source.view());
                 resource.fail_after_stl_operation(0);
                 target = std::move(source);
                 resource.allow_allocations();
@@ -409,8 +409,8 @@ TEST(Ruvia, http1_response_head_append_accepts_overlapping_written_inline_ranges
     for (const auto back : {std::size_t{0}, std::size_t{1}, ruvia::response_head_stack_bytes / 8, ruvia::response_head_stack_bytes / 4}) {
         ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
         const auto size = ruvia::response_head_stack_bytes / 4;
-        std::string prefix(size, 'a');
-        std::string generated(size, 'A');
+        std::pmr::string prefix(size, 'a');
+        std::pmr::string generated(size, 'A');
         for (std::size_t index = 0; index < size; ++index) {
             prefix[index] = static_cast<char>('a' + index % 26);
             generated[index] = static_cast<char>('A' + index % 26);
@@ -423,7 +423,7 @@ TEST(Ruvia, http1_response_head_append_accepts_overlapping_written_inline_ranges
         }
         std::memcpy(cursor, generated.data(), size);
         const std::string_view source(cursor - back, size);
-        const std::string expected = prefix + std::string(source);
+        const std::pmr::string expected = prefix + std::pmr::string(source);
         buffer.append(source);
         EXPECT_EQ(buffer.view(), std::string_view(expected));
     }
@@ -446,7 +446,7 @@ TEST(Ruvia, http1_response_head_commit_checks_owner_and_accepts_inline_boundarie
     }
     std::memset(cursor, 's', remaining);
     buffer.commit_stack(cursor + remaining);
-    const std::string expected = "prefix" + std::string(remaining, 's');
+    const std::pmr::string expected = "prefix" + std::pmr::string(remaining, 's');
     EXPECT_EQ(buffer.view(), std::string_view(expected));
     buffer.commit_stack(cursor);
     EXPECT_EQ(buffer.view(), std::string_view("prefix"));
@@ -519,13 +519,13 @@ TEST(Ruvia, http1_response_trailers_preserve_fields_borrowed_from_output) {
             if (reserve_first) {
                 output.reserve(output.size() * 4 + 64);
             }
-            const std::string prefix(output);
+            const std::pmr::string prefix(output);
             const std::array<ruvia::http_header_view, 2> fields{{
                 {std::string_view(output).substr(0, 6), std::string_view(output).substr(6)},
                 {"X-Again", std::string_view(output).substr(6)},
             }};
             const auto section = ruvia::validate_http_response_trailers(fields);
-            const std::string expected = prefix + "X-Tail: " + std::string(size, 'v') + "\r\nX-Again: " + std::string(size, 'v') + "\r\n";
+            const std::pmr::string expected = prefix + "X-Tail: " + std::pmr::string(size, 'v') + "\r\nX-Again: " + std::pmr::string(size, 'v') + "\r\n";
             ruvia::append_http1_response_trailers(output, section);
             EXPECT_EQ(std::string_view(output), std::string_view(expected));
         }
@@ -536,7 +536,7 @@ TEST(Ruvia, http1_response_trailers_leave_existing_output_on_allocation_failure)
     std::array<std::byte, 256> allocation_storage{};
     std::pmr::monotonic_buffer_resource resource(allocation_storage.data(), allocation_storage.size(), std::pmr::null_memory_resource());
     std::pmr::string output("prefix", &resource);
-    const std::string value(4096, 'v');
+    const std::pmr::string value(4096, 'v');
     const std::array<ruvia::http_header_view, 1> fields{{{"X-Long", value}}};
     const auto section = ruvia::validate_http_response_trailers(fields);
     bool rejected = false;
@@ -778,7 +778,7 @@ TEST(Ruvia, response_head_canonicalizes_managed_framing_fields_across_case) {
         return state_value;
     };
     const auto random_case = [&next_value](std::string_view name) {
-        std::string out;
+        std::pmr::string out;
         out.reserve(name.size());
         for (const char c : name) {
             if (c >= 'A' && c <= 'Z') {
@@ -792,7 +792,7 @@ TEST(Ruvia, response_head_canonicalizes_managed_framing_fields_across_case) {
         return out;
     };
     const auto ascii_lower = [](std::string_view text) {
-        std::string out(text);
+        std::pmr::string out(text);
         for (auto& c : out) {
             if (c >= 'A' && c <= 'Z') {
                 c = static_cast<char>(c - 'A' + 'a');
@@ -1053,16 +1053,16 @@ TEST(Ruvia, response_head_heap_spill_preserves_full_output) {
     // the unchecked raw stack sink overflow or the output truncate.
     http_response response(std::pmr::new_delete_resource());
     response.status(ruvia::http_status::ok);
-    const std::string big(200, 'v');
+    const std::pmr::string big(200, 'v');
     for (int i = 0; i < 10; ++i) {
-        response.header("X-Pad-" + std::to_string(i), big);
+        response.header(std::pmr::string("X-Pad-") + std::to_string(i).c_str(), big);
     }
     response.body("body");
     const auto head = emit_buffered_head(response);
 
     EXPECT_TRUE(head.starts_with("HTTP/1.1 200 OK\r\n"));
     for (int i = 0; i < 10; ++i) {
-        EXPECT_TRUE(head.find("X-Pad-" + std::to_string(i) + ": " + big + "\r\n") !=
+        EXPECT_TRUE(head.find(std::pmr::string("X-Pad-") + std::to_string(i).c_str() + ": " + big + "\r\n") !=
                     std::string_view::npos);
     }
     EXPECT_TRUE((head.find("Content-Length: 4\r\n") != std::string_view::npos));
@@ -1071,12 +1071,12 @@ TEST(Ruvia, response_head_heap_spill_preserves_full_output) {
 
 TEST(Ruvia, response_head_rejects_oversized_field_section) {
     http_response oversized(std::pmr::new_delete_resource());
-    oversized.header("X-Oversized", std::string(ruvia::max_http_header_bytes, 'v'));
+    oversized.header("X-Oversized", std::pmr::string(ruvia::max_http_header_bytes, 'v'));
     EXPECT_TRUE(throws_head_error([&] { (void)emit_buffered_head(oversized); }));
 
     http_response many(std::pmr::new_delete_resource());
     for (std::size_t i = 0; i < 80; ++i) {
-        many.header("X-Field-" + std::to_string(i), "value");
+        many.header(std::pmr::string("X-Field-") + std::to_string(i).c_str(), "value");
     }
     EXPECT_TRUE(!emit_buffered_head(many).empty());
 }

@@ -3,16 +3,18 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 
 #include "backend_tls.h"
 
 namespace example {
 
-inline void assign_setting(std::string& target, const environment& env, std::string_view name) {
+inline void assign_setting(std::pmr::string& target, const environment& env, std::string_view name) {
     if (const auto value = env.get(name)) {
         target.assign(*value);
     }
@@ -40,7 +42,7 @@ inline ruvia::db_config database_config(const environment& env, ruvia::db_driver
 
 #ifdef RUVIA_ENABLE_REDIS
 inline ruvia::redis_config redis_config(const environment& env, std::string_view prefix = "RUVIA_REDIS") {
-    const std::string base(prefix);
+    const std::pmr::string base(prefix, ruvia::process_resource());
     ruvia::redis_config config;
     assign_setting(config.host_, env, base + "_HOST");
     assign_setting(config.username_, env, base + "_USER");

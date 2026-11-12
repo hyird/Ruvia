@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <concepts>
+#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -181,14 +182,14 @@ TEST(Ruvia, http1_interim_response_writer_rejects_invalid_fields_transactionally
 }
 
 TEST(Ruvia, http1_interim_response_writer_enforces_size_limit) {
-    std::vector<http_header_view> many(80, http_header_view("X-Hint", "value"));
+    std::pmr::vector<http_header_view> many(80, http_header_view("X-Hint", "value"));
     std::array<char, 2048> many_buffer{};
     const auto many_result = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::early_hints, many),
         many_buffer);
     EXPECT_TRUE(std::holds_alternative<prepared_http1_interim_response>(many_result));
 
-    const std::string oversized_value(ruvia::max_http_header_bytes, 'x');
+    const std::pmr::string oversized_value(ruvia::max_http_header_bytes, 'x');
     const http_header_view oversized[] = {{"X-Hint", oversized_value}};
     EXPECT_TRUE(rejects_without_writing(oversized, '!'));
 }

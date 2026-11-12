@@ -2,8 +2,10 @@
 
 #include <filesystem>
 #include <memory>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include <asio/ssl/context.hpp>
@@ -13,6 +15,8 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "scoped_temp_directory.h"
 #include "test_tls_crypto.h"
@@ -25,11 +29,11 @@ class tls_identity final {
 public:
     // A self-signed identity whose subject CN and only DNS subjectAltName are `name`.
     explicit tls_identity(const char* name)
-        : tls_identity(name, std::string("DNS:") + name) {}
+        : tls_identity(name, std::pmr::string("DNS:", ruvia::process_resource()) + name) {}
 
     // The subject CN is `common_name`; `subject_alt_name` uses OpenSSL's
     // configuration syntax (`DNS:w*.example.com`), and empty omits the extension.
-    tls_identity(const char* common_name, const std::string& subject_alt_name)
+    tls_identity(const char* common_name, std::string_view subject_alt_name)
         : context_(asio::ssl::context::tls_server) {
         std::filesystem::permissions(directory_.path(), std::filesystem::perms::owner_all);
         std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048}), EVP_PKEY_free);
@@ -51,7 +55,7 @@ public:
             X509V3_CTX extension_context{};
             X509V3_set_ctx(&extension_context, certificate.get(), certificate.get(), nullptr, nullptr, 0);
             std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
-                X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, subject_alt_name.c_str()), X509_EXTENSION_free);
+                X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, std::pmr::string(subject_alt_name, ruvia::process_resource()).c_str()), X509_EXTENSION_free);
             if (!extension || X509_add_ext(certificate.get(), extension.get(), -1) != 1) {
                 throw std::runtime_error("cannot name TLS test identity");
             }

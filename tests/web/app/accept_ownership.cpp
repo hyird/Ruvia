@@ -23,6 +23,7 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/web/app.h"
@@ -117,13 +118,12 @@ std::string_view header(std::string_view head, std::string_view name) {
 }
 
 template <typename stream_type>
-std::string exchange(stream_type& stream, std::string_view expected) {
-    const auto request = std::string("POST /accept-owner HTTP/1.1\r\nHost: localhost\r\nContent-Length: ") +
-                         std::to_string(expected.size()) + "\r\n\r\n";
+std::pmr::string exchange(stream_type& stream, std::string_view expected) {
+    const auto request = std::move(std::pmr::string("POST /accept-owner HTTP/1.1\r\nHost: localhost\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(expected.size()))) + "\r\n\r\n";
     asio::write(stream, asio::buffer(request));
     asio::write(stream, asio::buffer(expected.substr(0, expected.size() / 2)));
     asio::write(stream, asio::buffer(expected.substr(expected.size() / 2)));
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::array<char, 4096> buffer{};
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     for (;;) {
@@ -134,7 +134,7 @@ std::string exchange(stream_type& stream, std::string_view expected) {
             throw std::system_error(error);
         }
         const auto head_end = response.find("\r\n\r\n");
-        if (head_end != std::string::npos) {
+        if (head_end != std::pmr::string::npos) {
             const auto head = std::string_view(response).substr(0, head_end);
             const auto length_text = header(head, "Content-Length");
             if (length_text.empty()) {
@@ -154,7 +154,7 @@ std::string exchange(stream_type& stream, std::string_view expected) {
                 if (worker.empty()) {
                     throw std::runtime_error("missing connection owner identity");
                 }
-                return std::string(worker);
+                return std::pmr::string(worker, ruvia::process_resource());
             }
         }
         if (std::chrono::steady_clock::now() >= deadline) {
@@ -210,7 +210,7 @@ TEST(Ruvia, app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pen
             throw std::runtime_error("ownership test app did not start");
         }
         EXPECT_EQ(observed->live_.load(), 3U);
-        std::vector<asio::ip::tcp::socket> idle;
+        std::pmr::vector<asio::ip::tcp::socket> idle{ruvia::process_resource()};
         if (cycle != 0) {
             for (unsigned connection = 0; connection != 12; ++connection) {
                 idle.emplace_back(io);

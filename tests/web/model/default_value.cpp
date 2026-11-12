@@ -2,11 +2,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
 
@@ -27,9 +29,9 @@ int failing_default_value() {
     throw std::runtime_error("default evaluation failed");
 }
 
-std::string owned_default_value() {
+std::pmr::string owned_default_value() {
     ++evaluations;
-    return std::string(128, 'd');
+    return std::pmr::string(128, 'd', ruvia::process_resource());
 }
 
 ruvia::json_value dynamic_null_default() {
@@ -100,9 +102,9 @@ TEST(Ruvia, model_default_expression_runs_once_for_absence_not_for_moves) {
 TEST(Ruvia, model_default_expression_exceptions_unwind_partial_owned_fields) {
     evaluations = 0;
     ruvia::test::counting_memory_resource memory;
-    const std::string prefix = "{\"name\":\"" + std::string(128, 'n') + "\"";
+    const std::pmr::string prefix("{\"name\":\"" + std::pmr::string(128, 'n', ruvia::process_resource()) + "\"", ruvia::process_resource());
     {
-        auto supplied = ruvia::from_json<failing_default_model>(prefix + ",\"value\":9}", {.resource_ = &memory});
+        auto supplied = ruvia::from_json<failing_default_model>(std::pmr::string(prefix, ruvia::process_resource()) + ",\"value\":9}", {.resource_ = &memory});
         EXPECT_EQ(supplied.get<"value">()->value_, 9);
         EXPECT_EQ(evaluations, std::size_t{0});
     }
@@ -110,7 +112,7 @@ TEST(Ruvia, model_default_expression_exceptions_unwind_partial_owned_fields) {
     for (std::size_t index = 0; index < 32; ++index) {
         bool failed = false;
         try {
-            (void)ruvia::from_json<failing_default_model>(prefix + "}", {.resource_ = &memory});
+            (void)ruvia::from_json<failing_default_model>(std::pmr::string(prefix, ruvia::process_resource()) + "}", {.resource_ = &memory});
         } catch (const std::runtime_error& error) {
             failed = std::string_view(error.what()) == "default evaluation failed";
         }
@@ -157,7 +159,7 @@ TEST(Ruvia, model_owned_default_is_normalized_to_the_model_resource) {
         }
         EXPECT_EQ(source.live_allocations(), std::size_t{0});
         EXPECT_EQ(evaluations, std::size_t{1});
-        EXPECT_EQ(retained.get<"value">()->view(), std::string_view(std::string(128, 'd')));
+        EXPECT_EQ(retained.get<"value">()->view(), std::string_view(std::pmr::string(128, 'd', ruvia::process_resource())));
         EXPECT_TRUE(!retained.is_present<"value">());
         retained.reset<"value">();
         EXPECT_EQ(destination.live_allocations(), std::size_t{0});

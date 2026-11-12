@@ -1095,7 +1095,8 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
         }
         if (statements_.size() == 1 && !statements_[0].procedural_) {
             out.reserve(1);
-            out.emplace_back(db_migration_options{std::string(id), std::string(statements_[0].sql_), statements_[0].atomicity_});
+            out.emplace_back(db_migration_options{
+                std::pmr::string(id, resource_), std::pmr::string(statements_[0].sql_, resource_), statements_[0].atomicity_});
         } else if (!statements_.empty()) {
             out.reserve(1);
             std::size_t body_size = 12U;
@@ -1106,10 +1107,10 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
             const auto delimiter = detail::select_db_dollar_delimiter(
                 delimiter_buf, [&](std::string_view candidate) noexcept {
                     return std::ranges::any_of(statements_, [&](const auto& s) {
-                        return s.sql_.find(candidate) != std::string::npos;
+                        return s.sql_.find(candidate) != std::string_view::npos;
                     });
                 });
-            std::string sql;
+            std::pmr::string sql(resource_);
             sql.reserve(3U + delimiter.size() * 2U + body_size);
             sql += "DO ";
             sql.append(delimiter);
@@ -1120,19 +1121,21 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
             }
             sql.append(" END ");
             sql.append(delimiter);
-            out.emplace_back(db_migration_options{std::string(id), std::move(sql), db_migration_atomicity::transactional});
+            out.emplace_back(db_migration_options{
+                std::pmr::string(id, resource_), std::move(sql), db_migration_atomicity::transactional});
         }
     } else {
         out.reserve(statements_.size());
         for (size_t i = 0; i < statements_.size(); ++i) {
             std::array<char, http_max_unsigned_decimal_size> digits;
             const auto suffix = http_format_unsigned(digits, static_cast<std::uint64_t>(i + 1U));
-            std::string numbered;
+            std::pmr::string numbered(resource_);
             numbered.reserve(id.size() + 1U + suffix.size());
             numbered.append(id);
             numbered.push_back('_');
             numbered.append(suffix);
-            out.emplace_back(db_migration_options{std::move(numbered), std::string(statements_[i].sql_), statements_[i].atomicity_});
+            out.emplace_back(db_migration_options{
+                std::move(numbered), std::pmr::string(statements_[i].sql_, resource_), statements_[i].atomicity_});
         }
     }
     return out;

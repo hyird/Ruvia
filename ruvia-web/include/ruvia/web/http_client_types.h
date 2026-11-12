@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -9,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client.h"
@@ -145,7 +147,7 @@ struct http_client_config final {
     // entry replaces an earlier one of the same name; max_cookies_ and
     // max_cookie_bytes_ bound the result. Explicit caller Cookie fields are
     // combined independently of the stored jar.
-    std::vector<http_header_view> cookies_{};
+    std::pmr::vector<http_header_view> cookies_{process_resource()};
 };
 
 class http_client_error final : public std::runtime_error {

@@ -5,12 +5,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
@@ -39,7 +41,7 @@ inline ruvia::task<void> query_with(
     ruvia::db_handle handle, std::string_view sql, std::string_view param, pipeline_test::outcome& result) {
     try {
         const ruvia::db_rows rows = co_await handle.query(sql, param);
-        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
+        result.value_ = std::pmr::string(rows.front()["v"].as<std::string_view>().value_or(""), ruvia::process_resource());
     } catch (const ruvia::db_error& error) {
         pipeline_test::record_failure(error, result);
     }
@@ -48,7 +50,7 @@ inline ruvia::task<void> query_with(
 inline ruvia::task<void> transaction_query(ruvia::db_transaction& transaction, pipeline_test::outcome& result, bool& completed) {
     try {
         const auto rows = co_await transaction.query("SELECT v FROM delayed_transaction");
-        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
+        result.value_ = std::pmr::string(rows.front()["v"].as<std::string_view>().value_or(""), ruvia::process_resource());
     } catch (const ruvia::db_error& error) {
         pipeline_test::record_failure(error, result);
     }
@@ -79,8 +81,9 @@ inline ruvia::task<void> finish_stream(ruvia::db_stream_result& stream, bool clo
 TEST(Ruvia, db_mariadb_concurrent_statements_are_pipelined_on_one_connection) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"a"}, .batch_ = 4}, {.rows_ = {"b"}}, {.column_ = "", .affected_rows_ = 3},
-                       {.rows_ = {"d"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .batch_ = 4}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("b", ruvia::process_resource())}, ruvia::process_resource())}, {.column_ = std::pmr::string("", ruvia::process_resource()), .affected_rows_ = 3},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("d", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -100,7 +103,7 @@ TEST(Ruvia, db_mariadb_concurrent_statements_are_pipelined_on_one_connection) {
     EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{3});
     EXPECT_TRUE(outcomes[3].value_ == "d");
     EXPECT_TRUE((peer.maria_queries() ==
-                 std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM b", "UPDATE c SET v = 1", "SELECT v FROM d"}));
+                 std::pmr::vector<std::pmr::string>({std::pmr::string("SELECT v FROM a", ruvia::process_resource()), std::pmr::string("SELECT v FROM b", ruvia::process_resource()), std::pmr::string("UPDATE c SET v = 1", ruvia::process_resource()), std::pmr::string("SELECT v FROM d", ruvia::process_resource())}, ruvia::process_resource())));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -110,9 +113,10 @@ TEST(Ruvia, db_mariadb_concurrent_statements_are_pipelined_on_one_connection) {
 TEST(Ruvia, db_mariadb_failed_pipelined_statement_does_not_fail_the_others) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"a"}, .batch_ = 3},
-                       {.error_ = "Table 'bench.b' doesn't exist", .code_ = 1146, .sql_state_ = "42S02"},
-                       {.rows_ = {"c"}}, {.rows_ = {"d"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .batch_ = 3},
+                                                                                        {.error_ = std::pmr::string("Table 'bench.b' doesn't exist", ruvia::process_resource()), .code_ = 1146, .sql_state_ = std::pmr::string("42S02", ruvia::process_resource())},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("c", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("d", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -140,8 +144,9 @@ TEST(Ruvia, db_mariadb_failed_pipelined_statement_does_not_fail_the_others) {
 TEST(Ruvia, db_mariadb_pipelined_executes_report_their_own_affected_rows_and_insert_ids) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.column_ = "", .affected_rows_ = 1, .insert_id_ = 7, .batch_ = 3},
-                       {.column_ = "", .affected_rows_ = 2}, {.column_ = "", .affected_rows_ = 300, .insert_id_ = 9}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .affected_rows_ = 1, .insert_id_ = 7, .batch_ = 3},
+                                                                                        {.column_ = std::pmr::string("", ruvia::process_resource()), .affected_rows_ = 2}, {.column_ = std::pmr::string("", ruvia::process_resource()), .affected_rows_ = 300, .insert_id_ = 9}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -168,7 +173,7 @@ TEST(Ruvia, db_mariadb_pipelined_executes_report_their_own_affected_rows_and_ins
 TEST(Ruvia, db_mariadb_procedure_results_are_drained_before_the_next_statement) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"p"}, .procedure_ = true, .batch_ = 2}, {.rows_ = {"after"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("p", ruvia::process_resource())}, ruvia::process_resource()), .procedure_ = true, .batch_ = 2}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("after", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -194,10 +199,11 @@ TEST(Ruvia, db_mariadb_stream_completion_preserves_result_boundaries_and_pipelin
     using mariadb_pipeline_test::peer_type;
     for (const bool close_early : {false, true}) {
         for (const bool empty : {false, true}) {
-            peer_type peer({{.rows_ = {"kept", "also kept"}},
-                               {.rows_ = empty ? std::vector<std::string>{} : std::vector<std::string>{"first", "second"},
-                                   .procedure_ = true},
-                               {.rows_ = {"after a"}, .batch_ = 2}, {.rows_ = {"after b"}}},
+            peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("kept", ruvia::process_resource()), std::pmr::string("also kept", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                                {.rows_ = std::pmr::vector<std::pmr::string>(empty ? std::pmr::vector<std::pmr::string>(ruvia::process_resource()) : std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource()), std::pmr::string("second", ruvia::process_resource())}, ruvia::process_resource()), ruvia::process_resource()),
+                                                                                                    .procedure_ = true},
+                                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("after a", ruvia::process_resource())}, ruvia::process_resource()), .batch_ = 2}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("after b", ruvia::process_resource())}, ruvia::process_resource())}},
+                               ruvia::process_resource()),
                 peer_type::after_startup::idle);
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -210,12 +216,12 @@ TEST(Ruvia, db_mariadb_stream_completion_preserves_result_boundaries_and_pipelin
                 if (close_early) {
                     co_await stream.close();
                 } else {
-                    std::vector<std::string> values;
+                    std::pmr::vector<std::pmr::string> values{ruvia::process_resource()};
                     while (auto row = co_await stream.read()) {
                         values.emplace_back((*row)["v"].as<std::string_view>().value_or(""));
                     }
-                    EXPECT_TRUE((values == (empty ? std::vector<std::string>{}
-                                                  : std::vector<std::string>{"first", "second"})));
+                    EXPECT_TRUE((values == (empty ? std::pmr::vector<std::pmr::string>(ruvia::process_resource())
+                                                  : std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource()), std::pmr::string("second", ruvia::process_resource())}, ruvia::process_resource()))));
                 }
                 EXPECT_TRUE(!stream.active());
                 co_await stream.close();
@@ -240,8 +246,9 @@ TEST(Ruvia, db_mariadb_stream_completion_preserves_result_boundaries_and_pipelin
 TEST(Ruvia, db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"first"}, .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
-                       {.rows_ = {"clean"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource())}, ruvia::process_resource()), .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("clean", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::reaccept);
     auto config = mariadb_pipeline_test::config(peer);
     config.read_timeout_.reset();
@@ -279,7 +286,7 @@ TEST(Ruvia, db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) 
     EXPECT_TRUE(next.value_ == "clean");
     EXPECT_EQ(peer.startups(), std::size_t{2});
     EXPECT_TRUE((peer.maria_queries() ==
-                 std::vector<std::string>{"CALL delayed_status()", "SELECT v FROM after_stream_timeout"}));
+                 std::pmr::vector<std::pmr::string>({std::pmr::string("CALL delayed_status()", ruvia::process_resource()), std::pmr::string("SELECT v FROM after_stream_timeout", ruvia::process_resource())}, ruvia::process_resource())));
 }
 
 // A separate close() gets a fresh operation budget, even after the stream has
@@ -287,8 +294,9 @@ TEST(Ruvia, db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) 
 TEST(Ruvia, db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"first"}, .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
-                       {.rows_ = {"clean"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource())}, ruvia::process_resource()), .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("clean", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto config = mariadb_pipeline_test::config(peer);
     config.read_timeout_.reset();
@@ -327,7 +335,7 @@ TEST(Ruvia, db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
     EXPECT_TRUE(next.value_ == "clean");
     EXPECT_EQ(peer.startups(), std::size_t{1});
     EXPECT_TRUE((peer.maria_queries() ==
-                 std::vector<std::string>{"CALL close_after_idle()", "SELECT v FROM after_explicit_close"}));
+                 std::pmr::vector<std::pmr::string>({std::pmr::string("CALL close_after_idle()", ruvia::process_resource()), std::pmr::string("SELECT v FROM after_explicit_close", ruvia::process_resource())}, ruvia::process_resource())));
 }
 
 // A rejected result shape still ran its SQL. BEGIN and disabled autocommit
@@ -340,7 +348,7 @@ TEST(Ruvia, db_mariadb_rowless_stream_checks_session_state_before_releasing_its_
         const std::string_view sql = status == 3   ? "START TRANSACTION"
                                      : status == 0 ? "SET autocommit = 0"
                                                    : "UPDATE t SET v = 1";
-        peer_type peer({{.column_ = "", .status_ = status}, {.rows_ = {"next"}}},
+        peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .status_ = status}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("next", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()),
             status == 2 ? peer_type::after_startup::idle : peer_type::after_startup::reaccept);
         auto& context_value = test::new_test_io_context();
         auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -369,8 +377,9 @@ TEST(Ruvia, db_mariadb_stream_completion_retires_transactional_connections) {
     using mariadb_pipeline_test::peer_type;
     for (const std::uint16_t status : {std::uint16_t{3}, std::uint16_t{0}}) {
         for (const bool close_early : {false, true}) {
-            peer_type peer({{.rows_ = {"first", "second"}, .status_ = status, .procedure_ = true},
-                               {.rows_ = {"next"}}},
+            peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource()), std::pmr::string("second", ruvia::process_resource())}, ruvia::process_resource()), .status_ = status, .procedure_ = true},
+                                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("next", ruvia::process_resource())}, ruvia::process_resource())}},
+                               ruvia::process_resource()),
                 peer_type::after_startup::reaccept);
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -404,7 +413,7 @@ TEST(Ruvia, db_mariadb_stream_completion_retires_transactional_connections) {
 TEST(Ruvia, db_mariadb_pipelined_statement_of_the_wrong_shape_is_refused_alone) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"x"}, .batch_ = 3}, {.column_ = "", .affected_rows_ = 1}, {.rows_ = {"z"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("x", ruvia::process_resource())}, ruvia::process_resource()), .batch_ = 3}, {.column_ = std::pmr::string("", ruvia::process_resource()), .affected_rows_ = 1}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("z", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -439,8 +448,7 @@ TEST(Ruvia, db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others)
             // The first statement's command goes out as it arrives; the others
             // wait for the reader's next turn, which comes after the stop.
             const bool unsent = cancel && abandoned_index == 1;
-            std::vector<mariadb_pipeline_test::reply> replies{
-                {.rows_ = {"a"}, .deferred_ = true, .batch_ = unsent ? std::size_t{2} : std::size_t{3}}};
+            std::pmr::vector<mariadb_pipeline_test::reply> replies({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true, .batch_ = unsent ? std::size_t{2} : std::size_t{3}}}, ruvia::process_resource());
             if (!unsent) {
                 replies.push_back({.rows_ = {"b"}});
             }
@@ -495,7 +503,7 @@ TEST(Ruvia, db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others)
 TEST(Ruvia, db_mariadb_connection_is_closed_when_every_pipelined_statement_is_abandoned) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"a"}, .deferred_ = true}, {.rows_ = {"c"}}}, peer_type::after_startup::reaccept);
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("c", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
@@ -516,7 +524,7 @@ TEST(Ruvia, db_mariadb_connection_is_closed_when_every_pipelined_statement_is_ab
     EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
     EXPECT_TRUE(outcomes[2].value_ == "c");
     // The second statement was stopped before its command went out.
-    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM a", "SELECT v FROM c"}));
+    EXPECT_TRUE((peer.maria_queries() == std::pmr::vector<std::pmr::string>({std::pmr::string("SELECT v FROM a", ruvia::process_resource()), std::pmr::string("SELECT v FROM c", ruvia::process_resource())}, ruvia::process_resource())));
     EXPECT_EQ(peer.startups(), std::size_t{2});
 }
 
@@ -526,8 +534,9 @@ TEST(Ruvia, db_mariadb_connection_is_closed_when_every_pipelined_statement_is_ab
 TEST(Ruvia, db_mariadb_waiting_transaction_is_not_starved_by_pipelined_statements) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"a"}, .deferred_ = true}, {.column_ = "", .status_ = 3}, {.column_ = ""},
-                       {.rows_ = {"b"}}, {.rows_ = {"c"}}, {.rows_ = {"d"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}, {.column_ = std::pmr::string("", ruvia::process_resource()), .status_ = 3}, {.column_ = std::pmr::string("", ruvia::process_resource())},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("b", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("c", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("d", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -549,8 +558,9 @@ TEST(Ruvia, db_mariadb_waiting_transaction_is_not_starved_by_pipelined_statement
     EXPECT_TRUE(outcomes[1].value_ == "b");
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "d");
-    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM a", "START TRANSACTION", "COMMIT",
-                                             "SELECT v FROM b", "SELECT v FROM c", "SELECT v FROM d"}));
+    EXPECT_TRUE((peer.maria_queries() == std::pmr::vector<std::pmr::string>({std::pmr::string("SELECT v FROM a", ruvia::process_resource()), std::pmr::string("START TRANSACTION", ruvia::process_resource()), std::pmr::string("COMMIT", ruvia::process_resource()),
+                                                                                std::pmr::string("SELECT v FROM b", ruvia::process_resource()), std::pmr::string("SELECT v FROM c", ruvia::process_resource()), std::pmr::string("SELECT v FROM d", ruvia::process_resource())},
+                                             ruvia::process_resource())));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -560,7 +570,7 @@ TEST(Ruvia, db_mariadb_lost_connection_fails_every_pipelined_statement) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     for (const bool first_answered : {false, true}) {
-        std::vector<mariadb_pipeline_test::reply> replies;
+        std::pmr::vector<mariadb_pipeline_test::reply> replies{ruvia::process_resource()};
         if (first_answered) {
             replies.push_back({.rows_ = {"a"}});
         }
@@ -595,11 +605,11 @@ TEST(Ruvia, db_mariadb_close_ends_pipelined_statements_in_every_phase) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     constexpr std::size_t statement_count = 40;
-    peer_type peer({{.rows_ = {"x"}, .deferred_ = true}}, peer_type::after_startup::idle);
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("x", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}}, ruvia::process_resource()), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
-    std::vector<pipeline_test::outcome> outcomes(statement_count);
+    std::pmr::vector<pipeline_test::outcome> outcomes(statement_count, ruvia::process_resource());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         const auto handle = connected.handle();
         task_scope statements(connected.worker());
@@ -619,8 +629,9 @@ TEST(Ruvia, db_mariadb_close_ends_pipelined_statements_in_every_phase) {
 TEST(Ruvia, db_mariadb_read_timeout_fails_every_pipelined_statement) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"a"}, .deferred_ = true, .batch_ = 3}, {.rows_ = {"b"}}, {.rows_ = {"c"}},
-                       {.rows_ = {"d"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true, .batch_ = 3}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("b", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("c", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("d", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::reaccept);
     auto config = mariadb_pipeline_test::config(peer);
     config.read_timeout_ = std::chrono::milliseconds(100);
@@ -652,8 +663,9 @@ TEST(Ruvia, db_mariadb_read_timeout_fails_every_pipelined_statement) {
 TEST(Ruvia, db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retires_its_lease) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.column_ = "", .status_ = 3},
-                       {.rows_ = {"late"}, .status_ = 3, .hold_ = 1}, {.rows_ = {"clean"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .status_ = 3},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("late", ruvia::process_resource())}, ruvia::process_resource()), .status_ = 3, .hold_ = 1}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("clean", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::reaccept);
     auto config = mariadb_pipeline_test::config(peer);
     config.read_timeout_ = std::chrono::milliseconds(100);
@@ -685,8 +697,9 @@ TEST(Ruvia, db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retir
     EXPECT_TRUE(next.value_ == "clean");
     EXPECT_EQ(peer.startups(), std::size_t{2});
     EXPECT_TRUE((peer.maria_queries() ==
-                 std::vector<std::string>{"START TRANSACTION", "SELECT v FROM delayed_transaction",
-                     "SELECT v FROM after_transaction_timeout"}));
+                 std::pmr::vector<std::pmr::string>({std::pmr::string("START TRANSACTION", ruvia::process_resource()), std::pmr::string("SELECT v FROM delayed_transaction", ruvia::process_resource()),
+                                                        std::pmr::string("SELECT v FROM after_transaction_timeout", ruvia::process_resource())},
+                     ruvia::process_resource())));
 }
 
 // A statement that leaves its connection inside a transaction (BEGIN through
@@ -695,7 +708,7 @@ TEST(Ruvia, db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retir
 TEST(Ruvia, db_mariadb_connection_left_inside_a_transaction_is_closed) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.column_ = "", .status_ = 3}, {.rows_ = {"fresh"}}}, peer_type::after_startup::reaccept);
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .status_ = 3}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("fresh", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()), peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
@@ -715,7 +728,7 @@ TEST(Ruvia, db_mariadb_connection_left_inside_a_transaction_is_closed) {
 TEST(Ruvia, db_mariadb_pipelined_parameters_are_interpolated) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"x"}}}, peer_type::after_startup::idle);
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("x", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()), peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
@@ -725,7 +738,7 @@ TEST(Ruvia, db_mariadb_pipelined_parameters_are_interpolated) {
         co_await pipeline_test::query_id(handle, "SELECT v FROM t WHERE id = ?", 42, result);
     });
     EXPECT_TRUE(result.value_ == "x");
-    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SELECT v FROM t WHERE id = 42"}));
+    EXPECT_TRUE((peer.maria_queries() == std::pmr::vector<std::pmr::string>({std::pmr::string("SELECT v FROM t WHERE id = 42", ruvia::process_resource())}, ruvia::process_resource())));
 }
 
 // MariaDB numbers server errors above the client library's range as well
@@ -734,9 +747,10 @@ TEST(Ruvia, db_mariadb_pipelined_parameters_are_interpolated) {
 TEST(Ruvia, db_mariadb_pipelined_server_error_above_the_client_range_fails_alone) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"a"}, .batch_ = 3},
-                       {.error_ = "CONSTRAINT `t.v` failed for `db`.`t`", .code_ = 4025, .sql_state_ = "23000"},
-                       {.rows_ = {"c"}}, {.rows_ = {"d"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .batch_ = 3},
+                                                                                        {.error_ = std::pmr::string("CONSTRAINT `t.v` failed for `db`.`t`", ruvia::process_resource()), .code_ = 4025, .sql_state_ = std::pmr::string("23000", ruvia::process_resource())},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("c", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("d", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -765,9 +779,10 @@ TEST(Ruvia, db_mariadb_pipelined_server_error_above_the_client_range_fails_alone
 TEST(Ruvia, db_mariadb_server_error_ending_the_session_closes_the_connection) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.rows_ = {"a"}, .batch_ = 2},
-                       {.error_ = "Connection was killed", .code_ = 1927, .sql_state_ = "70100"},
-                       {.rows_ = {"fresh"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource()), .batch_ = 2},
+                                                                                        {.error_ = std::pmr::string("Connection was killed", ruvia::process_resource()), .code_ = 1927, .sql_state_ = std::pmr::string("70100", ruvia::process_resource())},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("fresh", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -796,9 +811,10 @@ TEST(Ruvia, db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_ne
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
     constexpr std::uint16_t no_backslash_escapes = 512;
-    peer_type peer({{.column_ = "", .status_ = 2 | no_backslash_escapes, .batch_ = 2},
-                       {.rows_ = {"x"}, .status_ = 2 | no_backslash_escapes},
-                       {.rows_ = {"y"}, .status_ = 2 | no_backslash_escapes}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .status_ = 2 | no_backslash_escapes, .batch_ = 2},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("x", ruvia::process_resource())}, ruvia::process_resource()), .status_ = 2 | no_backslash_escapes},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("y", ruvia::process_resource())}, ruvia::process_resource()), .status_ = 2 | no_backslash_escapes}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -816,8 +832,9 @@ TEST(Ruvia, db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_ne
     EXPECT_TRUE(outcomes[1].value_ == "x");
     EXPECT_TRUE(outcomes[2].value_ == "y");
     EXPECT_TRUE((peer.maria_queries() ==
-                 std::vector<std::string>{"SET sql_mode = 'NO_BACKSLASH_ESCAPES'", "SELECT 'x'' , 1 AS w -- ' AS v",
-                     "SELECT 'y\\'' , 2 AS w -- ' AS v"}));
+                 std::pmr::vector<std::pmr::string>({std::pmr::string("SET sql_mode = 'NO_BACKSLASH_ESCAPES'", ruvia::process_resource()), std::pmr::string("SELECT 'x'' , 1 AS w -- ' AS v", ruvia::process_resource()),
+                                                        std::pmr::string("SELECT 'y\\'' , 2 AS w -- ' AS v", ruvia::process_resource())},
+                     ruvia::process_resource())));
 }
 
 // LOAD DATA LOCAL INFILE answers its command with a request for the file and
@@ -834,9 +851,10 @@ TEST(Ruvia, db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
         std::ofstream file(path, std::ios::binary | std::ios::trunc);
         file << "row1\nrow2\n";
     }
-    const auto load = "LOAD DATA LOCAL INFILE '" + path + "' INTO TABLE t";
-    peer_type peer({{.rows_ = {"a"}}, {.column_ = "", .affected_rows_ = 2, .local_infile_ = path}, {.rows_ = {"c"}},
-                       {.rows_ = {"d"}}},
+    const auto load = std::pmr::string("LOAD DATA LOCAL INFILE '", ruvia::process_resource()) + std::pmr::string(path, ruvia::process_resource()) + "' INTO TABLE t";
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource())}, {.column_ = std::pmr::string("", ruvia::process_resource()), .affected_rows_ = 2, .local_infile_ = std::pmr::string(path, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("c", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("d", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -856,8 +874,9 @@ TEST(Ruvia, db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
     EXPECT_EQ(outcomes[1].affected_rows_, std::uint64_t{2});
     EXPECT_TRUE(outcomes[2].value_ == "c");
     EXPECT_TRUE(outcomes[3].value_ == "d");
-    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM a", "query:" + load,
-                                              "infile:row1\nrow2\n", "query:SELECT v FROM c", "query:SELECT v FROM d"}));
+    EXPECT_TRUE((peer.maria_commands() == std::pmr::vector<std::pmr::string>({std::pmr::string("query:SELECT v FROM a", ruvia::process_resource()), std::pmr::string("query:", ruvia::process_resource()) + load,
+                                                                                 std::pmr::string("infile:row1\nrow2\n", ruvia::process_resource()), std::pmr::string("query:SELECT v FROM c", ruvia::process_resource()), std::pmr::string("query:SELECT v FROM d", ruvia::process_resource())},
+                                              ruvia::process_resource())));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -869,8 +888,8 @@ TEST(Ruvia, db_mariadb_load_data_local_infile_has_the_connection_to_itself) {
 TEST(Ruvia, db_mariadb_refused_load_data_local_infile_fails_alone) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    const auto load = std::string("  LOAD DATA LOCAL INFILE '/nonexistent/ruvia' INTO TABLE t");
-    peer_type peer({{.rows_ = {"a"}}, {.column_ = "", .local_infile_ = "/nonexistent/ruvia"}, {.rows_ = {"c"}}},
+    const auto load = std::pmr::string("  LOAD DATA LOCAL INFILE '/nonexistent/ruvia' INTO TABLE t", ruvia::process_resource());
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("a", ruvia::process_resource())}, ruvia::process_resource())}, {.column_ = std::pmr::string("", ruvia::process_resource()), .local_infile_ = std::pmr::string("/nonexistent/ruvia", ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("c", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()),
         peer_type::after_startup::reaccept);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -887,8 +906,9 @@ TEST(Ruvia, db_mariadb_refused_load_data_local_infile_fails_alone) {
     EXPECT_TRUE(outcomes[0].value_ == "a");
     EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
     EXPECT_TRUE(outcomes[2].value_ == "c");
-    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>{"query:SELECT v FROM a", "query:" + load,
-                                              "infile:", "query:SELECT v FROM c"}));
+    EXPECT_TRUE((peer.maria_commands() == std::pmr::vector<std::pmr::string>({std::pmr::string("query:SELECT v FROM a", ruvia::process_resource()), std::pmr::string("query:", ruvia::process_resource()) + load,
+                                                                                 std::pmr::string("infile:", ruvia::process_resource()), std::pmr::string("query:SELECT v FROM c", ruvia::process_resource())},
+                                              ruvia::process_resource())));
     EXPECT_EQ(peer.startups(), std::size_t{1});
 }
 
@@ -901,7 +921,7 @@ TEST(Ruvia, db_mariadb_refused_load_data_local_infile_fails_alone) {
 TEST(Ruvia, db_mariadb_backslash_escape_reads_the_sessions_character_set) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    peer_type peer({{.column_ = ""}, {.rows_ = {"gbk"}}, {.rows_ = {"x"}}, {.rows_ = {"y"}}},
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::pmr::string("", ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("gbk", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("x", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("y", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()),
         peer_type::after_startup::idle, 1, false);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
@@ -918,8 +938,9 @@ TEST(Ruvia, db_mariadb_backslash_escape_reads_the_sessions_character_set) {
     EXPECT_TRUE(!outcomes[0].error_.has_value());
     EXPECT_TRUE(outcomes[1].value_ == "x");
     EXPECT_TRUE(outcomes[2].value_ == "y");
-    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>{"SET NAMES gbk", "SELECT @@character_set_client",
-                                             "SELECT '\xbf\\'' , 1 -- ' AS v", "SELECT 'a\\\\b' AS v"}));
+    EXPECT_TRUE((peer.maria_queries() == std::pmr::vector<std::pmr::string>({std::pmr::string("SET NAMES gbk", ruvia::process_resource()), std::pmr::string("SELECT @@character_set_client", ruvia::process_resource()),
+                                                                                std::pmr::string("SELECT '\xbf\\'' , 1 -- ' AS v", ruvia::process_resource()), std::pmr::string("SELECT 'a\\\\b' AS v", ruvia::process_resource())},
+                                             ruvia::process_resource())));
 }
 
 // In UTF-8 no byte of a multibyte character is 0x5C, so a backslash after
@@ -930,19 +951,18 @@ TEST(Ruvia, db_mariadb_backslash_escape_reads_the_sessions_character_set) {
 TEST(Ruvia, db_mariadb_tracked_utf8mb4_session_escapes_without_reading_its_character_set) {
     using namespace ruvia;
     using mariadb_pipeline_test::peer_type;
-    const std::vector<std::pair<std::string, std::string>> gbk{
-        {"character_set_client", "gbk"}, {"character_set_connection", "gbk"}};
-    const std::vector<std::pair<std::string, std::string>> utf8mb4{
-        {"character_set_client", "utf8mb4"}, {"character_set_connection", "utf8mb4"}};
-    peer_type peer({{.rows_ = {"x"}}, {.column_ = "", .tracked_ = gbk}, {.rows_ = {"gbk"}}, {.rows_ = {"y"}},
-                       {.column_ = "", .tracked_ = utf8mb4}, {.column_ = ""}, {.rows_ = {"utf8mb4"}},
-                       {.rows_ = {"z"}}},
+    const std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> gbk({{std::pmr::string("character_set_client", ruvia::process_resource()), std::pmr::string("gbk", ruvia::process_resource())}, {std::pmr::string("character_set_connection", ruvia::process_resource()), std::pmr::string("gbk", ruvia::process_resource())}}, ruvia::process_resource());
+    const std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> utf8mb4({{std::pmr::string("character_set_client", ruvia::process_resource()), std::pmr::string("utf8mb4", ruvia::process_resource())}, {std::pmr::string("character_set_connection", ruvia::process_resource()), std::pmr::string("utf8mb4", ruvia::process_resource())}}, ruvia::process_resource());
+    peer_type peer(std::pmr::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("x", ruvia::process_resource())}, ruvia::process_resource())}, {.column_ = std::pmr::string("", ruvia::process_resource()), .tracked_ = std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>>(gbk, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("gbk", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("y", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                        {.column_ = std::pmr::string("", ruvia::process_resource()), .tracked_ = std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>>(utf8mb4, ruvia::process_resource())}, {.column_ = std::pmr::string("", ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("utf8mb4", ruvia::process_resource())}, ruvia::process_resource())},
+                                                                                        {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("z", ruvia::process_resource())}, ruvia::process_resource())}},
+                       ruvia::process_resource()),
         peer_type::after_startup::idle);
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
     std::array<pipeline_test::outcome, 6> outcomes;
-    const std::string jose = "Jos\xc3\xa9\\x";
+    const std::pmr::string jose("Jos\xc3\xa9\\x", ruvia::process_resource());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
         task_scope statements(connected.worker());
@@ -958,8 +978,9 @@ TEST(Ruvia, db_mariadb_tracked_utf8mb4_session_escapes_without_reading_its_chara
     EXPECT_TRUE(outcomes[2].value_ == "y");
     EXPECT_TRUE(outcomes[5].value_ == "z");
     EXPECT_TRUE((peer.maria_queries() ==
-                 std::vector<std::string>{"SELECT 'Jos\xc3\xa9\\\\x' AS v", "SET NAMES gbk", "SELECT @@character_set_client",
-                     "SELECT '\xbf\\'' , 1 -- ' AS v", "SET NAMES utf8mb4", "CALL p()", "SELECT @@character_set_client",
-                     "SELECT 'Jos\xc3\xa9\\\\x' AS w"}));
+                 std::pmr::vector<std::pmr::string>({std::pmr::string("SELECT 'Jos\xc3\xa9\\\\x' AS v", ruvia::process_resource()), std::pmr::string("SET NAMES gbk", ruvia::process_resource()), std::pmr::string("SELECT @@character_set_client", ruvia::process_resource()),
+                                                        std::pmr::string("SELECT '\xbf\\'' , 1 -- ' AS v", ruvia::process_resource()), std::pmr::string("SET NAMES utf8mb4", ruvia::process_resource()), std::pmr::string("CALL p()", ruvia::process_resource()), std::pmr::string("SELECT @@character_set_client", ruvia::process_resource()),
+                                                        std::pmr::string("SELECT 'Jos\xc3\xa9\\\\x' AS w", ruvia::process_resource())},
+                     ruvia::process_resource())));
 }
 #endif

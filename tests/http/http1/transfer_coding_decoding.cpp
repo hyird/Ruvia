@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <memory_resource>
+
 #include "content_decoding_fixture.h"
 #include "http1_request_message_fixture.h"
 
@@ -61,11 +63,11 @@ private:
 
 TEST(Ruvia, transfer_coding_stack_decodes_reverse_order_with_tiny_scratch) {
     constexpr std::string_view plain = "stacked transfer coding payload";
-    const std::string inner = gzip_compress(plain);
-    const std::string wire = zlib_deflate_compress(inner);
+    const std::pmr::string inner = gzip_compress(plain);
+    const std::pmr::string wire = zlib_deflate_compress(inner);
     constexpr std::array codings{http_transfer_coding::gzip, http_transfer_coding::deflate};
     decoder_memory_resource memory;
-    std::string decoded;
+    std::pmr::string decoded;
     std::array<char, 1> scratch{};
     {
         ruvia::http_transfer_coding_stack_decoder stack(
@@ -177,7 +179,7 @@ TEST(Ruvia, transfer_coding_stack_construction_failure_releases_partial_state) {
 TEST(Ruvia, transfer_coding_stack_accepts_the_bounded_sequence_and_reclaims_all_stages) {
     constexpr std::string_view plain = "bounded sequence payload";
     std::array<http_transfer_coding, ruvia::max_transfer_codings> codings{};
-    std::string wire(plain);
+    std::pmr::string wire(plain);
     for (std::size_t index = 0; index < codings.size(); ++index) {
         codings[index] = index % 2 == 0 ? http_transfer_coding::gzip : http_transfer_coding::deflate;
         wire = index % 2 == 0 ? gzip_compress(wire) : zlib_deflate_compress(wire);
@@ -227,7 +229,7 @@ TEST(Ruvia, transfer_coding_stack_owns_sequence_and_decodes_one_deflate_stage) {
 }
 
 TEST(Ruvia, transfer_coding_stack_applies_decoded_limit_to_each_layer) {
-    const std::string plain(4096, 'x');
+    const std::pmr::string plain(4096, 'x');
     const auto wire = zlib_deflate_compress(gzip_compress(plain));
     constexpr std::array codings{http_transfer_coding::gzip, http_transfer_coding::deflate};
     ruvia::http_transfer_coding_stack_decoder stack(
@@ -260,7 +262,7 @@ TEST(Ruvia, transfer_coding_stack_rejects_intermediate_limit_when_final_layer_fi
     constexpr std::string_view plain = "small decoded body";
     auto inner = gzip_compress(plain);
     inner[3] = static_cast<char>(static_cast<unsigned char>(inner[3]) | 0x04U);
-    std::string extra;
+    std::pmr::string extra;
     extra.push_back('\0');
     extra.push_back('\x04');  // RFC 1952 XLEN: 1024 extra bytes.
     extra.append(1024, 'x');
@@ -294,8 +296,8 @@ TEST(Ruvia, transfer_coding_decoder_gzip_round_trip) {
     http_transfer_coding_stack_decoder decoder(
         std::array{http_transfer_coding::gzip}, resource, protocol_byte_limit::limited(1u << 20));
 
-    const std::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
-    const std::string gz = gzip_compress(plain);
+    const std::pmr::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
+    const std::pmr::string gz = gzip_compress(plain);
     std::pmr::string output(resource);
     EXPECT_TRUE(!append_transfer_decoded(decoder, gz, output).failed_);
     const auto finish_result = decoder.finish_input();
@@ -305,8 +307,8 @@ TEST(Ruvia, transfer_coding_decoder_gzip_round_trip) {
 
 TEST(Ruvia, transfer_coding_decoder_gzip_decodes_every_rfc1952_member) {
     auto* resource = std::pmr::get_default_resource();
-    const std::string first = gzip_compress("first-");
-    const std::string second = gzip_compress("second");
+    const std::pmr::string first = gzip_compress("first-");
+    const std::pmr::string second = gzip_compress("second");
     EXPECT_TRUE(!first.empty());
     EXPECT_TRUE(!second.empty());
 
@@ -329,15 +331,15 @@ TEST(Ruvia, transfer_coding_decoder_gzip_decodes_every_rfc1952_member) {
 }
 
 TEST(Ruvia, transfer_coded_chunked_request_plan_drives_decode_order) {
-    const std::string plain = "RFC 9112 transfer coding followed by final chunked framing";
-    const std::string gz = gzip_compress(plain);
-    const std::string wire_body = chunked(gz);
+    const std::pmr::string plain = "RFC 9112 transfer coding followed by final chunked framing";
+    const std::pmr::string gz = gzip_compress(plain);
+    const std::pmr::string wire_body = chunked(gz);
     EXPECT_TRUE(!gz.empty());
     EXPECT_TRUE(!wire_body.empty());
-    const std::string raw_request = std::string(
-                                        "POST / HTTP/1.1\r\nHost: x\r\n"
-                                        "Transfer-Encoding: gzip, chunked\r\n\r\n") +
-                                    wire_body;
+    const std::pmr::string raw_request = std::pmr::string(
+                                             "POST / HTTP/1.1\r\nHost: x\r\n"
+                                             "Transfer-Encoding: gzip, chunked\r\n\r\n") +
+                                         wire_body;
     const auto parsed_value = parse_http1_request_message(raw_request);
     EXPECT_TRUE(parsed_value.complete());
     const auto* chunked_body = parsed_value.state_.body_plan_.chunked();
@@ -375,10 +377,10 @@ TEST(Ruvia, transfer_coded_chunked_request_plan_drives_decode_order) {
 
 TEST(Ruvia, transfer_coded_chunked_request_accepts_empty_coded_body) {
     constexpr std::string_view wire_body = "0\r\n\r\n";
-    const std::string raw_request = std::string(
-                                        "POST / HTTP/1.1\r\nHost: x\r\n"
-                                        "Transfer-Encoding: gzip, chunked\r\n\r\n") +
-                                    std::string(wire_body);
+    const std::pmr::string raw_request = std::pmr::string(
+                                             "POST / HTTP/1.1\r\nHost: x\r\n"
+                                             "Transfer-Encoding: gzip, chunked\r\n\r\n") +
+                                         std::pmr::string(wire_body);
     const auto parsed_value = parse_http1_request_message(raw_request);
     EXPECT_TRUE(parsed_value.complete());
     const auto* chunked_body = parsed_value.state_.body_plan_.chunked();
@@ -415,8 +417,8 @@ TEST(Ruvia, transfer_coding_decoder_rejects_bomb) {
     http_transfer_coding_stack_decoder decoder(
         std::array{http_transfer_coding::gzip}, resource, protocol_byte_limit::limited(1024));
 
-    const std::string big(1u << 20, 'a');
-    const std::string gz = gzip_compress(big);
+    const std::pmr::string big(1u << 20, 'a');
+    const std::pmr::string gz = gzip_compress(big);
     std::pmr::string output(resource);
     const auto error = append_transfer_decoded(decoder, gz, output);
     EXPECT_TRUE(error.failed_);
@@ -433,12 +435,12 @@ TEST(Ruvia, transfer_coding_decoder_rejects_bomb) {
 }
 
 TEST(Ruvia, transfer_coding_decoder_rebinds_caller_storage_between_steps) {
-    const std::string plain(4096, 'a');
-    std::string input = gzip_compress(plain);
+    const std::pmr::string plain(4096, 'a');
+    std::pmr::string input = gzip_compress(plain);
     http_transfer_coding_stack_decoder decoder(std::array{http_transfer_coding::gzip},
         std::pmr::get_default_resource(), protocol_byte_limit::limited(plain.size()));
     std::array<std::array<char, 7>, 2> windows{};
-    std::string decoded;
+    std::pmr::string decoded;
     bool drained = false;
     for (std::size_t turn = 0; turn < 2048; ++turn) {
         auto& window = windows[turn % windows.size()];
@@ -450,7 +452,7 @@ TEST(Ruvia, transfer_coding_decoder_rebinds_caller_storage_between_steps) {
         }
         // Replace the old input allocation and poison output immediately after
         // consuming its view. The inflater must only retain its own dictionary.
-        std::string next_value(input.substr(result_value.consumed_bytes()));
+        std::pmr::string next_value(input.substr(result_value.consumed_bytes()));
         input.swap(next_value);
         std::fill(window.begin(), window.end(), '#');
         if (result_value.need_input() || result_value.complete()) {
@@ -487,7 +489,7 @@ TEST(Ruvia, transfer_coding_decoder_reclaims_allocations_after_constructor_and_d
             protocol_byte_limit::unlimited());
         EXPECT_TRUE(memory.live_allocations() != 0);
         memory.reject_allocations(true);
-        const auto input = gzip_compress(std::string(4096, 'a'));
+        const auto input = gzip_compress(std::pmr::string(4096, 'a'));
         std::array<char, 1> output{};
         const auto failed = decoder.decode(input, output);
         EXPECT_TRUE(failed.decoder_failure() != nullptr);
@@ -528,7 +530,7 @@ TEST(Ruvia, transfer_coding_decoder_reports_typed_wire_failures) {
     EXPECT_TRUE(ruvia::http_request_transfer_coding_error(invalid_result.failure()->error()).status() ==
                 ruvia::http_status::bad_request);
 
-    std::string truncated = gzip_compress("truncated");
+    std::pmr::string truncated = gzip_compress("truncated");
     truncated.resize(truncated.size() - 4);
     http_transfer_coding_stack_decoder incomplete(
         std::array{http_transfer_coding::gzip}, resource, protocol_byte_limit::limited(1024));
@@ -558,7 +560,7 @@ TEST(Ruvia, transfer_coding_decoder_reports_typed_wire_failures) {
     EXPECT_TRUE(repeated_decoder_failure.failure() == nullptr);
     EXPECT_TRUE(repeated_decoder_failure.decoder_failure() != nullptr);
 
-    std::string trailing = gzip_compress("complete");
+    std::pmr::string trailing = gzip_compress("complete");
     trailing.push_back('x');
     http_transfer_coding_stack_decoder extra(
         std::array{http_transfer_coding::gzip}, resource, protocol_byte_limit::limited(1024));

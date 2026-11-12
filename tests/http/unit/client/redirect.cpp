@@ -160,7 +160,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
 }
 
 TEST(Ruvia, http_client_redirect_request_plan_owns_preserved_method) {
-    std::string method = "PROPFIND";
+    std::pmr::string method = "PROPFIND";
     http_client_request_view request;
     request.method_ = method;
 
@@ -252,9 +252,9 @@ TEST(Ruvia, http_client_ipv6_origin_compares_addresses_not_spellings) {
             const auto origin = http_origin_view::http({.host_ = source});
             EXPECT_TRUE(classify_http_client_origin_authority(origin, destination) ==
                         http_client_origin_authority_status::same_origin);
-            const auto location = std::string("http://") + std::string(destination) + "/next";
+            const auto location = std::pmr::string("http://") + std::pmr::string(destination) + "/next";
             check_resolved_target(origin, "/previous", location, "/next");
-            EXPECT_TRUE(classify_http_client_origin_authority(origin, std::string(destination) + ":81") ==
+            EXPECT_TRUE(classify_http_client_origin_authority(origin, std::pmr::string(destination) + ":81") ==
                         http_client_origin_authority_status::different_origin);
         }
     }
@@ -320,12 +320,12 @@ TEST(Ruvia, http_client_redirect_validates_path_before_dot_segment_removal) {
 TEST(Ruvia, http_client_redirect_empty_reference_path_preserves_base_path) {
     const auto origin = http_origin_view::http({.host_ = "example.com"});
     for (const std::string_view path : {"/a/./page", "/a/../page", "/a//.", "/a/.."}) {
-        const std::string current = std::string(path) + "?old=1";
+        const std::pmr::string current = std::pmr::string(path) + "?old=1";
         for (const std::string_view location : {"", "#fragment"}) {
             check_resolved_target(origin, current, location, current);
         }
-        check_resolved_target(origin, current, "?new=2", std::string(path) + "?new=2");
-        check_resolved_target(origin, current, "?", std::string(path) + "?");
+        check_resolved_target(origin, current, "?new=2", std::pmr::string(path) + "?new=2");
+        check_resolved_target(origin, current, "?", std::pmr::string(path) + "?");
     }
     check_resolved_target(origin, "/a/../page?old=1", "//example.com", "/");
     check_resolved_target(origin, "/a/../page?old=1", "next", "/next");

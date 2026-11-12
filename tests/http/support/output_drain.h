@@ -21,10 +21,10 @@ inline void drain_output(ruvia::http2_connection& connection, std::pmr::string& 
 
 // Collects every pending outbound frame into an owning string so a test can
 // feed, parse or compare the wire bytes.
-inline std::string drain_output(ruvia::http2_connection& connection) {
+inline std::pmr::string drain_output(ruvia::http2_connection& connection) {
     std::pmr::string batch;
     drain_output(connection, batch);
-    return std::string(batch.data(), batch.size());
+    return batch;
 }
 
 // Moves bytes between two connections. feed() input must outlive the events it
@@ -45,7 +45,7 @@ public:
     }
 
 private:
-    std::deque<std::string> retained_;
+    std::pmr::deque<std::pmr::string> retained_;
 };
 
 }  // namespace ruvia::test

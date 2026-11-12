@@ -11,8 +11,10 @@
 #include <exception>
 #include <functional>
 #include <future>
+#include <initializer_list>
 #include <limits>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -41,6 +43,7 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
@@ -87,7 +90,7 @@ public:
 class loopback_response_server final {
 public:
     loopback_response_server(asio::io_context& io_context, const ruvia::worker_handle& worker_value,
-        std::vector<std::string> bodies,
+        std::initializer_list<std::string_view> bodies,
         std::chrono::milliseconds response_delay = std::chrono::milliseconds::zero(),
         bool close_without_response = false,
         std::size_t responses_before_close = 0)
@@ -99,9 +102,8 @@ public:
           responses_before_close_(responses_before_close) {
         responses_.reserve(bodies.size());
         for (const auto& body : bodies) {
-            responses_.push_back("HTTP/1.1 200 OK\r\nContent-Length: " +
-                                 std::to_string(body.size()) +
-                                 "\r\nX-Peer: retained\r\nConnection: close\r\n\r\n" + body);
+            responses_.emplace_back("HTTP/1.1 200 OK\r\nContent-Length: ");
+            responses_.back().append(std::to_string(body.size())).append("\r\nX-Peer: retained\r\nConnection: close\r\n\r\n").append(body);
         }
     }
 
@@ -196,7 +198,7 @@ private:
 
     asio::io_context& io_context_;
     asio::ip::tcp::acceptor acceptor_;
-    std::vector<std::string> responses_;
+    std::pmr::vector<std::pmr::string> responses_{ruvia::process_resource()};
     ruvia::worker_signal done_;
     std::exception_ptr failure_;
     std::function<void()> on_request_;
@@ -257,8 +259,8 @@ public:
             std::rethrow_exception(failure_);
         }
     }
-    std::string head_;
-    std::string body_;
+    std::pmr::string head_{ruvia::process_resource()};
+    std::pmr::string body_{ruvia::process_resource()};
     ruvia::http_request_trailers trailers_{std::pmr::get_default_resource()};
     std::size_t uploaded_bytes_{0};
 
@@ -266,7 +268,7 @@ private:
     asio::awaitable<void> serve() {
         auto& socket = socket_;
         co_await acceptor_.async_accept(socket, asio::use_awaitable);
-        std::string input;
+        std::pmr::string input{ruvia::process_resource()};
         const auto head_size = co_await asio::async_read_until(socket, asio::dynamic_buffer(input), "\r\n\r\n", asio::use_awaitable);
         head_.assign(input.data(), head_size);
         input.erase(0, head_size);
@@ -285,10 +287,9 @@ private:
                     socket, asio::dynamic_buffer(input), asio::transfer_exactly(1), asio::use_awaitable);
             }
             uploaded_bytes_ = input.size();
-            const std::string body(rejected_body_size, 'r');
-            const std::string head = "HTTP/1.1 413 Content Too Large\r\nContent-Length: " +
-                                     std::to_string(body.size()) +
-                                     "\r\nConnection: close\r\n\r\n";
+            const std::pmr::string body(rejected_body_size, 'r', ruvia::process_resource());
+            const std::pmr::string head = std::move(std::pmr::string("HTTP/1.1 413 Content Too Large\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(body.size()))) +
+                                          "\r\nConnection: close\r\n\r\n";
             co_await asio::async_write(socket, asio::buffer(head), asio::use_awaitable);
             co_await asio::async_write(socket, asio::buffer(body), asio::use_awaitable);
             if (mode_ == mode_type::early_final_orderly_while_uploading) {
@@ -312,7 +313,7 @@ private:
             }
             constexpr std::string_view early_hint =
                 "HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n";
-            std::string reply;
+            std::pmr::string reply{ruvia::process_resource()};
             reply.reserve(early_hint_count * early_hint.size() + 25);
             for (std::size_t i = 0; i < early_hint_count; ++i) {
                 reply.append(early_hint);
@@ -413,7 +414,7 @@ public:
         gate_.cancel();
     }
 
-    std::array<std::string, 2> requests_;
+    std::array<std::pmr::string, 2> requests_{std::pmr::string{ruvia::process_resource()}, std::pmr::string{ruvia::process_resource()}};
 
 private:
     void stop() noexcept {
@@ -435,7 +436,7 @@ private:
         }
 #endif
         sockets_[0].emplace(co_await acceptor_.async_accept(asio::use_awaitable));
-        std::string request;
+        std::pmr::string request{ruvia::process_resource()};
         co_await asio::async_read_until(*sockets_[0], asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
         const std::string_view streaming_head = mode_ == cookie_peer_mode::http1_replacement
                                                     ? "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\nSet-Cookie: sid=old\r\n\r\n"
@@ -550,11 +551,11 @@ private:
 // records every request head.
 class scripted_head_peer final {
 public:
-    scripted_head_peer(asio::io_context& io, const ruvia::worker_handle& worker_value, std::vector<std::string> heads)
+    scripted_head_peer(asio::io_context& io, const ruvia::worker_handle& worker_value, std::initializer_list<std::string_view> heads)
         : acceptor_(io, {asio::ip::tcp::v4(), std::uint16_t{0}}),
           deadline_(io),
           done_(worker_value),
-          heads_(std::move(heads)),
+          heads_(heads.begin(), heads.end(), ruvia::process_resource()),
           io_(io) {}
 
     [[nodiscard]] std::uint16_t port() const {
@@ -586,7 +587,7 @@ public:
         }
     }
 
-    std::vector<std::string> requests_;
+    std::pmr::vector<std::pmr::string> requests_{ruvia::process_resource()};
 
 private:
     asio::awaitable<void> serve() {
@@ -601,20 +602,20 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     asio::steady_timer deadline_;
     ruvia::worker_signal done_;
-    std::vector<std::string> heads_;
+    std::pmr::vector<std::pmr::string> heads_{ruvia::process_resource()};
     asio::io_context& io_;
     std::exception_ptr failure_;
     bool complete_{false};
 };
 
-[[nodiscard]] std::string large_gzip_response_body() {
-    const std::string body(128 * 1024, 'z');
+[[nodiscard]] std::pmr::string large_gzip_response_body() {
+    const std::pmr::string body(128 * 1024, 'z', ruvia::process_resource());
     auto result_value = ruvia::encode_http_content(ruvia::http_content_coding::gzip, body,
         {.max_encoded_bytes_ = body.size()});
     if (!result_value.has_value()) {
         throw std::runtime_error("could not encode fake HTTP response body");
     }
-    return std::string(result_value->data(), result_value->size());
+    return std::pmr::string(result_value->data(), result_value->size(), ruvia::process_resource());
 }
 
 class http1_chunked_response_peer final {
@@ -622,13 +623,13 @@ public:
     enum class end_mode_type : unsigned char { terminal_gate,
         wait_for_client_close };
 
-    explicit http1_chunked_response_peer(asio::io_context& io, std::string encoded,
-        end_mode_type end_mode = end_mode_type::terminal_gate, std::string long_header = {})
+    explicit http1_chunked_response_peer(asio::io_context& io, std::string_view encoded,
+        end_mode_type end_mode = end_mode_type::terminal_gate, std::string_view long_header = {})
         : io_(io),
           acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
           gate_(io),
-          encoded_(std::move(encoded)),
-          long_header_(std::move(long_header)),
+          encoded_(encoded, ruvia::process_resource()),
+          long_header_(long_header, ruvia::process_resource()),
           end_mode_(end_mode),
           done_(done_promise_.get_future()) {}
 
@@ -673,15 +674,16 @@ private:
         if (chunk_error != std::errc{}) {
             throw std::runtime_error("HTTP/1 peer could not format chunk size");
         }
-        std::string response =
+        std::pmr::string response{
             "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n"
-            "Trailer: X-End\r\nConnection: close\r\n";
+            "Trailer: X-End\r\nConnection: close\r\n",
+            ruvia::process_resource()};
         if (!long_header_.empty()) {
-            response += "X-Long: " + long_header_ + "\r\n";
+            response.append("X-Long: ").append(long_header_).append("\r\n");
         }
         response += "\r\n";
         response.append(chunk_size.data(), chunk_end);
-        response += "\r\n" + encoded_ + "\r\n";
+        response.append("\r\n").append(encoded_).append("\r\n");
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
 
         if (end_mode_ == end_mode_type::wait_for_client_close) {
@@ -714,8 +716,8 @@ private:
     asio::io_context& io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::steady_timer gate_;
-    std::string encoded_;
-    std::string long_header_;
+    std::pmr::string encoded_{ruvia::process_resource()};
+    std::pmr::string long_header_{ruvia::process_resource()};
     end_mode_type end_mode_;
     std::promise<void> done_promise_;
     std::future<void> done_;
@@ -748,9 +750,9 @@ void run_operation(test_worker& worker_value, asio::io_context& io, operation_ty
 TEST(Ruvia, client_response_body_collectors_return_public_results) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    const std::string expected("\0\xff\xc3", 3);
+    const std::pmr::string expected("\0\xff\xc3", 3, ruvia::process_resource());
     loopback_response_server server(io, worker.handle_, {expected});
-    const std::string client_url = "http://127.0.0.1:" + std::to_string(server.port());
+    const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
     ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
     server.start();
     auto operation = [&]() -> ruvia::task<void> {
@@ -776,12 +778,12 @@ TEST(Ruvia, client_response_body_collectors_return_public_results) {
 }
 
 TEST(Ruvia, client_response_body_completion_preserves_truncation_after_buffered_bytes) {
-    for (const auto& prefix : {std::string{}, std::string("abc")}) {
+    for (const auto& prefix : {std::pmr::string{ruvia::process_resource()}, std::pmr::string("abc", ruvia::process_resource())}) {
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
         scripted_head_peer peer(io, worker.handle_,
-            {"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n" + prefix});
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.port());
+            {std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n", ruvia::process_resource()) + prefix});
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         peer.start();
         auto operation = [&]() -> ruvia::task<void> {
@@ -793,7 +795,7 @@ TEST(Ruvia, client_response_body_completion_preserves_truncation_after_buffered_
                 response_error = error.code();
             }
             EXPECT_TRUE(response_error.has_value());
-            std::string received;
+            std::pmr::string received{ruvia::process_resource()};
             while (received.size() < prefix.size()) {
                 EXPECT_TRUE(!response.stream().complete());
                 const auto chunk = co_await response.stream().text();
@@ -832,7 +834,7 @@ TEST(Ruvia, http_client_preserves_fixed_length_response_before_unsolicited_bytes
     test_worker worker(io);
     scripted_head_peer peer(
         io, worker.handle_, {"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nokunsolicited"});
-    const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
@@ -850,7 +852,7 @@ TEST(Ruvia, client_response_body_claims_its_shared_lane_only_when_started) {
     test_worker worker(io);
     http1_chunked_response_peer peer(io, large_gzip_response_body());
     peer.start();
-    const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.client().get("/body-lane").send();
@@ -901,7 +903,7 @@ void exercise_final_head_cookies(ruvia::http_client_protocol protocol) {
         test_worker worker(io);
         const bool http2 = protocol == ruvia::http_client_protocol::http2_only;
         cookie_stream_peer peer(io, worker.handle_, http2 ? cookie_peer_mode::http2 : cookie_peer_mode::http1);
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
         auto config = local_http_client_config(config_url);
         config.connection_count_ = http2 ? 1 : 2;
         config.protocol_ = protocol;
@@ -927,9 +929,9 @@ void exercise_final_head_cookies(ruvia::http_client_protocol protocol) {
             }
             co_await peer.wait();
             for (const auto& request : peer.requests_) {
-                const bool received = request.find("session=ready") != std::string::npos;
+                const bool received = request.find("session=ready") != std::pmr::string::npos;
                 EXPECT_TRUE(received == (policy == ruvia::http_client_received_cookie_policy::retain_and_send));
-                EXPECT_TRUE(request.find("informational=ignored") == std::string::npos);
+                EXPECT_TRUE(request.find("informational=ignored") == std::pmr::string::npos);
             }
             co_await client.shutdown();
         };
@@ -953,7 +955,7 @@ TEST(Ruvia, http1_slow_body_completion_does_not_roll_back_newer_final_head_cooki
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
     cookie_stream_peer peer(io, worker.handle_, cookie_peer_mode::http1_replacement);
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 2;
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
@@ -976,9 +978,9 @@ TEST(Ruvia, http1_slow_body_completion_does_not_roll_back_newer_final_head_cooki
             EXPECT_TRUE((co_await check.stream().read_all()).empty());
         }
         co_await peer.wait();
-        EXPECT_TRUE(peer.requests_[0].find("sid=old") != std::string::npos);
-        EXPECT_TRUE(peer.requests_[1].find("sid=new") != std::string::npos);
-        EXPECT_TRUE(peer.requests_[1].find("sid=old") == std::string::npos);
+        EXPECT_TRUE(peer.requests_[0].find("sid=old") != std::pmr::string::npos);
+        EXPECT_TRUE(peer.requests_[1].find("sid=new") != std::pmr::string::npos);
+        EXPECT_TRUE(peer.requests_[1].find("sid=old") == std::pmr::string::npos);
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -994,7 +996,7 @@ TEST(Ruvia, http_client_replaces_host_only_cookie_with_same_named_domain_cookie)
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n"
             "Set-Cookie: sid=domain; Domain=127.0.0.1; Path=/\r\n\r\n",
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     // Match the IPv4 peer directly without DNS or IPv6 connection fallback.
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
@@ -1010,9 +1012,9 @@ TEST(Ruvia, http_client_replaces_host_only_cookie_with_same_named_domain_cookie)
         co_await peer.wait();
         EXPECT_EQ(peer.requests_.size(), std::size_t{3});
         if (peer.requests_.size() == 3) {
-            EXPECT_TRUE(peer.requests_[1].find("sid=host") != std::string::npos);
-            EXPECT_TRUE(peer.requests_[2].find("sid=domain") != std::string::npos);
-            EXPECT_TRUE(peer.requests_[2].find("sid=host") == std::string::npos);
+            EXPECT_TRUE(peer.requests_[1].find("sid=host") != std::pmr::string::npos);
+            EXPECT_TRUE(peer.requests_[2].find("sid=domain") != std::pmr::string::npos);
+            EXPECT_TRUE(peer.requests_[2].find("sid=host") == std::pmr::string::npos);
         }
         co_await client.shutdown();
     };
@@ -1033,7 +1035,7 @@ TEST(Ruvia, http_client_jar_follows_user_agent_set_cookie_algorithm) {
          "Set-Cookie: d=4; Domain=127.0.0.1; Domain=\r\n"
          "Set-Cookie: part=insecure; Path=/; Partitioned\r\n\r\n",
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
     config.request_timeout_ = std::chrono::seconds(3);
@@ -1048,15 +1050,15 @@ TEST(Ruvia, http_client_jar_follows_user_agent_set_cookie_algorithm) {
         EXPECT_EQ(peer.requests_.size(), std::size_t{2});
         if (peer.requests_.size() == 2) {
             const auto& check = peer.requests_[1];
-            EXPECT_TRUE(check.find("=nameless") == std::string::npos);
-            EXPECT_TRUE(check.find("=emptyname") == std::string::npos);
-            EXPECT_TRUE(check.find("f=hello world") != std::string::npos);
-            EXPECT_TRUE(check.find("h=1") != std::string::npos);
-            EXPECT_TRUE(check.find("q=3") != std::string::npos);
-            EXPECT_TRUE(check.find("d=4") != std::string::npos);
+            EXPECT_TRUE(check.find("=nameless") == std::pmr::string::npos);
+            EXPECT_TRUE(check.find("=emptyname") == std::pmr::string::npos);
+            EXPECT_TRUE(check.find("f=hello world") != std::pmr::string::npos);
+            EXPECT_TRUE(check.find("h=1") != std::pmr::string::npos);
+            EXPECT_TRUE(check.find("q=3") != std::pmr::string::npos);
+            EXPECT_TRUE(check.find("d=4") != std::pmr::string::npos);
             // Path=/café is stored as given and does not match "/check".
-            EXPECT_TRUE(check.find("p=2") == std::string::npos);
-            EXPECT_TRUE(check.find("part=insecure") == std::string::npos);
+            EXPECT_TRUE(check.find("p=2") == std::pmr::string::npos);
+            EXPECT_TRUE(check.find("part=insecure") == std::pmr::string::npos);
         }
         co_await client.shutdown();
     };
@@ -1068,7 +1070,7 @@ TEST(Ruvia, http_client_merges_explicit_cookie_fields_without_losing_other_heade
     test_worker worker(io);
     scripted_head_peer peer(io, worker.handle_,
         {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
-    const std::string invalid_overridden_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string invalid_overridden_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto invalid_overridden = local_http_client_config(invalid_overridden_url);
     invalid_overridden.cookies_ = {{"sid", "bad value"}, {"sid", "stored"}};
     bool rejected_invalid_overridden = false;
@@ -1078,7 +1080,7 @@ TEST(Ruvia, http_client_merges_explicit_cookie_fields_without_losing_other_heade
         rejected_invalid_overridden = true;
     }
     EXPECT_TRUE(rejected_invalid_overridden);
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.max_cookies_ = 2;
     config.max_cookie_bytes_ = 16;
@@ -1104,7 +1106,7 @@ TEST(Ruvia, http_client_merges_explicit_cookie_fields_without_losing_other_heade
                 if (line_end == std::string_view::npos || line_end == line_start) {
                     break;
                 }
-                const auto line = request.substr(line_start, line_end - line_start);
+                const auto line = std::string_view(request).substr(line_start, line_end - line_start);
                 const auto colon = line.find(':');
                 if (colon != std::string_view::npos) {
                     const auto name = line.substr(0, colon);
@@ -1134,7 +1136,7 @@ TEST(Ruvia, http_client_omits_stored_cookies_from_trace) {
     scripted_head_peer peer(io, worker.handle_,
         {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.cookies_ = {{"sid", "secret"}};
     config.request_timeout_ = std::chrono::seconds(3);
@@ -1148,8 +1150,8 @@ TEST(Ruvia, http_client_omits_stored_cookies_from_trace) {
         co_await peer.wait();
         EXPECT_EQ(peer.requests_.size(), std::size_t{2});
         if (peer.requests_.size() == 2) {
-            EXPECT_TRUE(peer.requests_[0].find("sid=secret") == std::string::npos);
-            EXPECT_TRUE(peer.requests_[1].find("sid=secret") != std::string::npos);
+            EXPECT_TRUE(peer.requests_[0].find("sid=secret") == std::pmr::string::npos);
+            EXPECT_TRUE(peer.requests_[1].find("sid=secret") != std::pmr::string::npos);
         }
         co_await client.shutdown();
     };
@@ -1161,12 +1163,12 @@ TEST(Ruvia, http_client_omits_stored_cookies_from_trace) {
 TEST(Ruvia, http_client_passes_encoded_partial_content_through) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    const std::string gzip_prefix("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03", 10);
+    const std::pmr::string gzip_prefix("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03", 10, ruvia::process_resource());
     scripted_head_peer peer(io, worker.handle_,
         {"HTTP/1.1 206 Partial Content\r\nContent-Encoding: gzip\r\nContent-Range: bytes 0-9/100\r\n"
          "Content-Length: 10\r\nConnection: close\r\n\r\n" +
             gzip_prefix});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.request_timeout_ = std::chrono::seconds(3);
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1189,12 +1191,12 @@ TEST(Ruvia, http_client_passes_encoded_partial_content_through) {
 TEST(Ruvia, http_client_passes_unsupported_content_codings_through) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    const std::string opaque("\x01opaque\xff", 8);
+    const std::pmr::string opaque("\x01opaque\xff", 8, ruvia::process_resource());
     scripted_head_peer peer(io, worker.handle_,
-        {"HTTP/1.1 200 OK\r\nContent-Encoding: x-custom\r\nContent-Length: 8\r\nConnection: close\r\n\r\n" + opaque,
-            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip, compress\r\nContent-Length: 8\r\nConnection: close\r\n\r\n" +
+        {std::pmr::string("HTTP/1.1 200 OK\r\nContent-Encoding: x-custom\r\nContent-Length: 8\r\nConnection: close\r\n\r\n", ruvia::process_resource()) + opaque,
+            std::pmr::string("HTTP/1.1 200 OK\r\nContent-Encoding: gzip, compress\r\nContent-Length: 8\r\nConnection: close\r\n\r\n", ruvia::process_resource()) +
                 opaque});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.request_timeout_ = std::chrono::seconds(3);
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1219,15 +1221,18 @@ TEST(Ruvia, http_client_strips_decoded_content_encoding_and_rejects_overdeep_kno
     const auto gz_hello = *ruvia::encode_http_content(
         ruvia::http_content_coding::gzip, "hello", {.max_encoded_bytes_ = 1024});
     scripted_head_peer peer(io, worker.handle_,
-        {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " +
-                std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello),
-            "HTTP/1.1 200 OK\r\nContent-Encoding: identity, identity, identity, identity, identity, "
-            "identity, identity, identity, gzip\r\nContent-Length: " +
-                std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello),
-            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip\r\n"
-            "Content-Length: " +
-                std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello)});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+        {std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(gz_hello.size()))) + "\r\nConnection: close\r\n\r\n" + std::pmr::string(gz_hello, ruvia::process_resource()),
+            std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Encoding: identity, identity, identity, identity, identity, "
+                                       "identity, identity, identity, gzip\r\nContent-Length: ",
+                ruvia::process_resource())
+                    .append(std::to_string(gz_hello.size()))) +
+                "\r\nConnection: close\r\n\r\n" + std::pmr::string(gz_hello, ruvia::process_resource()),
+            std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Encoding: gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip\r\n"
+                                       "Content-Length: ",
+                ruvia::process_resource())
+                    .append(std::to_string(gz_hello.size()))) +
+                "\r\nConnection: close\r\n\r\n" + std::pmr::string(gz_hello, ruvia::process_resource())});
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.request_timeout_ = std::chrono::seconds(3);
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1259,7 +1264,7 @@ TEST(Ruvia, http_client_preserves_large_unsigned_timeout_bounds) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
     loopback_response_server server(io, worker.handle_, {"first", "second"}, std::chrono::milliseconds(10));
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(server.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
     auto config = local_http_client_config(config_url);
     const auto large = std::chrono::duration<std::uint64_t, std::milli>{std::numeric_limits<std::uint64_t>::max()};
     config.connect_timeout_ = large;
@@ -1291,7 +1296,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
         test_worker worker(io);
         loopback_response_server server(
             io, worker.handle_, {"slow"}, std::chrono::milliseconds(350));
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         auto config = local_http_client_config(config_url);
         config.request_timeout_ = std::chrono::milliseconds(50);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1318,7 +1323,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
         test_worker worker(io);
         loopback_response_server server(
             io, worker.handle_, {"late"}, std::chrono::milliseconds(350));
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         auto config = local_http_client_config(config_url);
         config.request_timeout_ = std::chrono::seconds(5);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1358,7 +1363,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
         test_worker worker(io);
         loopback_response_server server(
             io, worker.handle_, {"cancelled"}, std::chrono::milliseconds(350));
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         ruvia::stop_source base_stop;
         ruvia::stop_source derived_stop;
@@ -1395,7 +1400,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
         test_worker worker(io);
         loopback_response_server server(
             io, worker.handle_, {"retiring"}, std::chrono::milliseconds(350));
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         server.start();
 
@@ -1422,7 +1427,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
         test_worker worker(io);
         loopback_response_server server(
             io, worker.handle_, {"closing"}, std::chrono::milliseconds(350));
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         server.start();
 
@@ -1451,8 +1456,8 @@ TEST(Ruvia, http1_full_response_queue_cancellation_and_deadline_finish_without_r
     for (const bool deadline : {false, true}) {
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
-        loopback_response_server server(io, worker.handle_, {std::string(65536, 'q')});
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(server.port());
+        loopback_response_server server(io, worker.handle_, {std::pmr::string(65536, 'q', ruvia::process_resource())});
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         auto config = local_http_client_config(config_url);
         config.max_response_bytes_ = 1024;
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1497,8 +1502,8 @@ TEST(Ruvia, http1_full_response_queue_cancellation_and_deadline_finish_without_r
 TEST(Ruvia, http1_full_response_queue_loop_stop_joins_without_reading) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    loopback_response_server server(io, worker.handle_, {std::string(65536, 'q')});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(server.port());
+    loopback_response_server server(io, worker.handle_, {std::pmr::string(65536, 'q', ruvia::process_resource())});
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
     auto config = local_http_client_config(config_url);
     config.max_response_bytes_ = 1024;
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1529,7 +1534,7 @@ TEST(Ruvia, http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) 
         test_worker worker(io);
         http1_chunked_response_peer peer(
             io, encoded, http1_chunked_response_peer::end_mode_type::wait_for_client_close);
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
         auto config = local_http_client_config(config_url);
         config.max_response_bytes_ = 1024;
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1579,7 +1584,7 @@ TEST(Ruvia, http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
     const auto encoded = large_gzip_response_body();
     http1_chunked_response_peer peer(
         io, encoded, http1_chunked_response_peer::end_mode_type::wait_for_client_close);
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.max_response_bytes_ = 1024;
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1609,15 +1614,15 @@ TEST(Ruvia, http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
 TEST(Ruvia, http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_each_decode) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    const std::string expected(128 * 1024, 'z');
+    const std::pmr::string expected(128 * 1024, 'z', ruvia::process_resource());
     auto encoded_result = ruvia::encode_http_content(ruvia::http_content_coding::gzip, expected,
         {.max_encoded_bytes_ = expected.size()});
     EXPECT_TRUE(encoded_result.has_value());
     if (!encoded_result.has_value()) {
         return;
     }
-    http1_chunked_response_peer peer(io, std::string(encoded_result->data(), encoded_result->size()));
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    http1_chunked_response_peer peer(io, std::pmr::string(encoded_result->data(), encoded_result->size(), ruvia::process_resource()));
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.max_response_bytes_ = 1024;
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1666,9 +1671,9 @@ TEST(Ruvia, http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds
 TEST(Ruvia, http1_response_storage_remains_worker_owned_after_client_destruction) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    const std::string expected(128 * 1024, 'z');
+    const std::pmr::string expected(128 * 1024, 'z', ruvia::process_resource());
     const auto encoded = large_gzip_response_body();
-    const std::string long_header(32 * 1024, 'h');
+    const std::pmr::string long_header(32 * 1024, 'h', ruvia::process_resource());
     http1_chunked_response_peer peer(io, encoded,
         http1_chunked_response_peer::end_mode_type::terminal_gate, long_header);
     peer.start();
@@ -1676,9 +1681,9 @@ TEST(Ruvia, http1_response_storage_remains_worker_owned_after_client_destruction
     auto operation = [&]() -> ruvia::task<void> {
         std::optional<ruvia::http_client_response> response;
         std::optional<ruvia::http_client_response_bytes> retained_body;
-        std::string collected;
+        std::pmr::string collected{ruvia::process_resource()};
         {
-            const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.port());
+            const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
             ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
             response.emplace(co_await client.client().get("/retained-response").send());
             const auto first = co_await response->stream().read();
@@ -1710,7 +1715,7 @@ TEST(Ruvia, http1_response_storage_remains_worker_owned_after_client_destruction
         EXPECT_EQ(retained_body->bytes().size(), retained_view.size());
         EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(retained_body->bytes().data()),
                       retained_body->bytes().size()),
-            expected.substr(expected.size() - retained_view.size()));
+            std::string_view(expected).substr(expected.size() - retained_view.size()));
         retained_body.reset();
     };
     run_operation(worker, io, operation);
@@ -1724,7 +1729,7 @@ TEST(Ruvia, client_response_cold_collection_survives_client_and_expires_with_res
     server.start();
 
     auto operation = [&]() -> ruvia::task<void> {
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         auto client = std::make_unique<ruvia::http_client>(
             worker.attachment_.loop(), local_http_client_config(client_url));
         std::optional<ruvia::http_client_response> response;
@@ -1758,23 +1763,23 @@ TEST(Ruvia, http_client_sends_heads_beyond_the_retained_buffer_and_rejects_overs
     server.start();
 
     auto operation = [&]() -> ruvia::task<void> {
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         const auto body_text = [](const ruvia::http_client_response_bytes& bytes_value) {
-            return std::string(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.bytes().size());
+            return std::pmr::string(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.bytes().size(), ruvia::process_resource());
         };
         // Larger than the head buffer a connection retains, within the limit.
-        const std::string large_value(20 * 1024, 'v');
+        const std::pmr::string large_value(20 * 1024, 'v', ruvia::process_resource());
         const std::array large_headers{ruvia::http_header_view{"X-Large", large_value}};
         auto large = co_await client.client().get("/large").headers(large_headers).send();
         EXPECT_TRUE(large.status() == ruvia::http_status::ok);
-        EXPECT_EQ(body_text(co_await large.stream().read_all()), std::string("large-head"));
+        EXPECT_EQ(body_text(co_await large.stream().read_all()), std::pmr::string("large-head", ruvia::process_resource()));
         auto small = co_await client.client().get("/small").send();
         EXPECT_TRUE(small.status() == ruvia::http_status::ok);
-        EXPECT_EQ(body_text(co_await small.stream().read_all()), std::string("small-head"));
+        EXPECT_EQ(body_text(co_await small.stream().read_all()), std::pmr::string("small-head", ruvia::process_resource()));
         co_await server.wait();
 
-        const std::string oversized_value(ruvia::max_http_header_bytes + 2048, 'o');
+        const std::pmr::string oversized_value(ruvia::max_http_header_bytes + 2048, 'o', ruvia::process_resource());
         const std::array oversized_headers{ruvia::http_header_view{"X-Oversized", oversized_value}};
         std::optional<ruvia::http_client_error::code_type> rejected;
         try {
@@ -1795,7 +1800,7 @@ TEST(Ruvia, http_client_rejects_connection_options_naming_request_origin_metadat
     server.start();
 
     auto operation = [&]() -> ruvia::task<void> {
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(server.port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(server.port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         const std::array hop_by_hop{ruvia::http_header_view{"Connection", "X-Hop, Proxy-Authorization"},
             ruvia::http_header_view{"X-Hop", "1"}};
@@ -1825,7 +1830,7 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
     http1_chunked_response_peer peer(io, large_gzip_response_body(),
         http1_chunked_response_peer::end_mode_type::wait_for_client_close);
     peer.start();
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
 
     auto operation = [&]() -> ruvia::task<void> {
@@ -1884,10 +1889,10 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
 
 TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown) {
     std::optional<ruvia::http_client_response_bytes> retained;
-    std::string expected(
+    std::pmr::string expected(
         "\0\xff"
         "data",
-        6);
+        6, ruvia::process_resource());
     {
         auto& io = ruvia::test::new_test_io_context();
         {
@@ -1897,7 +1902,7 @@ TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown
             asio::ip::tcp::socket server_socket(io);
             ruvia::worker_signal server_done(worker.handle_);
             std::exception_ptr server_failure;
-            const std::string response_wire =
+            const std::pmr::string response_wire =
                 "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\n" +
                 expected;
             acceptor.async_accept(server_socket, [&](const std::error_code& error) {
@@ -1915,7 +1920,7 @@ TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown
                     });
             });
             {
-                const std::string client_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+                const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
                 ruvia::http_client client(worker.attachment_.loop(),
                     {.base_url_ = client_url},
                     {.max_retained_bytes_ = expected.size()});
@@ -1970,7 +1975,7 @@ TEST(Ruvia, http_client_connect_failure_message_is_utf8) {
     asio::ip::tcp::acceptor unavailable(io);
     unavailable.open(asio::ip::tcp::v4());
     unavailable.bind({asio::ip::tcp::v4(), 0});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(unavailable.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(unavailable.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     // Windows retries a refused loopback connect for about two seconds.
     config.connect_timeout_ = std::chrono::seconds(20);
@@ -1978,7 +1983,7 @@ TEST(Ruvia, http_client_connect_failure_message_is_utf8) {
     config.request_timeout_ = std::chrono::seconds(20);
     ruvia::http_client client(worker.attachment_.loop(), config);
     std::optional<ruvia::http_client_error::code_type> code;
-    std::string message;
+    std::pmr::string message{ruvia::process_resource()};
     auto operation = [&]() -> ruvia::task<void> {
         try {
             (void)co_await client.client().get("/").send();
@@ -1995,8 +2000,8 @@ TEST(Ruvia, http_client_connect_failure_message_is_utf8) {
     // UTF-8 whatever the system code page is, so it can travel in a JSON or
     // text/plain; charset=UTF-8 body. The strict JSON parser rejects ill-formed
     // UTF-8, and the message holds no characters that need escaping.
-    EXPECT_TRUE(message.find_first_of("\"\\") == std::string::npos);
-    const auto decoded = ruvia::from_json<ruvia::string>("\"" + message + "\"");
+    EXPECT_TRUE(message.find_first_of("\"\\") == std::pmr::string::npos);
+    const auto decoded = ruvia::from_json<ruvia::string>(std::pmr::string("\"", ruvia::process_resource()) + message + "\"");
     EXPECT_EQ(decoded.view(), std::string_view(message));
 }
 
@@ -2006,7 +2011,7 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
         upload_peer peer(io, worker.handle_, mode);
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
         auto config = local_http_client_config(config_url);
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -2028,11 +2033,11 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
                 too_large = true;
             }
             EXPECT_TRUE(too_large);
-            std::string input = "abc";
+            std::pmr::string input{"abc", ruvia::process_resource()};
             auto first = exchange_value.body().write(input);
             auto second = exchange_value.body().write("def");
             input.assign("xxx");
-            std::string trailer_value = "retained";
+            std::pmr::string trailer_value{"retained", ruvia::process_resource()};
             const std::array<ruvia::http_header_view, 1> fields_value{{{"X-End", trailer_value}}};
             auto ending = exchange_value.body().end(known ? std::span<const ruvia::http_header_view>{} : std::span<const ruvia::http_header_view>(fields_value));
             trailer_value.assign("changed");
@@ -2106,7 +2111,7 @@ TEST(Ruvia, http_client_upload_exchange_owns_chunks_and_trailers_and_drives_cont
             co_await peer.wait();
             EXPECT_EQ(peer.body_, "abcdef");
             EXPECT_TRUE(peer.trailers_.field("x-end") == (known ? std::nullopt : std::optional<std::string_view>("retained")));
-            EXPECT_TRUE((peer.head_.find("Expect: 100-continue") != std::string::npos) == expect_continue);
+            EXPECT_TRUE((peer.head_.find("Expect: 100-continue") != std::pmr::string::npos) == expect_continue);
             co_await client.shutdown();
         };
         run_operation(worker, io, operation);
@@ -2119,7 +2124,7 @@ TEST(Ruvia, http1_small_upload_completes_with_a_bounded_response_budget) {
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
         upload_peer peer(io, worker.handle_, mode);
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
         auto config = local_http_client_config(config_url);
         config.max_response_bytes_ = 1024;
         // Completing a six-byte upload (with or without trailers) must not
@@ -2175,7 +2180,7 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
         asio::ip::tcp::acceptor acceptor(io, {asio::ip::tcp::v4(), 0});
         ruvia::worker_signal peer_done(worker.handle_);
         std::exception_ptr peer_failure;
-        std::string received;
+        std::pmr::string received{ruvia::process_resource()};
         const auto serve = [&]() -> asio::awaitable<void> {
             auto socket = co_await acceptor.async_accept(asio::use_awaitable);
             asio::streambuf head;
@@ -2198,7 +2203,7 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
             peer_failure = failure;
             peer_done.notify();
         });
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         auto config = local_http_client_config(config_url);
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -2224,7 +2229,7 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
             }
             EXPECT_EQ(datagram_adapters_rejected, 2U);
             EXPECT_TRUE(tunnel->status() == ruvia::http_status::ok);
-            std::string input = "abc";
+            std::pmr::string input{"abc", ruvia::process_resource()};
             auto first = tunnel->write(input);
             auto second = tunnel->write("def");
             auto ending = tunnel->finish();
@@ -2274,7 +2279,7 @@ TEST(Ruvia, http_client_tunnel_claims_output_when_started_and_retires_after_abor
                 EXPECT_TRUE(!first_cancelled);
                 co_await std::move(second);
                 co_await std::move(ending);
-                std::string echoed;
+                std::pmr::string echoed{ruvia::process_resource()};
                 if (const auto bytes_value = co_await std::move(reading)) {
                     echoed.append(reinterpret_cast<const char*>(bytes_value->data()), bytes_value->size());
                 }
@@ -2304,7 +2309,7 @@ TEST(Ruvia, http_client_upload_exchange_preserves_early_final_response_and_stops
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
     upload_peer peer(io, worker.handle_, upload_peer::mode_type::early_final);
-    const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     std::optional<ruvia::http_client> client(std::in_place, worker.attachment_.loop(), local_http_client_config(client_url));
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
@@ -2336,7 +2341,7 @@ void exercise_early_response_during_upload(upload_peer::mode_type mode) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
     upload_peer peer(io, worker.handle_, mode);
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.max_response_bytes_ = 1024;
     config.request_timeout_ = std::chrono::seconds(3);
@@ -2346,7 +2351,7 @@ void exercise_early_response_during_upload(upload_peer::mode_type mode) {
         constexpr std::size_t upload_size = 8 * 1024 * 1024;
         auto exchange = co_await client.client().post("/upload").upload(
             {.max_chunk_bytes_ = upload_size});
-        std::string upload(upload_size, 'u');
+        std::pmr::string upload(upload_size, 'u', ruvia::process_resource());
         bool upload_failed = false;
         ruvia::task_scope writers(worker.handle_);
         const auto write = [&]() -> ruvia::task<void> {
@@ -2400,7 +2405,7 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
     test_worker worker(io);
     ruvia::test::tls_identity identity("localhost");
     asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
-    const std::string large(262163, 'b');
+    const std::pmr::string large(262163, 'b', ruvia::process_resource());
     const std::array<std::string_view, 2> expected{"fresh connection body", "healthy reused body"};
     unsigned connections = 0;
     unsigned requests = 0;
@@ -2415,7 +2420,7 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
             asio::streambuf request;
             co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
             ++requests;
-            const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(large.size()) + "\r\n\r\n" + large;
+            const std::pmr::string response = std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(large.size()))) + "\r\n\r\n" + large;
             std::error_code error;
             co_await asio::async_write(stream, asio::buffer(response), asio::redirect_error(asio::use_awaitable, error));
             std::array<char, 1024> bytes_value{};
@@ -2430,7 +2435,7 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
             asio::streambuf request;
             co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
             ++requests;
-            const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string(body);
+            const std::pmr::string response = std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(body.size()))) + "\r\n\r\n" + std::pmr::string(body, ruvia::process_resource());
             co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
         }
     };
@@ -2438,7 +2443,7 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
         peer_failure = failure;
         peer_done.notify();
     });
-    const std::string config_url = "https://localhost:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("https://localhost:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.tls_.ca_file_ = identity.ca_file_;
     config.max_response_bytes_ = 8192;
@@ -2541,7 +2546,7 @@ TEST(Ruvia, http1_tls_close_delimited_response_requires_close_notify) {
             peer_finished = true;
             peer_done.notify();
         });
-        const std::string config_url = "https://localhost:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string config_url = std::move(std::pmr::string("https://localhost:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         auto config = local_http_client_config(config_url);
         config.tls_.ca_file_ = identity.ca_file_;
         config.request_timeout_ = std::chrono::seconds(3);
@@ -2549,16 +2554,16 @@ TEST(Ruvia, http1_tls_close_delimited_response_requires_close_notify) {
         auto operation = [&]() -> ruvia::task<void> {
             const acceptor_closer closer{acceptor};
             auto response = co_await client.client().get("/close-delimited").send();
-            std::optional<std::string> body;
+            std::optional<std::pmr::string> body;
             bool truncated = false;
             try {
                 const auto bytes_value = co_await response.stream().read_all();
-                body.emplace(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size());
+                body.emplace(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size(), ruvia::process_resource());
             } catch (const ruvia::http_client_error& error) {
                 truncated = error.code() == ruvia::http_client_error::code_type::io_error;
             }
             if (close_notify) {
-                EXPECT_TRUE(body == std::optional<std::string>("partial"));
+                EXPECT_TRUE(body == std::optional<std::pmr::string>(std::pmr::string("partial", ruvia::process_resource())));
             } else {
                 EXPECT_TRUE(!body.has_value());
                 EXPECT_TRUE(truncated);
@@ -2582,14 +2587,14 @@ TEST(Ruvia, http1_tls_close_delimited_response_requires_close_notify) {
 TEST(Ruvia, http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_names) {
     struct identity_case final {
         const char* common_name_;
-        std::string subject_alt_name_;
+        std::pmr::string subject_alt_name_{ruvia::process_resource()};
         const char* server_name_;
         bool accepted_;
     };
     const std::array cases{
-        identity_case{"localhost", "", "localhost", false},
-        identity_case{"www.example.com", "DNS:w*.example.com", "www.example.com", false},
-        identity_case{"www.example.com", "DNS:*.example.com", "www.example.com", true},
+        identity_case{"localhost", std::pmr::string(ruvia::process_resource()), "localhost", false},
+        identity_case{"www.example.com", std::pmr::string("DNS:w*.example.com", ruvia::process_resource()), "www.example.com", false},
+        identity_case{"www.example.com", std::pmr::string("DNS:*.example.com", ruvia::process_resource()), "www.example.com", true},
     };
     for (const auto& identity_value : cases) {
         auto& io = ruvia::test::new_test_io_context();
@@ -2619,7 +2624,7 @@ TEST(Ruvia, http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_na
             peer_finished = true;
             peer_done.notify();
         });
-        const std::string config_url = "https://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string config_url = std::move(std::pmr::string("https://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         auto config = local_http_client_config(config_url);
         config.tls_.ca_file_ = identity.ca_file_;
         config.tls_.server_name_ = identity_value.server_name_;
@@ -2706,7 +2711,7 @@ struct tunnel_peer final {
     ruvia::worker_signal done_;
     asio::ssl::context& tls_;
     bool finished_{false};
-    std::string received_;
+    std::pmr::string received_{ruvia::process_resource()};
 };
 
 }  // namespace tls_record_budget_tests
@@ -2721,7 +2726,7 @@ TEST(Ruvia, http_client_tls_record_budget_covers_handshake_and_replaced_connect_
             EXPECT_TRUE(SSL_CTX_set_max_proto_version(identity.context_.native_handle(), version) == 1);
             tls_record_budget_tests::tunnel_peer peer(io, worker.handle_, identity.context_);
             asio::co_spawn(io, peer.serve(), [&](std::exception_ptr) { peer.finished_ = true; peer.done_.notify(); });
-            const std::string config_url = "https://127.0.0.1:" + std::to_string(peer.acceptor_.local_endpoint().port());
+            const std::pmr::string config_url = std::move(std::pmr::string("https://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.acceptor_.local_endpoint().port())));
             auto config = local_http_client_config(config_url);
             config.tls_.ca_file_ = identity.ca_file_;
             config.tls_.server_name_ = "localhost";
@@ -2771,7 +2776,7 @@ TEST(Ruvia, http_client_tls_refuses_server_initiated_renegotiation) {
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "https://localhost:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("https://localhost:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.tls_.ca_file_ = identity.ca_file_;
     config.request_timeout_ = std::chrono::seconds(3);
@@ -2883,7 +2888,7 @@ TEST(Ruvia, tls_client_sends_close_notify_before_closing) {
             peer_finished = true;
             peer_done.notify();
         });
-        const std::string config_url = "https://localhost:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string config_url = std::move(std::pmr::string("https://localhost:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         auto config = local_http_client_config(config_url);
         config.tls_.ca_file_ = identity.ca_file_;
         config.request_timeout_ = std::chrono::seconds(3);
@@ -2918,7 +2923,7 @@ TEST(Ruvia, http1_response_on_a_closing_connection_discards_trailing_bytes) {
         {"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhelloXjunk",
             "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 6\r\n\r\ndeniedHTTP/1.1 200 OK\r\n\r\n"});
     peer.start();
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.request_timeout_ = std::chrono::seconds(3);
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -2964,8 +2969,8 @@ TEST(Ruvia, http_client_replaces_a_keep_alive_connection_the_peer_closed_while_i
             ++connections;
             asio::streambuf request;
             co_await asio::async_read_until(socket, request, "\r\n\r\n", asio::use_awaitable);
-            const std::string response =
-                "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string(body);
+            const std::pmr::string response =
+                std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(body.size()))) + "\r\n\r\n" + std::pmr::string(body, ruvia::process_resource());
             co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
             if (!idle_closed) {
                 // A keep-alive idle timeout: the peer closes without a request.
@@ -2981,7 +2986,7 @@ TEST(Ruvia, http_client_replaces_a_keep_alive_connection_the_peer_closed_while_i
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 1;
     config.request_timeout_ = std::chrono::seconds(3);
@@ -3029,9 +3034,8 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
     };
     const auto answer = [](asio::ip::tcp::socket& socket, std::string_view body,
                             std::string_view connection) -> asio::awaitable<void> {
-        const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " +
-                                     std::to_string(body.size()) + "\r\nConnection: " +
-                                     std::string(connection) + "\r\n\r\n" + std::string(body);
+        const std::pmr::string response = std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(body.size()))) + "\r\nConnection: " +
+                                          std::pmr::string(connection, ruvia::process_resource()) + "\r\n\r\n" + std::pmr::string(body, ruvia::process_resource());
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
     };
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -3066,7 +3070,7 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 1;
     config.request_timeout_ = std::chrono::seconds(3);
@@ -3079,12 +3083,12 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
                       reinterpret_cast<const char*>(first_body.bytes().data()), first_body.size()),
             "prime");
 
-        std::optional<std::string> retry_body;
+        std::optional<std::pmr::string> retry_body;
         try {
             auto response = co_await client.client().get("/retry").send();
             const auto bytes_value = co_await response.stream().read_all();
             retry_body.emplace(
-                reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size());
+                reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size(), ruvia::process_resource());
         } catch (const ruvia::http_client_error&) {
             std::error_code ignored;
             acceptor.close(ignored);
@@ -3103,7 +3107,7 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        EXPECT_TRUE(retry_body == std::optional<std::string>("retried"));
+        EXPECT_TRUE(retry_body == std::optional<std::pmr::string>(std::pmr::string("retried", ruvia::process_resource())));
         EXPECT_TRUE(post_failure == ruvia::http_client_error::code_type::io_error);
         const auto stats = client.client().stats();
         EXPECT_EQ(stats.completed_requests_, std::size_t{2});
@@ -3135,8 +3139,8 @@ TEST(Ruvia, http_client_tls_idle_probe_retires_a_connection_with_unread_peer_rec
                                 std::string_view body) -> asio::awaitable<void> {
             asio::streambuf request;
             co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
-            const std::string response =
-                "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string(body);
+            const std::pmr::string response =
+                std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(body.size()))) + "\r\n\r\n" + std::pmr::string(body, ruvia::process_resource());
             co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
         };
         const auto serve = [&]() -> asio::awaitable<void> {
@@ -3175,7 +3179,7 @@ TEST(Ruvia, http_client_tls_idle_probe_retires_a_connection_with_unread_peer_rec
             peer_finished = true;
             peer_done.notify();
         });
-        const std::string config_url = "https://localhost:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string config_url = std::move(std::pmr::string("https://localhost:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         auto config = local_http_client_config(config_url);
         config.tls_.ca_file_ = identity.ca_file_;
         config.connection_count_ = 1;
@@ -3213,17 +3217,17 @@ TEST(Ruvia, http_client_abandoned_queued_request_is_never_written) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
     asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
-    std::vector<std::string> request_lines;
+    std::pmr::vector<std::pmr::string> request_lines{ruvia::process_resource()};
     std::exception_ptr peer_failure;
     ruvia::worker_signal peer_done(worker.handle_);
     bool peer_finished = false;
     const auto serve = [&]() -> asio::awaitable<void> {
         auto socket = co_await acceptor.async_accept(asio::use_awaitable);
-        std::string buffered;
+        std::pmr::string buffered{ruvia::process_resource()};
         for (unsigned index = 0; index != 2; ++index) {
             const auto head_bytes =
                 co_await asio::async_read_until(socket, asio::dynamic_buffer(buffered), "\r\n\r\n", asio::use_awaitable);
-            request_lines.push_back(buffered.substr(0, buffered.find("\r\n")));
+            request_lines.emplace_back(std::string_view(buffered).substr(0, buffered.find("\r\n")));
             buffered.erase(0, head_bytes);
             if (!request_lines.back().starts_with("GET ")) {
                 co_return;
@@ -3242,7 +3246,7 @@ TEST(Ruvia, http_client_abandoned_queued_request_is_never_written) {
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 1;
     config.request_timeout_ = std::chrono::seconds(3);
@@ -3307,7 +3311,7 @@ TEST(Ruvia, http_client_abandoned_request_cancels_its_connect_in_progress) {
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string client_url = "https://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string client_url = std::move(std::pmr::string("https://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     ruvia::http_client_config config{.base_url_ = client_url,
         .connection_count_ = 1,
         .connect_timeout_ = std::chrono::seconds(5),
@@ -3362,12 +3366,12 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
             std::exception_ptr peer_failure;
             bool peer_finished = false;
             ruvia::worker_signal peer_done(worker.handle_);
-            std::string request_body;
+            std::pmr::string request_body{ruvia::process_resource()};
             ruvia::http_request_trailers request_trailers(std::pmr::get_default_resource());
-            std::string next_request;
+            std::pmr::string next_request{ruvia::process_resource()};
             const auto serve = [&]() -> asio::awaitable<void> {
                 auto socket = co_await acceptor.async_accept(asio::use_awaitable);
-                std::string buffered;
+                std::pmr::string buffered{ruvia::process_resource()};
                 const auto head_bytes =
                     co_await asio::async_read_until(socket, asio::dynamic_buffer(buffered), "\r\n\r\n", asio::use_awaitable);
                 buffered.erase(0, head_bytes);
@@ -3377,7 +3381,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                             asio::transfer_at_least(1), asio::use_awaitable);
                     }
                 }
-                std::string response;
+                std::pmr::string response{ruvia::process_resource()};
                 if (expect_continue && !timeout_release) {
                     response += "HTTP/1.1 100 Continue\r\n\r\n";
                 }
@@ -3416,7 +3420,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                 }
                 const auto next_head_bytes =
                     co_await asio::async_read_until(socket, asio::dynamic_buffer(buffered), "\r\n\r\n", asio::use_awaitable);
-                next_request = buffered.substr(0, next_head_bytes);
+                next_request.assign(buffered.data(), next_head_bytes);
                 constexpr std::string_view final_response =
                     "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnext";
                 co_await asio::async_write(socket, asio::buffer(final_response), asio::use_awaitable);
@@ -3426,7 +3430,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                 peer_finished = true;
                 peer_done.notify();
             });
-            const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+            const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
             auto config = local_http_client_config(config_url);
             config.connection_count_ = 1;
             config.request_timeout_ = std::chrono::seconds(3);
@@ -3512,7 +3516,7 @@ TEST(Ruvia, http_client_abandoned_upload_cancels_its_retained_incomplete_respons
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 1;
     // A broken abandonment path fails as timeout rather than hanging the suite.
@@ -3583,7 +3587,7 @@ TEST(Ruvia, http_client_bounds_unfinished_upload_after_response_body_completion)
         first_closed = true;
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.request_timeout_ = std::chrono::milliseconds(100);
     config.connection_count_ = 1;
@@ -3655,7 +3659,7 @@ TEST(Ruvia, http_client_reports_upload_transport_failure_during_response_body) {
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.max_response_bytes_ = 16;
     config.connection_count_ = 1;
@@ -3665,7 +3669,7 @@ TEST(Ruvia, http_client_reports_upload_transport_failure_during_response_body) {
         auto exchange = co_await client.client().request("POST", "/reset").upload({});
         auto response = co_await exchange.response();
         EXPECT_TRUE(response.status() == ruvia::http_status::ok);
-        const std::string chunk(16 * 1024, 'u');
+        const std::pmr::string chunk(16 * 1024, 'u', ruvia::process_resource());
         std::optional<ruvia::http_client_error::code_type> upload_error;
         for (int i = 0; i < 1024 && !upload_error.has_value(); ++i) {
             try {
@@ -3696,11 +3700,11 @@ TEST(Ruvia, http_capsule_client_retains_payloads_across_reads_and_rejects_trunca
         asio::ip::tcp::acceptor acceptor(io, {asio::ip::tcp::v4(), 0});
         ruvia::worker_signal peer_done(worker.handle_);
         std::exception_ptr peer_failure;
-        std::string first_payload(128 * 1024 + 17, 'a');
+        std::pmr::string first_payload(128 * 1024 + 17, 'a', ruvia::process_resource());
         first_payload[4095] = '\0';
         first_payload[8192] = '\xff';
-        const std::string second_payload(4096, 'b');
-        std::string wire = "HTTP/1.1 200 Connection Established\r\n\r\n";
+        const std::pmr::string second_payload(4096, 'b', ruvia::process_resource());
+        std::pmr::string wire{"HTTP/1.1 200 Connection Established\r\n\r\n", ruvia::process_resource()};
         const auto append_capsule = [&](std::uint64_t type, std::string_view payload) {
             std::array<char, 16> header;
             const auto encoded = ruvia::encode_http_capsule_header(header, type, payload.size());
@@ -3725,7 +3729,7 @@ TEST(Ruvia, http_capsule_client_retains_payloads_across_reads_and_rejects_trunca
             peer_failure = failure;
             peer_done.notify();
         });
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(client_url));
         auto operation = [&]() -> ruvia::task<void> {
             auto result = co_await client.client().connect("target.test:443").open();
@@ -3877,7 +3881,7 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
         peer_done.notify();
     });
 
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 2;
     config.max_concurrent_http2_streams_per_connection_ = 2;
@@ -3978,7 +3982,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 1;
     config.protocol_ = ruvia::http_client_protocol::http2_only;
@@ -4131,7 +4135,7 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
         peer_finished = true;
         peer_done.notify();
     });
-    const std::string config_url = "https://localhost:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("https://localhost:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.tls_.ca_file_ = identity.ca_file_;
     config.connection_count_ = 1;
@@ -4191,7 +4195,7 @@ TEST(Ruvia, http_client_scopes_cookies_to_the_origin_authority_for_tunnels) {
         {"HTTP/1.1 407 Proxy Authentication Required\r\nSet-Cookie: tunnel=other\r\nContent-Length: 0\r\n"
          "Connection: close\r\n\r\n",
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http_client_config(config_url);
     config.cookies_ = {{"sid", "secret"}};
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
@@ -4211,9 +4215,9 @@ TEST(Ruvia, http_client_scopes_cookies_to_the_origin_authority_for_tunnels) {
         co_await peer.wait();
         EXPECT_EQ(peer.requests_.size(), std::size_t{2});
         if (peer.requests_.size() == 2) {
-            EXPECT_TRUE(peer.requests_[0].find("secret") == std::string::npos);
-            EXPECT_TRUE(peer.requests_[1].find("sid=secret") != std::string::npos);
-            EXPECT_TRUE(peer.requests_[1].find("tunnel=other") == std::string::npos);
+            EXPECT_TRUE(peer.requests_[0].find("secret") == std::pmr::string::npos);
+            EXPECT_TRUE(peer.requests_[1].find("sid=secret") != std::pmr::string::npos);
+            EXPECT_TRUE(peer.requests_[1].find("tunnel=other") == std::pmr::string::npos);
         }
         co_await client.shutdown();
     };
@@ -4237,7 +4241,7 @@ TEST(Ruvia, http1_client_read_timeout_bounds_a_stalled_response_head_and_body) {
             asio::streambuf request;
             co_await asio::async_read_until(socket, request, "\r\n\r\n", asio::use_awaitable);
             if (head_sent) {
-                const std::string partial("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nab");
+                const std::pmr::string partial("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nab", ruvia::process_resource());
                 co_await asio::async_write(socket, asio::buffer(partial), asio::use_awaitable);
             }
             // Stall until the client abandons the read and closes.
@@ -4253,7 +4257,7 @@ TEST(Ruvia, http1_client_read_timeout_bounds_a_stalled_response_head_and_body) {
             peer_finished = true;
             peer_done.notify();
         });
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
         auto config = local_http_client_config(config_url);
         config.read_timeout_ = std::chrono::milliseconds(100);
         config.request_timeout_ = std::chrono::seconds(20);
@@ -4305,8 +4309,8 @@ TEST(Ruvia, http1_client_idle_timeout_closes_an_unused_pooled_connection) {
             ++connections;
             asio::streambuf request;
             co_await asio::async_read_until(socket, request, "\r\n\r\n", asio::use_awaitable);
-            const std::string response =
-                "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string(body);
+            const std::pmr::string response =
+                std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(body.size()))) + "\r\n\r\n" + std::pmr::string(body, ruvia::process_resource());
             co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
             if (idle_closed) {
                 continue;
@@ -4338,7 +4342,7 @@ TEST(Ruvia, http1_client_idle_timeout_closes_an_unused_pooled_connection) {
         guard.cancel();
         peer_done.notify();
     });
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_count_ = 1;
     config.idle_timeout_ = std::chrono::milliseconds(100);
@@ -4464,7 +4468,7 @@ private:
         auto connection = ruvia::http2_connection::server();
         std::array<char, 16384> input{};
         std::pmr::string output;
-        std::vector<ruvia::http2_request_head_event> stalled;
+        std::pmr::vector<ruvia::http2_request_head_event> stalled{ruvia::process_resource()};
         std::optional<ruvia::http2_request_head_event> pending;
         std::size_t requests = 0;
         std::size_t pings = 0;
@@ -4573,7 +4577,7 @@ TEST(Ruvia, http2_client_read_timeout_resets_the_stalled_stream_and_keeps_the_se
     test_worker worker(io);
     http2_liveness_peer peer(io, worker.handle_, http2_liveness_peer::mode_type::stall_first_request);
     peer.start();
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http2_client_config(config_url);
     config.read_timeout_ = std::chrono::milliseconds(100);
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -4603,7 +4607,7 @@ TEST(Ruvia, http2_client_idle_timeout_closes_a_connection_without_streams) {
     test_worker worker(io);
     http2_liveness_peer peer(io, worker.handle_, http2_liveness_peer::mode_type::answer);
     peer.start();
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http2_client_config(config_url);
     config.idle_timeout_ = std::chrono::milliseconds(100);
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -4626,7 +4630,7 @@ TEST(Ruvia, http2_client_ping_fails_a_silent_connection) {
     test_worker worker(io);
     http2_liveness_peer peer(io, worker.handle_, http2_liveness_peer::mode_type::silent_after_request);
     peer.start();
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http2_client_config(config_url);
     config.read_timeout_ = std::nullopt;
     config.http2_ping_interval_ = std::chrono::milliseconds(100);
@@ -4655,7 +4659,7 @@ TEST(Ruvia, http2_client_ping_ack_keeps_a_quiet_connection_alive) {
     test_worker worker(io);
     http2_liveness_peer peer(io, worker.handle_, http2_liveness_peer::mode_type::answer_after_pings);
     peer.start();
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
     auto config = local_http2_client_config(config_url);
     config.read_timeout_ = std::nullopt;
     config.http2_ping_interval_ = std::chrono::milliseconds(100);
@@ -4763,7 +4767,7 @@ private:
     asio::steady_timer guard_;
     asio::steady_timer gate_;
     ruvia::worker_signal progress_;
-    std::vector<asio::ip::tcp::socket::lowest_layer_type*> sockets_;
+    std::pmr::vector<asio::ip::tcp::socket::lowest_layer_type*> sockets_{ruvia::process_resource()};
     std::exception_ptr failure_;
     std::size_t step_{0};
     bool finished_{false};
@@ -4893,7 +4897,7 @@ private:
     ruvia::http2_connection connection_{ruvia::http2_connection::server()};
     std::array<char, 16384> input_{};
     std::pmr::string output_;
-    std::deque<ruvia::http2_request_head_event> requests_;
+    std::pmr::deque<ruvia::http2_request_head_event> requests_{ruvia::process_resource()};
     bool goaway_received_{false};
 };
 
@@ -4920,12 +4924,12 @@ using tcp_origin_connection = http2_origin_connection<asio::ip::tcp::socket>;
 
 #if defined(RUVIA_ENABLE_HTTP2)
 [[nodiscard]] ruvia::task<void> send_and_keep(
-    ruvia::http_client& client, std::string_view target, std::optional<std::string>& body, bool& done,
+    ruvia::http_client& client, std::string_view target, std::optional<std::pmr::string>& body, bool& done,
     ruvia::worker_signal& done_signal) {
     try {
         auto response = co_await client.client().get(target).send();
         const auto bytes_value = co_await response.stream().read_all();
-        body.emplace(response_text(bytes_value));
+        body.emplace(response_text(bytes_value), ruvia::process_resource());
     } catch (const ruvia::http_client_error&) {
         // `body` stays unset; the caller's check reports it.
     }
@@ -4984,7 +4988,7 @@ TEST(Ruvia, http2_client_draining_session_bounds_a_new_request_by_acquire_timeou
         co_await first.read_until_end();
     };
     origin.start(script());
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(origin.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(origin.port())));
     auto config = http2_client_config(config_url);
     config.request_timeout_ = std::nullopt;
     config.acquire_timeout_ = std::chrono::milliseconds(200);
@@ -5047,15 +5051,15 @@ TEST(Ruvia, http2_client_draining_session_yields_to_a_free_slot) {
         co_await draining.read_until_end();
     };
     origin.start(script());
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(origin.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(origin.port())));
     auto config = http2_client_config(config_url);
     config.connection_count_ = 2;
     config.max_concurrent_http2_streams_per_connection_ = 2;
     config.acquire_timeout_ = std::chrono::milliseconds(300);
     ruvia::http_client client(worker.attachment_.loop(), config);
     ruvia::task_scope requests(worker.handle_);
-    std::optional<std::string> b_body;
-    std::optional<std::string> c_body;
+    std::optional<std::pmr::string> b_body;
+    std::optional<std::pmr::string> c_body;
     bool b_done = false;
     bool c_done = false;
     ruvia::worker_signal done_signal(worker.handle_);
@@ -5079,8 +5083,8 @@ TEST(Ruvia, http2_client_draining_session_yields_to_a_free_slot) {
             co_await origin.reach(4);
             // The ended connection's session retires meanwhile.
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
-            EXPECT_TRUE(b_body == std::optional<std::string>("b"));
-            EXPECT_TRUE(c_body == std::optional<std::string>("c"));
+            EXPECT_TRUE(b_body == std::optional<std::pmr::string>(std::pmr::string("b", ruvia::process_resource())));
+            EXPECT_TRUE(c_body == std::optional<std::pmr::string>(std::pmr::string("c", ruvia::process_resource())));
             auto next = co_await client.client().get("/next").send();
             EXPECT_EQ(response_text(co_await next.stream().read_all()), "next");
         });
@@ -5123,7 +5127,7 @@ TEST(Ruvia, http2_client_retries_only_idempotent_requests_after_a_reused_connect
         }
     };
     origin.start(script());
-    const std::string client_url = "http://127.0.0.1:" + std::to_string(origin.port());
+    const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(origin.port())));
     ruvia::http_client client(worker.attachment_.loop(), http2_client_config(client_url));
     ruvia::task_scope requests(worker.handle_);
     auto operation = [&]() -> ruvia::task<void> {
@@ -5169,14 +5173,14 @@ TEST(Ruvia, http2_client_stream_capacity_wait_is_an_acquisition) {
         co_await only.read_until_end();
     };
     origin.start(script());
-    const std::string config_url = "http://127.0.0.1:" + std::to_string(origin.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(origin.port())));
     auto config = http2_client_config(config_url);
     config.request_timeout_ = std::nullopt;
     config.acquire_timeout_ = std::chrono::milliseconds(500);
     ruvia::http_client client(worker.attachment_.loop(), config);
     ruvia::task_scope requests(worker.handle_);
-    std::optional<std::string> held_body;
-    std::optional<std::string> after_body;
+    std::optional<std::pmr::string> held_body;
+    std::optional<std::pmr::string> after_body;
     bool held_done = false;
     bool after_done = false;
     ruvia::worker_signal done_signal(worker.handle_);
@@ -5200,8 +5204,8 @@ TEST(Ruvia, http2_client_stream_capacity_wait_is_an_acquisition) {
             while (!held_done || !after_done) {
                 co_await done_signal.wait();
             }
-            EXPECT_TRUE(held_body == std::optional<std::string>("held"));
-            EXPECT_TRUE(after_body == std::optional<std::string>("after"));
+            EXPECT_TRUE(held_body == std::optional<std::pmr::string>(std::pmr::string("held", ruvia::process_resource())));
+            EXPECT_TRUE(after_body == std::optional<std::pmr::string>(std::pmr::string("after", ruvia::process_resource())));
         });
     };
     run_operation(worker, io, operation);
@@ -5245,7 +5249,7 @@ TEST(Ruvia, http1_client_closes_an_idle_connection_its_peer_ended_or_wrote_to) {
             }
         };
         origin.start(script());
-        const std::string config_url = "http://127.0.0.1:" + std::to_string(origin.port());
+        const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(origin.port())));
         auto config = local_http_client_config(config_url);
         config.connection_count_ = 1;
         config.idle_timeout_ = std::nullopt;
@@ -5278,7 +5282,7 @@ TEST(Ruvia, http_client_retries_over_http11_after_http11_required) {
     test_worker worker(io);
     ruvia::test::tls_identity identity("localhost");
     // Whether each handshake offered h2; the origin selects it when offered.
-    std::vector<bool> offered_h2;
+    std::pmr::vector<bool> offered_h2(ruvia::process_resource());
     SSL_CTX_set_alpn_select_cb(
         identity.context_.native_handle(),
         [](SSL*, const unsigned char** out, unsigned char* outlen, const unsigned char* in, unsigned int inlen,
@@ -5300,7 +5304,7 @@ TEST(Ruvia, http_client_retries_over_http11_after_http11_required) {
                 }
                 pos += len;
             }
-            static_cast<std::vector<bool>*>(arg)->push_back(h2);
+            static_cast<std::pmr::vector<bool>*>(arg)->push_back(h2);
             if (h2) {
                 return SSL_TLSEXT_ERR_OK;
             }
@@ -5328,10 +5332,10 @@ TEST(Ruvia, http_client_retries_over_http11_after_http11_required) {
         origin.watch(stream.lowest_layer());
         co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
         for (const std::string_view body : {std::string_view("h1-ok"), std::string_view("h1-again")}) {
-            std::string request;
+            std::pmr::string request{ruvia::process_resource()};
             co_await asio::async_read_until(stream, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
-            const std::string response =
-                "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string(body);
+            const std::pmr::string response =
+                std::move(std::pmr::string("HTTP/1.1 200 OK\r\nContent-Length: ", ruvia::process_resource()).append(std::to_string(body.size()))) + "\r\n\r\n" + std::pmr::string(body, ruvia::process_resource());
             co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
         }
         std::array<char, 64> input{};
@@ -5341,7 +5345,7 @@ TEST(Ruvia, http_client_retries_over_http11_after_http11_required) {
         }
     };
     origin.start(script());
-    const std::string config_url = "https://localhost:" + std::to_string(origin.port());
+    const std::pmr::string config_url = std::move(std::pmr::string("https://localhost:", ruvia::process_resource()).append(std::to_string(origin.port())));
     auto config = local_http_client_config(config_url);
     config.tls_.ca_file_ = identity.ca_file_;
     config.connection_count_ = 1;
@@ -5360,6 +5364,6 @@ TEST(Ruvia, http_client_retries_over_http11_after_http11_required) {
     };
     run_operation(worker, io, operation);
     SSL_CTX_set_alpn_select_cb(identity.context_.native_handle(), nullptr, nullptr);
-    EXPECT_TRUE(offered_h2 == std::vector<bool>({true, false}));
+    EXPECT_TRUE(offered_h2 == std::pmr::vector<bool>({true, false}, ruvia::process_resource()));
 }
 #endif

@@ -14,6 +14,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
@@ -86,7 +87,7 @@ public:
         }
     }
 
-    std::string received_;
+    std::pmr::string received_{ruvia::process_resource()};
     bool request_ended_{false};
     bool request_reset_{false};
     unsigned requests_{0};
@@ -101,7 +102,7 @@ private:
         }
         if (mode_ == response_mode::connection_lost || mode_ == response_mode::connection_lost_upload ||
             mode_ == response_mode::goaway_upload) {
-            std::string wire;
+            std::pmr::string wire{ruvia::process_resource()};
             const std::array<char, 6> no_streams{0, 3, 0, 0, 0, 0};
             append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {no_streams.data(), no_streams.size()});
             const std::array<char, 8> ping{};
@@ -114,7 +115,7 @@ private:
                 if (!header) {
                     throw std::runtime_error("invalid client HTTP/2 frame");
                 }
-                std::string payload(header->length_, '\0');
+                std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
                 if (!payload.empty()) {
                     co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
                 }
@@ -144,7 +145,7 @@ private:
                 throw std::runtime_error("missing retried HTTP/2 client preface");
             }
         }
-        std::string wire;
+        std::pmr::string wire{ruvia::process_resource()};
         const std::array<char, 6> one_stream{0, 3, 0, 0, 0, 1};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {one_stream.data(), one_stream.size()});
         if (mode_ == response_mode::disconnected) {
@@ -162,7 +163,7 @@ private:
             if (!header) {
                 throw std::runtime_error("invalid client HTTP/2 frame");
             }
-            std::string payload(header->length_, '\0');
+            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
             if (!payload.empty()) {
                 co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
             }
@@ -171,8 +172,8 @@ private:
             if (type == ruvia::http2_frame_type::settings && (header->flags_ & 1U) == 0) {
                 append_frame(wire, type, 1, 0, {});
             } else if (type == ruvia::http2_frame_type::headers) {
-                std::string method;
-                std::string path;
+                std::pmr::string method{ruvia::process_resource()};
+                std::pmr::string path{ruvia::process_resource()};
                 const auto decoded = decoder.decode(payload, [&](std::string_view name, std::string_view value) {
                     if (name == ":method") {
                         method = value;
@@ -345,7 +346,7 @@ private:
         if (std::string_view(preface.data(), preface.size()) != ruvia::http2_client_preface) {
             throw std::runtime_error("missing HTTP/2 preface");
         }
-        std::string wire;
+        std::pmr::string wire{ruvia::process_resource()};
         const std::array<char, 6> one_stream{0, 3, 0, 0, 0, 1};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {one_stream.data(), one_stream.size()});
         co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
@@ -357,7 +358,7 @@ private:
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 frame");
             }
-            std::string payload(header->length_, '\0');
+            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
             if (!payload.empty()) {
                 co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
             }
@@ -388,7 +389,7 @@ private:
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 frame");
             }
-            std::string payload(header->length_, '\0');
+            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
             if (!payload.empty()) {
                 co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
             }
@@ -426,7 +427,7 @@ void exercise_abandon_during_drain() {
     peer.start();
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.port());
+        const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                          .connection_count_ = 1,
                                                          .request_timeout_ = std::chrono::seconds(5),
@@ -480,7 +481,7 @@ void exercise(response_mode mode) {
     peer.start();
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
-        const std::string client_url = "http://127.0.0.1:" + std::to_string(peer.port());
+        const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                          .connection_count_ = 1,
                                                          .request_timeout_ = std::chrono::seconds(2),
@@ -523,14 +524,14 @@ void exercise(response_mode mode) {
                 }
                 EXPECT_TRUE(completion_cancelled);
             } else if (mode == response_mode::buffered) {
-                const std::string payload(65536, 'b');
+                const std::pmr::string payload(65536, 'b', ruvia::process_resource());
                 auto response = co_await client.client().post("/upload").body(payload).send();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
                 const auto bytes = co_await response.stream().read_all();
                 EXPECT_TRUE(bytes.bytes().empty());
                 EXPECT_TRUE(response.stream().complete());
             } else if (mode == response_mode::streaming) {
-                const std::string payload(streaming_payload_bytes, 's');
+                const std::pmr::string payload(streaming_payload_bytes, 's', ruvia::process_resource());
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = payload.size(), .max_chunk_bytes_ = payload.size()});
                 auto response = co_await exchange.response();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
@@ -599,10 +600,10 @@ void exercise(response_mode mode) {
                 if (mode == response_mode::ordinary || mode == response_mode::continued ||
                     mode == response_mode::buffered || mode == response_mode::streaming) {
                     const auto expected = mode == response_mode::buffered
-                                              ? std::string(65536, 'b')
+                                              ? std::pmr::string(65536, 'b', ruvia::process_resource())
                                           : mode == response_mode::streaming
-                                              ? std::string(streaming_payload_bytes, 's')
-                                              : std::string("payload");
+                                              ? std::pmr::string(streaming_payload_bytes, 's', ruvia::process_resource())
+                                              : std::pmr::string("payload", ruvia::process_resource());
                     EXPECT_EQ(peer.received_, expected);
                     EXPECT_TRUE(peer.request_ended_);
                 } else if (mode == response_mode::refused || mode == response_mode::connection_lost) {

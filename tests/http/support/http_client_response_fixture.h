@@ -89,7 +89,7 @@ inline http1_client_response_parse_result parse_result(std::string_view method,
     std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse,
     std::span<const ruvia::http_header_view> request_headers = {},
     std::pmr::memory_resource* resource = nullptr) {
-    std::string wire(header_section);
+    std::pmr::string wire(header_section);
     wire.append("\r\n\r\n");
     return parse_wire(method, wire, close_policy, request_headers, resource);
 }

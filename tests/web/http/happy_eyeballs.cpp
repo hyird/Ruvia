@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <exception>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/http_client.h"
@@ -76,7 +78,7 @@ public:
           socket_(io),
           done_(worker) {
         const bool listening_is_v6 = !first_is_v6;
-        std::vector<tcp::acceptor> skipped;
+        std::pmr::vector<tcp::acceptor> skipped{ruvia::process_resource()};
         for (std::size_t attempt = 0;; ++attempt) {
             open_acceptor(listening_, listening_is_v6);
             listening_.bind(loopback_endpoint(listening_is_v6, 0));
@@ -152,8 +154,8 @@ private:
 [[nodiscard]] ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment,
     opposite_family_peer& peer, std::string_view host,
     std::chrono::milliseconds connect_timeout) {
-    const std::string authority = host.find(':') == std::string_view::npos ? std::string(host) : "[" + std::string(host) + "]";
-    const std::string base_url = "http://" + authority + ":" + std::to_string(peer.port());
+    const std::pmr::string authority = host.find(':') == std::string_view::npos ? std::pmr::string(host, ruvia::process_resource()) : "[" + std::pmr::string(host, ruvia::process_resource()) + "]";
+    const std::pmr::string base_url = std::pmr::string("http://", ruvia::process_resource()) + authority + std::move(std::pmr::string(":", ruvia::process_resource()).append(std::to_string(peer.port())));
     ruvia::http_client client(attachment.loop(),
         {.base_url_ = base_url,
             .connect_timeout_ = connect_timeout,

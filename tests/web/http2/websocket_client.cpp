@@ -22,6 +22,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
@@ -55,14 +56,14 @@ void exercise_client(bool reset_peer, bool secure = false) {
     bool saw_extended_connect = false;
     bool saw_client_end = false;
     unsigned messages = 0;
-    const std::string large(2200000, 'a');
+    const std::pmr::string large(2200000, 'a', ruvia::process_resource());
     const auto serve_stream = [&](auto& socket) -> asio::awaitable<void> {
         std::pmr::unsynchronized_pool_resource resource;
         auto connection = ruvia::http2_connection::server({.resource_ = &resource});
         ruvia::http_io_buffer websocket_input(&resource);
         std::optional<ruvia::websocket_connection> websocket;
         std::optional<ruvia::http2_request_head_event> request_lease;
-        std::string outbound;
+        std::pmr::string outbound{ruvia::process_resource()};
         bool finish_value = false;
         bool ended = false;
         std::array<char, 16384> bytes_value{};
@@ -162,8 +163,9 @@ void exercise_client(bool reset_peer, bool secure = false) {
     bool reset_observed = false;
     const auto run = [&]() -> ruvia::task<void> {
         const std::array<ruvia::http_header_view, 1> headers{{{"X-Client", "unified"}}};
-        const std::string base_url = std::string(secure ? "https://127.0.0.1:" : "http://127.0.0.1:") +
-                                     std::to_string(peer.local_endpoint().port());
+        const std::pmr::string base_url(std::pmr::string(secure ? "https://127.0.0.1:" : "http://127.0.0.1:", ruvia::process_resource()) +
+                                            std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()),
+            ruvia::process_resource());
         ruvia::http_client_config config{
             .base_url_ = base_url,
             .write_timeout_ = std::chrono::milliseconds(2000),
@@ -236,7 +238,7 @@ void exercise_closing_peer(closing_peer behavior) {
     std::exception_ptr peer_failure;
     bool received_close = false;
     bool released_request = false;
-    std::vector<ruvia::http2_frame_type> terminal_frames;
+    std::pmr::vector<ruvia::http2_frame_type> terminal_frames{ruvia::process_resource()};
     bool received_end_stream = false;
     std::optional<ruvia::http2_error_code> reset_error;
     const auto serve = [&]() -> asio::awaitable<void> {
@@ -246,7 +248,7 @@ void exercise_closing_peer(closing_peer behavior) {
         ruvia::http_io_buffer websocket_input;
         std::optional<ruvia::websocket_connection> websocket;
         std::array<char, 16384> input{};
-        std::pmr::string output;
+        std::pmr::string output{ruvia::process_resource()};
         for (;;) {
             if (connection.wants_write()) {
                 ruvia::test::drain_output(connection, output);
@@ -259,7 +261,7 @@ void exercise_closing_peer(closing_peer behavior) {
                 EXPECT_TRUE(fed != ruvia::http2_feed_result::protocol_failure);
                 while (auto event = connection.next_event()) {
                     if (auto* head = event->request_head()) {
-                        const auto built_request = head->build_request(std::pmr::get_default_resource());
+                        const auto built_request = head->build_request(ruvia::process_resource());
                         const auto validation = ruvia::validate_http2_websocket_handshake(connection, head->stream_id(), built_request);
                         const auto submitted = connection.submit_websocket_handshake(head->stream_id(), built_request, validation);
                         EXPECT_TRUE(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(submitted));
@@ -311,7 +313,7 @@ void exercise_closing_peer(closing_peer behavior) {
                 const auto error = behavior == closing_peer::cancel_after_close ? ruvia::http2_error_code::cancel : ruvia::http2_error_code::protocol_error;
                 EXPECT_TRUE(connection.submit_reset(1, error) == ruvia::http2_submit_status::accepted);
             }
-            std::pmr::string retirement;
+            std::pmr::string retirement{ruvia::process_resource()};
             ruvia::test::drain_output(connection, retirement);
             output.append(retirement);
             for (std::size_t offset = 0; offset < output.size();) {
@@ -342,7 +344,7 @@ void exercise_closing_peer(closing_peer behavior) {
     bool protocol_error = false;
     bool close_completed = false;
     const auto run = [&]() -> ruvia::task<void> {
-        const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.local_endpoint().port());
+        const std::pmr::string base_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url,
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         std::exception_ptr failure;
@@ -492,7 +494,7 @@ void exercise_handshake_end(handshake_end mode) {
     bool closed_by_peer = false;
     std::optional<ruvia::http_client_error::code_type> connect_error;
     const auto run = [&]() -> ruvia::task<void> {
-        const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.local_endpoint().port());
+        const std::pmr::string base_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url,
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         std::exception_ptr failure;

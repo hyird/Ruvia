@@ -370,7 +370,7 @@ struct redis_index_config final {
 
 struct redis_repository_config final {
     borrowed_text prefix_{};
-    std::vector<redis_index_config> indexes_{};
+    std::pmr::vector<redis_index_config> indexes_{process_resource()};
 };
 
 // Omitted expiration preserves an existing TTL; new entities are persistent.

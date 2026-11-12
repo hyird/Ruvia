@@ -2,12 +2,14 @@
 
 #include <array>
 #include <chrono>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_types.h"
@@ -48,9 +50,9 @@ void check_session_ended_while_idle(
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), config);
-    std::string before;
+    std::pmr::string before{ruvia::process_resource()};
     std::optional<db_error::code_type> code;
-    std::string after;
+    std::pmr::string after{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
         const auto first = co_await handle.query("SELECT v FROM before");
@@ -116,13 +118,13 @@ TEST(Ruvia, db_session_ended_while_idle_reconnects_before_the_next_statement) {
 #ifdef RUVIA_ENABLE_POSTGRESQL
     {
         peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::reaccept,
-            {{.rows_ = {"before"}, .close_after_ = true}, {.rows_ = {"after"}}});
+            std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("before", ruvia::process_resource())}, ruvia::process_resource()), .close_after_ = true}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("after", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
         check_session_ended_while_idle(peer, ruvia::db_driver::postgresql);
     }
 #endif
 #ifdef RUVIA_ENABLE_MARIADB
     {
-        peer_type peer(std::vector<peer_type::maria_reply>{{.rows_ = {"before"}, .close_after_ = true}, {.rows_ = {"after"}}},
+        peer_type peer(std::pmr::vector<peer_type::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("before", ruvia::process_resource())}, ruvia::process_resource()), .close_after_ = true}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("after", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()),
             peer_type::after_startup::reaccept);
         check_session_ended_while_idle(peer, ruvia::db_driver::mariadb);
     }
@@ -137,14 +139,15 @@ TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        {{.error_ = "duplicate key value violates unique constraint", .sql_state_ = "23505"},
-            {.rows_ = {"kept"}}});
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.error_ = std::pmr::string("duplicate key value violates unique constraint", ruvia::process_resource()), .sql_state_ = std::pmr::string("23505", ruvia::process_resource())},
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("kept", ruvia::process_resource())}, ruvia::process_resource())}},
+            ruvia::process_resource()));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::optional<db_error::code_type> code;
-    std::string sql_state;
-    std::string kept;
+    std::pmr::string sql_state{ruvia::process_resource()};
+    std::pmr::string kept{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto handle = connected.handle();
         try {
@@ -168,16 +171,17 @@ TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection)
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        {{.column_ = "", .command_ = "BEGIN", .status_ = 'T'},
-            {.status_ = 'E', .error_ = "syntax error at or near \"SELEC\""},
-            {.column_ = "", .command_ = "ROLLBACK"},
-            {.rows_ = {"after"}}});
+        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("BEGIN", ruvia::process_resource()), .status_ = 'T'},
+                                                                                {.status_ = 'E', .error_ = std::pmr::string("syntax error at or near \"SELEC\"", ruvia::process_resource())},
+                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("ROLLBACK", ruvia::process_resource())},
+                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("after", ruvia::process_resource())}, ruvia::process_resource())}},
+            ruvia::process_resource()));
     auto& context_value = test::new_test_io_context();
     auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     std::optional<db_error::code_type> code;
     bool transaction_failed = false;
-    std::string after;
+    std::pmr::string after{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto handle = connected.handle();
         auto transaction = co_await handle.begin_transaction();
@@ -209,12 +213,12 @@ TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
     for (const auto copy : {direction::input, direction::output}) {
         for (const auto kind : {statement_kind::query, statement_kind::execute}) {
             test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-                test::backend_startup_peer::after_startup::reaccept, {{.copy_ = copy}, {.rows_ = {"fresh"}}});
+                test::backend_startup_peer::after_startup::reaccept, std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.copy_ = copy}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("fresh", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
             auto& context_value = test::new_test_io_context();
             auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
             db_client client(attachment.loop(), peer.config());
             std::optional<db_error::code_type> code;
-            std::string fresh;
+            std::pmr::string fresh{ruvia::process_resource()};
             test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
                 auto handle = connected.handle();
                 const auto sql = copy == direction::input ? "COPY records FROM STDIN" : "COPY records TO STDOUT";

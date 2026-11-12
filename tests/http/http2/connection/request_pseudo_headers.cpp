@@ -27,7 +27,7 @@ namespace {
 
 using pseudo_header = ruvia::http2_request_pseudo_header;
 
-void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
+void append_frame(std::pmr::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
     std::uint32_t stream_id, std::string_view payload) {
     std::array<char, ruvia::http2_frame_header_bytes> header{};
     if (!ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id)) {
@@ -37,8 +37,8 @@ void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t 
     wire.append(payload);
 }
 
-std::string opening_wire() {
-    std::string wire(ruvia::http2_client_preface);
+std::pmr::string opening_wire() {
+    std::pmr::string wire(ruvia::http2_client_preface);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
     return wire;
 }
@@ -124,14 +124,14 @@ TEST(Ruvia, http2_request_pseudo_headers_do_not_synthesize_authority_from_host) 
 
 TEST(Ruvia, http2_request_pseudo_headers_huffman_dynamic_index_and_continuation) {
     // RFC 7541 C.4.1: Huffman authority inserted at dynamic index 62.
-    const std::string block("\x82\x86\x84\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", 17);
+    const std::pmr::string block("\x82\x86\x84\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", 17);
     for (std::size_t split = 0; split <= block.size(); ++split) {
         auto server = ruvia::http2_connection::server();
         auto first = opening_wire();
         append_frame(first, ruvia::http2_frame_type::headers, 0x1, 1, std::string_view(block).substr(0, split));
         (void)server.feed(first);
         EXPECT_TRUE(!server.next_event());
-        std::string final;
+        std::pmr::string final;
         append_frame(final, ruvia::http2_frame_type::continuation, 0x4, 1, std::string_view(block).substr(split));
         EXPECT_TRUE(server.feed(final) == ruvia::http2_feed_result::accepted);
         auto head = take_request_head(server);
@@ -141,7 +141,7 @@ TEST(Ruvia, http2_request_pseudo_headers_huffman_dynamic_index_and_continuation)
             EXPECT_TRUE(head->request_view().authority_ == "www.example.com");
             EXPECT_TRUE(same_order(head->request_view().pseudo_header_order_, expected));
         }
-        std::string next;
+        std::pmr::string next;
         append_frame(next, ruvia::http2_frame_type::headers, 0x5, 3, "\xbe\x84\x87\x82");
         EXPECT_TRUE(server.feed(next) == ruvia::http2_feed_result::accepted);
         auto indexed = take_request_head(server);
@@ -189,14 +189,14 @@ TEST(Ruvia, http2_invalid_pseudo_headers_do_not_publish_but_keep_dynamic_table_s
     auto wire = opening_wire();
     // A duplicate :method fails request semantics, but the later incremental
     // :path literal must still become dynamic index 62 (RFC 7541 section 2.3.2).
-    const std::string malformed("\x82\x82\x44\x07/synced", 11);
+    const std::pmr::string malformed("\x82\x82\x44\x07/synced", 11);
     append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, malformed);
     EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
     EXPECT_TRUE(!take_request_head(server));
     EXPECT_TRUE(server.stream_aborted(1));
     std::pmr::string indexed("\xbe\x87\x82", 3);
     encode_pseudo_header(indexed, pseudo_header::authority);
-    std::string next;
+    std::pmr::string next;
     append_frame(next, ruvia::http2_frame_type::headers, 0x5, 3, indexed);
     EXPECT_TRUE(server.feed(next) == ruvia::http2_feed_result::accepted);
     auto head = take_request_head(server);
@@ -235,7 +235,7 @@ TEST(Ruvia, http2_request_pseudo_header_lease_survives_reset_move_and_later_inpu
             saved = lease->request_view();
             EXPECT_TRUE(same_order(saved.pseudo_header_order_, expected));
             auto moved = std::move(server);
-            std::string next;
+            std::pmr::string next;
             append_frame(next, ruvia::http2_frame_type::headers, 0x5, 3, block);
             EXPECT_TRUE(moved.feed(next) == ruvia::http2_feed_result::accepted);
             auto following = take_request_head(moved);

@@ -23,6 +23,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "backend_client_fixture.h"
@@ -212,7 +213,7 @@ TEST(Ruvia, redis_batch_builders_own_cold_payload_and_reject_reuse) {
         };
         {
             auto pipeline = handle.pipeline();
-            pipeline.set(std::string(128, 'k'), std::string(128, 'v'));
+            pipeline.set(std::pmr::string(128, 'k', ruvia::process_resource()), std::pmr::string(128, 'v', ruvia::process_resource()));
             std::optional moved(std::move(pipeline));
             EXPECT_TRUE(throws_logic_error([&] { pipeline.get("moved"); }));
             auto cold = std::move(*moved).exec();
@@ -222,7 +223,7 @@ TEST(Ruvia, redis_batch_builders_own_cold_payload_and_reject_reuse) {
         }
         {
             auto transaction = handle.transaction();
-            transaction.set(std::string(128, 'k'), std::string(128, 'v'));
+            transaction.set(std::pmr::string(128, 'k', ruvia::process_resource()), std::pmr::string(128, 'v', ruvia::process_resource()));
             std::optional moved(std::move(transaction));
             EXPECT_TRUE(throws_logic_error([&] { transaction.get("moved"); }));
             auto cold = std::move(*moved).exec();
@@ -321,7 +322,7 @@ TEST(Ruvia, redis_multi_key_commands_reject_empty_key_spans_before_io) {
 // canned reply and records the received arguments.
 class scripted_redis_peer final {
 public:
-    explicit scripted_redis_peer(std::vector<std::string> replies)
+    explicit scripted_redis_peer(std::pmr::vector<std::pmr::string> replies)
         : replies_(std::move(replies)),
           acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           thread_([this] { serve(); }) {}
@@ -335,7 +336,7 @@ public:
     }
 
     // Valid only after join().
-    [[nodiscard]] const std::vector<std::vector<std::string>>& commands() const noexcept {
+    [[nodiscard]] const std::pmr::vector<std::pmr::vector<std::pmr::string>>& commands() const noexcept {
         return commands_;
     }
 
@@ -347,17 +348,17 @@ public:
 
 private:
     // Parses one "*N\r\n($len\r\nbytes\r\n)*N" command from the front of input.
-    static bool take_command(std::string& input, std::vector<std::string>& args) {
+    static bool take_command(std::pmr::string& input, std::pmr::vector<std::pmr::string>& args) {
         std::size_t position = 0;
         const auto read_line = [&](char prefix, std::size_t& number) {
             if (position >= input.size() || input[position] != prefix) {
                 return false;
             }
             const auto end = input.find("\r\n", position);
-            if (end == std::string::npos) {
+            if (end == std::pmr::string::npos) {
                 return false;
             }
-            number = std::stoul(input.substr(position + 1, end - position - 1));
+            number = std::stoul(std::string(std::string_view(input).substr(position + 1, end - position - 1)));
             position = end + 2;
             return true;
         };
@@ -365,7 +366,7 @@ private:
         if (!read_line('*', count)) {
             return false;
         }
-        std::vector<std::string> parsed;
+        std::pmr::vector<std::pmr::string> parsed{ruvia::process_resource()};
         for (std::size_t i = 0; i < count; ++i) {
             std::size_t length = 0;
             if (!read_line('$', length) || input.size() < position + length + 2) {
@@ -382,7 +383,7 @@ private:
     void serve() {
         asio::ip::tcp::socket socket(io_);
         acceptor_.accept(socket);
-        std::string input;
+        std::pmr::string input{ruvia::process_resource()};
         std::array<char, 1024> buffer{};
         std::size_t next_reply = 0;
         for (;;) {
@@ -392,11 +393,10 @@ private:
                 return;
             }
             input.append(buffer.data(), read);
-            std::vector<std::string> args;
+            std::pmr::vector<std::pmr::string> args{ruvia::process_resource()};
             while (take_command(input, args)) {
                 commands_.push_back(args);
-                const std::string reply =
-                    next_reply < replies_.size() ? replies_[next_reply++] : std::string("-ERR unscripted\r\n");
+                const std::pmr::string reply(next_reply < replies_.size() ? replies_[next_reply++] : std::pmr::string("-ERR unscripted\r\n", ruvia::process_resource()), ruvia::process_resource());
                 asio::write(socket, asio::buffer(reply), error);
                 if (error) {
                     return;
@@ -405,8 +405,8 @@ private:
         }
     }
 
-    std::vector<std::string> replies_;
-    std::vector<std::vector<std::string>> commands_;
+    std::pmr::vector<std::pmr::string> replies_{ruvia::process_resource()};
+    std::pmr::vector<std::pmr::vector<std::pmr::string>> commands_{ruvia::process_resource()};
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     std::thread thread_;
@@ -572,19 +572,19 @@ void check_redis_result_move_guarantees(const result_type& original,
     EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
-[[nodiscard]] std::string redis_bulk_reply(std::string_view value) {
-    return "$" + std::to_string(value.size()) + "\r\n" + std::string(value) + "\r\n";
+[[nodiscard]] std::pmr::string redis_bulk_reply(std::string_view value) {
+    return "$" + std::pmr::string(std::to_string(value.size()), ruvia::process_resource()) + "\r\n" + std::pmr::string(value, ruvia::process_resource()) + "\r\n";
 }
 
 TEST(Ruvia, redis_typed_commands_preserve_arguments_across_direct_pipeline_and_transaction) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
-    const std::vector<std::string> command_replies{":1\r\n", ":2\r\n", "*1\r\n$5\r\nentry\r\n", ":1\r\n", "*1\r\n$6\r\nmember\r\n"};
-    auto replies = command_replies;
+    const std::pmr::vector<std::pmr::string> command_replies({std::pmr::string(":1\r\n", ruvia::process_resource()), std::pmr::string(":2\r\n", ruvia::process_resource()), std::pmr::string("*1\r\n$5\r\nentry\r\n", ruvia::process_resource()), std::pmr::string(":1\r\n", ruvia::process_resource()), std::pmr::string("*1\r\n$6\r\nmember\r\n", ruvia::process_resource())}, ruvia::process_resource());
+    auto replies = decltype(command_replies)(command_replies, ruvia::process_resource());
     replies.insert(replies.end(), command_replies.begin(), command_replies.end());
     replies.emplace_back("+OK\r\n");
-    replies.insert(replies.end(), 5, "+QUEUED\r\n");
-    std::string executed = "*5\r\n";
+    replies.insert(replies.end(), 5, std::pmr::string("+QUEUED\r\n", ruvia::process_resource()));
+    std::pmr::string executed("*5\r\n", ruvia::process_resource());
     for (const auto& reply : command_replies) {
         executed.append(reply);
     }
@@ -592,8 +592,8 @@ TEST(Ruvia, redis_typed_commands_preserve_arguments_across_direct_pipeline_and_t
     scripted_redis_peer peer(std::move(replies));
     ruvia::redis_config config{.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1};
     ruvia::redis_client client(worker.loop(), config);
-    const std::string key("key\0binary", 10);
-    const std::string member("member\0value", 12);
+    const std::pmr::string key("key\0binary", 10, ruvia::process_resource());
+    const std::pmr::string member("member\0value", 12, ruvia::process_resource());
     constexpr auto minimum = std::numeric_limits<std::int64_t>::min();
     constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
@@ -637,30 +637,31 @@ TEST(Ruvia, redis_typed_commands_preserve_arguments_across_direct_pipeline_and_t
         }
     });
     peer.join();
-    const std::vector<std::vector<std::string>> expected{
-        {"INCRBY", key, "-9223372036854775808"}, {"DECRBY", key, "9223372036854775807"},
-        {"LRANGE", key, "-9223372036854775808", "9223372036854775807"}, {"ZADD", key, "-inf", member},
-        {"ZRANGE", key, "9223372036854775807", "-9223372036854775808"}};
-    auto all = expected;
+    const std::pmr::vector<std::pmr::vector<std::pmr::string>> expected({std::pmr::vector<std::pmr::string>({std::pmr::string("INCRBY", ruvia::process_resource()), std::pmr::string(key, ruvia::process_resource()), std::pmr::string("-9223372036854775808", ruvia::process_resource())}, ruvia::process_resource()), std::pmr::vector<std::pmr::string>({std::pmr::string("DECRBY", ruvia::process_resource()), std::pmr::string(key, ruvia::process_resource()), std::pmr::string("9223372036854775807", ruvia::process_resource())}, ruvia::process_resource()),
+                                                                            std::pmr::vector<std::pmr::string>({std::pmr::string("LRANGE", ruvia::process_resource()), std::pmr::string(key, ruvia::process_resource()), std::pmr::string("-9223372036854775808", ruvia::process_resource()), std::pmr::string("9223372036854775807", ruvia::process_resource())}, ruvia::process_resource()), std::pmr::vector<std::pmr::string>({std::pmr::string("ZADD", ruvia::process_resource()), std::pmr::string(key, ruvia::process_resource()), std::pmr::string("-inf", ruvia::process_resource()), std::pmr::string(member, ruvia::process_resource())}, ruvia::process_resource()),
+                                                                            std::pmr::vector<std::pmr::string>({std::pmr::string("ZRANGE", ruvia::process_resource()), std::pmr::string(key, ruvia::process_resource()), std::pmr::string("9223372036854775807", ruvia::process_resource()), std::pmr::string("-9223372036854775808", ruvia::process_resource())}, ruvia::process_resource())},
+        ruvia::process_resource());
+    auto all = decltype(expected)(expected, ruvia::process_resource());
     all.insert(all.end(), expected.begin(), expected.end());
-    all.push_back({"MULTI"});
+    all.push_back(std::pmr::vector<std::pmr::string>({std::pmr::string("MULTI", ruvia::process_resource())}, ruvia::process_resource()));
     all.insert(all.end(), expected.begin(), expected.end());
-    all.push_back({"EXEC"});
+    all.push_back(std::pmr::vector<std::pmr::string>({std::pmr::string("EXEC", ruvia::process_resource())}, ruvia::process_resource()));
     EXPECT_TRUE(peer.commands() == all);
 }
 
 TEST(Ruvia, redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
-    scripted_redis_peer peer({
-        ":1\r\n",
-        "$3\r\ninf\r\n",
-        "$4\r\n-inf\r\n",
-        "*4\r\n$1\r\na\r\n$4\r\n-inf\r\n$1\r\nb\r\n$3\r\ninf\r\n",
-        ":2\r\n",
-        "$3\r\nnan\r\n",
-        "$5\r\n1e999\r\n",
-    });
+    scripted_redis_peer peer(std::pmr::vector<std::pmr::string>({
+                                                                    std::pmr::string(":1\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("$3\r\ninf\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("$4\r\n-inf\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("*4\r\n$1\r\na\r\n$4\r\n-inf\r\n$1\r\nb\r\n$3\r\ninf\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string(":2\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("$3\r\nnan\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("$5\r\n1e999\r\n", ruvia::process_resource()),
+                                                                },
+        ruvia::process_resource()));
     ruvia::redis_config config;
     config.host_ = "127.0.0.1";
     config.port_ = peer.port();
@@ -703,36 +704,37 @@ TEST(Ruvia, redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
     const auto& commands = peer.commands();
     EXPECT_EQ(commands.size(), std::size_t{7});
     if (commands.size() == 7) {
-        EXPECT_TRUE(commands[0] == (std::vector<std::string>{"ZADD", "scores", "+inf", "b"}));
-        EXPECT_TRUE(commands[4] == (std::vector<std::string>{"ZCOUNT", "scores", "-inf", "+inf"}));
+        EXPECT_TRUE(commands[0] == (std::pmr::vector<std::pmr::string>({std::pmr::string("ZADD", ruvia::process_resource()), std::pmr::string("scores", ruvia::process_resource()), std::pmr::string("+inf", ruvia::process_resource()), std::pmr::string("b", ruvia::process_resource())}, ruvia::process_resource())));
+        EXPECT_TRUE(commands[4] == (std::pmr::vector<std::pmr::string>({std::pmr::string("ZCOUNT", ruvia::process_resource()), std::pmr::string("scores", ruvia::process_resource()), std::pmr::string("-inf", ruvia::process_resource()), std::pmr::string("+inf", ruvia::process_resource())}, ruvia::process_resource())));
     }
 }
 
 TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
-    const std::string stream_name(120, 's');
-    const std::string field_name(128, 'f');
-    const std::string field_value(256, 'v');
-    const std::string key_name(128, 'k');
-    const std::string member_name(128, 'm');
+    const std::pmr::string stream_name(120, 's', ruvia::process_resource());
+    const std::pmr::string field_name(128, 'f', ruvia::process_resource());
+    const std::pmr::string field_value(256, 'v', ruvia::process_resource());
+    const std::pmr::string key_name(128, 'k', ruvia::process_resource());
+    const std::pmr::string member_name(128, 'm', ruvia::process_resource());
     const auto bulk_field = redis_bulk_reply(field_name);
     const auto bulk_value = redis_bulk_reply(field_value);
     const auto group_reply = "*2\r\n*2\r\n" + redis_bulk_reply(stream_name) +
-                             "*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n" + bulk_field + bulk_value +
+                             std::pmr::string("*2\r\n*2\r\n$3\r\n1-0\r\n*2\r\n", ruvia::process_resource()) + bulk_field + bulk_value +
                              "*2\r\n$3\r\n2-0\r\n$-1\r\n*2\r\n$4\r\nseed\r\n*1\r\n*2\r\n$3\r\n3-0\r\n*0\r\n";
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
-    scripted_redis_peer peer({
-        "*2\r\n*1\r\n" + bulk_value + ":42\r\n",
-        ":7\r\n",
-        group_reply,
-        "*0\r\n",
-        "*2\r\n$2\r\n12\r\n*2\r\n" + redis_bulk_reply(key_name) + "$6\r\nsecond\r\n",
-        "*2\r\n$1\r\n0\r\n*0\r\n",
-        "*2\r\n$1\r\n0\r\n*2\r\n" + bulk_field + bulk_value,
-        "*2\r\n$1\r\n5\r\n*2\r\n" + redis_bulk_reply(std::string(120, 'x')) + redis_bulk_reply(std::string(120, 'y')),
-        "*2\r\n$1\r\n9\r\n*2\r\n" + redis_bulk_reply(member_name) + "$3\r\n1.5\r\n",
-        "*2\r\n$1\r\n0\r\n*2\r\n" + redis_bulk_reply(std::string(120, 'z')) + "$3\r\n2.5\r\n",
-    });
+    scripted_redis_peer peer(std::pmr::vector<std::pmr::string>({
+                                                                    std::pmr::string("*2\r\n*1\r\n", ruvia::process_resource()) + bulk_value + ":42\r\n",
+                                                                    std::pmr::string(":7\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string(group_reply, ruvia::process_resource()),
+                                                                    std::pmr::string("*0\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("*2\r\n$2\r\n12\r\n*2\r\n" + redis_bulk_reply(key_name) + "$6\r\nsecond\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("*2\r\n$1\r\n0\r\n*0\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("*2\r\n$1\r\n0\r\n*2\r\n", ruvia::process_resource()) + bulk_field + bulk_value,
+                                                                    std::pmr::string("*2\r\n$1\r\n5\r\n*2\r\n" + redis_bulk_reply(std::pmr::string(120, 'x', ruvia::process_resource())) + redis_bulk_reply(std::pmr::string(120, 'y', ruvia::process_resource())), ruvia::process_resource()),
+                                                                    std::pmr::string("*2\r\n$1\r\n9\r\n*2\r\n" + redis_bulk_reply(member_name) + "$3\r\n1.5\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("*2\r\n$1\r\n0\r\n*2\r\n" + redis_bulk_reply(std::pmr::string(120, 'z', ruvia::process_resource())) + "$3\r\n2.5\r\n", ruvia::process_resource()),
+                                                                },
+        ruvia::process_resource()));
     ruvia::redis_config config;
     config.host_ = "127.0.0.1";
     config.port_ = peer.port();
@@ -854,8 +856,9 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
 TEST(Ruvia, redis_string_array_replies_reject_nil_elements) {
     // LRANGE positions and set members are never nil; dropping one would
     // silently shorten or shift the result.
-    scripted_redis_peer peer({"*3\r\n$1\r\na\r\n$-1\r\n$1\r\nc\r\n", "*1\r\n$-1\r\n",
-        "*2\r\n$1\r\n0\r\n*1\r\n$-1\r\n", "$1\r\nv\r\n"});
+    scripted_redis_peer peer(std::pmr::vector<std::pmr::string>({std::pmr::string("*3\r\n$1\r\na\r\n$-1\r\n$1\r\nc\r\n", ruvia::process_resource()), std::pmr::string("*1\r\n$-1\r\n", ruvia::process_resource()),
+                                                                    std::pmr::string("*2\r\n$1\r\n0\r\n*1\r\n$-1\r\n", ruvia::process_resource()), std::pmr::string("$1\r\nv\r\n", ruvia::process_resource())},
+        ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
@@ -881,9 +884,9 @@ TEST(Ruvia, redis_string_array_replies_reject_nil_elements) {
 }
 
 TEST(Ruvia, redis_set_result_copy_inherits_previous_value_resource) {
-    std::string text(4096, 'v');
+    std::pmr::string text(4096, 'v', ruvia::process_resource());
     text[17] = '\0';
-    scripted_redis_peer peer({redis_bulk_reply(text), "$0\r\n\r\n", "$-1\r\n"});
+    scripted_redis_peer peer(std::pmr::vector<std::pmr::string>({std::pmr::string(redis_bulk_reply(text), ruvia::process_resource()), std::pmr::string("$0\r\n\r\n", ruvia::process_resource()), std::pmr::string("$-1\r\n", ruvia::process_resource())}, ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
@@ -924,10 +927,10 @@ TEST(Ruvia, redis_set_result_copy_inherits_previous_value_resource) {
 }
 
 TEST(Ruvia, redis_set_result_assignment_retains_destination_resource_across_absence) {
-    std::string text(4096, 'v');
+    std::pmr::string text(4096, 'v', ruvia::process_resource());
     text[17] = '\0';
-    scripted_redis_peer destination_peer({redis_bulk_reply(text), "+OK\r\n", "$-1\r\n"});
-    scripted_redis_peer source_peer({redis_bulk_reply(text), "$0\r\n\r\n"});
+    scripted_redis_peer destination_peer(std::pmr::vector<std::pmr::string>({std::pmr::string(redis_bulk_reply(text), ruvia::process_resource()), std::pmr::string("+OK\r\n", ruvia::process_resource()), std::pmr::string("$-1\r\n", ruvia::process_resource())}, ruvia::process_resource()));
+    scripted_redis_peer source_peer(std::pmr::vector<std::pmr::string>({std::pmr::string(redis_bulk_reply(text), ruvia::process_resource()), std::pmr::string("$0\r\n\r\n", ruvia::process_resource())}, ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client destination(worker.loop(), {.host_ = "127.0.0.1", .port_ = destination_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
@@ -1001,16 +1004,16 @@ TEST(Ruvia, redis_set_result_assignment_retains_destination_resource_across_abse
 }
 
 TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_shapes) {
-    std::string key(128, 'k');
-    std::string payload(64 * 1024 + 1, 'v');
+    std::pmr::string key(128, 'k', ruvia::process_resource());
+    std::pmr::string payload(64 * 1024 + 1, 'v', ruvia::process_resource());
     key[17] = '\0';
     payload[2048] = '\0';
     const std::string_view expected_key(key);
     const std::string_view expected_payload(payload);
     const auto bulk_key = redis_bulk_reply(key);
     const auto bulk_payload = redis_bulk_reply(payload);
-    const auto array = [](std::initializer_list<std::string> items) {
-        std::string result = "*" + std::to_string(items.size()) + "\r\n";
+    const auto array = [](std::initializer_list<std::string_view> items) {
+        std::pmr::string result("*" + std::pmr::string(std::to_string(items.size()), ruvia::process_resource()) + "\r\n", ruvia::process_resource());
         for (const auto& item : items) {
             result.append(item);
         }
@@ -1018,17 +1021,18 @@ TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_
     };
     const auto fields = array({bulk_key, bulk_payload});
     const auto scored = array({bulk_key, redis_bulk_reply("1.5")});
-    const auto scan = [&](const std::string& values) {
+    const auto scan = [&](const std::pmr::string& values) {
         return array({redis_bulk_reply("0"), values});
     };
-    const auto stream = [&](const std::string& values) {
+    const auto stream = [&](const std::pmr::string& values) {
         return array({array({bulk_key, array({array({redis_bulk_reply("1-0"), values})})})});
     };
-    scripted_redis_peer peer({bulk_payload, bulk_payload, bulk_payload,
-        array({bulk_payload, "$-1\r\n", "$0\r\n\r\n"}), array({bulk_payload, bulk_key}),
-        fields, scored, scan(array({bulk_key, bulk_payload})), scan(fields), scan(scored), stream(fields),
-        array({bulk_payload, ":1\r\n"}), scan(array({bulk_key})), stream(array({bulk_key})),
-        bulk_payload, ":1\r\n", "$-1\r\n"});
+    scripted_redis_peer peer(std::pmr::vector<std::pmr::string>({std::pmr::string(bulk_payload, ruvia::process_resource()), std::pmr::string(bulk_payload, ruvia::process_resource()), std::pmr::string(bulk_payload, ruvia::process_resource()),
+                                                                    std::pmr::string(array({bulk_payload, "$-1\r\n", "$0\r\n\r\n"}), ruvia::process_resource()), std::pmr::string(array({bulk_payload, bulk_key}), ruvia::process_resource()),
+                                                                    std::pmr::string(fields, ruvia::process_resource()), std::pmr::string(scored, ruvia::process_resource()), std::pmr::string(scan(array({bulk_key, bulk_payload})), ruvia::process_resource()), std::pmr::string(scan(fields), ruvia::process_resource()), std::pmr::string(scan(scored), ruvia::process_resource()), std::pmr::string(stream(fields), ruvia::process_resource()),
+                                                                    std::pmr::string(array({bulk_payload, ":1\r\n"}), ruvia::process_resource()), std::pmr::string(scan(array({bulk_key})), ruvia::process_resource()), std::pmr::string(stream(array({bulk_key})), ruvia::process_resource()),
+                                                                    std::pmr::string(bulk_payload, ruvia::process_resource()), std::pmr::string(":1\r\n", ruvia::process_resource()), std::pmr::string("$-1\r\n", ruvia::process_resource())},
+        ruvia::process_resource()));
     auto& io = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});

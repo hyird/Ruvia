@@ -126,7 +126,7 @@ struct cors_request_fields final {
     return true;
 }
 
-void validate_cors_header_names(const std::vector<std::string>& names, const char* empty_message) {
+void validate_cors_header_names(std::span<const std::pmr::string> names, const char* empty_message) {
     if (empty_message != nullptr && names.empty()) {
         throw std::invalid_argument(empty_message);
     }
@@ -138,7 +138,7 @@ void validate_cors_header_names(const std::vector<std::string>& names, const cha
 }
 
 void append_cors_header_names(std::pmr::string& output, std::string_view header_name,
-    const std::vector<std::string>& names) {
+    std::span<const std::pmr::string> names) {
     if (names.empty()) {
         return;
     }

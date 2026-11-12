@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -15,11 +16,13 @@
 #include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
+
 namespace ruvia::test {
 
 template <typename stream_type>
-[[nodiscard]] inline std::string read_to_end(stream_type& stream, asio::error_code& terminal_error) {
-    std::string result;
+[[nodiscard]] inline std::pmr::string read_to_end(stream_type& stream, asio::error_code& terminal_error) {
+    std::pmr::string result{ruvia::process_resource()};
     std::array<char, 4096> bytes;
     terminal_error.clear();
     while (!terminal_error) {
@@ -30,7 +33,7 @@ template <typename stream_type>
 }
 
 template <typename stream_type>
-[[nodiscard]] inline std::string read_to_end(stream_type& stream) {
+[[nodiscard]] inline std::pmr::string read_to_end(stream_type& stream) {
     asio::error_code error;
     auto result = read_to_end(stream, error);
     if (error != asio::error::eof && error != asio::ssl::error::stream_truncated) {
@@ -39,7 +42,7 @@ template <typename stream_type>
     return result;
 }
 
-[[nodiscard]] inline std::string exchange(asio::io_context& io,
+[[nodiscard]] inline std::pmr::string exchange(asio::io_context& io,
     const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);

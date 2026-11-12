@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/app.h"
@@ -301,7 +302,7 @@ private:
     // Relays a subrequest named by the query as status and body; X-Test-Relayed
     // tells a relayed answer from a failure escaping dispatch().
     ruvia::task<ruvia::http_response> subrequest(ruvia::context& c) {
-        std::string method(c.req().query("method").value_or("GET"));
+        std::pmr::string method(c.req().query("method").value_or("GET"), ruvia::process_resource());
         std::pmr::string target(c.req().query("target").value_or("/"), c.arena());
         auto pending = c.dispatch({
             .method_ = method,
@@ -735,7 +736,7 @@ TEST(Ruvia, testing_facade_rejects_invalid_request_headers) {
     }
     EXPECT_TRUE(app.request(many).status() == ruvia::http_status::ok);
 
-    const std::string oversized_header_value(ruvia::max_http_header_bytes, 'x');
+    const std::pmr::string oversized_header_value(ruvia::max_http_header_bytes, 'x', ruvia::process_resource());
     EXPECT_TRUE(
         app.request(ruvia::test_request::get("/t/hello").header("X-Big", oversized_header_value))
             .status() == ruvia::http_status::request_header_fields_too_large);
@@ -879,9 +880,9 @@ TEST(Ruvia, testing_facade_runs_fallback_handlers_that_carry_state) {
     // needed had to be a global. It now accepts any callable, including one that
     // captures the collaborators the handler depends on.
     struct branding final {
-        std::string label_;
+        std::pmr::string label_{ruvia::process_resource()};
     };
-    const branding branding_value{"tenant-a"};
+    const branding branding_value{std::pmr::string("tenant-a", ruvia::process_resource())};
 
     ruvia::test_app app;
     app.on_not_found([branding_value](ruvia::context& c) -> ruvia::task<ruvia::http_response> {
@@ -918,7 +919,7 @@ TEST(Ruvia, testing_facade_error_handler_throwing_validation_issues_keeps_its_st
     ruvia::test_app app;
     app.on_error([](ruvia::context& c, ruvia::http_error_info) -> ruvia::task<ruvia::http_response> {
         ruvia::validator checks;
-        std::optional<std::string> absent;
+        std::optional<std::pmr::string> absent;
         checks.required(absent, "email", "email is required");
         checks.throw_if_invalid({.status_ = ruvia::http_status::unprocessable_content,
             .code_ = "invalid_payload",
@@ -1091,13 +1092,13 @@ TEST(Ruvia, testing_facade_response_owns_large_bodies_across_requests) {
     ruvia::test_app app;
     const auto first = app.request(ruvia::test_request::get("/t/large?fill=a"));
     EXPECT_EQ(first.body().size(), std::size_t(1024 * 1024));
-    EXPECT_EQ(first.body(), std::string(1024 * 1024, 'a'));
+    EXPECT_EQ(first.body(), std::pmr::string(1024 * 1024, 'a', ruvia::process_resource()));
 
     const auto second = app.request(ruvia::test_request::get("/t/large?fill=b"));
     EXPECT_EQ(second.body().size(), std::size_t(1024 * 1024));
     EXPECT_EQ(first.body().size(), std::size_t(1024 * 1024));
-    EXPECT_EQ(second.body(), std::string(1024 * 1024, 'b'));
-    EXPECT_EQ(first.body(), std::string(1024 * 1024, 'a'));
+    EXPECT_EQ(second.body(), std::pmr::string(1024 * 1024, 'b', ruvia::process_resource()));
+    EXPECT_EQ(first.body(), std::pmr::string(1024 * 1024, 'a', ruvia::process_resource()));
 }
 
 TEST(Ruvia, testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {
@@ -1315,7 +1316,7 @@ TEST(Ruvia, testing_facade_subrequest_answers_like_a_network_request) {
     // when reached through the public subrequest API.
     for (const auto target : {"/t/users/42", "/t/boom", "/missing"}) {
         const auto direct = app.request(ruvia::test_request::get(target));
-        const auto relayed = app.request(ruvia::test_request::get(std::string("/t/subrequest?target=") + target));
+        const auto relayed = app.request(ruvia::test_request::get(std::pmr::string("/t/subrequest?target=", ruvia::process_resource()) + target));
         EXPECT_EQ(relayed.status(), direct.status());
         EXPECT_TRUE(relayed.header("X-Test-Relayed").has_value());
         EXPECT_EQ(relayed.body(), direct.body());
@@ -1386,7 +1387,7 @@ TEST(Ruvia, testing_facade_security_headers_own_configured_policy) {
         config.frame_options_header_ = ruvia::default_security_header_policy::omit;
         config.xss_protection_header_ = ruvia::xss_protection_header_policy::omit;
         config.content_security_policy_ = "default-src 'none'";
-        const std::string custom_value(80, 'v');
+        const std::pmr::string custom_value(80, 'v', ruvia::process_resource());
         config.custom_headers_ = {{"X-Custom-Security", custom_value}};
         app.use<ruvia::security_headers_middleware>(config);
     }
@@ -1396,7 +1397,7 @@ TEST(Ruvia, testing_facade_security_headers_own_configured_policy) {
         response.header("Content-Security-Policy"), std::string_view("default-src 'none'"));
     EXPECT_TRUE(!response.header("X-Frame-Options").has_value());
     EXPECT_TRUE(!response.header("X-XSS-Protection").has_value());
-    const std::string expected_custom_value(80, 'v');
+    const std::pmr::string expected_custom_value(80, 'v', ruvia::process_resource());
     EXPECT_EQ(response.header("X-Custom-Security"), std::string_view(expected_custom_value));
 }
 
@@ -1405,8 +1406,8 @@ TEST(Ruvia, testing_facade_session_middleware_owns_configured_cookie_policy) {
     ruvia::test_app app;
     {
         ruvia::session_config config;
-        const std::string redis_alias(80, 'r');
-        const std::string key_prefix(80, 'k');
+        const std::pmr::string redis_alias(80, 'r', ruvia::process_resource());
+        const std::pmr::string key_prefix(80, 'k', ruvia::process_resource());
         config.redis_alias_ = redis_alias;
         config.cookie_name_ = "ruvia_session";
         config.key_prefix_ = key_prefix;
@@ -1658,7 +1659,7 @@ TEST(Ruvia, testing_facade_subrequest_rejects_a_file_response_recovered_from_406
     testing_facade_file_path() = dir / "large.bin";
     // Larger than the inline-read limit, so the error handler's answer stays
     // a file body instead of being read into the response.
-    const std::string large_payload(20000, 'L');
+    const std::pmr::string large_payload(20000, 'L', ruvia::process_resource());
     {
         std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
         out.write(large_payload.data(), static_cast<std::streamsize>(large_payload.size()));
@@ -1680,7 +1681,7 @@ TEST(Ruvia, testing_facade_reads_file_bodies_and_negotiates_precompressed_static
     const ruvia::test::scoped_temp_directory directory("ruvia_testing_facade_files");
     const auto& dir = directory.path();
     testing_facade_file_path() = dir / "large.bin";
-    const std::string large_payload(20000, 'L');
+    const std::pmr::string large_payload(20000, 'L', ruvia::process_resource());
     {
         std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
         out.write(large_payload.data(), static_cast<std::streamsize>(large_payload.size()));

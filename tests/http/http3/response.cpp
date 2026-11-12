@@ -55,7 +55,7 @@ template <typename error_type>
 
 // RFC 9204 §4.5.3: literal names and values, without dynamic table references
 // or Huffman coding, exercise the real decoder with arbitrary HTTP semantics.
-void append_qpack_integer(std::string& bytes, std::size_t value, unsigned prefix_bits, unsigned tag) {
+void append_qpack_integer(std::pmr::string& bytes, std::size_t value, unsigned prefix_bits, unsigned tag) {
     const auto mask = (1u << prefix_bits) - 1;
     if (value < mask) {
         bytes.push_back(static_cast<char>(tag | static_cast<unsigned>(value)));
@@ -70,7 +70,7 @@ void append_qpack_integer(std::string& bytes, std::size_t value, unsigned prefix
     bytes.push_back(static_cast<char>(value));
 }
 
-void append_http3_wire_frame(std::string& bytes, unsigned type, std::string_view payload) {
+void append_http3_wire_frame(std::pmr::string& bytes, unsigned type, std::string_view payload) {
     bytes.push_back(static_cast<char>(type));
     if (payload.size() < 64) {
         bytes.push_back(static_cast<char>(payload.size()));
@@ -83,8 +83,8 @@ void append_http3_wire_frame(std::string& bytes, unsigned type, std::string_view
     bytes.append(payload);
 }
 
-void append_http3_wire_headers(std::string& bytes, std::span<const ruvia::http3_field_view> fields) {
-    std::string section(2, '\0');  // Required Insert Count = 0; Delta Base = 0.
+void append_http3_wire_headers(std::pmr::string& bytes, std::span<const ruvia::http3_field_view> fields) {
+    std::pmr::string section(2, '\0');  // Required Insert Count = 0; Delta Base = 0.
     for (const auto& field : fields) {
         append_qpack_integer(section, field.name_.size(), 3, 0x20);
         section.append(field.name_);
@@ -94,7 +94,7 @@ void append_http3_wire_headers(std::string& bytes, std::span<const ruvia::http3_
     append_http3_wire_frame(bytes, 1, section);
 }
 
-void append_http3_wire_headers(std::string& bytes, std::initializer_list<ruvia::http3_field_view> fields) {
+void append_http3_wire_headers(std::pmr::string& bytes, std::initializer_list<ruvia::http3_field_view> fields) {
     append_http3_wire_headers(bytes, std::span(fields.begin(), fields.size()));
 }
 
@@ -162,7 +162,7 @@ TEST(Ruvia, http3_buffered_response_head_maps_status_fields_and_content_length) 
 
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
-    EXPECT_EQ(client.sequence_, std::string("HDE"));
+    EXPECT_EQ(client.sequence_, std::pmr::string("HDE"));
     EXPECT_EQ(client.headers_.size(), std::size_t{1});
     if (client.headers_.size() != 1) {
         return;
@@ -181,7 +181,7 @@ TEST(Ruvia, http3_buffered_response_head_maps_status_fields_and_content_length) 
             EXPECT_TRUE(byte < 'A' || byte > 'Z');
         }
     }
-    EXPECT_EQ(client.data(0), std::string("hello world"));
+    EXPECT_EQ(client.data(0), std::pmr::string("hello world"));
     EXPECT_TRUE(client.ended(0));
 }
 
@@ -193,20 +193,20 @@ TEST(Ruvia, http3_field_sections_keep_interleaved_names_and_values_after_submiss
         ruvia::test::http3_event_log request;
         EXPECT_TRUE(peers.send_request(0, get_request_head, true, request));
 
-        std::vector<std::string> names{std::string(80, 'a'), "X-Small", std::string(64, 'b'),
-            std::string(31, 'c') + "Z" + std::string(31, 'c'),
-            "Z" + std::string(63, 'd'), std::string(64, 'e') + "Z"};
-        std::vector<std::string> normalized{std::string(80, 'a'), "x-small", std::string(64, 'b'),
-            std::string(31, 'c') + "z" + std::string(31, 'c'),
-            "z" + std::string(63, 'd'), std::string(64, 'e') + "z"};
-        std::vector<std::string> values{"value-0", "value-1", "value-2", "value-3", "value-4", "value-5"};
+        std::pmr::vector<std::pmr::string> names{std::pmr::string(80, 'a'), "X-Small", std::pmr::string(64, 'b'),
+            std::pmr::string(31, 'c') + "Z" + std::pmr::string(31, 'c'),
+            "Z" + std::pmr::string(63, 'd'), std::pmr::string(64, 'e') + "Z"};
+        std::pmr::vector<std::pmr::string> normalized{std::pmr::string(80, 'a'), "x-small", std::pmr::string(64, 'b'),
+            std::pmr::string(31, 'c') + "z" + std::pmr::string(31, 'c'),
+            "z" + std::pmr::string(63, 'd'), std::pmr::string(64, 'e') + "z"};
+        std::pmr::vector<std::pmr::string> values{"value-0", "value-1", "value-2", "value-3", "value-4", "value-5"};
         for (std::size_t index = 0; index < extra_fields; ++index) {
-            names.push_back("X-Extra-" + std::to_string(index));
-            normalized.push_back("x-extra-" + std::to_string(index));
-            values.push_back("value-extra-" + std::to_string(index));
+            names.push_back(std::pmr::string("X-Extra-") + std::to_string(index).c_str());
+            normalized.push_back(std::pmr::string("x-extra-") + std::to_string(index).c_str());
+            values.push_back(std::pmr::string("value-extra-") + std::to_string(index).c_str());
         }
         const auto expected_values = values;
-        std::vector<ruvia::http_header_view> fields;
+        std::pmr::vector<ruvia::http_header_view> fields;
         for (std::size_t index = 0; index < names.size(); ++index) {
             fields.emplace_back(names[index], values[index]);
         }
@@ -236,8 +236,8 @@ TEST(Ruvia, http3_field_sections_keep_interleaved_names_and_values_after_submiss
         }
         ruvia::test::http3_event_log client;
         EXPECT_TRUE(peers.to_client(client));
-        EXPECT_EQ(client.sequence_, std::string("HHDHE"));
-        EXPECT_EQ(client.data(0), std::string("payload"));
+        EXPECT_EQ(client.sequence_, std::pmr::string("HHDHE"));
+        EXPECT_EQ(client.data(0), std::pmr::string("payload"));
         EXPECT_TRUE(client.ended(0));
         EXPECT_EQ(client.headers_.size(), std::size_t{3});
         if (client.headers_.size() != 3) {
@@ -263,7 +263,7 @@ TEST(Ruvia, http3_interim_allocation_failure_leaves_only_the_final_response_on_w
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log request;
         ASSERT_TRUE(peers.send_request(0, get_request_head, true, request));
-        const std::vector<ruvia::http_header_view> fields(80, ruvia::http_header_view{"x-hint", "value"});
+        const std::pmr::vector<ruvia::http_header_view> fields(80, ruvia::http_header_view{"x-hint", "value"});
         const ruvia::http_interim_response_head hints(
             ruvia::http_status::early_hints, std::span<const ruvia::http_header_view>(fields));
         const auto live = resource.live_allocations();
@@ -307,7 +307,7 @@ TEST(Ruvia, http3_buffered_response_head_to_head_request_ends_with_head) {
 
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
-    EXPECT_EQ(client.sequence_, std::string("HE"));
+    EXPECT_EQ(client.sequence_, std::pmr::string("HE"));
     EXPECT_TRUE(client.headers_.size() == 1 && client.headers_[0].stream_ended_ &&
                 client.headers_[0].status_ && client.headers_[0].status_->value() == 200);
     EXPECT_TRUE(client.data(0).empty());
@@ -347,7 +347,7 @@ TEST(Ruvia, http3_response_head_rejects_connection_specific_fields) {
     EXPECT_TRUE(peers.server_.finish_stream(0) == ruvia::http3_status::accepted);
     EXPECT_TRUE(peers.to_client(client));
     EXPECT_TRUE(client.headers_.size() == 1 && !client.headers_[0].field("connection").has_value());
-    EXPECT_EQ(client.data(0), std::string("bye"));
+    EXPECT_EQ(client.data(0), std::pmr::string("bye"));
     EXPECT_TRUE(client.ended(0));
 }
 
@@ -384,8 +384,8 @@ TEST(Ruvia, http3_response_content_length_mismatch_throws_length_error) {
 
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
-    EXPECT_EQ(client.data(0), std::string("hello"));
-    EXPECT_EQ(client.data(4), std::string("hello"));
+    EXPECT_EQ(client.data(0), std::pmr::string("hello"));
+    EXPECT_EQ(client.data(4), std::pmr::string("hello"));
     EXPECT_TRUE(client.ended(0) && client.ended(4));
     EXPECT_TRUE(!peers.client_.connection_error().has_value());
 }
@@ -424,7 +424,7 @@ TEST(Ruvia, http3_streaming_response_head_sends_trailers_after_data) {
 
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
-    EXPECT_EQ(client.sequence_, std::string("HDHE"));
+    EXPECT_EQ(client.sequence_, std::pmr::string("HDHE"));
     EXPECT_EQ(client.headers_.size(), std::size_t{2});
     if (client.headers_.size() != 2) {
         return;
@@ -433,7 +433,7 @@ TEST(Ruvia, http3_streaming_response_head_sends_trailers_after_data) {
     EXPECT_TRUE(client.headers_[0].field("content-type") == std::string_view("text/plain"));
     EXPECT_TRUE(!client.headers_[0].field("content-length").has_value());
     EXPECT_TRUE(!client.headers_[0].stream_ended_);
-    EXPECT_EQ(client.data(0), std::string("chunk-1;chunk-2"));
+    EXPECT_EQ(client.data(0), std::pmr::string("chunk-1;chunk-2"));
     EXPECT_EQ(client.headers_[1].fields_.size(), std::size_t{1});
     EXPECT_TRUE(client.headers_[1].field("x-checksum") == std::string_view("c2f1"));
     EXPECT_TRUE(client.headers_[1].stream_ended_);
@@ -467,7 +467,7 @@ TEST(Ruvia, http3_interim_response_precedes_final_head) {
 
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
-    EXPECT_EQ(client.sequence_, std::string("HHDE"));
+    EXPECT_EQ(client.sequence_, std::pmr::string("HHDE"));
     EXPECT_EQ(client.headers_.size(), std::size_t{2});
     if (client.headers_.size() != 2) {
         return;
@@ -477,7 +477,7 @@ TEST(Ruvia, http3_interim_response_precedes_final_head) {
     EXPECT_TRUE(!client.headers_[0].stream_ended_);
     EXPECT_TRUE(client.headers_[1].status_ && client.headers_[1].status_->value() == 200);
     EXPECT_TRUE(client.headers_[1].field("content-length") == std::string_view("4"));
-    EXPECT_EQ(client.data(0), std::string("page"));
+    EXPECT_EQ(client.data(0), std::pmr::string("page"));
 }
 
 // submit_data() holds at most max_stream_output_bytes_ unacknowledged DATA per
@@ -505,9 +505,9 @@ TEST(Ruvia, http3_submit_data_is_bounded_by_unacknowledged_output) {
 
     // Delivery alone frees nothing: the budget waits for the acknowledgement.
     ruvia::test::http3_event_log client;
-    std::vector<ruvia::test::http3_withheld_acknowledgement> withheld;
+    std::pmr::vector<ruvia::test::http3_withheld_acknowledgement> withheld;
     EXPECT_TRUE(peers.to_client(client, &withheld));
-    EXPECT_EQ(client.data(0), std::string(payload.substr(0, 8)));
+    EXPECT_EQ(client.data(0), std::pmr::string(payload.substr(0, 8)));
     EXPECT_EQ(peers.server_.pending_output_bytes(0), std::size_t{8});
     EXPECT_TRUE(peers.server_.submit_data(0, ruvia::test::http3_bytes(payload.substr(8))).status_ ==
                 ruvia::http3_status::would_block);
@@ -527,7 +527,7 @@ TEST(Ruvia, http3_submit_data_is_bounded_by_unacknowledged_output) {
     EXPECT_TRUE(peers.server_.finish_stream(0) == ruvia::http3_status::accepted);
     EXPECT_TRUE(peers.to_client(client));
 
-    EXPECT_EQ(client.data(0), std::string(payload));
+    EXPECT_EQ(client.data(0), std::pmr::string(payload));
     EXPECT_TRUE(client.ended(0));
     EXPECT_EQ(peers.server_.pending_output_bytes(0), std::size_t{0});
 }
@@ -603,11 +603,11 @@ TEST(Ruvia, http3_client_processes_all_600_to_999_statuses_as_server_errors) {
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log server;
         ASSERT_TRUE(peers.send_request(0, get_request_head, true, server));
-        std::string digits(3, '0');
+        std::pmr::string digits(3, '0');
         digits[0] = static_cast<char>('0' + code / 100);
         digits[1] = static_cast<char>('0' + code / 10 % 10);
         digits[2] = static_cast<char>('0' + code % 10);
-        std::string wire;
+        std::pmr::string wire;
         append_http3_wire_headers(wire, {{":status", digits}, {"content-length", "3"}});
         append_http3_wire_frame(wire, 0, "err");
         ruvia::test::http3_event_log client;
@@ -633,7 +633,7 @@ TEST(Ruvia, http3_official_nghttp3_rejects_000_to_099_before_publishing_client_h
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log server;
         ASSERT_TRUE(peers.send_request(0, get_request_head, true, server));
-        std::string wire;
+        std::pmr::string wire;
         append_http3_wire_headers(wire, {{":status", digits}});
         ruvia::test::http3_event_log client;
         const auto result = receive_http3_wire_response(peers, 0, wire, true, client);
@@ -644,7 +644,7 @@ TEST(Ruvia, http3_official_nghttp3_rejects_000_to_099_before_publishing_client_h
 }
 
 TEST(Ruvia, http3_client_rejects_invalid_response_heads_before_publication) {
-    const std::vector<std::vector<ruvia::http3_field_view>> invalid_heads{
+    const std::pmr::vector<std::pmr::vector<ruvia::http3_field_view>> invalid_heads{
         {{":status", "101"}},
         {{":status", "20"}},
         {{":status", "2000"}},
@@ -666,7 +666,7 @@ TEST(Ruvia, http3_client_rejects_invalid_response_heads_before_publication) {
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log server;
         ASSERT_TRUE(peers.send_request(0, get_request_head, true, server));
-        std::string wire;
+        std::pmr::string wire;
         append_http3_wire_headers(wire, invalid_heads[index]);
         ruvia::test::http3_event_log client;
         const auto result = receive_http3_wire_response(peers, 0, wire, true, client);
@@ -681,7 +681,7 @@ TEST(Ruvia, http3_client_validates_interim_final_and_retained_trailer_fields_on_
     ASSERT_TRUE(peers.bind());
     ruvia::test::http3_event_log server;
     ASSERT_TRUE(peers.send_request(0, get_request_head, true, server));
-    std::string wire;
+    std::pmr::string wire;
     append_http3_wire_headers(wire, {{":status", "103"}, {"link", "</style.css>; rel=preload"}});
     append_http3_wire_headers(wire, {{":status", "200"}, {"content-length", "3"}, {"x-head", "valid"},
                                         {"x-invalid", "bad\r\nvalue"}});
@@ -713,7 +713,7 @@ TEST(Ruvia, http3_client_validates_interim_final_and_retained_trailer_fields_on_
 }
 
 TEST(Ruvia, http3_client_rejects_invalid_trailer_sections_without_publishing_partial_fields) {
-    const std::vector<std::vector<ruvia::http3_field_view>> invalid_trailers{
+    const std::pmr::vector<std::pmr::vector<ruvia::http3_field_view>> invalid_trailers{
         {{"x-checksum", "valid"}, {":status", "200"}},
         {{"x-checksum", "valid"}, {":path", "/"}},
         {{"x-checksum", "valid"}, {"te", "trailers"}},
@@ -724,7 +724,7 @@ TEST(Ruvia, http3_client_rejects_invalid_trailer_sections_without_publishing_par
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log server;
         ASSERT_TRUE(peers.send_request(0, get_request_head, true, server));
-        std::string wire;
+        std::pmr::string wire;
         append_http3_wire_headers(wire, {{":status", "200"}, {"content-length", "3"}});
         append_http3_wire_frame(wire, 0, "abc");
         ruvia::test::http3_event_log client;
@@ -746,7 +746,7 @@ TEST(Ruvia, http3_client_rejects_short_and_excess_content_without_publishing_com
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log server;
         ASSERT_TRUE(peers.send_request(0, get_request_head, true, server));
-        std::string wire;
+        std::pmr::string wire;
         append_http3_wire_headers(wire, {{":status", "200"}, {"content-length", declared}});
         ruvia::test::http3_event_log client;
         ASSERT_TRUE(receive_http3_wire_response(peers, 0, wire, false, client).status_ == ruvia::http3_status::accepted);
@@ -765,7 +765,7 @@ TEST(Ruvia, http3_core_response_validation_resets_only_the_malformed_stream) {
     ruvia::test::http3_event_log server;
     ASSERT_TRUE(peers.send_request(0, get_request_head, true, server));
     ASSERT_TRUE(peers.send_request(4, get_request_head, true, server));
-    std::string wire;
+    std::pmr::string wire;
     // nghttp3 permits request-style TE: trailers in a response. The core's
     // response-specific rule rejects it without invalidating the codec.
     append_http3_wire_headers(wire, {{":status", "200"}, {"te", "trailers"}});

@@ -44,10 +44,10 @@ namespace {
 
 TEST(Ruvia, error_code_text_keeps_portable_category_messages) {
     const auto timed_out = std::make_error_code(std::errc::timed_out);
-    EXPECT_EQ(ruvia::error_code_text(timed_out), timed_out.message());
+    EXPECT_EQ(std::string_view(ruvia::error_code_text(timed_out)), timed_out.message());
 
     const std::system_error generic(timed_out, "upstream");
-    EXPECT_EQ(ruvia::system_error_text(generic), std::string(generic.what()));
+    EXPECT_EQ(ruvia::system_error_text(generic), std::string_view(generic.what()));
 }
 
 TEST(Ruvia, error_code_text_describes_system_codes_in_utf8) {

@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 
 #include "memory_resource_fixture.h"
@@ -57,7 +58,7 @@ static_assert(!lookup_offers_value<const string_lookup>);
 using lookup_status = ruvia::unique_lookup_status;
 
 TEST(Ruvia, json_token_moves_preserve_complete_tokens_and_reset_sources) {
-    const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
+    const std::pmr::string input("{\"payload\":\"" + std::pmr::string(160, 'x', ruvia::process_resource()) + "\"}", ruvia::process_resource());
     const auto check = [&]<typename token_type>(std::string_view empty) {
         ruvia::test::counting_memory_resource source_resource;
         ruvia::test::counting_memory_resource target_resource;
@@ -325,7 +326,7 @@ TEST(Ruvia, json_value_get_reads_root_scalars_and_arrays_and_models) {
 }
 TEST(Ruvia, json_value_dynamic_traversal_reclaims_decoded_key_on_exception) {
     ruvia::test::counting_memory_resource resource;
-    std::string body = "{\"" + std::string(256, 'k') + "\\u0061\":1}";
+    std::pmr::string body("{\"" + std::pmr::string(256, 'k', ruvia::process_resource()) + "\\u0061\":1}", ruvia::process_resource());
     const auto json = ruvia::json_value::parse(body, {.resource_ = &resource});
     bool thrown = false;
     try {
@@ -381,7 +382,7 @@ TEST(Ruvia, json_dynamic_parse_enforces_cumulative_array_element_budget) {
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse("[]"); }));
 
     const auto elements = [](std::size_t count) {
-        std::string body = R"({"a":[)";
+        std::pmr::string body(R"({"a":[)", ruvia::process_resource());
         for (std::size_t index = 0; index != count; ++index) {
             body.append(index == 0 ? "0" : ",0");
         }

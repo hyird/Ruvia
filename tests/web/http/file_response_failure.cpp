@@ -9,6 +9,7 @@
 #include <fstream>
 #include <future>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <semaphore>
 #include <string>
@@ -22,6 +23,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -99,7 +101,7 @@ class file_failure_routes final {
     // reads it.
     ruvia::task<ruvia::http_response> changed(ruvia::context& c) {
         const auto path = failure_dir() / "changed.bin";
-        write_file(path, std::string(4096, 'c'));
+        write_file(path, std::pmr::string(4096, 'c', ruvia::process_resource()));
         auto response = co_await c.file({.path_ = path});
         write_file(path, "x");
         co_return response;
@@ -120,8 +122,8 @@ void record_failure(const ruvia::connection_failure_record& record) noexcept {
     }
 }
 
-std::string get(std::string_view target) {
-    std::string request("GET ");
+std::pmr::string get(std::string_view target) {
+    std::pmr::string request("GET ", ruvia::process_resource());
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     return request;
@@ -129,7 +131,7 @@ std::string get(std::string_view target) {
 
 // Reads until the server closes the connection; nullopt when that takes
 // longer than `limit` (the socket is then shut down to end the read).
-[[nodiscard]] std::optional<std::string> read_to_close(asio::ip::tcp::socket& socket, std::chrono::milliseconds limit) {
+[[nodiscard]] std::optional<std::pmr::string> read_to_close(asio::ip::tcp::socket& socket, std::chrono::milliseconds limit) {
     auto reader = std::async(std::launch::async, [&socket] {
         std::error_code error;
         return ruvia::test::read_to_end(socket, error);
@@ -149,8 +151,8 @@ using namespace file_response_failure_test;
 
 TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_opens_time_out) {
     std::filesystem::create_directories(failure_dir() / "static");
-    write_file(failure_dir() / "body.bin", std::string(4096, 'b'));
-    write_file(failure_dir() / "static" / "asset.txt", std::string(4096, 's'));
+    write_file(failure_dir() / "body.bin", std::pmr::string(4096, 'b', ruvia::process_resource()));
+    write_file(failure_dir() / "static" / "asset.txt", std::pmr::string(4096, 's', ruvia::process_resource()));
     static_files = std::make_unique<ruvia::static_root>(failure_dir() / "static");
 
     asio::io_context io;
@@ -179,7 +181,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             EXPECT_TRUE(wire.has_value());
             if (wire.has_value()) {
                 EXPECT_TRUE(wire->starts_with("HTTP/1.1 500 "));
-                EXPECT_TRUE(wire->find(std::string(64, 'c')) == std::string::npos);
+                EXPECT_TRUE(wire->find(std::pmr::string(64, 'c', ruvia::process_resource())) == std::pmr::string::npos);
             }
             EXPECT_EQ(reported_failures.load(), std::size_t{0});
         }
@@ -200,7 +202,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             EXPECT_TRUE(wire.has_value());
             if (wire.has_value()) {
                 EXPECT_TRUE(wire->starts_with("HTTP/1.1 503 "));
-                EXPECT_TRUE(wire->find("file_read_unavailable") != std::string::npos);
+                EXPECT_TRUE(wire->find("file_read_unavailable") != std::pmr::string::npos);
             }
             ruvia::test::wait_until([timeouts_before] { return reported_timeouts.load() > timeouts_before; }, 5s);
         }
@@ -215,7 +217,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             asio::write(socket, asio::buffer(get("/file-failure/file")));
             const auto wire = read_to_close(socket, 5s);
             EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
-                        wire->ends_with(std::string(4096, 'b')));
+                        wire->ends_with(std::pmr::string(4096, 'b', ruvia::process_resource())));
         }
         {
             asio::ip::tcp::socket socket(io);
@@ -223,7 +225,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             asio::write(socket, asio::buffer(get("/file-failure/static")));
             const auto wire = read_to_close(socket, 5s);
             EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
-                        wire->ends_with(std::string(4096, 's')));
+                        wire->ends_with(std::pmr::string(4096, 's', ruvia::process_resource())));
         }
         ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 5s);
     }
@@ -249,7 +251,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             EXPECT_TRUE(wire.has_value());
             if (wire.has_value()) {
                 EXPECT_TRUE(wire->starts_with("HTTP/1.1 503 "));
-                EXPECT_TRUE(wire->find("file_read_unavailable") != std::string::npos);
+                EXPECT_TRUE(wire->find("file_read_unavailable") != std::pmr::string::npos);
             }
             ruvia::test::wait_until([missing_before] { return reported_missing_pools.load() > missing_before; }, 5s);
         }

@@ -3,12 +3,14 @@
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/dotenv.h"
 
 namespace example {
@@ -22,7 +24,7 @@ public:
         : dotenv_(dotenv) {}
 
     std::optional<std::string_view> get(std::string_view name) const {
-        const std::string key(name);
+        const std::pmr::string key(name, ruvia::process_resource());
         if (const auto* value = std::getenv(key.c_str())) {
             return std::string_view(value);
         }

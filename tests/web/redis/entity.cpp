@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "memory_resource_fixture.h"
@@ -106,8 +107,8 @@ TEST(Ruvia, redis_entity_move_preserves_owned_values_and_resource) {
     ruvia::test::counting_memory_resource resource;
     {
         redis_user source_value(&resource);
-        source_value.set<"id">(std::string(120, 'i'));
-        source_value.set<"name">(std::string(120, 'n'));
+        source_value.set<"id">(std::pmr::string(120, 'i', ruvia::process_resource()));
+        source_value.set<"name">(std::pmr::string(120, 'n', ruvia::process_resource()));
         source_value.set<"active">(true);
 
         redis_user moved(std::move(source_value));
@@ -125,7 +126,7 @@ TEST(Ruvia, redis_entity_move_preserves_owned_values_and_resource) {
 }
 
 TEST(Ruvia, redis_entity_failed_owning_assignment_preserves_each_column_state) {
-    const std::string replacement(256, 'x');
+    const std::pmr::string replacement(256, 'x', ruvia::process_resource());
     for (int state_value = 0; state_value < 3; ++state_value) {
         ruvia::test::rejecting_memory_resource resource;
         nullable_redis_text entity(&resource);

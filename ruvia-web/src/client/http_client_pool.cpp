@@ -844,7 +844,7 @@ task<bool> http_client_pool::send_http3_datagram(http_client_response_state& sta
 }
 #endif
 
-task<void> http_client_pool::migrate_http3(std::string local_address, std::uint16_t port) {
+task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::uint16_t port) {
 #ifdef RUVIA_ENABLE_HTTP3
     require_accepting();
     if (slots_.closing()) {

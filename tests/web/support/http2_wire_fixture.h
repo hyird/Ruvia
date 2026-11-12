@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -15,11 +16,12 @@
 #include <asio/error.hpp>
 #include <asio/read.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http2_framing.h"
 
 namespace ruvia::test {
 
-inline void append_frame(std::string& wire, http2_frame_type type, std::uint8_t flags,
+inline void append_frame(std::pmr::string& wire, http2_frame_type type, std::uint8_t flags,
     std::uint32_t stream_id, std::string_view payload) {
     std::array<char, http2_frame_header_bytes> header{};
     if (payload.size() > std::numeric_limits<std::uint32_t>::max() ||
@@ -32,7 +34,7 @@ inline void append_frame(std::string& wire, http2_frame_type type, std::uint8_t 
 
 struct received_frame final {
     http2_frame_header header_;
-    std::string payload_;
+    std::pmr::string payload_{ruvia::process_resource()};
 };
 
 template <typename stream_type>
@@ -79,7 +81,7 @@ template <typename stream_type>
     if (!header) {
         throw std::runtime_error("invalid HTTP/2 response frame");
     }
-    received_frame result{*header, std::string(header->length_, '\0')};
+    received_frame result{*header, std::pmr::string(header->length_, '\0', ruvia::process_resource())};
     read_exact(result.payload_.data(), result.payload_.size());
     return result;
 }

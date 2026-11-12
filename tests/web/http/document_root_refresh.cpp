@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <memory_resource>
 #include <set>
 #include <string>
 #include <string_view>
@@ -18,6 +19,7 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -47,7 +49,10 @@ std::atomic<bool> held_request_started{false};
 std::atomic<bool> release_held_request{true};
 
 struct root_worker_state final {
-    std::string label_{std::to_string(next_worker_id.fetch_add(1, std::memory_order_relaxed))};
+    root_worker_state() {
+        label_.append(std::to_string(next_worker_id.fetch_add(1, std::memory_order_relaxed)));
+    }
+    std::pmr::string label_{ruvia::process_resource()};
 };
 
 class root_request_observation final {
@@ -164,9 +169,9 @@ template <typename fn_type>
 }
 
 // Sends one request on a fresh connection and returns the complete response.
-[[nodiscard]] std::string exchange(
+[[nodiscard]] std::pmr::string exchange(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
-    std::string request("GET ");
+    std::pmr::string request("GET ", ruvia::process_resource());
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n");
     return ruvia::test::exchange(io, endpoint, request);
@@ -177,7 +182,7 @@ template <typename fn_type>
 [[nodiscard]] bool eventually_serves(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view body,
     std::size_t required_workers = worker_count) {
-    std::set<std::string> observed_workers;
+    std::pmr::set<std::pmr::string> observed_workers{ruvia::process_resource()};
     return retry_until_deadline([&] {
         const auto response = exchange(io, endpoint, "/version.txt");
         if (!response.starts_with("HTTP/1.1 200") || !response.ends_with(body)) {
@@ -185,15 +190,15 @@ template <typename fn_type>
         }
         constexpr std::string_view worker_header = "\r\nX-Document-Root-Worker: ";
         const auto header = response.find(worker_header);
-        if (header == std::string::npos) {
+        if (header == std::pmr::string::npos) {
             return false;
         }
         const auto label = header + worker_header.size();
         const auto end = response.find("\r\n", label);
-        if (end == std::string::npos) {
+        if (end == std::pmr::string::npos) {
             return false;
         }
-        observed_workers.emplace(response.substr(label, end - label));
+        observed_workers.emplace(std::string_view(response).substr(label, end - label));
         return observed_workers.size() >= required_workers;
     });
 }
@@ -247,7 +252,7 @@ TEST(Ruvia, document_root_refresh_keeps_old_requests_across_multiple_publication
     EXPECT_TRUE(eventually_serves(io, server.endpoint(), "another publication before the old request finishes", worker_count - 1));
 
     release_held_request.store(true, std::memory_order_release);
-    std::string response;
+    std::pmr::string response{ruvia::process_resource()};
     std::error_code error;
     asio::read(held, asio::dynamic_buffer(response), error);
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200"));

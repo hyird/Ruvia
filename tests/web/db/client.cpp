@@ -15,6 +15,7 @@
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 
@@ -114,21 +115,21 @@ TEST(Ruvia, db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
     // reject the list with std::invalid_argument; a connect failure is not one.
     const auto validation_error = [](std::string_view sql) {
         const std::array<ruvia::db_migration, 1> migrations{{
-            ruvia::db_migration{{.id_ = "001", .sql_ = std::string(sql)}},
+            ruvia::db_migration{{.id_ = "001", .sql_ = std::pmr::string(sql, ruvia::process_resource())}},
         }};
         auto config = ruvia::db_config{.driver_ = ruvia::db_driver::mariadb, .port_ = std::uint16_t{1}};
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         try {
             (void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>(migrations));
         } catch (const std::invalid_argument& error) {
-            return std::string(error.what());
+            return std::pmr::string(error.what(), ruvia::process_resource());
         } catch (const std::exception&) {
         }
-        return std::string();
+        return std::pmr::string(ruvia::process_resource());
     };
-    EXPECT_EQ(validation_error("CREATE TABLE t (a INT);--"), std::string());
-    EXPECT_EQ(validation_error("--"), std::string("database migration SQL must not be empty"));
-    EXPECT_EQ(validation_error("SELECT 1;--x"), std::string("database migration must contain exactly one SQL statement"));
+    EXPECT_EQ(validation_error("CREATE TABLE t (a INT);--"), std::pmr::string(ruvia::process_resource()));
+    EXPECT_EQ(validation_error("--"), std::pmr::string("database migration SQL must not be empty", ruvia::process_resource()));
+    EXPECT_EQ(validation_error("SELECT 1;--x"), std::pmr::string("database migration must contain exactly one SQL statement", ruvia::process_resource()));
 }
 #endif
 
@@ -152,12 +153,12 @@ TEST(Ruvia, db_migrator_copies_public_configuration) {
     std::optional<ruvia::db_migrator> migrator;
     {
         auto config = test_db_config();
-        config.host_ = std::string(40, 'h') + "." + std::string(40, 'h');
+        config.host_ = std::pmr::string(40, 'h', ruvia::process_resource()) + "." + std::pmr::string(40, 'h', ruvia::process_resource());
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
-        config.username_ = std::string(80, 'u');
-        config.password_ = std::string(80, 'p');
-        config.database_ = std::string(80, 'd');
-        const std::string table_name(60, 't');
+        config.username_ = std::pmr::string(80, 'u', ruvia::process_resource());
+        config.password_ = std::pmr::string(80, 'p', ruvia::process_resource());
+        config.database_ = std::pmr::string(80, 'd', ruvia::process_resource());
+        const std::pmr::string table_name(60, 't', ruvia::process_resource());
         ruvia::db_migrator_options options{
             .table_ = table_name,
             .lock_timeout_ = std::chrono::seconds(30),
@@ -166,7 +167,7 @@ TEST(Ruvia, db_migrator_copies_public_configuration) {
         migrator.emplace(config, options);
     }
     // Opaque owner + four long DB strings + the long migration table all use
-    // the caller's resource rather than their public std::string allocators.
+    // the caller's resource rather than the input strings' allocators.
     EXPECT_TRUE(target_resource.allocation_count() >= 6);
     migrator.reset();
 }
@@ -174,11 +175,11 @@ TEST(Ruvia, db_migrator_copies_public_configuration) {
 TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
     {
         auto config = test_db_config();
-        config.host_ = std::string(40, 'h') + "." + std::string(40, 'h');
+        config.host_ = std::pmr::string(40, 'h', ruvia::process_resource()) + "." + std::pmr::string(40, 'h', ruvia::process_resource());
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.connect_timeout_ = std::chrono::milliseconds::zero();
         tracking_resource resource;
-        const std::string table_name(60, 't');
+        const std::pmr::string table_name(60, 't', ruvia::process_resource());
         const ruvia::db_migrator_options options{
             .table_ = table_name,
             .resource_ = &resource,
@@ -189,7 +190,7 @@ TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
     }
     {
         auto config = test_db_config();
-        config.host_ = std::string(40, 'h') + "." + std::string(40, 'h');
+        config.host_ = std::pmr::string(40, 'h', ruvia::process_resource()) + "." + std::pmr::string(40, 'h', ruvia::process_resource());
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         tracking_resource resource;
         const ruvia::db_migrator_options options{
@@ -228,10 +229,10 @@ TEST(Ruvia, db_migrator_validates_migration_list_before_allocating_runtime) {
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 2"}},
     }};
     auto config = test_db_config();
-    config.host_ = std::string(80, 'h');
+    config.host_ = std::pmr::string(80, 'h', ruvia::process_resource());
     config.tls_.mode_ = ruvia::client_tls_mode::disabled;
     tracking_resource resource;
-    const std::string table_name(60, 't');
+    const std::pmr::string table_name(60, 't', ruvia::process_resource());
     const ruvia::db_migrator_options options{
         .table_ = table_name,
         .resource_ = &resource,
@@ -246,7 +247,7 @@ TEST(Ruvia, db_migrator_validates_migration_list_before_allocating_runtime) {
 
 TEST(Ruvia, db_expression_values_use_explicit_resource_for_owned_parameters) {
     ruvia::test::counting_memory_resource source_resource;
-    const std::string value(128, 'v');
+    const std::pmr::string value(128, 'v', ruvia::process_resource());
     ruvia::db_query source_value(&source_resource);
     source_value.select(source_value.value(value));
     const auto statement = source_value.compile(ruvia::db_driver::postgresql, &source_resource);
@@ -286,7 +287,7 @@ TEST(Ruvia, db_value_copy_inherits_owned_text_resource_and_rolls_back_failure) {
     {
         std::optional<ruvia::db_value> copied;
         {
-            const std::string text(4096, 'v');
+            const std::pmr::string text(4096, 'v', ruvia::process_resource());
             ruvia::db_query query(&resource);
             query.select(query.value(text));
             const auto statement = query.compile(ruvia::db_driver::postgresql, &resource);

@@ -24,7 +24,7 @@ TEST(Ruvia, hex_encode_accepts_output_overlapping_input) {
     constexpr std::size_t input_start = 16;
     for (std::size_t size = 0; size <= text.size(); ++size) {
         const auto input = text.substr(0, size);
-        std::string expected(2 * size, '\0');
+        std::pmr::string expected(2 * size, '\0');
         ruvia::http_encode_lower_hex(expected.data(), input);
         // Every output start from wholly before to wholly after the input,
         // including in place and starts inside it.
@@ -34,7 +34,7 @@ TEST(Ruvia, hex_encode_accepts_output_overlapping_input) {
             const auto* const end =
                 ruvia::http_encode_lower_hex(buffer.data() + output_start, std::string_view(buffer.data() + input_start, size));
             EXPECT_EQ(end, buffer.data() + output_start + expected.size());
-            EXPECT_EQ(std::string(buffer.data() + output_start, expected.size()), expected);
+            EXPECT_EQ(std::pmr::string(buffer.data() + output_start, expected.size()), expected);
         }
     }
 }
@@ -47,7 +47,7 @@ TEST(Ruvia, hex_append_accepts_input_aliasing_the_output) {
                                                         "01ab"));
 
     // A long prefix forces reallocation while the source is a strict subrange.
-    std::pmr::string part(std::string(64, 'z') + "\xff", std::pmr::new_delete_resource());
+    std::pmr::string part(std::pmr::string(64, 'z') + "\xff", std::pmr::new_delete_resource());
     part.shrink_to_fit();
     const std::span<const unsigned char> tail(reinterpret_cast<const unsigned char*>(part.data()) + 63, 2);
     ruvia::http_append_lower_hex(part, tail);

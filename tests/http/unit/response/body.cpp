@@ -50,7 +50,7 @@ void check_response_body_moves(prepare_type&& prepare, inspect_type&& inspect) {
             std::optional<http_response> target;
             if (assign) {
                 target.emplace(&target_resource);
-                target->body(std::string(256, 't'));
+                target->body(std::pmr::string(256, 't'));
             }
             if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
                 source_resource.fail_after(0);
@@ -92,7 +92,7 @@ void check_response_body_moves(prepare_type&& prepare, inspect_type&& inspect) {
 
 TEST(Ruvia, response_public_body_owns_its_source) {
     http_response response(std::pmr::new_delete_resource());
-    std::string source_value = "owned copy";
+    std::pmr::string source_value = "owned copy";
 
     response.body(source_value);
     source_value[0] = 'X';
@@ -106,7 +106,7 @@ TEST(Ruvia, response_head_metadata_body_releases_storage_and_follows_body_lifeti
         http_response response(&resource);
         const auto retained_allocations = resource.live_allocations();
         EXPECT_TRUE(!response.has_head_metadata_body());
-        response.body(std::string(256, 'x'));
+        response.body(std::pmr::string(256, 'x'));
         EXPECT_TRUE(resource.live_allocations() != 0);
         response.head_metadata_body();
         EXPECT_TRUE(response.has_head_metadata_body());
@@ -124,7 +124,7 @@ TEST(Ruvia, response_head_metadata_body_releases_storage_and_follows_body_lifeti
 
         moved.head_metadata_body();
         resource.fail_after(0);
-        EXPECT_TRUE(ruvia::test::throws_on([&] { moved.body(std::string(256, 'y')); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { moved.body(std::pmr::string(256, 'y')); }));
         resource.allow_allocations();
         EXPECT_TRUE(moved.has_head_metadata_body());
         moved.owned_body(std::pmr::string("replacement", &resource));
@@ -505,7 +505,7 @@ TEST(Ruvia, response_multipart_body_moves_leave_sources_empty_and_reusable) {
             ranges, 10, "text/plain", "moved_ranges", source.memory_resource());
         source.multipart_file_body(path.native(), 10, identity, std::move(plan)); }, [&](const http_response& target) {
         EXPECT_TRUE(target.has_multipart_file_body());
-        std::string materialized;
+        std::pmr::string materialized;
         constexpr std::string_view file_bytes = "0123456789";
         for (std::size_t index = 0; index < target.body_segment_count(); ++index) {
             const auto segment = target.body_segment(index);

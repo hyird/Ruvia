@@ -14,6 +14,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
@@ -85,7 +86,7 @@ void check_character_class_rule(std::string_view value, bool matches, std::strin
 
 [[nodiscard]] std::exception_ptr capture_validation_exception(std::pmr::memory_resource* resource) {
     validator validator_value({.resource_ = resource});
-    validator_value.add(std::string(128, 'f'), "required", std::string(256, 'm'));
+    validator_value.add(std::pmr::string(128, 'f', ruvia::process_resource()), "required", std::pmr::string(256, 'm', ruvia::process_resource()));
     try {
         validator_value.throw_if_invalid({
             .status_ = ruvia::http_status::unprocessable_content,
@@ -103,7 +104,7 @@ void check_character_class_rule(std::string_view value, bool matches, std::strin
     alignas(std::max_align_t) std::array<std::byte, 64> initial_value{};
     std::pmr::monotonic_buffer_resource arena(initial_value.data(), initial_value.size(), upstream);
     validator validator_value({.resource_ = &arena});
-    validator_value.add(std::string(128, 'f'), "required", std::string(256, 'm'));
+    validator_value.add(std::pmr::string(128, 'f', ruvia::process_resource()), "required", std::pmr::string(256, 'm', ruvia::process_resource()));
     try {
         validator_value.throw_if_invalid();
     } catch (...) {
@@ -126,8 +127,8 @@ TEST(Ruvia, request_model_required_and_optional_fields_are_structural) {
 
 TEST(Ruvia, validator_required_flags_absent_values) {
     validator v;
-    std::optional<std::string> present = std::string("x");
-    std::optional<std::string> absent;
+    std::optional<std::pmr::string> present = std::pmr::string("x", ruvia::process_resource());
+    std::optional<std::pmr::string> absent;
     v.required(present, "present");
     v.required(absent, "absent", "absent is required");
 
@@ -140,7 +141,7 @@ TEST(Ruvia, validator_required_flags_absent_values) {
 
 TEST(Ruvia, validator_length_bounds_and_absent_skips) {
     validator v;
-    std::optional<std::string> value = std::string("abc");
+    std::optional<std::pmr::string> value = std::pmr::string("abc", ruvia::process_resource());
     v.min_length(value, "f", 2);  // 3 >= 2, ok
     v.max_length(value, "f", 5);  // 3 <= 5, ok
     EXPECT_TRUE(v.ok());
@@ -148,7 +149,7 @@ TEST(Ruvia, validator_length_bounds_and_absent_skips) {
     v.min_length(value, "f", 5);  // 3 < 5 -> too_small
     v.max_length(value, "f", 2);  // 3 > 2 -> too_big
     // An absent value is never checked.
-    std::optional<std::string> absent;
+    std::optional<std::pmr::string> absent;
     v.min_length(absent, "g", 100);
 
     EXPECT_EQ(v.issues().size(), std::size_t{2});
@@ -163,7 +164,7 @@ TEST(Ruvia, validator_range_and_one_of) {
     EXPECT_TRUE(v.ok());
     v.range(n, "n", 6, 10);  // 5 < 6 -> too_small
 
-    std::optional<std::string> s = std::string("b");
+    std::optional<std::pmr::string> s = std::pmr::string("b", ruvia::process_resource());
     v.one_of(s, "s", {"a", "b", "c"});  // allowed, ok
     v.one_of(s, "s", {"x", "y"});       // not allowed -> one_of
 
@@ -365,7 +366,7 @@ TEST(Ruvia, model_pattern_rules_preserve_class_escapes_and_literal_hyphens) {
 TEST(Ruvia, model_pattern_rules_bound_matching_work) {
     // A class costs one lookup per input byte however many members it lists.
     bounded_pattern_rules model;
-    model.set<"wide_class">(std::string(4096, 'b'));
+    model.set<"wide_class">(std::pmr::string(4096, 'b', ruvia::process_resource()));
     validator class_result;
     ruvia::validate_model(model, class_result);
     EXPECT_TRUE(class_result.ok());
@@ -382,7 +383,7 @@ TEST(Ruvia, model_pattern_rules_bound_matching_work) {
 
     // Cubic backtracking over a long non-matching input stops at the shared
     // matching work limit instead of running unbounded, and fails closed.
-    model.set<"backtracking">(std::string(4096, 'a'));
+    model.set<"backtracking">(std::pmr::string(4096, 'a', ruvia::process_resource()));
     validator long_result;
     ruvia::validate_model(model, long_result);
     EXPECT_EQ(long_result.issues().size(), std::size_t{1});
@@ -397,7 +398,7 @@ TEST(Ruvia, validator_one_of_absent_skips_and_range_accepts_doubles) {
     validator v;
     // one_of on an absent optional is skipped -- the one rule whose absent-skip branch
     // the other tests don't exercise (required/min_length/range already cover theirs).
-    std::optional<std::string> absent;
+    std::optional<std::pmr::string> absent;
     v.one_of(absent, "a", {"x", "y"});
     EXPECT_TRUE(v.ok());
 
@@ -424,9 +425,9 @@ TEST(Ruvia, validator_one_of_absent_skips_and_range_accepts_doubles) {
 
 TEST(Ruvia, throw_if_invalid_exposes_typed_issues) {
     validator v;
-    std::optional<std::string> absent;
+    std::optional<std::pmr::string> absent;
     v.required(absent, "email", "email is required");
-    std::optional<std::string> short_name = std::string("a");
+    std::optional<std::pmr::string> short_name = std::pmr::string("a", ruvia::process_resource());
     v.min_length(short_name, "name", 3, "too short");
 
     try {
@@ -555,7 +556,7 @@ TEST(Ruvia, http_error_move_assignment_rebinds_equivalent_resource_diagnostics) 
     ruvia::test::equivalent_tracking_resource target(upstream);
     std::optional<ruvia::http_error> destination(std::in_place,
         ruvia::http_error_info_options{}, &target);
-    const std::string text(256, 'x');
+    const std::pmr::string text(256, 'x', ruvia::process_resource());
     {
         validator diagnostics({.resource_ = &source});
         diagnostics.add(text, text, text);
@@ -585,7 +586,7 @@ TEST(Ruvia, validator_throw_if_invalid_raises_on_issues) {
     ok.throw_if_invalid();  // no issues -> no throw
 
     validator bad;
-    std::optional<std::string> absent;
+    std::optional<std::pmr::string> absent;
     bad.required(absent, "x");
     bool threw = false;
     try {
@@ -598,7 +599,7 @@ TEST(Ruvia, validator_throw_if_invalid_raises_on_issues) {
 
 TEST(Ruvia, validation_diagnostic_text_preserves_complete_utf8_within_limit) {
     ruvia::validator validator;
-    std::string message(ruvia::max_validation_text_bytes - 1, 'x');
+    std::pmr::string message(ruvia::max_validation_text_bytes - 1, 'x', ruvia::process_resource());
     message += "中文";
     validator.add("field", "code", message);
     EXPECT_EQ(validator.issues()[0].message().size(), ruvia::max_validation_text_bytes - 1);
@@ -608,7 +609,7 @@ TEST(Ruvia, validation_diagnostic_text_preserves_complete_utf8_within_limit) {
 namespace validator_ownership_test {
 
 void add_owned_issues(ruvia::validator& value) {
-    value.add(std::string(128, 'f'), std::string(96, 'c'), std::string(256, 'm'));
+    value.add(std::pmr::string(128, 'f', ruvia::process_resource()), std::pmr::string(96, 'c', ruvia::process_resource()), std::pmr::string(256, 'm', ruvia::process_resource()));
     value.add("secondary", "invalid", "second issue");
 }
 
@@ -619,9 +620,9 @@ void check_owned_issues(const ruvia::validator& value,
     EXPECT_EQ(value.issues().size(), count);
     EXPECT_TRUE(!value.ok());
     if (value.issues().size() >= 2) {
-        EXPECT_EQ(value.issues()[0].field(), std::string_view(std::string(128, 'f')));
-        EXPECT_EQ(value.issues()[0].code(), std::string_view(std::string(96, 'c')));
-        EXPECT_EQ(value.issues()[0].message(), std::string_view(std::string(256, 'm')));
+        EXPECT_EQ(value.issues()[0].field(), std::string_view(std::pmr::string(128, 'f', ruvia::process_resource())));
+        EXPECT_EQ(value.issues()[0].code(), std::string_view(std::pmr::string(96, 'c', ruvia::process_resource())));
+        EXPECT_EQ(value.issues()[0].message(), std::string_view(std::pmr::string(256, 'm', ruvia::process_resource())));
         EXPECT_EQ(value.issues()[1].field(), std::string_view("secondary"));
         EXPECT_EQ(value.issues()[1].code(), std::string_view("invalid"));
         EXPECT_EQ(value.issues()[1].message(), std::string_view("second issue"));
@@ -642,8 +643,8 @@ void check_owned_error(const ruvia::validator& value,
         EXPECT_EQ(std::string_view(error.what()), std::string_view("payload failed validation"));
         EXPECT_EQ(error.validation_issues().size(), count);
         if (error.validation_issues().size() >= 2) {
-            EXPECT_EQ(error.validation_issues()[0].field(), std::string_view(std::string(128, 'f')));
-            EXPECT_EQ(error.validation_issues()[0].message(), std::string_view(std::string(256, 'm')));
+            EXPECT_EQ(error.validation_issues()[0].field(), std::string_view(std::pmr::string(128, 'f', ruvia::process_resource())));
+            EXPECT_EQ(error.validation_issues()[0].message(), std::string_view(std::pmr::string(256, 'm', ruvia::process_resource())));
             EXPECT_EQ(error.validation_issues()[1].field(), std::string_view("secondary"));
         }
     }
@@ -666,9 +667,9 @@ TEST(Ruvia, validator_copy_constructor_preserves_resource_and_owns_diagnostics) 
         }
         temporary_default.retire();
         check_owned_issues(*copy, &resource);
-        copy->add("later", "required", std::string(200, 'a'));
+        copy->add("later", "required", std::pmr::string(200, 'a', ruvia::process_resource()));
         check_owned_issues(*copy, &resource, 3);
-        EXPECT_EQ(copy->issues().back().message(), std::string_view(std::string(200, 'a')));
+        EXPECT_EQ(copy->issues().back().message(), std::string_view(std::pmr::string(200, 'a', ruvia::process_resource())));
         check_owned_error(*copy, 3);
         copy.reset();
         EXPECT_EQ(temporary_default.callbacks_after_retirement(), std::size_t{0});
@@ -685,7 +686,7 @@ TEST(Ruvia, validator_assignment_retains_destination_resource_after_source_retir
             ruvia::test::equivalent_tracking_resource target(upstream);
             EXPECT_TRUE(source.is_equal(target));
             std::optional<ruvia::validator> destination(std::in_place, ruvia::model_options{.resource_ = &target});
-            destination->add("seed", "old", std::string(180, 's'));
+            destination->add("seed", "old", std::pmr::string(180, 's', ruvia::process_resource()));
             {
                 ruvia::validator input({.resource_ = &source});
                 add_owned_issues(input);
@@ -695,9 +696,9 @@ TEST(Ruvia, validator_assignment_retains_destination_resource_after_source_retir
                     EXPECT_TRUE(input.ok());
                     EXPECT_TRUE(input.resource() == &source);
                     EXPECT_TRUE(input.issues().get_allocator().resource() == &source);
-                    input.add("reused", "required", std::string(190, 'r'));
+                    input.add("reused", "required", std::pmr::string(190, 'r', ruvia::process_resource()));
                     EXPECT_EQ(input.issues().size(), std::size_t{1});
-                    EXPECT_EQ(input.issues()[0].message(), std::string_view(std::string(190, 'r')));
+                    EXPECT_EQ(input.issues()[0].message(), std::string_view(std::pmr::string(190, 'r', ruvia::process_resource())));
                 } else {
                     *destination = input;
                     check_owned_issues(input, &source);
@@ -708,9 +709,9 @@ TEST(Ruvia, validator_assignment_retains_destination_resource_after_source_retir
             // without invoking a destroyed allocator object in the red run.
             source.retire();
             check_owned_issues(*destination, &target);
-            destination->add("later", "required", std::string(200, 'a'));
+            destination->add("later", "required", std::pmr::string(200, 'a', ruvia::process_resource()));
             check_owned_issues(*destination, &target, 3);
-            EXPECT_EQ(destination->issues().back().message(), std::string_view(std::string(200, 'a')));
+            EXPECT_EQ(destination->issues().back().message(), std::string_view(std::pmr::string(200, 'a', ruvia::process_resource())));
             check_owned_error(*destination, 3);
             destination.reset();
             EXPECT_EQ(source.callbacks_after_retirement(), std::size_t{0});
@@ -730,7 +731,7 @@ TEST(Ruvia, validator_copy_and_rebinding_failure_preserve_diagnostics_and_resour
                 ruvia::validator input({.resource_ = &source});
                 add_owned_issues(input);
                 ruvia::validator destination({.resource_ = &target});
-                destination.add("seed", "old", std::string(180, 's'));
+                destination.add("seed", "old", std::pmr::string(180, 's', ruvia::process_resource()));
                 const auto live = upstream.live_allocations();
                 target.reject_allocations_after(allowance);
                 bool rejected = false;
@@ -753,7 +754,7 @@ TEST(Ruvia, validator_copy_and_rebinding_failure_preserve_diagnostics_and_resour
                 if (!destination.issues().empty()) {
                     EXPECT_EQ(destination.issues()[0].field(), std::string_view("seed"));
                     EXPECT_EQ(destination.issues()[0].code(), std::string_view("old"));
-                    EXPECT_EQ(destination.issues()[0].message(), std::string_view(std::string(180, 's')));
+                    EXPECT_EQ(destination.issues()[0].message(), std::string_view(std::pmr::string(180, 's', ruvia::process_resource())));
                 }
                 source.reject_allocations_after(allowance);
                 rejected = false;
@@ -767,12 +768,12 @@ TEST(Ruvia, validator_copy_and_rebinding_failure_preserve_diagnostics_and_resour
                 EXPECT_TRUE(rejected);
                 EXPECT_EQ(upstream.live_allocations(), live);
                 check_owned_issues(input, &source);
-                input.add("source remains usable", "required", std::string(200, 'a'));
-                destination.add("target remains usable", "required", std::string(200, 'b'));
+                input.add("source remains usable", "required", std::pmr::string(200, 'a', ruvia::process_resource()));
+                destination.add("target remains usable", "required", std::pmr::string(200, 'b', ruvia::process_resource()));
                 EXPECT_EQ(input.issues().size(), std::size_t{3});
                 EXPECT_EQ(destination.issues().size(), std::size_t{2});
-                EXPECT_EQ(input.issues().back().message(), std::string_view(std::string(200, 'a')));
-                EXPECT_EQ(destination.issues().back().message(), std::string_view(std::string(200, 'b')));
+                EXPECT_EQ(input.issues().back().message(), std::string_view(std::pmr::string(200, 'a', ruvia::process_resource())));
+                EXPECT_EQ(destination.issues().back().message(), std::string_view(std::pmr::string(200, 'b', ruvia::process_resource())));
             }
             EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
             EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
@@ -787,7 +788,7 @@ TEST(Ruvia, validator_same_resource_moves_and_self_assignment_do_not_allocate) {
         ruvia::validator input({.resource_ = &resource});
         add_owned_issues(input);
         ruvia::validator destination({.resource_ = &resource});
-        destination.add("seed", "old", std::string(180, 's'));
+        destination.add("seed", "old", std::pmr::string(180, 's', ruvia::process_resource()));
         std::optional<ruvia::validator> moved;
         const auto attempts = resource.allocation_attempts();
         if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
@@ -817,13 +818,13 @@ TEST(Ruvia, validator_same_resource_moves_and_self_assignment_do_not_allocate) {
             EXPECT_TRUE(moved->ok());
             EXPECT_TRUE(moved->resource() == &resource);
             EXPECT_TRUE(moved->issues().get_allocator().resource() == &resource);
-            moved->add("reused after assignment", "required", std::string(200, 'b'));
+            moved->add("reused after assignment", "required", std::pmr::string(200, 'b', ruvia::process_resource()));
             EXPECT_EQ(moved->issues().size(), std::size_t{1});
-            EXPECT_EQ(moved->issues()[0].message(), std::string_view(std::string(200, 'b')));
+            EXPECT_EQ(moved->issues()[0].message(), std::string_view(std::pmr::string(200, 'b', ruvia::process_resource())));
         }
-        input.add("reused after construction", "required", std::string(200, 'a'));
+        input.add("reused after construction", "required", std::pmr::string(200, 'a', ruvia::process_resource()));
         EXPECT_EQ(input.issues().size(), std::size_t{1});
-        EXPECT_EQ(input.issues()[0].message(), std::string_view(std::string(200, 'a')));
+        EXPECT_EQ(input.issues()[0].message(), std::string_view(std::pmr::string(200, 'a', ruvia::process_resource())));
         check_owned_error(destination);
     }
     EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
@@ -834,9 +835,9 @@ TEST(Ruvia, validation_issue_copy_inherits_resource_and_outlives_validator) {
     static_assert(std::is_nothrow_move_constructible_v<ruvia::validation_issue>);
     counting_memory_resource upstream;
     ruvia::test::equivalent_tracking_resource resource(upstream);
-    const std::string field(128, 'f');
-    const std::string code(96, 'c');
-    const std::string message(256, 'm');
+    const std::pmr::string field(128, 'f', ruvia::process_resource());
+    const std::pmr::string code(96, 'c', ruvia::process_resource());
+    const std::pmr::string message(256, 'm', ruvia::process_resource());
     std::optional<ruvia::validation_issue> copied;
     {
         validator input({.resource_ = &resource});
@@ -863,9 +864,9 @@ TEST(Ruvia, validation_issue_copy_inherits_resource_and_outlives_validator) {
 }
 
 TEST(Ruvia, validation_issue_assignment_rebinds_atomically_and_allows_retry) {
-    const std::string field(128, 'f');
-    const std::string code(96, 'c');
-    const std::string message(256, 'm');
+    const std::pmr::string field(128, 'f', ruvia::process_resource());
+    const std::pmr::string code(96, 'c', ruvia::process_resource());
+    const std::pmr::string message(256, 'm', ruvia::process_resource());
     const bool inject_failures = ruvia::test::stl_allocation_failure_injection_enabled();
     for (const bool move : {false, true}) {
         for (std::size_t allowance = 0; allowance != (inject_failures ? 3u : 1u); ++allowance) {
@@ -926,9 +927,9 @@ TEST(Ruvia, validation_issue_assignment_rebinds_atomically_and_allows_retry) {
 }
 
 TEST(Ruvia, validation_issue_equivalent_resource_moves_preserve_destination_allocator) {
-    const std::string field(128, 'f');
-    const std::string code(96, 'c');
-    const std::string message(256, 'm');
+    const std::pmr::string field(128, 'f', ruvia::process_resource());
+    const std::pmr::string code(96, 'c', ruvia::process_resource());
+    const std::pmr::string message(256, 'm', ruvia::process_resource());
     const bool inject_failures = ruvia::test::stl_allocation_failure_injection_enabled();
     for (const bool distinct_resources : {false, true}) {
         counting_memory_resource upstream;
@@ -987,7 +988,7 @@ RUVIA_MODEL(lazy_path_envelope,
 }  // namespace
 
 TEST(Ruvia, validator_model_paths_are_built_only_for_emitted_issues) {
-    std::string body = R"({"field_name_longer_than_small_string_storage":"x","items":[)";
+    std::pmr::string body(R"({"field_name_longer_than_small_string_storage":"x","items":[)", ruvia::process_resource());
     for (std::size_t index = 0; index != 1024; ++index) {
         body.append(index == 0 ? R"({"value":1})" : R"(,{"value":1})");
     }

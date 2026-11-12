@@ -11,6 +11,7 @@
 #include <thread>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_response.h"
@@ -128,7 +129,7 @@ TEST(Ruvia, testing_facade_reclaims_worker_owned_response_memory) {
         EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
 
         const auto cancelled = app.request(ruvia::test_request::get("/testing-memory/cancel"));
-        EXPECT_EQ(cancelled.body(), std::string(256 * 1024, 'c'));
+        EXPECT_EQ(cancelled.body(), std::pmr::string(256 * 1024, 'c', ruvia::process_resource()));
         EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
         EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
 

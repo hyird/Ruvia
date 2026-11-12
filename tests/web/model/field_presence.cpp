@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
 
@@ -107,7 +109,7 @@ TEST(Ruvia, model_field_presence_and_nullability_are_independent) {
 }
 
 TEST(Ruvia, model_patch_public_states_distinguish_omission_clear_and_assignment) {
-    std::optional<std::string> remark{"original"};
+    std::optional<std::pmr::string> remark(std::in_place, "original", ruvia::process_resource());
     auto apply = [&](std::string_view json) {
         const auto patch = ruvia::from_json<patch_value>(json);
         if (!patch.is_present<"remark">()) {
@@ -116,7 +118,7 @@ TEST(Ruvia, model_patch_public_states_distinguish_omission_clear_and_assignment)
         if (patch.is_null<"remark">()) {
             remark.reset();
         } else {
-            remark = patch.get<"remark">()->view();
+            remark.emplace(patch.get<"remark">()->view(), ruvia::process_resource());
         }
     };
     apply("{}");
@@ -343,8 +345,8 @@ TEST(Ruvia, model_nullable_response_emits_explicit_null_without_emitting_absence
 TEST(Ruvia, model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclaim_memory) {
     ruvia::test::counting_memory_resource source;
     ruvia::test::counting_memory_resource destination;
-    const std::string text(256, 'x');
-    const std::string body = "{\"value\":{\"text\":\"" + text + "\"},\"object\":{\"text\":\"" + text + "\"}}";
+    const std::pmr::string text(256, 'x', ruvia::process_resource());
+    const std::pmr::string body(std::pmr::string("{\"value\":{\"text\":\"", ruvia::process_resource()) + text + "\"},\"object\":{\"text\":\"" + text + "\"}}", ruvia::process_resource());
     {
         owned_values retained({.resource_ = &destination});
         {
@@ -366,8 +368,8 @@ TEST(Ruvia, model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclai
                 EXPECT_TRUE(parsed_value.is_present<"value">());
             }
             EXPECT_EQ(destination.live_allocations(), baseline);
-            for (const auto& invalid : {body.substr(0, body.size() - 1) + ",\"value\":null}",
-                     body.substr(0, body.size() - 1) + ",\"note\":42}", body.substr(0, body.size() - 1)}) {
+            for (const auto& invalid : {std::pmr::string(std::string_view(body).substr(0, body.size() - 1), ruvia::process_resource()) + ",\"value\":null}",
+                     std::pmr::string(std::string_view(body).substr(0, body.size() - 1), ruvia::process_resource()) + ",\"note\":42}", std::pmr::string(std::string_view(body).substr(0, body.size() - 1), ruvia::process_resource())}) {
                 EXPECT_TRUE(ruvia::test::throws_on(
                     [&] { (void)ruvia::from_json<owned_values>(invalid, {.resource_ = &destination}); }));
                 EXPECT_EQ(destination.live_allocations(), baseline);

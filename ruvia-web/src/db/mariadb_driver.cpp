@@ -110,7 +110,7 @@ struct mysql_wait_deadline final {
 }
 
 [[nodiscard]] db_error mysql_socket_error(std::string_view operation, std::error_code error) {
-    std::string message(operation);
+    std::pmr::string message(operation, process_resource());
     if (error) {
         message.append(": ");
         message.append(error_code_text(error));

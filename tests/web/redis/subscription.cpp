@@ -6,6 +6,7 @@
 #include <future>
 #include <istream>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -27,18 +28,19 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 namespace {
 
-[[nodiscard]] std::string bulk(std::string_view value) {
-    return "$" + std::to_string(value.size()) + "\r\n" + std::string(value) + "\r\n";
+[[nodiscard]] std::pmr::string bulk(std::string_view value) {
+    return "$" + std::pmr::string(std::to_string(value.size()), ruvia::process_resource()) + "\r\n" + std::pmr::string(value, ruvia::process_resource()) + "\r\n";
 }
 
-[[nodiscard]] std::string push(std::string_view kind, std::string_view name, std::size_t count) {
-    return "*3\r\n" + bulk(kind) + bulk(name) + ":" + std::to_string(count) + "\r\n";
+[[nodiscard]] std::pmr::string push(std::string_view kind, std::string_view name, std::size_t count) {
+    return "*3\r\n" + bulk(kind) + bulk(name) + ":" + std::pmr::string(std::to_string(count), ruvia::process_resource()) + "\r\n";
 }
 
 // Whether the peer answers PING: a deaf peer still receives and counts it.
@@ -90,31 +92,31 @@ private:
 
         asio::ip::tcp::socket socket_;
         asio::streambuf buffer_;
-        std::set<std::string> channels_;
-        std::set<std::string> patterns_;
+        std::pmr::set<std::pmr::string> channels_{ruvia::process_resource()};
+        std::pmr::set<std::pmr::string> patterns_{ruvia::process_resource()};
     };
 
-    asio::awaitable<std::string> line(session& current) {
+    asio::awaitable<std::pmr::string> line(session& current) {
         co_await asio::async_read_until(current.socket_, current.buffer_, "\r\n", asio::use_awaitable);
         std::istream input(&current.buffer_);
-        std::string value;
+        std::pmr::string value{ruvia::process_resource()};
         std::getline(input, value);
         value.pop_back();
         co_return value;
     }
 
-    asio::awaitable<std::vector<std::string>> command(session& current) {
+    asio::awaitable<std::pmr::vector<std::pmr::string>> command(session& current) {
         const auto header_value = co_await line(current);
-        const auto count = std::stoi(header_value.substr(1));
-        std::vector<std::string> args;
+        const auto count = std::stoi(std::string(std::string_view(header_value).substr(1)));
+        std::pmr::vector<std::pmr::string> args{ruvia::process_resource()};
         for (int index = 0; index < count; ++index) {
             const auto size_line = co_await line(current);
-            const auto size = static_cast<std::size_t>(std::stoul(size_line.substr(1)));
+            const auto size = static_cast<std::size_t>(std::stoul(std::string(std::string_view(size_line).substr(1))));
             if (current.buffer_.size() < size + 2) {
                 co_await asio::async_read(current.socket_, current.buffer_,
                     asio::transfer_exactly(size + 2 - current.buffer_.size()), asio::use_awaitable);
             }
-            std::string arg(size, '\0');
+            std::pmr::string arg(size, '\0', ruvia::process_resource());
             std::istream input(&current.buffer_);
             input.read(arg.data(), static_cast<std::streamsize>(size));
             input.ignore(2);
@@ -147,7 +149,7 @@ private:
             if (!target->socket_.is_open()) {
                 continue;
             }
-            if (target->channels_.contains(std::string(channel))) {
+            if (target->channels_.contains(std::pmr::string(channel, ruvia::process_resource()))) {
                 const auto frame = "*3\r\n" + bulk("message") + bulk(channel) + bulk(payload);
                 co_await asio::async_write(target->socket_, asio::buffer(frame), asio::use_awaitable);
                 ++receivers;
@@ -167,13 +169,13 @@ private:
         try {
             for (;;) {
                 const auto args = co_await command(*current);
-                std::string reply;
+                std::pmr::string reply{ruvia::process_resource()};
                 bool close_after_reply = false;
                 if (args.front() == "SELECT" || args.front() == "AUTH") {
                     reply = "+OK\r\n";
                 } else if (args.front() == "PUBLISH") {
                     const auto receivers = co_await deliver(args.at(1), args.at(2));
-                    reply = ":" + std::to_string(receivers) + "\r\n";
+                    reply = ":" + std::pmr::string(std::to_string(receivers), ruvia::process_resource()) + "\r\n";
                 } else if (args.front() == "SUBSCRIBE" || args.front() == "PSUBSCRIBE") {
                     const bool pattern = args.front() == "PSUBSCRIBE";
                     for (std::size_t index = 1; index < args.size(); ++index) {
@@ -203,7 +205,7 @@ private:
                     const auto kind = pattern ? "punsubscribe" : "unsubscribe";
                     if (args.size() == 1 && names.empty()) {
                         reply = "*3\r\n" + bulk(kind) + "$-1\r\n:" +
-                                std::to_string(current->channels_.size() + current->patterns_.size()) + "\r\n";
+                                std::pmr::string(std::to_string(current->channels_.size() + current->patterns_.size()), ruvia::process_resource()) + "\r\n";
                     } else if (args.size() == 1) {
                         while (!names.empty()) {
                             const auto name = *names.begin();
@@ -222,7 +224,7 @@ private:
                         continue;
                     }
                     reply = current->channels_.empty() && current->patterns_.empty()
-                                ? std::string("+PONG\r\n")
+                                ? std::pmr::string("+PONG\r\n", ruvia::process_resource())
                                 : "*2\r\n" + bulk("pong") + bulk("");
                 } else {
                     reply = "-ERR unknown command\r\n";
@@ -245,7 +247,7 @@ private:
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     std::uint16_t port_;
-    std::vector<std::shared_ptr<session>> sessions_;
+    std::pmr::vector<std::shared_ptr<session>> sessions_{ruvia::process_resource()};
     asio::executor_work_guard<asio::io_context::executor_type> work_;
     std::future<void> done_;
     std::thread thread_;
@@ -286,7 +288,7 @@ ruvia::task<void> check_events_arrive_in_wire_order(ruvia::redis_client& client)
     EXPECT_TRUE(message && message->message() && message->message()->channel() == "news" && !message->message()->pattern());
     EXPECT_TRUE(message && message->message() && message->message()->payload() == std::string_view("pay\0load", 8));
     // The event borrows the current reply until the next read starts.
-    const std::string retained(message->message()->payload());
+    const std::pmr::string retained(message->message()->payload(), ruvia::process_resource());
     auto pattern_message = co_await subscription.read();
     EXPECT_TRUE(pattern_message && pattern_message->message());
     EXPECT_TRUE(pattern_message && pattern_message->message() && pattern_message->message()->pattern() == "news*" && pattern_message->message()->channel() == "news");
@@ -395,7 +397,7 @@ ruvia::task<void> check_error_reply_keeps_connection(ruvia::redis_client& client
     co_await client.connect();
     auto redis = client.handle();
     auto subscription = redis.subscription();
-    const std::string allowed_name(64 * 1024, 'a');
+    const std::pmr::string allowed_name(64 * 1024, 'a', ruvia::process_resource());
     const std::array<std::string_view, 2> channels{"denied", allowed_name};
     co_await subscription.subscribe(channels);
     bool denied = false;
@@ -573,11 +575,11 @@ ruvia::task<void> check_silent_peer_fails_the_idle_probe(
     co_await client.shutdown();
 }
 
-ruvia::task<void> read_late_message(ruvia::redis_subscription& subscription, std::optional<std::string>& payload) {
+ruvia::task<void> read_late_message(ruvia::redis_subscription& subscription, std::optional<std::pmr::string>& payload) {
     auto event = co_await subscription.read();
     EXPECT_TRUE(event && event->message() && !event->confirmation());
     if (event && event->message()) {
-        payload.emplace(event->message()->payload());
+        payload.emplace(event->message()->payload(), ruvia::process_resource());
     }
 }
 
@@ -594,7 +596,7 @@ ruvia::task<void> check_answered_probes_keep_an_idle_subscription(
     co_await subscription.subscribe("quiet");
     auto confirmed = co_await subscription.read();
     EXPECT_TRUE(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "quiet");
-    std::optional<std::string> payload;
+    std::optional<std::pmr::string> payload;
     ruvia::task_scope scope(client.worker());
     scope.spawn(read_late_message(subscription, payload));
     scope.spawn(publish_after_idle_intervals(client.handle(), client.worker()));

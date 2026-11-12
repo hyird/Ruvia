@@ -9,6 +9,7 @@
 #include <exception>
 #include <future>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <system_error>
@@ -23,6 +24,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 
 namespace {
@@ -425,7 +427,7 @@ TEST(Ruvia, worker_notification_many_producers_coalesce_without_lost_final_state
     auto task_value = spawn(worker, wait_for_producers(notification, state, producer_count));
     EXPECT_TRUE(worker.start());
 
-    std::vector<std::thread> producers;
+    std::pmr::vector<std::thread> producers(ruvia::process_resource());
     producers.reserve(producer_count);
     for (std::size_t producer_index = 0; producer_index < producer_count; ++producer_index) {
         producers.emplace_back([&] {
@@ -576,7 +578,7 @@ TEST(Ruvia, worker_notification_close_races_producers_without_waiting_for_them) 
     std::atomic<bool> begin{false};
     std::atomic<std::size_t> open_calls{0};
     std::atomic<std::size_t> closed_returns{0};
-    std::vector<std::thread> producers;
+    std::pmr::vector<std::thread> producers(ruvia::process_resource());
     producers.reserve(producer_count);
     for (std::size_t index = 0; index < producer_count; ++index) {
         producers.emplace_back([&] {

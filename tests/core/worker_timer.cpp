@@ -12,6 +12,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <ratio>
 #include <stdexcept>
@@ -28,6 +29,7 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/channel.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/one_shot.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
@@ -662,7 +664,7 @@ bool self_rescheduling_due_timer_preserves_other_expirations() {
     ruvia::worker_timer_registration repeating;
     ruvia::worker_timer_registration other;
     const auto earlier = std::chrono::steady_clock::now() - std::chrono::seconds(2);
-    std::string order;
+    std::pmr::string order(ruvia::process_resource());
     int rounds = 0;
     std::function<void(ruvia::worker_timer_outcome)> tick;
     tick = [&](ruvia::worker_timer_outcome outcome) {

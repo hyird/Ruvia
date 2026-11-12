@@ -2,9 +2,12 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
 
@@ -16,7 +19,7 @@ namespace ruvia {
 struct tls_identity_config final {
     std::filesystem::path certificate_chain_file_{};
     std::filesystem::path private_key_file_{};
-    std::string private_key_password_{};
+    std::pmr::string private_key_password_{process_resource()};
 };
 
 enum class client_tls_mode : std::uint8_t {
@@ -43,7 +46,7 @@ struct client_tls_config final {
     std::optional<tls_identity_config> identity_{};
     // SNI and verified peer name, an IP literal or ASCII DNS name; nullopt
     // uses the configured host. An IP literal matches IP subjectAltNames.
-    std::optional<std::string> server_name_{};
+    std::optional<std::pmr::string> server_name_{};
     // 每条 TLS 连接发出的记录总上限（含握手和 KeyUpdate），范围 1..2^23。
     // 达到上限后终止连接；更新密钥不重置计数。保守的连接级上限保证不会达到
     // RFC 9846 §5.5 的单密钥 AES-GCM 用量上限，也适用于数据库连接。
@@ -65,7 +68,7 @@ struct tls_client_certificate_config final {
 // An additional identity served when the client's server_name (RFC 6066 SNI)
 // equals host_, compared ASCII case-insensitively.
 struct tls_sni_config final {
-    std::string host_{};
+    std::pmr::string host_{process_resource()};
     tls_identity_config identity_{};
 };
 
@@ -90,7 +93,7 @@ struct tls_sni_config final {
 struct tls_config final {
     tls_identity_config identity_{};
     tls_client_certificate_config client_certificates_{};
-    std::vector<tls_sni_config> sni_{};
+    std::pmr::vector<tls_sni_config> sni_{process_resource()};
     // 发出的 TLS 记录总上限，范围 1..2^23；含握手及控制记录，KeyUpdate 不
     // 重置计数。达到上限后终止连接，以满足 RFC 9846 §5.5 的密钥用量约束。
     std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
