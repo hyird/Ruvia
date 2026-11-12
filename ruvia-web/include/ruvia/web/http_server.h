@@ -49,17 +49,17 @@ public:
     http_server(http_server&&) = delete;
     http_server& operator=(http_server&&) = delete;
 
-    // Owner loop only. Before start(), stages a listener; afterwards adds it
-    // atomically. Uses the same validation, credential loading and inherited
-    // socket ownership as application::listen(). dispatch_ must be
-    // request_stream or connection: this host does not register routes.
+    // Owner loop, before start only: stages owned configuration without
+    // loading credentials. Runtime additions use add_listener().
     void listen(listen_config config) &;
     void listen(listen_config) && = delete;
+    [[nodiscard]] task<void> add_listener(listen_config config) &;
+    task<void> add_listener(listen_config) && = delete;
     // Stages or adds a TCP/TLS service without binding a listening socket.
     // http_/https_ identify it for adopt(); HTTP/3, inherited listeners and
     // automatic redirects require listen() instead.
-    void add_connection_service(listen_config config) &;
-    void add_connection_service(listen_config) && = delete;
+    [[nodiscard]] task<void> add_connection_service(listen_config config) &;
+    task<void> add_connection_service(listen_config) && = delete;
     // Takes ownership even on failure. The socket must be connected and not
     // associated with another Windows IOCP; it is first bound to this loop.
     // Uses the same TLS handshake, budgets, timeouts and session drivers as
@@ -80,8 +80,8 @@ public:
     // continue until they end or close(). The endpoint may then be added again.
     void remove_listener(const listener_endpoint& endpoint) &;
     void remove_listener(const listener_endpoint&) && = delete;
-    void replace_tls_identities(const listener_endpoint& endpoint, tls_config config) &;
-    void replace_tls_identities(const listener_endpoint&, tls_config) && = delete;
+    [[nodiscard]] task<void> replace_tls_identities(const listener_endpoint& endpoint, tls_config config) &;
+    task<void> replace_tls_identities(const listener_endpoint&, tls_config) && = delete;
 #ifndef _WIN32
     [[nodiscard]] listener_sockets duplicate_listener_sockets(const listener_endpoint& endpoint) const&;
     listener_sockets duplicate_listener_sockets(const listener_endpoint&) const&& = delete;
@@ -108,10 +108,9 @@ private:
 
 // A service shared by caller-owned loops. Callbacks may run concurrently.
 // Configuration before start does not require the loops to be driven.
-// start(), shutdown() and running controls block, must run outside every
-// member loop, and require the caller to drive all live loops until completion.
-// A valid but undriven loop cannot be detected. close() is any-thread and never
-// stops a caller loop; a member loop's retirement closes the entire group.
+// Controls suspend without blocking member loops and resume on the explicit
+// caller worker (which may itself be a member). Drive live loops until shutdown
+// completes. close() never stops caller loops; member retirement closes the group.
 class http_server_group final {
 public:
     http_server_group(std::span<const event_loop> loops, http_server_callbacks callbacks, server_config config = {});
@@ -122,27 +121,27 @@ public:
     http_server_group& operator=(http_server_group&&) = delete;
 
     void listen(listen_config config) &;
-    void add_connection_service(listen_config config) &;
+    [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config) &;
+    [[nodiscard]] task<void> add_connection_service(worker_handle caller, listen_config config) &;
     // Before start only; replaces the complete set on every worker. Parsing
     // and allocation finish before publication; invalid input changes nothing.
     http_server_group& trusted_proxies(trusted_proxy_config config) &;
     // Prepare every worker before opening any listener; failure rolls back
     // the whole host without cancelling unrelated caller work.
-    void start() &;
-    void remove_listener(const listener_endpoint& endpoint) &;
-    void replace_tls_identities(const listener_endpoint& endpoint, tls_config config) &;
+    [[nodiscard]] task<void> start(worker_handle caller) &;
+    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint) &;
+    [[nodiscard]] task<void> replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config) &;
 #ifndef _WIN32
-    [[nodiscard]] listener_sockets duplicate_listener_sockets(const listener_endpoint& endpoint) const&;
-    listener_sockets duplicate_listener_sockets(const listener_endpoint&) const&& = delete;
+    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(worker_handle caller, const listener_endpoint& endpoint) const&;
+    task<listener_sockets> duplicate_listener_sockets(worker_handle, const listener_endpoint&) const&& = delete;
 #endif
     // Explicit target worker; takes socket ownership even when rejected.
-    void adopt(std::size_t worker_index, const listener_endpoint& service, native_socket socket) &;
-    // Blocking external control, as remove_listener(). IDs never name a
-    // different connection after retirement; false means the ID is not live.
-    [[nodiscard]] bool close_connection(std::uint64_t connection_id) &;
-    bool close_connection(std::uint64_t) && = delete;
+    [[nodiscard]] task<void> adopt(worker_handle caller, std::size_t worker_index, const listener_endpoint& service, native_socket socket) &;
+    // IDs never name another connection after retirement.
+    [[nodiscard]] task<bool> close_connection(worker_handle caller, std::uint64_t connection_id) &;
+    task<bool> close_connection(worker_handle, std::uint64_t) && = delete;
     void close() noexcept;
-    void shutdown() &;
+    [[nodiscard]] task<void> shutdown(worker_handle caller) &;
     [[nodiscard]] http_server_stats stats() const noexcept;
     [[nodiscard]] std::size_t worker_count() const noexcept;
     [[nodiscard]] const worker_handle& worker(std::size_t index) const& RUVIA_LIFETIMEBOUND;

@@ -75,15 +75,15 @@ public:
     // transactions of application::add_listener() and remove_listener()
     // (see worker_connections).
     void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
-        const http_server_listener_definition& definition
+        const http_server_listener_definition& definition, prepared_http_server_session session
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_directory* directory
 #endif
     ) {
-        connections_.prepare_listener(index, http3_index, definition, false
+        connections_.prepare_listener(index, http3_index, definition, false, std::move(session)
 #if defined(RUVIA_ENABLE_HTTP3)
-            ,
+                                                                                 ,
             directory
 #endif
         );

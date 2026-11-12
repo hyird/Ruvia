@@ -38,6 +38,8 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -59,12 +61,33 @@ namespace listener_sockets_test {
 using namespace std::chrono_literals;
 using tls_stream = asio::ssl::stream<asio::ip::tcp::socket>;
 
+ruvia::event_loop control_loop() {
+    struct runtime final {
+        ruvia::blocking_pool blocking_{{.thread_count_ = 2}};
+        ruvia::event_loop_pool loops_{{.loop_count_ = 1, .blocking_pool_ = &blocking_}};
+
+        runtime() {
+            loops_.start();
+        }
+        ~runtime() {
+            loops_.join();
+        }
+    };
+    static runtime value;
+    return value.loops_.loop(0);
+}
+
+std::atomic<std::uint16_t>& control_addition_port() {
+    static std::atomic<std::uint16_t> value{0};
+    return value;
+}
+
 std::binary_semaphore& started() {
     static std::binary_semaphore value{0};
     return value;
 }
 
-// The endpoint a route tries to remove and duplicate from a business worker.
+// The endpoint a route duplicates from a business worker.
 std::atomic<std::uint16_t>& controlled_port() {
     static std::atomic<std::uint16_t> value{0};
     return value;
@@ -88,7 +111,7 @@ std::string failure_of(fn_type&& fn) {
 // on_start hooks run before the app serves; the runtime listener controls
 // need it running, which an unknown endpoint then reports as such.
 void wait_until_running(ruvia::application& app) {
-    while (failure_of([&app] { app.remove_listener({.address_ = "0.0.0.0", .port_ = 9}); }) != "invalid_argument") {
+    while (failure_of([&app] { control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "0.0.0.0", .port_ = 9})).get(); }) != "invalid_argument") {
         std::this_thread::sleep_for(1ms);
     }
 }
@@ -109,15 +132,25 @@ public:
         co_return context.text(std::to_string(context.worker().id()));
     }
 
-    // A business worker cannot wait for every worker, itself included.
+    // Runtime controls suspend instead of waiting on the current business worker.
     ruvia::task<ruvia::http_response> control(ruvia::context& context) {
         const ruvia::listener_endpoint endpoint{.address_ = "127.0.0.1", .port_ = controlled_port().load()};
-        auto outcome = failure_of([] { ruvia::app().add_listener({.address_ = "127.0.0.1", .http_ = 1}); });
-        outcome += " " + failure_of([&endpoint] { ruvia::app().remove_listener(endpoint); });
 #if !defined(_WIN32)
-        outcome += " " + failure_of([&endpoint] { (void)ruvia::app().duplicate_listener_sockets(endpoint); });
+        auto sockets = co_await ruvia::app().duplicate_listener_sockets(context.worker(), endpoint);
+        for (const auto* service : {&sockets.http_, &sockets.https_, &sockets.http3_}) {
+            for (const auto fd : *service) {
+                (void)::close(fd);
+            }
+        }
 #endif
-        co_return context.text(outcome);
+        const auto port = control_addition_port().load();
+        co_await ruvia::app().add_listener(context.worker(), {.address_ = "127.0.0.1", .http_ = port});
+        co_await ruvia::app().remove_listener(context.worker(), {.address_ = "127.0.0.1", .port_ = port});
+#if defined(_WIN32)
+        co_return context.text("added removed");
+#else
+        co_return context.text("added removed duplicated");
+#endif
     }
 };
 
@@ -312,9 +345,9 @@ TEST(Ruvia, readded_http3_listener_serves_new_and_retired_connections_on_every_w
     }
     ASSERT_NE(established[1], nullptr);
     const ruvia::listener_endpoint endpoint{.address_ = "127.0.0.1", .port_ = https.port()};
-    app.remove_listener(endpoint);
+    control_loop().start(app.remove_listener(control_loop().handle(), endpoint)).get();
     config.tls_ = tls_of(second);
-    ASSERT_NO_THROW(app.add_listener(config));
+    ASSERT_NO_THROW(control_loop().start(app.add_listener(control_loop().handle(), config)).get());
     std::vector<std::unique_ptr<ruvia::test::http3_test_client>> current;
     for (int attempt = 0; attempt < 4; ++attempt) {
         auto client = std::make_unique<ruvia::test::http3_test_client>(udp, second.ca_file_, "localhost", 5s);
@@ -327,7 +360,7 @@ TEST(Ruvia, readded_http3_listener_serves_new_and_retired_connections_on_every_w
 
 #if defined(__linux__) && defined(SO_DETACH_REUSEPORT_BPF)
     // Exercise the same dispatch without the optional kernel CID selector.
-    auto duplicated = app.duplicate_listener_sockets(endpoint);
+    auto duplicated = control_loop().start(app.duplicate_listener_sockets(control_loop().handle(), endpoint)).get();
     const int ignored = 0;
     (void)::setsockopt(duplicated.http3_.front(), SOL_SOCKET, SO_DETACH_REUSEPORT_BPF, &ignored, sizeof(ignored));
     for (const auto fd : duplicated.https_) {
@@ -381,12 +414,12 @@ TEST(Ruvia, readded_http3_listener_without_connections_releases_its_udp_sockets)
     ASSERT_TRUE(started().try_acquire_for(10s));
     wait_until_running(app);
     for (int attempt = 0; attempt < 4; ++attempt) {
-        ASSERT_NO_THROW(app.add_listener(config));
+        ASSERT_NO_THROW(control_loop().start(app.add_listener(control_loop().handle(), config)).get());
 #if !defined(_WIN32)
         // The wildcard reservation would itself prevent an exclusive bind.
         udp_reservation.reset();
 #endif
-        app.remove_listener({.address_ = "127.0.0.1", .port_ = https.port()});
+        control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "127.0.0.1", .port_ = https.port()})).get();
         // Windows releases the shared socket on its acceptor control queue.
         const auto deadline = std::chrono::steady_clock::now() + 3s;
         asio::ip::udp::socket exclusive(io);
@@ -603,6 +636,8 @@ TEST(Ruvia, duplicated_listener_sockets_serve_a_successor) {
     const auto http = http_reservation.endpoint();
     const auto https = https_reservation.endpoint();
     controlled_port() = https.port();
+    ruvia::test::tcp_port_reservation control_reservation(io);
+    control_addition_port() = control_reservation.endpoint().port();
     ruvia::listen_config config{
         .address_ = "127.0.0.1",
         .http_ = http.port(),
@@ -620,7 +655,7 @@ TEST(Ruvia, duplicated_listener_sockets_serve_a_successor) {
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2}).listen(config).on_start(nullptr).on_start([] { started().release(); });
     const ruvia::listener_endpoint https_endpoint{.address_ = "127.0.0.1", .port_ = https.port()};
-    EXPECT_EQ(failure_of([&] { (void)app.duplicate_listener_sockets(https_endpoint); }), "logic_error");
+    EXPECT_EQ(failure_of([&] { (void)control_loop().start(app.duplicate_listener_sockets(control_loop().handle(), https_endpoint)).get(); }), "logic_error");
 
     ruvia::listener_sockets https_sockets;
     ruvia::listener_sockets http_sockets;
@@ -628,11 +663,12 @@ TEST(Ruvia, duplicated_listener_sockets_serve_a_successor) {
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));
         wait_until_running(app);
-        EXPECT_EQ(failure_of([&] { (void)app.duplicate_listener_sockets({.address_ = "127.0.0.2", .port_ = https.port()}); }),
+        EXPECT_EQ(failure_of([&] { (void)control_loop().start(app.duplicate_listener_sockets(control_loop().handle(), {.address_ = "127.0.0.2", .port_ = https.port()})).get(); }),
             "invalid_argument");
-        EXPECT_EQ(plain_body(io, http, "/control"), "logic_error logic_error logic_error");
-        https_sockets = app.duplicate_listener_sockets(https_endpoint);
-        http_sockets = app.duplicate_listener_sockets({.address_ = "127.0.0.1", .port_ = http.port()});
+        EXPECT_EQ(plain_body(io, http, "/control"), "added removed duplicated");
+        EXPECT_TRUE(refuses(io, control_reservation.endpoint()));
+        https_sockets = control_loop().start(app.duplicate_listener_sockets(control_loop().handle(), https_endpoint)).get();
+        http_sockets = control_loop().start(app.duplicate_listener_sockets(control_loop().handle(), {.address_ = "127.0.0.1", .port_ = http.port()})).get();
         EXPECT_TRUE(https_sockets.http_.empty());
         EXPECT_EQ(https_sockets.https_.size(), 2U);
         EXPECT_EQ(https_sockets.http3_.size(), http3_sockets);
@@ -699,22 +735,33 @@ TEST(Ruvia, added_listeners_adopt_inherited_sockets) {
 
     const int lonely = listening_socket(rejected.port());
     EXPECT_EQ(failure_of([&] {
-        app.add_listener({.address_ = "127.0.0.1",
-            .http_ = rejected.port(),
-            .inherited_sockets_ = ruvia::listener_sockets{.http_ = {lonely}}});
+        control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1",
+                                                                           .http_ = rejected.port(),
+                                                                           .inherited_sockets_ = ruvia::listener_sockets{.http_ = {lonely}}}))
+            .get();
     }),
         "invalid_argument");
     EXPECT_TRUE(closed(lonely));
     EXPECT_TRUE(refuses(io, rejected));
 
+    // Dropping a cold addition releases the sockets transferred at task creation.
+    const int abandoned = listening_socket(rejected.port());
+    {
+        auto cold = app.add_listener(control_loop().handle(),
+            {.address_ = "127.0.0.1", .http_ = rejected.port(), .inherited_sockets_ = ruvia::listener_sockets{.http_ = {abandoned}}});
+    }
+    EXPECT_TRUE(closed(abandoned));
+    EXPECT_TRUE(refuses(io, rejected));
+
     const int first = listening_socket(adopted.port());
     const int second = listening_socket(adopted.port());
-    EXPECT_EQ(failure_of([&] {
-        app.add_listener({.address_ = "127.0.0.1",
-            .http_ = adopted.port(),
-            .inherited_sockets_ = ruvia::listener_sockets{.http_ = {first, second}}});
-    }),
-        "none");
+    // Neither the config nor its borrowed address survives until execution.
+    auto addition = [&] {
+        std::string address = "127.0.0.1";
+        return app.add_listener(control_loop().handle(),
+            {.address_ = address, .http_ = adopted.port(), .inherited_sockets_ = ruvia::listener_sockets{.http_ = {first, second}}});
+    }();
+    EXPECT_EQ(failure_of([&] { control_loop().start(std::move(addition)).get(); }), "none");
     EXPECT_TRUE(close_on_exec(first));
     for (int request = 0; request < 8; ++request) {
         EXPECT_EQ(plain_body(io, adopted, "/hello"), "hello");
@@ -729,9 +776,9 @@ TEST(Ruvia, added_listeners_adopt_inherited_sockets) {
 // runs -- the first HTTP/3 one included -- and keeps it for later runs. A
 // failure on any worker (here an HTTPS port bound elsewhere) discards the
 // addition everywhere, its HTTP port included, while the app serves on. A
-// stopped app, a business worker and a duplicate endpoint are refused, and
-// replace_tls_identities() reaches an added listener after others were
-// removed.
+// stopped app and a duplicate endpoint are refused, and business workers can
+// await runtime controls. replace_tls_identities() reaches an added listener
+// after others were removed.
 TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
     const ruvia::test::tls_identity first("first", "DNS:localhost,IP:127.0.0.1");
     const ruvia::test::tls_identity second("second", "DNS:localhost,IP:127.0.0.1");
@@ -747,6 +794,8 @@ TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
     const auto secure = secure_reservation.endpoint();
     const auto discarded = discarded_reservation.endpoint();
     controlled_port() = added.port();
+    ruvia::test::tcp_port_reservation control_reservation(io);
+    control_addition_port() = control_reservation.endpoint().port();
     // Bound without sharing, so a worker cannot bind the port.
     asio::ip::tcp::acceptor busy(io);
     busy.open(asio::ip::tcp::v4());
@@ -764,48 +813,51 @@ TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
         .listen({.address_ = "127.0.0.1", .http_ = base.port()})
         .on_start(nullptr)
         .on_start([] { started().release(); });
-    EXPECT_EQ(failure_of([&] { app.add_listener({.address_ = "127.0.0.1", .http_ = added.port()}); }), "logic_error");
+    EXPECT_EQ(failure_of([&] { control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1", .http_ = added.port()})).get(); }), "logic_error");
     auto client = tls_client();
     {
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));
         wait_until_running(app);
         EXPECT_TRUE(refuses(io, added));
-        EXPECT_EQ(failure_of([&] { app.add_listener({.address_ = "127.0.0.1", .http_ = added.port()}); }), "none");
+        EXPECT_EQ(failure_of([&] { control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1", .http_ = added.port()})).get(); }), "none");
         EXPECT_EQ(plain_body(io, added, "/hello"), "hello");
-        EXPECT_EQ(failure_of([&] { app.add_listener(secure_config); }), "none");
+        EXPECT_EQ(failure_of([&] { control_loop().start(app.add_listener(control_loop().handle(), secure_config)).get(); }), "none");
         EXPECT_EQ(https_served_name(io, client, secure), "first");
 #if defined(RUVIA_ENABLE_HTTP3)
         EXPECT_TRUE(http3_serves(http3, first));
         // The UDP endpoint is a separate namespace, taken all the same.
         EXPECT_EQ(failure_of([&] {
-            app.add_listener({.address_ = "127.0.0.1",
-                .https_ = discarded.port(),
-                .http3_ = http3,
-                .tls_ = tls_of(second)});
+            control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1",
+                                                                               .https_ = discarded.port(),
+                                                                               .http3_ = http3,
+                                                                               .tls_ = tls_of(second)}))
+                .get();
         }),
             "invalid_argument");
 #endif
-        EXPECT_EQ(failure_of([&] { app.add_listener({.address_ = "127.0.0.1", .http_ = added.port()}); }),
+        EXPECT_EQ(failure_of([&] { control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1", .http_ = added.port()})).get(); }),
             "invalid_argument");
         EXPECT_EQ(failure_of([&] {
-            app.add_listener({.address_ = "127.0.0.1",
-                .http_ = discarded.port(),
-                .https_ = busy_port,
-                .tls_ = tls_of(second)});
+            control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1",
+                                                                               .http_ = discarded.port(),
+                                                                               .https_ = busy_port,
+                                                                               .tls_ = tls_of(second)}))
+                .get();
         }),
             "system_error");
         EXPECT_TRUE(refuses(io, discarded));
         EXPECT_EQ(plain_body(io, base, "/hello"), "hello");
         EXPECT_EQ(plain_body(io, added, "/hello"), "hello");
 #if defined(_WIN32)
-        EXPECT_EQ(plain_body(io, base, "/control"), "logic_error logic_error");
+        EXPECT_EQ(plain_body(io, base, "/control"), "added removed");
 #else
-        EXPECT_EQ(plain_body(io, base, "/control"), "logic_error logic_error logic_error");
+        EXPECT_EQ(plain_body(io, base, "/control"), "added removed duplicated");
 #endif
 
-        app.remove_listener({.address_ = "127.0.0.1", .port_ = base.port()});
-        app.replace_tls_identities({.address_ = "127.0.0.1", .port_ = secure.port()}, tls_of(second));
+        EXPECT_TRUE(refuses(io, control_reservation.endpoint()));
+        control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "127.0.0.1", .port_ = base.port()})).get();
+        control_loop().start(app.replace_tls_identities(control_loop().handle(), {.address_ = "127.0.0.1", .port_ = secure.port()}, tls_of(second))).get();
         EXPECT_EQ(https_served_name(io, client, secure), "second");
 #if defined(RUVIA_ENABLE_HTTP3)
         EXPECT_TRUE(http3_serves(http3, second));
@@ -817,7 +869,7 @@ TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
         std::array<std::string, 2> outcomes;
         {
             const auto add_racing = [&](std::string& outcome) {
-                outcome = failure_of([&] { app.add_listener({.address_ = "127.0.0.1", .http_ = racing.port()}); });
+                outcome = failure_of([&] { control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1", .http_ = racing.port()})).get(); });
             };
             std::thread first_adder(add_racing, std::ref(outcomes[0]));
             std::thread second_adder(add_racing, std::ref(outcomes[1]));
@@ -848,7 +900,7 @@ TEST(Ruvia, listeners_are_added_while_running_and_kept_for_later_runs) {
 // remove_listener() closes a TCP service, and its HTTP/3 service, to new
 // connections before it returns, while established ones -- keep-alive HTTP,
 // TLS and QUIC -- still complete requests. Later runs no longer serve it. An
-// unknown endpoint, a stopped app and a business worker are refused.
+// unknown endpoint and a stopped app are refused; business workers can await controls.
 TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones) {
     const ruvia::test::tls_identity identity("removed", "DNS:localhost,IP:127.0.0.1");
     asio::io_context io;
@@ -859,6 +911,8 @@ TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones)
     const auto removed = removed_reservation.endpoint();
     const auto secure = secure_reservation.endpoint();
     controlled_port() = removed.port();
+    ruvia::test::tcp_port_reservation control_reservation(io);
+    control_addition_port() = control_reservation.endpoint().port();
     ruvia::listen_config secure_config{.address_ = "127.0.0.1", .https_ = secure.port(), .tls_ = tls_of(identity)};
 #if defined(RUVIA_ENABLE_HTTP3)
     ruvia::test::udp_port_reservation udp_reservation(io);
@@ -876,7 +930,7 @@ TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones)
         .on_start([] { started().release(); });
     const ruvia::listener_endpoint removed_endpoint{.address_ = "127.0.0.1", .port_ = removed.port()};
     const ruvia::listener_endpoint secure_endpoint{.address_ = "127.0.0.1", .port_ = secure.port()};
-    EXPECT_EQ(failure_of([&] { app.remove_listener(removed_endpoint); }), "logic_error");
+    EXPECT_EQ(failure_of([&] { control_loop().start(app.remove_listener(control_loop().handle(), removed_endpoint)).get(); }), "logic_error");
     {
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));
@@ -893,15 +947,16 @@ TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones)
         ASSERT_TRUE(serves_hello(established_http3));
 #endif
 #if defined(_WIN32)
-        EXPECT_EQ(plain_body(io, kept, "/control"), "logic_error logic_error");
+        EXPECT_EQ(plain_body(io, kept, "/control"), "added removed");
 #else
-        EXPECT_EQ(plain_body(io, kept, "/control"), "logic_error logic_error logic_error");
+        EXPECT_EQ(plain_body(io, kept, "/control"), "added removed duplicated");
 #endif
 
-        EXPECT_EQ(failure_of([&] { app.remove_listener(removed_endpoint); }), "none");
-        EXPECT_EQ(failure_of([&] { app.remove_listener(secure_endpoint); }), "none");
-        EXPECT_EQ(failure_of([&] { app.remove_listener(removed_endpoint); }), "invalid_argument");
-        EXPECT_EQ(failure_of([&] { app.remove_listener({.address_ = "127.0.0.1", .port_ = 1}); }), "invalid_argument");
+        EXPECT_TRUE(refuses(io, control_reservation.endpoint()));
+        EXPECT_EQ(failure_of([&] { control_loop().start(app.remove_listener(control_loop().handle(), removed_endpoint)).get(); }), "none");
+        EXPECT_EQ(failure_of([&] { control_loop().start(app.remove_listener(control_loop().handle(), secure_endpoint)).get(); }), "none");
+        EXPECT_EQ(failure_of([&] { control_loop().start(app.remove_listener(control_loop().handle(), removed_endpoint)).get(); }), "invalid_argument");
+        EXPECT_EQ(failure_of([&] { control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "127.0.0.1", .port_ = 1})).get(); }), "invalid_argument");
         EXPECT_TRUE(refuses(io, removed));
         EXPECT_TRUE(refuses(io, secure));
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -951,7 +1006,7 @@ TEST(Ruvia, mixed_listener_shares_one_socket_group_and_preserves_transport_throu
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));
         wait_until_running(app);
-        ASSERT_NO_THROW(app.add_listener(config));
+        ASSERT_NO_THROW(control_loop().start(app.add_listener(control_loop().handle(), config)).get());
         std::thread plaintext([&] {
             asio::io_context peer_io;
             for (int attempt = 0; attempt < 12; ++attempt) {
@@ -967,21 +1022,21 @@ TEST(Ruvia, mixed_listener_shares_one_socket_group_and_preserves_transport_throu
         ASSERT_TRUE(serves_hello(established));
         const auto established_tls = connect_tls(io, client, endpoint);
         ASSERT_TRUE(serves_hello(*established_tls));
-        app.replace_tls_identities(target, tls_of(second));
+        control_loop().start(app.replace_tls_identities(control_loop().handle(), target, tls_of(second))).get();
         EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-second");
         EXPECT_EQ(plain_body(io, endpoint, "/hello"), "hello");
 #if defined(RUVIA_ENABLE_HTTP3)
         EXPECT_TRUE(http3_serves(udp.endpoint().port(), second));
 #endif
 #if !defined(_WIN32)
-        inherited = app.duplicate_listener_sockets(target);
+        inherited = control_loop().start(app.duplicate_listener_sockets(control_loop().handle(), target)).get();
         EXPECT_TRUE(inherited.http_.empty());
         EXPECT_EQ(inherited.https_.size(), 2U);
         for (const auto fd : inherited.https_) {
             EXPECT_TRUE(listening(fd));
         }
 #endif
-        app.remove_listener(target);
+        control_loop().start(app.remove_listener(control_loop().handle(), target)).get();
 #if defined(_WIN32)
         EXPECT_TRUE(refuses(io, endpoint));
 #endif
@@ -1002,7 +1057,7 @@ TEST(Ruvia, mixed_listener_shares_one_socket_group_and_preserves_transport_throu
         EXPECT_EQ(plain_body(io, endpoint, "/hello"), "hello");
         EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-second");
     }
-    app.remove_listener(target);
+    control_loop().start(app.remove_listener(control_loop().handle(), target)).get();
     EXPECT_TRUE(refuses(io, endpoint));
     app.stop();
     successor.join();

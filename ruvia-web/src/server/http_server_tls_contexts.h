@@ -19,8 +19,8 @@ struct http3_connection_options;
 namespace ruvia::detail {
 
 // Builds one worker's TLS contexts of a listener at startup, from its loaded
-// definition: the TCP context (TLS 1.2/1.3, ALPN h2, http/1.1, http/1.0, or a
-// connection-dispatch listener's own ALPN list) and, when the listener has an
+// definition: the TCP context (TLS 1.1..1.3, h2 only with TLS >= 1.2,
+// http/1.1, http/1.0, or connection dispatch's custom ALPN) and, with an
 // HTTP/3 service, the QUIC context (TLS 1.3 only, ALPN h3 only, opt-in early
 // data). Neither carries an identity: each
 // handshake selects one from the identity set the session holds when its
@@ -33,6 +33,14 @@ namespace ruvia::detail {
 // to its observe_tls_client_hello() observation; without it no observation
 // branch is installed. A listener without TLS keeps no context.
 void configure_http_server_tls_contexts(http_server_session_config& session, bool observe_client_hello);
+
+using prepared_http_server_session =
+    std::unique_ptr<http_server_session_config, pmr_object_deleter<http_server_session_config>>;
+
+// Builds a stable-address candidate off the owner loop. Its contexts borrow
+// only its own fields; move the owning pointer, never the session itself.
+[[nodiscard]] prepared_http_server_session prepare_http_server_session_config(
+    const http_server_listener_definition& definition, bool observe_client_hello);
 
 // Attaches the local address a connection arrived at, which identity
 // selection matches against local-address identities. The caller keeps it

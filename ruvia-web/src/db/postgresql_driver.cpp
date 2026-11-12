@@ -771,7 +771,7 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
             port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8",
             use_tls ? "verify-full" : "disable", root_certificate,
             identity.has_value() ? tls_file_name_c_str(identity->certificate_chain_file_) : "",
-            identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", "TLSv1.2",
+            identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", "TLSv1.1",
             nullptr};
         // PQconnectStartParams copies the parameter strings before returning.
         native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);

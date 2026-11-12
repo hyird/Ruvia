@@ -74,6 +74,8 @@ constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
             return "failed to configure TLS ALPN";
         case client_tls_setup_error::peer_identity_failed:
             return "failed to configure TLS peer identity";
+        case client_tls_setup_error::protocol_failed:
+            return "TLS protocol requirements were not met";
     }
     std::terminate();
 }
@@ -166,6 +168,14 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
 client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, std::span<const unsigned char> protocols) {
     if (SSL_clear(&ssl) != 1) {
         return client_tls_setup_error::reset_failed;
+    }
+    // Keep a stricter context minimum (in particular QUIC's TLS 1.3).
+    // Mixed ALPN offers may negotiate HTTP/1.1 over TLS 1.1; the shared TCP
+    // transport checks the selected protocol before exposing any byte I/O.
+    if (std::ranges::equal(protocols, http2_alpn) &&
+        SSL_get_min_proto_version(&ssl) < TLS1_2_VERSION &&
+        SSL_set_min_proto_version(&ssl, TLS1_2_VERSION) != 1) {
+        return client_tls_setup_error::protocol_failed;
     }
     if (const auto prepared = prepare_client_tls_session(ssl, host); prepared != client_tls_setup_error::none) {
         return prepared;

@@ -21,17 +21,93 @@
 namespace ruvia::detail {
 namespace {
 
+using security_callback = int (*)(const SSL*, const SSL_CTX*, int, int, int, void*, void*);
+
+int enforce_security(const SSL*, const SSL_CTX*, int, int, int, void*, void*) noexcept;
+void guard_native_handshake(const SSL*, int, int) noexcept;
+
 struct tls_context_policy final {
-    tls_context_policy(std::string_view host, std::uint64_t limit)
+    tls_context_policy(SSL_CTX& context, std::string_view host, std::uint64_t limit)
         : host_(host, process_resource()),
-          record_limit_(limit) {
+          record_limit_(limit),
+          original_security_(SSL_CTX_get_security_callback(&context)),
+          original_security_data_(SSL_CTX_get0_security_ex_data(&context)),
+          original_info_(SSL_CTX_get_info_callback(&context)) {
+        if (original_security_ == enforce_security) {
+            const auto* previous = static_cast<const tls_context_policy*>(original_security_data_);
+            original_security_ = previous->original_security_;
+            original_security_data_ = previous->original_security_data_;
+            if (original_info_ == guard_native_handshake) {
+                original_info_ = previous->original_info_;
+            }
+        }
         if (!is_client_ip_address(host_) && host_.ends_with('.')) {
             host_.pop_back();
         }
     }
     std::pmr::string host_;
     std::uint64_t record_limit_;
+    security_callback original_security_;
+    void* original_security_data_;
+    void (*original_info_)(const SSL*, int, int);
 };
+
+int enforce_security(const SSL* ssl, const SSL_CTX* context, int operation, int bits, int nid,
+    void* other, void* opaque) noexcept {
+    const auto& policy = *static_cast<const tls_context_policy*>(opaque);
+    if (operation == SSL_SECOP_VERSION) {
+        if (nid < TLS1_1_VERSION) {
+            return 0;
+        }
+        if (nid == TLS1_1_VERSION) {
+            return 1;
+        }
+    }
+    if (operation == SSL_SECOP_COMPRESSION) {
+        return 0;
+    }
+    if (operation == SSL_SECOP_CIPHER_SUPPORTED || operation == SSL_SECOP_CIPHER_SHARED ||
+        operation == SSL_SECOP_CIPHER_CHECK) {
+        const auto* cipher = static_cast<const SSL_CIPHER*>(other);
+        switch (SSL_CIPHER_get_id(cipher)) {
+            case TLS1_CK_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
+            case TLS1_CK_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
+            case TLS1_CK_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
+            case TLS1_CK_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
+            case TLS1_CK_ECDHE_ECDSA_WITH_CHACHA20_POLY1305:
+            case TLS1_CK_ECDHE_RSA_WITH_CHACHA20_POLY1305:
+                break;
+            case TLS1_CK_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:
+            case TLS1_CK_ECDHE_RSA_WITH_AES_128_CBC_SHA:
+            case TLS1_CK_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:
+            case TLS1_CK_ECDHE_RSA_WITH_AES_256_CBC_SHA:
+                // SUPPORTED runs before the peer's version is known. Advertise
+                // CBC for fallback, but never select or accept it with TLS 1.2.
+                if (operation != SSL_SECOP_CIPHER_SUPPORTED && (!ssl || SSL_version(ssl) != TLS1_1_VERSION)) {
+                    return 0;
+                }
+                break;
+            default:
+                if (std::string_view(SSL_CIPHER_get_version(cipher)) != "TLSv1.3") {
+                    return 0;
+                }
+        }
+    }
+    if (ssl && SSL_version(ssl) == TLS1_1_VERSION &&
+        (nid == NID_md5_sha1 || nid == NID_sha1) &&
+        (operation == SSL_SECOP_SIGALG_SUPPORTED || operation == SSL_SECOP_SIGALG_SHARED ||
+            operation == SSL_SECOP_SIGALG_CHECK || operation == SSL_SECOP_SIGALG_MASK)) {
+        // These are handshake signature operations only. In particular,
+        // SSL_SECOP_CA_MD, EE_KEY and CA_KEY are never exempted.
+        return 1;
+    }
+    return policy.original_security_ &&
+           policy.original_security_(ssl, context, operation, bits, nid, other, policy.original_security_data_);
+}
+
+int deny_security(const SSL*, const SSL_CTX*, int, int, int, void*, void*) noexcept {
+    return 0;
+}
 
 struct tls_record_state final {
     std::uint64_t limit_;
@@ -61,6 +137,19 @@ int copy_record_state(CRYPTO_EX_DATA*, const CRYPTO_EX_DATA*, void** value, int,
 int context_index = -1;
 int record_index = -1;
 int bio_index = -1;
+
+void guard_native_handshake(const SSL* ssl, int where, int result) noexcept {
+    if ((where & SSL_CB_HANDSHAKE_START) != 0) {
+        // Unlike SSL_new's ex_data notification, this runs only after the
+        // connection is initialized and before any handshake is processed.
+        SSL_set_options(const_cast<SSL*>(ssl), SSL_OP_NO_RENEGOTIATION | SSL_OP_NO_COMPRESSION);
+    }
+    const auto* policy = static_cast<const tls_context_policy*>(
+        SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), context_index));
+    if (policy && policy->original_info_) {
+        policy->original_info_(ssl, where, result);
+    }
+}
 
 long deny_output(BIO* bio, int operation, const char*, std::size_t, int, long, int result,
     std::size_t* processed) noexcept {
@@ -172,10 +261,13 @@ int verify_native_certificate(X509_STORE_CTX* store, void* opaque) noexcept {
 }
 
 void install_context_callbacks(SSL_CTX& context, tls_context_policy* policy) noexcept {
+    SSL_CTX_set0_security_ex_data(&context, policy);
+    SSL_CTX_set_security_callback(&context, enforce_security);
     SSL_CTX_set_msg_callback(&context, count_tls_records);
     SSL_CTX_set_msg_callback_arg(&context, nullptr);
     if (!policy->host_.empty()) {
         SSL_CTX_set_cert_verify_callback(&context, verify_native_certificate, policy);
+        SSL_CTX_set_info_callback(&context, guard_native_handshake);
     }
 }
 
@@ -225,13 +317,14 @@ void native_tls_context_scope::new_context(void* parent, void*, CRYPTO_EX_DATA* 
     }
     auto* context = static_cast<SSL_CTX*>(parent);
     try {
-        auto owner = make_pmr_object<tls_context_policy>(process_resource(), current_->host_, current_->record_limit_);
+        auto owner = make_pmr_object<tls_context_policy>(process_resource(), *context, current_->host_, current_->record_limit_);
         if (CRYPTO_set_ex_data(storage, index, owner.get()) != 1) {
             throw std::bad_alloc();
         }
         install_context_callbacks(*context, owner.release());
     } catch (...) {
         current_->failure_ = std::current_exception();
+        SSL_CTX_set_security_callback(context, deny_security);
         SSL_CTX_set_cert_verify_callback(context, deny_certificate, nullptr);
         SSL_CTX_set_msg_callback(context, block_messages);
     }
@@ -246,7 +339,7 @@ void validate_tls_record_limit(std::uint64_t limit) {
 void apply_tls_protocol_policy(SSL_CTX& context, std::uint64_t record_limit) {
     validate_tls_record_limit(record_limit);
     register_tls_policy_indexes();
-    auto owner = make_pmr_object<tls_context_policy>(process_resource(), std::string_view{}, record_limit);
+    auto owner = make_pmr_object<tls_context_policy>(process_resource(), context, std::string_view{}, record_limit);
     auto* previous = static_cast<tls_context_policy*>(SSL_CTX_get_ex_data(&context, context_index));
     if (SSL_CTX_set_ex_data(&context, context_index, owner.get()) != 1) {
         throw std::bad_alloc();
@@ -254,16 +347,12 @@ void apply_tls_protocol_policy(SSL_CTX& context, std::uint64_t record_limit) {
     auto* policy = owner.release();
     destroy_pmr_object(previous, process_resource());
     install_context_callbacks(context, policy);
-    static constexpr char tls12_cipher_suites[] =
-        "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
-        "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
-        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305";
-    if (SSL_CTX_set_min_proto_version(&context, TLS1_2_VERSION) != 1 || SSL_CTX_set_max_proto_version(&context, 0) != 1) {
+    if (SSL_CTX_set_min_proto_version(&context, TLS1_1_VERSION) != 1 || SSL_CTX_set_max_proto_version(&context, 0) != 1) {
         throw std::runtime_error("failed to configure TLS versions");
     }
     SSL_CTX_set_options(&context, SSL_OP_NO_COMPRESSION | SSL_OP_NO_RENEGOTIATION);
-    if (SSL_CTX_set_cipher_list(&context, tls12_cipher_suites) != 1) {
-        throw std::runtime_error("failed to configure TLS 1.2 cipher suites");
+    if (SSL_CTX_set_cipher_list(&context, tls_cipher_suites) != 1) {
+        throw std::runtime_error("failed to configure TLS cipher suites");
     }
 }
 

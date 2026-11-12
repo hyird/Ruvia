@@ -26,6 +26,7 @@
 #include "server/http_connection_state.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
+#include "server/http_server_tls_contexts.h"
 #include "server/http_server_worker_state.h"
 #if defined(_WIN32)
 #include "server/windows_acceptor.h"
@@ -120,6 +121,14 @@ public:
         http3_worker_directory* directory = nullptr
 #endif
     );
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
+        const http_server_listener_definition& definition, bool externally_accepted,
+        prepared_http_server_session session
+#if defined(RUVIA_ENABLE_HTTP3)
+        ,
+        http3_worker_directory* directory = nullptr
+#endif
+    );
     // Starts admitting a prepared listener. A failure to start fails the worker.
     void open_listener(std::size_t index) noexcept;
     // Closes the sockets of a listener prepared but never opened and retires
@@ -158,8 +167,10 @@ public:
 private:
     struct listener final {
         listener(asio::io_context& io, const worker_handle& worker_value,
-            const http_server_listener_definition& definition, std::pmr::memory_resource* resource)
-            : session_(definition, resource),
+            const http_server_listener_definition& definition, std::pmr::memory_resource* resource,
+            prepared_http_server_session session = {})
+            : session_owner_(std::move(session)),
+              session_(session_owner_ ? *session_owner_ : inline_session_.emplace(definition, resource)),
               endpoint_(definition.endpoint_),
               tasks_(worker_value, {.resource_ = resource}),
               retired_(worker_value)
@@ -174,7 +185,9 @@ private:
 #endif
         }
 
-        http_server_session_config session_;
+        prepared_http_server_session session_owner_;
+        std::optional<http_server_session_config> inline_session_;
+        http_server_session_config& session_;
         asio::ip::tcp::endpoint endpoint_;
         // Its accept loop, sessions and HTTP/3 endpoint tasks, all joined
         // before the listener is destroyed: they borrow session_.

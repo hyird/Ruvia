@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <future>
@@ -19,6 +20,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
+#include <asio/redirect_error.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/steady_timer.hpp>
@@ -45,6 +47,7 @@ public:
         : acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           socket_(io_),
           timer_(io_),
+          deadline_(io_),
           work_(asio::make_work_guard(io_)),
           bytes_(bytes),
           tls_(tls),
@@ -58,18 +61,33 @@ public:
             acceptor_.close(ignored);
             socket_.close(ignored);
             timer_.cancel();
+            deadline_.cancel();
             work_.reset();
         });
         thread_.join();
-        try {
-            done_.get();
-        } catch (const std::system_error&) {
-            // Peer failure is expected for cancellation and rejected TLS.
-        }
+        finish();
     }
 
     [[nodiscard]] tcp_client_config config() const {
         return {.host_ = "127.0.0.1", .port_ = acceptor_.local_endpoint().port(), .tls_ = {.mode_ = client_tls_mode::disabled}, .connect_timeout_ = std::chrono::seconds(2), .read_timeout_ = std::chrono::seconds(2), .write_timeout_ = std::chrono::seconds(2)};
+    }
+
+    [[nodiscard]] std::size_t received_bytes() const noexcept {
+        return received_bytes_.load();
+    }
+
+    [[nodiscard]] int tls_version() const noexcept {
+        return tls_version_.load();
+    }
+
+    void finish() {
+        if (done_.valid()) {
+            try {
+                done_.get();
+            } catch (const std::system_error&) {
+                // Peer failure is expected for cancellation and rejected TLS.
+            }
+        }
     }
 
 private:
@@ -81,11 +99,25 @@ private:
             co_return;
         }
         std::string bytes(bytes_, '\0');
-        co_await asio::async_read(stream, asio::buffer(bytes), asio::use_awaitable);
+        std::error_code error;
+        received_bytes_ = co_await asio::async_read(stream, asio::buffer(bytes),
+            asio::redirect_error(asio::use_awaitable, error));
+        if (error) {
+            throw std::system_error(error);
+        }
         co_await asio::async_write(stream, asio::buffer(bytes), asio::use_awaitable);
     }
 
     asio::awaitable<void> serve() {
+        deadline_.expires_after(std::chrono::seconds(5));
+        deadline_.async_wait([this](const std::error_code& error) {
+            if (!error) {
+                std::error_code ignored;
+                acceptor_.close(ignored);
+                socket_.close(ignored);
+                timer_.cancel();
+            }
+        });
         co_await acceptor_.async_accept(socket_, asio::use_awaitable);
         socket_.set_option(asio::socket_base::receive_buffer_size(4096));
         if (stall_handshake_) {
@@ -93,6 +125,7 @@ private:
         } else if (tls_) {
             asio::ssl::stream<asio::ip::tcp::socket&> stream(socket_, *tls_);
             co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            tls_version_ = SSL_version(stream.native_handle());
             co_await exchange(stream);
             co_await stream.async_shutdown(asio::use_awaitable);
         } else {
@@ -105,10 +138,13 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     asio::ip::tcp::socket socket_;
     asio::steady_timer timer_;
+    asio::steady_timer deadline_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
     std::size_t bytes_;
     asio::ssl::context* tls_;
     bool stall_handshake_;
+    std::atomic<std::size_t> received_bytes_{};
+    std::atomic<int> tls_version_{};
     std::future<void> done_;
     std::thread thread_;
 };
@@ -306,6 +342,75 @@ TEST(Ruvia, tcp_client_tls_and_mutual_tls_authenticate_san_and_exchange_bytes) {
         pool.start();
         pool.loop(0).start(byte_exchange(pool.loop(0), config)).get();
         pool.join();
+    }
+}
+
+TEST(Ruvia, tcp_client_tls11_exchanges_bytes_and_still_authenticates_san) {
+    for (const bool matching_san : {true, false}) {
+        ruvia::test::tls_identity server("server.example",
+            matching_san ? "DNS:server.example" : "DNS:other.example");
+        auto* context = server.context_.native_handle();
+        ASSERT_EQ(SSL_CTX_set_min_proto_version(context, TLS1_1_VERSION), 1);
+        ASSERT_EQ(SSL_CTX_set_max_proto_version(context, TLS1_1_VERSION), 1);
+        ASSERT_EQ(SSL_CTX_set_cipher_list(context, "ECDHE-RSA-AES128-SHA"), 1);
+        // Independent legacy peer only: production clients retain their shared
+        // security callback and certificate/key-strength checks.
+        SSL_CTX_set_security_level(context, 0);
+        byte_peer peer(10000, &server.context_);
+        auto config = peer.config();
+        config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
+        config.tls_.ca_file_ = server.ca_file_;
+        config.tls_.server_name_.emplace("server.example");
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        pool.start();
+        if (matching_san) {
+            pool.loop(0).start(byte_exchange(pool.loop(0), config)).get();
+            EXPECT_EQ(peer.tls_version(), TLS1_1_VERSION);
+            EXPECT_EQ(peer.received_bytes(), 10000U);
+        } else {
+            ruvia::tcp_client client(pool.loop(0), config);
+            EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
+            pool.loop(0).start(client.shutdown()).get();
+        }
+        pool.join();
+    }
+}
+
+TEST(Ruvia, tcp_client_rejects_tls10_and_h2_below_tls12_before_application_bytes) {
+    for (const int version : {TLS1_VERSION, TLS1_1_VERSION}) {
+        for (const bool h2_only : {false, true}) {
+            ruvia::test::tls_identity server("server.example");
+            auto* context = server.context_.native_handle();
+            ASSERT_EQ(SSL_CTX_set_min_proto_version(context, version), 1);
+            ASSERT_EQ(SSL_CTX_set_max_proto_version(context, version), 1);
+            ASSERT_EQ(SSL_CTX_set_cipher_list(context, "ECDHE-RSA-AES128-SHA"), 1);
+            SSL_CTX_set_security_level(context, 0);
+            SSL_CTX_set_alpn_select_cb(context, [](SSL*, const unsigned char** selected, unsigned char* size, const unsigned char*, unsigned int, void*) -> int {
+                    static constexpr unsigned char h2[] = {'h', '2'};
+                    *selected = h2;
+                    *size = sizeof(h2);
+                    return SSL_TLSEXT_ERR_OK; }, nullptr);
+            byte_peer peer(4, &server.context_);
+            auto config = peer.config();
+            config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
+            config.tls_.ca_file_ = server.ca_file_;
+            config.tls_.server_name_.emplace("server.example");
+            config.alpn_.emplace_back("h2");
+            if (!h2_only) {
+                config.alpn_.emplace_back("http/1.1");
+            }
+            ruvia::event_loop_pool pool({.loop_count_ = 1});
+            ruvia::tcp_client client(pool.loop(0), config);
+            pool.start();
+            EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
+            pool.loop(0).start(client.shutdown()).get();
+            pool.join();
+            peer.finish();
+            if (version == TLS1_1_VERSION && !h2_only) {
+                EXPECT_EQ(peer.tls_version(), TLS1_1_VERSION);
+            }
+            EXPECT_EQ(peer.received_bytes(), 0U);
+        }
     }
 }
 

@@ -219,7 +219,9 @@ void worker_connections::prepare() {
 }
 void worker_connections::prepare_listener_resources(std::size_t index) {
     auto& configured = *listeners_[index];
-    configure_http_server_tls_contexts(configured.session_, static_cast<bool>(options_.tls_client_hello_));
+    if (configured.session_.tls() && !configured.session_.tls_context_) {
+        configure_http_server_tls_contexts(configured.session_, static_cast<bool>(options_.tls_client_hello_));
+    }
 #if !defined(_WIN32)
     auto& socket = configured.socket_;
     const auto inherited =
@@ -297,6 +299,21 @@ void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] st
     http3_worker_directory* directory
 #endif
 ) {
+    prepare_listener(index, http3_index, definition, externally_accepted, {}
+#if defined(RUVIA_ENABLE_HTTP3)
+        ,
+        directory
+#endif
+    );
+}
+void worker_connections::prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
+    const http_server_listener_definition& definition, bool externally_accepted,
+    prepared_http_server_session session
+#if defined(RUVIA_ENABLE_HTTP3)
+    ,
+    http3_worker_directory* directory
+#endif
+) {
     assert(worker_.is_current());
     if (!http_server_worker_running(state_)) {
         throw std::logic_error("the worker is stopping");
@@ -304,7 +321,7 @@ void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] st
     if (listeners_.size() <= index) {
         listeners_.resize(index + 1);
     }
-    listeners_[index] = make_pmr_object<listener>(process_resource(), io_, worker_, definition, process_resource());
+    listeners_[index] = make_pmr_object<listener>(process_resource(), io_, worker_, definition, process_resource(), std::move(session));
     listeners_[index]->externally_accepted_ = externally_accepted;
     try {
 #if defined(RUVIA_ENABLE_HTTP3)

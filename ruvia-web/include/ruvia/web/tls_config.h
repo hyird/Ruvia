@@ -14,6 +14,8 @@
 #include <asio/ip/address.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/task.h"
+#include "ruvia/core/worker_handle.h"
 #include "ruvia/web/detail/callback.h"
 
 namespace ruvia {
@@ -26,9 +28,9 @@ namespace ruvia {
 // narrows through the ANSI code page. In-memory PEM serves HTTPS listeners
 // only: database, Redis and HTTP clients read identity files and reject it.
 // A non-empty password decrypts the key; its binary bytes, including
-// embedded NUL, are preserved. application::listen(),
-// replace_tls_identities() and tls_certificate_store::insert_or_assign()
-// parse once and cleanse their own password and PEM copies before returning.
+// embedded NUL, are preserved. Listener configuration stages these bytes;
+// starting/adding a listener, replacing identities and certificate-store
+// updates parse once off-worker and cleanse their owned password/PEM copies.
 struct tls_identity_config final {
     std::filesystem::path certificate_chain_file_{};
     std::filesystem::path private_key_file_{};
@@ -71,11 +73,13 @@ namespace detail {
 struct tls_certificate_store_access;
 }
 
-// Thread-safe, independently usable certificate library. A mutation parses only
-// its one identity, then atomically publishes an immutable snapshot. Failed
-// updates leave the library unchanged. Handshakes capture a snapshot before
-// calling the selector: replacing/erasing its selected ID cannot invalidate
-// that handshake. Established connections retain their OpenSSL references.
+// Thread-safe, independently usable certificate library. Writers serialize
+// without blocking workers, prepare immutable snapshots on caller's blocking
+// pool, then atomically publish on caller. Failed/rejected updates leave the
+// library unchanged. Handshakes capture a snapshot before calling the selector:
+// replacing/erasing its selected ID cannot invalidate that handshake.
+// Established connections retain their OpenSSL references. Cold tasks retain
+// the library state and own their inputs even after this object is destroyed.
 // Copies are deliberately disabled; tls_config retains shared ownership.
 class tls_certificate_store final {
 public:
@@ -84,17 +88,28 @@ public:
     tls_certificate_store(const tls_certificate_store&) = delete;
     tls_certificate_store& operator=(const tls_certificate_store&) = delete;
 
-    // ID zero is reserved and rejected. The value parameter is the library's
-    // own copy; its password and PEM bytes are cleansed even on failure.
-    void insert_or_assign(tls_certificate_id id, tls_identity_config identity);
-    [[nodiscard]] bool erase(tls_certificate_id id);
+    // Await on caller; awaiting elsewhere throws std::logic_error. The caller
+    // must have an attached blocking_pool for parsing or snapshot preparation.
+    // Rejections throw blocking_operation_rejected; loader exceptions propagate
+    // unchanged. A stopping caller cannot publish: std::runtime_error before
+    // submission/after preparation, or blocking_operation_rejected while
+    // waiting for the pool. Started tasks must be awaited/joined.
+    // ID zero throws std::invalid_argument. Before returning a cold task, the
+    // library copies secrets into process_resource storage and cleanses its
+    // incoming copy, including on failure. Discarding a cold task cleanses its
+    // retained copy; any detached preparation owns and cleanses its own input
+    // and never publishes. These operations have no per-call timeout/token.
+    [[nodiscard]] task<void> insert_or_assign(
+        worker_handle caller, tls_certificate_id id, tls_identity_config identity);
+    // Returns false for an absent ID without submitting blocking work.
+    [[nodiscard]] task<bool> erase(worker_handle caller, tls_certificate_id id);
     [[nodiscard]] bool contains(tls_certificate_id id) const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
 
 private:
     friend struct detail::tls_certificate_store_access;
     struct state;
-    std::unique_ptr<state> state_;
+    std::shared_ptr<state> state_;
 };
 
 enum class client_tls_mode : std::uint8_t {
@@ -107,8 +122,8 @@ enum class client_tls_mode : std::uint8_t {
 // authenticates the peer. Redis clients read the CA bundle and identity once,
 // when the registration is created, and share them across workers; database
 // drivers read the files when connecting and do not accept an encrypted
-// private key. Redis clients negotiate TLS 1.2 or 1.3, offer only ECDHE with
-// AEAD suites for TLS 1.2, and refuse renegotiation. Every client verifies
+// private key. Redis clients negotiate TLS 1.1, 1.2 or 1.3, offer only ECDHE
+// with AEAD suites for TLS 1.2, and refuse renegotiation. Every client verifies
 // identities by subjectAltName type (RFC 9525): DNS names match DNS-ID entries,
 // IP literals match IP entries, the subject Common Name is never used, and DNS
 // wildcards cover only a complete left-most label.
@@ -163,19 +178,20 @@ struct tls_local_address_config final {
     tls_identity_config identity_{};
 };
 
-// One HTTPS listener's identities. The listener negotiates TLS 1.2 or 1.3; its
-// TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
-// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. The paired
-// HTTP/3 service (listen_config::http3_) uses the same identities over QUIC
-// with TLS 1.3 only and ALPN h3 only. Without certificate_store_, each handshake
-// selects once, when its ClientHello is processed: an exact sni_ host, else a
+// One HTTPS listener's identities. The listener negotiates TLS 1.1, 1.2 or 1.3;
+// its TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
+// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0, with HTTP/2
+// requiring TLS 1.2 or newer. The paired HTTP/3 service (listen_config::http3_)
+// uses the same identities over QUIC with TLS 1.3 only and ALPN h3 only.
+// Without certificate_store_, each handshake selects once, when its
+// ClientHello is processed: an exact sni_ host, else a
 // wildcard sni_ host, else a local_addresses_ entry, else the primary
 // identity_. A client offering no server_name, or one matching nothing, is
 // thus still served: a product choice for single-certificate and wildcard
 // deployments, deliberately not RFC 9325 §3.7's unrecognized_name alert.
-// Sessions resume across workers of the listener, in both TLS versions only
-// under the server_name (compared ASCII case-insensitively) they were
-// established with, and across application::replace_tls_identities(). Ticket
+// Sessions resume across workers of the listener, in every supported TLS
+// version only under the server_name (compared ASCII case-insensitively) they
+// were established with, and across application::replace_tls_identities(). Ticket
 // keys rotate every two hours (the session lifetime) and are destroyed one
 // interval after their last use for new tickets. RFC 9110 §7.4: a request
 // whose target is an "https" resource is answered 421 (Misdirected Request)

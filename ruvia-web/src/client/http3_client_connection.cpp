@@ -104,7 +104,8 @@ struct http3_client_connection::tls_state final {
           ticket_host_(process_resource()) {
         initialize_quic_crypto();
         configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
-        if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
+        if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1 ||
+            SSL_CTX_set_max_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
             throw http_client_error(error_code::tls_failed, "QUIC requires TLS 1.3");
         }
         SSL_CTX_set_session_cache_mode(context_.native_handle(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);

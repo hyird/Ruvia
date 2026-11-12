@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -22,6 +23,7 @@
 #include "client/http_client_config_storage.h"
 #include "http/static_root_config_storage.h"
 #include "http/static_root_index.h"
+#include "integration/runtime_control_gate.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 
@@ -165,13 +167,11 @@ struct app_state final {
     mutable std::mutex mutex_;
     std::condition_variable lifecycle_changed_;
     app_lifecycle lifecycle_;
-    // Serializes the runtime listener controls -- replace_tls_identities(),
-    // add_listener(), remove_listener() and duplicate_listener_sockets() --
-    // each of which posts to every worker and waits. Taken before mutex_,
-    // never while holding it. The run() owner takes it only to unpublish the
-    // runtime once every worker joined, so a control that holds it may keep
-    // using the runtime it found.
-    std::mutex runtime_control_mutex_;
+    // Controls never hold a mutex across suspension. The synchronous run()
+    // owner keeps the published runtime and frozen configuration alive until
+    // every admitted control (including its blocking preparation) has joined.
+    runtime_control_gate runtime_control_gate_;
+    std::size_t runtime_controls_{};
 };
 
 inline void ensure_app_not_running(bool running, const char* message) {

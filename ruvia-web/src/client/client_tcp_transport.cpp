@@ -293,6 +293,13 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         stream_.async_handshake(asio::ssl::stream_base::client, std::move(handler));
     });
     auto result_value = finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
+    // RFC 9113 section 9.2: even a noncompliant peer selecting h2 over a
+    // legacy TLS connection must never cause HTTP/2 preface/application I/O.
+    // Enforce this here as raw TCP clients can also offer h2.
+    if (result_value.ok() && alpn() == "h2" && SSL_version(stream_.native_handle()) < TLS1_2_VERSION) {
+        result_value.status_ = client_transport_status::tls_failed;
+        result_value.error_ = make_client_tls_setup_error_code(client_tls_setup_error::protocol_failed);
+    }
     tls_close_ready_ = result_value.ok();
     co_return result_value;
 }

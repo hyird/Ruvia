@@ -364,8 +364,10 @@ public:
         return endpoint_.tls_ != nullptr;
     }
     // Resolves, connects, applies socket policies and, for TLS, prepares SNI,
-    // peer identity and the ALPN offer before the handshake. Every
-    // operation borrowing a previous connection must have finished.
+    // peer identity and the ALPN offer before the handshake. h2-only offers
+    // require TLS 1.2; a peer selecting h2 below TLS 1.2 is rejected before
+    // application I/O. Every operation borrowing a previous connection must
+    // have finished.
     [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
     // Replaces the endpoint's ALPN offer for every later connect().
     void offer_alpn(client_alpn alpn) noexcept {

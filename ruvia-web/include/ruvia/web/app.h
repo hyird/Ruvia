@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/task.h"
+#include "ruvia/core/worker_handle.h"
 #include "ruvia/web/connection_events.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/dotenv.h"
@@ -114,56 +116,53 @@ public:
     // running HTTPS listener `endpoint` names, for TLS over TCP and its
     // HTTP/3 service alike, as listen() would load them; client_certificates_
     // (the same CA path and requirement) and max_outgoing_records_ must equal
-    // the listener's. Blocking: every credential loads on the caller first,
-    // then each worker adopts the new set on its own thread, and the call
-    // returns once all have. Every handshake whose ClientHello a worker
-    // processes afterwards selects from the new set; established connections
+    // the listener's. Credentials are prepared on caller's blocking pool,
+    // then every worker adopts the new set on its own thread. Awaiting resumes
+    // on caller, including when caller is an application worker.
+    // Every handshake whose ClientHello a worker processes after completion
+    // selects from the new set; established connections
     // and handshakes past their ClientHello keep their identity. Session
     // caches and ticket keys stay, so sessions keep resuming. The listener
     // keeps the new set for later run()s. An unknown endpoint, one without
     // HTTPS, a changed policy or an invalid setting throws
     // std::invalid_argument, and unreadable or mismatched credentials throw
     // as from listen(), all before anything changes. Throws std::logic_error
-    // unless the app is running, or when called on a business worker thread,
-    // which could not adopt while waiting. When the app starts stopping
+    // unless the app is running. When the app starts stopping
     // before every worker accepted the set, std::logic_error reports that
     // the replacement did not happen: the listener keeps its previous set for
     // later run()s, and workers that already adopted the new one serve it only
     // to handshakes racing the stop, which closes them. Concurrent calls take
-    // effect in the order they publish. config's copies of passwords and
-    // in-memory PEM text are cleansed as by listen().
-    void replace_tls_identities(const listener_endpoint& endpoint, tls_config config);
+    // effect in the order they publish. config's password and PEM copies are
+    // owned immediately and cleansed on completion or destruction of the task.
+    [[nodiscard]] task<void> replace_tls_identities(
+        worker_handle caller, const listener_endpoint& endpoint, tls_config config);
     // Adds config's listeners to the running app, validated and loaded as
     // listen() would (an endpoint a listener already serves throws
-    // std::invalid_argument), with any inherited_sockets_. Blocking: every
-    // worker prepares them on its own thread -- binds or adopts its sockets,
-    // builds TLS contexts and the HTTP/3 endpoint -- and only once all did
-    // does each start accepting; the call returns when every worker accepts.
+    // std::invalid_argument), with any inherited_sockets_. Preparation uses
+    // caller's blocking pool; owner threads bind or adopt prepared sockets,
+    // and only once all succeeded does each start accepting. Awaiting joins
+    // every accepted control and resumes on caller.
     // When any worker fails, every worker discards them, closing their
     // sockets, and the first failure is rethrown while the app serves as
     // before. The app keeps them for later run()s. Throws std::logic_error
-    // unless the app is running, or when called on a business worker thread,
-    // which could not prepare while waiting; also when the app starts stopping
+    // unless the app is running, or when it starts stopping
     // before every worker accepted, and then they are not kept. config's
-    // secrets are cleansed as by listen().
-    void add_listener(listen_config config);
+    // secrets are owned immediately and cleansed when the task completes or is dropped.
+    [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config);
     // Removes the running TCP service `endpoint` names (as for
-    // replace_tls_identities()), with its HTTP/3 service. Blocking: returns
+    // replace_tls_identities()), with its HTTP/3 service. Awaiting completes
     // once every worker stopped admitting it, closed its TCP sockets and its
     // accept loop exited. Established connections are served until they end
     // or the app stops; an HTTP/3 service keeps receiving for its established
     // QUIC connections, ignoring new ones, and its UDP sockets close with the
     // last of them. Later run()s no longer serve it. An unknown endpoint throws
-    // std::invalid_argument; the thread and lifecycle rules of add_listener()
+    // std::invalid_argument; the lifecycle rules of add_listener()
     // apply, and a removal the stop preempted keeps the listener for later
-    // run()s. Concurrent add_listener(), remove_listener(),
-    // replace_tls_identities() and duplicate_listener_sockets() calls take
-    // effect one at a time.
-    void remove_listener(const listener_endpoint& endpoint);
-    // Blocking caller-thread control. Closes every protocol stream of the
-    // connection; false means the ID is no longer live. Same lifecycle and
-    // worker self-wait restrictions as remove_listener().
-    [[nodiscard]] bool close_connection(std::uint64_t connection_id);
+    // run()s. Concurrent runtime controls take effect one at a time.
+    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint);
+    // Closes every protocol stream of the connection; false means the ID is
+    // no longer live. Application workers may await this control too.
+    [[nodiscard]] task<bool> close_connection(worker_handle caller, std::uint64_t connection_id);
 #ifndef _WIN32
     // Duplicates (dup()) every worker's socket of the running TCP service
     // `endpoint` names, and of its HTTP/3 service, into http_ or https_ and
@@ -171,10 +170,11 @@ public:
     // service passes as listen_config::inherited_sockets_. The duplicates are
     // not close-on-exec and belong to the caller; the app keeps serving on its
     // own sockets. QUIC connections do not move with the UDP sockets. An
-    // unknown endpoint throws std::invalid_argument; the thread and lifecycle
+    // unknown endpoint throws std::invalid_argument; the lifecycle
     // rules of add_listener() apply. POSIX only: on Windows the acceptor owns
     // a single exclusive socket per service.
-    [[nodiscard]] listener_sockets duplicate_listener_sockets(const listener_endpoint& endpoint) const;
+    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(
+        worker_handle caller, const listener_endpoint& endpoint) const;
 #endif
     // Disabled by default. A config enables response coding and precompressed
     // static variant negotiation; nullptr disables both.
@@ -355,17 +355,13 @@ private:
     application& use_middleware(detail::owned_middleware_descriptor descriptor);
     application& use_worker_state_definition(detail::worker_state_definition definition);
 
-    struct state_deleter_type final {
-        void operator()(detail::app_state* state) const noexcept;
-    };
-
     application();
     ~application();
 
     application(const application&) = delete;
     application& operator=(const application&) = delete;
 
-    std::unique_ptr<detail::app_state, state_deleter_type> state_;
+    std::shared_ptr<detail::app_state> state_;
 };
 
 application& app();

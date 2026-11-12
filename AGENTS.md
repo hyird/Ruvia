@@ -144,7 +144,7 @@ sequenceDiagram
     participant M as 中间件链 (三态 single-shot next)
     participant H as Controller / 业务与数据层
 
-    C->>IO: 原始字节流 (TLS 1.2/1.3 SAN 强校验)
+    C->>IO: 原始字节流 (TCP TLS / QUIC，SAN 强校验)
     IO->>P: 借用输入视图单遍解析
     P-->>IO: 纯值解析结果与协议计划 (歧义 Fail-Closed / 421 / 414 / 431)
     IO->>M: 构造 Context (借用请求 Arena)

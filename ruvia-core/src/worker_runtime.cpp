@@ -9,10 +9,14 @@
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <utility>
 
 #include <asio/config.hpp>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
@@ -336,10 +340,28 @@ public:
         }
         stop_.request_stop();
         abort_phases();
-        const std::lock_guard lock(mutex_);
-        stop_dispatching_ = false;
-        stop_dispatch_thread_ = {};
+#if defined(_WIN32)
+        thread_join_operation* waiters;
+#endif
+        {
+            const std::lock_guard lock(mutex_);
+            stop_dispatching_ = false;
+            stop_dispatch_thread_ = {};
+#if defined(_WIN32)
+            waiters = std::exchange(thread_waiters_, nullptr);
+#endif
+        }
         condition_.notify_all();
+#if defined(_WIN32)
+        while (waiters) {
+            auto* current = waiters;
+            waiters = current->next_;
+            current->next_ = nullptr;
+            auto caller = current->caller_;
+            const auto continuation = std::exchange(current->continuation_, {});
+            caller.defer_resume(continuation);
+        }
+#endif
     }
 
     [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept {
@@ -378,6 +400,36 @@ public:
         abort_phases();
         lifecycle_.complete_stop();
     }
+
+#if defined(_WIN32)
+    std::uintptr_t prepare_thread_join() {
+        if (context_.handle().is_current()) {
+            throw std::logic_error("cannot join a worker runtime from its owner");
+        }
+        request_stop();
+        const std::lock_guard lock(mutex_);
+        if (joining_ || stop_dispatching_) {
+            throw std::logic_error("cannot prepare a worker thread wait while joining or dispatching its stop hooks");
+        }
+        if (joined_) {
+            return 0;
+        }
+        if (!thread_.joinable()) {
+            thread_ = std::thread([this] { run(false); });
+        }
+        HANDLE duplicate{};
+        if (!::DuplicateHandle(::GetCurrentProcess(), thread_.native_handle(),
+                ::GetCurrentProcess(), &duplicate, SYNCHRONIZE, FALSE, 0)) {
+            const auto error = ::GetLastError();
+            if (!std::in_range<int>(error)) {
+                throw std::runtime_error("worker thread handle duplication returned an out-of-range system error");
+            }
+            throw std::system_error(static_cast<int>(error), std::system_category(),
+                "failed to duplicate worker thread wait handle");
+        }
+        return reinterpret_cast<std::uintptr_t>(duplicate);
+    }
+#endif
 
     void join() {
         if (context_.handle().is_current()) {
@@ -442,6 +494,9 @@ public:
     bool start_called_{};
     bool stop_dispatching_{};
     std::thread::id stop_dispatch_thread_{};
+#if defined(_WIN32)
+    thread_join_operation* thread_waiters_{};
+#endif
     bool joining_{};
     bool joined_{};
     worker_group* group_{nullptr};
@@ -520,6 +575,54 @@ void worker_runtime::finalize() noexcept {
 void worker_runtime::join() {
     impl_->join();
 }
+#if defined(_WIN32)
+worker_runtime::thread_join_operation::thread_join_operation(worker_runtime& owner, worker_handle caller) noexcept
+    : owner_(&owner),
+      caller_(std::move(caller)) {}
+
+worker_runtime::thread_join_operation::~thread_join_operation() {
+    if (started_ && !resumed_) {
+        std::terminate();
+    }
+}
+
+bool worker_runtime::thread_join_operation::await_ready() {
+    if (!caller_.is_current()) {
+        throw std::logic_error("worker thread join preparation must run on its caller worker");
+    }
+    if (owner_->handle().is_current()) {
+        throw std::logic_error("cannot join a worker runtime from its owner");
+    }
+    owner_->request_stop();
+    const std::lock_guard lock(owner_->impl_->mutex_);
+    if (owner_->impl_->joining_ || (owner_->impl_->stop_dispatching_ &&
+                                       owner_->impl_->stop_dispatch_thread_ == std::this_thread::get_id())) {
+        throw std::logic_error("cannot prepare a worker thread wait during join or its own stop dispatch");
+    }
+    started_ = true;
+    return !owner_->impl_->stop_dispatching_;
+}
+
+bool worker_runtime::thread_join_operation::await_suspend(std::coroutine_handle<> continuation) {
+    const std::lock_guard lock(owner_->impl_->mutex_);
+    if (!owner_->impl_->stop_dispatching_) {
+        return false;
+    }
+    continuation_ = continuation;
+    next_ = owner_->impl_->thread_waiters_;
+    owner_->impl_->thread_waiters_ = this;
+    return true;
+}
+
+std::uintptr_t worker_runtime::thread_join_operation::await_resume() {
+    resumed_ = true;
+    return owner_->impl_->prepare_thread_join();
+}
+
+worker_runtime::thread_join_operation worker_runtime::prepare_thread_join(worker_handle caller) & {
+    return thread_join_operation(*this, std::move(caller));
+}
+#endif
 
 std::exception_ptr worker_runtime::failure() noexcept {
     const std::lock_guard lock(impl_->mutex_);

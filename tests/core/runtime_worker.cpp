@@ -28,6 +28,9 @@
 #include <asio/ip/udp.hpp>
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
@@ -37,6 +40,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_cancellation.h"
+#include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
 
 #include "memory_resource_fixture.h"
@@ -2804,3 +2808,51 @@ TEST(Ruvia, WorkerRootTaskDeliversConstResult) {
 TEST(Ruvia, WorkerDrainingPostCanScheduleDeferCleanupDuringStop) {
     EXPECT_TRUE(test_draining_post_can_schedule_defer_cleanup_during_stop());
 }
+
+#if defined(_WIN32)
+TEST(Ruvia, WorkerNativeThreadWaitDoesNotWaitForRunningOrColdCleanup) {
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    pool.start();
+    const auto caller = pool.loop(0);
+    for (const bool started : {false, true}) {
+        SCOPED_TRACE(started);
+        ruvia::worker_runtime runtime;
+        std::promise<void> entered;
+        auto entered_future = entered.get_future();
+        std::promise<void> release;
+        const auto released = release.get_future().share();
+        struct release_shutdown final {
+            std::promise<void>* release_;
+            ~release_shutdown() {
+                if (release_) {
+                    release_->set_value();
+                }
+            }
+        } unblock{&release};
+        runtime.configure({.startup_ = [&] { runtime.mark_ready(); },
+            .shutdown_ = [&] {
+                entered.set_value();
+                (void)released.wait_for(std::chrono::seconds(10)); }});
+        if (started) {
+            ASSERT_TRUE(runtime.start());
+            ASSERT_TRUE(runtime.wait_until_ready());
+        }
+        const auto prepare = [&]() -> ruvia::task<std::uintptr_t> {
+            co_return co_await runtime.prepare_thread_join(caller.handle());
+        };
+        const auto native = caller.start(prepare()).get();
+        ASSERT_NE(native, std::uintptr_t{0});
+        const std::unique_ptr<void, decltype(&::CloseHandle)> handle(
+            reinterpret_cast<HANDLE>(native), &::CloseHandle);
+        ASSERT_EQ(entered_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        EXPECT_EQ(::WaitForSingleObject(handle.get(), 0), WAIT_TIMEOUT);
+        release.set_value();
+        unblock.release_ = nullptr;
+        ASSERT_EQ(::WaitForSingleObject(handle.get(), 5000), WAIT_OBJECT_0);
+        runtime.join();
+        EXPECT_EQ(runtime.state(), ruvia::worker_runtime_state::stopped);
+        EXPECT_EQ(caller.start(prepare()).get(), std::uintptr_t{0});
+    }
+    pool.join();
+}
+#endif

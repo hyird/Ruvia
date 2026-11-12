@@ -19,6 +19,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
 #include <asio/socket_base.hpp>
+#include <asio/windows/object_handle.hpp>
 #include <asio/windows/overlapped_ptr.hpp>
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
@@ -323,7 +324,7 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
                                              (void)runtime_.fail(failure);
                                          }
                                      })); },
-        .serve_ = [this] { serve_on_context(); },
+        .serve_ = [this] { serve_on_context(); complete_phase(false); },
         .stop_admission_ = [this] {
             stopping_ = true;
             close_admission();
@@ -337,7 +338,17 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
 #endif
             runtime_.finalize(); },
         .finalize_ = [this] { finalize_signal_.notify(); },
-        .failure_ = [this](std::exception_ptr failure) noexcept { failure_sink_.notify(failure); },
+        .failure_ = [this](std::exception_ptr failure) noexcept {
+            complete_phase(true, failure);
+            complete_phase(false, failure);
+            failure_sink_.notify(failure); },
+        .shutdown_ = [this] {
+            try { throw std::logic_error("HTTP server acceptor stopped before its phase completed"); }
+            catch (...) {
+                const auto failure = std::current_exception();
+                complete_phase(true, failure);
+                complete_phase(false, failure);
+            } },
     });
 }
 
@@ -369,6 +380,90 @@ bool windows_acceptor::serve() {
     return runtime_.wait_until_serving();
 }
 
+void windows_acceptor::complete_phase(bool startup, std::exception_ptr failure) noexcept {
+    std::optional<runtime_control_completion::receipt> receipt;
+    {
+        std::lock_guard lock(phase_mutex_);
+        auto& pending = startup ? startup_receipt_ : serve_receipt_;
+        receipt.swap(pending);
+    }
+    if (receipt) {
+        receipt->complete(std::move(failure));
+    }
+}
+
+task<void> windows_acceptor::start(worker_handle caller) {
+    runtime_control_completion completion(caller);
+    {
+        std::lock_guard lock(phase_mutex_);
+        if (startup_receipt_) {
+            throw std::logic_error("HTTP server acceptor is already starting");
+        }
+        startup_receipt_.emplace(completion.make_receipt());
+    }
+    try {
+        for (const auto& slot : workers_) {
+            if (!slot->target_.adopt_) {
+                throw std::logic_error("Windows acceptor worker was not bound");
+            }
+        }
+        if (!runtime_.start()) {
+            throw std::logic_error("HTTP server acceptor is stopping");
+        }
+    } catch (...) {
+        complete_phase(true, std::current_exception());
+    }
+    co_await completion.wait();
+    if (const auto failure = completion.failure()) {
+        std::rethrow_exception(failure);
+    }
+}
+
+task<void> windows_acceptor::serve(worker_handle caller) {
+    runtime_control_completion completion(caller);
+    {
+        std::lock_guard lock(phase_mutex_);
+        if (serve_receipt_) {
+            throw std::logic_error("HTTP server acceptor is already opening");
+        }
+        serve_receipt_.emplace(completion.make_receipt());
+    }
+    try {
+        runtime_.request_serve();
+        if (runtime_.state() != worker_runtime_state::running) {
+            throw std::logic_error("HTTP server acceptor is stopping");
+        }
+    } catch (...) {
+        complete_phase(false, std::current_exception());
+    }
+    co_await completion.wait();
+    if (const auto failure = completion.failure()) {
+        std::rethrow_exception(failure);
+    }
+}
+
+task<void> windows_acceptor::join(worker_handle caller, asio::io_context& caller_io) {
+    if (!caller.is_current()) {
+        throw std::logic_error("acceptor join must run on its caller worker");
+    }
+    const auto native = co_await runtime_.prepare_thread_join(caller);
+    if (native != 0) {
+        std::unique_ptr<void, decltype(&::CloseHandle)> native_owner(reinterpret_cast<HANDLE>(native), &::CloseHandle);
+        asio::windows::object_handle thread(caller_io);
+        std::error_code error;
+        thread.assign(native_owner.get(), error);
+        if (error) {
+            throw std::system_error(error, "failed to assign acceptor thread wait handle");
+        }
+        (void)native_owner.release();
+        const auto waited = co_await ruvia::async_asio([&thread](auto handler) { thread.async_wait(std::move(handler)); });
+        if (waited.failed()) {
+            throw std::system_error(waited.error_code(), "failed to await acceptor thread exit");
+        }
+    }
+    runtime_.join();
+}
+
 void windows_acceptor::stop_admission() noexcept {
     // A refused control means the acceptor is already stopping, which closes
     // admission itself.
@@ -394,6 +489,7 @@ task<void> windows_acceptor::run() {
             open_listeners();
             // Ignored once stopping: core has already aborted the barrier.
             runtime_.mark_ready();
+            complete_phase(true);
         }
     } catch (...) {
         if (!stopping_) {

@@ -21,6 +21,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
@@ -624,7 +625,8 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
 namespace standalone_websocket_test {
 void exercise_protocol(ruvia::http_client_protocol protocol) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
     ruvia::test::tcp_port_reservation plain(io), secure(io);
     ruvia::test::udp_port_reservation udp(io);
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");

@@ -13,8 +13,7 @@
 
 namespace ruvia::detail {
 
-app_state::app_state()
-    : runtime_(nullptr, pmr_object_deleter<app_runtime_graph>{process_resource()}) {
+app_state::app_state() {
     // listen() keeps loaded TLS credentials here; initializing OpenSSL first registers its atexit cleanup before the app singleton completes, so the app is destroyed first.
     if (OPENSSL_init_ssl(0, nullptr) != 1) {
         throw std::runtime_error("failed to initialize OpenSSL");
@@ -33,13 +32,10 @@ application& app() {
 }
 
 application::application()
-    : state_(construct_pmr_object<detail::app_state>(process_resource())) {}
+    : state_(std::allocate_shared<detail::app_state>(
+          std::pmr::polymorphic_allocator<detail::app_state>(process_resource()))) {}
 
 application::~application() = default;
-
-void application::state_deleter_type::operator()(detail::app_state* state_value) const noexcept {
-    destroy_pmr_object(state_value, process_resource());
-}
 
 const env& application::env() const noexcept {
     return state_->env_;

@@ -31,11 +31,11 @@ int main() {
 | --- | --- |
 | `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限与请求 Arena 参数 |
 | `application& listen(listen_config config)` | 注册监听端点（支持可多次调用监听多个地址/端口，重复端点会报错拒绝；TLS 证书在调用时立即加载校验；`inherited_sockets_` 接管已绑定的 socket） |
-| `void replace_tls_identities(const listener_endpoint& endpoint, tls_config config)` | 运行中阻塞替换某个 HTTPS 监听器（及其 HTTP/3 服务）的身份集合，之后的新握手使用新集合，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
-| `void add_listener(listen_config config)` | 运行中阻塞新增监听器：全部 worker 准备成功后统一开放接入，任一失败全部回滚，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
-| `void remove_listener(const listener_endpoint& endpoint)` | 运行中阻塞移除一个 TCP 服务（含配对 HTTP/3）：停止接入、关闭监听 socket，已建立连接继续服务 |
-| `listener_sockets duplicate_listener_sockets(const listener_endpoint& endpoint) const` | 仅 POSIX：复制运行中服务全部 worker 的监听 socket（含 HTTP/3），供 exec 热升级交接 |
-| `bool close_connection(std::uint64_t id)` | 运行中按 ID 请求断开整条连接，线程与返回值契约见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
+| `task<void> replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config)` | 异步替换 HTTPS 监听器及其 HTTP/3 服务的身份集合，之后的新握手使用新集合，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
+| `task<void> add_listener(worker_handle caller, listen_config config)` | 异步新增监听器：全部 worker 准备成功后统一开放接入，任一失败全部回滚，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
+| `task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint)` | 异步停止一个 TCP 服务及配对 HTTP/3 的新准入；已建立连接继续服务 |
+| `task<listener_sockets> duplicate_listener_sockets(worker_handle caller, const listener_endpoint& endpoint) const` | 仅 POSIX：异步复制全部 worker 的监听 socket，供 exec 热升级交接 |
+| `task<bool> close_connection(worker_handle caller, std::uint64_t id)` | 异步按 ID 请求断开整条连接，返回值契约见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `on_connection_admission(...)` / `on_connection_open(...)` / `on_connection_close(...)` | 配置传输准入、生命周期与连接附加状态，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `on_http2_frame(...)` / `on_http2_headers(...)` | 启用结构化帧与 HPACK 字段观察；要求 `RUVIA_ENABLE_HTTP2`，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `template <middleware M, typename... Args> application& use(Args&&... args)` | 注册全局中间件（每个 worker 独立构造一份实例） |
@@ -166,39 +166,42 @@ ruvia::app().listen({
 - **迁移与 CID 容量**：依赖已升级至包含[备用 CID 退休修复](https://github.com/ngtcp2/ngtcp2/commit/a359eba92519ebed1339e1efbd309fc00c65a1d7)的 ngtcp2 1.26.0。默认 `active_connection_id_limit_ = 4`，为当前路径、旧路径探测和下一候选路径保留容量；这是实现选择，RFC 9000 §18.2 的最低合法值仍为 2。出站客户端在 CID 暂时不足时等待协议补充，等待与路径验证共用 `connect_timeout_` 整体截止期，不通过重连或重放请求伪装迁移成功。真实协议错误仍关闭连接。
 - **Retry 与无状态重置**：`http3_retry_` 默认关闭；显式启用后对未携带 Token 的客户端 Initial 发送 QUIC Retry（RFC 9000 §8.1.2）完成无状态地址验证，伪造或过期的 Retry Token 以无状态 `CONNECTION_CLOSE(INVALID_TOKEN)` 拒绝。指向本 worker 已退役服务端连接 ID 的短包头数据报在关闭期结束后按速率限制发送严格小于触发包长的 Stateless Reset（RFC 9000 §10.3）。HTTP/3 不提供 Server Push（nghttp3 不实现 HTTP/3 推送）与 HTTP/2 专属的 `ALTSVC` 帧（RFC 7838 §4 仅定义于 HTTP/2；HTTP/3 使用 `Alt-Svc` 响应头）。`:authority` 与 `Host` 不一致等请求语义错误以 `H3_MESSAGE_ERROR` 只重置该流；nghttp3 在帧层识别的格式错误按 RFC 9114 §8 允许的方式升级为连接错误。`100 Continue` 与 `103 Early Hints` 等 1xx 照常发送。
 - HTTP/3 的超时与连接级排空复用 HTTP/2 的语义：`idle_timeout_` 同时作为 QUIC `max_idle_timeout`（未设置则不启用），握手受 `request_header_timeout_` / `header_completion_timeout_` 约束；请求体超过 `request_body_timeout_` / `body_completion_timeout_`、或对端超过 `write_timeout_` 未确认输出的流以 `H3_REQUEST_CANCELLED` 单独重置；达到 `max_requests_per_connection_` 或连接超时时先发 shutdown-notice GOAWAY，经 `min(1 s, 3×PTO)` 后发最终 GOAWAY，所有已接纳流结束后以 `H3_NO_ERROR` 关闭连接；`stop()` 则立即以 `H3_NO_ERROR` 关闭。
-- 服务端与数据库、Redis 客户端共用 `ruvia/web/tls_config.h` 中的 `tls_identity_config`（证书链、私钥与可选口令）。每个身份恰好使用一种来源：两个 PEM 文件（`certificate_chain_file_` / `private_key_file_`），或内存 PEM 文本（`certificate_chain_pem_` 为叶证书后接其链，`private_key_pem_` 为可加密私钥）；混用或只给一半抛出 `std::invalid_argument`。路径为 `std::filesystem::path`，不得为空或含 NUL，以 UTF-8 交给 OpenSSL 与数据库驱动，Windows 原生路径不经过 ANSI 代码页。内存 PEM 仅供 HTTPS 监听器使用，数据库、Redis 与 HTTP 客户端读取身份文件并拒绝它。`listen()`、`add_listener()` 与 `replace_tls_identities()` 解析一次后清除自身持有的口令与内存 PEM 副本。
+- 服务端与数据库、Redis 客户端共用 `ruvia/web/tls_config.h` 中的 `tls_identity_config`（证书链、私钥与可选口令）。每个身份恰好使用一种来源：两个 PEM 文件（`certificate_chain_file_` / `private_key_file_`），或内存 PEM 文本（`certificate_chain_pem_` 为叶证书后接其链，`private_key_pem_` 为可加密私钥）；混用或只给一半抛出 `std::invalid_argument`。路径为 `std::filesystem::path`，不得为空或含 NUL，以 UTF-8 交给 OpenSSL 与数据库驱动，Windows 原生路径不经过 ANSI 代码页。内存 PEM 仅供 HTTPS 监听器使用，数据库、Redis 与 HTTP 客户端读取身份文件并拒绝它。凭据解析后清除操作自身持有的口令与内存 PEM 副本；`application::listen()` 在启动前同步解析，独立宿主的 `listen()` 只暂存，解析推迟至异步启动。
 - `tls_.client_certificates_.requirement_` 支持 `tls_client_certificate_requirement::optional` 或 `required`（双向 TLS / mTLS）。先用 `const auto connection = c.conn();` 保存元数据，再通过 `connection.tls()->client_certificate_subject()` 读取 optional 主题：无值表示未出示证书，有值空串表示已验证但 Subject DN 为空的证书（[RFC 5280 §4.1.2.6](https://www.rfc-editor.org/rfc/rfc5280.html#section-4.1.2.6)）；不能用文本是否为空判断证书存在性。主题提取失败终止该连接并报告，不降级为未认证身份。
 - **固定身份选择**：未设置 `certificate_store_` 时，每次握手在处理 ClientHello 时选定一次身份并安装到该连接，优先级为精确 `sni_` 主机名 > 通配 `sni_` 主机名 > `local_addresses_` > 主身份 `identity_`；HelloRetryRequest 之后的第二个 ClientHello 沿用首次所选。
   - **SNI**：`sni_` 按 SNI 主机名（ASCII 不区分大小写）匹配；`host_` 可写作 `*.example.com`，通配符只能是完整的最左标签并恰好覆盖一个标签（RFC 6125 §6.4.3：匹配 `a.example.com`，不匹配 `example.com` 与 `a.b.example.com`）。
   - **本端地址**：`local_addresses_` 按连接到达的本端地址选择身份，`address_` 须为非未指定的数字 IP（IPv4 映射 IPv6 地址等同其 IPv4 形式），用于客户端以 IP 字面量连接的部署（RFC 6066 禁止在 SNI 中携带 IP）。TCP 与 HTTP/3 都使用实际目的地址，支持通配监听；QUIC 跨 worker 转交保留目的地址与接口，回复使用对应源地址。
   - **兜底**：客户端未发送 server_name 或名称与地址都不匹配时使用主证书完成握手。这是为单证书与通配符证书部署做出的产品选择，不发送 RFC 9325 §3.7 建议的 `unrecognized_name` 告警。
-- **运行期替换**：`app().replace_tls_identities({.address_ = "0.0.0.0", .port_ = 8443}, new_tls)` 在应用运行时替换该 HTTPS 端点及其 HTTP/3 服务的固定身份集合，或证书库与选择策略。`ruvia::listener_endpoint` 以 `address_`（默认 `"0.0.0.0"`，按 `listen_config::address_` 同一规则规范化）与 `port_`（该监听配置的 `http_` 或 `https_` 端口）指名一个 TCP 服务，HTTP/3 服务经其 HTTPS 端点指名。
-  - **校验在前**：新集合先在调用线程完整校验并加载；未知端点、非 HTTPS 端点、非法设置，或 `client_certificates_`（同一 CA 路径与要求）与 `max_outgoing_records_` 与现值不同，抛出 `std::invalid_argument`；文件不可读、PEM 无效或证书私钥不匹配与 `listen()` 一样抛出系统错误。这些情况下现有身份照常服务。
-  - **阻塞发布**：随后每个业务 worker 在自身线程上采用新集合，全部完成后才返回。此后由 worker 处理 ClientHello 的握手都从新集合选择；已建立的连接与已越过 ClientHello 的握手保留原身份。每 worker 每协议族只有一个持久 `SSL_CTX`，会话缓存与票据密钥不受影响，会话照常跨替换恢复（仍只在原 SNI 名称下）。
-  - **线程与生命周期**：应用未处于运行状态（含启动钩子与停机期间）或在业务 worker 线程上调用（无法等待自身）抛出 `std::logic_error`。若发布时应用已开始停机，同样抛出 `std::logic_error` 且视为未替换：监听器保留原集合供下次 `run()` 使用，已采用新集合的 worker 只可能把它用于与停机竞争的握手，这些连接随停机关闭。
+- **运行期替换**：`co_await app().replace_tls_identities(caller, {.address_ = "0.0.0.0", .port_ = 8443}, new_tls)` 替换该 HTTPS 端点及其 HTTP/3 服务的固定身份集合，或证书库与选择策略。`ruvia::listener_endpoint` 以 `address_`（默认 `"0.0.0.0"`，按 `listen_config::address_` 同一规则规范化）与 `port_`（该监听配置的 `http_` 或 `https_` 端口）指名一个 TCP 服务，HTTP/3 服务经其 HTTPS 端点指名。
+  - **校验在前**：候选凭据的文件读取、PEM 与 CA 加载、TLS 上下文准备卸载至 `caller` 借用的有界 `blocking_pool`，不阻塞事件循环。未知端点、非 HTTPS 端点、非法设置，或 `client_certificates_` 与 `max_outgoing_records_` 与现值不同，抛出 `std::invalid_argument`；文件不可读、PEM 无效或证书私钥不匹配抛出系统错误。失败保留原集合。
+  - **异步发布**：每个业务 worker 在自身线程采用新集合，调用协程挂起至全部完成。此后的 ClientHello 使用新集合；既有连接与已越过 ClientHello 的握手保留原身份。每 worker 每协议族的持久 `SSL_CTX`、会话缓存与票据密钥不替换，会话仍只在原 SNI 名称下恢复。
+  - **线程与生命周期**：在显式 `caller` 所属 worker 上 `co_await`，允许业务 worker 发起；应用未运行（含启动钩子与停机期间）抛出 `std::logic_error`。与停机竞争时等待已投递控制及其负载退出，再传播失败，不提前销毁运行时；未成功提交的监听定义保留原集合。已采用新集合的 worker 只可能将其用于与停机竞争的握手，这些连接随停机关闭。
   - **持久化**：成功替换同时更新监听器定义，应用停止后再次 `run()` 继续使用新集合；停止期间仍用 `listen()` 整体替换监听配置。并发调用按发布顺序生效。
-- 协议策略固定：仅 TLS 1.2 / 1.3；TLS 1.2 只协商 ECDHE + AEAD 密码套件（AES-128-GCM 优先），由服务器偏好决定；拒绝重协商；`routes` 与 `request_stream` 监听器的 ALPN 依次选择 `h2`、`http/1.1`、`http/1.0`，三者都未提供时以 `no_application_protocol` 告警失败（HTTP/3 的 QUIC 握手只接受 TLS 1.3 与 `h3`）。
+- **TCP TLS 版本**：入站服务、出站 HTTP/原始 TCP、Redis 与数据库最低为 TLS 1.1，仍拒绝 TLS 1.0、压缩与重协商。TLS 1.1 仅使用 ECDHE + AES-128/256-CBC-SHA；TLS 1.2 保持 ECDHE + AEAD（AES-128-GCM 优先），TLS 1.3 使用 OpenSSL 默认 AEAD 套件。
+- **旧版兼容例外**：TLS 1.1 已被 [RFC 8996 §3](https://www.rfc-editor.org/rfc/rfc8996.html#section-3) 禁止协商，此处按明确兼容需求保留，并非现代安全基线。仅豁免该版本与其必需的旧握手签名；证书链、SAN、密钥强度及 TLS 1.2/1.3 的检查仍委托原 [OpenSSL 安全回调](https://docs.openssl.org/3.0/man3/SSL_CTX_set_security_level/)，不全局设置 `SECLEVEL=0`。
+- **HTTP 协议下限**：HTTP/2 至少 TLS 1.2，HTTP/3 / QUIC 仅 TLS 1.3。`routes` 与 `request_stream` 的 ALPN 按 `h2`、`http/1.1`、`http/1.0` 选择，TLS 1.1 跳过 `h2`；没有共同协议时以 `no_application_protocol` 告警失败。原始连接的自定义 ALPN 同样不能在 TLS 1.1 选择 `h2`。
 - `tls_.alpn_` 只用于 `listener_dispatch::connection` 的 HTTPS 服务：按服务器偏好顺序提供的 ALPN 协议名（每个 1..255 字节，为空时依次为 `h2`、`http/1.1`）；客户端提供的 ALPN 均不在列表中时以 `no_application_protocol` 告警失败（RFC 7301 §3.2），未提供 ALPN 时握手照常完成且不选协议。`routes` 与 `request_stream` 监听器设置非空列表、名称长度越界或无 `https_` 时 `listen()` 抛 `std::invalid_argument`。
 - `tls_.max_outgoing_records_`（默认 `2^23`，范围 `1..2^23`）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限。
-- 会话可在同一监听器的任意 worker 上恢复；TLS 1.2 与 TLS 1.3 会话都只在与建立时相同的 SNI 名称（ASCII 不区分大小写）下恢复（RFC 6066 §3；RFC 9846 §4.6.1 允许拒绝不同 SNI 的 PSK），否则完整握手。会话票据密钥每 2 小时（会话有效期）轮换一次，旧密钥再保留一个周期用于解密，随后销毁（RFC 9325 §3.4）；某个 worker 复制密钥失败时约 5 秒后重试，而不是等到下一次轮换。
+- 会话可在同一监听器的任意 worker 上恢复；TLS 1.1、1.2 与 1.3 会话都只在与建立时相同的 SNI 名称（ASCII 不区分大小写）下恢复（RFC 6066 §3；RFC 9846 §4.6.1 允许拒绝不同 SNI 的 PSK），否则完整握手。会话票据密钥每 2 小时（会话有效期）轮换一次，旧密钥再保留一个周期用于解密，随后销毁（RFC 9325 §3.4）；某个 worker 复制密钥失败时约 5 秒后重试，而不是等到下一次轮换。
 - 目标源校验（RFC 9110 §7.4 / §15.5.20）：目标为 `https` 资源的请求（HTTPS 连接上的 origin-form / asterisk-form，或显式 `https` 绝对形式目标 / HTTP/2 `:scheme https`），只有当本连接握手出示的证书在 subjectAltName 的 DNS 或 IP 条目中覆盖目标主机（`:authority`，否则 `Host`；通配符只匹配完整的最左标签，不使用主题 CN）时才处理，否则回 `421 Misdirected Request`；HTTP/2 只拒绝该流，连接保留。证书匹配而非 SNI 匹配，因此证书覆盖的其他名称仍可复用连接（RFC 9113 §9.1.1）。明文监听器收到 `https` 目标同样回 `421`。`http` 目标、CONNECT 隧道目标与空 authority 的请求不受影响；来自 `trusted_proxy_config` 网段的对端豁免两项检查。每个连接缓存最近 4 个主机的判定，不对每个请求重复扫描证书。
 - **监听 socket 接管（`inherited_sockets_`）**：`ruvia::listener_sockets` 以 `http_`、`https_`（监听中的 TCP socket）与 `http3_`（已绑定的 UDP socket）三组 `ruvia::native_socket`（POSIX 文件描述符，Windows `SOCKET`）代替绑定对应服务；空向量照常绑定。
   - **同端口句柄**：明文与 TLS 共用端口时，唯一 TCP 句柄组放在 `https_`；`http_` 必须为空，导出也使用 `https_`。
   - **校验**：TCP 句柄须处于监听（`SO_ACCEPTCONN`），UDP 句柄须已绑定，且本端地址族、地址与端口都等于本配置（规范化后比较，通配地址只匹配通配绑定）；非空向量要求其服务已启用。不符或同一句柄出现两次抛出 `std::invalid_argument`。
   - **所有权**：`listen()` / `add_listener()` 从调用起拥有全部句柄并设置 close-on-exec（Windows 清除继承标志），该调用的任何失败都关闭它收到的全部句柄。下一次 `run()` 无论成败都消费它们代替绑定，之后的 `run()` 照常绑定；被 `listen()` 替换而未消费的句柄随之关闭。
   - **数量与顺序**：POSIX 每组恰为 worker 数，否则 `run()` / `add_listener()` 抛出 `std::invalid_argument`；第 i 个交给第 i 个 worker。`http3_` 须按 `SO_REUSEPORT` 组内成员顺序给出（即 `duplicate_listener_sockets()` 的返回顺序），Linux 在该组上挂载 cBPF 分流；顺序不符时数据报经用户态转交仍到达所属 worker。Windows 每组至多 1 个，由 Acceptor 线程如自行绑定的 socket 一样使用（不再设置 `SO_EXCLUSIVEADDRUSE`）；已被其他进程关联 I/O 完成端口的 socket 无法接管，启动失败。
-- **导出（仅 POSIX）**：`duplicate_listener_sockets(endpoint)` 按 worker 顺序返回运行中 TCP 服务各 worker 监听 socket 的 `dup()`（HTTPS 服务一并返回 HTTP/3 的 UDP socket），未设置 `FD_CLOEXEC`，归调用方所有；本应用继续在原 socket 上接入。exec 出的新进程把它们作为 `inherited_sockets_` 交给 `listen()` 并 `run()`，旧进程随后 `remove_listener()` 或 `stop()`：端口始终有人监听，旧进程未接受的连接留在共享队列中由新进程接受。QUIC 连接状态不随 socket 交接，旧进程的 HTTP/3 连接随其关闭而结束。Windows 的 Acceptor 每服务只独占一个 socket，不提供该接口。
+- **导出（仅 POSIX）**：`co_await duplicate_listener_sockets(caller, endpoint)` 按 worker 顺序返回运行中 TCP 服务各 worker 监听 socket 的 `dup()`（HTTPS 服务一并返回 HTTP/3 的 UDP socket），未设置 `FD_CLOEXEC`，归调用方所有；本应用继续在原 socket 上接入。exec 出的新进程把它们作为 `inherited_sockets_` 交给 `listen()` 并 `run()`，旧进程随后异步 `remove_listener(caller, endpoint)` 或 `stop()`：端口始终有人监听，旧进程未接受的连接留在共享队列中由新进程接受。QUIC 连接状态不随 socket 交接，旧进程的 HTTP/3 连接随其关闭而结束。Windows 的 Acceptor 每服务只独占一个 socket，不提供该接口。
 - **运行期增删**：`ruvia::listener_endpoint` 指名服务的规则同运行期替换。
-  - **新增**：`add_listener(config)` 与 `listen()` 同样校验并加载凭据，与运行中监听器重复的 TCP 或 HTTP/3 UDP 端点抛出 `std::invalid_argument`。每个 worker（Windows 另含 Acceptor）在自身线程上绑定或接管 socket，并构建 TLS 上下文与 HTTP/3 端点（应用此前没有 HTTP/3 时同时建立跨 worker 转交目录），全部成功后才统一开放接入，所有 worker 开始接入后返回。任一失败（如端口被占用）时全部丢弃并关闭 socket，重抛首个异常，既有监听器照常服务。新增的 TLS 监听器与本次运行其他监听器在同一时刻轮换票据密钥。
-  - **移除**：`remove_listener(endpoint)` 停止该 TCP 服务的接入、关闭各 worker 的监听 socket，并在各 worker 的 accept 任务退出后返回，此后新连接被拒绝；已建立的连接继续服务直至自然结束或应用停止，全部结束后监听器才退役。配对的 HTTP/3 服务停止接纳新连接（新 Initial 被忽略），继续为已建立的 QUIC 连接收发，每个 worker 在其最后一条连接结束后关闭 UDP socket。监听器槽位在一次运行内不复用，排队中的 socket 或数据报转交不会落到其他监听器。
-  - **持久化与线程**：成功的增删同步更新监听配置，供之后的 `run()` 使用。线程与生命周期规则同运行期替换：应用未运行（含启动钩子与停机期间）或在业务 worker 线程上调用抛出 `std::logic_error`；发布前应用已开始停机同样抛出 `std::logic_error` 并视为未生效。`add_listener()`、`remove_listener()`、`replace_tls_identities()` 与 `duplicate_listener_sockets()` 的并发调用逐个生效。
+  - **新增**：`co_await add_listener(caller, config)` 校验配置并异步准备凭据；与运行中监听器重复的 TCP 或 HTTP/3 UDP 端点抛出 `std::invalid_argument`。各 worker（Windows 另含 Acceptor）绑定或接管 socket，并采用准备好的 TLS 上下文与 HTTP/3 端点；全部成功后统一开放接入，全部开始接入后恢复调用方。任一失败时关闭候选 socket、等待清理并重抛首个异常，既有监听器照常服务。新增 TLS 监听器与本次运行其他监听器同时轮换票据密钥。
+  - **移除**：`co_await remove_listener(caller, endpoint)` 停止该 TCP 服务的接入、关闭各 worker 的监听 socket，挂起至 accept 任务退出；已建立连接继续服务，全部结束后监听器才退役。配对 HTTP/3 服务忽略新 Initial，继续为既有 QUIC 连接收发，每个 worker 在其最后一条连接结束后关闭 UDP socket。一次运行内不复用监听器槽位，排队转交不会落到其他监听器。
+  - **持久化与并发**：成功增删更新监听配置，供之后的 `run()` 使用；调用边界同运行期替换。运行期控制通过异步门串行提交，不持有互斥锁跨挂起，也不在 worker 上调用 `future::get()` 或等待条件变量。`run()` / `stop()` 与启动前配置仍由外部控制线程同步驱动。
 
 #### 增量证书库与选择策略（`"ruvia/web/tls_config.h"`）
 
 | 公开入口 | 契约 |
 | --- | --- |
-| `tls_certificate_store::insert_or_assign(id, identity)` | 非零 ID，新增或替换单个身份；同步解析该身份，失败不改变库，清除库自身持有的口令与 PEM 副本 |
-| `erase(id)` / `contains(id)` / `size()` | 增量删除、查询；库可独立使用，全部方法线程安全 |
+| `co_await tls_certificate_store::insert_or_assign(caller, id, identity)` | 非零 ID，异步解析并新增或替换单个身份；失败不改变库，清除操作自身持有的口令与 PEM 副本 |
+| `co_await erase(caller, id)` | 异步删除并返回是否存在该 ID |
+| `contains(id)` / `size()` | 同步查询；库可独立使用，全部方法线程安全 |
 | `tls_config::certificate_store_` | 共享证书库；不能同时配置固定 `identity_`、`sni_` 或 `local_addresses_` |
 | `tls_config::default_certificate_` | 未配置选择器时使用的证书 ID |
 | `tls_config::select_certificate_` | `shared_ptr<const tls_certificate_selector>`；必须配合证书库，完全接管身份选择 |
@@ -206,6 +209,7 @@ ruvia::app().listen({
 | `offers_signature_algorithm(code)` | 按 TLS 签名方案编号检查客户端能力，可用于 RSA / ECDSA 选择 |
 
 - **发布与所有权**：每次变更原子发布不可变快照；握手在调用选择器前取得快照，期间替换或删除所选 ID 不影响该握手。已建立连接保留原证书引用，不重建上下文、会话缓存或票据密钥。
+- **执行与取消**：在 `caller` 所属 worker 上等待变更；已有身份的快照复制、解析及删除卸载至其借用的有界 `blocking_pool`。缺池、满池、解析失败或调用方停止均不发布候选；已开始的后台作业仅持有自有输入，取消等待后不能偷偷提交。不存在的 ID 可直接返回 `false`，不占阻塞池。
 - **拒绝规则**：选择器返回 `nullopt`、抛异常或返回快照中不存在的 ID 时握手失败；恢复握手也执行选择，不绕过拒绝策略。没有选择器时，缺失的默认 ID 同样拒绝握手。
 - **回调边界**：TCP TLS 与 QUIC 共用选择入口，不要求启用观察回调；视图仅在选择期间有效，不暴露 OpenSSL 对象。不同 worker 可并发调用，目标自行同步可变状态；文件读取与 PEM 解析只发生在库更新时。
 
@@ -358,8 +362,8 @@ ruvia::app()
 
 | 按 ID 控制入口 | 线程与生命周期 |
 | --- | --- |
-| `application::close_connection(id)` | 应用运行时，在业务 worker 之外阻塞发布 |
-| `http_server_group::close_connection(id)` | 宿主组运行时，在全部成员循环之外阻塞发布 |
+| `co_await application::close_connection(caller, id)` | 应用运行时，在显式 `caller` 所属 worker 上等待控制完成，可由业务 worker 发起 |
+| `co_await http_server_group::close_connection(caller, id)` | 宿主组运行时异步发布，`caller` 可以是成员 worker |
 | `http_server::close_connection(id)` | 单宿主运行时，在所属循环直接执行 |
 
 - **返回值**：`true` 表示找到已登记连接并请求关闭，不表示任务已全部回收；未知或已退役 ID 返回 `false`。违反上述调用边界抛 `std::logic_error`，请求内自断连使用 `abort_connection()`。
@@ -476,13 +480,14 @@ ruvia::app()
 
 | 方法 | 契约 |
 | --- | --- |
-| `listen(config)` | `start()` 前暂存监听配置，启动后原子新增；仅接受 `request_stream` / `connection` 分发，可包含 TLS、HTTP/3 与继承监听 socket |
-| `add_connection_service(config)` | 准备不绑定监听 socket 的 TCP/TLS 服务，以配置中的地址端口标识；供外部 Acceptor 交接连接 |
+| `listen(config)` | 仅在 `start()` 前暂存配置，不读取凭据；接受 `request_stream` / `connection` 分发及 TLS、HTTP/3、继承 socket |
+| `co_await add_listener(config)` | 运行期原子新增；候选准备失败完整回滚 |
+| `co_await add_connection_service(config)` | 启动前或运行期异步准备不绑定监听 socket 的 TCP/TLS 服务，供外部 Acceptor 交接 |
 | `adopt(endpoint, native_socket)` | 接管已连接 socket，失败也关闭句柄；首次绑定当前循环，执行相同的 TLS、HTTP、预算、超时与回收主链 |
 | `trusted_proxies(config)` | 启动前原子替换可信代理集合，默认不信任转发头；非法 CIDR 不改变原配置 |
 | `co_await start()` | 一次性准备全部服务后开放准入；失败先关闭并 join 已准备资源，再传播异常；允许先启动空宿主 |
 | `remove_listener(endpoint)` | 立即停止新准入，保留已建立会话；同端点可以重新添加 |
-| `replace_tls_identities(endpoint, config)` | 在所属循环替换 TLS 身份，保持既有客户端证书策略与记录上限 |
+| `co_await replace_tls_identities(endpoint, config)` | 异步准备并替换 TLS 身份，保持既有客户端证书策略与记录上限 |
 | `close_connection(id)` | 按 ID 请求整连接关闭，控制边界见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `duplicate_listener_sockets(endpoint)` | POSIX 上复制监听句柄，交接契约同应用入口 |
 | `close()` / `co_await shutdown()` | 立即断开、不提供 GOAWAY 后等待在途请求的排空模式；前者任意线程请求关闭，后者在所属循环等待全部会话与后台操作回收，不停止循环或其他宿主 |
@@ -514,6 +519,8 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 - **线程归属**：除 `close()`、析构与 `stats()` 外，操作均在绑定循环执行；`server_config` 的调度字段由外部循环负责，其余限额作用于该宿主的单 worker。
 - **原生接管**：外部服务不接收 HTTP/3、继承监听 socket 或自动重定向配置；Windows 的接管 socket 不得已绑定其他 IOCP，绑定监听仍复用独立原生 Acceptor。
 - **销毁边界**：析构仅请求关闭；调用方须继续驱动循环，直到 `shutdown()` 完成或循环自身的停止回调完成 join。出站 `http_client`、`db_client`、`redis_client` 可独立绑定同一循环并捕获到处理器，无须全局注册。
+- **异步准备**：TLS 凭据、CA 与上下文准备需要所属循环显式借用 `blocking_pool`；缺池或拒绝准入时传播失败，不退回 worker 同步执行。纯明文服务不要求池。冷任务返回前拥有配置、敏感输入与继承 socket；丢弃未等待的任务也会释放它们。
+- **Windows Acceptor**：启动、退役与关闭异步等待原生线程完成；退出等待不占阻塞池，因此池已满或已停止也不妨碍清理。
 
 #### 多循环共享服务
 
@@ -521,11 +528,12 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 
 | 入口 / 边界 | 契约 |
 | --- | --- |
-| `listen()` / `add_connection_service()` / `trusted_proxies()` | 启动前可在循环尚未驱动时配置；可信代理集合仍只允许启动前修改 |
-| `start()` / `shutdown()` | 阻塞控制操作，在所有成员循环之外调用；调用方须已经并持续驱动全部存活循环，未驱动但仍有效的循环无法检测 |
-| 运行期监听增删、TLS 替换、`duplicate_listener_sockets()` | 在成员循环外调用；新增监听先全员准备再开放，失败整组回滚，POSIX 复制结果保持 worker 顺序 |
-| `adopt(worker_index, endpoint, socket)` | 显式指定接管 worker，失败也接管并关闭 socket |
-| `close_connection(id)` | 在成员循环外按 ID 请求整连接关闭，返回值契约见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
+| `listen()` / `trusted_proxies()` | 启动前纯配置，可在循环尚未驱动时调用；运行后用异步新增入口 |
+| `co_await start(caller)` / `co_await shutdown(caller)` | 在显式 `caller` 的 worker 上等待；允许成员 worker 发起，调用方须持续驱动全部存活循环 |
+| `co_await add_listener(caller, config)` / `add_connection_service(caller, config)` | 前者运行期新增监听；后者启动前或运行期准备外部接管服务；失败整组回滚 |
+| `co_await remove_listener(caller, endpoint)` / `replace_tls_identities(caller, endpoint, config)` / `duplicate_listener_sockets(caller, endpoint)` | 异步跨成员控制；POSIX 复制结果保持 worker 顺序 |
+| `co_await adopt(caller, worker_index, endpoint, socket)` | 显式指定接管 worker，冷任务即拥有 socket，失败或丢弃也关闭句柄 |
+| `co_await close_connection(caller, id)` | 按 ID 请求整连接关闭，返回值契约见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `worker_count()` / `worker(index)` / `stats()` | 查询实际成员与汇总统计，限额仍逐 worker 执行 |
 | 共享状态 | 同一监听器的 TLS 票据密钥、QUIC secret 与 CID 目录服务级共享；Windows 共用一个原生 Acceptor |
 | 关闭与退役 | `close()` 任意线程请求立即断连，不提供排空模式、不停止外部循环；任一成员退役或发生致命驱动故障时关闭整组，收束全部连接及在途操作 |
@@ -542,9 +550,15 @@ int main() {
     server.listen({.address_ = "127.0.0.1", .http_ = 8080,
         .dispatch_ = ruvia::listener_dispatch::request_stream});
     runtime.start();
-    server.start();
-    std::cin.get();  // 外部控制线程决定服务寿命。
-    server.shutdown();
+    const auto startup = [&]() -> ruvia::task<void> {
+        co_await server.start(loops[0].handle());
+    };
+    loops[0].start(startup()).get();
+    std::cin.get();  // 仅外部控制线程阻塞；worker 不调用 get()。
+    const auto shutdown = [&]() -> ruvia::task<void> {
+        co_await server.shutdown(loops[0].handle());
+    };
+    loops[0].start(shutdown()).get();
     runtime.join();
 }
 ```

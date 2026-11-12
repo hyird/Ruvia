@@ -5,8 +5,11 @@
 #include <array>
 #include <chrono>
 #include <exception>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <asio/ip/tcp.hpp>
@@ -14,6 +17,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
@@ -83,7 +87,8 @@ using namespace standalone_server_test;
 
 TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_shutdown) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
     ruvia::test::tcp_port_reservation first(io), second(io), secure(io);
     ruvia::test::udp_port_reservation udp(io);
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
@@ -166,8 +171,8 @@ TEST(Ruvia, independent_server_adopts_connected_sockets_for_raw_and_http_service
     asio::ip::tcp::acceptor http(io, {asio::ip::address_v4::loopback(), 0});
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_server server(attachment.loop(), {.request_stream_ = &answer, .connection_ = &echo});
-        server.add_connection_service({.address_ = "127.0.0.1", .http_ = raw.local_endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection});
-        server.add_connection_service({.address_ = "127.0.0.1", .http_ = http.local_endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+        co_await server.add_connection_service({.address_ = "127.0.0.1", .http_ = raw.local_endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection});
+        co_await server.add_connection_service({.address_ = "127.0.0.1", .http_ = http.local_endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         co_await server.start();
         ruvia::task_scope accepts(server.worker());
         accepts.spawn(adopt_one(server, raw));
@@ -214,7 +219,8 @@ TEST(Ruvia, independent_server_adopts_connected_sockets_for_raw_and_http_service
 
 TEST(Ruvia, independent_server_failed_addition_releases_every_prepared_listener) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
     ruvia::test::tcp_port_reservation good(io);
     asio::ip::tcp::acceptor busy(io, {asio::ip::address_v4::loopback(), 0});
     const ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
@@ -224,12 +230,12 @@ TEST(Ruvia, independent_server_failed_addition_releases_every_prepared_listener)
         const auto port = good.endpoint().port();
         bool rejected = false;
         try {
-            server.listen({.address_ = "127.0.0.1", .http_ = port, .https_ = busy.local_endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream});
+            co_await server.add_listener({.address_ = "127.0.0.1", .http_ = port, .https_ = busy.local_endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream});
         } catch (const std::system_error&) {
             rejected = true;
         }
         EXPECT_TRUE(rejected);
-        server.listen({.address_ = "127.0.0.1", .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream});
+        co_await server.add_listener({.address_ = "127.0.0.1", .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port);
         ruvia::http_client client(attachment.loop(), {.base_url_ = origin});
         std::exception_ptr failure;
@@ -271,7 +277,7 @@ TEST(Ruvia, independent_server_loop_retirement_joins_pending_adopted_connection)
             }
             token_stopped = connection.stop_token().stop_requested();
         }});
-        server.add_connection_service({.address_ = "127.0.0.1", .http_ = acceptor.local_endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection});
+        co_await server.add_connection_service({.address_ = "127.0.0.1", .http_ = acceptor.local_endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection});
         co_await server.start();
         server.adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, accepted.release());
         co_await entered.wait();
@@ -285,4 +291,111 @@ TEST(Ruvia, independent_server_loop_retirement_joins_pending_adopted_connection)
     EXPECT_TRUE(cancelled);
     EXPECT_TRUE(token_stopped);
     EXPECT_FALSE(attachment.valid());
+}
+
+TEST(Ruvia, independent_server_cold_runtime_addition_owns_configuration) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::tcp_port_reservation port(io);
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = &answer});
+        co_await server.start();
+        std::string address = "127.0.0.1";
+        ruvia::listen_config config{.address_ = address, .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream};
+        auto addition = server.add_listener(config);
+        address.assign("not-an-address");
+        config.http_.reset();
+        co_await std::move(addition);
+        EXPECT_THROW(server.listen(config), std::logic_error);
+        const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin});
+        std::exception_ptr failure;
+        try {
+            co_await check_response(client, ruvia::http_protocol_version::http11);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        co_await server.shutdown();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+}
+
+TEST(Ruvia, independent_server_discarded_cold_addition_closes_inherited_socket) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor inherited(io, {asio::ip::address_v4::loopback(), 0});
+    const auto endpoint = inherited.local_endpoint();
+    const auto socket = inherited.release();
+    ruvia::http_server server(attachment.loop(), {.request_stream_ = &answer});
+    {
+        auto discarded = server.add_listener({.address_ = "127.0.0.1", .http_ = endpoint.port(), .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {socket}}});
+        asio::ip::tcp::acceptor competing(io);
+        competing.open(asio::ip::tcp::v4());
+        std::error_code error;
+        competing.bind(endpoint, error);
+        EXPECT_EQ(error, asio::error::address_in_use);
+    }
+    asio::ip::tcp::acceptor replacement(io);
+    replacement.open(asio::ip::tcp::v4());
+    std::error_code error;
+    replacement.bind(endpoint, error);
+    EXPECT_FALSE(error);
+    const auto shutdown = [&]() -> ruvia::task<void> {
+        co_await server.shutdown();
+        attachment.stop();
+    };
+    auto completed = attachment.loop().start(shutdown());
+    attachment.run();
+    completed.get();
+}
+
+TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
+    asio::ip::tcp::socket peer(io);
+    peer.connect(acceptor.local_endpoint());
+    auto accepted = acceptor.accept();
+    bool retired = false;
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto worker = attachment.loop().handle();
+        ruvia::worker_signal entered(worker);
+        auto server = std::make_unique<ruvia::http_server>(attachment.loop(),
+            ruvia::http_server_callbacks{.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
+                struct retirement final {
+                    bool& retired_;
+                    ~retirement() {
+                        retired_ = true;
+                    }
+                } retire{retired};
+                entered.notify();
+                try {
+                    (void)co_await connection.read();
+                } catch (const std::system_error&) {
+                }
+            }});
+        co_await server->add_connection_service({.address_ = "127.0.0.1",
+            .http_ = acceptor.local_endpoint().port(),
+            .dispatch_ = ruvia::listener_dispatch::connection});
+        co_await server->start();
+        server->adopt({.address_ = "127.0.0.1", .port_ = acceptor.local_endpoint().port()}, accepted.release());
+        co_await entered.wait();
+        auto shutdown = server->shutdown();
+        server.reset();
+        co_await std::move(shutdown);
+        EXPECT_TRUE(retired);
+        EXPECT_TRUE(attachment.loop().accepting());
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    EXPECT_TRUE(retired);
 }

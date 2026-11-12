@@ -948,7 +948,8 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
 
 TEST(Ruvia, standalone_streamed_tunnel_refusals_propagate_upstream_disconnect) {
     asio::io_context io;
-    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
     ruvia::test::tcp_port_reservation source_port(io), plain_port(io), tls_port(io);
     ruvia::test::udp_port_reservation udp_port(io);
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");

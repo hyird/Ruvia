@@ -393,10 +393,11 @@ private:
         std::unique_ptr<detail::app_runtime_graph, pmr_object_deleter<detail::app_runtime_graph>>
             retired(nullptr, pmr_object_deleter<detail::app_runtime_graph>{process_resource()});
         {
-            // A runtime listener control in progress finishes first: every
-            // worker joined, so its controls ran or were destroyed.
-            const std::lock_guard serialized(state_.runtime_control_mutex_);
-            std::lock_guard lock(state_.mutex_);
+            // run()/stop() remain synchronous main-thread lifecycle drivers.
+            // Controls suspend their callers; only this owner waits to retire
+            // their borrowed runtime and frozen configuration after joining.
+            std::unique_lock lock(state_.mutex_);
+            state_.lifecycle_changed_.wait(lock, [this] { return state_.runtime_controls_ == 0; });
             retired = std::move(state_.runtime_);
         }
         retired.reset();

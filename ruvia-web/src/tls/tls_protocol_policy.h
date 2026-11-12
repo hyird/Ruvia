@@ -10,19 +10,31 @@
 namespace ruvia::detail {
 
 // The protocol policy of every client and server TLS context. Startup only.
-// - TLS 1.2 or newer, no TLS compression.
+// - TLS 1.1 or newer, no TLS compression.
 // - No renegotiation: RFC 9113 §9.2.1 requires it disabled for HTTP/2 over
 //   TLS 1.2, and nothing here relies on it for other protocols.
 // - TLS 1.2 cipher suites limited to ECDHE key exchange with AEAD ciphers
 //   (RFC 9325 §4.1-4.2; none is on RFC 9113 Appendix A's prohibited list),
 //   TLS_ECDHE_*_WITH_AES_128_GCM_SHA256 first (RFC 9325 §4.2.1). TLS 1.3
 //   suites, all AEAD, keep OpenSSL's defaults.
+// - TLS 1.1 alone additionally permits ECDHE AES-CBC-SHA suites and its
+//   mandatory legacy handshake signatures. Certificate and key security
+//   checks, and all TLS 1.2/1.3 security checks, retain the original callback.
 // - The connection-wide outgoing record limit includes every key epoch and is
 //   capped at 2^23. It therefore stays below RFC 9846 §5.5's per-key AES-GCM
 //   limit and reaches neither a record sequence nor a KeyUpdate epoch limit.
 // Servers additionally choose by their own preference order.
 void validate_tls_record_limit(std::uint64_t limit);
 void apply_tls_protocol_policy(SSL_CTX& context, std::uint64_t record_limit);
+
+// Native drivers accepting an explicit cipher list use the same preference
+// order. The security callback excludes the final four suites in TLS 1.2.
+inline constexpr char tls_cipher_suites[] =
+    "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:"
+    "ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA";
 
 // The policy's SSL_CTX message callback, which enforces the outgoing record
 // limit. A context that installs its own message callback must forward every
@@ -32,6 +44,7 @@ void count_tls_records(int writing, int version, int content_type, const void* b
 
 // 原生数据库驱动自己创建 SSL_CTX。作用域只包围一次同步 start/cont/poll 调用，
 // 不跨协程挂起：构造通知只安装回调和自有元数据，不驱动未初始化的 SSL 对象。
+// HANDSHAKE_START 回调才在已初始化的 SSL 上禁用重协商和压缩。
 // 证书回调在实际握手中验证证书链和 SAN，先于任何数据库应用数据。
 class native_tls_context_scope final {
 public:

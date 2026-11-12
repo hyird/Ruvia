@@ -106,17 +106,39 @@ void observe_quic_messages(int writing, int, int content_type, const void* bytes
     deliver_client_hello(writing, content_type, bytes, size, ssl);
 }
 
+int select_tcp_alpn(SSL* ssl, std::span<const unsigned char> protocols,
+    const unsigned char** out, unsigned char* out_length,
+    const unsigned char* in, unsigned int in_length) noexcept {
+    if (SSL_version(ssl) >= TLS1_2_VERSION) {
+        return SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols.data(),
+                   static_cast<unsigned int>(protocols.size()), in, in_length) == OPENSSL_NPN_NEGOTIATED
+                   ? SSL_TLSEXT_ERR_OK
+                   : SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    // RFC 9113 §9.2: h2 cannot be selected on TLS 1.1, even when a raw
+    // connection listener explicitly lists it among its own protocols.
+    for (std::size_t offset = 0; offset < protocols.size();) {
+        const auto* protocol = protocols.data() + offset;
+        const auto length = protocol[0];
+        offset += static_cast<std::size_t>(length) + 1;
+        if (length == 2 && protocol[1] == 'h' && protocol[2] == '2') {
+            continue;
+        }
+        if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocol,
+                static_cast<unsigned int>(length) + 1, in, in_length) == OPENSSL_NPN_NEGOTIATED) {
+            return SSL_TLSEXT_ERR_OK;
+        }
+    }
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
+}
+
 // Every HTTP version this server speaks over TLS on TCP, in preference order;
 // RFC 7301 §3.2 reserves the alert for offers naming none of them.
-int select_tcp_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
+int select_tcp_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length,
     const unsigned char* in, unsigned int in_length, void*) noexcept {
     static constexpr unsigned char protocols[] = {
         2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1', 8, 'h', 't', 't', 'p', '/', '1', '.', '0'};
-    if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols,
-            static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
-        return SSL_TLSEXT_ERR_OK;
-    }
-    return SSL_TLSEXT_ERR_ALERT_FATAL;
+    return select_tcp_alpn(ssl, protocols, out, out_length, in, in_length);
 }
 
 // RFC 9114 §3.1: an HTTP/3 connection negotiates "h3", and RFC 9001 §8.1
@@ -133,15 +155,12 @@ int select_quic_alpn_protocol(SSL*, const unsigned char** out, unsigned char* ou
 
 // A connection-dispatch listener offers its own protocols (tls_config::alpn_),
 // still in server preference and failing an offer that names none of them.
-int select_connection_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
+int select_connection_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length,
     const unsigned char* in, unsigned int in_length, void* argument) noexcept {
     const auto& protocols = *static_cast<const std::pmr::string*>(argument);
-    if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length,
-            reinterpret_cast<const unsigned char*>(protocols.data()), static_cast<unsigned int>(protocols.size()), in,
-            in_length) == OPENSSL_NPN_NEGOTIATED) {
-        return SSL_TLSEXT_ERR_OK;
-    }
-    return SSL_TLSEXT_ERR_ALERT_FATAL;
+    return select_tcp_alpn(ssl,
+        {reinterpret_cast<const unsigned char*>(protocols.data()), protocols.size()},
+        out, out_length, in, in_length);
 }
 
 // RFC 6066 §3: a session never resumes under a server_name other than the one
@@ -311,7 +330,7 @@ void configure_family(http_server_session_config& session, tls_context_family fa
     } else {
         context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
                                   asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
-                                  asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
+                                  asio::ssl::context::single_dh_use);
         apply_tls_protocol_policy(*native, tls->max_outgoing_records_);
         if (session.connection_.has_value()) {
             SSL_CTX_set_alpn_select_cb(native, select_connection_alpn_protocol, &session.connection_->alpn_);
@@ -398,6 +417,13 @@ void configure_http_server_tls_contexts(http_server_session_config& session, boo
     if (session.http3_.has_value()) {
         configure_family(session, tls_context_family::quic, observe_client_hello);
     }
+}
+
+prepared_http_server_session prepare_http_server_session_config(
+    const http_server_listener_definition& definition, bool observe_client_hello) {
+    auto session = make_pmr_object<http_server_session_config>(process_resource(), definition, process_resource());
+    configure_http_server_tls_contexts(*session, observe_client_hello);
+    return session;
 }
 
 void bind_tls_local_address(SSL& tls, const asio::ip::address& local_address) {

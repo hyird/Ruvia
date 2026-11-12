@@ -13,16 +13,24 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <utility>
 
 #include <asio/co_spawn.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read_until.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/ssl/stream.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
+#include <asio/use_future.hpp>
 #include <asio/write.hpp>
+#include <openssl/ssl.h>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
@@ -54,7 +62,190 @@ template <typename callback_type>
     return false;
 }
 
+// An independent legacy server, with an absolute deadline covering accept,
+// TLS and HTTP. It never uses the production TLS policy under test.
+class legacy_http_peer final {
+public:
+    explicit legacy_http_peer(asio::ssl::context& context)
+        : acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+          socket_(io_),
+          deadline_(io_),
+          context_(context),
+          port_(acceptor_.local_endpoint().port()),
+          done_(asio::co_spawn(io_, serve(), asio::use_future)),
+          thread_([this] { io_.run(); }) {}
+
+    ~legacy_http_peer() {
+        asio::post(io_, [this] {
+            std::error_code ignored;
+            acceptor_.close(ignored);
+            socket_.close(ignored);
+            deadline_.cancel();
+        });
+        finish();
+    }
+
+    void finish() {
+        if (done_.valid()) {
+            try {
+                done_.get();
+            } catch (const std::system_error&) {
+                // Handshake rejection or connection close is expected in
+                // negative cases; assertions below inspect all received data.
+            }
+        }
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    [[nodiscard]] std::string url() const {
+        return "https://127.0.0.1:" + std::to_string(port_);
+    }
+
+    std::string request_;
+    int tls_version_{};
+    bool timed_out_{};
+
+private:
+    asio::awaitable<void> serve() {
+        deadline_.expires_after(std::chrono::seconds(5));
+        deadline_.async_wait([this](const std::error_code& error) {
+            if (!error) {
+                timed_out_ = true;
+                std::error_code ignored;
+                acceptor_.close(ignored);
+                socket_.close(ignored);
+            }
+        });
+        struct cancel_deadline final {
+            asio::steady_timer& timer_;
+            ~cancel_deadline() {
+                timer_.cancel();
+            }
+        } guard{deadline_};
+        co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+        asio::ssl::stream<asio::ip::tcp::socket&> stream(socket_, context_);
+        co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+        tls_version_ = SSL_version(stream.native_handle());
+        std::error_code error;
+        co_await asio::async_read_until(stream, asio::dynamic_buffer(request_),
+            "\r\n\r\n", asio::redirect_error(asio::use_awaitable, error));
+        if (error) {
+            co_return;
+        }
+        constexpr std::string_view response =
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nlegacy";
+        co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
+        co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, error));
+    }
+
+    asio::io_context io_;
+    asio::ip::tcp::acceptor acceptor_;
+    asio::ip::tcp::socket socket_;
+    asio::steady_timer deadline_;
+    asio::ssl::context& context_;
+    std::uint16_t port_;
+    std::future<void> done_;
+    std::thread thread_;
+};
+
+void exercise_legacy_http_peer(int version, ruvia::http_client_protocol protocol,
+    bool select_h2, bool matching_san = true, bool elliptic_curve = false) {
+    ruvia::test::tls_identity identity("server.example",
+        matching_san ? "DNS:server.example" : "DNS:other.example", elliptic_curve);
+    auto* context = identity.context_.native_handle();
+    ASSERT_EQ(SSL_CTX_set_min_proto_version(context, version), 1);
+    ASSERT_EQ(SSL_CTX_set_max_proto_version(context, version), 1);
+    ASSERT_EQ(SSL_CTX_set_cipher_list(context,
+                  "ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA"),
+        1);
+    // Only the independent fixture allows legacy handshake signatures this
+    // way. Trust and SAN verification remain enabled in the real client.
+    SSL_CTX_set_security_level(context, 0);
+    if (select_h2) {
+        SSL_CTX_set_alpn_select_cb(context, [](SSL*, const unsigned char** selected, unsigned char* size, const unsigned char*, unsigned int, void*) -> int {
+                static constexpr unsigned char h2[] = {'h', '2'};
+                *selected = h2;
+                *size = sizeof(h2);
+                return SSL_TLSEXT_ERR_OK; }, nullptr);
+    }
+    legacy_http_peer peer(identity.context_);
+    const auto url = peer.url();
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::http_client client(pool.loop(0),
+        {.base_url_ = url,
+            .connect_timeout_ = std::chrono::seconds(2),
+            .request_timeout_ = std::chrono::seconds(2),
+            .protocol_ = protocol,
+            .tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "server.example"}});
+    const bool expect_success = version == TLS1_1_VERSION && !select_h2 && matching_san &&
+                                protocol != ruvia::http_client_protocol::http2_only;
+    std::optional<ruvia::http_client_error::code_type> failure_code;
+    std::exception_ptr unexpected;
+    bool exchanged = false;
+    const auto run = [&]() -> ruvia::task<void> {
+        try {
+            auto response = co_await client.client().get("/legacy").send();
+            EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http11);
+            EXPECT_TRUE(response.status() == ruvia::http_status::ok);
+            const auto body = co_await response.stream().read_all();
+            EXPECT_EQ(body.text(), std::string_view("legacy"));
+            exchanged = true;
+        } catch (const ruvia::http_client_error& error) {
+            failure_code = error.code();
+        } catch (...) {
+            unexpected = std::current_exception();
+        }
+        co_await client.shutdown();
+    };
+    pool.start();
+    pool.loop(0).start(run()).get();
+    pool.join();
+    peer.finish();
+    if (unexpected) {
+        std::rethrow_exception(unexpected);
+    }
+    EXPECT_FALSE(peer.timed_out_);
+    EXPECT_EQ(exchanged, expect_success);
+    if (expect_success) {
+        EXPECT_FALSE(failure_code.has_value());
+        EXPECT_EQ(peer.tls_version_, TLS1_1_VERSION);
+        EXPECT_TRUE(peer.request_.starts_with("GET /legacy HTTP/1.1\r\n"));
+    } else {
+        EXPECT_EQ(failure_code, ruvia::http_client_error::code_type::tls_failed);
+        EXPECT_TRUE(peer.request_.empty());
+        if (version == TLS1_1_VERSION && select_h2 &&
+            protocol == ruvia::http_client_protocol::negotiate && matching_san) {
+            // The intentionally noncompliant peer really selected h2 in a
+            // completed TLS 1.1 handshake, rather than failing earlier.
+            EXPECT_EQ(peer.tls_version_, TLS1_1_VERSION);
+        }
+    }
+}
+
 }  // namespace
+
+TEST(Ruvia, http_client_tls11_http1_and_negotiation_exchange_with_verified_san) {
+    for (const auto protocol : {ruvia::http_client_protocol::http1_only,
+             ruvia::http_client_protocol::negotiate}) {
+        for (const bool elliptic_curve : {false, true}) {
+            exercise_legacy_http_peer(TLS1_1_VERSION, protocol, false, true, elliptic_curve);
+        }
+        exercise_legacy_http_peer(TLS1_1_VERSION, protocol, false, false);
+    }
+}
+
+TEST(Ruvia, http_client_rejects_tls10_and_h2_below_tls12_without_http2_bytes) {
+    for (const auto protocol : {ruvia::http_client_protocol::http1_only,
+             ruvia::http_client_protocol::negotiate}) {
+        exercise_legacy_http_peer(TLS1_VERSION, protocol, false);
+    }
+#ifdef RUVIA_ENABLE_HTTP2
+    exercise_legacy_http_peer(TLS1_1_VERSION, ruvia::http_client_protocol::negotiate, true);
+    exercise_legacy_http_peer(TLS1_1_VERSION, ruvia::http_client_protocol::http2_only, true);
+#endif
+}
 
 TEST(Ruvia, http_client_handle_origin_and_expired_send_reject_after_shutdown) {
     auto& io = ruvia::test::new_test_io_context();

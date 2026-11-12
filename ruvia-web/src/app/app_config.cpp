@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -14,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -23,6 +23,7 @@
 #include <asio/ip/udp.hpp>
 #include <openssl/crypto.h>
 
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/socket.h"
@@ -32,8 +33,10 @@
 #include "app/app_state.h"
 #include "app/env_state.h"
 #include "integration/named_capability.h"
+#include "integration/runtime_control_completion.h"
 #include "router/router_impl.h"
 #include "server/http_server_options_validation.h"
+#include "server/http_server_tls_contexts.h"
 #include "server/http_server_tls_identity.h"
 #include "util/config_validation.h"
 
@@ -398,20 +401,112 @@ void append_listen_configs(
     }
 }
 
-// The running app's runtime, for a control that posts to every worker and
-// waits, which a worker waiting on itself never would. The caller holds the
-// application lock.
+// The caller holds the application lock. Awaited controls may originate on
+// any worker, including one of this run's own workers.
 [[nodiscard]] detail::app_runtime_graph& running_runtime(
-    detail::app_state& state_value, const char* not_running_message, const char* worker_thread_message) {
+    detail::app_state& state_value, const char* not_running_message) {
     if (!state_value.lifecycle_.running() || state_value.runtime_ == nullptr) {
         throw std::logic_error(not_running_message);
     }
-    for (auto& worker : state_value.runtime_->workers_) {
-        if (worker.runtime_->runtime().handle().is_current()) {
-            throw std::logic_error(worker_thread_message);
+    return *state_value.runtime_;
+}
+
+class active_app_control final {
+public:
+    active_app_control(std::shared_ptr<detail::app_state> state, const char* not_running)
+        : state_(std::move(state)) {
+        std::lock_guard lock(state_->mutex_);
+        runtime_ = &running_runtime(*state_, not_running);
+        ++state_->runtime_controls_;
+    }
+    ~active_app_control() {
+        std::lock_guard lock(state_->mutex_);
+        --state_->runtime_controls_;
+        state_->lifecycle_changed_.notify_all();
+    }
+    active_app_control(const active_app_control&) = delete;
+    active_app_control& operator=(const active_app_control&) = delete;
+    [[nodiscard]] detail::app_runtime_graph& runtime() const noexcept {
+        return *runtime_;
+    }
+
+private:
+    std::shared_ptr<detail::app_state> state_;
+    detail::app_runtime_graph* runtime_{};
+};
+
+struct owned_tls_config final {
+    explicit owned_tls_config(tls_config config)
+        : config_(std::move(config)) {}
+    owned_tls_config(owned_tls_config&&) = default;
+    ~owned_tls_config() {
+        tls_secret_cleanser cleanser(config_);
+    }
+    tls_config config_;
+};
+
+// Own sockets and borrowed address text before returning a cold task. Even
+// dropping that task without awaiting closes the inherited handles.
+struct owned_listen_config final {
+    explicit owned_listen_config(listen_config config)
+        : config_(std::move(config)) {
+        try {
+            address_.assign(config_.address_.view());
+            config_.address_ = address_;
+        } catch (...) {
+            close_unowned_inherited_sockets(std::span<const listen_config>(&config_, 1), {});
+            tls_secret_cleanser cleanser(config_.tls_);
+            throw;
         }
     }
-    return *state_value.runtime_;
+    owned_listen_config(owned_listen_config&& other) noexcept
+        : config_(std::move(other.config_)),
+          address_(std::move(other.address_)) {
+        config_.address_ = address_;
+        other.config_.inherited_sockets_.reset();
+    }
+    ~owned_listen_config() {
+        close_unowned_inherited_sockets(std::span<const listen_config>(&config_, 1), {});
+        tls_secret_cleanser cleanser(config_.tls_);
+    }
+    [[nodiscard]] auto load() {
+        try {
+            auto result = detail::load_server_listeners(std::span<const listen_config>(&config_, 1));
+            config_.inherited_sockets_.reset();
+            return result;
+        } catch (...) {
+            // load_server_listeners already closed every unclaimed handle.
+            config_.inherited_sockets_.reset();
+            throw;
+        }
+    }
+    listen_config config_;
+    std::pmr::string address_{process_resource()};
+};
+
+// run_blocking can stop delivering before its callable finishes. A separate
+// receipt joins actual execution/destruction, so no accepted preparation or
+// exception escapes the runtime control, even when its caller is stopping.
+template <typename function_type>
+task<std::invoke_result_t<function_type&>> prepare_runtime_control(worker_handle caller, function_type function) {
+    using result_type = std::invoke_result_t<function_type&>;
+    detail::runtime_control_completion completion(caller);
+    auto result = co_await run_blocking(caller, completion.make_command(
+                                                    [function = std::move(function)](const auto& receipt) mutable -> result_type {
+                                                        try {
+                                                            auto prepared = function();
+                                                            receipt.complete();
+                                                            return prepared;
+                                                        } catch (...) {
+                                                            receipt.complete(std::current_exception());
+                                                            throw;
+                                                        }
+                                                    }));
+    co_await completion.wait();
+    if (auto failure = completion.failure()) {
+        std::rethrow_exception(failure);
+    }
+    co_return std::move(result).take_value();
 }
 
 // The stored definition of the listener serving `target`. The caller holds
@@ -441,8 +536,7 @@ void append_listen_configs(
 // identities `config` may replace. The caller holds the application lock.
 [[nodiscard]] std::size_t find_replaceable_tls_listener(
     detail::app_state& state_value, const asio::ip::tcp::endpoint& target, const tls_config& config) {
-    (void)running_runtime(state_value, "TLS identities can be replaced only while the app is running",
-        "TLS identities cannot be replaced from a business worker thread");
+    (void)running_runtime(state_value, "TLS identities can be replaced only while the app is running");
     const auto index = stored_listener_index(state_value, target);
     const auto* tls = std::get_if<detail::http_server_listener_definition::tls>(&state_value.listeners_[index].transport_);
     if (tls == nullptr) {
@@ -452,92 +546,25 @@ void append_listen_configs(
     return index;
 }
 
-// Lets a runtime control API wait for the controls it posted to the run's
-// owner threads. Each control holds a copy of receipt() and drops it once
-// done, or unrun when destroyed first; dropping the last copy wakes wait(),
-// so the caller never waits on a control that cannot run. A control that
-// ran reports through complete() before dropping its copy. Destruction waits
-// as well: controls borrow what their caller declared before this.
-class runtime_control_publication final {
-public:
-    runtime_control_publication()
-        : state_(std::allocate_shared<state_type>(std::pmr::polymorphic_allocator<state_type>(process_resource()))),
-          receipt_(
-              nullptr,
-              [state = state_](void*) noexcept {
-                  const std::lock_guard lock(state->mutex_);
-                  state->released_ = true;
-                  state->changed_.notify_all();
-              },
-              std::pmr::polymorphic_allocator<std::byte>(process_resource())) {}
-    ~runtime_control_publication() {
-        wait();
-    }
-
-    runtime_control_publication(const runtime_control_publication&) = delete;
-    runtime_control_publication& operator=(const runtime_control_publication&) = delete;
-
-    [[nodiscard]] std::shared_ptr<void> receipt() const noexcept {
-        return receipt_;
-    }
-
-    // An owner thread, from a control that ran: `failure` is what it threw.
-    void complete(std::exception_ptr failure) noexcept {
-        const std::lock_guard lock(state_->mutex_);
-        ++state_->completed_;
-        if (state_->failure_ == nullptr) {
-            state_->failure_ = std::move(failure);
-        }
-    }
-
-    // Drops this side's copy, then waits until every control dropped its own.
-    void wait() noexcept {
-        receipt_.reset();
-        std::unique_lock lock(state_->mutex_);
-        state_->changed_.wait(lock, [this] { return state_->released_; });
-    }
-
-    // After wait(): how many controls ran, and the first failure among them.
-    [[nodiscard]] std::size_t completed() const noexcept {
-        return state_->completed_;
-    }
-    [[nodiscard]] std::exception_ptr failure() const noexcept {
-        return state_->failure_;
-    }
-
-private:
-    struct state_type final {
-        std::mutex mutex_;
-        std::condition_variable changed_;
-        bool released_{false};
-        std::size_t completed_{0};
-        std::exception_ptr failure_;
-    };
-
-    std::shared_ptr<state_type> state_;
-    std::shared_ptr<void> receipt_;
-};
-
 using control_list = std::pmr::vector<move_only_function<void()>>;
 
 // Builds, before anything is posted, one control per worker that runs
 // `run(worker, worker_index)` on that worker's thread for `publication`.
 template <typename run_type>
 void make_worker_controls(control_list& controls, detail::app_runtime_graph& runtime,
-    runtime_control_publication& publication, const run_type& run) {
+    detail::runtime_control_completion& publication, const run_type& run) {
     controls.reserve(runtime.workers_.size());
     for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
-        controls.emplace_back([&publication, run, worker = runtime.workers_[index].runtime_.get(), index,
-                                  receipt = publication.receipt()]() mutable {
-            std::exception_ptr failure;
-            try {
-                run(*worker, index);
-            } catch (...) {
-                failure = std::current_exception();
-            }
-            publication.complete(std::move(failure));
-            receipt.reset();
-        });
+        controls.emplace_back(publication.make_command(
+            [run, worker = runtime.workers_[index].runtime_.get(), index](const auto& receipt) mutable {
+                std::exception_ptr failure;
+                try {
+                    run(*worker, index);
+                } catch (...) {
+                    failure = std::current_exception();
+                }
+                receipt.complete(std::move(failure));
+            }));
     }
 }
 
@@ -556,35 +583,49 @@ void make_worker_controls(control_list& controls, detail::app_runtime_graph& run
 // A non-routed run materializes the same route plan and worker bindings as
 // startup only when its first routed listener is requested. Every throwing
 // step precedes adoption; owner controls replace the empty tables in place.
-void enable_runtime_routes(detail::app_runtime_graph& runtime, const detail::app_state& state_value) {
-    if (runtime.routes_enabled_) {
-        return;
-    }
+struct runtime_route_candidate final {
+    detail::compiled_route_plan_ptr_type plan_;
+    std::pmr::vector<detail::controller_store> controllers_{process_resource()};
+    std::pmr::vector<std::unique_ptr<detail::route_table, pmr_object_deleter<detail::route_table>>> tables_{process_resource()};
+    std::pmr::vector<std::unique_ptr<detail::rate_limiter, pmr_object_deleter<detail::rate_limiter>>> rate_limiters_{process_resource()};
+};
+
+[[nodiscard]] runtime_route_candidate prepare_runtime_routes(
+    const detail::app_state& state_value, std::size_t worker_count) {
+    runtime_route_candidate result;
     const auto registrars = detail::seal_controller_registrars();
-    std::pmr::vector<detail::controller_store> controllers(process_resource());
-    controllers.reserve(runtime.workers_.size());
+    auto& controllers = result.controllers_;
+    auto& tables = result.tables_;
+    auto& rate_limiters = result.rate_limiters_;
+    controllers.reserve(worker_count);
     controllers.emplace_back(registrars);
-    auto plan = detail::compile_route_plan(registrars, controllers.front(), state_value.configuration_);
-    std::pmr::vector<std::unique_ptr<detail::route_table, pmr_object_deleter<detail::route_table>>> tables(process_resource());
-    tables.reserve(runtime.workers_.size());
-    for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
+    result.plan_ = detail::compile_route_plan(registrars, controllers.front(), state_value.configuration_);
+    tables.reserve(worker_count);
+    for (std::size_t index = 0; index < worker_count; ++index) {
         if (index != 0) {
             controllers.emplace_back(registrars);
         }
-        tables.push_back(make_pmr_object<detail::route_table>(process_resource(), *plan, controllers.back()));
+        tables.push_back(make_pmr_object<detail::route_table>(process_resource(), *result.plan_, controllers.back()));
     }
-    std::pmr::vector<std::unique_ptr<detail::rate_limiter, pmr_object_deleter<detail::rate_limiter>>> rate_limiters(process_resource());
     if (tables.front()->has_route_rate_limit() && !state_value.options_.default_rate_limit_per_worker_.has_value()) {
-        rate_limiters.reserve(runtime.workers_.size());
-        for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
+        rate_limiters.reserve(worker_count);
+        for (std::size_t index = 0; index < worker_count; ++index) {
             rate_limiters.push_back(make_pmr_object<detail::rate_limiter>(process_resource(), std::nullopt,
                 detail::route_rate_limit_presence::present, state_value.options_.rate_limit_capacity_per_worker_));
         }
     }
-    runtime_control_publication publication;
+    return result;
+}
+
+task<void> enable_runtime_routes(worker_handle caller, detail::app_runtime_graph& runtime,
+    runtime_route_candidate& candidate) {
+    detail::runtime_control_completion publication(caller);
     control_list controls(process_resource());
     make_worker_controls(controls, runtime, publication,
-        [&runtime, &controllers, &tables, &rate_limiters](detail::web_worker_runtime& worker, std::size_t index) noexcept {
+        [&runtime, &candidate](detail::web_worker_runtime& worker, std::size_t index) noexcept {
+            auto& controllers = candidate.controllers_;
+            auto& tables = candidate.tables_;
+            auto& rate_limiters = candidate.rate_limiters_;
             if (!rate_limiters.empty()) {
                 worker.adopt_route_rate_limiter(*rate_limiters[index]);
             }
@@ -595,10 +636,13 @@ void enable_runtime_routes(detail::app_runtime_graph& runtime, const detail::app
     // Once published, later additions reuse this run's compiled route ability,
     // including when binding the first routed listener subsequently fails.
     runtime.empty_route_plan_ = std::move(runtime.route_plan_);
-    runtime.route_plan_ = std::move(plan);
+    runtime.route_plan_ = std::move(candidate.plan_);
     runtime.routes_enabled_ = true;
     const bool posted = post_worker_controls(runtime, controls);
-    publication.wait();
+    co_await publication.wait();
+    if (auto failure = publication.failure()) {
+        std::rethrow_exception(failure);
+    }
     if (!posted || publication.completed() != runtime.workers_.size()) {
         throw std::logic_error("the app began stopping before every worker adopted the routes");
     }
@@ -608,24 +652,23 @@ void enable_runtime_routes(detail::app_runtime_graph& runtime, const detail::app
 // Builds an acceptor control before any owner thread prepares new resources.
 template <typename run_type>
 [[nodiscard]] move_only_function<void()> make_acceptor_control(
-    detail::windows_acceptor& acceptor, runtime_control_publication& publication, run_type run) {
-    return [&publication, &acceptor, run = std::move(run), receipt = publication.receipt()]() mutable {
+    detail::windows_acceptor& acceptor, detail::runtime_control_completion& publication, run_type run) {
+    return publication.make_command([&acceptor, run = std::move(run)](const auto& receipt) mutable {
         std::exception_ptr failure;
         try {
             run(acceptor);
         } catch (...) {
             failure = std::current_exception();
         }
-        publication.complete(std::move(failure));
-        receipt.reset();
-    };
+        receipt.complete(std::move(failure));
+    });
 }
 
 // Runs `run(acceptor)` on the acceptor thread for `publication`; false when
 // the acceptor stops first.
 template <typename run_type>
 [[nodiscard]] bool post_acceptor_control(
-    detail::windows_acceptor& acceptor, runtime_control_publication& publication, run_type run) {
+    detail::windows_acceptor& acceptor, detail::runtime_control_completion& publication, run_type run) {
     return acceptor.post_control(make_acceptor_control(acceptor, publication, std::move(run)));
 }
 #endif
@@ -701,158 +744,189 @@ application& application::listen(std::initializer_list<listen_config> configs) {
     return listen(std::span<const listen_config>(configs.begin(), configs.size()));
 }
 
-void application::replace_tls_identities(const listener_endpoint& endpoint, tls_config config) {
-    const tls_secret_cleanser secret_cleanser(config);
-    const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    {
-        std::lock_guard lock(state_->mutex_);
-        (void)find_replaceable_tls_listener(*state_, target, config);
-    }
-    // Retired selectors may run user destructors; release after the control lock.
+namespace {
+task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, worker_handle caller,
+    asio::ip::tcp::endpoint target, owned_tls_config input) {
     std::shared_ptr<const detail::http_server_tls_identities> retired;
-    const std::lock_guard serialized(state_->runtime_control_mutex_);
-    // Credentials load on this thread, outside the application lock, before
-    // anything changes.
-    auto identities = detail::load_http_server_tls_identities(config, process_resource());
-    bool published = false;
+    const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
+    active_app_control active(state, "TLS identities can be replaced only while the app is running");
     {
-        runtime_control_publication publication;
-        control_list controls(process_resource());
-        std::lock_guard lock(state_->mutex_);
-        // The app may have stopped, or begun stopping, while credentials loaded.
-        const auto index = find_replaceable_tls_listener(*state_, target, config);
-        auto& runtime = *state_->runtime_;
+        std::lock_guard lock(state->mutex_);
+        (void)find_replaceable_tls_listener(*state, target, input.config_);
+    }
+    auto identities = co_await prepare_runtime_control(caller, [input = std::move(input)]() mutable {
+        return detail::load_http_server_tls_identities(input.config_, process_resource());
+    });
+    detail::runtime_control_completion completion(caller);
+    control_list controls(process_resource());
+    auto& runtime = active.runtime();
+    std::size_t index = 0;
+    bool posted = false;
+    {
+        std::lock_guard lock(state->mutex_);
+        (void)running_runtime(*state, "TLS identities can be replaced only while the app is running");
+        index = stored_listener_index(*state, target);
         const auto slot = runtime_listener_slot(runtime, target);
-        make_worker_controls(controls, runtime, publication,
+        make_worker_controls(controls, runtime, completion,
             [slot, identities](detail::web_worker_runtime& worker, std::size_t) {
                 worker.adopt_tls_identities(slot, identities);
             });
-        published = post_worker_controls(runtime, controls);
-        if (published) {
-            // Later run()s serve the set every worker now adopts.
-            auto& stored =
-                std::get<detail::http_server_listener_definition::tls>(state_->listeners_[index].transport_).identities_;
-            retired = std::exchange(stored, std::move(identities));
-        }
-    }
-    if (!published) {
-        throw std::logic_error("the app began stopping before every worker adopted the TLS identities");
-    }
-}
-
-bool application::close_connection(std::uint64_t connection_id) {
-    constexpr const char* not_running = "connections can be closed only while the app is running";
-    constexpr const char* worker_thread = "connections cannot be closed from a business worker thread: use context::abort_connection";
-    {
-        std::lock_guard lock(state_->mutex_);
-        (void)running_runtime(*state_, not_running, worker_thread);
-    }
-    const std::lock_guard serialized(state_->runtime_control_mutex_);
-    std::atomic<bool> closed{false};
-    runtime_control_publication publication;
-    bool posted = false;
-    std::size_t worker_count = 0;
-    {
-        control_list controls(process_resource());
-        std::lock_guard lock(state_->mutex_);
-        auto& runtime = running_runtime(*state_, not_running, worker_thread);
-        worker_count = runtime.workers_.size();
-        make_worker_controls(controls, runtime, publication,
-            [connection_id, &closed](detail::web_worker_runtime& worker, std::size_t) noexcept {
-                if (worker.close_connection(connection_id)) {
-                    closed.store(true, std::memory_order_relaxed);
-                }
-            });
         posted = post_worker_controls(runtime, controls);
     }
-    publication.wait();
-    if (const auto failure = publication.failure()) {
+    co_await completion.wait();
+    if (auto failure = completion.failure()) {
         std::rethrow_exception(failure);
     }
-    if (!posted || publication.completed() != worker_count) {
-        throw std::logic_error("the app began stopping before every worker accepted the connection control");
+    {
+        std::lock_guard lock(state->mutex_);
+        if (!posted || completion.completed() != runtime.workers_.size() || !state->lifecycle_.running()) {
+            throw std::logic_error("the app began stopping before every worker adopted the TLS identities");
+        }
+        auto& stored = std::get<detail::http_server_listener_definition::tls>(state->listeners_[index].transport_).identities_;
+        retired = std::exchange(stored, std::move(identities));
     }
-    return closed.load(std::memory_order_relaxed);
+}
+}  // namespace
+
+task<void> application::replace_tls_identities(
+    worker_handle caller, const listener_endpoint& endpoint, tls_config config) {
+    owned_tls_config input(std::move(config));
+    const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
+    return replace_app_tls_identities(state_, std::move(caller), target, std::move(input));
 }
 
-void application::add_listener(listen_config config) {
-    const tls_secret_cleanser secret_cleanser(config.tls_);
-    const std::span<const listen_config> configs(&config, 1);
-    try {
-        std::lock_guard lock(state_->mutex_);
-        (void)running_runtime(*state_, "listeners can be added only while the app is running",
-            "listeners cannot be added from a business worker thread");
-    } catch (...) {
-        close_unowned_inherited_sockets(configs, {});
-        throw;
+namespace {
+task<bool> close_app_connection(
+    std::shared_ptr<detail::app_state> state, worker_handle caller, std::uint64_t connection_id) {
+    const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
+    active_app_control active(state, "connections can be closed only while the app is running");
+    auto& runtime = active.runtime();
+    std::atomic<bool> closed{false};
+    detail::runtime_control_completion completion(caller);
+    control_list controls(process_resource());
+    make_worker_controls(controls, runtime, completion,
+        [connection_id, &closed](detail::web_worker_runtime& worker, std::size_t) noexcept {
+            if (worker.close_connection(connection_id)) {
+                closed.store(true, std::memory_order_relaxed);
+            }
+        });
+    const bool posted = post_worker_controls(runtime, controls);
+    co_await completion.wait();
+    if (auto failure = completion.failure()) {
+        std::rethrow_exception(failure);
     }
-    // As listen() stores them; the run clones them below.
-    auto added = detail::load_server_listeners(configs);
-    // The definitions own the inherited sockets from here on. The runtime
-    // outlives this lock: run() retires it only while holding it.
-    const std::lock_guard serialized(state_->runtime_control_mutex_);
-    std::pmr::vector<detail::http_server_listener_definition> prepared(process_resource());
+    if (!posted || completion.completed() != runtime.workers_.size()) {
+        throw std::logic_error("the app began stopping before every worker accepted the connection control");
+    }
+    co_return closed.load(std::memory_order_relaxed);
+}
+}  // namespace
+
+task<bool> application::close_connection(worker_handle caller, std::uint64_t connection_id) {
+    return close_app_connection(state_, std::move(caller), connection_id);
+}
+
+namespace {
+struct listener_addition_candidate final {
+    std::pmr::vector<detail::http_server_listener_definition> added_{process_resource()};
+    std::pmr::vector<detail::http_server_listener_definition> prepared_{process_resource()};
+    std::pmr::vector<std::pmr::vector<detail::prepared_http_server_session>> sessions_{process_resource()};
+    std::optional<runtime_route_candidate> routes_;
+};
+
+[[nodiscard]] std::exception_ptr control_round_failure(const detail::runtime_control_completion& completion,
+    bool posted, std::size_t targets, const char* message) noexcept {
+    if (auto failure = completion.failure()) {
+        return failure;
+    }
+    if (!posted || completion.completed() != targets) {
+        try {
+            return std::make_exception_ptr(std::logic_error(message));
+        } catch (...) {
+            return std::current_exception();
+        }
+    }
+    return {};
+}
+
+task<void> add_app_listener(
+    std::shared_ptr<detail::app_state> state, worker_handle caller, owned_listen_config input) {
+    const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
+    active_app_control active(state, "listeners can be added only while the app is running");
+    auto& runtime = active.runtime();
+    const auto worker_count = runtime.workers_.size();
+    const auto key_origin = runtime.tls_key_origin_;
+    const bool needs_routes = !runtime.routes_enabled_;
+    const bool inexpensive = !input.config_.https_.has_value() &&
+                             (!needs_routes || input.config_.dispatch_ != listener_dispatch::routes);
+    auto prepare =
+        [state, worker_count, key_origin, needs_routes, input = std::move(input)]() mutable {
+            listener_addition_candidate result;
+            result.added_ = input.load();
+            result.prepared_.reserve(result.added_.size());
+            for (const auto& definition : result.added_) {
+                result.prepared_.push_back(detail::validate_run_listener(
+                    definition, state->options_, key_origin, process_resource()));
+            }
+            result.sessions_.reserve(worker_count);
+            for (std::size_t worker = 0; worker < worker_count; ++worker) {
+                auto& sessions = result.sessions_.emplace_back();
+                sessions.reserve(result.prepared_.size());
+                for (const auto& definition : result.prepared_) {
+                    if (std::holds_alternative<detail::http_server_listener_definition::tls>(definition.transport_)) {
+                        sessions.push_back(detail::prepare_http_server_session_config(
+                            definition, static_cast<bool>(state->options_.tls_client_hello_)));
+                    } else {
+                        sessions.emplace_back();
+                    }
+                }
+            }
+            if (needs_routes && std::ranges::any_of(result.added_, [](const auto& listener) {
+                    return !listener.connection_.has_value() && !listener.request_stream_ &&
+                           !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(
+                               listener.transport_);
+                })) {
+                result.routes_.emplace(prepare_runtime_routes(*state, worker_count));
+            }
+            return result;
+        };
+    // Pure plaintext additions need no file/PEM/route work and still work on
+    // callers whose blocking pool is disabled.
+    auto candidate = inexpensive ? prepare() : (co_await prepare_runtime_control(caller, std::move(prepare)));
+    auto& added = candidate.added_;
+    auto& prepared = candidate.prepared_;
     std::pmr::vector<std::optional<std::size_t>> http3_slots(process_resource());
-    detail::app_runtime_graph* runtime = nullptr;
     std::size_t first_slot = 0;
 #if defined(RUVIA_ENABLE_HTTP3)
     detail::http3_worker_directory* directory = nullptr;
 #endif
     {
-        std::lock_guard lock(state_->mutex_);
-        runtime = &running_runtime(*state_, "listeners can be added only while the app is running",
-            "listeners cannot be added from a business worker thread");
-        detail::ensure_new_listener_endpoints(state_->listeners_, added);
-        prepared.reserve(added.size());
-        // Every allocation for publication is completed before owner threads
-        // acquire sockets. Committing the stored definitions then cannot grow.
-        state_->listeners_.reserve(state_->listeners_.size() + added.size());
+        std::lock_guard lock(state->mutex_);
+        (void)running_runtime(*state, "listeners can be added only while the app is running");
+        detail::ensure_new_listener_endpoints(state->listeners_, added);
+        state->listeners_.reserve(state->listeners_.size() + added.size());
         http3_slots.reserve(added.size());
-        for (const auto& definition : added) {
-            // Server options are frozen while the app runs, so they describe this run.
-            prepared.push_back(
-                detail::validate_run_listener(definition, state_->options_, runtime->tls_key_origin_, process_resource()));
-        }
 #if defined(RUVIA_ENABLE_HTTP3)
-        if (runtime->http3_directory_ == nullptr &&
+        if (runtime.http3_directory_ == nullptr &&
             std::ranges::any_of(prepared, [](const auto& definition) { return definition.http3_.has_value(); })) {
-            auto created = make_pmr_object<detail::http3_worker_directory>(process_resource(), runtime->workers_.size());
-            for (std::size_t index = 0; index < runtime->workers_.size(); ++index) {
-                created->bind_worker(index, runtime->workers_[index].runtime_->runtime().handle());
+            auto created = make_pmr_object<detail::http3_worker_directory>(process_resource(), runtime.workers_.size());
+            for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
+                created->bind_worker(index, runtime.workers_[index].runtime_->runtime().handle());
             }
-            // Declared before the workers, so it outlives them like one run() made.
-            runtime->http3_directory_ = std::move(created);
+            runtime.http3_directory_ = std::move(created);
         }
-        directory = runtime->http3_directory_.get();
+        directory = runtime.http3_directory_.get();
 #endif
-        // Numbered now, whatever the outcome: a slot is never reused.
-        first_slot = runtime->listener_slots_.size();
-        runtime->listener_slots_.resize(first_slot + added.size());
+        first_slot = runtime.listener_slots_.size();
+        runtime.listener_slots_.resize(first_slot + added.size());
         for (const auto& definition : prepared) {
             http3_slots.push_back(
-                definition.http3_.has_value() ? std::optional<std::size_t>(runtime->http3_slot_count_++) : std::nullopt);
+                definition.http3_.has_value() ? std::optional<std::size_t>(runtime.http3_slot_count_++) : std::nullopt);
         }
     }
-    if (std::ranges::any_of(added, [](const auto& listener) {
-            return !listener.connection_.has_value() && !listener.request_stream_ &&
-                   !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(listener.transport_);
-        })) {
-        enable_runtime_routes(*runtime, *state_);
+    if (candidate.routes_) {
+        co_await enable_runtime_routes(caller, runtime, *candidate.routes_);
     }
-
-    // Every owner thread prepares the listeners -- bound or adopted, admitting
-    // nothing -- before any opens them. Declared before each round's
-    // publication, which waits for the controls borrowing them.
-    const auto prepare = [&](auto& target) {
-        for (std::size_t index = 0; index < prepared.size(); ++index) {
-            target.prepare_listener(first_slot + index, http3_slots[index], prepared[index]
-#if defined(RUVIA_ENABLE_HTTP3)
-                ,
-                directory
-#endif
-            );
-        }
-    };
     const auto discard = [first_slot, count = prepared.size()](auto& target) noexcept {
         for (std::size_t index = 0; index < count; ++index) {
             target.discard_listener(first_slot + index);
@@ -863,198 +937,214 @@ void application::add_listener(listen_config config) {
             target.open_listener(first_slot + index);
         }
     };
-    // Prebuild all rounds, including rollback and the Windows acceptor
-    // controls. No allocation is allowed between preparation and commit, or
-    // while discarding a partially prepared addition.
-    runtime_control_publication prepared_publication;
+    detail::runtime_control_completion prepared_completion(caller);
+    detail::runtime_control_completion discarded_completion(caller);
+    detail::runtime_control_completion opened_completion(caller);
     control_list prepare_controls(process_resource());
-    make_worker_controls(prepare_controls, *runtime, prepared_publication,
-        [&prepare](detail::web_worker_runtime& worker, std::size_t) { prepare(worker); });
-    runtime_control_publication discarded_publication;
     control_list discard_controls(process_resource());
-    make_worker_controls(discard_controls, *runtime, discarded_publication,
-        [&discard](detail::web_worker_runtime& worker, std::size_t) { discard(worker); });
-    runtime_control_publication opened_publication;
     control_list open_controls(process_resource());
-    make_worker_controls(open_controls, *runtime, opened_publication,
-        [&open](detail::web_worker_runtime& worker, std::size_t) { open(worker); });
-#if defined(_WIN32)
-    auto prepare_acceptor = make_acceptor_control(*runtime->acceptor_, prepared_publication,
-        [&prepare](detail::windows_acceptor& acceptor) { prepare(acceptor); });
-    auto discard_acceptor = make_acceptor_control(*runtime->acceptor_, discarded_publication,
-        [&discard](detail::windows_acceptor& acceptor) { discard(acceptor); });
-    runtime_control_publication accepting_publication;
-    auto open_acceptor = make_acceptor_control(*runtime->acceptor_, accepting_publication,
-        [&open](detail::windows_acceptor& acceptor) { open(acceptor); });
+    make_worker_controls(prepare_controls, runtime, prepared_completion,
+        [&](detail::web_worker_runtime& worker, std::size_t worker_index) {
+            for (std::size_t index = 0; index < prepared.size(); ++index) {
+                worker.prepare_listener(first_slot + index, http3_slots[index], prepared[index],
+                    std::move(candidate.sessions_[worker_index][index])
+#if defined(RUVIA_ENABLE_HTTP3)
+                        ,
+                    directory
 #endif
-    try {
-        bool posted = post_worker_controls(*runtime, prepare_controls);
+                );
+            }
+        });
+    make_worker_controls(discard_controls, runtime, discarded_completion,
+        [discard](detail::web_worker_runtime& worker, std::size_t) { discard(worker); });
+    make_worker_controls(open_controls, runtime, opened_completion,
+        [open](detail::web_worker_runtime& worker, std::size_t) { open(worker); });
 #if defined(_WIN32)
-        if (posted) {
-            posted = runtime->acceptor_->post_control(std::move(prepare_acceptor));
-        }
-        prepare_acceptor = nullptr;
+    auto prepare_acceptor = make_acceptor_control(*runtime.acceptor_, prepared_completion,
+        [&](detail::windows_acceptor& acceptor) {
+            for (std::size_t index = 0; index < prepared.size(); ++index) {
+                acceptor.prepare_listener(first_slot + index, http3_slots[index], prepared[index]
+#if defined(RUVIA_ENABLE_HTTP3)
+                    ,
+                    directory
 #endif
-        prepared_publication.wait();
-        if (const auto failure = prepared_publication.failure()) {
-            std::rethrow_exception(failure);
-        }
-        if (!posted || prepared_publication.completed() != control_targets(*runtime)) {
-            throw std::logic_error("the app began stopping before every worker prepared the listeners");
-        }
-    } catch (...) {
-        // A stopping run closes its own resources if it refuses a control.
-        (void)post_worker_controls(*runtime, discard_controls);
+                );
+            }
+        });
+    auto discard_acceptor = make_acceptor_control(*runtime.acceptor_, discarded_completion,
+        [discard](detail::windows_acceptor& acceptor) { discard(acceptor); });
+    detail::runtime_control_completion accepting_completion(caller);
+    auto open_acceptor = make_acceptor_control(*runtime.acceptor_, accepting_completion,
+        [open](detail::windows_acceptor& acceptor) { open(acceptor); });
+#endif
+    bool posted = post_worker_controls(runtime, prepare_controls);
 #if defined(_WIN32)
-        (void)runtime->acceptor_->post_control(std::move(discard_acceptor));
+    if (posted) {
+        posted = runtime.acceptor_->post_control(std::move(prepare_acceptor));
+    }
+    prepare_acceptor = nullptr;
 #endif
-        discarded_publication.wait();
+    co_await prepared_completion.wait();
+    auto failure = control_round_failure(prepared_completion, posted, control_targets(runtime),
+        "the app began stopping before every worker prepared the listeners");
+    if (!failure) {
+        {
+            std::lock_guard lock(state->mutex_);
+            posted = state->lifecycle_.running() && post_worker_controls(runtime, open_controls);
+        }
+        open_controls.clear();
+        co_await opened_completion.wait();
+        failure = control_round_failure(opened_completion, posted, runtime.workers_.size(),
+            "the app began stopping before every worker accepted the listeners");
+#if defined(_WIN32)
+        if (!failure) {
+            {
+                std::lock_guard lock(state->mutex_);
+                posted = state->lifecycle_.running() && runtime.acceptor_->post_control(std::move(open_acceptor));
+            }
+            open_acceptor = nullptr;
+            co_await accepting_completion.wait();
+            failure = control_round_failure(accepting_completion, posted, 1,
+                "the app began stopping before the acceptor accepted the listeners");
+        }
+#endif
+    }
+    if (!failure) {
+        std::lock_guard lock(state->mutex_);
+        if (!state->lifecycle_.running()) {
+            try {
+                failure = std::make_exception_ptr(
+                    std::logic_error("the app began stopping before every worker accepted the listeners"));
+            } catch (...) {
+                failure = std::current_exception();
+            }
+        } else {
+            for (std::size_t index = 0; index < added.size(); ++index) {
+                runtime.listener_slots_[first_slot + index] = added[index].endpoint_;
+                added[index].inherited_sockets_.reset();
+                state->listeners_.push_back(std::move(added[index]));
+            }
+        }
+    }
+    if (failure) {
+        (void)post_worker_controls(runtime, discard_controls);
+#if defined(_WIN32)
+        (void)runtime.acceptor_->post_control(std::move(discard_acceptor));
+#endif
+        co_await discarded_completion.wait();
+        if (auto rollback_failure = discarded_completion.failure()) {
+            report_unhandled_failure("app listener rollback", rollback_failure);
+        }
 #if defined(RUVIA_ENABLE_HTTP3) && !defined(_WIN32)
-        // Sockets opened for workers that failed before claiming theirs.
         for (const auto& slot : http3_slots) {
-            if (slot.has_value()) {
+            if (slot) {
                 directory->close_unclaimed_listener_sockets(*slot);
             }
         }
 #endif
-        throw;
-    }
-
-    bool published = false;
-#if defined(_WIN32)
-    // Every worker admits before the acceptor hands it connections. All
-    // controls and storage are already allocated before this first open.
-    const bool admitting = post_worker_controls(*runtime, open_controls);
-    opened_publication.wait();
-#endif
-    {
-        std::lock_guard lock(state_->mutex_);
-#if defined(_WIN32)
-        published = admitting && state_->lifecycle_.running() &&
-                    runtime->acceptor_->post_control(std::move(open_acceptor));
-#else
-        published = state_->lifecycle_.running() && post_worker_controls(*runtime, open_controls);
-#endif
-        if (published) {
-            // Later run()s serve them too; this run consumed their inherited sockets.
-            for (std::size_t index = 0; index < added.size(); ++index) {
-                runtime->listener_slots_[first_slot + index] = added[index].endpoint_;
-                added[index].inherited_sockets_.reset();
-                state_->listeners_.push_back(std::move(added[index]));
-            }
-        }
-    }
-    if (!published) {
-        throw std::logic_error("the app began stopping before every worker accepted the listeners");
+        std::rethrow_exception(failure);
     }
 }
+}  // namespace
 
-void application::remove_listener(const listener_endpoint& endpoint) {
-    const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    constexpr auto not_running = "listeners can be removed only while the app is running";
-    constexpr auto worker_thread = "listeners cannot be removed from a business worker thread";
-    {
-        std::lock_guard lock(state_->mutex_);
-        (void)running_runtime(*state_, not_running, worker_thread);
-    }
-    const std::lock_guard serialized(state_->runtime_control_mutex_);
-    detail::app_runtime_graph* runtime = nullptr;
+task<void> application::add_listener(worker_handle caller, listen_config config) {
+    return add_app_listener(state_, std::move(caller), owned_listen_config(std::move(config)));
+}
+
+namespace {
+task<void> remove_app_listener(
+    std::shared_ptr<detail::app_state> state, worker_handle caller, asio::ip::tcp::endpoint target) {
+    std::optional<detail::http_server_listener_definition> retired;
+    const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
+    active_app_control active(state, "listeners can be removed only while the app is running");
+    auto& runtime = active.runtime();
     std::size_t slot = 0;
     {
-        std::lock_guard lock(state_->mutex_);
-        runtime = &running_runtime(*state_, not_running, worker_thread);
-        (void)stored_listener_index(*state_, target);
-        slot = runtime_listener_slot(*runtime, target);
+        std::lock_guard lock(state->mutex_);
+        (void)stored_listener_index(*state, target);
+        slot = runtime_listener_slot(runtime, target);
     }
 #if defined(_WIN32)
-    // The acceptor stops accepting first, so no connection it accepts reaches
-    // a worker that no longer admits the listener.
-    {
-        runtime_control_publication publication;
-        if (!post_acceptor_control(*runtime->acceptor_, publication,
-                [slot, receipt = publication.receipt()](detail::windows_acceptor& acceptor) {
-                    acceptor.remove_listener(slot, receipt);
-                })) {
-            throw std::logic_error("the app began stopping before every worker removed the listener");
-        }
+    detail::runtime_control_completion accepting_completion(caller);
+    auto accepting_lifetime = std::make_shared<detail::runtime_control_completion::receipt>(
+        accepting_completion.make_receipt());
+    const bool accepting_posted = post_acceptor_control(*runtime.acceptor_, accepting_completion,
+        [slot, receipt = std::move(accepting_lifetime)](detail::windows_acceptor& acceptor) {
+            acceptor.remove_listener(slot, receipt);
+        });
+    co_await accepting_completion.wait();
+    if (auto failure = control_round_failure(accepting_completion, accepting_posted, 1,
+            "the app began stopping before the acceptor removed the listener")) {
+        std::rethrow_exception(failure);
     }
 #endif
-    // Destroyed after the lock.
-    std::optional<detail::http_server_listener_definition> retired;
-    bool published = false;
+    detail::runtime_control_completion completion(caller);
+    control_list controls(process_resource());
+    auto lifetime = std::make_shared<detail::runtime_control_completion::receipt>(completion.make_receipt());
+    make_worker_controls(controls, runtime, completion,
+        [slot, receipt = std::move(lifetime)](detail::web_worker_runtime& worker, std::size_t) {
+            worker.remove_listener(slot, receipt);
+        });
+    bool posted = false;
     {
-        runtime_control_publication publication;
-        control_list controls(process_resource());
-        // Each worker holds a receipt until its accept loop exited.
-        make_worker_controls(controls, *runtime, publication,
-            [slot, receipt = publication.receipt()](detail::web_worker_runtime& worker, std::size_t) {
-                worker.remove_listener(slot, receipt);
-            });
-        std::lock_guard lock(state_->mutex_);
-        published = state_->lifecycle_.running() && post_worker_controls(*runtime, controls);
-        if (published) {
-            // Later run()s no longer serve it.
-            const auto index = stored_listener_index(*state_, target);
-            retired.emplace(std::move(state_->listeners_[index]));
-            state_->listeners_.erase(state_->listeners_.begin() + static_cast<std::ptrdiff_t>(index));
-            runtime->listener_slots_[slot].reset();
+        std::lock_guard lock(state->mutex_);
+        posted = state->lifecycle_.running() && post_worker_controls(runtime, controls);
+    }
+    controls.clear();
+    co_await completion.wait();
+    if (auto failure = control_round_failure(completion, posted, runtime.workers_.size(),
+            "the app began stopping before every worker removed the listener")) {
+        std::rethrow_exception(failure);
+    }
+    {
+        std::lock_guard lock(state->mutex_);
+        if (!state->lifecycle_.running()) {
+            throw std::logic_error("the app began stopping before every worker removed the listener");
         }
+        const auto index = stored_listener_index(*state, target);
+        retired.emplace(std::move(state->listeners_[index]));
+        state->listeners_.erase(state->listeners_.begin() + static_cast<std::ptrdiff_t>(index));
+        runtime.listener_slots_[slot].reset();
     }
-    if (!published) {
-        throw std::logic_error("the app began stopping before every worker removed the listener");
-    }
+}
+}  // namespace
+
+task<void> application::remove_listener(worker_handle caller, const listener_endpoint& endpoint) {
+    const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
+    return remove_app_listener(state_, std::move(caller), target);
 }
 
 #if !defined(_WIN32)
-listener_sockets application::duplicate_listener_sockets(const listener_endpoint& endpoint) const {
-    const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    constexpr auto not_running = "listener sockets can be duplicated only while the app is running";
-    constexpr auto worker_thread = "listener sockets cannot be duplicated from a business worker thread";
-    {
-        std::lock_guard lock(state_->mutex_);
-        (void)running_runtime(*state_, not_running, worker_thread);
-    }
-    const std::lock_guard serialized(state_->runtime_control_mutex_);
-    // Written by each worker at its own index.
+namespace {
+task<listener_sockets> duplicate_app_listener_sockets(
+    std::shared_ptr<detail::app_state> state, worker_handle caller, asio::ip::tcp::endpoint target) {
+    const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
+    active_app_control active(state, "listener sockets can be duplicated only while the app is running");
+    auto& runtime = active.runtime();
     std::pmr::vector<detail::listener_socket_duplicates> duplicates(process_resource());
+    detail::runtime_control_completion completion(caller);
+    control_list controls(process_resource());
     bool https = false;
     bool http3 = false;
-    bool posted = false;
-    std::exception_ptr failure;
     {
-        runtime_control_publication publication;
-        control_list controls(process_resource());
-        {
-            std::lock_guard lock(state_->mutex_);
-            auto& runtime = running_runtime(*state_, not_running, worker_thread);
-            const auto& stored = state_->listeners_[stored_listener_index(*state_, target)];
-            https = std::holds_alternative<detail::http_server_listener_definition::tls>(stored.transport_);
-            http3 = stored.http3_.has_value();
-            const auto slot = runtime_listener_slot(runtime, target);
-            duplicates.resize(runtime.workers_.size());
-            make_worker_controls(controls, runtime, publication,
-                [slot, &duplicates](detail::web_worker_runtime& worker, std::size_t index) {
-                    duplicates[index] = worker.duplicate_listener(slot);
-                });
-            posted = post_worker_controls(runtime, controls);
-        }
-        publication.wait();
-        failure = publication.failure();
-        if (failure == nullptr && (!posted || publication.completed() != duplicates.size())) {
-            failure = std::make_exception_ptr(
-                std::logic_error("the app began stopping before every worker duplicated its sockets"));
-        }
+        std::lock_guard lock(state->mutex_);
+        const auto& stored = state->listeners_[stored_listener_index(*state, target)];
+        https = std::holds_alternative<detail::http_server_listener_definition::tls>(stored.transport_);
+        http3 = stored.http3_.has_value();
+        const auto slot = runtime_listener_slot(runtime, target);
+        duplicates.resize(runtime.workers_.size());
+        make_worker_controls(controls, runtime, completion,
+            [slot, &duplicates](detail::web_worker_runtime& worker, std::size_t index) {
+                duplicates[index] = worker.duplicate_listener(slot);
+            });
     }
-    const auto close_duplicates = [&duplicates]() noexcept {
-        for (const auto& duplicate : duplicates) {
-            detail::close_native_socket(duplicate.tcp_);
-            detail::close_native_socket(duplicate.udp_);
-        }
-    };
+    const bool posted = post_worker_controls(runtime, controls);
+    co_await completion.wait();
     listener_sockets result;
     auto& tcp = https ? result.https_ : result.http_;
     try {
-        if (failure != nullptr) {
+        if (auto failure = control_round_failure(completion, posted, duplicates.size(),
+                "the app began stopping before every worker duplicated its sockets")) {
             std::rethrow_exception(failure);
         }
         tcp.reserve(duplicates.size());
@@ -1062,7 +1152,10 @@ listener_sockets application::duplicate_listener_sockets(const listener_endpoint
             result.http3_.reserve(duplicates.size());
         }
     } catch (...) {
-        close_duplicates();
+        for (const auto& duplicate : duplicates) {
+            detail::close_native_socket(duplicate.tcp_);
+            detail::close_native_socket(duplicate.udp_);
+        }
         throw;
     }
     for (const auto& duplicate : duplicates) {
@@ -1071,7 +1164,14 @@ listener_sockets application::duplicate_listener_sockets(const listener_endpoint
             result.http3_.push_back(duplicate.udp_);
         }
     }
-    return result;
+    co_return result;
+}
+}  // namespace
+
+task<listener_sockets> application::duplicate_listener_sockets(
+    worker_handle caller, const listener_endpoint& endpoint) const {
+    const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
+    return duplicate_app_listener_sockets(state_, std::move(caller), target);
 }
 #endif
 

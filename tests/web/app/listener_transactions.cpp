@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <future>
 #include <semaphore>
 #include <span>
 #include <stdexcept>
@@ -24,6 +25,8 @@
 #include <cerrno>
 #endif
 
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -38,6 +41,27 @@
 namespace listener_transactions_test {
 
 using namespace std::chrono_literals;
+
+struct control_runtime final {
+    ruvia::blocking_pool blocking_{{.thread_count_ = 1}};
+    ruvia::event_loop_pool loops_{{.loop_count_ = 1, .blocking_pool_ = &blocking_}};
+
+    control_runtime() {
+        loops_.start();
+    }
+    ~control_runtime() {
+        loops_.join();
+    }
+};
+
+control_runtime& controls() {
+    static control_runtime value;
+    return value;
+}
+
+ruvia::event_loop control_loop() {
+    return controls().loops_.loop(0);
+}
 
 std::binary_semaphore started{0};
 
@@ -63,7 +87,7 @@ ruvia::task<void> serve_connection(ruvia::server_connection& connection) {
 void wait_until_running(ruvia::application& app) {
     ruvia::test::wait_until([&app] {
         try {
-            app.remove_listener({.address_ = "0.0.0.0", .port_ = 9});
+            control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "0.0.0.0", .port_ = 9})).get();
         } catch (const std::invalid_argument&) {
             return true;
         } catch (const std::logic_error&) {
@@ -122,7 +146,7 @@ TEST(Ruvia, adding_first_routed_listener_builds_controllers_and_route_rate_limit
     ruvia::test::app_run run(app);
     ASSERT_TRUE(started.try_acquire_for(10s));
     wait_until_running(app);
-    app.add_listener({.address_ = "127.0.0.1", .http_ = routed.endpoint().port()});
+    control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get();
     EXPECT_TRUE(request(io, routed.endpoint()).ends_with("ready"));
     EXPECT_TRUE(request(io, routed.endpoint(), "/limited").starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(request(io, routed.endpoint(), "/limited").starts_with("HTTP/1.1 429 "));
@@ -163,15 +187,15 @@ TEST(Ruvia, add_listener_prepare_failure_discards_already_adopted_sockets_withou
         config.inherited_sockets_->http_.push_back(inherited_socket(io, addition.endpoint()));
     }
     const auto sockets = config.inherited_sockets_->http_;
-    EXPECT_THROW(app.add_listener(config), std::system_error);
+    EXPECT_THROW(control_loop().start(app.add_listener(control_loop().handle(), config)).get(), std::system_error);
     for (const auto socket : sockets) {
         EXPECT_TRUE(closed(socket));
     }
     EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
-    EXPECT_THROW(app.remove_listener({.address_ = "127.0.0.1", .port_ = addition.endpoint().port()}), std::invalid_argument);
+    EXPECT_THROW(control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "127.0.0.1", .port_ = addition.endpoint().port()})).get(), std::invalid_argument);
     blocker.close();
     config.inherited_sockets_.reset();
-    app.add_listener(std::move(config));
+    control_loop().start(app.add_listener(control_loop().handle(), std::move(config))).get();
     EXPECT_TRUE(request(io, addition.endpoint()).ends_with("ready"));
     EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
     app.stop();
@@ -217,4 +241,57 @@ TEST(Ruvia, mixed_listener_adopts_one_physical_socket_group_for_plain_and_tls_ra
     }
     app.stop();
     runner.join();
+}
+
+TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
+    const ruvia::test::tls_identity identity("async-addition", "DNS:localhost");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation original(io), secure(io);
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 1})
+        .listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
+        .on_connection(&serve_connection)
+        .on_start(nullptr)
+        .on_start([] { started.release(); });
+    ruvia::test::app_run run(app);
+    ASSERT_TRUE(started.try_acquire_for(10s));
+    wait_until_running(app);
+
+    std::binary_semaphore entered{0}, release{0};
+    ASSERT_EQ(controls().blocking_.submit([&] {
+        entered.release();
+        release.acquire();
+    }),
+        ruvia::blocking_submit_status::accepted);
+    entered.acquire();
+
+    const auto loop = control_loop();
+    auto addition = loop.start(app.add_listener(loop.handle(),
+        {.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::connection}));
+    std::promise<void> heartbeat;
+    auto observed = heartbeat.get_future();
+    const auto posted = loop.handle().post([&heartbeat] { heartbeat.set_value(); });
+    EXPECT_EQ(posted, ruvia::post_status::accepted);
+    if (posted == ruvia::post_status::accepted) {
+        EXPECT_EQ(observed.wait_for(1s), std::future_status::ready);
+        EXPECT_EQ(controls().blocking_.stats().queued_, 1U);
+    }
+    EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
+    release.release();
+    if (posted == ruvia::post_status::accepted) {
+        observed.wait();
+    }
+    addition.get();
+
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.load_verify_file(identity.ca_file_.string());
+    client.set_verify_mode(asio::ssl::verify_peer);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    stream.next_layer().connect(secure.endpoint());
+    stream.handshake(asio::ssl::stream_base::client);
+    asio::write(stream, asio::buffer(std::string_view(
+                            "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
+    EXPECT_TRUE(ruvia::test::read_to_end(stream).ends_with("ready"));
+    app.stop();
+    run.join();
 }

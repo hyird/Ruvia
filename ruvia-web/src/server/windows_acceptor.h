@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <utility>
@@ -25,6 +26,7 @@
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
 
+#include "integration/runtime_control_completion.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 
@@ -119,11 +121,16 @@ public:
     // acceptor's failure (a listener that cannot be bound).
     [[nodiscard]] bool start();
     [[nodiscard]] bool serve();
+    [[nodiscard]] task<void> start(worker_handle caller);
+    [[nodiscard]] task<void> serve(worker_handle caller);
     // Any thread.
     void stop_admission() noexcept;
     void request_stop() noexcept;
     // Lifecycle thread, after request_stop().
     void join();
+    // Waits for the native thread HANDLE asynchronously; join() afterwards only
+    // reclaims a thread whose exit has already been observed.
+    [[nodiscard]] task<void> join(worker_handle caller, asio::io_context& caller_io);
     [[nodiscard]] std::exception_ptr failure() noexcept;
     // Any thread: sockets the chosen worker's queue refused, and accept
     // failures other than peer disconnects.
@@ -178,6 +185,7 @@ private:
     struct udp_listener;
 #endif
 
+    void complete_phase(bool startup, std::exception_ptr failure = {}) noexcept;
     task<void> run();
     void open_listeners();
     void open_tcp_listener(tcp_listener& listener);
@@ -222,6 +230,9 @@ private:
     bool stopping_{false};
     std::atomic<std::size_t> refused_{0};
     std::atomic<std::size_t> accept_failures_{0};
+    std::mutex phase_mutex_;
+    std::optional<runtime_control_completion::receipt> startup_receipt_;
+    std::optional<runtime_control_completion::receipt> serve_receipt_;
 };
 
 }  // namespace ruvia::detail

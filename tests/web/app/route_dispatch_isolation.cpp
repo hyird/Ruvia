@@ -10,6 +10,8 @@
 
 #include <asio/io_context.hpp>
 
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -24,6 +26,22 @@
 namespace route_dispatch_isolation_test {
 
 using namespace std::chrono_literals;
+
+ruvia::event_loop control_loop() {
+    struct runtime final {
+        ruvia::blocking_pool blocking_{{.thread_count_ = 1}};
+        ruvia::event_loop_pool loops_{{.loop_count_ = 1, .blocking_pool_ = &blocking_}};
+
+        runtime() {
+            loops_.start();
+        }
+        ~runtime() {
+            loops_.join();
+        }
+    };
+    static runtime value;
+    return value.loops_.loop(0);
+}
 
 std::atomic<int> controller_constructions{0};
 std::atomic<int> middleware_constructions{0};
@@ -144,7 +162,7 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
     ASSERT_TRUE(started.try_acquire_for(10s));
     ruvia::test::wait_until([&app] {
         try {
-            app.remove_listener({.address_ = "0.0.0.0", .port_ = 9});
+            control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "0.0.0.0", .port_ = 9})).get();
         } catch (const std::invalid_argument&) {
             return true;
         } catch (const std::logic_error&) {
@@ -152,7 +170,7 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
         return false;
     },
         10s);
-    EXPECT_THROW(app.add_listener({.address_ = "127.0.0.1", .http_ = routed.endpoint().port()}), std::invalid_argument);
+    EXPECT_THROW(control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get(), std::invalid_argument);
     EXPECT_TRUE(ruvia::test::exchange(io, raw.endpoint(),
         "GET /still-serving HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             .ends_with("connection"));

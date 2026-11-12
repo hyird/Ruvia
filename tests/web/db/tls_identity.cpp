@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <future>
 #include <memory_resource>
 #include <stdexcept>
@@ -120,11 +121,39 @@ private:
 };
 
 bool sends_startup(ruvia::db_driver driver, const char* reference, const char* common_name,
-    const char* san, std::uint64_t record_limit = std::uint64_t{1} << 23) {
-    ruvia::test::tls_identity identity(common_name, san);
+    const char* san, std::uint64_t record_limit = std::uint64_t{1} << 23, int version = 0,
+    bool elliptic_curve = false, bool mutual_tls = false, const char* cipher = nullptr) {
+    ruvia::test::tls_identity identity(common_name, san, elliptic_curve);
+    auto* const context = identity.context_.native_handle();
+    if (version != 0) {
+        // Only the adversarial test peer relaxes OpenSSL's legacy-signature
+        // policy. The database client must retain the production policy.
+        SSL_CTX_set_security_level(context, 0);
+        if (SSL_CTX_set_min_proto_version(context, version) != 1 ||
+            SSL_CTX_set_max_proto_version(context, version) != 1) {
+            throw std::runtime_error("cannot pin database test peer TLS version");
+        }
+    }
+    if (cipher != nullptr && SSL_CTX_set_cipher_list(context, cipher) != 1) {
+        throw std::runtime_error("cannot pin database test peer cipher");
+    }
+    if (mutual_tls) {
+        if (SSL_CTX_load_verify_locations(context, identity.ca_file_.string().c_str(), nullptr) != 1) {
+            throw std::runtime_error("cannot trust database test client identity");
+        }
+        SSL_CTX_set_verify(context, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
+    }
     handshake_peer peer(identity.context_, driver == ruvia::db_driver::mariadb);
     ruvia::db_config config{.driver_ = driver, .host_ = "127.0.0.1", .port_ = peer.port(), .username_ = "test", .database_ = "test"};
     config.tls_.ca_file_ = identity.ca_file_;
+    if (mutual_tls) {
+        // libpq rejects client private keys readable by group/other users;
+        // the generic server identity fixture does not restrict its key file.
+        std::filesystem::permissions(identity.private_key_file(),
+            std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+        config.tls_.identity_ = ruvia::tls_identity_config{
+            .certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()};
+    }
     if (driver == ruvia::db_driver::postgresql) {
         config.tls_.server_name_ = reference;
     }
@@ -142,6 +171,28 @@ bool sends_startup(ruvia::db_driver driver, const char* reference, const char* c
     return peer.received_application_data();
 }
 
+void checks_protocol_floor(ruvia::db_driver driver) {
+    constexpr auto limit = std::uint64_t{1} << 23;
+    for (const bool elliptic_curve : {false, true}) {
+        SCOPED_TRACE(elliptic_curve ? "ECDSA" : "RSA");
+        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
+            limit, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "127.0.0.1", "",
+            limit, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2",
+            limit, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
+            1, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
+            limit, TLS1_VERSION, elliptic_curve));
+        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
+            limit, TLS1_1_VERSION, elliptic_curve, true));
+        const auto* const cbc = elliptic_curve ? "ECDHE-ECDSA-AES128-SHA" : "ECDHE-RSA-AES128-SHA";
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
+            limit, TLS1_2_VERSION, elliptic_curve, false, cbc));
+    }
+}
+
 }  // namespace database_tls_tests
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -157,6 +208,10 @@ TEST(Ruvia, postgresql_tls_checks_san_identity_before_sending_startup) {
     EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1"));
     EXPECT_TRUE(!sends_startup(driver, "audit.test", "other.test", "DNS:audit.test", 1));
 }
+
+TEST(Ruvia, postgresql_tls_accepts_1_1_and_rejects_1_0_without_relaxing_identity_or_record_limits) {
+    database_tls_tests::checks_protocol_floor(ruvia::db_driver::postgresql);
+}
 #endif
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -168,5 +223,9 @@ TEST(Ruvia, mariadb_tls_checks_ip_san_even_on_loopback_before_authentication) {
     EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2"));
     EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1"));
     EXPECT_TRUE(!sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", 1));
+}
+
+TEST(Ruvia, mariadb_tls_accepts_1_1_and_rejects_1_0_without_relaxing_identity_or_record_limits) {
+    database_tls_tests::checks_protocol_floor(ruvia::db_driver::mariadb);
 }
 #endif

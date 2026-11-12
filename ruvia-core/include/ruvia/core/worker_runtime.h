@@ -1,5 +1,6 @@
 #pragma once
 
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -66,6 +67,8 @@ struct worker_runtime_hooks final {
 // Protocol/application state is composed via hooks; it must remain alive
 // through join(). No hook may throw except startup_ and serve_.
 class worker_runtime final {
+    class impl_type;
+
 public:
     explicit worker_runtime(worker_runtime_options options = {});
     ~worker_runtime();
@@ -110,6 +113,37 @@ public:
     // from its owner or from a thread currently dispatching its stop hooks
     // throws logic_error instead of waiting on itself.
     void join();
+#if defined(_WIN32)
+    class thread_join_operation final {
+    public:
+        thread_join_operation(const thread_join_operation&) = delete;
+        thread_join_operation& operator=(const thread_join_operation&) = delete;
+        void operator&() const = delete;
+        ~thread_join_operation();
+        [[nodiscard]] bool await_ready();
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);
+        [[nodiscard]] std::uintptr_t await_resume();
+
+    private:
+        thread_join_operation(worker_runtime& owner, worker_handle caller) noexcept;
+        worker_runtime* owner_;
+        worker_handle caller_;
+        thread_join_operation* next_{};
+        std::coroutine_handle<> continuation_{};
+        bool started_{};
+        bool resumed_{};
+        friend class worker_runtime;
+        friend class impl_type;
+    };
+    // Await on caller: requests stop and joins any external stop dispatch
+    // without blocking its event loop. Launches a cold owner's drain thread
+    // if needed, then returns an owned SYNCHRONIZE HANDLE as uintptr_t.
+    // Wait asynchronously for that HANDLE, close it, and call join() to reap
+    // the exited thread. Zero means already joined. Runtime must outlive the
+    // operation; concurrent join() is not permitted.
+    [[nodiscard]] thread_join_operation prepare_thread_join(worker_handle caller) &;
+    thread_join_operation prepare_thread_join(worker_handle) && = delete;
+#endif
     // The first failure, if any. Reading it takes ownership: destruction no
     // longer reports a failure that was read here.
     [[nodiscard]] std::exception_ptr failure() noexcept;
@@ -128,7 +162,6 @@ private:
     void bind_group(worker_group& group);
     void unbind_group(worker_group& group) noexcept;
 
-    class impl_type;
     struct impl_deleter_type final {
         void operator()(impl_type* value) const noexcept;
     };

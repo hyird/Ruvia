@@ -980,8 +980,11 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
         throw mysql_error(initialized, "configuring MariaDB authenticated TLS", db_error::code_type::connect_failed);
     }
     if (use_tls) {
-        if (mysql_optionsv(&initialized, MYSQL_OPT_TLS_VERSION, "TLSv1.2,TLSv1.3") != 0) {
+        if (mysql_optionsv(&initialized, MYSQL_OPT_TLS_VERSION, "TLSv1.1,TLSv1.2,TLSv1.3") != 0) {
             throw mysql_error(initialized, "configuring MariaDB TLS versions", db_error::code_type::connect_failed);
+        }
+        if (mysql_optionsv(&initialized, MYSQL_OPT_SSL_CIPHER, tls_cipher_suites) != 0) {
+            throw mysql_error(initialized, "configuring MariaDB TLS ciphers", db_error::code_type::connect_failed);
         }
         const auto set_path = [&initialized](mysql_option option, const tls_file_name& path) {
             if (mysql_optionsv(&initialized, option, tls_file_name_c_str(path)) != 0) {

@@ -382,7 +382,7 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级直接返回重定向响应。跨 origin 时移除 `Authorization`、`Proxy-Authorization` 与 `Cookie`，目标客户端按自己的 TLS、连接池和凭据配置执行。
 
-`http_client_config::protocol_` 可限定为 `http1_only`、`http2_only` 或 `http3_only`。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
+`http_client_config::protocol_` 可限定为 `http1_only`、`http2_only` 或 `http3_only`。TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)；自动协商可在旧服务端使用 HTTP/1.1，`http2_only` 不降到 TLS 1.1，非法的低版本 `h2` 在发送应用数据前拒绝。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
 
 `negotiate` 模式从 HTTPS 响应的 `Alt-Svc` 缓存 `h3` 替代地址，后续请求尝试 QUIC，证书身份仍按原始 origin 校验。替代端点在请求发送前连接失败时淘汰该缓存项并回落至原站 TCP/TLS；显式 `http3_only` 不回落。升级与回落共享原请求期限，不降级为明文 HTTP。
 

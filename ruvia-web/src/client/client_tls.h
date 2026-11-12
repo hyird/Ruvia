@@ -105,6 +105,7 @@ enum class client_tls_setup_error : std::uint8_t {
     sni_failed,
     alpn_failed,
     peer_identity_failed,
+    protocol_failed,
 };
 
 // The ALPN offer of one client protocol. HTTP/1 and WebSocket offer
@@ -124,7 +125,8 @@ enum class client_alpn : std::uint8_t {
 void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config);
 // Resets the reusable SSL of a client stream, prepares SNI (DNS names only, one
 // trailing dot removed), the expected peer host or IP, and installs the ALPN
-// offer. A host name matches DNS-ID subjectAltNames only: no Common Name
+// offer. An h2-only offer requires TLS 1.2 or newer (RFC 9113).
+// A host name matches DNS-ID subjectAltNames only: no Common Name
 // fallback, no partial-label wildcards. `host` need not be NUL-terminated.
 [[nodiscard]] client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, std::span<const unsigned char> protocols);
 // Carries a setup failure through transport results; message() names it.
