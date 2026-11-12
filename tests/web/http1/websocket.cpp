@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -46,6 +47,8 @@ struct websocket_eof_observation {
     std::atomic<bool> send_close_rejected_{};
     std::atomic<bool> send_during_read_rejected_{};
     std::atomic<bool> send_echo_finished_{};
+    std::promise<unsigned> close_rejections_;
+    std::atomic<bool> close_completed_{};
 };
 const auto websocket_eof_observed = std::make_shared<websocket_eof_observation>();
 [[maybe_unused]] const bool websocket_eof_observation_registered = [] {
@@ -78,6 +81,7 @@ class http1_websocket_routes final {
         .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(100),
                            .pong_timeout_ = std::chrono::milliseconds(150)}}};
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
+    RUVIA_GET_WS("/http1-websocket-close-lanes", close_exclusively);
     RUVIA_GET_WS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
     RUVIA_GET_WS("/http1-websocket-write-only-heartbeat", write_without_reading, short_heartbeat);
     RUVIA_GET_WS("/http1-websocket-fair-handoff", write_with_pending_read, longest_heartbeat);
@@ -212,6 +216,32 @@ class http1_websocket_routes final {
         } catch (...) {
             observed_value.failed_ = true;
         }
+    }
+
+    ruvia::task<void> close_exclusively(ruvia::context& context_value) {
+        auto& observed_value = *context_value.worker_state<std::shared_ptr<websocket_eof_observation>>();
+        auto& websocket_value = context_value.websocket();
+        ruvia::task_scope closing(context_value.worker());
+        closing.spawn(websocket_value.close());
+        unsigned rejected = 0;
+        try {
+            static_cast<void>(co_await websocket_value.read());
+        } catch (const std::logic_error&) {
+            ++rejected;
+        }
+        try {
+            co_await websocket_value.text("must not be sent");
+        } catch (const std::logic_error&) {
+            ++rejected;
+        }
+        try {
+            co_await websocket_value.close();
+        } catch (const std::logic_error&) {
+            ++rejected;
+        }
+        observed_value.close_rejections_.set_value(rejected);
+        co_await closing.join();
+        observed_value.close_completed_ = true;
     }
 
     ruvia::task<void> read_until_eof(ruvia::context& context_value) {
@@ -539,6 +569,41 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
     EXPECT_TRUE(websocket_eof_observed->close_overlap_rejected_);
     EXPECT_TRUE(!websocket_eof_observed->failed_);
     EXPECT_TRUE(websocket_eof_observed->inform_rejected_);
+}
+
+TEST(Ruvia, http1_websocket_close_excludes_reads_writes_and_another_close) {
+    auto& io = ruvia::test::new_test_io_context();
+    websocket_eof_observed->close_rejections_ = std::promise<unsigned>();
+    auto rejections = websocket_eof_observed->close_rejections_.get_future();
+    websocket_eof_observed->close_completed_ = false;
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    constexpr std::string_view request =
+        "GET /http1-websocket-close-lanes HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    asio::write(client, asio::buffer(request));
+    std::string response;
+    asio::read_until(client, asio::dynamic_buffer(response), "\r\n\r\n");
+    ASSERT_TRUE(response.starts_with("HTTP/1.1 101 "));
+    const auto head_end = response.find("\r\n\r\n") + 4;
+    // Keep the handshake pending until all overlap attempts have completed.
+    ASSERT_EQ(rejections.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_EQ(rejections.get(), 3U);
+    constexpr std::array<char, 8> close_frame{'\x88', '\x82', '\0', '\0', '\0', '\0', '\x03', '\xe8'};
+    asio::write(client, asio::buffer(close_frame));
+    client.shutdown(asio::ip::tcp::socket::shutdown_send);
+    std::error_code error;
+    asio::read(client, asio::dynamic_buffer(response), error);
+    EXPECT_EQ(error, asio::error::eof);
+    EXPECT_EQ(std::string_view(response).substr(head_end), std::string_view("\x88\x02\x03\xe8", 4));
+    ruvia::close_socket(client);
+    server.finish();
+    EXPECT_TRUE(websocket_eof_observed->close_completed_);
 }
 
 // send(websocket_message&&) echoes the borrowed read payload with its own

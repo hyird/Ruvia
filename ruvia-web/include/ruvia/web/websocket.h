@@ -218,7 +218,6 @@ private:
     peer_close_reason_type peer_close_reason_;
     bool read_active_{false};
     bool write_active_{false};
-    bool close_active_{false};
     ::ruvia::operation_scope operation_scope_;
 };
 

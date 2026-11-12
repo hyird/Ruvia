@@ -71,10 +71,10 @@ ruvia::task<void> write_websocket_message(void* target,
 ruvia::task<void> close_websocket_with_reason(void* target,
     ruvia::task<void> (*close)(void*, ruvia::websocket_close_options),
     ruvia::websocket_close_options options, std::pmr::string reason,
-    bool& read_active, bool& write_active, bool& close_active) {
+    bool& read_active, bool& write_active) {
+    // Holding both lanes also excludes another close.
     auto read_lease = ruvia::detail::claim_operation_lane(read_active, "websocket close cannot overlap a read");
     auto write_lease = ruvia::detail::claim_operation_lane(write_active, "websocket close cannot overlap an output operation");
-    auto close_lease = ruvia::detail::claim_operation_lane(close_active, "websocket close is already in progress");
     options.reason_ = reason;
     co_await close(target, options);
 }
@@ -261,7 +261,7 @@ task<void> websocket::close(websocket_close_options options) & {
     std::pmr::string owned(options.reason_.view(), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
         close_websocket_with_reason(target_, close_, options, std::move(owned),
-            read_active_, write_active_, close_active_));
+            read_active_, write_active_));
 }
 
 void websocket::abort() noexcept {

@@ -229,7 +229,7 @@ private:
 | `task<void> binary(std::string_view payload, websocket_send_options options = {}) &` | 发送二进制消息（另有 `std::pmr::string&&` 重载） |
 | `task<void> send(websocket_message&& message, websocket_send_options options = {}) &` | 零拷贝发送 `read()` 返回的 `websocket_message`（发送完成前会占用读缓冲） |
 | `task<void> ping(std::string_view payload = {}) &` / `pong(std::string_view payload = {}) &` | 发送显式 `Ping` 或 `Pong` 控制帧 |
-| `task<void> close(websocket_close_options options = {}) &` | 发起或完成 WebSocket 关闭握手（默认 `code_ = websocket_close_status::normal_closure`） |
+| `task<void> close(websocket_close_options options = {}) &` | 发起或完成关闭握手；启动后独占读写通道，并发读、写或再次关闭抛 `std::logic_error`（默认 `code_ = websocket_close_status::normal_closure`） |
 | `std::string_view subprotocol() const& noexcept` | 获取握手协商选中的 WebSocket 子协议（未选中时为空视图） |
 | `std::optional<std::uint16_t> peer_close_code() const noexcept` / `std::string_view peer_close_reason() const& noexcept` | 读取对端发送的 Close 帧状态码与 UTF-8 原因（收到对端 Close 帧后可用） |
 | `void abort() noexcept` | 立即中止底层传输而不执行关闭握手 |
