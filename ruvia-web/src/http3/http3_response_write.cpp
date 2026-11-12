@@ -91,12 +91,15 @@ task<multiplexed_buffered_response_write_result> http3_buffered_response_writer:
         if (source.file_bytes_pending()) {
             // Read only what the stream may submit: a stream whose peer stopped
             // acknowledging holds neither a read buffer nor a pool task.
-            if (!(co_await await_output_budget(session_, stream_id, signal)) ||
-                !(co_await file_reads_.acquire(
-                    [this, stream_id]() noexcept { return stream_ended(stream_id); }))) {
+            if (!(co_await await_output_budget(session_, stream_id, signal))) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
-            slot.emplace(file_reads_);
+            auto acquired = co_await file_reads_.acquire(
+                [this, stream_id]() noexcept { return stream_ended(stream_id); });
+            if (!acquired) {
+                co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
+            }
+            slot.emplace(std::move(*acquired));
             if (stream_ended(stream_id)) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }

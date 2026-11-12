@@ -307,17 +307,26 @@ class multiplexed_file_read_limiter final {
 public:
     class slot final {
     public:
-        explicit slot(multiplexed_file_read_limiter& owner) noexcept
-            : owner_(&owner) {}
-        ~slot() {
-            --owner_->active_;
-            owner_->released_.notify();
+        slot(slot&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)) {}
+        ~slot() noexcept {
+            if (owner_ != nullptr) {
+                auto* const owner = std::exchange(owner_, nullptr);
+                --owner->active_;
+                owner->released_.notify();
+            }
         }
 
         slot(const slot&) = delete;
         slot& operator=(const slot&) = delete;
+        slot& operator=(slot&&) = delete;
 
     private:
+        friend class multiplexed_file_read_limiter;
+
+        explicit slot(multiplexed_file_read_limiter& owner) noexcept
+            : owner_(&owner) {}
+
         multiplexed_file_read_limiter* owner_;
     };
 
@@ -329,16 +338,17 @@ public:
     multiplexed_file_read_limiter(const multiplexed_file_read_limiter&) = delete;
     multiplexed_file_read_limiter& operator=(const multiplexed_file_read_limiter&) = delete;
 
+    // Admission and its return obligation travel as one move-only value.
     template <typename stream_ended_predicate>
-    [[nodiscard]] task<bool> acquire(stream_ended_predicate stream_ended) {
+    [[nodiscard]] task<std::optional<slot>> acquire(stream_ended_predicate stream_ended) {
         while (active_ >= max_slots_) {
             co_await released_.wait();
             if (stream_ended()) {
-                co_return false;
+                co_return std::nullopt;
             }
         }
         ++active_;
-        co_return true;
+        co_return std::optional<slot>(slot(*this));
     }
 
     template <typename stream_ended_predicate>
@@ -348,10 +358,10 @@ public:
         source.emplace(response, file_io);
         bool opened = false;
         {
-            if (!(co_await acquire(stream_ended))) {
+            const auto held = co_await acquire(stream_ended);
+            if (!held) {
                 co_return multiplexed_buffered_response_write_result{};
             }
-            const slot held(*this);
             opened = co_await source->open_first();
         }
         if (stream_ended()) {

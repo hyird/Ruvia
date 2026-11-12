@@ -82,11 +82,12 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
                 http2_send_window_wait_status::aborted) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
-            if (!(co_await file_reads_.acquire(
-                    [this, stream_id]() noexcept { return stream_ended(stream_id); }))) {
+            auto acquired = co_await file_reads_.acquire(
+                [this, stream_id]() noexcept { return stream_ended(stream_id); });
+            if (!acquired) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
-            slot.emplace(file_reads_);
+            slot.emplace(std::move(*acquired));
             if (stream_ended(stream_id)) {
                 co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
             }
