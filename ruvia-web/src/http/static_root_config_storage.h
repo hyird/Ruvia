@@ -1,6 +1,9 @@
 #pragma once
 
 #include <memory_resource>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/static_files.h"
@@ -11,6 +14,8 @@ struct static_root_mime_type_storage final {
     explicit static_root_mime_type_storage(std::pmr::memory_resource* resource)
         : extension_(pmr_resource_or_default(resource)),
           content_type_(pmr_resource_or_default(resource)) {}
+
+    friend bool operator==(const static_root_mime_type_storage&, const static_root_mime_type_storage&) = default;
 
     std::pmr::string extension_;
     std::pmr::string content_type_;
@@ -32,6 +37,8 @@ struct static_root_config_storage final {
     static_root_config_storage(static_root_config_storage&&) noexcept = default;
     static_root_config_storage& operator=(const static_root_config_storage&) = delete;
     static_root_config_storage& operator=(static_root_config_storage&&) noexcept = default;
+
+    friend bool operator==(const static_root_config_storage&, const static_root_config_storage&) = default;
 
     std::pmr::string cache_control_;
     std::pmr::string index_file_;

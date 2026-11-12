@@ -470,18 +470,7 @@ bool detail::static_root_access::same_snapshot(
     const static_root& left, const static_root& right) noexcept {
     const auto& lhs = *left.state_;
     const auto& rhs = *right.state_;
-    const auto& lhs_config = lhs.config_;
-    const auto& rhs_config = rhs.config_;
-    if (lhs.root_ != rhs.root_ || lhs_config.index_file_ != rhs_config.index_file_ ||
-        lhs_config.cache_control_ != rhs_config.cache_control_ ||
-        lhs_config.default_content_type_ != rhs_config.default_content_type_ ||
-        lhs_config.file_type_kind_ != rhs_config.file_type_kind_ ||
-        lhs_config.range_requests_ != rhs_config.range_requests_ ||
-        lhs_config.response_validators_ != rhs_config.response_validators_ ||
-        lhs_config.dotfiles_ != rhs_config.dotfiles_ ||
-        lhs_config.file_type_extensions_ != rhs_config.file_type_extensions_ ||
-        lhs.directories_ != rhs.directories_ ||
-        lhs_config.mime_types_.size() != rhs_config.mime_types_.size() ||
+    if (lhs.root_ != rhs.root_ || lhs.directories_ != rhs.directories_ ||
         lhs.entries_.size() != rhs.entries_.size()) {
         return false;
     }
@@ -490,11 +479,8 @@ bool detail::static_root_access::same_snapshot(
         return false;
     }
 #endif
-    for (std::size_t i = 0; i < lhs_config.mime_types_.size(); ++i) {
-        if (lhs_config.mime_types_[i].extension_ != rhs_config.mime_types_[i].extension_ ||
-            lhs_config.mime_types_[i].content_type_ != rhs_config.mime_types_[i].content_type_) {
-            return false;
-        }
+    if (lhs.config_ != rhs.config_) {
+        return false;
     }
     for (std::size_t i = 0; i < lhs.entries_.size(); ++i) {
         if (!same_static_root_entry_metadata(lhs.entries_[i], rhs.entries_[i])) {

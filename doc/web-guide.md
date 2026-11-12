@@ -587,6 +587,7 @@ Ruvia 提供三种静态文件服务方式：
 3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 重建并发布不可变目录快照。
    - **预压缩**：启用 `app().compression(compression_config{})` 后，`precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 控制启动及刷新时生成的表示；仅设置预压缩开关不会生成这些表示。
    - **失败保留**：重建或采用失败时继续服务上一份完整快照，`http_stats().document_root_refresh_failures_` 计数加一；原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。
+   - **等价跳过**：指纹只作预筛选；随后比较完整规范化策略、目录索引及文件元数据，等价时不发布替换快照。
    - **无锁切换**：启动期固定各 Worker 的邮箱；发布者通过无锁原子指针交换移交快照所有权，各 Worker 在请求间隙采用，不获取发布者互斥锁。
    - **及时回收**：未读取的邮箱节点被后续发布替换回收；正在被请求借用的旧快照保留到租约归还，邮箱宿主活过全部 Worker 的停机与 join。
 
