@@ -221,12 +221,37 @@ struct http1_tunnel_upgrade_commit final {
             throw inbound_transport_error(ec, "CONNECT head write");
         }
         tail_.record_access(dispatch_.options_.access_log_, head_response.status());
+        co_return make_transport();
+    }
+
+    [[nodiscard]] transport_type make_transport() const {
         if constexpr (requires { dispatch_.stream_.next_layer(); }) {
             tls_output_.emplace(*dispatch_.stream_.native_handle(), dispatch_.stream_.lowest_layer(),
                 dispatch_.base_route_services_.worker(), *process_resource());
             tls_output_->start();
         }
-        co_return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, &dispatch_.scanner_entry_);
+        return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, &dispatch_.scanner_entry_);
+    }
+
+    [[nodiscard]] task<std::optional<websocket_upgrade_commit<transport_type>>> accept_websocket(
+        context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) const {
+        const auto validation = validate_websocket_handshake(dispatch_.parsed_.request_,
+            dispatch_.parsed_.body_plan_, endpoint.handshake_validation());
+        if (const auto* failure = validation.failure()) {
+            reject_request_stream_websocket(context_value, *failure);
+            co_return std::nullopt;
+        }
+        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request_,
+            {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()},
+            process_resource());
+        context_access::commit_upgrade(context_value);
+        if (const auto error = co_await write_websocket_handshake(dispatch_.stream_, handshake,
+                dispatch_.parsed_.body_plan_.expectations(), *process_resource(), dispatch_.scanner_entry_)) {
+            throw inbound_transport_error(error, "WebSocket handshake write");
+        }
+        tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
+        co_return websocket_upgrade_commit<transport_type>(
+            make_transport(), handshake.compression(), handshake.subprotocol(), *process_resource());
     }
 };
 
@@ -246,16 +271,21 @@ template <typename stream_type>
     // a handler failure that execute_tunnel_upgrade_session surfaces.
     std::optional<http_response> buffered;
     std::exception_ptr failure;
+    const http1_tunnel_upgrade_commit<stream_type> commit{
+        .dispatch_ = d,
+        .tail_ = tail,
+        .udp_ = udp,
+        .tls_output_ = tls_output,
+    };
+    auto commit_websocket = [&commit](context& context_value, const websocket_route_endpoint& endpoint,
+                                std::span<const http_header_view> headers) {
+        return commit.accept_websocket(context_value, endpoint, headers);
+    };
     try {
         buffered = co_await execute_tunnel_upgrade_session<http_socket_tunnel_transport<stream_type>>(
             d.routes_, d.parsed_.request_, resolved, d.request_memory_, d.base_route_services_,
             d.options_, d.scanner_entry_, d.inbound_buffer_pool_, udp, pending,
-            http1_tunnel_upgrade_commit<stream_type>{
-                .dispatch_ = d,
-                .tail_ = tail,
-                .udp_ = udp,
-                .tls_output_ = tls_output,
-            });
+            commit, commit_websocket);
     } catch (...) {
         failure = std::current_exception();
     }

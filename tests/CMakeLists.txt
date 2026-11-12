@@ -156,6 +156,11 @@ if(RUVIA_BUILD_WEB)
     # on_request_stream beside an ordinary routes listener with middleware.
     ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/app/request_stream.cpp)
     ruvia_add_web_standalone_test(ruvia_http_server 60 web/app/http_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/app/http_server_group.cpp)
+    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/websocket/standalone_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_dotenv_tests 30 web/app/dotenv_parser.cpp)
+    ruvia_add_web_standalone_test(ruvia_tcp_byte_client 60 web/client/tcp_client.cpp)
+    ruvia_add_web_standalone_test(ruvia_request_stream_files 90 web/app/request_stream_files.cpp)
     ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/app/listener_transactions.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/app/route_dispatch_isolation.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT

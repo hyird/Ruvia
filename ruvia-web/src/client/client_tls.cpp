@@ -25,20 +25,6 @@ constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};
 constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
     2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 
-[[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept {
-    switch (mode) {
-        case client_alpn::none:
-            return {};
-        case client_alpn::http11:
-            return http11_alpn;
-        case client_alpn::http2:
-            return http2_alpn;
-        case client_alpn::negotiate:
-            return negotiated_http_alpn;
-    }
-    std::terminate();
-}
-
 [[nodiscard]] bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
     X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
     if (ip_address) {
@@ -103,6 +89,19 @@ public:
 };
 
 }  // namespace
+[[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept {
+    switch (mode) {
+        case client_alpn::none:
+            return {};
+        case client_alpn::http11:
+            return http11_alpn;
+        case client_alpn::http2:
+            return http2_alpn;
+        case client_alpn::negotiate:
+            return negotiated_http_alpn;
+    }
+    std::terminate();
+}
 
 client_tls_config_storage::client_tls_config_storage(
     const client_tls_config& source_value, client_tls_files files, std::pmr::memory_resource* resource)
@@ -164,14 +163,13 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     config.certificate_->install(context_value);
 }
 
-client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, client_alpn alpn) {
+client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, std::span<const unsigned char> protocols) {
     if (SSL_clear(&ssl) != 1) {
         return client_tls_setup_error::reset_failed;
     }
     if (const auto prepared = prepare_client_tls_session(ssl, host); prepared != client_tls_setup_error::none) {
         return prepared;
     }
-    const auto protocols = client_alpn_bytes(alpn);
     if (SSL_set_alpn_protos(&ssl, protocols.data(), static_cast<unsigned int>(protocols.size())) != 0) {
         return client_tls_setup_error::alpn_failed;
     }

@@ -891,7 +891,7 @@ public:
         local_ = socket_->local_endpoint();
         tls_.reset(SSL_new(tls_state_.context_.native_handle()));
         const auto identity = pool_.config().tls_.server_name_ ? std::string_view(*pool_.config().tls_.server_name_) : std::string_view(pool_.config().host_);
-        if (!tls_ || prepare_client_tls_stream(*tls_, identity, client_alpn::none) != client_tls_setup_error::none ||
+        if (!tls_ || prepare_client_tls_stream(*tls_, identity, {}) != client_tls_setup_error::none ||
             ngtcp2_crypto_ossl_configure_client_session(tls_.get()) != 0) {
             throw http_client_error(error_code::tls_failed, "HTTP/3 TLS setup failed");
         }
@@ -1088,6 +1088,8 @@ public:
     std::size_t borrowed_operations_{};
     stream* connecting_stream_{};
     bool open_{}, retired_{}, draining_{}, early_started_{}, early_rejected_{}, handshake_confirmed_{}, migrating_{};
+    std::uint64_t migration_cancellation_id_{};
+    bool migration_cancelled_{};
     worker_timer_registration expiry_;
     worker_timer_registration idle_timer_;
 };
@@ -1491,6 +1493,11 @@ bool http3_client_connection::cancel_by_id(std::uint64_t id) noexcept {
     if (!session_) {
         return false;
     }
+    if (session_->migration_cancellation_id_ == id) {
+        session_->migration_cancelled_ = true;
+        session_->close(error_code::cancelled);
+        return true;
+    }
     for (auto* item : session_->streams_) {
         if (item->cancellation_id_ == id) {
             session_->cancel(*item, error_code::cancelled);
@@ -1753,7 +1760,11 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     throw http_client_error(error_code::protocol_error, "HTTP/3 request attempts exhausted");
 }
 
-task<void> http3_client_connection::migrate(std::string_view local_address, std::uint16_t port) {
+task<void> http3_client_connection::migrate(std::string_view local_address, std::uint16_t port,
+    const operation_timeout& timeout, stop_token stop) {
+    if (stop.stop_requested()) {
+        throw http_client_error(error_code::cancelled, "HTTP/3 migration cancelled");
+    }
     if (!session_) {
         throw http_client_error(error_code::protocol_unavailable, "HTTP/3 endpoint selection is in progress");
     }
@@ -1772,6 +1783,20 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
             flag_ = false;
         }
     } guard{self.migrating_};
+    self.migration_cancelled_ = false;
+    worker_cancellation_registration cancellation(self.pool_.cancellation_target(), self.migration_cancellation_id_);
+    cancellation.arm(stop);
+    const auto check = [&] {
+        if (self.migration_cancelled_ || stop.stop_requested() || timeout.expired() || !self.open_ || self.retired_) {
+            const auto code = self.migration_cancelled_ || stop.stop_requested() ? error_code::cancelled
+                              : self.retired_                                    ? error_code::closing
+                              : timeout.expired()                                ? error_code::timeout
+                                                                                 : error_code::io_error;
+            self.close(code);
+            throw http_client_error(code, "HTTP/3 migration stopped");
+        }
+    };
+    check();
     auto replacement = make_pmr_object<asio::ip::udp::socket>(process_resource(), self.pool_.io_context());
     asio::ip::udp::endpoint local;
     try {
@@ -1788,15 +1813,11 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     } catch (const std::system_error&) {
         throw http_client_error(error_code::connect_failed, "HTTP/3 migration socket setup failed");
     }
-    bool expired = false;
     worker_timer_registration timer;
-    (void)self.pool_.worker().schedule_timer(timer, worker_timer_deadline_after(self.pool_.config().connect_timeout_.value()),
-        [&self, &expired](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { expired = true; self.changed_.notify(); } });
+    (void)self.pool_.worker().schedule_timer(timer, *timeout.deadline(),
+        [&self](worker_timer_outcome) noexcept { self.changed_.notify(); });
     for (;;) {
-        if (!self.open_ || expired) {
-            self.close();
-            throw http_client_error(expired ? error_code::timeout : error_code::io_error, "HTTP/3 migration connection ID unavailable");
-        }
+        check();
         if (!self.handshake_confirmed_) {
             self.writer_.notify();
             co_await self.changed_.wait();
@@ -1840,10 +1861,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     std::exception_ptr failure;
     try {
         for (;;) {
-            if (!self.open_ || expired) {
-                self.close();
-                throw http_client_error(expired ? error_code::timeout : error_code::io_error, "HTTP/3 path validation failed");
-            }
+            check();
             const auto* active = ngtcp2_conn_get_path2(self.quic_->native_handle());
             if (active->local.addrlen == self.local_.size() && std::memcmp(active->local.addr, self.local_.data(), self.local_.size()) == 0) {
                 break;
@@ -1851,10 +1869,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
             co_await self.changed_.wait();
         }
         while (self.sending_socket_ == self.old_socket_.get()) {
-            if (!self.open_ || expired) {
-                self.close();
-                throw http_client_error(error_code::timeout, "HTTP/3 old path output did not retire");
-            }
+            check();
             co_await self.changed_.wait();
         }
     } catch (...) {
@@ -1869,6 +1884,9 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     }
     self.old_socket_.reset();
     self.active_receive_buffer_ = next_buffer;
+    if (!failure) {
+        check();
+    }
     if (failure) {
         std::rethrow_exception(failure);
     }

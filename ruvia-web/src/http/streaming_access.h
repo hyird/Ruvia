@@ -30,6 +30,10 @@ struct streaming_access final {
         writer.bind_worker(worker_value);
     }
 
+    [[nodiscard]] static bool& output_lane(response_stream_writer& writer) noexcept {
+        return writer.output_active_;
+    }
+
     // The token is supplied by the caller rather than read from `context`:
     // context is incomplete here, and this header is deliberately narrow.
     static void bind_context(response_stream_writer& writer, context& context_value, stop_token stop_token_value) {

@@ -125,11 +125,11 @@ std::pmr::string detail::dotenv_path_message(std::string_view prefix, const std:
     return result_value;
 }
 
-void detail::load_env_from_executable_directory(env& env_value, dotenv_options options) {
-    detail::load_env_from_file(env_value, detail::dotenv_executable_directory() / ".env", options);
+env& env::load_dotenv(dotenv_options options) & {
+    return load_dotenv(detail::dotenv_executable_directory() / ".env", options);
 }
 
-void detail::load_env_from_file(env& env_value, const std::filesystem::path& path, dotenv_options options) {
+env& env::load_dotenv(const std::filesystem::path& path, dotenv_options options) & {
     if (options.existing_variables_ != dotenv_existing_variable_policy::preserve &&
         options.existing_variables_ != dotenv_existing_variable_policy::override) {
         throw std::invalid_argument("dotenv existing variable policy is invalid");
@@ -147,12 +147,11 @@ void detail::load_env_from_file(env& env_value, const std::filesystem::path& pat
         if (options.missing_file_ == dotenv_missing_file_policy::require) {
             throw std::runtime_error(detail::dotenv_path_message("dotenv file not found: ", path).c_str());
         }
-        return;
+        return *this;
     }
 
     auto entries = detail::read_dotenv_entries(input, path);
-    auto& state_value = detail::env_access::state(env_value);
-    auto& variables = state_value.variables_;
+    auto& variables = state_->variables_;
     if (!entries.empty()) {
         variables.reserve(variables.size() + entries.size());
     }
@@ -169,7 +168,8 @@ void detail::load_env_from_file(env& env_value, const std::filesystem::path& pat
         variables.insert(it, std::move(entry));
     }
 
-    state_value.loaded_ = true;
+    state_->loaded_ = true;
+    return *this;
 }
 
 }  // namespace ruvia

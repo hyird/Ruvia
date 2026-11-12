@@ -45,7 +45,7 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
         .port_ = config.port_,
         .tls_ = config.scheme_ == http_scheme::https ? &config.tls_ : nullptr,
         .tcp_ = config.tcp_,
-        .alpn_ = select_client_alpn(config.protocol_)};
+        .alpn_ = client_alpn_bytes(select_client_alpn(config.protocol_))};
 }
 
 }  // namespace

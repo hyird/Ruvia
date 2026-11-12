@@ -70,6 +70,7 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
       tunnel_authority_(std::move(other.tunnel_authority_)),
       tunnel_protocol_(std::move(other.tunnel_protocol_)),
       websocket_(std::move(other.websocket_)),
+      host_stop_(std::move(other.host_stop_)),
       is_tunnel_(other.is_tunnel_),
       tunnel_(std::exchange(other.tunnel_, nullptr)),
       has_body_(std::exchange(other.has_body_, false)),
@@ -504,7 +505,7 @@ task<void> http_client_handle::migrate(std::string_view local_address, std::uint
     registration_.require_active();
 #ifdef RUVIA_ENABLE_HTTP3
     return make_scoped_operation(registration_.scope(),
-        pool_->migrate_http3(std::pmr::string(local_address, process_resource()), port));
+        pool_->migrate_http3(std::pmr::string(local_address, process_resource()), port, options_, host_stop_token_));
 #else
     (void)local_address;
     (void)port;

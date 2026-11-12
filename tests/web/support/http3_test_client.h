@@ -61,9 +61,11 @@ struct http3_test_response final {
     std::pmr::string body_{ruvia::process_resource()};
     http3_test_fields trailers_{ruvia::process_resource()};
     std::pmr::vector<int> interim_statuses_{ruvia::process_resource()};
-    // The application error code of a stream that ended by RESET_STREAM or
-    // STOP_SENDING instead of completing (RFC 9114 §4.1.1).
+    // A non-H3_NO_ERROR failure reported when the stream closes, including a
+    // local protocol failure. Transport actions alone do not close a response.
     std::optional<std::uint64_t> reset_error_;
+    // STOP_SENDING stops the request writer, not the response reader.
+    std::optional<std::uint64_t> stop_sending_error_;
 
     // The first field named `name`, compared ASCII case-insensitively.
     [[nodiscard]] std::optional<std::pmr::string> header(std::string_view name) const {
@@ -393,14 +395,16 @@ public:
     }
 
     // Raw field sections are reserved for malformed-request wire regressions.
-    [[nodiscard]] std::int64_t start_raw_request(std::initializer_list<std::pair<std::string_view, std::string_view>> headers) {
+    // Leave the send half open for malformed extended CONNECT bootstraps.
+    [[nodiscard]] std::int64_t start_raw_request(std::initializer_list<std::pair<std::string_view, std::string_view>> headers,
+        bool end_stream = true) {
         const auto stream_id = open_stream(false);
         std::pmr::vector<http3_field_view> fields{ruvia::process_resource()};
         fields.reserve(headers.size());
         for (const auto& [name, value] : headers) {
             fields.push_back({name, value});
         }
-        if (connection_->http3().submit_request(stream_id, fields, true) != http3_status::accepted) {
+        if (connection_->http3().submit_request(stream_id, fields, end_stream) != http3_status::accepted) {
             throw std::runtime_error("HTTP/3 malformed wire request was not accepted");
         }
         flush();
@@ -773,7 +777,7 @@ private:
     }
 
     [[nodiscard]] static bool response_complete(const stream_state& stream) noexcept {
-        return stream.ended_ || stream.closed_ || stream.response_.reset_error_.has_value();
+        return stream.ended_ || stream.closed_;
     }
 
     [[nodiscard]] std::int64_t open_stream(bool consume_on_arrival) {
@@ -984,10 +988,14 @@ private:
                         found->second.ended_ = true;
                     }
                 } else if constexpr (std::is_same_v<event_type, http3_transport_action_event>) {
-                    if (const auto found = streams_.find(value.stream_id_); found != streams_.end()) {
-                        auto& reset_error = found->second.response_.reset_error_;
-                        reset_error = reset_error.value_or(value.application_error_code_);
+                    if (value.action_ == http3_transport_action::stop_sending) {
+                        if (const auto found = streams_.find(value.stream_id_); found != streams_.end()) {
+                            found->second.response_.stop_sending_error_ = value.application_error_code_;
+                        }
                     }
+                    // The public event also carries local codec instructions:
+                    // a RESET_STREAM action is not proof of an inbound reset.
+                    // FIN and the actual stream-close event own completion.
                 } else if constexpr (std::is_same_v<event_type, http3_stream_close_event>) {
                     if (const auto found = streams_.find(value.stream_id_); found != streams_.end()) {
                         found->second.closed_ = true;

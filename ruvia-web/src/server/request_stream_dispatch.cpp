@@ -31,13 +31,19 @@
 #include "router/route_table.h"
 #include "server/http_response_stream_dispatch.h"
 #include "server/http_server_options.h"
+#include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
 
 struct request_stream_access final {
     [[nodiscard]] static request_stream make(context& context_value, response_stream_writer& response,
-        const request_stream_tunnel_accept* accept_tunnel) noexcept {
-        return request_stream(context_value, response, accept_tunnel);
+        const request_stream_tunnel_accept* accept_tunnel,
+        const request_stream_websocket_accept* accept_websocket = nullptr) noexcept {
+        return request_stream(context_value, response, accept_tunnel, accept_websocket);
+    }
+
+    [[nodiscard]] static task<void> close(request_stream& stream) {
+        return stream.operation_scope_.close_and_join();
     }
 };
 
@@ -45,15 +51,18 @@ namespace {
 
 // Runs the connection's callback; returns its failure, if any.
 task<std::exception_ptr> run_request_stream_callback(
-    context& context_value, response_stream_writer& response, const request_stream_tunnel_accept* accept_tunnel) {
+    context& context_value, response_stream_writer& response, const request_stream_tunnel_accept* accept_tunnel,
+    const request_stream_websocket_accept* accept_websocket = nullptr) {
     const auto callback = context_access::services(context_value).request_stream();
-    auto stream = request_stream_access::make(context_value, response, accept_tunnel);
+    auto stream = request_stream_access::make(context_value, response, accept_tunnel, accept_websocket);
+    std::exception_ptr failure;
     try {
         co_await callback(stream);
     } catch (...) {
-        co_return std::current_exception();
+        failure = std::current_exception();
     }
-    co_return nullptr;
+    co_await request_stream_access::close(stream);
+    co_return failure;
 }
 
 // After the callback: a committed response or tunnel stands, and a failure
@@ -111,6 +120,9 @@ public:
         // accept_tunnel() committed the upgrade: no response can follow.
         if (context_access::output_committed(context_)) {
             throw std::logic_error("the request's tunnel is already established");
+        }
+        if (context_access::has_response(context_)) {
+            throw std::logic_error("a complete response is already selected");
         }
         auto head = context_access::streaming_head(context_);
         const auto method = context_access::request(context_).known_method();
@@ -210,13 +222,14 @@ bool http1_request_stream_tunnel(const http_request& request, bool content) noex
     return request.known_method() == http_known_method::connect || (!content && http1_request_offers_upgrade(request));
 }
 
-task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept) {
+task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept,
+    const request_stream_websocket_accept* accept_websocket) {
     request_stream_refusal refusal(context_value);
     auto response = make_response_stream_writer(refusal, *process_resource());
     auto& services = context_access::services(context_value);
     services.bind_response_stream(response);
     streaming_access::bind_context(response, context_value, context_value.stop_token());
-    auto failure = co_await run_request_stream_callback(context_value, response, &accept);
+    auto failure = co_await run_request_stream_callback(context_value, response, &accept, accept_websocket);
     streaming_access::release_context(response);
     // Unless accept_tunnel() committed the upgrade, nothing reached the peer:
     // the writer leaves the context, whose output is a buffered response again.
@@ -312,6 +325,31 @@ context_response_editor request_stream::draft() & noexcept {
     return context_.draft();
 }
 
+task<http_response> request_stream::file(file_response_options options) {
+    return make_scoped_operation(operation_scope_, context_.file(options));
+}
+
+task<http_response> request_stream::static_file(const static_root& root, static_file_response_options options) {
+    return make_scoped_operation(operation_scope_, context_.static_file(root, options));
+}
+
+void request_stream::respond(http_response response) {
+    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
+        "response stream output operation is already in progress");
+    if (response_.committed() || detail::context_access::output_committed(context_) ||
+        detail::context_access::has_response(context_)) {
+        throw std::logic_error("the request's response is already selected or committed");
+    }
+    if (tunnel_requested() && request().known_method() == http_known_method::connect &&
+        response.status().is_successful()) {
+        throw std::logic_error("a 2xx response to CONNECT establishes the tunnel; use accept_tunnel()");
+    }
+    if (response.status() == http_status::switching_protocols) {
+        throw std::logic_error("a 101 response requires accept_tunnel() or accept_websocket()");
+    }
+    context_.respond(std::move(response));
+}
+
 response_stream_writer& request_stream::response() & noexcept {
     return response_;
 }
@@ -321,10 +359,17 @@ bool request_stream::tunnel_requested() const noexcept {
 }
 
 task<http_tunnel*> request_stream::accept_tunnel(http_status_code status, http_tunnel_route_config config) & {
+    return make_scoped_operation(operation_scope_, accept_tunnel_impl(status, config));
+}
+
+task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, http_tunnel_route_config config) {
+    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
+        "response stream output operation is already in progress");
     if (accept_tunnel_ == nullptr) {
         throw std::logic_error("accept_tunnel() requires a CONNECT or HTTP/1.1 Upgrade request");
     }
-    if (response_.committed() || detail::context_access::output_committed(context_)) {
+    if (response_.committed() || detail::context_access::output_committed(context_) ||
+        detail::context_access::has_response(context_)) {
         throw std::logic_error("the request's response is already committed");
     }
     if (request().known_method() == http_known_method::connect) {
@@ -336,6 +381,23 @@ task<http_tunnel*> request_stream::accept_tunnel(http_status_code status, http_t
         throw std::invalid_argument("an HTTP/1.1 Upgrade is accepted with 101 (Switching Protocols)");
     }
     co_return co_await (*accept_tunnel_)(status, config);
+}
+
+task<websocket*> request_stream::accept_websocket(websocket_route_config config) & {
+    return make_scoped_operation(operation_scope_, accept_websocket_impl(std::move(config)));
+}
+
+task<websocket*> request_stream::accept_websocket_impl(websocket_route_config config) {
+    auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
+        "response stream output operation is already in progress");
+    if (accept_websocket_ == nullptr) {
+        throw std::logic_error("accept_websocket() requires an Upgrade or extended CONNECT request");
+    }
+    if (response_.committed() || detail::context_access::output_committed(context_) ||
+        detail::context_access::has_response(context_)) {
+        throw std::logic_error("the request's response is already selected or committed");
+    }
+    co_return co_await (*accept_websocket_)(std::move(config));
 }
 
 ::ruvia::stop_token request_stream::stop_token() const noexcept {

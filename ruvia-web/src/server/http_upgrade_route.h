@@ -35,6 +35,7 @@
 
 #include "context/context_access.h"
 #include "context/context_services.h"
+#include "http/http_protocol_error_info.h"
 #include "http/http_tunnel_session.h"
 #include "http/inline_http_header_views.h"
 #include "router/route_resolution.h"
@@ -145,6 +146,12 @@ namespace ruvia::detail {
     };
 }
 
+inline void reject_request_stream_websocket(context& context_value, const websocket_handshake_failure& failure) {
+    auto response = context_value.error(copy_http_protocol_error_info(context_value.arena(), failure.protocol_error()));
+    failure.apply_required_response_headers(response);
+    context_access::set_response(context_value, std::move(response));
+}
+
 // `datagrams` is the route's http_tunnel_route_config::datagrams_, which
 // CONNECT-UDP (`udp`) always sets.
 [[nodiscard]] inline http_response prepare_tunnel_upgrade_response_head(
@@ -192,100 +199,6 @@ template <typename session_type, typename establish_type, typename finish_type>
         std::rethrow_exception(failure);
     }
     co_return buffered;
-}
-
-template <typename transport_type, typename commit_upgrade_type>
-struct tunnel_upgrade_session_operation final {
-    using session_type = http_tunnel_session<transport_type>;
-
-    const http_request& request_;
-    const resolved_route& resolved_;
-    const tunnel_route_endpoint& endpoint_;
-    const context_services& services_;
-    const http_server_options& options_;
-    connection_scanner::entry& scanner_entry_;
-    std::pmr::memory_resource& inbound_;
-    bool udp_;
-    std::string_view pending_;
-    commit_upgrade_type& commit_upgrade_;
-    std::optional<session_type>& session_;
-    http_tunnel_route_config config_{endpoint_.config()};
-
-    // Commits the upgrade head the context's draft describes and opens the
-    // session over the transport that head hands over.
-    [[nodiscard]] task<void> establish(context& context_value) {
-        auto head_response = prepare_tunnel_upgrade_response_head(
-            context_value, request_.protocol_version(), udp_, config_.datagrams_);
-        std::optional<transport_type> transport;
-        if constexpr (requires { commit_upgrade_(context_value, head_response).operator co_await(); }) {
-            transport.emplace(co_await commit_upgrade_(context_value, head_response));
-        } else {
-            transport.emplace(commit_upgrade_(context_value, head_response));
-        }
-        try {
-            session_.emplace(std::move(*transport), services_.worker(), *process_resource(), inbound_,
-                config_.datagrams_, pending_);
-        } catch (...) {
-            transport->abort();
-            throw;
-        }
-    }
-
-    [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {
-        config_ = route_endpoint::validate_tunnel_config(
-            !request_.protocol().empty() || request_.known_method() != http_known_method::connect, udp_, config);
-        co_await establish(context_value);
-        scanner_entry_.enter_long_lived();
-        co_return &session_->tunnel();
-    }
-
-    [[nodiscard]] task<void> operator()(context& context_value) {
-        if (is_request_stream_tunnel_route(resolved_.route())) {
-            // The request stream callback commits the tunnel itself, through
-            // request_stream::accept_tunnel(), or answers without one.
-            auto accept = [this, &context_value](http_status_code, http_tunnel_route_config config) {
-                return accept_request_stream_tunnel(context_value, config);
-            };
-            const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>(accept);
-            co_await serve_request_stream_tunnel(context_value, accept_ref);
-            co_return;
-        }
-        co_await establish(context_value);
-        co_await invoke_tunnel_handler(
-            *session_, scanner_entry_, resolved_.stream_handler(), context_value);
-    }
-
-    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
-        return finish_tunnel_session(session_value, std::move(failure),
-            options_.connection_failure_, services_.get_conn_info().remote().address(),
-            scanner_entry_, config_.peer_transport_fin_timeout_);
-    }
-};
-
-template <typename transport_type, typename commit_upgrade_type>
-[[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(
-    const route_table& routes, const http_request& request, const resolved_route& resolved,
-    request_memory& memory, const context_services& services, const http_server_options& options,
-    connection_scanner::entry& scanner_entry, std::pmr::memory_resource& inbound, bool udp,
-    std::string_view pending, commit_upgrade_type commit_upgrade) {
-    const auto& endpoint = *resolved.route().endpoint().tunnel();
-    using operation_type = tunnel_upgrade_session_operation<transport_type, commit_upgrade_type>;
-    std::optional<typename operation_type::session_type> session;
-    operation_type operation{
-        .request_ = request,
-        .resolved_ = resolved,
-        .endpoint_ = endpoint,
-        .services_ = services,
-        .options_ = options,
-        .scanner_entry_ = scanner_entry,
-        .inbound_ = inbound,
-        .udp_ = udp,
-        .pending_ = pending,
-        .commit_upgrade_ = commit_upgrade,
-        .session_ = session,
-    };
-    co_return co_await run_http_upgrade_route(
-        routes, request, resolved, memory, services, session, operation, operation);
 }
 
 template <typename stream_type>
@@ -350,6 +263,149 @@ private:
     websocket_compression compression_{};
     std::pmr::string subprotocol_;
 };
+
+template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
+struct tunnel_upgrade_session_operation final {
+    using session_type = http_tunnel_session<transport_type>;
+
+    const http_request& request_;
+    const resolved_route& resolved_;
+    const tunnel_route_endpoint& endpoint_;
+    const context_services& services_;
+    const http_server_options& options_;
+    connection_scanner::entry& scanner_entry_;
+    std::pmr::memory_resource& inbound_;
+    bool udp_;
+    std::string_view pending_;
+    commit_upgrade_type& commit_upgrade_;
+    commit_websocket_type& commit_websocket_;
+    std::optional<session_type>& session_;
+    http_tunnel_route_config config_{endpoint_.config()};
+    std::optional<server_websocket_connection<transport_type>> websocket_session_{};
+    struct websocket_borrow final {
+        explicit websocket_borrow(server_websocket_connection<transport_type>& connection)
+            : value_(make_websocket_facade(connection, *process_resource())) {}
+        websocket value_;
+    };
+    std::optional<websocket_borrow> websocket_{};
+
+    // Commits the upgrade head the context's draft describes and opens the
+    // session over the transport that head hands over.
+    [[nodiscard]] task<void> establish(context& context_value) {
+        auto head_response = prepare_tunnel_upgrade_response_head(
+            context_value, request_.protocol_version(), udp_, config_.datagrams_);
+        std::optional<transport_type> transport;
+        if constexpr (requires { commit_upgrade_(context_value, head_response).operator co_await(); }) {
+            transport.emplace(co_await commit_upgrade_(context_value, head_response));
+        } else {
+            transport.emplace(commit_upgrade_(context_value, head_response));
+        }
+        try {
+            session_.emplace(std::move(*transport), services_.worker(), *process_resource(), inbound_,
+                config_.datagrams_, pending_);
+        } catch (...) {
+            transport->abort();
+            throw;
+        }
+    }
+
+    [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {
+        config_ = route_endpoint::validate_tunnel_config(
+            !request_.protocol().empty() || request_.known_method() != http_known_method::connect, udp_, config);
+        co_await establish(context_value);
+        scanner_entry_.enter_long_lived();
+        co_return &session_->tunnel();
+    }
+
+    [[nodiscard]] task<websocket*> accept_request_stream_websocket(context& context_value, websocket_route_config config) {
+        auto endpoint = route_endpoint::websocket(process_resource(), nullptr, std::move(config));
+        const auto& websocket_endpoint = *endpoint.websocket();
+        const auto headers = websocket_response_headers(context_value);
+        auto committed = co_await commit_websocket_(context_value, websocket_endpoint, headers);
+        if (!committed) {
+            co_return nullptr;
+        }
+        try {
+            websocket_session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
+                websocket_endpoint.lifecycle(),
+                protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
+                inbound_, pending_,
+                make_server_websocket_connection_options(options_, committed->compression(), websocket_endpoint.deflate()),
+                committed->release_subprotocol());
+        } catch (...) {
+            committed->abort();
+            throw;
+        }
+        websocket_.emplace(*websocket_session_);
+        scanner_entry_.enter_long_lived();
+        co_return &websocket_->value_;
+    }
+
+    [[nodiscard]] task<void> operator()(context& context_value) {
+        if (is_request_stream_tunnel_route(resolved_.route())) {
+            auto accept = [this, &context_value](http_status_code, http_tunnel_route_config config) {
+                return accept_request_stream_tunnel(context_value, config);
+            };
+            const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>(accept);
+            auto accept_websocket = [this, &context_value](websocket_route_config config) {
+                return accept_request_stream_websocket(context_value, std::move(config));
+            };
+            const auto websocket_accept_ref = callback_access::bind<task<websocket*>(websocket_route_config)>(accept_websocket);
+            std::exception_ptr failure;
+            try {
+                co_await serve_request_stream_tunnel(context_value, accept_ref, &websocket_accept_ref);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            // Retire borrowed operations before draining the owned connection,
+            // exactly as the route handler's stack facade does.
+            websocket_.reset();
+            if (websocket_session_) {
+                co_await finish_websocket_session(*websocket_session_, failure,
+                    options_.connection_failure_, services_.get_conn_info().remote().address());
+            } else if (failure) {
+                std::rethrow_exception(failure);
+            }
+            co_return;
+        }
+        co_await establish(context_value);
+        co_await invoke_tunnel_handler(
+            *session_, scanner_entry_, resolved_.stream_handler(), context_value);
+    }
+
+    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
+        return finish_tunnel_session(session_value, std::move(failure),
+            options_.connection_failure_, services_.get_conn_info().remote().address(),
+            scanner_entry_, config_.peer_transport_fin_timeout_);
+    }
+};
+
+template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
+[[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(
+    const route_table& routes, const http_request& request, const resolved_route& resolved,
+    request_memory& memory, const context_services& services, const http_server_options& options,
+    connection_scanner::entry& scanner_entry, std::pmr::memory_resource& inbound, bool udp,
+    std::string_view pending, commit_upgrade_type commit_upgrade, commit_websocket_type commit_websocket) {
+    const auto& endpoint = *resolved.route().endpoint().tunnel();
+    using operation_type = tunnel_upgrade_session_operation<transport_type, commit_upgrade_type, commit_websocket_type>;
+    std::optional<typename operation_type::session_type> session;
+    operation_type operation{
+        .request_ = request,
+        .resolved_ = resolved,
+        .endpoint_ = endpoint,
+        .services_ = services,
+        .options_ = options,
+        .scanner_entry_ = scanner_entry,
+        .inbound_ = inbound,
+        .udp_ = udp,
+        .pending_ = pending,
+        .commit_upgrade_ = commit_upgrade,
+        .commit_websocket_ = commit_websocket,
+        .session_ = session,
+    };
+    co_return co_await run_http_upgrade_route(
+        routes, request, resolved, memory, services, session, operation, operation);
+}
 
 template <typename stream_type, typename commit_upgrade_type>
 struct websocket_upgrade_session_operation final {

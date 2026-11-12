@@ -403,6 +403,7 @@ http_client_handle::http_client_handle(const http_client_handle& other)
     : pool_(other.pool_),
       resource_(other.resource_),
       options_(other.options_),
+      host_stop_token_(other.host_stop_token_),
       registration_(other.registration_, this),
       registry_(other.registry_) {}
 
@@ -423,6 +424,7 @@ task<http_client_response> http_client_handle::dispatch(
     registration_.require_active();
     validate_operation_options(options_);
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
+    request.set_host_stop(host_stop_token_);
     if (const auto* bytes = view.content_.borrowed_bytes()) {
         request.set_body(bytes->value());
     }
@@ -437,6 +439,7 @@ task<http_client_exchange> http_client_handle::dispatch_upload(const http_client
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
     detail::http_client_request_storage request(head.method_.view(), head.target_.view(), head.headers_, resource_);
+    request.set_host_stop(host_stop_token_);
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_request(std::move(request), upload, options_));
 }
 
@@ -492,6 +495,7 @@ task<http_client_tunnel_result> http_client_handle::dispatch_connect(const http_
     }
     detail::http_client_request_storage request("CONNECT", head.target_.view(), head.headers_, pmr_resource_or_default(resource_));
     request.set_tunnel(head.authority_.view(), head.protocol_.view());
+    request.set_host_stop(host_stop_token_);
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
 }
 

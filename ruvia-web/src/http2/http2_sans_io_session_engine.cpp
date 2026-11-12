@@ -772,6 +772,9 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         if (body_reader_storage) {
             dispatch_services.bind_streaming_request_body(body_reader_storage->facade());
         }
+        const stop_group dispatch_stop(dispatch_services.get_stop_token(), stream_signal->terminal_stop_token());
+        const auto dispatch_stop_token = dispatch_stop.token();
+        dispatch_services.bind_stop_token(dispatch_stop_token);
 
         const auto reset_dispatch_stream = [this, stream_id](bool cancelled) noexcept {
             reset_stream_no_throw(stream_id, cancelled ? http2_error_code::cancel : http2_error_code::internal_error);
@@ -814,10 +817,30 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         }
                         return finish_upgrade_commit(head_response.status(), context_value);
                     };
+                    auto commit_websocket = [this, stream_id, &request, &finish_upgrade_commit](
+                                                context& context_value, const websocket_route_endpoint& endpoint,
+                                                std::span<const http_header_view> headers)
+                        -> task<std::optional<websocket_upgrade_commit<http2_sans_io_tunnel_transport>>> {
+                        const auto validation = ruvia::validate_http2_websocket_handshake(
+                            connection_, stream_id, request, endpoint.handshake_validation());
+                        if (const auto* failure = validation.failure()) {
+                            reject_request_stream_websocket(context_value, *failure);
+                            co_return std::nullopt;
+                        }
+                        const auto result = connection_.submit_websocket_handshake(stream_id, request, validation,
+                            {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
+                        const auto* handshake = std::get_if<websocket_extended_connect_negotiation>(&result);
+                        if (handshake == nullptr || !stream_runtimes_.mark_tunnel(stream_id)) {
+                            throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
+                        }
+                        co_return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(
+                            finish_upgrade_commit(http_status::ok, context_value), handshake->compression(),
+                            handshake->subprotocol(), *ruvia::process_resource());
+                    };
                     auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(
                         routes_, request, *resolved, request_memory_value, dispatch_services, options,
                         session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(),
-                        std::string_view{}, commit);
+                        std::string_view{}, commit, commit_websocket);
                     if (!buffered) {
                         co_return;
                     }

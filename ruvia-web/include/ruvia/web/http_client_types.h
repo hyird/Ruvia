@@ -84,9 +84,8 @@ struct http_client_http3_config final {
     std::size_t max_stream_output_bytes_{256 * 1024};
 };
 
-// Configuration for one http_client bound to one event_loop. application registration
-// creates one such client per Web worker, so these limits remain per client
-// without exposing the application deployment model in the standalone API.
+// Per-origin configuration. Standalone owners and application workers use the
+// same isolated transport, TLS, cookie and connection limits for each alias.
 struct http_client_config final {
     borrowed_text alias_{"default"};
     borrowed_text base_url_{};

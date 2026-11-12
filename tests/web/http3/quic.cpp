@@ -36,16 +36,22 @@
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
 
+#include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
+#include <asio/redirect_error.hpp>
+#include <asio/use_awaitable.hpp>
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http3_quic_connection.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_response.h"
@@ -1260,6 +1266,146 @@ ruvia::task<void> exercise_outbound_resumption(ruvia::event_loop loop,
     }
 }
 
+// A real UDP relay gates encrypted packets after the public client has received
+// an authenticated response. A migration cannot receive a path-validation reply
+// while blocked, independent of scheduler and network timing.
+class migration_relay final {
+public:
+    migration_relay(const ruvia::event_loop& loop, asio::ip::udp::endpoint server)
+        : socket_(loop.io_context(), {asio::ip::address_v4::loopback(), 0}),
+          server_(server),
+          done_(loop.handle()) {
+        asio::co_spawn(loop.executor(), serve(), [this](std::exception_ptr failure) {
+            failure_ = failure;
+            complete_ = true;
+            done_.notify();
+        });
+    }
+    [[nodiscard]] std::uint16_t port() const {
+        return socket_.local_endpoint().port();
+    }
+    void block() noexcept {
+        blocked_ = true;
+    }
+    [[nodiscard]] ruvia::task<void> shutdown() {
+        std::error_code ignored;
+        socket_.close(ignored);
+        while (!complete_) {
+            co_await done_.wait();
+        }
+        if (failure_) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+private:
+    asio::awaitable<void> serve() {
+        std::array<std::byte, 65536> bytes;
+        for (;;) {
+            asio::ip::udp::endpoint sender;
+            std::error_code error;
+            const auto size = co_await socket_.async_receive_from(asio::buffer(bytes), sender,
+                asio::redirect_error(asio::use_awaitable, error));
+            if (error == asio::error::operation_aborted || error == asio::error::bad_descriptor) {
+                co_return;
+            }
+            if (error) {
+                throw std::system_error(error);
+            }
+            if (blocked_) {
+                continue;
+            }
+            if (sender != server_) {
+                client_ = sender;
+            }
+            co_await socket_.async_send_to(asio::buffer(bytes.data(), size),
+                sender == server_ ? client_ : server_, asio::redirect_error(asio::use_awaitable, error));
+            if (error == asio::error::operation_aborted || error == asio::error::bad_descriptor) {
+                co_return;
+            }
+            if (error) {
+                throw std::system_error(error);
+            }
+        }
+    }
+    asio::ip::udp::socket socket_;
+    asio::ip::udp::endpoint server_;
+    asio::ip::udp::endpoint client_;
+    ruvia::worker_signal done_;
+    std::exception_ptr failure_;
+    bool blocked_{};
+    bool complete_{};
+};
+
+ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attachment,
+    ruvia::http_client_config config, asio::ip::udp::endpoint remote, int mode) {
+    const auto loop = attachment.loop();
+    migration_relay relay(loop, remote);
+    const std::pmr::string base_url("https://localhost:" +
+                                        std::pmr::string(std::to_string(relay.port()), ruvia::process_resource()),
+        ruvia::process_resource());
+    config.base_url_ = base_url;
+    config.idle_timeout_ = 30s;
+    config.connect_timeout_ = mode == 2 ? 100ms : 2s;
+    config.http3_.enable_early_data_ = false;
+    ruvia::http_client owner(loop, config);
+    std::exception_ptr failure;
+    try {
+        auto client = owner.client();
+        {
+            auto warm = co_await client.get("/resumption/safe").send();
+            EXPECT_TRUE(warm.ok());
+            (void)co_await warm.bytes();
+        }
+        relay.block();
+        ruvia::stop_source stop;
+        ruvia::operation_options options{.timeout_ = mode == 1 ? 20ms : 5s, .stop_token_ = stop.token()};
+        std::optional<ruvia::http_client_error::code_type> outcome;
+        bool complete = false;
+        const auto migrate = [&]() -> ruvia::task<void> {
+            try {
+                co_await client.with_options(options).migrate("127.0.0.1");
+            } catch (const ruvia::http_client_error& error) {
+                outcome = error.code();
+            }
+            complete = true;
+        };
+        ruvia::task_scope tasks(loop.handle());
+        const auto started = std::chrono::steady_clock::now();
+        tasks.spawn(migrate());
+        (void)co_await ruvia::sleep_for(loop.handle(), 5ms);
+        if (mode == 0 || mode == 3 || mode == 4) {
+            EXPECT_FALSE(complete);
+        }
+        if (mode == 0) {
+            stop.request_stop();
+        } else if (mode == 3) {
+            owner.close();
+        } else if (mode == 4) {
+            attachment.stop();
+        }
+        co_await tasks.join();
+        if (mode == 1 || mode == 2) {
+            EXPECT_LT(std::chrono::steady_clock::now() - started, 1s);
+        }
+        EXPECT_TRUE(complete);
+        EXPECT_TRUE(outcome.has_value());
+        if (outcome) {
+            EXPECT_TRUE(*outcome == (mode == 0                   ? ruvia::http_client_error::code_type::cancelled
+                                        : mode == 3 || mode == 4 ? ruvia::http_client_error::code_type::closing
+                                                                 : ruvia::http_client_error::code_type::timeout));
+        }
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await owner.shutdown();
+    co_await relay.shutdown();
+    attachment.stop();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 ruvia::task<void> exercise_outbound_migration(ruvia::event_loop loop,
     ruvia::http_client_config config) {
     config.idle_timeout_ = 30s;
@@ -1280,6 +1426,17 @@ ruvia::task<void> exercise_outbound_migration(ruvia::event_loop loop,
                 worker = text.text();
             } else {
                 EXPECT_EQ(text.text(), worker);
+            }
+            if (change == 0) {
+                ruvia::stop_source stop;
+                stop.request_stop();
+                bool cancelled = false;
+                try {
+                    co_await client.with_options({.timeout_ = 1ms, .stop_token_ = stop.token()}).migrate("127.0.0.1");
+                } catch (const ruvia::http_client_error& error) {
+                    cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                }
+                EXPECT_TRUE(cancelled);
             }
         }
     } catch (...) {
@@ -1440,6 +1597,19 @@ TEST(Ruvia, http3_outbound_consecutive_migrations_wait_for_connection_ids) {
     }
     loops.stop();
     loops.join();
+}
+
+TEST(Ruvia, http3_outbound_migration_cancellation_and_deadlines_cover_path_validation) {
+    auto& server = http3_resumption_test::server::shared();
+    ruvia::blocking_pool blocking;
+    for (int mode = 0; mode != 5; ++mode) {
+        asio::io_context io;
+        auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &blocking});
+        auto root = attachment.loop().start(http3_resumption_test::exercise_blocked_migration(
+            attachment, server.outbound_config(), server.enabled_endpoint(), mode));
+        attachment.run();
+        root.get();
+    }
 }
 
 TEST(Ruvia, http3_resumes_tls_tickets_across_workers_with_early_data_negotiated) {

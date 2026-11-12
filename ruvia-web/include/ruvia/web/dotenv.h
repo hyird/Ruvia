@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -18,7 +19,6 @@
 namespace ruvia {
 namespace detail {
 
-struct env_access;
 struct env_state;
 
 }  // namespace detail
@@ -51,6 +51,14 @@ public:
     env();
     ~env();
 
+    // Loads into this instance only, never into the process environment.
+    // The default file is beside the executable. Successful loads may
+    // invalidate get() views; malformed files leave the prior state intact.
+    env& load_dotenv(dotenv_options options = {}) &;
+    env& load_dotenv(dotenv_options = {}) && = delete;
+    env& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) &;
+    env& load_dotenv(const std::filesystem::path&, dotenv_options = {}) && = delete;
+
     env(const env&) = delete;
     env& operator=(const env&) = delete;
     env(env&&) = delete;
@@ -81,8 +89,6 @@ private:
     struct state_deleter_type final {
         void operator()(detail::env_state* state) const noexcept;
     };
-
-    friend struct detail::env_access;
 
     [[nodiscard]] static std::optional<bool> parse_bool_value(std::string_view value) noexcept;
 

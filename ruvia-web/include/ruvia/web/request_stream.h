@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_header.h"
@@ -20,6 +21,7 @@
 #include "ruvia/web/detail/callback.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/streaming.h"
+#include "ruvia/web/websocket.h"
 
 namespace ruvia {
 
@@ -29,6 +31,7 @@ namespace detail {
 struct request_stream_access;
 // Commits a tunnel request's success head and returns the established tunnel.
 using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>;
+using request_stream_websocket_accept = callback_ref<task<websocket*>(websocket_route_config)>;
 using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 }  // namespace detail
 
@@ -46,14 +49,14 @@ using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 // middleware, document root, CORS policy, response compression, rate limit
 // or on_error handler takes part.
 //
-// The callback commits exactly one response: through response(), or for a
-// tunnel request through accept_tunnel(). Once it is committed, an exception
-// from the callback aborts the stream (HTTP/1: the connection) and reaches
-// on_connection_failure. Before that, an http_error answers with its status,
-// a request body failure with its 4xx, and any other exception -- or a
-// callback that returns without committing -- with 500 after reaching
-// on_connection_failure. A committed response stream the callback did not
-// end is ended when it returns.
+// The callback selects exactly one response: respond(), response().commit(),
+// accept_tunnel(), or accept_websocket(). respond() transfers a complete
+// response to the server, which sends it after the callback returns; it does
+// not commit output to the wire. Before wire commitment, callback failures
+// replace the selected response with the framework's error answer. After wire
+// commitment, a callback exception aborts the stream (HTTP/1: the connection)
+// and reaches on_connection_failure. A callback returning without a response
+// answers 500; a committed response stream not explicitly ended is ended.
 class request_stream final {
 public:
     request_stream(const request_stream&) = delete;
@@ -128,10 +131,28 @@ public:
     [[nodiscard]] redis_handle redis(std::string_view alias) const;
 #endif
 
-    // Edits the head the next response().commit() or accept_tunnel() sends:
-    // status, header fields and cookies.
+    // Edits the next file/static_file response or the head response().commit()
+    // or an acceptance sends. Complete responses passed to respond() keep their
+    // own metadata: respond() does not merge an unconsumed draft.
     [[nodiscard]] context_response_editor draft() & noexcept;
     context_response_editor draft() && = delete;
+
+    // Reuses Context's file factory: conditional requests, HEAD and single or
+    // multipart ranges retain their settled status and opened file handle.
+    // Options are owned before return; static_file() borrows root until its
+    // task completes. Blocking-pool, cancellation, timeout and identity checks
+    // are the same as context::file()/static_file().
+    [[nodiscard]] task<http_response> file(file_response_options options);
+    [[nodiscard]] task<http_response> static_file(const static_root& root, static_file_response_options options = {});
+    // A temporary root would be destroyed before the returned task reads it.
+    task<http_response> static_file(const static_root&&, static_file_response_options = {}) = delete;
+
+    // Transfers all response metadata and body ownership without sending yet.
+    // The existing final-response driver sends buffers, files and multipart
+    // ranges after the callback returns. Throws logic_error once any response
+    // is selected or output committed. Failure before wire commitment still
+    // replaces it with an error response, releasing its file/body resources.
+    void respond(http_response response);
 
     // The streamed response: commit the head draft() describes, then write
     // the content and end it, with trailers where the protocol carries them.
@@ -161,6 +182,15 @@ public:
     [[nodiscard]] task<http_tunnel*> accept_tunnel(http_status_code status = http_status::ok, http_tunnel_route_config config = {}) &;
     task<http_tunnel*> accept_tunnel(http_status_code = http_status::ok, http_tunnel_route_config = {}) && = delete;
 
+    // Negotiates a WebSocket on an offered HTTP/1.1 Upgrade or extended
+    // CONNECT through the server's normal handshake and session driver.
+    // The cold task has no effects until awaited. On handshake rejection it
+    // returns nullptr and selects the error response the server sends after
+    // the callback returns. Any response/acceptance already selected throws
+    // logic_error. The returned session is borrowed until the callback ends.
+    [[nodiscard]] task<websocket*> accept_websocket(websocket_route_config config = {}) &;
+    task<websocket*> accept_websocket(websocket_route_config = {}) && = delete;
+
     // Requested when the application stops and, for a request that is not a
     // tunnel request, when the client abandons it (HTTP/1: the connection
     // ends after the request content; HTTP/2 and HTTP/3: the stream is reset).
@@ -170,15 +200,24 @@ private:
     friend struct detail::request_stream_access;
 
     request_stream(context& context_value, response_stream_writer& response,
-        const detail::request_stream_tunnel_accept* accept_tunnel) noexcept
+        const detail::request_stream_tunnel_accept* accept_tunnel,
+        const detail::request_stream_websocket_accept* accept_websocket = nullptr) noexcept
         : context_(context_value),
           response_(response),
-          accept_tunnel_(accept_tunnel) {}
+          accept_tunnel_(accept_tunnel),
+          accept_websocket_(accept_websocket) {
+        operation_scope_.bind_worker(context_value.worker());
+    }
+
+    [[nodiscard]] task<http_tunnel*> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
+    [[nodiscard]] task<websocket*> accept_websocket_impl(websocket_route_config config);
 
     context& context_;
     response_stream_writer& response_;
     // Null unless tunnel_requested().
     const detail::request_stream_tunnel_accept* accept_tunnel_;
+    const detail::request_stream_websocket_accept* accept_websocket_;
+    ::ruvia::operation_scope operation_scope_;
 };
 
 // application-owned handler of every listener_dispatch::request_stream

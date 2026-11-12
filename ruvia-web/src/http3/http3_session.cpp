@@ -1108,9 +1108,37 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                         admission.tail().record_access(options.access_log_, head_response.status());
                         return http3_tunnel_transport(*this, *stream, *signal);
                     };
+                    auto commit_websocket = [this, stream, signal, &request, &head, &admission, &options](
+                                                context& context_value, const websocket_route_endpoint& endpoint,
+                                                std::span<const http_header_view> headers)
+                        -> task<std::optional<websocket_upgrade_commit<http3_tunnel_transport>>> {
+                        const auto validation = validate_http3_websocket_handshake(head, request, endpoint.handshake_validation());
+                        if (const auto* failure = validation.failure()) {
+                            reject_request_stream_websocket(context_value, *failure);
+                            co_return std::nullopt;
+                        }
+                        const auto result = codec().submit_websocket_handshake(stream->id(), request, validation,
+                            {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});
+                        const auto* handshake = std::get_if<websocket_extended_connect_negotiation>(&result);
+                        if (handshake == nullptr) {
+                            throw std::invalid_argument("HTTP/3 WebSocket handshake rejected");
+                        }
+                        if (!stream->tunnel()) {
+                            stream->mark_tunnel();
+                            ++tunnel_streams_;
+                        }
+                        stream->mark_response_committed();
+                        set_inactivity_phase();
+                        context_access::commit_upgrade(context_value);
+                        wake_writer();
+                        admission.tail().record_access(options.access_log_, http_status::ok);
+                        co_return websocket_upgrade_commit<http3_tunnel_transport>(
+                            http3_tunnel_transport(*this, *stream, *signal), handshake->compression(),
+                            handshake->subprotocol(), *ruvia::process_resource());
+                    };
                     auto buffered = co_await execute_tunnel_upgrade_session<http3_tunnel_transport>(
                         routes, request, *resolved, request_memory_value, dispatch_services, options,
-                        scanner_entry_, inbound_buffers_, admission.udp_tunnel(), std::string_view{}, commit);
+                        scanner_entry_, inbound_buffers_, admission.udp_tunnel(), std::string_view{}, commit, commit_websocket);
                     if (!buffered) {
                         co_return;
                     }

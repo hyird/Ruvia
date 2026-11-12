@@ -498,6 +498,7 @@ public:
 
     // Inherits an empty token; a supplied state replaces user cancellation.
     // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
+    // Request-host cancellation remains independent and cannot be replaced.
     [[nodiscard]] http_client_handle with_options(operation_options options) const;
     [[nodiscard]] http_client_request request(std::string_view method, std::string_view path) const;
     [[nodiscard]] http_client_request get(std::string_view path) const;
@@ -510,6 +511,9 @@ public:
     [[nodiscard]] http_client_connect_request connect(std::string_view authority) const;
     [[nodiscard]] http_client_connect_request udp(std::string_view path) const;
     [[nodiscard]] http_client_websocket_request websocket(std::string_view path) const;
+    // Migrates existing authenticated HTTP/3 sessions only, without reconnect or
+    // replay. Cancellation and the tighter of operation/connect timeout cover
+    // handshake confirmation, CID availability and path validation together.
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port = 0) const;
     [[nodiscard]] http_client_stats stats() const;
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
@@ -542,6 +546,7 @@ private:
     detail::http_client_pool* pool_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
     operation_options options_;
+    stop_token host_stop_token_;
     scoped_capability_registration registration_;
     const detail::http_client_registry* registry_{};
 };
@@ -617,11 +622,13 @@ private:
     bool consumed_{false};
 };
 
-// One outbound HTTP origin bound to one Ruvia event loop. Construction does
-// not create a thread, and connections are established lazily by send().
+// Preconfigured outbound HTTP origins bound to one Ruvia event loop. Construction
+// does not create a thread; connections are established lazily by send().
 class http_client final {
 public:
     http_client(event_loop loop, const http_client_config& config,
+        http_client_result_budget_config result_budget = {});
+    http_client(event_loop loop, std::span<const http_client_config> configs,
         http_client_result_budget_config result_budget = {});
     ~http_client();
 
@@ -635,8 +642,12 @@ public:
     // shutdown, so only lvalue clients may create them.
     [[nodiscard]] http_client_handle with_options(operation_options options) const&;
     http_client_handle with_options(operation_options) const&& = delete;
+    // client() selects the sole configuration, or alias "default" in a set.
+    // Redirects may reach only this owner's preconfigured origins.
     [[nodiscard]] http_client_handle client() const&;
     http_client_handle client() const&& = delete;
+    [[nodiscard]] http_client_handle client(std::string_view alias) const&;
+    http_client_handle client(std::string_view) const&& = delete;
 
     // Idempotent and callable from any thread. It only requests immediate
     // shutdown; use shutdown() when the worker teardown must be awaited.

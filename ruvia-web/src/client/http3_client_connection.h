@@ -37,7 +37,8 @@ public:
     void reprioritize(http_client_response_state& response, http_priority priority);
     [[nodiscard]] std::size_t available() const noexcept;
     [[nodiscard]] bool active() const noexcept;
-    [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port);
+    [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port,
+        const operation_timeout& timeout, stop_token stop);
     [[nodiscard]] task<bool> send_datagram(http_client_response_state& response, std::span<const std::byte> bytes);
 
 private:

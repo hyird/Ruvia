@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
@@ -40,6 +41,13 @@ public:
     http_client_request_storage& operator=(http_client_request_storage&&) noexcept = delete;
 
     http_client_request_storage& set_body(std::string_view body);
+
+    void set_host_stop(stop_token token) noexcept {
+        host_stop_ = std::move(token);
+    }
+    [[nodiscard]] const stop_token& host_stop() const noexcept {
+        return host_stop_;
+    }
 
     void set_tunnel(std::string_view authority, std::string_view protocol);
     void set_websocket(std::shared_ptr<http_client_websocket_handshake> handshake) noexcept {
@@ -109,6 +117,7 @@ private:
     std::pmr::string tunnel_authority_;
     std::pmr::string tunnel_protocol_;
     std::shared_ptr<http_client_websocket_handshake> websocket_;
+    stop_token host_stop_;
     bool is_tunnel_{};
     http_client_tunnel_state* tunnel_{};
     bool has_body_{false};

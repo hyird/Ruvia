@@ -33,6 +33,7 @@ class route_entry;
 // upgrade route built. `accept` commits the success head and establishes the
 // tunnel; a response the callback writes instead becomes the context's
 // buffered response.
-[[nodiscard]] task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept);
+[[nodiscard]] task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept,
+    const request_stream_websocket_accept* accept_websocket = nullptr);
 
 }  // namespace ruvia::detail

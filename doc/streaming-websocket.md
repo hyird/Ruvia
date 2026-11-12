@@ -171,6 +171,7 @@ ruvia::task<void> stream_subscription(
 参考示例：[examples/web/websocket.cpp](../examples/web/websocket.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
+不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发ruviawebrequest_streamh) 显式协商并取得同一个 `websocket` 会话接口。
 
 - **Extended CONNECT 字段**：HTTP/2 中的 `Sec-WebSocket-Key` / `Sec-WebSocket-Accept` 已被 `:protocol` 取代，按 [RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 不做处理，既不校验也不拒绝。
 - **子协议提议**：接收方跳过 `Sec-WebSocket-Protocol` 提议中的重复子协议；唯一性是 RFC 6455 §4.1 对发送方客户端的要求。
@@ -369,9 +370,16 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 出站传输及 WebSocket 握手错误统一抛出 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态，消息越限使用 `message_too_large`。配置非法抛出 `std::invalid_argument`，已消费构造器或并发占用同一读写通道等调用错误抛出 `std::logic_error`。WebSocket 的 `receive`、`send`、`ping`、`pong`、`close` 接受逐次操作选项，收紧超时或附加取消。
 
-句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。`with_options(operation_options)` 可附加取消与更紧的截止时间。独立事件循环使用 `http_client(loop, config)`，通过 `.client()` 取得句柄；结束前 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
+句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
-自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；只跟随同一 origin 或启动时已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级直接返回重定向响应。跨 origin 时移除 `Authorization`、`Proxy-Authorization` 与 `Cookie`，目标客户端按自己的 TLS、连接池和凭据配置执行。独立客户端未注册其他 origin，因此只自动跟随同源重定向。
+| 独立拥有者入口 | origin 选择 |
+| --- | --- |
+| `http_client(loop, config, result_budget = {})` | `.client()` 选择唯一配置，`.client(alias)` 可按别名选择 |
+| `http_client(loop, span<const http_client_config>, result_budget = {})` | `.client(alias)` 选择已配置 origin；无参 `.client()` 要求存在 `"default"` |
+
+配置集合在构造返回前拥有化；所有别名共用拥有者生命周期与结果预算，各自保留 TLS、连接、Cookie 及凭据策略。
+
+自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级直接返回重定向响应。跨 origin 时移除 `Authorization`、`Proxy-Authorization` 与 `Cookie`，目标客户端按自己的 TLS、连接池和凭据配置执行。
 
 `http_client_config::protocol_` 可限定为 `http1_only`、`http2_only` 或 `http3_only`。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
 
@@ -379,7 +387,7 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
 
-迁移沿用 ngtcp2 的路径验证机制；CID 容量、补充等待与截止期见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。迁移保持原连接，不自动重放失败请求。
+迁移沿用 ngtcp2 的路径验证机制；CID 容量见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。握手确认、CID 补充等待与路径验证共用 `connect_timeout_` 和 `with_options()` 中更紧的整体期限，同时响应用户、宿主与循环退出取消。迁移保持原连接，不自动重放失败请求。
 
 `client.next_advertisement()` 可观察 HTTP/2 与 HTTP/3 连接收到的 `ORIGIN` 帧（`advertisements_.receive_origins_ = true`）以及 HTTP/2 连接收到的 `ALTSVC` 帧（`advertisements_.receive_alternative_services_ = true`）。Server Push 仅适用于 HTTP/2；HTTP/3 的 Alt-Svc 发现从已验证源站的响应头获取。
 

@@ -335,8 +335,8 @@ struct client_tcp_endpoint final {
     // nullptr selects plaintext TCP.
     const client_tls_config_storage* tls_;
     client_tcp_config tcp_;
-    // ALPN offered in the TLS handshake; ignored for plaintext TCP.
-    client_alpn alpn_;
+    // ALPN wire offer borrowed until transport retirement; empty for TCP.
+    std::span<const unsigned char> alpn_{};
 };
 
 // True for an OpenSSL failure or a TLS stream truncated without close_notify.
@@ -369,7 +369,7 @@ public:
     [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
     // Replaces the endpoint's ALPN offer for every later connect().
     void offer_alpn(client_alpn alpn) noexcept {
-        endpoint_.alpn_ = alpn;
+        endpoint_.alpn_ = client_alpn_bytes(alpn);
     }
     // Selected ALPN protocol of the current TLS connection; empty for TCP.
     [[nodiscard]] std::string_view alpn() noexcept;

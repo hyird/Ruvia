@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
@@ -13,7 +14,8 @@ namespace ruvia {
 
 namespace detail {
 class http_server_state;
-}
+class http_server_group_state;
+}  // namespace detail
 
 struct http_server_callbacks final {
     request_stream_callback request_stream_;
@@ -56,6 +58,10 @@ public:
     void adopt(const listener_endpoint& service, native_socket socket) &;
     void adopt(const listener_endpoint&, native_socket) && = delete;
 
+    // Before start only. Replaces the complete trusted set atomically; invalid
+    // CIDRs leave it unchanged. Empty means trust no forwarded headers.
+    http_server& trusted_proxies(trusted_proxy_config config) &;
+    http_server& trusted_proxies(trusted_proxy_config) && = delete;
     // Owner loop only. Starts every staged service once; a failure closes and
     // joins all prepared resources before propagating. An empty host may start
     // and have services added later.
@@ -84,6 +90,48 @@ public:
 
 private:
     std::shared_ptr<detail::http_server_state> state_;
+};
+
+// A service shared by caller-owned loops. Callbacks may run concurrently.
+// Configuration before start does not require the loops to be driven.
+// start(), shutdown() and running controls block, must run outside every
+// member loop, and require the caller to drive all live loops until completion.
+// A valid but undriven loop cannot be detected. close() is any-thread and never
+// stops a caller loop; a member loop's retirement closes the entire group.
+class http_server_group final {
+public:
+    http_server_group(std::span<const event_loop> loops, http_server_callbacks callbacks, server_config config = {});
+    ~http_server_group();
+    http_server_group(const http_server_group&) = delete;
+    http_server_group& operator=(const http_server_group&) = delete;
+    http_server_group(http_server_group&&) = delete;
+    http_server_group& operator=(http_server_group&&) = delete;
+
+    void listen(listen_config config) &;
+    void add_connection_service(listen_config config) &;
+    // Before start only; replaces the complete set on every worker. Parsing
+    // and allocation finish before publication; invalid input changes nothing.
+    http_server_group& trusted_proxies(trusted_proxy_config config) &;
+    // Prepare every worker before opening any listener; failure rolls back
+    // the whole host without cancelling unrelated caller work.
+    void start() &;
+    void remove_listener(const listener_endpoint& endpoint) &;
+    void replace_tls_identities(const listener_endpoint& endpoint, tls_config config) &;
+#ifndef _WIN32
+    [[nodiscard]] listener_sockets duplicate_listener_sockets(const listener_endpoint& endpoint) const&;
+    listener_sockets duplicate_listener_sockets(const listener_endpoint&) const&& = delete;
+#endif
+    // Explicit target worker; takes socket ownership even when rejected.
+    void adopt(std::size_t worker_index, const listener_endpoint& service, native_socket socket) &;
+    void close() noexcept;
+    void shutdown() &;
+    [[nodiscard]] http_server_stats stats() const noexcept;
+    [[nodiscard]] std::size_t worker_count() const noexcept;
+    [[nodiscard]] const worker_handle& worker(std::size_t index) const& RUVIA_LIFETIMEBOUND;
+    const worker_handle& worker(std::size_t) const&& = delete;
+
+private:
+    std::shared_ptr<detail::http_server_group_state> state_;
 };
 
 }  // namespace ruvia

@@ -48,13 +48,13 @@ namespace ruvia {
 application& application::load_dotenv(dotenv_options options) {
     return detail::mutate_stopped_app(
         *this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
-            detail::load_env_from_executable_directory(state_value.env_, options);
+            state_value.env_.load_dotenv(options);
         });
 }
 
 application& application::load_dotenv(const std::filesystem::path& path, dotenv_options options) {
     return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running",
-        [&](detail::app_state& state_value) { detail::load_env_from_file(state_value.env_, path, options); });
+        [&](detail::app_state& state_value) { state_value.env_.load_dotenv(path, options); });
 }
 
 namespace {

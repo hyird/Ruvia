@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -114,6 +115,7 @@ enum class client_alpn : std::uint8_t {
     http2,
     negotiate,
 };
+[[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept;
 
 // Startup-only. Applies the shared TLS protocol policy (tls_protocol_policy.h);
 // trust and client identity loading have one implementation; the ALPN offer is
@@ -124,7 +126,7 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
 // trailing dot removed), the expected peer host or IP, and installs the ALPN
 // offer. A host name matches DNS-ID subjectAltNames only: no Common Name
 // fallback, no partial-label wildcards. `host` need not be NUL-terminated.
-[[nodiscard]] client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, client_alpn alpn);
+[[nodiscard]] client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, std::span<const unsigned char> protocols);
 // Carries a setup failure through transport results; message() names it.
 [[nodiscard]] std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept;
 

@@ -185,8 +185,7 @@ http_client_handle worker_client_registry_view::client(
         throw http_client_error(
             http_client_error::code_type::not_configured, "http client is not configured");
     }
-    return http_clients_->get(operation_scope)
-        .with_options(context_operation_options(stop_token_value));
+    return http_clients_->get(operation_scope, stop_token_value);
 }
 
 http_client_handle worker_client_registry_view::client(std::string_view alias,
@@ -195,8 +194,7 @@ http_client_handle worker_client_registry_view::client(std::string_view alias,
         throw http_client_error(
             http_client_error::code_type::not_configured, "http client is not configured");
     }
-    return http_clients_->get(alias, operation_scope)
-        .with_options(context_operation_options(stop_token_value));
+    return http_clients_->get(alias, operation_scope, stop_token_value);
 }
 
 }  // namespace ruvia::detail

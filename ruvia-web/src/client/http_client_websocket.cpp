@@ -727,6 +727,7 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
             std::pmr::polymorphic_allocator<detail::http_client_websocket_handshake>(resource),
             websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_}, resource);
         stored.emplace("GET", request.path_, headers.view(), resource);
+        stored->set_host_stop(request.client_.host_stop_token_);
         stored->set_tunnel(pool.config().authority_, "websocket");
         stored->set_websocket(handshake);
     }

@@ -31,8 +31,14 @@ public:
     http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
         std::span<const http_client_definition_type> definitions,
         const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
+    http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
+        std::span<const http_client_config> configs,
+        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     http_client_registry(asio::io_context&, worker_handle&&,
         std::span<const http_client_definition_type>,
+        const std::shared_ptr<http_client_result_budget_domain>&) = delete;
+    http_client_registry(asio::io_context&, worker_handle&&,
+        std::span<const http_client_config>,
         const std::shared_ptr<http_client_result_budget_domain>&) = delete;
     ~http_client_registry();
     http_client_registry(const http_client_registry&) = delete;
@@ -40,13 +46,17 @@ public:
 
     void close_now() noexcept;
     [[nodiscard]] task<void> join();
-    [[nodiscard]] http_client_handle get(::ruvia::operation_scope& scope) const;
-    [[nodiscard]] http_client_handle get(std::string_view alias, ::ruvia::operation_scope& scope) const;
+    [[nodiscard]] http_client_handle get(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_handle get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
     [[nodiscard]] http_client_pool* find_origin(http_scheme scheme, std::string_view authority) const;
 
 private:
     using pool_owner_type = std::unique_ptr<http_client_pool, pmr_object_deleter<http_client_pool>>;
 
+    template <typename config_type>
+    void initialize(asio::io_context& io_context, const worker_handle& worker_value,
+        std::span<const config_type> configs,
+        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     [[nodiscard]] http_client_pool& default_pool() const;
     std::pmr::vector<pool_owner_type> pools_;
     named_capability_index alias_index_;

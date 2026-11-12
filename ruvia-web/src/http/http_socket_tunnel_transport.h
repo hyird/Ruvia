@@ -13,6 +13,7 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_io_buffer.h"
 
 #include "http/http_stream_end.h"
 #include "http/tls_tunnel_output.h"
@@ -59,6 +60,21 @@ public:
             throw inbound_transport_error(result_value.error_code(), "HTTP tunnel read");
         }
         co_return result_value.result() != 0;
+    }
+
+    [[nodiscard]] task<bool> read_more(http_io_buffer& bytes) {
+        const auto writable = bytes.prepare(4096);
+        const auto result = co_await async_asio<std::size_t>([&](auto completion) {
+            stream_.async_read_some(asio::buffer(writable.data(), writable.size()), std::move(completion));
+        });
+        bytes.commit(result.result());
+        if (is_stream_read_end(result.error_code())) {
+            co_return false;
+        }
+        if (result.error_code()) {
+            throw inbound_transport_error(result.error_code(), "WebSocket read");
+        }
+        co_return result.result() != 0;
     }
     // `completed_bytes` receives the plaintext prefix accepted by the stream,
     // including progress reported with the terminal error.

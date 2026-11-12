@@ -382,6 +382,8 @@ task<void> http_client_pool::execute_request_into(
         throw;
     }
     const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
+    stop_group cancellation(request.host_stop(), options.stop_token_);
+    options.stop_token_ = cancellation.token();
     const auto acquire_timeout = timeout.constrained_by(config_.acquire_timeout_);
     if (requests_buffered_ >= config_.max_buffered_requests_) {
         ++failed_requests_;
@@ -844,16 +846,23 @@ task<bool> http_client_pool::send_http3_datagram(http_client_response_state& sta
 }
 #endif
 
-task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::uint16_t port) {
+task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::uint16_t port,
+    operation_options options, stop_token host_stop) {
 #ifdef RUVIA_ENABLE_HTTP3
     require_accepting();
     if (slots_.closing()) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
+    const auto timeout = operation_timeout(config_.connect_timeout_).constrained_by(options.timeout_);
+    stop_group cancellation(host_stop, options.stop_token_);
+    options.stop_token_ = cancellation.token();
+    if (options.stop_token_.stop_requested()) {
+        throw http_client_error(http_client_error::code_type::cancelled, "HTTP/3 migration cancelled");
+    }
     bool migrated = false;
     for (auto& connection : http3_connections_) {
         if (connection && connection->active()) {
-            co_await connection->migrate(local_address, port);
+            co_await connection->migrate(local_address, port, timeout, options.stop_token_);
             migrated = true;
         }
     }
@@ -863,6 +872,8 @@ task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::
 #else
     (void)local_address;
     (void)port;
+    (void)options;
+    (void)host_stop;
     throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP/3 is disabled");
     co_return;
 #endif

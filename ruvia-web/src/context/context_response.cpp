@@ -229,6 +229,9 @@ http_response context::streaming_head() {
 }
 
 task<http_response> detail::context_access::commit_streaming_head(context& context_value) {
+    if (context_access::has_response(context_value)) {
+        throw std::logic_error("a complete response is already selected");
+    }
     if (session_access::available(context_value)) {
         co_await session_access::commit(context_value);
     }
