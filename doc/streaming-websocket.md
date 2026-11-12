@@ -349,6 +349,8 @@ co_return c.text(body.text());
 
 `text()`、`bytes()`、`json<T>()` 与 `stream()` 消费同一条线性正文流，不缓存可重复读取的副本。结果收集同时受调用方 `max_bytes`、客户端响应上限和 worker 共享结果预算约束。Header/Trailer 视图借用响应对象；拥有型收集结果可独立保留。
 
+- **双向异常归属**：上传失败不追溯撤销已验证完整的响应；响应尚未完成时，导致交换失败的传输或解码异常仍由响应消费入口报告。
+
 WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。`receive()` 返回 `nullopt` 表示结束；返回消息借用连接的接收存储，视图在下一次 `receive()` 或 `close()` 前有效。连接不能跨 worker 使用。
 
 出站传输及 WebSocket 握手错误统一抛出 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态，消息越限使用 `message_too_large`。配置非法抛出 `std::invalid_argument`，已消费构造器或并发占用同一读写通道等调用错误抛出 `std::logic_error`。WebSocket 的 `receive`、`send`、`ping`、`pong`、`close` 接受逐次操作选项，收紧超时或附加取消。

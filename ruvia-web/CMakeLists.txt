@@ -1,5 +1,5 @@
 ruvia_collect_cpp_sources(ruvia_web_sources src
-    EXCLUDE_REGEX "${_ruvia_disabled_protocol_regex}")
+    "${_ruvia_disabled_protocol_regex}")
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
@@ -64,5 +64,5 @@ endif()
 list(JOIN _ruvia_web_excluded_header_patterns "|" _ruvia_web_excluded_header_regex)
 
 ruvia_install_public_header_closure(web include/ruvia/web
-    EXCLUDE_REGEX "${_ruvia_web_excluded_header_regex}")
+    "${_ruvia_web_excluded_header_regex}")
 

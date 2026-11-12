@@ -48,8 +48,6 @@ private:
     using pool_owner_type = std::unique_ptr<http_client_pool, pmr_object_deleter<http_client_pool>>;
 
     [[nodiscard]] http_client_pool& default_pool() const;
-    void add(asio::io_context& io_context, const worker_handle& worker, http_client_config_storage config,
-        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
     std::pmr::vector<pool_owner_type> pools_;
     named_capability_index alias_index_;
     bool closing_{false};

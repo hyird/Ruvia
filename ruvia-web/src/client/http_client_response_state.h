@@ -87,10 +87,7 @@ public:
             return;
         }
         stopped_ = true;
-        data_.notify();
-        if (wake_ != nullptr) {
-            wake_(wake_target_);
-        }
+        notify_data();
         space_.notify();
     }
     void* wake_target_{};
@@ -155,10 +152,9 @@ public:
     http_client_output_queue output_;
     http_client_upload_config config_;
     std::pmr::vector<http_header> trailers_;
-    // An HTTP/1 peer can stop accepting an in-flight upload while still
-    // delivering a complete response. The upload operation reports this
-    // independently so it cannot poison that response before framing proves
-    // whether the response completed.
+    // Upload-only failures belong to the writer, not to an otherwise valid
+    // response. HTTP/1 may record them while the response is still arriving;
+    // late failures in any protocol must preserve an already validated EOF.
     std::exception_ptr failure_;
     bool content_released_{};
     http_client_response_handoff response_;
@@ -413,9 +409,6 @@ public:
     std::size_t offset_{0};
     std::size_t buffered_limit_{default_max_buffered_body_bytes};
     std::exception_ptr failure_;
-    // A late upload failure stays observable to its writer, but cannot change
-    // the EOF of an already validated response. The exception is stored once.
-    bool upload_only_failure_{false};
     // The pool retired before the exchange completed; consumers report
     // http_client_error::closing with their own operation message.
     bool pool_closed_{false};

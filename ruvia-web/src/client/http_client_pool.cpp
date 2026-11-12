@@ -290,10 +290,14 @@ task<void> http_client_pool::execute_into(
     try {
         co_await execute_request_into(std::move(request), std::move(options), state_value);
     } catch (...) {
-        state_value->upload_only_failure_ =
-            state_value->complete_ && state_value->upload_ && state_value->failure_ == nullptr;
-        state_value->discard_failed_encoded_response();
-        state_value->failure_ = std::current_exception();
+        if (state_value->complete_ && state_value->upload_ && !state_value->failure_) {
+            if (!state_value->upload_->failure_) {
+                state_value->upload_->failure_ = std::current_exception();
+            }
+        } else {
+            state_value->discard_failed_encoded_response();
+            state_value->failure_ = std::current_exception();
+        }
     }
     state_value->complete_ = true;
     if (auto* output = state_value->output()) {

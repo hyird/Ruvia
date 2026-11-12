@@ -229,6 +229,7 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 - **跨协议描述符存储**：协议解析与首部写出共用 `parser/http_header_descriptor_storage.h`；预留或追加超过 32 项时才整体迁入调用方 PMR（缺省为默认资源）。
 - **响应长度语义**：HTTP/1、HTTP/2 与 HTTP/3 共用 `Content-Length` 选择；HTTP/1 仅叠加 chunked 与 close-delimited 分帧，保留 HEAD 元数据及 204、205、CONNECT 规则。
+- **流式提交事实**：`http_response_stream_commit_plan` 从 `body_plan()` 派生头后阶段与 Trailer 状态资格，不保留第二份状态或状态码规则。
 - **通告值资源**：`http_origin_advertisement` 与 `http_alternative_service_advertisement` 复制构造沿用源 PMR，赋值保留目标 PMR；嵌套字符串同步绑定目标资源。
 - **通告赋值提交**：复制或跨资源移动分配失败时保留两端原值；同资源移动不分配，完成提交后才释放旧存储。
 

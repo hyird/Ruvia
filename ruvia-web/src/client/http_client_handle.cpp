@@ -157,7 +157,7 @@ void detail::http_client_response_state::notify_producer_space() noexcept {
 }
 
 void detail::http_client_response_state::rethrow_response_failure() const {
-    if (failure_ && !upload_only_failure_) {
+    if (failure_) {
         std::rethrow_exception(failure_);
     }
 }

@@ -13,12 +13,11 @@ if(NOT RUVIA_ENABLE_HTTP3)
 endif()
 list(JOIN _ruvia_disabled_protocol_patterns "|" _ruvia_disabled_protocol_regex)
 
-function(ruvia_collect_cpp_sources out relative_dir)
-    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_collect "" "EXCLUDE_REGEX" "")
+function(ruvia_collect_cpp_sources out relative_dir exclude_regex)
     file(GLOB_RECURSE _ruvia_sources CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.cpp")
-    if(_ruvia_collect_EXCLUDE_REGEX)
-        list(FILTER _ruvia_sources EXCLUDE REGEX "${_ruvia_collect_EXCLUDE_REGEX}")
+    if(exclude_regex)
+        list(FILTER _ruvia_sources EXCLUDE REGEX "${exclude_regex}")
     endif()
     list(SORT _ruvia_sources)
     set(${out} ${_ruvia_sources} PARENT_SCOPE)
@@ -99,9 +98,7 @@ endfunction()
 # Install the public header surface plus exactly the same-component detail
 # headers that surface includes transitively. Source-only implementation headers
 # stay build-private without requiring a second hand-maintained header list.
-function(ruvia_install_public_header_closure component relative_dir)
-    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" "EXCLUDE_REGEX" "")
-
+function(ruvia_install_public_header_closure component relative_dir exclude_regex)
     file(GLOB_RECURSE _ruvia_closure_candidates CONFIGURE_DEPENDS
         RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.h"
@@ -113,8 +110,7 @@ function(ruvia_install_public_header_closure component relative_dir)
     set(_ruvia_closure_headers)
     while(_ruvia_closure_queue)
         list(POP_FRONT _ruvia_closure_queue _ruvia_header)
-        if(_ruvia_closure_EXCLUDE_REGEX AND
-           _ruvia_header MATCHES "${_ruvia_closure_EXCLUDE_REGEX}")
+        if(exclude_regex AND _ruvia_header MATCHES "${exclude_regex}")
             continue()
         endif()
         if(_ruvia_header IN_LIST _ruvia_closure_headers)

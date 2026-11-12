@@ -38,18 +38,12 @@ http_client_registry::http_client_registry(asio::io_context& io_context, const w
     alias_index_.build(definitions);
     pools_.reserve(definitions.size());
     for (const auto& definition : definitions) {
-        add(io_context, worker_value, http_client_config_storage(definition.config_, process_resource()), result_budget_domain);
+        pools_.push_back(make_pmr_object<http_client_pool>(process_resource(), io_context, worker_value,
+            http_client_config_storage(definition.config_, process_resource()), result_budget_domain));
     }
 }
 
 http_client_registry::~http_client_registry() = default;
-
-void http_client_registry::add(asio::io_context& io_context, const worker_handle& worker_value,
-    http_client_config_storage config, const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    auto pool = make_pmr_object<http_client_pool>(process_resource(), io_context, worker_value, std::move(config),
-        result_budget_domain);
-    pools_.push_back(std::move(pool));
-}
 
 void http_client_registry::close_now() noexcept {
     if (closing_) {

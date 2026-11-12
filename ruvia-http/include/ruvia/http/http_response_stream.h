@@ -70,15 +70,15 @@ public:
     }
 
     [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
-        return head_disposition_;
+        return body_plan_.body_suppressed() ? http_response_stream_head_disposition::message_ended
+                                            : http_response_stream_head_disposition::body_open;
     }
 
     // A status that can never carry content (1xx/204/205/304) has no message
     // body to terminate with a trailer section; asking for one is a handler
     // error. Every other unavailable framing discards the trailers instead.
     [[nodiscard]] bool status_permits_trailers() const noexcept {
-        return !response_status().is_informational() && response_status() != http_status::no_content &&
-               response_status() != http_status::reset_content && response_status() != http_status::not_modified;
+        return body_plan_.status_allows_body();
     }
 
     [[nodiscard]] bool trailer_intent_allowed() const noexcept {
@@ -90,15 +90,13 @@ private:
         http_response_stream_framing, http_known_method, http_status_code, http_response_trailer_intent) noexcept;
 
     http_response_stream_commit_plan(http_response_stream_framing framing, http_response_body_plan body_plan,
-        http_response_stream_head_disposition head_disposition, bool trailer_intent_present) noexcept
+        bool trailer_intent_present) noexcept
         : framing_(framing),
           body_plan_(body_plan),
-          head_disposition_(head_disposition),
           trailer_intent_present_(trailer_intent_present) {}
 
     http_response_stream_framing framing_{http_response_stream_framing::http1_chunked};
     http_response_body_plan body_plan_;
-    http_response_stream_head_disposition head_disposition_{http_response_stream_head_disposition::message_ended};
     bool trailer_intent_present_{false};
 };
 
@@ -107,8 +105,6 @@ private:
     http_response_trailer_intent trailer_intent) noexcept {
     const auto body_plan = plan_http_response_body(request_method, response_status);
     return http_response_stream_commit_plan(framing, body_plan,
-        body_plan.body_suppressed() ? http_response_stream_head_disposition::message_ended
-                                    : http_response_stream_head_disposition::body_open,
         trailer_intent == http_response_trailer_intent::present);
 }
 
