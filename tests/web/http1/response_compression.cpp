@@ -93,6 +93,7 @@ class response_compression_routes final {
     RUVIA_GET("/compression-mixed-rejected", mixed_rejected_coding);
     RUVIA_POST("/compression-echo-decoded", echo_decoded);
     RUVIA_GET("/compression-zero-declared", head_zero_declared);
+    RUVIA_GET("/compression-stream", stream);
     RUVIA_GET("/compression-stream-custom", stream_custom_coding);
     RUVIA_GET("/compression-stream-mixed", stream_mixed_coding);
     RUVIA_GET("/compression-stream-204", stream_no_content);
@@ -158,6 +159,17 @@ class response_compression_routes final {
         const auto body = co_await context_value.req().text();
         co_return context_value.text(body);
     }
+    ruvia::task<void> stream(ruvia::context& context_value) {
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        const std::string_view body(small_body);
+        co_await writer.write(body.substr(0, body.size() / 2));
+        co_await writer.write(body.substr(body.size() / 2));
+        co_await writer.end();
+    }
+
     ruvia::task<void> stream_custom_coding(ruvia::context& context_value) {
         context_value.draft().header("Content-Encoding", "x-custom");
         auto& writer = context_value.stream_text();
@@ -294,6 +306,53 @@ class response_compression_routes final {
 }
 
 }  // namespace
+
+TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::identity,
+        ruvia::http_content_coding::gzip, ruvia::http_content_coding::deflate,
+        ruvia::http_content_coding::brotli, ruvia::http_content_coding::zstd};
+    for (const auto coding : codings) {
+        const auto token = ruvia::http_content_coding_token(coding);
+        std::pmr::string fields("Accept-Encoding: ", ruvia::process_resource());
+        fields.append(token).append("\r\n");
+        const auto check_coding = [coding, token](std::string_view response) {
+            const auto headers = head_fields(response);
+            if (coding == ruvia::http_content_coding::identity) {
+                EXPECT_FALSE(has_field(headers, "content-encoding:"));
+            } else {
+                std::pmr::string expected("content-encoding: ", ruvia::process_resource());
+                expected.append(token);
+                EXPECT_TRUE(has_field(headers, expected));
+            }
+        };
+        const auto head = fetch_response(server.endpoint(), head_request("/compression-stream", fields));
+        ASSERT_TRUE(head.has_value());
+        EXPECT_TRUE(head->starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response_body(*head).empty());
+        check_coding(*head);
+
+        // HTTP/1.0 close delimiting isolates content encoding from chunk framing.
+        std::pmr::string request("GET /compression-stream HTTP/1.0\r\nHost: localhost\r\n",
+            ruvia::process_resource());
+        request.append(fields).append("\r\n");
+        const auto get = fetch_response(server.endpoint(), request);
+        ASSERT_TRUE(get.has_value());
+        EXPECT_NE(std::string_view(*get).substr(0, get->find("\r\n")).find(" 200 "), std::string_view::npos);
+        check_coding(*get);
+        if (coding == ruvia::http_content_coding::identity) {
+            EXPECT_EQ(response_body(*get), std::string_view(small_body));
+        } else {
+            const auto decoded = ruvia::decode_http_content(std::array{coding}, response_body(*get),
+                {.max_decoded_bytes_ = small_body.size(), .resource_ = ruvia::process_resource()});
+            const auto* body = std::get_if<std::pmr::string>(&decoded);
+            ASSERT_NE(body, nullptr);
+            EXPECT_EQ(*body, small_body);
+        }
+    }
+    server.finish();
+}
 
 TEST(Ruvia, http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {
     auto& io = ruvia::test::new_test_io_context();

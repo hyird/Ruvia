@@ -68,7 +68,7 @@ public:
             if (http_response_coding_fallback_forbidden(selection_, request_method, response, &request)) {
                 throw http_error(http_not_acceptable_coding_error());
             }
-            state_.emplace<identity_type>();
+            state_.emplace<inactive_type>();
             return;
         }
 
@@ -80,8 +80,7 @@ public:
     // responses retain their selected representation metadata but never create
     // an encoder for bytes that the protocol will not send.
     void activate(http_response_body_plan body_plan) {
-        if (std::holds_alternative<identity_type>(state_) ||
-            std::holds_alternative<suppressed_type>(state_)) {
+        if (std::holds_alternative<inactive_type>(state_)) {
             return;
         }
         const auto* pending = std::get_if<pending_type>(&state_);
@@ -89,7 +88,7 @@ public:
             throw std::logic_error("streaming response compression is not pending");
         }
         if (body_plan.body_suppressed()) {
-            state_.emplace<suppressed_type>();
+            state_.emplace<inactive_type>();
             return;
         }
         state_.emplace<active_type>(codecs_.acquire_stream_encoder(selection_.coding()));
@@ -102,7 +101,7 @@ public:
     // A stream-head transaction may prepare representation metadata before the
     // protocol layer accepts the head. If that later preparation fails, the
     // sink is terminal before any body byte can be retried; keep the encoder
-    // lifecycle in the same terminal state instead of leaving Pending/Identity
+    // lifecycle in the same terminal state instead of leaving pending/inactive
     // behind for a second commit attempt.
     void abort() noexcept {
         encoded_chunk_.clear();
@@ -162,9 +161,9 @@ public:
 
 private:
     struct unprepared_type final {};
-    struct identity_type final {};
+    // Identity output and protocol-suppressed bodies both need no encoder.
+    struct inactive_type final {};
     struct pending_type final {};
-    struct suppressed_type final {};
     struct finished_type final {};
     struct failed_type final {};
 
@@ -175,7 +174,7 @@ private:
         stream_encoder_lease lease_;
     };
 
-    using state_type = std::variant<unprepared_type, identity_type, pending_type, suppressed_type, finished_type, failed_type, active_type>;
+    using state_type = std::variant<unprepared_type, inactive_type, pending_type, finished_type, failed_type, active_type>;
 
     // A length the head declares sizes the stream like a buffered body; an
     // undeclared length leaves the decision to the negotiated coding.
