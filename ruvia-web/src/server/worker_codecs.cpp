@@ -16,7 +16,7 @@ worker_codecs::worker_codecs() noexcept
       websocket_deflate_(process_resource()) {}
 
 worker_codecs::~worker_codecs() {
-    for (auto* pool : {&stream_gzip_, &stream_deflate_, &stream_brotli_, &stream_zstd_}) {
+    for (auto* pool : {&gzip_.streaming_, &deflate_.streaming_, &brotli_.streaming_, &zstd_.streaming_}) {
         for (std::size_t i = 0; i < pool->count_; ++i) {
             destroy_pmr_object(resolved_pmr_resource_tag{}, pool->free_[i], process_resource());
         }
@@ -25,6 +25,10 @@ worker_codecs::~worker_codecs() {
 }
 
 http_content_encode_context& worker_codecs::encoder(http_content_coding coding) {
+    return encoders(coding).buffered_;
+}
+
+worker_codecs::coding_encoders_type& worker_codecs::encoders(http_content_coding coding) {
     switch (coding) {
         case http_content_coding::gzip:
             return gzip_;
@@ -40,24 +44,8 @@ http_content_encode_context& worker_codecs::encoder(http_content_coding coding) 
     throw std::logic_error("identity content coding has no encoder");
 }
 
-worker_codecs::stream_encoder_pool_type& worker_codecs::stream_encoders(http_content_coding coding) {
-    switch (coding) {
-        case http_content_coding::gzip:
-            return stream_gzip_;
-        case http_content_coding::deflate:
-            return stream_deflate_;
-        case http_content_coding::brotli:
-            return stream_brotli_;
-        case http_content_coding::zstd:
-            return stream_zstd_;
-        case http_content_coding::identity:
-            break;
-    }
-    throw std::logic_error("identity content coding has no stream encoder");
-}
-
 stream_encoder_lease worker_codecs::acquire_stream_encoder(http_content_coding coding) {
-    auto& pool = stream_encoders(coding);
+    auto& pool = encoders(coding).streaming_;
     if (pool.count_ != 0) {
         return stream_encoder_lease(*this, *pool.free_[--pool.count_]);
     }
@@ -67,7 +55,7 @@ stream_encoder_lease worker_codecs::acquire_stream_encoder(http_content_coding c
 }
 
 void worker_codecs::release_stream_encoder(http_content_encoder& encoder) noexcept {
-    auto& pool = stream_encoders(encoder.coding());
+    auto& pool = encoders(encoder.coding()).streaming_;
     if (pool.count_ < pool.free_.size()) {
         try {
             encoder.reset();

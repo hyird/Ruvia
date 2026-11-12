@@ -147,7 +147,21 @@ ruvia::app().listen({
 
 #### 压缩、CORS 与可信代理配置
 
-- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）；应用自行设置的 `Content-Encoding` 编码栈（含自定义编码 token）仍按请求的 `Accept-Encoding` 逐项校验，任一层编码被拒绝时回 `406`。仅文本类媒体类型参与压缩（`text/*`、JSON / XML 及 `+json` / `+xml` 后缀、JavaScript / ECMAScript、`application/wasm`、`application/x-ndjson`、SVG、图标及未压缩字体 `font/ttf` / `font/otf` / `application/vnd.ms-fontobject`），缺少 `Content-Type`、其他类型或类型名含 `zip` 时保持 identity；静态文件预压缩使用同一白名单。应用自带 `Content-Encoding` 的响应不再编码，但其 `200` / `406` 结果取决于 `Accept-Encoding`，因此同样加 `Vary: Accept-Encoding`。框架编码响应时弱化强 `ETag`、删除不是带引号 entity-tag 的 `ETag`，并删除 `Accept-Ranges`（identity 字节范围不适用于编码后的表示）。`sync_bytes_` 是事件循环内联编码上限：更大的缓冲体在启用阻塞池时卸载编码，未启用时保持 identity（拒绝 identity 时回 `406`），不在事件循环上编码。流式响应的头部声明 `Content-Length` 时按与缓冲体相同的 `min_bytes_` / `max_bytes_` 规则决定是否编码；每次应用写入按 16 KiB 输入分片编码，仅在该次写入末尾 flush 一次（HTTP/1 与 HTTP/2 一致）；流式 br 使用 512 KiB 窗口（lgwin 19，同 Pingora），zstd 使用压缩级别默认窗口（RFC 9659 的 8 MiB 只作上限），编码失败的流式编码器直接释放、不回池复用。`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`（拒绝 identity 时同样编码 0 字节体）；显式 `RUVIA_HEAD` 路由返回空非文件响应体时不压缩该空体：按其声明的 `Content-Length`（支持逗号分隔的相同值；无声明时仅在拒绝 identity 时）决定是否加 `Content-Encoding`，加上时去掉 `Content-Length`（编码后长度未知，RFC 9110 §8.6 允许省略），未声明 `Content-Length` 的显式空 `HEAD` 响应省略 `Content-Length`。请求体按 `Content-Encoding` 透明解码时，前 64 KiB 解码输出在事件循环内完成，更大的表示改在阻塞池上解码；无阻塞池或池拒绝时仍在事件循环内解码（请求必须得到内容），两者都受解码上限约束。
+- **`compression_config`**：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。
+  - **小正文**：`min_bytes_` 只控制压缩是否划算；请求以 `identity;q=0` 等方式拒绝 identity 时，小缓冲体同样压缩，结果不必小于原文，不因此返回 `406`。
+  - **固定表示**：响应已有 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时不再压缩；RFC 9530 的摘要随内容编码而变。
+  - **应用编码协商**：自行设置的 `Content-Encoding` 栈含自定义 token 时也按 `Accept-Encoding` 逐项校验，任一层被拒绝即回 `406`；其 `200` / `406` 结果依赖请求编码偏好，因此同样追加 `Vary: Accept-Encoding`。
+  - **媒体白名单**：仅压缩 `text/*`、JSON / XML 及 `+json` / `+xml` 后缀、JavaScript / ECMAScript、`application/wasm`、`application/x-ndjson`、SVG、图标及未压缩字体 `font/ttf` / `font/otf` / `application/vnd.ms-fontobject`；静态文件预压缩共用此白名单。缺少 `Content-Type`、其他类型或类型名含 `zip` 时保持 identity。
+  - **验证器与范围**：框架编码时弱化强 `ETag`、删除不是带引号 entity-tag 的 `ETag`，并删除不再适用于编码表示的 `Accept-Ranges`。
+  - **阻塞卸载**：`sync_bytes_` 是事件循环内联编码上限；更大的缓冲体在启用阻塞池时卸载编码，未启用时保持 identity，拒绝 identity 则回 `406`，不在事件循环上编码。
+  - **状态归属**：每种算法的缓冲上下文与流式空闲池归同一 Worker 所有；卸载任务使用独立编码器，不借用 Worker 状态。
+  - **流式阈值**：响应头声明 `Content-Length` 时，按与缓冲体相同的 `min_bytes_` / `max_bytes_` 规则决定是否编码。
+  - **分片与 flush**：每次应用写入按 16 KiB 输入分片编码，仅在该次写入末尾 flush 一次；HTTP/1 与 HTTP/2 一致。
+  - **原生窗口**：流式 br 使用 512 KiB 窗口（lgwin 19，同 Pingora）；zstd 使用压缩级别默认窗口，RFC 9659 的 8 MiB 仅作上限。
+  - **流式归还**：编码器回池前先重置，空闲池保持有界；超出空闲上限、编码失败或重置失败的编码器直接释放，不回池。
+  - **HEAD 回退**：`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`；拒绝 identity 时同样编码 0 字节体。
+  - **显式 HEAD**：`RUVIA_HEAD` 返回空非文件响应体时不压缩该空体；按声明的 `Content-Length` 决定是否添加编码，支持逗号分隔的相同值，无声明时仅在拒绝 identity 时添加。添加编码后去掉未知的编码长度（RFC 9110 §8.6）；未声明长度的显式空 `HEAD` 响应省略 `Content-Length`。
+  - **请求解码**：按 `Content-Encoding` 透明解码时，前 64 KiB 输出在事件循环内完成，更大的表示改在阻塞池上解码。无阻塞池或池拒绝时仍在事件循环内解码，请求必须得到内容；两条路径均受解码上限约束。
 - `cors_config`：
   - `origin_`：`cors_origin_config{.mode_ = cors_origin_mode::any | exact | credentialed_exact, .value_ = "..."}`
   - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`

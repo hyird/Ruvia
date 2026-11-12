@@ -71,7 +71,7 @@ namespace {
                 }
                 break;
             case 13U:
-                if (has_cache_control && http_ascii_equals_ignore_case(name, "Cache-Control")) {
+                if (http_ascii_equals_ignore_case(name, "Cache-Control")) {
                     cache_parser.update(header.value());
                 }
                 break;
@@ -168,13 +168,12 @@ http_response_compression_decision prepare_response_compression(
         response.add_vary_token("Accept-Encoding");
         return http_response_compression_decision::fixed_representation;
     }
-    const auto status_code = response.status();
     // Integrity fields describe the content or the selected representation,
     // both of which include the content coding (RFC 9530 §1, §2, §3; legacy
     // Content-MD5 likewise covered the sent content). Encoding here would
     // leave them describing bytes that are not sent.
     if (availability == http_response_coding_availability::identity_only ||
-        status_code == http_status::partial_content || status_code == http_status::reset_content ||
+        response.status() == http_status::partial_content ||
         response_headers_skip_compression(response)) {
         return http_response_compression_decision::fixed_representation;
     }

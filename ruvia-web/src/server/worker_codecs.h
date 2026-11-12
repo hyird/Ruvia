@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory_resource>
 #include <utility>
 
 #include "ruvia/http/http_content_codec.h"
@@ -95,18 +96,22 @@ private:
         std::size_t count_{0};
     };
 
-    [[nodiscard]] stream_encoder_pool_type& stream_encoders(http_content_coding coding);
+    struct coding_encoders_type final {
+        coding_encoders_type(http_content_coding coding, std::pmr::memory_resource* resource) noexcept
+            : buffered_(coding, resource) {}
+
+        http_content_encode_context buffered_;
+        stream_encoder_pool_type streaming_;
+    };
+
+    [[nodiscard]] coding_encoders_type& encoders(http_content_coding coding);
     void release_stream_encoder(http_content_encoder& encoder) noexcept;
     void destroy_stream_encoder(http_content_encoder& encoder) noexcept;
 
-    http_content_encode_context gzip_;
-    http_content_encode_context deflate_;
-    http_content_encode_context brotli_;
-    http_content_encode_context zstd_;
-    stream_encoder_pool_type stream_gzip_;
-    stream_encoder_pool_type stream_deflate_;
-    stream_encoder_pool_type stream_brotli_;
-    stream_encoder_pool_type stream_zstd_;
+    coding_encoders_type gzip_;
+    coding_encoders_type deflate_;
+    coding_encoders_type brotli_;
+    coding_encoders_type zstd_;
     websocket_deflate_codecs websocket_deflate_;
 };
 
