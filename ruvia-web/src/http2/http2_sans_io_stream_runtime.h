@@ -25,14 +25,13 @@ namespace ruvia::detail {
 
 class http2_sans_io_stream_runtime final {
 public:
+    // The owning table resolves metadata and body resources before construction.
     http2_sans_io_stream_runtime(std::uint32_t stream_id, std::pmr::memory_resource* resource,
-        std::pmr::memory_resource* body_resource = nullptr)
+        std::pmr::memory_resource* body_resource)
         : stream_id_(stream_id),
-          resource_(pmr_resource_or_default(resource)),
-          body_resource_(body_resource != nullptr ? body_resource : resource_),
-          trailers_(resource_),
-          buffered_body_(body_resource_),
-          body_queue_(body_resource_) {}
+          trailers_(resource),
+          buffered_body_(body_resource),
+          body_queue_(body_resource) {}
 
     void bind_push_parent(std::uint32_t id) noexcept {
         push_parent_ = id;
@@ -207,8 +206,6 @@ private:
 
     std::uint32_t stream_id_;
     std::uint32_t push_parent_{};
-    std::pmr::memory_resource* resource_;
-    std::pmr::memory_resource* body_resource_;
     http_request_trailers trailers_;
     std::optional<http_priority> priority_update_{};
     std::optional<http2_request_head_event> request_head_;
