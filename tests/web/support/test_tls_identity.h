@@ -33,10 +33,13 @@ public:
 
     // The subject CN is `common_name`; `subject_alt_name` uses OpenSSL's
     // configuration syntax (`DNS:w*.example.com`), and empty omits the extension.
-    tls_identity(const char* common_name, std::string_view subject_alt_name)
+    tls_identity(const char* common_name, std::string_view subject_alt_name, bool elliptic_curve = false)
         : context_(asio::ssl::context::tls_server) {
         std::filesystem::permissions(directory_.path(), std::filesystem::perms::owner_all);
-        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048}), EVP_PKEY_free);
+        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(elliptic_curve
+                                                                    ? EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1")
+                                                                    : EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048}),
+            EVP_PKEY_free);
         std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
         if (!key || !certificate || X509_set_version(certificate.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||

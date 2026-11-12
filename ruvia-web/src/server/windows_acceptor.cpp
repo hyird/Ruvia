@@ -3,9 +3,11 @@
 #if defined(_WIN32)
 
 #include <mswsock.h>
+#include <ws2tcpip.h>
 
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
@@ -77,6 +79,95 @@ void claim_exclusive_address(socket_type& socket) {
     return accept_ex;
 }
 
+#if defined(RUVIA_ENABLE_HTTP3)
+template <typename function_type>
+[[nodiscard]] function_type resolve_message_extension(SOCKET socket, GUID identifier) {
+    function_type function = nullptr;
+    DWORD bytes = 0;
+    if (::WSAIoctl(socket, SIO_GET_EXTENSION_FUNCTION_POINTER, &identifier, static_cast<DWORD>(sizeof(identifier)),
+            &function, static_cast<DWORD>(sizeof(function)), &bytes, nullptr, nullptr) == SOCKET_ERROR) {
+        throw std::system_error(last_socket_error(), "failed to resolve UDP message extension");
+    }
+    return function;
+}
+
+void enable_udp_packet_info(asio::ip::udp::socket& socket) {
+    const DWORD enabled = 1;
+    const auto native = socket.native_handle();
+    const auto enable = [&](int level, int option) {
+        return ::setsockopt(native, level, option, reinterpret_cast<const char*>(&enabled),
+            static_cast<int>(sizeof(enabled)));
+    };
+    if (socket.local_endpoint().protocol() == asio::ip::udp::v6()) {
+        if (enable(IPPROTO_IPV6, IPV6_PKTINFO) == SOCKET_ERROR) {
+            throw std::system_error(last_socket_error(), "failed to enable IPv6 UDP packet information");
+        }
+        DWORD only_v6 = 0;
+        int size = sizeof(only_v6);
+        if (::getsockopt(native, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<char*>(&only_v6), &size) == SOCKET_ERROR) {
+            throw std::system_error(last_socket_error(), "failed to inspect UDP dual-stack policy");
+        }
+        if (only_v6 != 0) {
+            return;
+        }
+    }
+    if (enable(IPPROTO_IP, IP_PKTINFO) == SOCKET_ERROR) {
+        const auto error = last_socket_error();
+        // Winsock documents WSAEINVAL on dual-stack sockets when IPv4 is disabled.
+        if (error.value() == WSAEINVAL && socket.local_endpoint().protocol() == asio::ip::udp::v6()) {
+            const auto probe = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (probe == INVALID_SOCKET && ::WSAGetLastError() == WSAEAFNOSUPPORT) {
+                return;
+            }
+            if (probe != INVALID_SOCKET) {
+                (void)::closesocket(probe);
+            }
+        }
+        throw std::system_error(error, "failed to enable IPv4 UDP packet information");
+    }
+}
+
+struct udp_packet_destination final {
+    asio::ip::udp::endpoint local_;
+    std::uint32_t interface_index_;
+};
+
+[[nodiscard]] std::optional<udp_packet_destination> packet_destination(
+    WSAMSG& message, const asio::ip::udp::endpoint& remote, std::uint16_t port) {
+    if ((message.dwFlags & MSG_CTRUNC) != 0) {
+        return std::nullopt;
+    }
+    for (auto* header = WSA_CMSG_FIRSTHDR(&message); header != nullptr; header = WSA_CMSG_NXTHDR(&message, header)) {
+        if (header->cmsg_level == IPPROTO_IP && header->cmsg_type == IP_PKTINFO &&
+            header->cmsg_len >= WSA_CMSG_LEN(sizeof(IN_PKTINFO))) {
+            IN_PKTINFO info{};
+            std::memcpy(&info, WSA_CMSG_DATA(header), sizeof(info));
+            asio::ip::address_v4::bytes_type bytes{};
+            std::memcpy(bytes.data(), &info.ipi_addr, bytes.size());
+            asio::ip::address address{asio::ip::address_v4(bytes)};
+            if (remote.address().is_v6()) {
+                address = asio::ip::make_address_v6(asio::ip::v4_mapped, address.to_v4());
+            }
+            return udp_packet_destination{{address, port}, info.ipi_ifindex};
+        }
+        if (header->cmsg_level == IPPROTO_IPV6 && header->cmsg_type == IPV6_PKTINFO &&
+            header->cmsg_len >= WSA_CMSG_LEN(sizeof(IN6_PKTINFO))) {
+            IN6_PKTINFO info{};
+            std::memcpy(&info, WSA_CMSG_DATA(header), sizeof(info));
+            asio::ip::address_v6::bytes_type bytes{};
+            std::memcpy(bytes.data(), &info.ipi6_addr, bytes.size());
+            asio::ip::address_v6 address(bytes);
+            if (address.is_link_local() || address.is_multicast_link_local()) {
+                address.scope_id(info.ipi6_ifindex);
+            }
+            return udp_packet_destination{{address, port}, info.ipi6_ifindex};
+        }
+    }
+    // Never invent the destination from a wildcard socket's bind address.
+    return std::nullopt;
+}
+#endif
+
 [[nodiscard]] std::size_t acceptor_queue_capacity(std::size_t worker_count) {
 #if defined(RUVIA_ENABLE_HTTP3)
     constexpr auto max_workers =
@@ -142,6 +233,8 @@ struct windows_acceptor::udp_transport final {
     asio::ip::udp::socket socket_;
     std::size_t listeners_{0};
     bool receiving_{false};
+    LPFN_WSARECVMSG receive_message_{nullptr};
+    LPFN_WSASENDMSG send_message_{nullptr};
 };
 
 struct windows_acceptor::udp_listener final {
@@ -380,6 +473,9 @@ void windows_acceptor::open_udp_listener(udp_listener& listener) {
         claim_exclusive_address(socket);
         socket.bind(listener.endpoint_);
     }
+    enable_udp_packet_info(socket);
+    transport->receive_message_ = resolve_message_extension<LPFN_WSARECVMSG>(socket.native_handle(), WSAID_WSARECVMSG);
+    transport->send_message_ = resolve_message_extension<LPFN_WSASENDMSG>(socket.native_handle(), WSAID_WSASENDMSG);
     // Sending runs on this thread for every worker: a full send buffer
     // loses the datagram instead of blocking the acceptor.
     socket.non_blocking(true);
@@ -633,9 +729,30 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
     try {
         while (admitting_ && socket.is_open()) {
             asio::ip::udp::endpoint remote;
+            alignas(WSACMSGHDR) std::array<char,
+                WSA_CMSG_SPACE(sizeof(IN6_PKTINFO)) + WSA_CMSG_SPACE(sizeof(IN_PKTINFO))>
+                control{};
+            WSABUF payload{};
+            payload.buf = reinterpret_cast<char*>(buffer.data());
+            payload.len = static_cast<ULONG>(buffer.size());
+            WSAMSG message{};
+            message.name = remote.data();
+            message.namelen = static_cast<int>(remote.capacity());
+            message.lpBuffers = &payload;
+            message.dwBufferCount = 1;
+            message.Control.buf = control.data();
+            message.Control.len = static_cast<ULONG>(control.size());
             const auto completion = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
-                socket.async_receive_from(asio::buffer(buffer.data(), buffer.size()), remote,
-                    asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
+                asio::windows::overlapped_ptr native(io_, std::move(handler));
+                DWORD received = 0;
+                const int result = transport->receive_message_(
+                    socket.native_handle(), &message, &received, native.get(), nullptr);
+                const int error = result == 0 ? 0 : ::WSAGetLastError();
+                if (result == 0 || error == WSA_IO_PENDING) {
+                    (void)native.release();
+                } else {
+                    native.complete(asio::error_code(error, asio::system_category()), 0);
+                }
             });
             // A stop, or the last worker's release of a removed listener.
             if (!admitting_ || !socket.is_open()) {
@@ -647,7 +764,12 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
                 }
                 throw std::system_error(error, "HTTP/3 UDP receive failed");
             }
-            steer(listener, std::span<const std::byte>(buffer.data(), completion.result()), remote);
+            remote.resize(static_cast<std::size_t>(message.namelen));
+            const auto destination = packet_destination(message, remote, listener.endpoint_.port());
+            if (destination) {
+                steer(listener, std::span<const std::byte>(buffer.data(), completion.result()),
+                    remote, destination->local_, destination->interface_index_);
+            }
         }
     } catch (...) {
         // The listener cannot receive any more: its connections time out and
@@ -657,7 +779,8 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
 }
 
 void windows_acceptor::steer(
-    const udp_listener& listener, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote) noexcept {
+    const udp_listener& listener, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
+    const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
     ngtcp2_version_cid header{};
     const auto decoded = ngtcp2_pkt_decode_version_cid(
         &header, reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), http3_connection_id_length);
@@ -689,11 +812,12 @@ void windows_acceptor::steer(
         listener_index = initial_listener->index_;
         owner = http3_initial_worker(*initial_listener->secret_, destination, workers_.size());
     }
-    (void)directory_->hand_off(*owner, listener_index, bytes, remote);
+    (void)directory_->hand_off(*owner, listener_index, bytes, remote, local, interface_index);
 }
 
 bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_listener_index,
-    const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes) noexcept {
+    const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes,
+    const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
     auto token = http3_in_flight_token::reserve(workers_[worker_index]->egress_in_flight_);
     if (!token) {
         return false;
@@ -701,9 +825,9 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
     try {
         const auto status = runtime_.handle().post_factory([&]() -> move_only_function<void()> {
             std::pmr::vector<std::byte> owned(bytes.begin(), bytes.end(), process_resource());
-            return [this, http3_listener_index, remote, owned = std::move(owned),
+            return [this, http3_listener_index, remote, local, interface_index, owned = std::move(owned),
                        token = std::move(token)]() mutable noexcept {
-                send_datagram(http3_listener_index, remote, owned);
+                send_datagram(http3_listener_index, remote, owned, local, interface_index);
             };
         });
         return status == post_status::accepted;
@@ -713,12 +837,66 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
 }
 
 void windows_acceptor::send_datagram(std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote,
-    std::span<const std::byte> bytes) noexcept {
+    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local,
+    std::uint32_t interface_index) noexcept {
     // Errors (a full send buffer, a closed socket, an unreachable peer) lose
     // the datagram, as the network may; QUIC recovery handles the peer.
     if (const auto& listener = udp_listeners_[http3_listener_index]; listener != nullptr && listener->transport_ != nullptr) {
-        std::error_code ignored;
-        (void)listener->transport_->socket_.send_to(asio::buffer(bytes.data(), bytes.size()), remote, 0, ignored);
+        auto& transport = *listener->transport_;
+        if (!transport.socket_.is_open() || local.address().is_unspecified()) {
+            return;
+        }
+        auto destination = remote;
+        WSABUF payload{};
+        payload.buf = const_cast<char*>(reinterpret_cast<const char*>(bytes.data()));
+        payload.len = static_cast<ULONG>(bytes.size());
+        alignas(WSACMSGHDR) std::array<char, WSA_CMSG_SPACE(sizeof(IN6_PKTINFO))> control{};
+        WSAMSG message{};
+        message.name = destination.data();
+        message.namelen = static_cast<int>(destination.size());
+        message.lpBuffers = &payload;
+        message.dwBufferCount = 1;
+        message.Control.buf = control.data();
+        const auto source = local.address();
+        const bool ipv4 = remote.address().is_v4() ||
+                          (remote.address().is_v6() && remote.address().to_v6().is_v4_mapped());
+        auto* header = reinterpret_cast<WSACMSGHDR*>(control.data());
+        if (ipv4) {
+            asio::ip::address_v4::bytes_type address{};
+            if (source.is_v4()) {
+                address = source.to_v4().to_bytes();
+            } else if (source.to_v6().is_v4_mapped()) {
+                const auto mapped = source.to_v6().to_bytes();
+                std::memcpy(address.data(), mapped.data() + 12, address.size());
+            } else {
+                return;
+            }
+            IN_PKTINFO info{};
+            std::memcpy(&info.ipi_addr, address.data(), address.size());
+            info.ipi_ifindex = interface_index;
+            message.Control.len = static_cast<ULONG>(WSA_CMSG_SPACE(sizeof(info)));
+            header->cmsg_level = IPPROTO_IP;
+            header->cmsg_type = IP_PKTINFO;
+            header->cmsg_len = WSA_CMSG_LEN(sizeof(info));
+            std::memcpy(WSA_CMSG_DATA(header), &info, sizeof(info));
+        } else {
+            if (!source.is_v6()) {
+                return;
+            }
+            IN6_PKTINFO info{};
+            const auto address = source.to_v6().to_bytes();
+            std::memcpy(&info.ipi6_addr, address.data(), address.size());
+            info.ipi6_ifindex = interface_index == 0
+                                    ? static_cast<ULONG>(source.to_v6().scope_id())
+                                    : interface_index;
+            message.Control.len = static_cast<ULONG>(WSA_CMSG_SPACE(sizeof(info)));
+            header->cmsg_level = IPPROTO_IPV6;
+            header->cmsg_type = IPV6_PKTINFO;
+            header->cmsg_len = WSA_CMSG_LEN(sizeof(info));
+            std::memcpy(WSA_CMSG_DATA(header), &info, sizeof(info));
+        }
+        DWORD sent = 0;
+        (void)transport.send_message_(transport.socket_.native_handle(), &message, 0, &sent, nullptr, nullptr);
     }
 }
 

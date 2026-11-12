@@ -457,11 +457,14 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             return state_value;
         });
 
-    // Valid credentials ensure this fails for the conflicting services, not
-    // for a missing TLS identity.
+    // Separate configurations cannot claim one endpoint; sharing HTTP and
+    // HTTPS is explicit within a single listen_config.
     bool duplicate_rejected = false;
     try {
-        app.listen({.address_ = "127.0.0.1", .http_ = 12345, .https_ = 12345, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}});
+        app.listen({
+            {.address_ = "127.0.0.1", .http_ = 12345, .https_ = 12345, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}},
+            {.address_ = "127.0.0.1", .http_ = 12345},
+        });
     } catch (const std::invalid_argument&) {
         duplicate_rejected = true;
     }

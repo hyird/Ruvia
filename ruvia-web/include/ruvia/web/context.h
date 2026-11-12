@@ -164,11 +164,10 @@ public:
         std::uint16_t port_{0};
     };
 
-    // Names the transport connection within one application::run(): unique
-    // across every worker, listener and protocol, shared by every request the
-    // connection carries, and equal to connection_id() of its
-    // on_tls_client_hello and on_http2_input records. Never zero for a served
-    // connection; zero for a test_app request, which has no connection.
+    // Process-wide unique transport ID across workers, hosts and restarts.
+    // Every request and observation on one connection shares this ID; retired
+    // IDs are never reused. Never zero for a served connection; zero for a
+    // test_app request, which has no transport connection.
     [[nodiscard]] constexpr std::uint64_t id() const noexcept {
         return id_;
     }
@@ -179,6 +178,9 @@ public:
         return remote_;
     }
 
+    [[nodiscard]] constexpr endpoint local() const noexcept {
+        return local_;
+    }
     // Who the request is from. Equal to remote() unless the peer is a configured
     // trusted proxy AND it sent a forwarding header, in which case it is what
     // that header names. Never derived from an untrusted peer's headers: those
@@ -267,10 +269,14 @@ private:
             client_ = remote_;
         }
     }
+    constexpr void set_local(std::string_view address, std::uint16_t port) noexcept {
+        local_ = endpoint(address, port);
+    }
 
     std::uint64_t id_;
     endpoint remote_;
     endpoint client_;
+    endpoint local_{std::string_view{}};
     std::variant<plain_connection_transport, tls_connection_transport> transport_;
     http_scheme scheme_;
     bool via_trusted_proxy_{false};
@@ -602,6 +608,11 @@ public:
     // Connection metadata borrows this request's transport state.
     [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND;
     const conn_info& conn() const&& = delete;
+    // Copies shared ownership of the state returned by on_connection_open.
+    [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept;
+    // Closes the entire transport immediately, including every HTTP/2 or
+    // HTTP/3 stream. A virtual test connection has no transport to close.
+    void abort_connection() noexcept;
 
     // The exception that failed the current middleware/handler dispatch, or
     // null. Distinct from error(status, code, message) which constructs an

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include <asio/ip/address.hpp>
 #include <openssl/types.h>
@@ -38,6 +39,10 @@ void configure_http_server_tls_contexts(http_server_session_config& session, boo
 // alive and unchanged for the SSL's whole lifetime; a connection without one
 // never matches them.
 void bind_tls_local_address(SSL& tls, const asio::ip::address& local_address);
+
+// A selector needs the same stable endpoint/connection binding as an observer,
+// even when no observer is registered. Does not install message observation.
+[[nodiscard]] bool tls_certificate_selection_enabled(const http_server_session_config& session) noexcept;
 
 // One connection's on_tls_client_hello delivery: every field of the record
 // except the message, which the ClientHello supplies.

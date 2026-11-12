@@ -21,6 +21,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/server_config.h"
 
+#include "server/http_server_tls_identities.h"
 #include "server/inherited_listener_sockets.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_files.h"
@@ -32,48 +33,6 @@ namespace ruvia::detail {
 // bytes, so packets can be steered to that worker.
 inline constexpr std::size_t http3_max_worker_count = 65536;
 
-// One TLS listener's identities, immutable once loaded: a run's workers and
-// the stored listener definition share one set, and
-// application::replace_tls_identities() publishes a new set instead of
-// changing one.
-struct http_server_tls_identities final {
-    struct named_identity final {
-        named_identity(std::string_view name, tls_certificate certificate, std::pmr::memory_resource* resource)
-            : name_(name, pmr_resource_or_default(resource)),
-              certificate_(std::move(certificate)) {}
-
-        // ASCII lowercase: a host name, or the parent domain a wildcard's
-        // "*" label stands in front of.
-        std::pmr::string name_;
-        tls_certificate certificate_;
-    };
-
-    struct addressed_identity final {
-        // An IPv4-mapped IPv6 address is held in its IPv4 form.
-        asio::ip::address address_;
-        tls_certificate certificate_;
-    };
-
-    http_server_tls_identities(tls_certificate primary, std::pmr::memory_resource* resource)
-        : primary_(std::move(primary)),
-          exact_names_(pmr_resource_or_default(resource)),
-          wildcard_names_(pmr_resource_or_default(resource)),
-          local_addresses_(pmr_resource_or_default(resource)) {}
-
-    // The identity of a handshake whose ClientHello offered `server_name`
-    // (empty without one) and arrived at `local_address` (null when
-    // unknown): an exact name, then a wildcard covering exactly the name's
-    // left-most label (RFC 6125 §6.4.3), then the local address, else the
-    // primary.
-    [[nodiscard]] const tls_certificate& select(
-        std::string_view server_name, const asio::ip::address* local_address) const noexcept;
-
-    tls_certificate primary_;
-    std::pmr::vector<named_identity> exact_names_;
-    std::pmr::vector<named_identity> wildcard_names_;
-    std::pmr::vector<addressed_identity> local_addresses_;
-};
-
 struct http_server_listener_definition final {
     // Every TLS member is loaded when the listener is configured: no identity
     // file name, in-memory PEM or private-key password survives in a
@@ -84,6 +43,17 @@ struct http_server_listener_definition final {
         // The configured bundle's name, only so replace_tls_identities() can
         // recognize the unchanged policy it requires.
         tls_file_name ca_file_;
+    };
+
+    struct redirect_http_to_https final {
+        std::uint16_t https_port_;
+    };
+
+    // A mixed listener still owns exactly one TLS configuration and one TCP
+    // socket. The worker chooses the stream type before parsing any HTTP.
+    enum class tls_tcp_mode : std::uint8_t {
+        tls_only,
+        detect_plain_or_tls,
     };
 
     struct tls final {
@@ -98,13 +68,12 @@ struct http_server_listener_definition final {
         // Created once by server configuration validation and shared by every
         // worker, which copies its keys into its own TLS contexts' key set.
         std::shared_ptr<tls_session_ticket_key_ring> session_ticket_keys_;
+        tls_tcp_mode tcp_mode_{tls_tcp_mode::tls_only};
+        // Applies only after the accepted stream was identified as plaintext.
+        std::optional<redirect_http_to_https> plaintext_redirect_;
     };
 
     struct plain_http final {};
-
-    struct redirect_http_to_https final {
-        std::uint16_t https_port_;
-    };
 
     // The HTTP/3 service of a TLS listener: a QUIC endpoint on the same
     // address and UDP port_, serving the listener's TLS identities.
@@ -181,8 +150,17 @@ public:
     }
     const http_server_listener_definition::tls* tls() const&& = delete;
 
+    [[nodiscard]] bool accepts_plaintext() const noexcept {
+        const auto* configured = tls();
+        return configured != nullptr &&
+               configured->tcp_mode_ == http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls;
+    }
+
     [[nodiscard]] const http_server_listener_definition::redirect_http_to_https* redirect()
         const& noexcept {
+        if (const auto* configured = tls(); configured != nullptr) {
+            return configured->plaintext_redirect_ ? &*configured->plaintext_redirect_ : nullptr;
+        }
         return std::get_if<http_server_listener_definition::redirect_http_to_https>(&transport_);
     }
     const http_server_listener_definition::redirect_http_to_https* redirect() const&& = delete;

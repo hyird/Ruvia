@@ -45,6 +45,14 @@ const conn_info& context::conn() const& noexcept {
     return services().get_conn_info();
 }
 
+std::shared_ptr<void> context::connection_state() const noexcept {
+    return services().connection_state();
+}
+
+void context::abort_connection() noexcept {
+    services().abort_connection();
+}
+
 bool context::is_subrequest() const noexcept {
     return services().dispatch_depth() != 0;
 }

@@ -169,6 +169,8 @@ using native_socket = int;
 // of one SO_REUSEPORT group; on Windows it holds the one socket the acceptor
 // thread owns. See listen_config::inherited_sockets_ and
 // application::duplicate_listener_sockets().
+// When http_ and https_ name the same port there is one TCP socket group,
+// held only in https_; http_ must be empty for inheritance.
 struct listener_sockets final {
     std::pmr::vector<native_socket> http_{process_resource()};
     std::pmr::vector<native_socket> https_{process_resource()};
@@ -209,6 +211,11 @@ struct listen_config final {
     // Values are checked before narrowing; an enabled service must be non-zero.
     std::optional<port_number> http_{};
     std::optional<port_number> https_{};
+    // Equal HTTP and HTTPS ports share one physical TCP listener. Before
+    // consuming input, first byte 0x16 selects TLS; every other byte selects
+    // plaintext, including for connection dispatch. Detection shares the TLS
+    // handshake deadlines; TLS failures never retry as plaintext. Distinct
+    // ports keep their strict plaintext / TLS behavior.
     // HTTP/3 (RFC 9114) over QUIC on this UDP port, serving the HTTPS
     // listener's tls_ identities with TLS 1.3 and ALPN "h3" only. Requires
     // https_ and a build with RUVIA_ENABLE_HTTP3; it may equal the https_
@@ -246,6 +253,8 @@ struct listen_config final {
     bool http3_retry_{false};
     tls_config tls_{};
     bool auto_https_redirect_{false};
+    // On a shared HTTP/HTTPS port only plaintext connections redirect; TLS
+    // connections serve normally, including HTTP/2 and any paired HTTP/3.
     // Applies to the http_, https_ and http3_ services alike; with
     // auto_https_redirect_ the http_ service only redirects.
     // listener_dispatch::connection rejects http3_ and auto_https_redirect_
@@ -272,6 +281,8 @@ struct listen_config final {
     // the acceptor thread uses as it would a socket it bound; a socket another
     // process associated with an I/O completion port cannot be adopted, which
     // fails startup.
+    // A shared HTTP/HTTPS port accepts TCP handles only in https_; a non-empty
+    // http_ vector is rejected, and all supplied handles close on failure.
     std::optional<listener_sockets> inherited_sockets_{};
 };
 

@@ -78,7 +78,8 @@ public:
         std::pmr::memory_resource* resource, http2_role role, const http2_connection_options& options)
         : resource_(resource),
           connection_(resource, role, options.enable_push_, options.receive_origin_advertisements_,
-              options.receive_frame_metadata_) {}
+              options.receive_frame_metadata_, options.frame_observer_, options.header_observer_,
+              options.observer_context_) {}
     http2_connection_owner_endpoint(const http2_connection_owner_endpoint&) = delete;
     http2_connection_owner_endpoint& operator=(const http2_connection_owner_endpoint&) = delete;
 

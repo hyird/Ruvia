@@ -5,6 +5,9 @@
 #include <span>
 #include <string_view>
 
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "ruvia/http/http2_observation.h"
+#endif
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/callback.h"
 
@@ -102,9 +105,57 @@ private:
     std::span<const std::byte> bytes_;
 };
 
+#if defined(RUVIA_ENABLE_HTTP2)
+// Typed facts produced by the one protocol parser/HPACK decoder, not TCP read
+// boundaries. Records and decoded field views live only for the callback.
+// observation_sequence_ counts parser-exposed frame headers, not transport reads.
+// Frames are observed before processing their final payload fragment; headers
+// are observed at decoder begin/field/end points before HTTP validation.
+// Observers cannot change input, cancel validation, or imply frame acceptance.
+class http2_frame_record final {
+public:
+    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
+        return connection_id_;
+    }
+    [[nodiscard]] const http2_frame_metadata& metadata() const noexcept {
+        return metadata_;
+    }
+
+private:
+    friend struct detail::server_observation_access;
+    constexpr http2_frame_record(std::uint64_t connection_id, const http2_frame_metadata& metadata) noexcept
+        : connection_id_(connection_id),
+          metadata_(metadata) {}
+    std::uint64_t connection_id_;
+    const http2_frame_metadata& metadata_;
+};
+
+class http2_headers_record final {
+public:
+    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
+        return connection_id_;
+    }
+    [[nodiscard]] const http2_header_metadata& metadata() const noexcept {
+        return metadata_;
+    }
+
+private:
+    friend struct detail::server_observation_access;
+    constexpr http2_headers_record(std::uint64_t connection_id, const http2_header_metadata& metadata) noexcept
+        : connection_id_(connection_id),
+          metadata_(metadata) {}
+    std::uint64_t connection_id_;
+    const http2_header_metadata& metadata_;
+};
+#endif
+
 namespace detail {
 using tls_client_hello_callback_ref = callback_ref<void(const tls_client_hello_record&) noexcept>;
 using http2_input_callback_ref = callback_ref<void(const http2_input_record&) noexcept>;
+#if defined(RUVIA_ENABLE_HTTP2)
+using http2_frame_callback_ref = callback_ref<void(const http2_frame_record&) noexcept>;
+using http2_headers_callback_ref = callback_ref<void(const http2_headers_record&) noexcept>;
+#endif
 }  // namespace detail
 
 // application-owned observers, invoked synchronously on the worker thread that
@@ -113,5 +164,9 @@ using http2_input_callback_ref = callback_ref<void(const http2_input_record&) no
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using tls_client_hello_callback = detail::callback<void(const tls_client_hello_record&) noexcept>;
 using http2_input_callback = detail::callback<void(const http2_input_record&) noexcept>;
+#if defined(RUVIA_ENABLE_HTTP2)
+using http2_frame_callback = detail::callback<void(const http2_frame_record&) noexcept>;
+using http2_headers_callback = detail::callback<void(const http2_headers_record&) noexcept>;
+#endif
 
 }  // namespace ruvia

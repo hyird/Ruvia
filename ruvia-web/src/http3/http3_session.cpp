@@ -322,15 +322,19 @@ ngtcp2_conn* http3_session::native_connection(ngtcp2_crypto_conn_ref* reference)
 
 http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial,
     const asio::ip::udp::endpoint& remote, const ngtcp2_cid& original_dcid,
-    std::optional<ngtcp2_cid> retry_scid, std::span<const std::uint8_t> retry_token)
+    std::optional<ngtcp2_cid> retry_scid, std::span<const std::uint8_t> retry_token,
+    connection_lifecycle lifecycle)
     : endpoint_(endpoint),
       services_(endpoint.services()),
       slot_(std::move(slot)),
-      connection_id_(services_.connection_ids_.next()),
-      local_(endpoint.local_endpoint()),
+      connection_lifecycle_(std::move(lifecycle)),
+      connection_id_(connection_lifecycle_.id()),
+      local_(connection_lifecycle_.local_endpoint().address(), connection_lifecycle_.local_endpoint().port()),
       tls_local_address_(local_.address()),
       remote_(remote),
       path_remote_(remote),
+      path_local_(local_),
+      path_interface_index_(connection_lifecycle_.interface_index()),
       remote_address_(process_resource()),
       local_address_(process_resource()),
       connection_ids_(process_resource()),
@@ -356,7 +360,8 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         throw std::runtime_error("failed to create the QUIC TLS session");
     }
     bind_tls_local_address(*tls_, tls_local_address_);
-    if (const auto callback = services_.options_.tls_client_hello_) {
+    if (const auto callback = services_.options_.tls_client_hello_;
+        callback || tls_certificate_selection_enabled(endpoint.session_config())) {
         assign_peer_address(local_address_, local_.address());
         client_hello_.emplace(tls_client_hello_observation{.callback_ = callback,
             .fields_ = {.connection_id_ = connection_id_,
@@ -425,10 +430,11 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     configure_http3_server_tls_session(*tls_, *connection_, http3_options,
         endpoint.session_config().http3_->early_data_, tls_resumption_context_);
 
-    scanner_guard_.emplace(services_.scanner_, scanner_entry_,
-        connection_transport(
-            this, [](void* target) noexcept { static_cast<http3_session*>(target)->close_now(); },
-            [](void* target) noexcept { static_cast<http3_session*>(target)->request_drain(); }));
+    const connection_transport transport(
+        this, [](void* target) noexcept { static_cast<http3_session*>(target)->close_now(); },
+        [](void* target) noexcept { static_cast<http3_session*>(target)->request_drain(); });
+    connection_lifecycle_.bind_transport(transport);
+    scanner_guard_.emplace(services_.scanner_, scanner_entry_, transport);
     scanner_entry_.register_periodic_check(
         scanner_checks_, this,
         [](void* target, std::int64_t now_ms) noexcept {
@@ -464,7 +470,9 @@ ngtcp2_tstamp http3_session::now() noexcept {
 }
 
 ngtcp2_path http3_session::path(asio::ip::udp::endpoint& remote) noexcept {
-    return http3_quic_path(local_, remote);
+    auto result = http3_quic_path(path_local_, remote);
+    result.user_data = reinterpret_cast<void*>(static_cast<std::uintptr_t>(path_interface_index_));
+    return result;
 }
 
 void http3_session::register_connection_id(const ngtcp2_cid& cid) {
@@ -577,13 +585,16 @@ void http3_session::on_datagram(http3_datagram_event& event) {
     stream->store_datagram(event.payload_, services_.options_.server_.max_buffered_body_bytes_);
 }
 
-void http3_session::receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote) noexcept {
+void http3_session::receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote,
+    const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
     if (lifecycle_ != lifecycle_type::open || connection_->closed()) {
         // The closing period absorbs late packets (RFC 9000 §10.2).
         return;
     }
     scanner_entry_.touch();
     path_remote_ = remote;
+    path_local_ = local;
+    path_interface_index_ = interface_index;
     try {
         (void)connection_->receive_datagram(path(path_remote_), NGTCP2_ECN_NOT_ECT, datagram, now());
     } catch (...) {
@@ -655,6 +666,7 @@ void http3_session::start_application() {
     base_services_.emplace(services_.capabilities_.make_context_services(services_.stop_token_)
             .with_tls_transport(connection_id_, remote_address_, client_subject, tls_selected_alpn(*tls_),
                 tls_server_name(*tls_), remote_.port(), *served_certificate_)
+            .with_connection_lifecycle(connection_lifecycle_)
             .with_inbound_buffer_pool(inbound_buffers_)
             .with_request_stream(endpoint_.session_config().request_stream_ ? services_.options_.request_stream_
                                                                             : request_stream_callback_ref{}));
@@ -1136,9 +1148,21 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                             http3_tunnel_transport(*this, *stream, *signal), handshake->compression(),
                             handshake->subprotocol(), *ruvia::process_resource());
                     };
+                    http3_response_stream_sink refusal_sink(*this, *stream, *signal, process_resource(),
+                        request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
+                        options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
+                    auto refusal_writer = make_response_stream_writer(refusal_sink, *process_resource());
+                    auto upgrade_services = dispatch_services;
+                    if (is_request_stream_tunnel_route(resolved->route())) {
+                        upgrade_services.bind_response_stream(refusal_writer);
+                    }
                     auto buffered = co_await execute_tunnel_upgrade_session<http3_tunnel_transport>(
-                        routes, request, *resolved, request_memory_value, dispatch_services, options,
+                        routes, request, *resolved, request_memory_value, upgrade_services, options,
                         scanner_entry_, inbound_buffers_, admission.udp_tunnel(), std::string_view{}, commit, commit_websocket);
+                    if (refusal_sink.committed()) {
+                        admission.tail().record_access(options.access_log_, committed_response_stream_status(refusal_sink));
+                        co_return;
+                    }
                     if (!buffered) {
                         co_return;
                     }
@@ -1287,16 +1311,19 @@ task<void> http3_session::flush() {
 task<void> http3_session::send_datagram() {
     // ngtcp2 names the path of every packet it writes.
     const auto destination = http3_udp_endpoint(datagram_.path_.path.remote);
-    if (!destination) {
+    const auto source = http3_udp_endpoint(datagram_.path_.path.local);
+    const auto interface_index = static_cast<std::uint32_t>(
+        reinterpret_cast<std::uintptr_t>(datagram_.path_.path.user_data));
+    if (!destination || !source) {
         throw std::logic_error("QUIC output has no valid remote path");
     }
 #if defined(_WIN32)
     // The acceptor sends it from the listener's socket; a datagram past its
     // bounded queue is lost, as UDP may lose any, and QUIC recovery resends.
-    (void)endpoint_.send(*destination, datagram_.bytes_);
+    (void)endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
     co_return;
 #else
-    auto error = endpoint_.send(*destination, datagram_.bytes_);
+    auto error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
     while (error == asio::error::would_block || error == asio::error::try_again) {
         // Only a full socket send buffer stalls the writer; the scanner's
         // write clock bounds it like a blocked TCP write.
@@ -1305,7 +1332,7 @@ task<void> http3_session::send_datagram() {
             // The socket closed: the datagram is lost, as UDP may lose any.
             co_return;
         }
-        error = endpoint_.send(*destination, datagram_.bytes_);
+        error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
         if (!error) {
             scanner_entry_.note_write_progress();
         }
@@ -1397,8 +1424,12 @@ void http3_session::close_now() noexcept {
             http3_quic_datagram close_packet(process_resource());
             const auto result = connection_->next_datagram(http3_max_datagram_bytes, now(), close_packet);
             if (result.status_ == http3_quic_status::accepted && !close_packet.bytes_.empty()) {
-                if (const auto destination = http3_udp_endpoint(close_packet.path_.path.remote)) {
-                    (void)endpoint_.send(*destination, close_packet.bytes_);
+                const auto destination = http3_udp_endpoint(close_packet.path_.path.remote);
+                const auto source = http3_udp_endpoint(close_packet.path_.path.local);
+                if (destination && source) {
+                    const auto interface_index = static_cast<std::uint32_t>(
+                        reinterpret_cast<std::uintptr_t>(close_packet.path_.path.user_data));
+                    (void)endpoint_.send(*destination, close_packet.bytes_, *source, interface_index);
                 }
             }
         } catch (...) {

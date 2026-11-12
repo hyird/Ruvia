@@ -43,6 +43,7 @@
 #include "ruvia/web/controller.h"
 
 #include "app_run.h"
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 #include "test_tls_identity.h"
 
@@ -202,6 +203,61 @@ std::string https_served_name(asio::io_context& io, asio::ssl::context& client, 
     } catch (const std::exception&) {
         return {};
     }
+}
+
+// Split the TLS record prefix without introducing a second TLS implementation.
+// asio's ordinary TLS driver still writes and reads every handshake message.
+class fragmented_tcp final {
+public:
+    using lowest_layer_type = asio::ip::tcp::socket;
+    using executor_type = lowest_layer_type::executor_type;
+
+    explicit fragmented_tcp(asio::ip::tcp::socket socket)
+        : socket_(std::move(socket)) {}
+
+    executor_type get_executor() noexcept {
+        return socket_.get_executor();
+    }
+    lowest_layer_type& lowest_layer() noexcept {
+        return socket_;
+    }
+    const lowest_layer_type& lowest_layer() const noexcept {
+        return socket_;
+    }
+
+    template <typename buffers_type>
+    std::size_t read_some(const buffers_type& buffers, asio::error_code& error) {
+        return socket_.read_some(buffers, error);
+    }
+
+    template <typename buffers_type>
+    std::size_t write_some(const buffers_type& buffers, asio::error_code& error) {
+        if (prefix_bytes_ != 0) {
+            --prefix_bytes_;
+            std::this_thread::sleep_for(2ms);
+            const auto first = *asio::buffer_sequence_begin(buffers);
+            return socket_.write_some(asio::buffer(first, 1), error);
+        }
+        return socket_.write_some(buffers, error);
+    }
+
+private:
+    lowest_layer_type socket_;
+    std::size_t prefix_bytes_{5};
+};
+
+bool eventually_closed(asio::ip::tcp::socket& socket) {
+    socket.non_blocking(true);
+    bool ended = false;
+    ruvia::test::wait_until([&] {
+        std::array<char, 256> bytes{};
+        asio::error_code error;
+        (void)socket.read_some(asio::buffer(bytes), error);
+        ended = error == asio::error::eof || error == asio::error::connection_reset;
+        return ended;
+    },
+        3s);
+    return ended;
 }
 
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -869,3 +925,167 @@ TEST(Ruvia, removed_listeners_refuse_new_connections_and_serve_established_ones)
     app.stop();
     runner.join();
 }
+
+TEST(Ruvia, mixed_listener_shares_one_socket_group_and_preserves_transport_through_runtime_controls) {
+    const ruvia::test::tls_identity first("mixed-first", "DNS:localhost,IP:127.0.0.1");
+    const ruvia::test::tls_identity second("mixed-second", "DNS:localhost,IP:127.0.0.1");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation base(io), shared(io);
+    const auto endpoint = shared.endpoint();
+    const ruvia::listener_endpoint target{.address_ = "127.0.0.1", .port_ = endpoint.port()};
+    ruvia::listen_config config{.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(first)};
+#if defined(RUVIA_ENABLE_HTTP3)
+    ruvia::test::udp_port_reservation udp(io);
+    config.http3_ = udp.endpoint().port();
+#endif
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2})
+        .listen({.address_ = "127.0.0.1", .http_ = base.endpoint().port()})
+        .on_start(nullptr)
+        .on_start([] { started().release(); });
+    auto client = tls_client();
+#if !defined(_WIN32)
+    ruvia::listener_sockets inherited;
+#endif
+    {
+        ruvia::test::app_run runner(app);
+        ASSERT_TRUE(started().try_acquire_for(10s));
+        wait_until_running(app);
+        ASSERT_NO_THROW(app.add_listener(config));
+        std::thread plaintext([&] {
+            asio::io_context peer_io;
+            for (int attempt = 0; attempt < 12; ++attempt) {
+                EXPECT_EQ(plain_body(peer_io, endpoint, "/hello"), "hello");
+            }
+        });
+        for (int attempt = 0; attempt < 12; ++attempt) {
+            EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-first");
+        }
+        plaintext.join();
+        asio::ip::tcp::socket established(io);
+        established.connect(endpoint);
+        ASSERT_TRUE(serves_hello(established));
+        const auto established_tls = connect_tls(io, client, endpoint);
+        ASSERT_TRUE(serves_hello(*established_tls));
+        app.replace_tls_identities(target, tls_of(second));
+        EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-second");
+        EXPECT_EQ(plain_body(io, endpoint, "/hello"), "hello");
+#if defined(RUVIA_ENABLE_HTTP3)
+        EXPECT_TRUE(http3_serves(udp.endpoint().port(), second));
+#endif
+#if !defined(_WIN32)
+        inherited = app.duplicate_listener_sockets(target);
+        EXPECT_TRUE(inherited.http_.empty());
+        EXPECT_EQ(inherited.https_.size(), 2U);
+        for (const auto fd : inherited.https_) {
+            EXPECT_TRUE(listening(fd));
+        }
+#endif
+        app.remove_listener(target);
+#if defined(_WIN32)
+        EXPECT_TRUE(refuses(io, endpoint));
+#endif
+        EXPECT_TRUE(serves_hello(established));
+        EXPECT_TRUE(serves_hello(*established_tls));
+        app.stop();
+        runner.join();
+    }
+    config.tls_ = tls_of(second);
+#if !defined(_WIN32)
+    config.inherited_sockets_ = std::move(inherited);
+#endif
+    app.listen(config);
+    ruvia::test::app_run successor(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    wait_until_running(app);
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        EXPECT_EQ(plain_body(io, endpoint, "/hello"), "hello");
+        EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-second");
+    }
+    app.remove_listener(target);
+    EXPECT_TRUE(refuses(io, endpoint));
+    app.stop();
+    successor.join();
+}
+
+TEST(Ruvia, mixed_listener_redirects_only_plaintext_and_accepts_fragmented_client_hello) {
+    const ruvia::test::tls_identity identity("mixed-redirect", "DNS:localhost");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2})
+        .listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity), .auto_https_redirect_ = true})
+        .on_start(nullptr)
+        .on_start([] { started().release(); });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    const auto response = ruvia::test::exchange(io, endpoint,
+        "GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 308 "));
+    EXPECT_NE(response.find("https://localhost:" + std::to_string(endpoint.port()) + "/hello"), std::string::npos);
+    auto client = tls_client();
+    asio::ip::tcp::socket socket(io);
+    socket.connect(endpoint);
+    asio::ssl::stream<fragmented_tcp> stream(fragmented_tcp(std::move(socket)), client);
+    stream.handshake(asio::ssl::stream_base::client);
+    EXPECT_TRUE(serves_hello(stream));
+    EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-redirect");
+    app.stop();
+    runner.join();
+}
+
+TEST(Ruvia, mixed_listener_detection_and_partial_handshakes_share_deadlines_and_immediate_stop) {
+    const ruvia::test::tls_identity identity("mixed-deadlines", "DNS:localhost");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2, .connection_scan_interval_ = 5ms, .request_header_timeout_ = 80ms, .header_completion_timeout_ = 180ms})
+        .listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = endpoint.port(), .tls_ = tls_of(identity)})
+        .on_start(nullptr)
+        .on_start([] { started().release(); });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    asio::ip::tcp::socket silent(io), partial_tls(io), slow_plain(io);
+    silent.connect(endpoint);
+    partial_tls.connect(endpoint);
+    slow_plain.connect(endpoint);
+    asio::write(partial_tls, asio::buffer(std::string_view("\x16\x03", 2)));
+    const auto started_at = std::chrono::steady_clock::now();
+    for (const char byte : std::string_view("GET ")) {
+        asio::error_code error;
+        asio::write(slow_plain, asio::buffer(&byte, 1), error);
+        std::this_thread::sleep_for(50ms);
+    }
+    EXPECT_TRUE(eventually_closed(silent));
+    EXPECT_TRUE(eventually_closed(partial_tls));
+    EXPECT_TRUE(eventually_closed(slow_plain));
+    EXPECT_LT(std::chrono::steady_clock::now() - started_at, 1s);
+    auto client = tls_client();
+    EXPECT_EQ(plain_body(io, endpoint, "/hello"), "hello");
+    EXPECT_EQ(https_served_name(io, client, endpoint), "mixed-deadlines");
+    asio::ip::tcp::socket pending_detection(io), pending_tls(io);
+    pending_detection.connect(endpoint);
+    pending_tls.connect(endpoint);
+    asio::write(pending_tls, asio::buffer(std::string_view("\x16", 1)));
+    const auto stopped_at = std::chrono::steady_clock::now();
+    app.stop();
+    runner.join();
+    EXPECT_LT(std::chrono::steady_clock::now() - stopped_at, 1s);
+    EXPECT_TRUE(eventually_closed(pending_detection));
+    EXPECT_TRUE(eventually_closed(pending_tls));
+}
+
+#if !defined(_WIN32)
+TEST(Ruvia, mixed_listener_rejects_conflicting_inheritance_vectors_and_closes_every_handle) {
+    const ruvia::test::tls_identity identity("mixed-inherit", "DNS:localhost");
+    const int http = listening_socket(0);
+    const auto port = local_port(http);
+    const int https = listening_socket(port);
+    auto& app = ruvia::app();
+    EXPECT_THROW(app.listen({.address_ = "127.0.0.1", .http_ = port, .https_ = port, .tls_ = tls_of(identity), .inherited_sockets_ = ruvia::listener_sockets{.http_ = {http}, .https_ = {https}}}), std::invalid_argument);
+    EXPECT_TRUE(closed(http));
+    EXPECT_TRUE(closed(https));
+}
+#endif

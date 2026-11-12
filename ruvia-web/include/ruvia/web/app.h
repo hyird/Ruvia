@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/web/connection_events.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/dotenv.h"
 #include "ruvia/web/error.h"
@@ -159,6 +160,10 @@ public:
     // replace_tls_identities() and duplicate_listener_sockets() calls take
     // effect one at a time.
     void remove_listener(const listener_endpoint& endpoint);
+    // Blocking caller-thread control. Closes every protocol stream of the
+    // connection; false means the ID is no longer live. Same lifecycle and
+    // worker self-wait restrictions as remove_listener().
+    [[nodiscard]] bool close_connection(std::uint64_t connection_id);
 #ifndef _WIN32
     // Duplicates (dup()) every worker's socket of the running TCP service
     // `endpoint` names, and of its HTTP/3 service, into http_ or https_ and
@@ -262,12 +267,27 @@ public:
     // and clearing follow on_access().
     application& on_http2_input(http2_input_callback callback);
     application& on_http2_input(std::nullptr_t);
+#if defined(RUVIA_ENABLE_HTTP2)
+    // Typed frame and HPACK facts from the protocol parser, in wire order.
+    application& on_http2_frame(http2_frame_callback callback);
+    application& on_http2_frame(std::nullptr_t);
+    application& on_http2_headers(http2_headers_callback callback);
+    application& on_http2_headers(std::nullptr_t);
+#endif
     // Serves every listener_dispatch::connection listener (see
     // server_connection and connection_callback); run() throws
     // std::invalid_argument for such a listener without one. Replacement
     // and clearing follow on_access().
     application& on_connection(connection_callback callback);
     application& on_connection(std::nullptr_t);
+    // Admission precedes TLS/HTTP processing. Open may return owned per-
+    // connection state; close runs after retirement on the owning worker.
+    application& on_connection_admission(connection_admission_callback callback);
+    application& on_connection_admission(std::nullptr_t);
+    application& on_connection_open(connection_open_callback callback);
+    application& on_connection_open(std::nullptr_t);
+    application& on_connection_close(connection_close_callback callback);
+    application& on_connection_close(std::nullptr_t);
     // Serves every listener_dispatch::request_stream listener (see
     // request_stream and request_stream_callback); run() throws
     // std::invalid_argument for such a listener without one. Replacement

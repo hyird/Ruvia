@@ -50,11 +50,10 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         context_services_value.bind_response_stream(*response_stream);
     }
     const auto* response_stream_output = context_services_value.response_output().response_stream();
-    response_stream_context_binding stream_context_binding(
-        response_stream_output != nullptr ? &response_stream_output->writer() : nullptr);
-    if (response_stream_output != nullptr) {
-        detail::streaming_access::bind_context(
-            response_stream_output->writer(), context_value, context_value.stop_token());
+    auto* const bound_writer = response_stream_output != nullptr ? &response_stream_output->writer() : nullptr;
+    response_stream_context_binding stream_context_binding(bound_writer);
+    if (bound_writer != nullptr) {
+        detail::streaming_access::bind_context(*bound_writer, context_value, context_value.stop_token());
     }
 
     // Records that next() reached the handler even when it emitted no bytes.
@@ -93,6 +92,15 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     } catch (...) {
         exception = std::current_exception();
     }
+    if (context_services_value.connection_aborted()) {
+        if (exception != nullptr) {
+            std::rethrow_exception(exception);
+        }
+        if (auto context_exception = context_value.exception()) {
+            std::rethrow_exception(context_exception);
+        }
+        co_return std::nullopt;
+    }
 
     if (exception != nullptr) {
         if (detail::context_access::output_committed(context_value)) {
@@ -127,9 +135,9 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         // Reaching this common point gives middleware post-processing its full
         // chance to adjust an uncommitted head; an already committed writer no
         // longer needs the context.
-        if (response_stream_output != nullptr) {
+        if (bound_writer != nullptr && (!output_committed || bound_writer->committed())) {
             try {
-                co_await response_stream_output->writer().end();
+                co_await bound_writer->end();
             } catch (...) {
                 exception = std::current_exception();
             }

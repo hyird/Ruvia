@@ -62,7 +62,8 @@ server_connection::server_connection(const detail::server_connection_fields& fie
       id_(fields.id_),
       local_(fields.local_address_, fields.local_port_),
       remote_(fields.remote_address_, fields.remote_port_),
-      stop_token_(stop_token_value) {
+      stop_token_(stop_token_value),
+      state_(fields.state_) {
     if (fields.tls_.has_value()) {
         tls_.emplace(tls_connection_transport(
             fields.tls_->client_certificate_subject_, fields.tls_->alpn_, fields.tls_->server_name_));
@@ -120,7 +121,7 @@ template <typename stream_type>
 task<void> worker_connections::serve_connection(
     stream_type& stream, tcp_socket_type& socket, server_connection_fields fields) {
     // A stopping worker has already closed the connection.
-    if (!http_server_worker_running(state_)) {
+    if (!http_server_worker_running(state_) || !socket.is_open()) {
         co_return;
     }
     std::pmr::string local_address(process_resource());

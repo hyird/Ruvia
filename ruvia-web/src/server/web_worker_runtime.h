@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -95,6 +96,9 @@ public:
     }
     void remove_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept {
         connections_.remove_listener(index, std::move(receipt));
+    }
+    [[nodiscard]] bool close_connection(std::uint64_t connection_id) noexcept {
+        return connections_.close_connection(connection_id);
     }
 #if !defined(_WIN32)
     [[nodiscard]] listener_socket_duplicates duplicate_listener(std::size_t index) {

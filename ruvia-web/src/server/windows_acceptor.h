@@ -124,6 +124,7 @@ public:
     void request_stop() noexcept;
     // Lifecycle thread, after request_stop().
     void join();
+    [[nodiscard]] std::exception_ptr failure() noexcept;
     // Any thread: sockets the chosen worker's queue refused, and accept
     // failures other than peer disconnects.
     [[nodiscard]] std::size_t refused() const noexcept {
@@ -161,7 +162,8 @@ public:
     // socket of HTTP/3 listener `http3_listener_index`. False when it was
     // dropped (the worker's bound is full or the acceptor stopped).
     [[nodiscard]] bool transmit(std::size_t worker_index, std::size_t http3_listener_index,
-        const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes) noexcept;
+        const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes,
+        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     // Any thread: one business worker's endpoint of a removed HTTP/3
     // listener served its last connection. The last worker releases this
     // listener's claim; the socket closes once no listener still needs it.
@@ -192,9 +194,11 @@ private:
 #if defined(RUVIA_ENABLE_HTTP3)
     task<void> run_receives(udp_listener& listener);
     void steer(const udp_listener& listener, std::span<const std::byte> bytes,
-        const asio::ip::udp::endpoint& remote) noexcept;
+        const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local,
+        std::uint32_t interface_index) noexcept;
     void send_datagram(std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote,
-        std::span<const std::byte> bytes) noexcept;
+        std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local,
+        std::uint32_t interface_index) noexcept;
 #endif
 
     // Declared first: every socket below belongs to its io_context.

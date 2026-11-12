@@ -1,16 +1,12 @@
 #include "server/request_stream_dispatch.h"
 
-#include <chrono>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
-#include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/timer.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
@@ -29,7 +25,6 @@
 #include "http/streaming_access.h"
 #include "router/compiled_route_plan.h"
 #include "router/route_table.h"
-#include "server/http_response_stream_dispatch.h"
 #include "server/http_server_options.h"
 #include "util/operation_lane_lease.h"
 
@@ -67,11 +62,17 @@ task<std::exception_ptr> run_request_stream_callback(
 
 // After the callback: a committed response or tunnel stands, and a failure
 // past it propagates to the transport, which aborts the stream and reports it.
-// Otherwise nothing reached the peer: the request gets the framework's answer
-// to the failure -- a callback that committed nothing is a fault -- and an
-// unexpected one reaches the connection failure sink. No application error
-// handler takes part.
+// Otherwise nothing reached the peer: an explicit connection abort is terminal;
+// without it the request gets the framework's answer to the failure, and a
+// callback that selected nothing is a fault. Unexpected failures reach the sink.
+// No application error handler takes part.
 void complete_request_stream(context& context_value, std::exception_ptr failure) {
+    if (context_access::services(context_value).connection_aborted()) {
+        if (failure != nullptr) {
+            std::rethrow_exception(failure);
+        }
+        return;
+    }
     if (context_access::output_committed(context_value)) {
         if (failure != nullptr) {
             std::rethrow_exception(failure);
@@ -99,94 +100,6 @@ task<void> serve_request_stream(void*, context& context_value) {
     auto failure = co_await run_request_stream_callback(context_value, context_value.stream(), nullptr);
     complete_request_stream(context_value, std::move(failure));
 }
-
-// What a tunnel request's callback writes instead of accepting the tunnel.
-// Nothing reaches the peer before the callback returns, so the response is
-// kept whole and handed back as the context's buffered response; it carries
-// no trailers.
-class request_stream_refusal final {
-public:
-    explicit request_stream_refusal(context& context_value)
-        : context_(context_value),
-          body_(context_value.arena()) {}
-
-    request_stream_refusal(const request_stream_refusal&) = delete;
-    request_stream_refusal& operator=(const request_stream_refusal&) = delete;
-
-    task<stream_commit_result> commit() {
-        if (head_.has_value()) {
-            throw std::logic_error("response stream is already committed");
-        }
-        // accept_tunnel() committed the upgrade: no response can follow.
-        if (context_access::output_committed(context_)) {
-            throw std::logic_error("the request's tunnel is already established");
-        }
-        if (context_access::has_response(context_)) {
-            throw std::logic_error("a complete response is already selected");
-        }
-        auto head = context_access::streaming_head(context_);
-        const auto method = context_access::request(context_).known_method();
-        // RFC 9110 §9.3.6: any 2xx response to CONNECT switches to tunnel mode.
-        if (method == http_known_method::connect && head.status().is_successful()) {
-            throw std::logic_error("a 2xx response to CONNECT establishes the tunnel; use accept_tunnel()");
-        }
-        ended_ = plan_http_response_body(method, head.status()).body_suppressed();
-        head_.emplace(std::move(head));
-        co_return ended_ ? stream_commit_result::completed : stream_commit_result::body;
-    }
-
-    task<void> write(std::string_view chunk) {
-        require_body();
-        body_.append(chunk);
-        co_return;
-    }
-
-    task<void> end(std::span<const http_header_view> trailers) {
-        if (!trailers.empty()) {
-            throw std::logic_error(ended_ ? "response stream is already ended"
-                                          : "a refused tunnel request's response carries no trailers");
-        }
-        if (!head_.has_value()) {
-            (void)co_await commit();
-        }
-        ended_ = true;
-    }
-
-    task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
-        require_body();
-        co_return co_await sleep_for(context_.worker(), duration, stop_token_value);
-    }
-
-    void bind_context(context*) noexcept {}
-
-    void release_context() noexcept {}
-
-    [[nodiscard]] bool committed() const noexcept {
-        return head_.has_value();
-    }
-
-    [[nodiscard]] bool aborted() const noexcept {
-        return false;
-    }
-
-    // Only once committed().
-    [[nodiscard]] http_response take_response() {
-        head_->owned_body(std::move(body_));
-        return std::move(*head_);
-    }
-
-private:
-    void require_body() const {
-        if (!head_.has_value() || ended_) {
-            throw std::logic_error("response stream has no open body");
-        }
-    }
-
-    context& context_;
-    std::optional<http_response> head_;
-    std::pmr::string body_;
-    bool ended_{false};
-};
 
 [[nodiscard]] const route_entry& request_stream_response_route() noexcept {
     // Process-invariant and allocation-free: no route path, method token or
@@ -224,25 +137,7 @@ bool http1_request_stream_tunnel(const http_request& request, bool content) noex
 
 task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept,
     const request_stream_websocket_accept* accept_websocket) {
-    request_stream_refusal refusal(context_value);
-    auto response = make_response_stream_writer(refusal, *process_resource());
-    auto& services = context_access::services(context_value);
-    services.bind_response_stream(response);
-    streaming_access::bind_context(response, context_value, context_value.stop_token());
-    auto failure = co_await run_request_stream_callback(context_value, response, &accept, accept_websocket);
-    streaming_access::release_context(response);
-    // Unless accept_tunnel() committed the upgrade, nothing reached the peer:
-    // the writer leaves the context, whose output is a buffered response again.
-    if (services.response_output().response_stream() != nullptr) {
-        services.response_output() = context_response_output();
-    }
-    if (failure == nullptr && refusal.committed()) {
-        try {
-            context_access::set_response(context_value, refusal.take_response());
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    }
+    auto failure = co_await run_request_stream_callback(context_value, context_value.stream(), &accept, accept_websocket);
     complete_request_stream(context_value, std::move(failure));
 }
 

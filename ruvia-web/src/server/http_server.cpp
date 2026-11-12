@@ -46,6 +46,13 @@ http_server_options standalone_options(server_config config, const http_server_c
     options.connection_failure_.callback_ = callback_access::ref(callbacks.connection_failure_);
     options.tls_client_hello_ = callback_access::ref(callbacks.tls_client_hello_);
     options.http2_input_ = callback_access::ref(callbacks.http2_input_);
+#if defined(RUVIA_ENABLE_HTTP2)
+    options.http2_frame_ = callback_access::ref(callbacks.http2_frame_);
+    options.http2_headers_ = callback_access::ref(callbacks.http2_headers_);
+#endif
+    options.connection_admission_ = callback_access::ref(callbacks.connection_admission_);
+    options.connection_open_ = callback_access::ref(callbacks.connection_open_);
+    options.connection_close_ = callback_access::ref(callbacks.connection_close_);
     return options;
 }
 
@@ -244,6 +251,12 @@ public:
         connections_.adopt_connection(index, socket);
     }
 
+    [[nodiscard]] bool close_connection(std::uint64_t connection_id) {
+        require_current();
+        require_running();
+        return connections_.close_connection(connection_id);
+    }
+
     void remove(const listener_endpoint& endpoint) {
         require_current();
         require_running();
@@ -272,7 +285,7 @@ public:
         ensure_same_http_server_tls_policy(*current, replacement.tls_);
         auto identities = std::get<http_server_listener_definition::tls>(loaded.front().transport_).identities_;
         connections_.adopt_tls_identities(index, identities);
-        current->identities_ = std::move(identities);
+        auto retired = std::exchange(current->identities_, std::move(identities));
     }
 
 #ifndef _WIN32
@@ -977,15 +990,34 @@ public:
         }
     }
 
+    [[nodiscard]] bool close_connection(std::uint64_t connection_id) {
+        require_external();
+        std::lock_guard lock(mutex_);
+        require_running();
+        for (const auto& worker : workers_) {
+            bool closed = false;
+            control(worker, [&](http_server_state& state) { closed = state.close_connection(connection_id); });
+            if (closed) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void replace(const listener_endpoint& endpoint, tls_config config) {
         listen_config replacement{.address_ = endpoint.address_, .https_ = endpoint.port_, .tls_ = std::move(config), .dispatch_ = listener_dispatch::connection};
         auto loaded = load_server_listeners(std::span<const listen_config>(&replacement, 1));
         require_external();
+        struct replacement_target final {
+            std::size_t slot_;
+            std::shared_ptr<const http_server_tls_identities> retired_;
+        };
+        // Retain callbacks until publication finishes and the control lock exits.
+        std::pmr::vector<replacement_target> targets(process_resource());
         std::lock_guard lock(mutex_);
         require_running();
         auto identities = std::get<http_server_listener_definition::tls>(loaded.front().transport_).identities_;
-        std::vector<std::size_t> slots;
-        slots.reserve(workers_.size());
+        targets.reserve(workers_.size());
         for (const auto& worker : workers_) {
             control(worker, [&](http_server_state& state) {
                 state.require_running();
@@ -995,13 +1027,13 @@ public:
                     throw std::invalid_argument("the connection service does not use TLS");
                 }
                 ensure_same_http_server_tls_policy(*current, replacement.tls_);
-                slots.push_back(index);
+                targets.push_back({index, current->identities_});
             });
         }
         for (std::size_t index = 0; index != workers_.size(); ++index) {
             control(workers_[index], [&](http_server_state& state) {
-                state.connections_.adopt_tls_identities(slots[index], identities);
-                std::get<http_server_listener_definition::tls>(state.services_[slots[index]].definition_.transport_).identities_ = identities;
+                state.connections_.adopt_tls_identities(targets[index].slot_, identities);
+                std::get<http_server_listener_definition::tls>(state.services_[targets[index].slot_].definition_.transport_).identities_ = identities;
             });
         }
     }
@@ -1214,6 +1246,9 @@ void http_server::add_connection_service(listen_config config) & {
 void http_server::adopt(const listener_endpoint& service, native_socket socket) & {
     state_->adopt(service, socket);
 }
+bool http_server::close_connection(std::uint64_t connection_id) & {
+    return state_->close_connection(connection_id);
+}
 http_server& http_server::trusted_proxies(trusted_proxy_config config) & {
     state_->trusted_proxies(std::move(config));
     return *this;
@@ -1225,7 +1260,8 @@ void http_server::remove_listener(const listener_endpoint& endpoint) & {
     state_->remove(endpoint);
 }
 void http_server::replace_tls_identities(const listener_endpoint& endpoint, tls_config config) & {
-    state_->replace(endpoint, std::move(config));
+    const auto state = state_;
+    state->replace(endpoint, std::move(config));
 }
 #ifndef _WIN32
 listener_sockets http_server::duplicate_listener_sockets(const listener_endpoint& endpoint) const& {
@@ -1271,7 +1307,8 @@ void http_server_group::remove_listener(const listener_endpoint& endpoint) & {
     state_->remove(endpoint);
 }
 void http_server_group::replace_tls_identities(const listener_endpoint& endpoint, tls_config config) & {
-    state_->replace(endpoint, std::move(config));
+    const auto state = state_;
+    state->replace(endpoint, std::move(config));
 }
 #ifndef _WIN32
 listener_sockets http_server_group::duplicate_listener_sockets(const listener_endpoint& endpoint) const& {
@@ -1280,6 +1317,9 @@ listener_sockets http_server_group::duplicate_listener_sockets(const listener_en
 #endif
 void http_server_group::adopt(std::size_t worker_index, const listener_endpoint& service, native_socket socket) & {
     state_->adopt(worker_index, service, socket);
+}
+bool http_server_group::close_connection(std::uint64_t connection_id) & {
+    return state_->close_connection(connection_id);
 }
 void http_server_group::close() noexcept {
     state_->close();

@@ -137,6 +137,13 @@ struct app_state final {
     connection_failure_callback connection_failure_callback_;
     tls_client_hello_callback tls_client_hello_callback_;
     http2_input_callback http2_input_callback_;
+#if defined(RUVIA_ENABLE_HTTP2)
+    http2_frame_callback http2_frame_callback_;
+    http2_headers_callback http2_headers_callback_;
+#endif
+    connection_admission_callback connection_admission_callback_;
+    connection_open_callback connection_open_callback_;
+    connection_close_callback connection_close_callback_;
     connection_callback connection_callback_;
     request_stream_callback request_stream_callback_;
     http_server_options options_{};

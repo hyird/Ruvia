@@ -24,6 +24,7 @@
 #include "http3/http3_connection_id.h"
 #include "http3/http3_worker_directory.h"
 #include "server/connection_count.h"
+#include "server/connection_lifecycle.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
@@ -47,6 +48,7 @@ struct http3_worker_services final {
     connection_scanner& scanner_;
     connection_count& connection_count_;
     connection_id_sequence& connection_ids_;
+    connection_registry& registry_;
     const stop_token& stop_token_;
     const http_server_worker_state& state_;
     std::atomic<std::size_t>& refused_;
@@ -123,7 +125,8 @@ public:
     // socket's send buffer is full (then wait with wait_writable()); on
     // Windows the datagram is queued to the acceptor, or lost when that
     // bounded queue is full (no_buffer_space).
-    [[nodiscard]] std::error_code send(const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] std::error_code send(const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes,
+        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
 #if !defined(_WIN32)
     // Completes once the socket can send again, or with the error that ended
     // waiting (the socket closed).
@@ -140,15 +143,18 @@ private:
     task<void> run_receive_loop();
 #endif
     task<void> serve(session_pointer session);
-    void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote) noexcept;
-    void accept(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote) noexcept;
-    void send_version_negotiation(const ngtcp2_version_cid& header, const asio::ip::udp::endpoint& remote) noexcept;
+    void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
+        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void accept(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
+        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void send_version_negotiation(const ngtcp2_version_cid& header, const asio::ip::udp::endpoint& remote,
+        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     void send_retry(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote,
-        std::size_t max_packet_bytes) noexcept;
+        std::size_t max_packet_bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     void send_stateless_connection_close(const ngtcp2_pkt_hd& header, const asio::ip::udp::endpoint& remote,
-        std::uint64_t error_code) noexcept;
+        std::uint64_t error_code, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     void send_stateless_reset(std::span<const std::uint8_t> destination_cid, std::size_t trigger_bytes,
-        const asio::ip::udp::endpoint& remote) noexcept;
+        const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     [[nodiscard]] bool consume_stateless_reset_budget() noexcept;
     // A retiring endpoint whose last connection ended.
     void release_after_last_connection() noexcept;

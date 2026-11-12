@@ -363,7 +363,8 @@ void http3_worker_directory::close_unclaimed_listener_sockets(std::size_t listen
 #endif
 
 bool http3_worker_directory::hand_off(std::size_t owner, std::size_t listener_index,
-    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, std::uint32_t ecn) noexcept {
+    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
+    const asio::ip::udp::endpoint& local, std::uint32_t interface_index, std::uint32_t ecn) noexcept {
     if (owner >= slots_.size()) {
         return false;
     }
@@ -379,6 +380,8 @@ bool http3_worker_directory::hand_off(std::size_t owner, std::size_t listener_in
                 .bytes_ = std::move(copied),
                 .remote_ = remote,
                 .ecn_ = ecn,
+                .local_ = local,
+                .interface_index_ = interface_index,
             };
             return [&target, listener_index, owned = std::move(datagram), token = std::move(token)]() mutable noexcept {
                 // The target pointer is confined to this, the owner's, thread.

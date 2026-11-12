@@ -13,6 +13,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_observation.h"
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client.h"
@@ -49,6 +50,11 @@ struct http2_connection_options final {
     // Request pseudo-header order is always in the request-head event's
     // request_view().
     bool receive_frame_metadata_{false};
+    // Independent synchronous, allocation-free wire/HPACK observations. These
+    // include raw facts the normalized received_* events intentionally omit.
+    http2_frame_observer_type frame_observer_{nullptr};
+    http2_header_observer_type header_observer_{nullptr};
+    void* observer_context_{nullptr};
 };
 
 struct http2_regular_request_head_view final {

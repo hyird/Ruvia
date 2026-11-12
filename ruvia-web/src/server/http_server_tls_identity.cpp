@@ -20,6 +20,7 @@
 #include "ruvia/http/http_ascii.h"
 
 #include "tls/dns_host.h"
+#include "tls/tls_certificate_store.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_files.h"
 #include "tls/tls_protocol_policy.h"
@@ -119,15 +120,36 @@ private:
         tls_identity_source source_;
     };
 
-    tls_identity_source primary_;
+    std::optional<tls_identity_source> primary_;
+    std::shared_ptr<tls_certificate_store> store_;
+    std::shared_ptr<const tls_certificate_selector> selector_;
+    tls_certificate_id default_certificate_{};
     std::pmr::vector<named_source> names_;
     std::pmr::vector<addressed_source> addresses_;
 };
 
 tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_resource* resource)
-    : primary_(make_tls_identity_source(config.identity_, resource)),
-      names_(resource),
+    : names_(resource),
       addresses_(resource) {
+    if (config.certificate_store_) {
+        const auto& identity = config.identity_;
+        if (!identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() ||
+            !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() ||
+            !identity.private_key_password_.empty() || !config.sni_.empty() || !config.local_addresses_.empty()) {
+            throw std::invalid_argument("TLS certificate library cannot be combined with fixed identities");
+        }
+        if (!config.select_certificate_ && config.default_certificate_ == 0) {
+            throw std::invalid_argument("TLS certificate library requires a selector or default certificate ID");
+        }
+        store_ = config.certificate_store_;
+        selector_ = config.select_certificate_;
+        default_certificate_ = config.default_certificate_;
+        return;
+    }
+    if (config.select_certificate_ || config.default_certificate_ != 0) {
+        throw std::invalid_argument("TLS certificate selection requires a certificate library");
+    }
+    primary_.emplace(make_tls_identity_source(config.identity_, resource));
     names_.reserve(config.sni_.size());
     for (const auto& sni : config.sni_) {
         if (sni.host_.empty()) {
@@ -170,8 +192,16 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
 }
 
 std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load(std::pmr::memory_resource* resource) const {
+    if (store_) {
+        auto identities = std::allocate_shared<http_server_tls_identities>(
+            std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), resource);
+        identities->certificate_store_ = store_;
+        identities->select_certificate_ = selector_;
+        identities->default_certificate_ = default_certificate_;
+        return identities;
+    }
     auto identities = std::allocate_shared<http_server_tls_identities>(
-        std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), load_tls_identity(primary_), resource);
+        std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), load_tls_identity(*primary_), resource);
     for (const auto& named : names_) {
         auto& target = named.wildcard_ ? identities->wildcard_names_ : identities->exact_names_;
         target.emplace_back(named.name_, load_tls_identity(named.source_), resource);
@@ -196,6 +226,10 @@ std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load(std::p
 }
 
 }  // namespace
+
+tls_certificate load_server_tls_certificate(const tls_identity_config& identity) {
+    return load_tls_identity(make_tls_identity_source(identity, process_resource()));
+}
 
 const tls_certificate& http_server_tls_identities::select(
     std::string_view server_name, const asio::ip::address* local_address) const noexcept {
@@ -223,7 +257,7 @@ const tls_certificate& http_server_tls_identities::select(
             }
         }
     }
-    return primary_;
+    return *primary_;
 }
 
 http_server_listener_definition::tls load_http_server_tls(

@@ -16,8 +16,10 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/streaming.h"
 
+#include "context/context_services.h"
 #include "http/streaming_access.h"
 #include "router/route_table.h"
+#include "server/http_server_options.h"
 #include "server/inbound_transport_error.h"
 
 namespace ruvia {
@@ -25,6 +27,17 @@ class context;  // only used as context* in a type-erased bind thunk; web suppli
 }
 
 namespace ruvia::detail {
+
+// A normal response writer may reject a tunnel but may never establish one.
+// Establishment transfers ownership through the protocol's acceptance driver.
+inline void validate_response_stream_status(const http_request& request, const http_response& response) {
+    if (request.known_method() == http_known_method::connect && response.status().is_successful()) {
+        throw std::logic_error("a 2xx response to CONNECT establishes the tunnel; use accept_tunnel()");
+    }
+    if (response.status() == http_status::switching_protocols) {
+        throw std::logic_error("a 101 response requires accept_tunnel() or accept_websocket()");
+    }
+}
 
 // Plain forwarding functions, not coroutines: each returns the sink's own task,
 // so a streamed chunk costs exactly the sink's frame and no wrapper frame.
@@ -93,13 +106,13 @@ private:
     http_status_code status_;
 };
 
-class response_stream_peer_aborted_before_commit final {
+class response_stream_aborted_before_commit final {
 private:
     friend class response_stream_dispatch_result;
-    constexpr response_stream_peer_aborted_before_commit() noexcept = default;
+    constexpr response_stream_aborted_before_commit() noexcept = default;
 };
 
-class response_stream_peer_aborted_after_commit final {
+class response_stream_aborted_after_commit final {
 public:
     [[nodiscard]] constexpr http_status_code status() const noexcept {
         return status_;
@@ -107,7 +120,7 @@ public:
 
 private:
     friend class response_stream_dispatch_result;
-    explicit constexpr response_stream_peer_aborted_after_commit(http_status_code status) noexcept
+    explicit constexpr response_stream_aborted_after_commit(http_status_code status) noexcept
         : status_(status) {}
     http_status_code status_;
 };
@@ -178,12 +191,12 @@ public:
         return response_stream_dispatch_result(response_stream_completed(status));
     }
 
-    [[nodiscard]] static response_stream_dispatch_result make_peer_aborted_before_commit() noexcept {
-        return response_stream_dispatch_result(response_stream_peer_aborted_before_commit{});
+    [[nodiscard]] static response_stream_dispatch_result make_aborted_before_commit() noexcept {
+        return response_stream_dispatch_result(response_stream_aborted_before_commit{});
     }
 
-    [[nodiscard]] static response_stream_dispatch_result make_peer_aborted_after_commit(http_status_code status) noexcept {
-        return response_stream_dispatch_result(response_stream_peer_aborted_after_commit(status));
+    [[nodiscard]] static response_stream_dispatch_result make_aborted_after_commit(http_status_code status) noexcept {
+        return response_stream_dispatch_result(response_stream_aborted_after_commit(status));
     }
 
     [[nodiscard]] static response_stream_dispatch_result make_failed_after_commit(
@@ -207,15 +220,15 @@ public:
     }
     const response_stream_completed* completed() const&& = delete;
 
-    [[nodiscard]] const response_stream_peer_aborted_before_commit* peer_aborted_before_commit() const& noexcept {
-        return std::get_if<response_stream_peer_aborted_before_commit>(&value_);
+    [[nodiscard]] const response_stream_aborted_before_commit* aborted_before_commit() const& noexcept {
+        return std::get_if<response_stream_aborted_before_commit>(&value_);
     }
-    const response_stream_peer_aborted_before_commit* peer_aborted_before_commit() const&& = delete;
+    const response_stream_aborted_before_commit* aborted_before_commit() const&& = delete;
 
-    [[nodiscard]] const response_stream_peer_aborted_after_commit* peer_aborted_after_commit() const& noexcept {
-        return std::get_if<response_stream_peer_aborted_after_commit>(&value_);
+    [[nodiscard]] const response_stream_aborted_after_commit* aborted_after_commit() const& noexcept {
+        return std::get_if<response_stream_aborted_after_commit>(&value_);
     }
-    const response_stream_peer_aborted_after_commit* peer_aborted_after_commit() const&& = delete;
+    const response_stream_aborted_after_commit* aborted_after_commit() const&& = delete;
 
     [[nodiscard]] const response_stream_failed_after_commit* failed_after_commit() const& noexcept {
         return std::get_if<response_stream_failed_after_commit>(&value_);
@@ -236,7 +249,7 @@ public:
         if (const auto* value = completed()) {
             return value->status();
         }
-        if (const auto* value = peer_aborted_after_commit()) {
+        if (const auto* value = aborted_after_commit()) {
             return value->status();
         }
         if (const auto* value = failed_after_commit()) {
@@ -246,8 +259,8 @@ public:
     }
 
 private:
-    using value_type = std::variant<response_stream_completed, response_stream_peer_aborted_before_commit,
-        response_stream_peer_aborted_after_commit, response_stream_failed_after_commit,
+    using value_type = std::variant<response_stream_completed, response_stream_aborted_before_commit,
+        response_stream_aborted_after_commit, response_stream_failed_after_commit,
         response_stream_route_response, response_stream_recovered_failure>;
 
     template <typename alternative_type>
@@ -281,11 +294,11 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
     try {
         auto result_value = co_await routes_value.dispatch_response_stream(
             request, route, request_memory_value, response_stream, services);
-        if (peer_aborted()) {
+        if (services.connection_aborted() || peer_aborted()) {
             if (!sink_value.committed()) {
-                co_return response_stream_dispatch_result::make_peer_aborted_before_commit();
+                co_return response_stream_dispatch_result::make_aborted_before_commit();
             }
-            co_return response_stream_dispatch_result::make_peer_aborted_after_commit(
+            co_return response_stream_dispatch_result::make_aborted_after_commit(
                 committed_response_stream_status(sink_value));
         }
         if (!result_value.has_value()) {
@@ -300,16 +313,28 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
         }
         co_return response_stream_dispatch_result::make_route_response(std::move(*result_value));
     } catch (const inbound_transport_error&) {
-        if (peer_aborted()) {
+        if (services.connection_aborted() || peer_aborted()) {
             if (!sink_value.committed()) {
-                co_return response_stream_dispatch_result::make_peer_aborted_before_commit();
+                co_return response_stream_dispatch_result::make_aborted_before_commit();
             }
-            co_return response_stream_dispatch_result::make_peer_aborted_after_commit(
+            co_return response_stream_dispatch_result::make_aborted_after_commit(
                 committed_response_stream_status(sink_value));
         }
         exception = std::current_exception();
     } catch (...) {
         exception = std::current_exception();
+    }
+    if (services.connection_aborted()) {
+        auto result = sink_value.committed()
+                          ? response_stream_dispatch_result::make_aborted_after_commit(
+                                committed_response_stream_status(sink_value))
+                          : response_stream_dispatch_result::make_aborted_before_commit();
+        // The transport is already closed, but a real callback failure still
+        // belongs to its configured outlet. Snapshot before invoking user code.
+        const auto failure = services.connection_failure();
+        const auto remote = services.get_conn_info().remote().address();
+        failure.invoke(remote, exception);
+        co_return result;
     }
 
     if (sink_value.committed()) {

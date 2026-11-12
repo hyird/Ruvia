@@ -142,7 +142,9 @@ nghttp2_ssize http2_connection::read_outbound_data(nghttp2_session*, std::int32_
 }
 
 http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push,
-    bool receive_origin_advertisements, bool receive_frame_metadata)
+    bool receive_origin_advertisements, bool receive_frame_metadata,
+    http2_frame_observer_type frame_observer, http2_header_observer_type header_observer,
+    void* observer_context)
     : resource_(resource),
       memory_(resource),
       memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)),
@@ -157,6 +159,9 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
     enable_push_ = role == http2_role::client && enable_push;
     receive_origin_advertisements_ = role == http2_role::client && receive_origin_advertisements;
     receive_frame_metadata_ = receive_frame_metadata;
+    frame_observer_ = frame_observer;
+    header_observer_ = header_observer;
+    observer_context_ = observer_context;
     create_session();
 }
 
@@ -227,6 +232,15 @@ void http2_connection::create_session() {
         }
     }
     nghttp2_option_set_builtin_recv_extension_type(option.get(), NGHTTP2_PRIORITY_UPDATE);
+    // Unknown extensions remain semantically ignored, but use nghttp2's same
+    // framing callbacks when a wire observer needs their position.
+    if (frame_observer_ != nullptr) {
+        for (unsigned type = 0x0a; type <= 0xff; ++type) {
+            if (type != NGHTTP2_PRIORITY_UPDATE) {
+                nghttp2_option_set_user_recv_extension_type(option.get(), static_cast<std::uint8_t>(type));
+            }
+        }
+    }
 
     nghttp2_session* raw_session = nullptr;
     const int result = role_ == http2_role::client
@@ -416,8 +430,9 @@ http2_feed_result http2_connection::feed(std::string_view in) {
     }
     events_.clear();
     event_offset_ = 0;
-    const auto consumed = nghttp2_session_mem_recv2(
-        session_.get(), reinterpret_cast<const std::uint8_t*>(in.data()), in.size());
+    const auto consumed = frame_observer_ != nullptr ? receive_observed(in)
+                                                     : nghttp2_session_mem_recv2(session_.get(),
+                                                           reinterpret_cast<const std::uint8_t*>(in.data()), in.size());
     if (consumed < 0) {
         try {
             fail_on_nghttp2_error(static_cast<int>(consumed));
@@ -435,7 +450,125 @@ http2_feed_result http2_connection::feed(std::string_view in) {
                                                               : http2_feed_result::accepted;
 }
 
+nghttp2_ssize http2_connection::receive_observed(std::string_view input) {
+    const auto original_size = input.size();
+    while (!input.empty()) {
+        // nghttp2 is the only frame-header parser. Until on_begin_frame gives
+        // us a payload length, offer one octet; afterwards offer whole payload
+        // fragments. No magic/header bytes are interpreted or retained here.
+        const auto count = observed_payload_remaining_ == 0
+                               ? std::size_t{1}
+                               : (std::min)(input.size(), observed_payload_remaining_);
+        if (observed_payload_remaining_ != 0) {
+            observe_frame_payload(input.substr(0, count));
+            observed_payload_remaining_ -= count;
+            if (observed_payload_remaining_ == 0) {
+                frame_observer_(observer_context_, observed_frame_);
+            }
+        }
+        const auto consumed = nghttp2_session_mem_recv2(session_.get(),
+            reinterpret_cast<const std::uint8_t*>(input.data()), count);
+        if (consumed < 0) {
+            return consumed;
+        }
+        if (consumed == 0 || local_connection_state_.fatal_failure() != nullptr) {
+            break;
+        }
+        input.remove_prefix(static_cast<std::size_t>(consumed));
+    }
+    return static_cast<nghttp2_ssize>(original_size);
+}
+
+void http2_connection::observe_frame_payload(std::string_view input) noexcept {
+    const auto type = observed_frame_.type_;
+    const bool settings = type == http2_frame_type::settings;
+    const bool window = type == http2_frame_type::window_update;
+    const bool priority = type == http2_frame_type::priority ||
+                          (type == http2_frame_type::headers && (observed_frame_.flags_ & NGHTTP2_FLAG_PRIORITY) != 0);
+    if (!settings && !window && !priority) {
+        return;
+    }
+    const auto scalar_bytes = settings ? std::size_t{6} : window ? std::size_t{4}
+                                                                 : std::size_t{5};
+    for (const unsigned char byte : input) {
+        const auto offset = observed_payload_offset_++;
+        if (observed_headers_padding_ && offset == 0) {
+            continue;
+        }
+        if (!settings && observed_scalar_size_ == scalar_bytes) {
+            break;
+        }
+        observed_scalar_[observed_scalar_size_++] = byte;
+        if (observed_scalar_size_ != scalar_bytes) {
+            continue;
+        }
+        const auto read_u32 = [this](std::size_t start) noexcept {
+            return (std::uint32_t{observed_scalar_[start]} << 24) |
+                   (std::uint32_t{observed_scalar_[start + 1]} << 16) |
+                   (std::uint32_t{observed_scalar_[start + 2]} << 8) |
+                   std::uint32_t{observed_scalar_[start + 3]};
+        };
+        if (settings) {
+            if (observed_frame_.settings_count_ < observed_frame_.settings_.size()) {
+                observed_frame_.settings_[observed_frame_.settings_count_++] = {
+                    static_cast<http2_setting_id>((std::uint16_t{observed_scalar_[0]} << 8) |
+                                                  observed_scalar_[1]),
+                    read_u32(2)};
+            }
+            observed_scalar_size_ = 0;
+        } else if (window) {
+            observed_frame_.window_increment_ = read_u32(0) & 0x7fffffffU;
+        } else {
+            const auto dependency = read_u32(0);
+            observed_frame_.priority_ = http2_received_priority{
+                .stream_id_ = observed_frame_.stream_id_,
+                .stream_dependency_ = dependency & 0x7fffffffU,
+                .weight_ = static_cast<std::uint16_t>(observed_scalar_[4] + 1),
+                .exclusive_ = (dependency & 0x80000000U) != 0};
+        }
+    }
+}
+
+void http2_connection::observe_header(http2_header_observation_phase phase,
+    std::string_view name, std::string_view value) noexcept {
+    if (header_observer_ == nullptr) {
+        return;
+    }
+    const http2_header_metadata metadata{
+        .first_frame_observation_sequence_ = observed_header_sequence_,
+        .frame_observation_sequence_ = observed_frame_.observation_sequence_,
+        .stream_id_ = observed_header_stream_,
+        .field_index_ = observed_field_index_,
+        .phase_ = phase,
+        .name_ = name,
+        .value_ = value};
+    header_observer_(observer_context_, metadata);
+    if (phase == http2_header_observation_phase::field) {
+        ++observed_field_index_;
+    }
+}
+
 int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
+    if (frame_observer_ != nullptr || header_observer_ != nullptr) {
+        observed_frame_ = {};
+        observed_frame_.observation_sequence_ = observed_next_sequence_++;
+        observed_frame_.payload_length_ = static_cast<std::uint32_t>(header.length);
+        observed_frame_.stream_id_ = static_cast<std::uint32_t>(header.stream_id);
+        observed_frame_.type_ = static_cast<http2_frame_type>(header.type);
+        observed_frame_.flags_ = header.flags;
+        observed_payload_remaining_ = header.length;
+        observed_payload_offset_ = 0;
+        observed_scalar_size_ = 0;
+        observed_headers_padding_ = header.type == NGHTTP2_HEADERS &&
+                                    (header.flags & NGHTTP2_FLAG_PADDED) != 0;
+        if (header.type == NGHTTP2_SETTINGS) {
+            observed_frame_.settings_complete_ = header.length % 6 == 0 &&
+                                                 header.length / 6 <= observed_frame_.settings_.size();
+        }
+        if (frame_observer_ != nullptr && header.length == 0) {
+            frame_observer_(observer_context_, observed_frame_);
+        }
+    }
     switch (header.type) {
         case NGHTTP2_HEADERS:
             if (role_ == http2_role::server && (header.stream_id & 1) != 0) {
@@ -471,8 +604,12 @@ int http2_connection::on_begin_frame(const nghttp2_frame_hd& header) {
     return 0;
 }
 
-int http2_connection::on_extension_chunk(const nghttp2_frame_hd&, std::string_view data) {
-    extension_payload_.append(data.data(), data.size());
+int http2_connection::on_extension_chunk(const nghttp2_frame_hd& header, std::string_view data) {
+    if (role_ == http2_role::client &&
+        (header.type == static_cast<std::uint8_t>(http2_frame_type::alternative_service) ||
+            (header.type == static_cast<std::uint8_t>(http2_frame_type::origin) && receive_origin_advertisements_))) {
+        extension_payload_.append(data.data(), data.size());
+    }
     return 0;
 }
 
@@ -519,7 +656,11 @@ int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
             break;
         case static_cast<std::uint8_t>(http2_frame_type::alternative_service):
         case static_cast<std::uint8_t>(http2_frame_type::origin):
-            process_advertisement(frame.hd);
+            if (role_ == http2_role::client &&
+                (frame.hd.type == static_cast<std::uint8_t>(http2_frame_type::alternative_service) ||
+                    receive_origin_advertisements_)) {
+                process_advertisement(frame.hd);
+            }
             break;
         default:
             break;

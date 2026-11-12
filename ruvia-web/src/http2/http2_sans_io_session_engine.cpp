@@ -361,17 +361,28 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
           session_.options().server_.max_inbound_buffer_bytes_per_connection_),
       base_services_(session_.services().with_inbound_buffer_pool(inbound_buffers_)),
       remote_address_(session_.services().get_conn_info().remote().address()),
-      connection_(ruvia::http2_connection::server({.resource_ = process_resource()})),
+      connection_(ruvia::http2_connection::server({.resource_ = process_resource(),
+          .frame_observer_ = session_.options().http2_frame_
+                                 ? +[](void* target, const http2_frame_metadata& metadata) noexcept {
+                                       auto& self = *static_cast<http2_sans_io_session_engine*>(target);
+                                       self.session_.options().http2_frame_(server_observation_access::http2_frame(
+                                           self.base_services_.get_conn_info().id(), metadata));
+                                   }
+                                 : nullptr,
+          .header_observer_ = session_.options().http2_headers_ ? +[](void* target, const http2_header_metadata& metadata) noexcept {
+              auto& self = *static_cast<http2_sans_io_session_engine*>(target);
+              self.session_.options().http2_headers_(server_observation_access::http2_headers(
+                  self.base_services_.get_conn_info().id(), metadata));
+          }
+                                                                : nullptr,
+          .observer_context_ = this})),
       write_signal_(session_.services().worker()),
       output_budget_(session_.services().worker()),
       handler_finished_(session_.services().worker()),
       writer_finished_(session_.services().worker()),
       admission_policy_(http_request_admission_policy::server(session_.options())),
       stream_runtimes_(process_resource(), termination_, &inbound_buffers_),
-      buffered_response_writer_(*this, connection_, stream_runtimes_, write_signal_, output_budget_,
-          response_file_io{.worker_ = session_.services().worker(),
-              .stop_ = session_.services().get_stop_token(),
-              .timeout_ = session_.options().server_.write_timeout_}) {
+      buffered_response_writer_(*this, connection_, stream_runtimes_, write_signal_, output_budget_, response_file_io{.worker_ = session_.services().worker(), .stop_ = session_.services().get_stop_token(), .timeout_ = session_.options().server_.write_timeout_}) {
     // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
     // multiplexed session, not an unadmitted HTTP/1 request-head read.
     base_services_.bind_routes(routes_);
@@ -837,10 +848,23 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                             finish_upgrade_commit(http_status::ok, context_value), handshake->compression(),
                             handshake->subprotocol(), *ruvia::process_resource());
                     };
+                    http2_sans_io_response_stream_sink refusal_sink(connection_, stream_id,
+                        *stream_runtime, write_signal_, *stream_signal, output_budget_,
+                        process_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
+                        options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
+                    auto refusal_writer = make_response_stream_writer(refusal_sink, *process_resource());
+                    auto upgrade_services = dispatch_services;
+                    if (is_request_stream_tunnel_route(resolved->route())) {
+                        upgrade_services.bind_response_stream(refusal_writer);
+                    }
                     auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(
-                        routes_, request, *resolved, request_memory_value, dispatch_services, options,
+                        routes_, request, *resolved, request_memory_value, upgrade_services, options,
                         session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(),
                         std::string_view{}, commit, commit_websocket);
+                    if (refusal_sink.committed()) {
+                        admission.tail().record_access(options.access_log_, committed_response_stream_status(refusal_sink));
+                        co_return;
+                    }
                     if (!buffered) {
                         co_return;
                     }

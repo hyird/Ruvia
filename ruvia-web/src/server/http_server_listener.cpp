@@ -21,6 +21,8 @@ http_server_listener_definition::tls clone_tls(
     }
     result_value.max_outgoing_records_ = source_value.max_outgoing_records_;
     result_value.session_ticket_keys_ = source_value.session_ticket_keys_;
+    result_value.tcp_mode_ = source_value.tcp_mode_;
+    result_value.plaintext_redirect_ = source_value.plaintext_redirect_;
     return result_value;
 }
 

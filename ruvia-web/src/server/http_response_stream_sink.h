@@ -415,8 +415,12 @@ private:
 
         try {
             auto& context_value = state_.bound_context();
+            if (context_access::output_committed(context_value)) {
+                throw std::logic_error("the request's tunnel is already established");
+            }
             auto* const interim_output = context_access::interim_output(context_value);
             auto response = co_await context_access::commit_streaming_head(context_value);
+            validate_response_stream_status(request_, response);
             ensure_peer_writable();
             // The same final-representation order as a buffered response: the
             // application CORS policy first, then content coding.
@@ -444,6 +448,7 @@ private:
                 interim_output->commit_final();
             }
             state_.mark_committed(stream_head.commit_plan());
+            arm_peer_monitor();
         } catch (...) {
             // Representation metadata and protocol framing are one pre-wire
             // transaction. Once either side has failed, no handler retry may
@@ -707,9 +712,9 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     }
     // The cancelled read can deliver a peer end after dispatch already
     // returned. Classify only after joining, when its final result is known.
-    if (response_sink.peer_aborted()) {
+    if (result_value.aborted_before_commit() != nullptr || result_value.aborted_after_commit() != nullptr || response_sink.peer_aborted()) {
         if (!response_sink.committed()) {
-            throw inbound_transport_error(asio::error::eof, "HTTP response stream peer disconnected before commit");
+            throw inbound_transport_error(asio::error::eof, "HTTP response stream aborted before commit");
         }
         co_return http1_session_request_completion::make_truncated_stream(
             response_sink.connection_plan(), committed_response_stream_status(response_sink));

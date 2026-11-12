@@ -266,6 +266,29 @@ template <typename stream_type>
             http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
         co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
     }
+    // The pending bytes remain owned by the HTTP input budget until acceptance
+    // hands them to the tunnel. A refusal uses the ordinary framed sink; its
+    // peer monitor starts only when that refusal is actually committed.
+    http_lazy_buffered_body_route_state<stream_type> body_state;
+    if (const auto setup_failure = try_prepare_http_lazy_buffered_body_route(
+            body_state, d, protocol_byte_limit::unlimited(), pending)) {
+        std::rethrow_exception(setup_failure);
+    }
+    stop_source peer_stop;
+    const stop_group request_stop(d.base_route_services_.get_stop_token(), peer_stop.token());
+    const auto request_stop_token = request_stop.token();
+    d.base_route_services_.bind_stop_token(request_stop_token);
+    http_response_head_buffer refusal_head(std::pmr::polymorphic_allocator<char>{process_resource()});
+    const auto refusal_plan = http1_plan_response_stream(d.parsed_, http1_close_policy::close_after_response,
+        http1_request_body_consumption::complete);
+    response_stream_sink<stream_type> refusal_sink(d.stream_, *d.options_.codecs_, refusal_head, d.scanner_entry_,
+        d.base_route_services_.worker(), d.parsed_.request_, d.cors_, refusal_plan, refusal_plan, body_state.body(),
+        d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,
+        d.inbound_buffer_pool_, peer_stop, d.request_pipelined_);
+    auto refusal_writer = make_response_stream_writer(refusal_sink, *process_resource());
+    if (is_request_stream_tunnel_route(resolved.route())) {
+        d.base_route_services_.bind_response_stream(refusal_writer);
+    }
     std::optional<tls_tunnel_output> tls_output;
     // The TLS output pump must be stopped and joined on every exit, including
     // a handler failure that execute_tunnel_upgrade_session surfaces.
@@ -289,6 +312,14 @@ template <typename stream_type>
     } catch (...) {
         failure = std::current_exception();
     }
+    refusal_sink.retire_peer_monitor();
+    try {
+        co_await refusal_sink.finish_peer_monitor();
+    } catch (...) {
+        if (!failure) {
+            failure = std::current_exception();
+        }
+    }
     if (tls_output) {
         if (failure) {
             tls_output->abort();
@@ -297,6 +328,10 @@ template <typename stream_type>
     }
     if (failure) {
         std::rethrow_exception(failure);
+    }
+    if (refusal_sink.committed()) {
+        co_return http1_session_request_completion::make_committed_stream(
+            refusal_sink.connection_plan().require_close(), committed_response_stream_status(refusal_sink), 0);
     }
     if (buffered) {
         d.response_ = std::move(*buffered);
@@ -651,6 +686,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
     const auto& file_output = session.file_output_;
     const auto remote_address = session.remote_address_;
     constexpr bool plain_tcp = std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>;
+    const auto* redirect = plain_tcp ? listener_value.redirect() : nullptr;
     auto& read_buffer = work_set.read_buffer_;
     auto& parsed_value = work_set.parsed_;
     auto& response_head = work_set.response_head_;
@@ -704,7 +740,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 // completed an HTTP/1 exchange stays HTTP/1, so both refuse
                 // prior-knowledge HTTP/2.
                 const auto preface_probe =
-                    session.served_keepalive_request_ || listener_value.redirect() != nullptr
+                    session.served_keepalive_request_ || redirect != nullptr
                         ? http2_cleartext_preface_probe::http1
                         : probe_http2_cleartext_preface(read_buffer.pending());
                 if (preface_probe == http2_cleartext_preface_probe::complete_preface) {
@@ -762,7 +798,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     },
                     admission_policy, base_route_services));
 
-                if (const auto* redirect = listener_value.redirect()) {
+                if (redirect != nullptr) {
                     if (admission->endpoint() == http_request_endpoint::rejection) {
                         request_rejection = *admission->rejection();
                         break;
@@ -911,7 +947,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
 
             if (const auto* failure = parsed_value.failure()) {
                 if constexpr (plain_tcp) {
-                    if (listener_value.redirect() == nullptr &&
+                    if (redirect == nullptr &&
                         ruvia::should_drop_invalid_cleartext_http1_input(buffer_view, failure->source())) {
                         co_return http_connection_close::abort;
                     }

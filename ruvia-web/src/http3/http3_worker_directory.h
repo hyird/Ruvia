@@ -32,6 +32,8 @@ struct http3_handoff_datagram final {
     std::pmr::vector<std::byte> bytes_;
     asio::ip::udp::endpoint remote_;
     std::uint32_t ecn_{0};
+    asio::ip::udp::endpoint local_;
+    std::uint32_t interface_index_{};
 };
 
 // Slot identities outlive their worker-local endpoint. Another worker can
@@ -137,6 +139,7 @@ public:
     // Any thread. False when the datagram was dropped.
     [[nodiscard]] bool hand_off(std::size_t owner, std::size_t listener_index,
         std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
+        const asio::ip::udp::endpoint& local, std::uint32_t interface_index,
         std::uint32_t ecn = 0) noexcept;
 
 private:

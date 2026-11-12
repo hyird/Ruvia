@@ -93,7 +93,7 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
         const auto plain = first.endpoint().port();
         const auto another = second.endpoint().port();
         server.listen({.address_ = "127.0.0.1", .http_ = plain, .dispatch_ = ruvia::listener_dispatch::request_stream});
-        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .http_ = secure.endpoint().port(), .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
 #if defined(RUVIA_ENABLE_HTTP3)
         tls.http3_ = udp.endpoint().port();
 #endif
@@ -110,7 +110,10 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
             };
             std::vector<target> targets{
                 {"http://127.0.0.1:" + std::to_string(plain), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11},
+                {"http://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11},
+                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11},
 #if defined(RUVIA_ENABLE_HTTP2)
+                {"http://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2},
                 {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2},
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)

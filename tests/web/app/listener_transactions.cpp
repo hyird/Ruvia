@@ -13,6 +13,9 @@
 #include <asio/buffer.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl/context.hpp>
+#include <asio/ssl/stream.hpp>
+#include <asio/write.hpp>
 
 #if !defined(_WIN32)
 #include <fcntl.h>
@@ -173,4 +176,45 @@ TEST(Ruvia, add_listener_prepare_failure_discards_already_adopted_sockets_withou
     EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
     app.stop();
     run.join();
+}
+
+TEST(Ruvia, mixed_listener_adopts_one_physical_socket_group_for_plain_and_tls_raw_dispatch) {
+    const ruvia::test::tls_identity identity("mixed-adopted", "DNS:localhost");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    ruvia::listen_config config{
+        .address_ = "127.0.0.1",
+        .http_ = endpoint.port(),
+        .https_ = endpoint.port(),
+        .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}},
+        .dispatch_ = ruvia::listener_dispatch::connection,
+        .inherited_sockets_ = ruvia::listener_sockets{},
+    };
+#if defined(_WIN32)
+    constexpr std::size_t socket_count = 1;
+#else
+    constexpr std::size_t socket_count = 2;
+#endif
+    for (std::size_t index = 0; index < socket_count; ++index) {
+        config.inherited_sockets_->https_.push_back(inherited_socket(io, endpoint));
+    }
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2}).listen(std::move(config)).on_connection(&serve_connection).on_start(nullptr).on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started.try_acquire_for(10s));
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.load_verify_file(identity.ca_file_.string());
+    client.set_verify_mode(asio::ssl::verify_peer);
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        EXPECT_TRUE(request(io, endpoint).ends_with("ready"));
+        asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+        stream.next_layer().connect(endpoint);
+        stream.handshake(asio::ssl::stream_base::client);
+        asio::write(stream, asio::buffer(std::string_view(
+                                "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")));
+        EXPECT_TRUE(ruvia::test::read_to_end(stream).ends_with("ready"));
+    }
+    app.stop();
+    runner.join();
 }

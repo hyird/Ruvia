@@ -24,6 +24,7 @@
 #include "http/streaming_access.h"
 #include "integration/request_io_metrics.h"
 #include "integration/worker_client_registry_view.h"
+#include "server/connection_lifecycle.h"
 #include "server/trusted_proxies.h"
 
 namespace ruvia {
@@ -77,6 +78,7 @@ struct context_connection_services final {
     // Set for a listener_dispatch::request_stream connection: every request
     // goes to this callback instead of the routes.
     request_stream_callback_ref request_stream_{};
+    connection_lifecycle* lifecycle_{};
 };
 
 // Borrowed protocol channels outlive every context for this request.
@@ -276,6 +278,7 @@ public:
         services.connection_services_.info_ = connection_services_.info_;
         services.connection_services_.inbound_buffer_pool_ = connection_services_.inbound_buffer_pool_;
         services.connection_services_.routes_ = connection_services_.routes_;
+        services.connection_services_.lifecycle_ = connection_services_.lifecycle_;
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
         services.request_services_.io_metrics_ = request_services_.io_metrics_;
         services.request_services_.early_data_ = request_services_.early_data_;
@@ -347,6 +350,25 @@ public:
 
     [[nodiscard]] constexpr tls_served_certificate* served_certificate() const noexcept {
         return connection_services_.served_certificate_;
+    }
+    [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept {
+        const auto* lifecycle = connection_services_.lifecycle_;
+        return lifecycle == nullptr ? std::shared_ptr<void>{} : lifecycle->state();
+    }
+    void abort_connection() const noexcept {
+        if (auto* lifecycle = connection_services_.lifecycle_) {
+            lifecycle->abort();
+        }
+    }
+    [[nodiscard]] bool connection_aborted() const noexcept {
+        const auto* lifecycle = connection_services_.lifecycle_;
+        return lifecycle != nullptr && lifecycle->aborted();
+    }
+    [[nodiscard]] context_services with_connection_lifecycle(connection_lifecycle& lifecycle) const noexcept {
+        auto services = *this;
+        services.connection_services_.lifecycle_ = &lifecycle;
+        services.connection_services_.info_.set_local(lifecycle.local_address(), lifecycle.local_port());
+        return services;
     }
 
     // Views borrow connection-owned storage and remain valid for every context

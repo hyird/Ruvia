@@ -104,6 +104,12 @@ int http2_connection::on_begin_headers(const nghttp2_frame& frame) {
     if (local_connection_state_.fatal_failure() != nullptr) {
         return 0;
     }
+    if (header_observer_ != nullptr) {
+        observed_header_sequence_ = observed_frame_.observation_sequence_;
+        observed_header_stream_ = static_cast<std::uint32_t>(frame.hd.stream_id);
+        observed_field_index_ = 0;
+        observe_header(http2_header_observation_phase::begin);
+    }
     if (frame.hd.type == NGHTTP2_HEADERS && receive_frame_metadata_ &&
         (frame.hd.flags & NGHTTP2_FLAG_PRIORITY) != 0) {
         // RFC 9113 §5.3.2 priority fields are advisory metadata, queued ahead
@@ -217,6 +223,7 @@ int http2_connection::on_header(const nghttp2_frame& frame, std::string_view nam
     if (!header_block_.has_value() || local_connection_state_.fatal_failure() != nullptr) {
         return 0;
     }
+    observe_header(http2_header_observation_phase::field, name, value);
     if (accept_header_field(name, value)) {
         return 0;
     }
@@ -265,6 +272,7 @@ void http2_connection::reject_header_block(std::uint32_t stream_id, bool malform
 }
 
 void http2_connection::finish_header_block(const nghttp2_frame& frame) {
+    observe_header(http2_header_observation_phase::end);
     if (!header_block_.has_value()) {
         return;
     }

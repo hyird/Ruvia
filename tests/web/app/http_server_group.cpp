@@ -7,11 +7,14 @@
 #include <thread>
 
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl/context.hpp>
+#include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/timer.h"
 #include "ruvia/web/http_server.h"
 
+#include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
 #include "test_tls_identity.h"
 #include "udp_port_reservation.h"
@@ -97,6 +100,42 @@ ruvia::listen_config secure(std::uint16_t tcp, std::uint16_t udp, const ruvia::t
     (void)udp;
 #endif
     return config;
+}
+
+template <typename stream_type>
+std::string request_on(stream_type& stream, std::string_view path = "/proxy") {
+    const std::string head = "GET " + std::string(path) +
+                             " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    asio::write(stream, asio::buffer(head));
+    const auto response = ruvia::test::read_to_end(stream);
+    return std::string(response);
+}
+
+std::string tls_request(std::uint16_t port, const ruvia::test::tls_identity& identity) {
+    asio::io_context io;
+    asio::ssl::context context(asio::ssl::context::tls_client);
+    context.load_verify_file(identity.ca_file_.string());
+    context.set_verify_mode(asio::ssl::verify_peer);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, context);
+    stream.next_layer().connect({asio::ip::address_v4::loopback(), port});
+    stream.handshake(asio::ssl::stream_base::client);
+    return request_on(stream);
+}
+
+ruvia::task<void> raw_transport_answer(ruvia::server_connection& connection) {
+    std::string head;
+    while (head.find("\r\n\r\n") == std::string::npos) {
+        const auto bytes = co_await connection.read();
+        if (!bytes) {
+            co_return;
+        }
+        head.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+    }
+    const std::string_view body = connection.tls() != nullptr ? "tls" : "plain";
+    const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " +
+                                 std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + std::string(body);
+    co_await connection.write(std::as_bytes(std::span(response.data(), response.size())));
+    co_await connection.finish();
 }
 }  // namespace server_group_test
 
@@ -359,3 +398,107 @@ TEST(Ruvia, independent_group_shared_http3_endpoint_survives_repeated_migration_
     EXPECT_EQ(group.stats().active_connections_, std::size_t{0});
 }
 #endif
+
+TEST(Ruvia, independent_group_mixed_listener_preserves_transport_during_rotation_readd_and_inheritance) {
+    external_loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto port = reservation.endpoint().port();
+    const ruvia::listener_endpoint target{.address_ = "127.0.0.1", .port_ = port};
+    const ruvia::test::tls_identity first("mixed-group-first", "DNS:localhost");
+    const ruvia::test::tls_identity second("mixed-group-second", "DNS:localhost");
+    auto config = secure(port, 0, first);
+    config.http_ = port;
+    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = &answer});
+    group.start();
+    group.listen(config);
+    auto plaintext = std::async(std::launch::async, [port] { return request(port, "/proxy"); });
+    EXPECT_NE(tls_request(port, first).find("127.0.0.1:direct:https"), std::string::npos);
+    EXPECT_NE(plaintext.get().find("127.0.0.1:direct:http"), std::string::npos);
+    group.replace_tls_identities(target, secure(port, 0, second).tls_);
+    EXPECT_NE(tls_request(port, second).find("127.0.0.1:direct:https"), std::string::npos);
+    group.remove_listener(target);
+    asio::ip::tcp::socket refused(io);
+    asio::error_code error;
+    refused.connect(reservation.endpoint(), error);
+    EXPECT_EQ(error, asio::error::connection_refused);
+    config.tls_ = secure(port, 0, second).tls_;
+    group.listen(config);
+    EXPECT_NE(request(port, "/proxy").find("127.0.0.1:direct:http"), std::string::npos);
+    EXPECT_NE(tls_request(port, second).find("127.0.0.1:direct:https"), std::string::npos);
+#if !defined(_WIN32)
+    auto inherited = group.duplicate_listener_sockets(target);
+    EXPECT_TRUE(inherited.http_.empty());
+    EXPECT_EQ(inherited.https_.size(), 2U);
+#endif
+    group.shutdown();
+    ruvia::http_server_group successor(runtime.loops_, {.request_stream_ = &answer});
+#if !defined(_WIN32)
+    config.inherited_sockets_ = std::move(inherited);
+#endif
+    successor.listen(std::move(config));
+    successor.start();
+    EXPECT_NE(request(port, "/proxy").find("127.0.0.1:direct:http"), std::string::npos);
+    EXPECT_NE(tls_request(port, second).find("127.0.0.1:direct:https"), std::string::npos);
+    successor.shutdown();
+}
+
+TEST(Ruvia, mixed_raw_connection_services_detect_transport_after_single_and_group_adoption) {
+    external_loops runtime;
+    asio::io_context io;
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
+    const auto port = acceptor.local_endpoint().port();
+    const ruvia::listener_endpoint target{.address_ = "127.0.0.1", .port_ = port};
+    const ruvia::test::tls_identity identity("mixed-raw", "DNS:localhost");
+    auto config = secure(port, 0, identity);
+    config.http_ = port;
+    config.dispatch_ = ruvia::listener_dispatch::connection;
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.load_verify_file(identity.ca_file_.string());
+    client.set_verify_mode(asio::ssl::verify_peer);
+
+    ruvia::http_server single(runtime.loops_[0], {.connection_ = &raw_transport_answer});
+    const auto start_single = [&]() -> ruvia::task<void> {
+        single.add_connection_service(config);
+        co_await single.start();
+    };
+    runtime.loops_[0].start(start_single()).get();
+    for (const bool secured : {false, true}) {
+        asio::ip::tcp::socket peer(io);
+        peer.connect(acceptor.local_endpoint());
+        auto accepted = acceptor.accept();
+        const auto adopt = [&]() -> ruvia::task<void> {
+            single.adopt(target, accepted.release());
+            co_return;
+        };
+        runtime.loops_[0].start(adopt()).get();
+        if (secured) {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(peer), client);
+            stream.handshake(asio::ssl::stream_base::client);
+            EXPECT_TRUE(request_on(stream).ends_with("tls"));
+        } else {
+            EXPECT_TRUE(request_on(peer).ends_with("plain"));
+        }
+    }
+    runtime.loops_[0].start(single.shutdown()).get();
+
+    ruvia::http_server_group group(runtime.loops_, {.connection_ = &raw_transport_answer});
+    group.add_connection_service(config);
+    group.start();
+    for (std::size_t worker = 0; worker < group.worker_count(); ++worker) {
+        for (const bool secured : {false, true}) {
+            asio::ip::tcp::socket peer(io);
+            peer.connect(acceptor.local_endpoint());
+            auto accepted = acceptor.accept();
+            group.adopt(worker, target, accepted.release());
+            if (secured) {
+                asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(peer), client);
+                stream.handshake(asio::ssl::stream_base::client);
+                EXPECT_TRUE(request_on(stream).ends_with("tls"));
+            } else {
+                EXPECT_TRUE(request_on(peer).ends_with("plain"));
+            }
+        }
+    }
+    group.shutdown();
+}

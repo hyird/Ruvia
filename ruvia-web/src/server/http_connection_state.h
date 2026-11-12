@@ -26,6 +26,7 @@
 #include "integration/request_io_metrics.h"
 #include "router/route_resolution.h"
 #include "server/connection_count.h"
+#include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {
 
@@ -156,13 +157,22 @@ make_connection_work_set(std::size_t arena_bytes);
 // and releases the count second.
 class accepted_connection_lease final {
 public:
-    accepted_connection_lease(asio::ip::tcp::socket socket, connection_count& count) noexcept
+    accepted_connection_lease(asio::ip::tcp::socket socket, connection_count& count,
+        connection_lifecycle lifecycle) noexcept
         : slot_(count),
-          socket_(std::move(socket)) {}
+          socket_(std::move(socket)),
+          lifecycle_(std::move(lifecycle)) {
+        lifecycle_.bind_transport(connection_transport::tcp(socket_));
+    }
 
     accepted_connection_lease(const accepted_connection_lease&) = delete;
     accepted_connection_lease& operator=(const accepted_connection_lease&) = delete;
-    accepted_connection_lease(accepted_connection_lease&& other) noexcept = default;
+    accepted_connection_lease(accepted_connection_lease&& other) noexcept
+        : slot_(std::move(other.slot_)),
+          socket_(std::move(other.socket_)),
+          lifecycle_(std::move(other.lifecycle_)) {
+        lifecycle_.bind_transport(connection_transport::tcp(socket_));
+    }
     accepted_connection_lease& operator=(accepted_connection_lease&&) = delete;
 
     ~accepted_connection_lease() {
@@ -178,11 +188,15 @@ public:
         return socket_;
     }
     asio::ip::tcp::socket& socket() && = delete;
+    [[nodiscard]] connection_lifecycle& lifecycle() noexcept {
+        return lifecycle_;
+    }
 
 private:
     // Declared first: released after the socket closes.
     connection_slot slot_;
     asio::ip::tcp::socket socket_;
+    connection_lifecycle lifecycle_;
 };
 
 }  // namespace ruvia::detail

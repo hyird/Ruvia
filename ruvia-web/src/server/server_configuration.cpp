@@ -119,6 +119,23 @@ http_server_listener_definition validate_run_listener(const http_server_listener
     if (const auto* redirect = std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener.transport_)) {
         detail::ensure_non_zero_port(redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }
+    if (const auto* tls = std::get_if<http_server_listener_definition::tls>(&listener.transport_)) {
+        switch (tls->tcp_mode_) {
+            case http_server_listener_definition::tls_tcp_mode::tls_only:
+                if (tls->plaintext_redirect_) {
+                    throw std::invalid_argument("a plaintext redirect requires a mixed HTTP/HTTPS listener");
+                }
+                break;
+            case http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls:
+                if (tls->plaintext_redirect_) {
+                    detail::ensure_non_zero_port(
+                        tls->plaintext_redirect_->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
+                }
+                break;
+            default:
+                throw std::invalid_argument("invalid TLS TCP transport mode");
+        }
+    }
     if (listener.connection_.has_value() && !options.connection_) {
         throw std::invalid_argument("listener_dispatch::connection requires application::on_connection()");
     }

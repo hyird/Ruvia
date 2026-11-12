@@ -1,13 +1,20 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include <asio/ip/address.hpp>
+
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/web/detail/callback.h"
 
 namespace ruvia {
 
@@ -19,15 +26,75 @@ namespace ruvia {
 // narrows through the ANSI code page. In-memory PEM serves HTTPS listeners
 // only: database, Redis and HTTP clients read identity files and reject it.
 // A non-empty password decrypts the key; its binary bytes, including
-// embedded NUL, are preserved. application::listen() and
-// replace_tls_identities() parse the identity once and cleanse their own
-// copies of the password and of the in-memory PEM text before returning.
+// embedded NUL, are preserved. application::listen(),
+// replace_tls_identities() and tls_certificate_store::insert_or_assign()
+// parse once and cleanse their own password and PEM copies before returning.
 struct tls_identity_config final {
     std::filesystem::path certificate_chain_file_{};
     std::filesystem::path private_key_file_{};
     std::pmr::string certificate_chain_pem_{process_resource()};
     std::pmr::string private_key_pem_{process_resource()};
     std::pmr::string private_key_password_{process_resource()};
+};
+
+using tls_certificate_id = std::uint64_t;
+
+// Immutable ClientHello views, valid only during the selection callback.
+// Wire lists use network-byte-order uint16 pairs, except alpn_ which is the
+// RFC 7301 ProtocolNameList. Absent extensions have empty views. No OpenSSL
+// object, file access or borrowed application identity is needed.
+struct tls_certificate_selection final {
+    std::uint64_t connection_id_{};
+    std::string_view remote_address_;
+    std::uint16_t remote_port_{};
+    std::string_view server_name_;
+    std::optional<asio::ip::address> local_address_;
+    std::uint16_t local_port_{};
+    bool quic_{};
+    std::uint16_t legacy_version_{};
+    std::span<const std::byte> cipher_suites_;
+    std::span<const std::byte> signature_algorithms_;
+    std::span<const std::byte> supported_versions_;
+    std::span<const std::byte> supported_groups_;
+    std::span<const std::byte> alpn_;
+
+    [[nodiscard]] bool offers_signature_algorithm(std::uint16_t algorithm) const noexcept;
+};
+
+// nullopt rejects the handshake. Exceptions and IDs absent from the snapshot
+// also fail closed, including on resumed handshakes. Calls may run concurrently
+// on different workers; the callable must synchronize its own mutable state.
+using tls_certificate_selector =
+    detail::callback<std::optional<tls_certificate_id>(const tls_certificate_selection&)>;
+
+namespace detail {
+struct tls_certificate_store_access;
+}
+
+// Thread-safe, independently usable certificate library. A mutation parses only
+// its one identity, then atomically publishes an immutable snapshot. Failed
+// updates leave the library unchanged. Handshakes capture a snapshot before
+// calling the selector: replacing/erasing its selected ID cannot invalidate
+// that handshake. Established connections retain their OpenSSL references.
+// Copies are deliberately disabled; tls_config retains shared ownership.
+class tls_certificate_store final {
+public:
+    tls_certificate_store();
+    ~tls_certificate_store();
+    tls_certificate_store(const tls_certificate_store&) = delete;
+    tls_certificate_store& operator=(const tls_certificate_store&) = delete;
+
+    // ID zero is reserved and rejected. The value parameter is the library's
+    // own copy; its password and PEM bytes are cleansed even on failure.
+    void insert_or_assign(tls_certificate_id id, tls_identity_config identity);
+    [[nodiscard]] bool erase(tls_certificate_id id);
+    [[nodiscard]] bool contains(tls_certificate_id id) const noexcept;
+    [[nodiscard]] std::size_t size() const noexcept;
+
+private:
+    friend struct detail::tls_certificate_store_access;
+    struct state;
+    std::unique_ptr<state> state_;
 };
 
 enum class client_tls_mode : std::uint8_t {
@@ -88,9 +155,9 @@ struct tls_sni_config final {
 // equals its IPv4 form), when the client sent no server_name or one matching
 // no sni_ entry -- typically a listener bound to a wildcard address serving
 // clients that connect by IP literal, which RFC 6066 forbids naming in SNI.
-// TLS over TCP matches the address the client connected to. HTTP/3 knows only
-// the address its UDP socket is bound to, so its connections match only on a
-// listener bound to that specific address.
+// Both TLS over TCP and HTTP/3 use the actual destination address, including
+// wildcard listeners; QUIC retains packet destination/interface information
+// when handing datagrams between workers and selecting the reply source.
 struct tls_local_address_config final {
     std::pmr::string address_{process_resource()};
     tls_identity_config identity_{};
@@ -100,8 +167,8 @@ struct tls_local_address_config final {
 // TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
 // renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. The paired
 // HTTP/3 service (listen_config::http3_) uses the same identities over QUIC
-// with TLS 1.3 only and ALPN h3 only. Each handshake selects its identity
-// once, when its ClientHello is processed: an exact sni_ host, else a
+// with TLS 1.3 only and ALPN h3 only. Without certificate_store_, each handshake
+// selects once, when its ClientHello is processed: an exact sni_ host, else a
 // wildcard sni_ host, else a local_addresses_ entry, else the primary
 // identity_. A client offering no server_name, or one matching nothing, is
 // thus still served: a product choice for single-certificate and wildcard
@@ -132,6 +199,14 @@ struct tls_config final {
     // offering no ALPN completes it without a protocol. A routes listener
     // negotiates its own HTTP versions and rejects a non-empty list.
     std::pmr::vector<std::pmr::string> alpn_{process_resource()};
+    // Optional live library, shared by every worker and both TLS transports.
+    // With a library, fixed identity_/sni_/local_addresses_ must be empty.
+    // Without a selector, default_certificate_ selects an ID. A selector must
+    // be paired with a library and completely replaces fixed selection.
+    // Updating the library never rebuilds contexts, ticket keys or caches.
+    std::shared_ptr<tls_certificate_store> certificate_store_;
+    std::shared_ptr<const tls_certificate_selector> select_certificate_;
+    tls_certificate_id default_certificate_{};
 };
 
 }  // namespace ruvia

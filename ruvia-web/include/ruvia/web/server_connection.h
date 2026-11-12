@@ -34,6 +34,7 @@ struct server_connection_fields final {
     std::string_view remote_address_;
     std::uint16_t remote_port_;
     std::optional<tls_type> tls_;
+    const std::shared_ptr<void>* state_{};
 };
 }  // namespace detail
 
@@ -90,6 +91,9 @@ public:
         return worker_;
     }
     const worker_handle& worker() const&& = delete;
+    [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept {
+        return state_ == nullptr ? std::shared_ptr<void>{} : *state_;
+    }
 
     // The next bytes the peer sent, at most 4 KiB; std::nullopt once the peer
     // ended its send direction (TCP FIN or TLS close_notify, or TCP closed
@@ -132,6 +136,7 @@ private:
     conn_info::endpoint remote_;
     std::optional<tls_connection_transport> tls_;
     ::ruvia::stop_token stop_token_;
+    const std::shared_ptr<void>* state_;
     bool read_active_{false};
     bool write_active_{false};
     bool send_ended_{false};

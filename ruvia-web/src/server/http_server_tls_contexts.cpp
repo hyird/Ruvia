@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -22,6 +23,7 @@
 
 #include "auth/constant_time.h"
 #include "server/http_server_tls_identity.h"
+#include "tls/tls_certificate_store.h"
 #include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
@@ -69,6 +71,9 @@ int local_address_index() noexcept {
     return index;
 }
 
+bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
+    std::string_view server_name, int* alert) noexcept;
+
 // OpenSSL reports each inbound handshake message once it is reassembled and
 // before it processes it, so a ClientHello reaches the observer before the
 // client hello, server_name and certificate callbacks run.
@@ -80,7 +85,7 @@ void deliver_client_hello(int writing, int content_type, const void* bytes, std:
     }
     const auto* observation = static_cast<const tls_client_hello_observation*>(
         SSL_get_ex_data(ssl, client_hello_observation_index()));
-    if (observation == nullptr) {
+    if (observation == nullptr || !observation->callback_) {
         return;
     }
     auto fields = observation->fields_;
@@ -146,12 +151,13 @@ int select_connection_alpn_protocol(SSL*, const unsigned char** out, unsigned ch
 // contexts match, so any other name, or none, gets a full handshake (RFC 9846
 // §4.6.1 permits declining such a PSK). Names longer than a context are bound
 // by their SHA-256 digest.
-int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
+int bind_session_to_server_name(SSL* ssl, int* alert, void* argument) noexcept {
     // Without server_name: one NUL byte, which no host name contains.
     std::array<unsigned char, SSL_MAX_SID_CTX_LENGTH> context{};
     std::size_t context_size = 1;
     const unsigned char* extension = nullptr;
     std::size_t extension_size = 0;
+    std::string_view server_name;
     if (SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &extension, &extension_size) == 1) {
         // One non-empty host_name entry: any other ServerNameList shape fails
         // the handshake before OpenSSL could resume a session under it.
@@ -165,6 +171,7 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
             *alert = SSL_AD_DECODE_ERROR;
             return SSL_CLIENT_HELLO_ERROR;
         }
+        server_name = std::string_view(reinterpret_cast<const char*>(extension + 5), name_size);
         if (name_size <= context.size()) {
             for (std::size_t i = 0; i < name_size; ++i) {
                 context[i] = http_ascii_to_lower(extension[5 + i]);
@@ -188,28 +195,89 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
         *alert = SSL_AD_INTERNAL_ERROR;
         return SSL_CLIENT_HELLO_ERROR;
     }
+    if (!select_handshake_certificate(ssl, *static_cast<http_server_session_config*>(argument), server_name, alert)) {
+        return SSL_CLIENT_HELLO_ERROR;
+    }
     return SSL_CLIENT_HELLO_SUCCESS;
 }
 
-// RFC 6066 §3: each handshake selects its identity once its server_name is
-// known, from the set its worker holds now, and installs it on its own SSL;
-// the ClientHello after a HelloRetryRequest keeps the identity the first one
-// selected. The name is acknowledged whenever it was offered, since it also
-// binds resumption (bind_session_to_server_name). Serving an unrecognized
-// name the primary identity, rather than RFC 9325 §3.7's unrecognized_name
-// alert, is a product choice documented on tls_config.
-int select_tls_identity(SSL* ssl, int* alert, void* arg) noexcept {
+// OpenSSL supplies the extension bytes. Strip only their length prefix, not
+// a second ClientHello parser; OpenSSL retains all protocol validation.
+std::span<const std::byte> client_hello_list(SSL* ssl, unsigned int type, std::size_t prefix) {
+    const unsigned char* bytes = nullptr;
+    std::size_t size = 0;
+    if (SSL_client_hello_get0_ext(ssl, type, &bytes, &size) != 1) {
+        return {};
+    }
+    if (size < prefix) {
+        throw std::invalid_argument("malformed TLS selection extension");
+    }
+    const auto length = prefix == 1 ? static_cast<std::size_t>(bytes[0])
+                                    : static_cast<std::size_t>((bytes[0] << 8) | bytes[1]);
+    if (length != size - prefix) {
+        throw std::invalid_argument("malformed TLS selection extension length");
+    }
+    return {reinterpret_cast<const std::byte*>(bytes + prefix), length};
+}
+
+// Runs before session lookup, so neither resumption nor missing SNI bypasses a
+// selector rejection. A HelloRetryRequest retains the first selected identity.
+bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
+    std::string_view server_name, int* alert) noexcept {
     if (SSL_get_certificate(ssl) != nullptr) {
-        return SSL_TLSEXT_ERR_OK;
+        return true;
     }
-    const auto* tls = static_cast<const http_server_session_config*>(arg)->tls();
-    const char* name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
-    const auto* local_address = static_cast<const asio::ip::address*>(SSL_get_ex_data(ssl, local_address_index()));
-    const auto& identity = tls->identities_->select(name == nullptr ? std::string_view() : std::string_view(name), local_address);
-    if (!identity.present(*ssl)) {
+    const auto& identities = *session.tls()->identities_;
+    const auto* local = static_cast<const asio::ip::address*>(SSL_get_ex_data(ssl, local_address_index()));
+    try {
+        if (!identities.certificate_store_) {
+            if (identities.select(server_name, local).present(*ssl)) {
+                return true;
+            }
+        } else {
+            // Capture before calling user code: even a concurrent replacement
+            // or a mutation made inside the callback cannot change this choice.
+            const auto snapshot = tls_certificate_store_access::snapshot(*identities.certificate_store_);
+            std::optional<tls_certificate_id> selected = identities.default_certificate_;
+            if (identities.select_certificate_) {
+                const auto* binding = static_cast<const tls_client_hello_observation*>(
+                    SSL_get_ex_data(ssl, client_hello_observation_index()));
+                if (!binding || binding->fields_.connection_id_ == 0 || local == nullptr) {
+                    throw std::logic_error("TLS certificate selector requires connection metadata");
+                }
+                const unsigned char* ciphers = nullptr;
+                const auto cipher_size = SSL_client_hello_get0_ciphers(ssl, &ciphers);
+                const tls_certificate_selection input{
+                    .connection_id_ = binding->fields_.connection_id_,
+                    .remote_address_ = binding->fields_.remote_address_,
+                    .remote_port_ = binding->fields_.remote_port_,
+                    .server_name_ = server_name,
+                    .local_address_ = local ? std::optional(*local) : std::nullopt,
+                    .local_port_ = binding->fields_.local_port_,
+                    .quic_ = binding->fields_.quic_,
+                    .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)),
+                    .cipher_suites_ = {reinterpret_cast<const std::byte*>(ciphers), cipher_size},
+                    .signature_algorithms_ = client_hello_list(ssl, TLSEXT_TYPE_signature_algorithms, 2),
+                    .supported_versions_ = client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1),
+                    .supported_groups_ = client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2),
+                    .alpn_ = client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2)};
+                selected = (*identities.select_certificate_)(input);
+            }
+            if (selected) {
+                if (const auto found = snapshot->find(*selected); found != snapshot->end() && found->second->present(*ssl)) {
+                    return true;
+                }
+            }
+        }
+    } catch (...) {
         *alert = SSL_AD_INTERNAL_ERROR;
-        return SSL_TLSEXT_ERR_ALERT_FATAL;
+        return false;
     }
+    *alert = SSL_AD_ACCESS_DENIED;
+    return false;
+}
+
+int acknowledge_server_name(SSL*, int*, void*) noexcept {
     return SSL_TLSEXT_ERR_OK;
 }
 
@@ -260,10 +328,10 @@ void configure_family(http_server_session_config& session, tls_context_family fa
     session.ticket_keys_->install(*native);
     // The client hello callback runs before OpenSSL looks up the offered
     // session, which the server_name callback would be too late for.
-    SSL_CTX_set_client_hello_cb(native, &bind_session_to_server_name, nullptr);
+    SSL_CTX_set_client_hello_cb(native, &bind_session_to_server_name, &session);
     // The session outlives every SSL of its contexts, which its worker joins
     // before retiring them.
-    SSL_CTX_set_tlsext_servername_callback(native, &select_tls_identity);
+    SSL_CTX_set_tlsext_servername_callback(native, &acknowledge_server_name);
     SSL_CTX_set_tlsext_servername_arg(native, &session);
 }
 
@@ -338,6 +406,11 @@ void bind_tls_local_address(SSL& tls, const asio::ip::address& local_address) {
     if (index < 0 || SSL_set_ex_data(&tls, index, const_cast<asio::ip::address*>(&local_address)) != 1) {
         throw std::runtime_error("failed to attach the TLS connection's local address");
     }
+}
+
+bool tls_certificate_selection_enabled(const http_server_session_config& session) noexcept {
+    const auto* tls = session.tls();
+    return tls != nullptr && static_cast<bool>(tls->identities_->select_certificate_);
 }
 
 void observe_tls_client_hello(SSL& tls, const tls_client_hello_observation& observation) {

@@ -31,6 +31,7 @@
 #include "http3/http3_response_write.h"
 #include "http3/http3_stream.h"
 #include "server/connection_count.h"
+#include "server/connection_lifecycle.h"
 #include "server/connection_scanner.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_tls_contexts.h"
@@ -74,8 +75,8 @@ public:
     // ID as original_destination_connection_id.
     http3_session(http3_endpoint& endpoint, connection_slot slot, const ngtcp2_pkt_hd& initial,
         const asio::ip::udp::endpoint& remote, const ngtcp2_cid& original_dcid,
-        std::optional<ngtcp2_cid> retry_scid = std::nullopt,
-        std::span<const std::uint8_t> retry_token = {});
+        std::optional<ngtcp2_cid> retry_scid, std::span<const std::uint8_t> retry_token,
+        connection_lifecycle lifecycle);
     ~http3_session();
 
     http3_session(const http3_session&) = delete;
@@ -84,7 +85,8 @@ public:
     http3_session& operator=(http3_session&&) = delete;
 
     // One datagram for this connection, from `remote`.
-    void receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote) noexcept;
+    void receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote,
+        const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
     [[nodiscard]] task<void> run();
     // Ends the connection now: CONNECTION_CLOSE(H3_NO_ERROR), streams
     // cancelled, no closing period. The scanner's close action.
@@ -171,15 +173,18 @@ private:
     http3_endpoint& endpoint_;
     const http3_worker_services& services_;
     connection_slot slot_;
+    connection_lifecycle connection_lifecycle_;
     // conn_info::id() of this connection.
     std::uint64_t connection_id_;
     asio::ip::udp::endpoint local_;
-    // The address identity selection matches local-address identities
-    // against: the UDP socket's bound address. tls_ borrows it.
+    // The actual destination address of the Initial, including wildcard-bound
+    // listeners. TLS identity selection borrows this stable address.
     asio::ip::address tls_local_address_;
     asio::ip::udp::endpoint remote_;
     // The sender of the datagram being read, for its ngtcp2 path.
     asio::ip::udp::endpoint path_remote_;
+    asio::ip::udp::endpoint path_local_;
+    std::uint32_t path_interface_index_;
     std::pmr::string remote_address_;
     // Present only with an on_tls_client_hello observer; tls_ borrows it, so
     // it is declared before tls_.

@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 
+#include "ruvia/web/connection_events.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
@@ -74,6 +75,16 @@ struct server_observation_access final {
         std::uint64_t connection_id, std::span<const std::byte> bytes) noexcept {
         return http2_input_record(connection_id, bytes);
     }
+#if defined(RUVIA_ENABLE_HTTP2)
+    [[nodiscard]] static constexpr http2_frame_record http2_frame(
+        std::uint64_t connection_id, const http2_frame_metadata& metadata) noexcept {
+        return http2_frame_record(connection_id, metadata);
+    }
+    [[nodiscard]] static constexpr http2_headers_record http2_headers(
+        std::uint64_t connection_id, const http2_header_metadata& metadata) noexcept {
+        return http2_headers_record(connection_id, metadata);
+    }
+#endif
 };
 
 // The connection level's failure outlet. An unset callback still reports: the
@@ -177,6 +188,13 @@ struct http_server_options final {
     // Empty observers keep the connection paths free of observation work.
     tls_client_hello_callback_ref tls_client_hello_{};
     http2_input_callback_ref http2_input_{};
+#if defined(RUVIA_ENABLE_HTTP2)
+    http2_frame_callback_ref http2_frame_{};
+    http2_headers_callback_ref http2_headers_{};
+#endif
+    connection_admission_callback_ref connection_admission_{};
+    connection_open_callback_ref connection_open_{};
+    connection_close_callback_ref connection_close_{};
     // Serves every listener_dispatch::connection listener; run() requires it
     // when one exists.
     connection_callback_ref connection_{};

@@ -140,6 +140,8 @@ public:
     // It first binds that socket to this worker's execution context.
     void adopt_connection(std::size_t index, native_socket socket);
     [[nodiscard]] http_server_stats stats() const noexcept;
+    // Owning worker only; false for an unknown or retired connection ID.
+    [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
 #if defined(_WIN32)
     // This worker as the acceptor's hand-over target.
     [[nodiscard]] windows_acceptor::business_worker acceptor_target() noexcept;
@@ -259,6 +261,7 @@ private:
     // Caller-thread statistics and the Windows acceptor's balancing read it.
     connection_count connection_count_;
     connection_id_sequence connection_ids_;
+    connection_registry registry_;
     std::atomic<std::size_t> refused_{};
     std::atomic<std::size_t> failures_{};
     std::atomic<std::size_t> accept_failures_{};

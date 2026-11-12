@@ -348,6 +348,27 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **`ORIGIN` / `ALTSVC` 通告**：作为 `nghttp2` 扩展帧发送，载荷上限为对端 `SETTINGS_MAX_FRAME_SIZE` 与 16384 字节（`nghttp2` 扩展帧缓冲）中的较小者，超出返回 `invalid_message`。
 - **`SETTINGS_ENABLE_CONNECT_PROTOCOL`**：服务端收到 0 或 1 不产生任何影响（RFC 8441 §3）；任一角色收到 0、1 以外的取值都是 `PROTOCOL_ERROR` 连接错误。客户端仍校验服务端发送的 1→0 回退。
 
+##### 4.2.1 帧与字段观察
+
+`"ruvia/http/http2_observation.h"` 提供同步、只读的协议解析事实，与 `receive_frame_metadata_` 的已应用事件独立。
+
+| `http2_connection_options` 字段 | 契约 |
+| --- | --- |
+| `frame_observer_` | `void(void*, const http2_frame_metadata&) noexcept`；帧完整到达后、最后一段载荷送入协议处理前交付 |
+| `header_observer_` | `void(void*, const http2_header_metadata&) noexcept`；按 HPACK 解码器输出次序交付字段节 |
+| `observer_context_` | 回调上下文，借用至连接销毁；两个观察器共用 |
+
+| 记录 | 可观察事实 |
+| --- | --- |
+| `http2_frame_metadata` | `observation_sequence_`、载荷长度、流 ID、帧类型与 `nghttp2` 规范化后的 flags；原始 SETTINGS 次序（含未知、重复 ID），WINDOW_UPDATE 增量，独立 PRIORITY 或 HEADERS 的依赖/独占/权重 |
+| `settings()` / `settings_complete_` | 借用内联条目；超过既有 32 项帧预算或载荷不按六字节对齐时标记不完整，不改变协议拒绝规则 |
+| `http2_header_metadata` | `begin / field / end` 阶段、流 ID、字段下标、首帧与当前帧观察序号、字段名和值；保留伪首部与普通字段的实际输出次序，CONTINUATION 不另起字段节 |
+
+- **序号范围**：从前言后的 0 开始，只计算 `nghttp2` 暴露的帧头，包含 ACK、未知扩展与 CONTINUATION；预先丢弃的帧（如已重置流上的 DATA）不计数，不是绝对线上帧号。
+- **验证边界**：观察不表示协议接受；字段交付先于 HTTP 语义校验，无效字段节可能没有 `end` 或后续字段。flags 不保留解析器剔除的保留位。
+- **借用与重入**：回调仅在 `feed()` 内同步执行，记录及字段视图仅在回调期间有效；返回前不得修改、重入、移动或销毁该连接。
+- **关闭成本**：空观察器不保留输入、不增加分配或分帧工作；开启时仍使用同一 `nghttp2` 分帧与 HPACK 主链，不另建解析器。
+
 
 #### 4.3 HTTP/3、QPACK 与 QUIC（`"ruvia/http/http3_connection.h"`, `"ruvia/http/http3_quic_connection.h"`）
 

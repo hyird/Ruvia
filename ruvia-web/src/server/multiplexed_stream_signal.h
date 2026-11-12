@@ -555,7 +555,11 @@ private:
         throw_if_terminated();
         throw_if_body_failed();
         try {
+            if (context_access::output_committed(state_.bound_context())) {
+                throw std::logic_error("the request's tunnel is already established");
+            }
             auto response = co_await context_access::commit_streaming_head(state_.bound_context());
+            validate_response_stream_status(context_access::request(state_.bound_context()), response);
             if (cors_ != nullptr) {
                 apply_cors_headers(context_access::request(state_.bound_context()), response, *cors_);
             }
@@ -727,7 +731,7 @@ template <typename reset_type>
     const http_server_options& options, std::string_view remote_address,
     http_response_tail& tail, http_response& response, bool& body_failure_handled,
     reset_type&& reset_stream) {
-    if (result_value.peer_aborted_before_commit() != nullptr) {
+    if (result_value.aborted_before_commit() != nullptr) {
         return true;
     }
     if (const auto committed_status = result_value.committed_status()) {

@@ -56,6 +56,9 @@ public:
           cancel_(cancel_action) {}
 
     [[nodiscard]] static connection_transport tcp(asio::ip::tcp::socket& socket) noexcept;
+    [[nodiscard]] bool valid() const noexcept {
+        return target_ != nullptr;
+    }
 
     void close() const noexcept {
         close_(target_);

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <span>
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
+#include "ruvia/web/connection_events.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/server_connection.h"
@@ -24,6 +26,13 @@ struct http_server_callbacks final {
     connection_failure_callback connection_failure_;
     tls_client_hello_callback tls_client_hello_;
     http2_input_callback http2_input_;
+#if defined(RUVIA_ENABLE_HTTP2)
+    http2_frame_callback http2_frame_;
+    http2_headers_callback http2_headers_;
+#endif
+    connection_admission_callback connection_admission_;
+    connection_open_callback connection_open_;
+    connection_close_callback connection_close_;
 };
 
 // One inbound service host on a caller-owned event loop. No application,
@@ -78,6 +87,11 @@ public:
     listener_sockets duplicate_listener_sockets(const listener_endpoint&) const&& = delete;
 #endif
 
+    // Owner loop, while running. Requests whole-connection termination, not
+    // merely a stream reset. False means no live connection has this ID.
+    [[nodiscard]] bool close_connection(std::uint64_t connection_id) &;
+    bool close_connection(std::uint64_t) && = delete;
+
     // Any thread; cancels only this host, not unrelated work on the loop.
     // Destruction requests the same close. The loop must keep running until
     // shutdown completes, or its own retirement has joined the stop callback.
@@ -123,6 +137,10 @@ public:
 #endif
     // Explicit target worker; takes socket ownership even when rejected.
     void adopt(std::size_t worker_index, const listener_endpoint& service, native_socket socket) &;
+    // Blocking external control, as remove_listener(). IDs never name a
+    // different connection after retirement; false means the ID is not live.
+    [[nodiscard]] bool close_connection(std::uint64_t connection_id) &;
+    bool close_connection(std::uint64_t) && = delete;
     void close() noexcept;
     void shutdown() &;
     [[nodiscard]] http_server_stats stats() const noexcept;

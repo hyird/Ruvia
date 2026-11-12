@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <condition_variable>
 #include <cstddef>
@@ -86,7 +87,9 @@ void cleanse_identity(tls_identity_config& identity) noexcept {
            !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() ||
            !identity.private_key_password_.empty() || config.client_certificates_.ca_file_.has_value() ||
            config.client_certificates_.requirement_ != tls_client_certificate_requirement::optional ||
-           !config.sni_.empty() || !config.local_addresses_.empty();
+           !config.sni_.empty() || !config.local_addresses_.empty() ||
+           config.certificate_store_ != nullptr || static_cast<bool>(config.select_certificate_) ||
+           config.default_certificate_ != 0;
 }
 
 // listen() and replace_tls_identities() own their tls_config, the only copy
@@ -164,9 +167,7 @@ void append_listen_config(
     }
     detail::ensure_non_zero_optional_port(config.http_, "HTTP listen port must not be zero");
     detail::ensure_non_zero_optional_port(config.https_, "HTTPS listen port must not be zero");
-    if (config.http_.has_value() && config.http_ == config.https_) {
-        throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
-    }
+    const bool mixed = config.http_.has_value() && config.http_ == config.https_;
     if (config.auto_https_redirect_ &&
         (!config.http_.has_value() || !config.https_.has_value())) {
         throw std::invalid_argument(
@@ -216,7 +217,7 @@ void append_listen_config(
         }
     };
 
-    if (config.http_.has_value()) {
+    if (config.http_.has_value() && !mixed) {
         const auto endpoint = asio::ip::tcp::endpoint(address, config.http_->value());
         ensure_unique_endpoint(endpoint);
         if (config.auto_https_redirect_) {
@@ -239,6 +240,13 @@ void append_listen_config(
         // Credentials load once, here; the definition keeps no identity file
         // name, in-memory PEM or password.
         auto tls = detail::load_http_server_tls(config.tls_, replacement.get_allocator().resource());
+        if (mixed) {
+            tls.tcp_mode_ = detail::http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls;
+            if (config.auto_https_redirect_) {
+                tls.plaintext_redirect_.emplace(
+                    detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
+            }
+        }
         replacement.emplace_back(endpoint, std::move(tls), std::move(http3));
         replacement.back().request_stream_ = config.dispatch_ == listener_dispatch::request_stream;
         if (connection_alpn.has_value()) {
@@ -328,6 +336,9 @@ void adopt_inherited_sockets(std::span<detail::http_server_listener_definition> 
         return;
     }
     const auto& sockets = *config.inherited_sockets_;
+    if (config.http_.has_value() && config.http_ == config.https_ && !sockets.http_.empty()) {
+        throw std::invalid_argument("a mixed HTTP/HTTPS listener inherits its single TCP socket group in https_, not http_");
+    }
     if ((!sockets.http_.empty() && !config.http_.has_value()) || (!sockets.https_.empty() && !config.https_.has_value()) ||
         (!sockets.http3_.empty() && !config.http3_.has_value())) {
         throw std::invalid_argument("inherited listener sockets require their service's listen port");
@@ -374,8 +385,10 @@ void append_listen_configs(
     ensure_distinct_inherited_sockets(configs);
     std::size_t endpoint_count = 0;
     for (const auto& config : configs) {
-        endpoint_count +=
-            static_cast<std::size_t>(config.http_.has_value()) + static_cast<std::size_t>(config.https_.has_value());
+        endpoint_count += config.http_.has_value() && config.http_ == config.https_
+                              ? 1
+                              : static_cast<std::size_t>(config.http_.has_value()) +
+                                    static_cast<std::size_t>(config.https_.has_value());
     }
     replacement.reserve(replacement.size() + endpoint_count);
     for (const auto& config : configs) {
@@ -695,12 +708,12 @@ void application::replace_tls_identities(const listener_endpoint& endpoint, tls_
         std::lock_guard lock(state_->mutex_);
         (void)find_replaceable_tls_listener(*state_, target, config);
     }
+    // Retired selectors may run user destructors; release after the control lock.
+    std::shared_ptr<const detail::http_server_tls_identities> retired;
     const std::lock_guard serialized(state_->runtime_control_mutex_);
     // Credentials load on this thread, outside the application lock, before
     // anything changes.
     auto identities = detail::load_http_server_tls_identities(config, process_resource());
-    // Destroyed, with the set it replaced, after the lock.
-    std::shared_ptr<const detail::http_server_tls_identities> retired;
     bool published = false;
     {
         runtime_control_publication publication;
@@ -725,6 +738,41 @@ void application::replace_tls_identities(const listener_endpoint& endpoint, tls_
     if (!published) {
         throw std::logic_error("the app began stopping before every worker adopted the TLS identities");
     }
+}
+
+bool application::close_connection(std::uint64_t connection_id) {
+    constexpr const char* not_running = "connections can be closed only while the app is running";
+    constexpr const char* worker_thread = "connections cannot be closed from a business worker thread: use context::abort_connection";
+    {
+        std::lock_guard lock(state_->mutex_);
+        (void)running_runtime(*state_, not_running, worker_thread);
+    }
+    const std::lock_guard serialized(state_->runtime_control_mutex_);
+    std::atomic<bool> closed{false};
+    runtime_control_publication publication;
+    bool posted = false;
+    std::size_t worker_count = 0;
+    {
+        control_list controls(process_resource());
+        std::lock_guard lock(state_->mutex_);
+        auto& runtime = running_runtime(*state_, not_running, worker_thread);
+        worker_count = runtime.workers_.size();
+        make_worker_controls(controls, runtime, publication,
+            [connection_id, &closed](detail::web_worker_runtime& worker, std::size_t) noexcept {
+                if (worker.close_connection(connection_id)) {
+                    closed.store(true, std::memory_order_relaxed);
+                }
+            });
+        posted = post_worker_controls(runtime, controls);
+    }
+    publication.wait();
+    if (const auto failure = publication.failure()) {
+        std::rethrow_exception(failure);
+    }
+    if (!posted || publication.completed() != worker_count) {
+        throw std::logic_error("the app began stopping before every worker accepted the connection control");
+    }
+    return closed.load(std::memory_order_relaxed);
 }
 
 void application::add_listener(listen_config config) {
@@ -1145,6 +1193,34 @@ application& application::on_http2_input(std::nullptr_t) {
     return on_http2_input(http2_input_callback{});
 }
 
+#if defined(RUVIA_ENABLE_HTTP2)
+application& application::on_http2_frame(http2_frame_callback callback_value) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register HTTP/2 frame hook while app is running",
+        [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
+            std::swap(state_value.http2_frame_callback_, callback_value);
+            state_value.options_.http2_frame_ = detail::callback_access::ref(state_value.http2_frame_callback_);
+        });
+}
+
+application& application::on_http2_frame(std::nullptr_t) {
+    return on_http2_frame(http2_frame_callback{});
+}
+
+application& application::on_http2_headers(http2_headers_callback callback_value) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register HTTP/2 headers hook while app is running",
+        [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
+            std::swap(state_value.http2_headers_callback_, callback_value);
+            state_value.options_.http2_headers_ = detail::callback_access::ref(state_value.http2_headers_callback_);
+        });
+}
+
+application& application::on_http2_headers(std::nullptr_t) {
+    return on_http2_headers(http2_headers_callback{});
+}
+#endif
+
 application& application::on_connection(connection_callback callback_value) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection handler while app is running",
@@ -1156,6 +1232,45 @@ application& application::on_connection(connection_callback callback_value) {
 
 application& application::on_connection(std::nullptr_t) {
     return on_connection(connection_callback{});
+}
+
+application& application::on_connection_admission(connection_admission_callback callback_value) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register connection admission hook while app is running",
+        [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
+            std::swap(state_value.connection_admission_callback_, callback_value);
+            state_value.options_.connection_admission_ = detail::callback_access::ref(state_value.connection_admission_callback_);
+        });
+}
+
+application& application::on_connection_admission(std::nullptr_t) {
+    return on_connection_admission(connection_admission_callback{});
+}
+
+application& application::on_connection_open(connection_open_callback callback_value) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register connection open hook while app is running",
+        [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
+            std::swap(state_value.connection_open_callback_, callback_value);
+            state_value.options_.connection_open_ = detail::callback_access::ref(state_value.connection_open_callback_);
+        });
+}
+
+application& application::on_connection_open(std::nullptr_t) {
+    return on_connection_open(connection_open_callback{});
+}
+
+application& application::on_connection_close(connection_close_callback callback_value) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register connection close hook while app is running",
+        [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
+            std::swap(state_value.connection_close_callback_, callback_value);
+            state_value.options_.connection_close_ = detail::callback_access::ref(state_value.connection_close_callback_);
+        });
+}
+
+application& application::on_connection_close(std::nullptr_t) {
+    return on_connection_close(connection_close_callback{});
 }
 
 application& application::on_request_stream(request_stream_callback callback_value) {

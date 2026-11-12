@@ -31,8 +31,8 @@ class route_entry;
 
 // Runs the connection's callback for a tunnel request in the context its
 // upgrade route built. `accept` commits the success head and establishes the
-// tunnel; a response the callback writes instead becomes the context's
-// buffered response.
+// tunnel; a refusal writes through the protocol's ordinary response stream,
+// which the upgrade driver must bind before dispatching this context.
 [[nodiscard]] task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept,
     const request_stream_websocket_accept* accept_websocket = nullptr);
 

@@ -145,6 +145,7 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
         ruvia::app().listen({.address_ = bad_address, .http_ = 8080});
     }));
     EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 0}); }));
+    // Matching ports are supported, but still require a real TLS identity.
     EXPECT_TRUE(throws_invalid(
         [] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .https_ = 8080}); }));
     EXPECT_TRUE(throws_invalid([] {

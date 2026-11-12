@@ -19,6 +19,13 @@
 
 namespace {
 
+template <typename value_type>
+concept settings_borrowable = requires(value_type&& value) {
+    std::forward<value_type>(value).settings();
+};
+static_assert(settings_borrowable<const ruvia::http2_frame_metadata&>);
+static_assert(!settings_borrowable<ruvia::http2_frame_metadata>);
+
 class receive_memory_resource final : public std::pmr::memory_resource {
 public:
     std::optional<std::size_t> allocation_budget_{};
@@ -467,4 +474,248 @@ TEST(Ruvia, http2_receive_window_overflow_does_not_publish_rejected_credit) {
     EXPECT_EQ(log.count_, 1u);
     EXPECT_TRUE(log.records_[0].kind_ == received_kind::settings);
     EXPECT_TRUE(server.connection_error() == ruvia::http2_error_code::flow_control_error);
+}
+
+namespace {
+struct wire_observation_log final {
+    std::vector<ruvia::http2_frame_metadata> frames_;
+    struct field final {
+        std::uint64_t first_;
+        std::uint64_t frame_;
+        std::size_t index_;
+        std::string name_;
+        std::string value_;
+    };
+    std::vector<field> fields_;
+    std::size_t begins_{0};
+    std::size_t ends_{0};
+
+    static void frame(void* context, const ruvia::http2_frame_metadata& metadata) noexcept {
+        static_cast<wire_observation_log*>(context)->frames_.push_back(metadata);
+    }
+    static void header(void* context, const ruvia::http2_header_metadata& metadata) noexcept {
+        auto& log = *static_cast<wire_observation_log*>(context);
+        switch (metadata.phase_) {
+            case ruvia::http2_header_observation_phase::begin:
+                ++log.begins_;
+                break;
+            case ruvia::http2_header_observation_phase::end:
+                ++log.ends_;
+                break;
+            case ruvia::http2_header_observation_phase::field:
+                log.fields_.push_back({metadata.first_frame_observation_sequence_, metadata.frame_observation_sequence_,
+                    metadata.field_index_, std::string(metadata.name_), std::string(metadata.value_)});
+                break;
+        }
+    }
+};
+}  // namespace
+
+TEST(Ruvia, http2_wire_observers_preserve_raw_settings_priority_and_fragmented_hpack) {
+    for (const auto fragment : {std::size_t{1}, std::size_t{7}, std::size_t{4096}}) {
+        wire_observation_log observed;
+        auto server = ruvia::http2_connection::server({.frame_observer_ = &wire_observation_log::frame,
+            .header_observer_ = &wire_observation_log::header,
+            .observer_context_ = &observed});
+        std::pmr::string settings;
+        append_setting(settings, 3, 17);
+        append_setting(settings, 0xfafa, 123);
+        append_setting(settings, 3, 29);
+        append_setting(settings, 1, 1024);
+        append_setting(settings, 1, 4096);
+        std::pmr::string wire(ruvia::http2_client_preface);
+        append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, settings);
+        append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(7340033));
+        append_frame(wire, ruvia::http2_frame_type::priority, 0, 3, priority_payload(0, 256, true));
+        // RFC 7541 C.4.1: Huffman-coded authority inserted at dynamic index 62.
+        const std::string_view block("\x82\x86\x84\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", 17);
+        std::pmr::string payload(1, '\x03');
+        payload += priority_payload(3, 42, false);
+        payload += block.substr(0, 6);
+        payload.append(3, '\0');
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x29, 1, payload);
+        append_frame(wire, ruvia::http2_frame_type::continuation, 0x4, 1, block.substr(6));
+        // A second block uses that dynamic-table entry in a different order.
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 3,
+            std::string_view("\xbe\x84\x87\x82", 4));
+        received_log requests;
+        for (std::size_t cursor = 0; cursor < wire.size(); cursor += fragment) {
+            EXPECT_TRUE(server.feed(std::string_view(wire).substr(cursor, fragment)) ==
+                        ruvia::http2_feed_result::accepted);
+            requests.drain(server);
+        }
+        ASSERT_EQ(observed.frames_.size(), 6u);
+        for (std::size_t i = 0; i < observed.frames_.size(); ++i) {
+            EXPECT_EQ(observed.frames_[i].observation_sequence_, i);
+        }
+        const auto& raw = observed.frames_[0];
+        ASSERT_EQ(raw.settings().size(), 5u);
+        EXPECT_TRUE(raw.settings_complete_);
+        EXPECT_EQ(static_cast<std::uint16_t>(raw.settings()[1].id_), 0xfafa);
+        EXPECT_EQ(raw.settings()[0].value_, 17u);
+        EXPECT_EQ(raw.settings()[2].value_, 29u);
+        EXPECT_EQ(raw.settings()[3].value_, 1024u);
+        EXPECT_EQ(raw.settings()[4].value_, 4096u);
+        ASSERT_TRUE(observed.frames_[1].window_increment_);
+        EXPECT_EQ(*observed.frames_[1].window_increment_, 7340033u);
+        ASSERT_TRUE(observed.frames_[2].priority_);
+        EXPECT_EQ(observed.frames_[2].priority_->weight_, 256u);
+        EXPECT_TRUE(observed.frames_[2].priority_->exclusive_);
+        ASSERT_TRUE(observed.frames_[3].priority_);
+        EXPECT_EQ(observed.frames_[3].priority_->stream_dependency_, 3u);
+        EXPECT_EQ(observed.frames_[3].priority_->weight_, 42u);
+        EXPECT_TRUE(observed.frames_[4].type_ == ruvia::http2_frame_type::continuation);
+        ASSERT_EQ(observed.fields_.size(), 8u);
+        EXPECT_EQ(observed.fields_[0].name_, ":method");
+        EXPECT_EQ(observed.fields_[1].name_, ":scheme");
+        EXPECT_EQ(observed.fields_[2].name_, ":path");
+        EXPECT_EQ(observed.fields_[3].name_, ":authority");
+        EXPECT_EQ(observed.fields_[3].value_, "www.example.com");
+        EXPECT_EQ(observed.fields_[3].first_, 3u);
+        EXPECT_EQ(observed.fields_[3].frame_, 4u);
+        EXPECT_EQ(observed.fields_[4].name_, ":authority");
+        EXPECT_EQ(observed.fields_[5].name_, ":path");
+        EXPECT_EQ(observed.fields_[6].name_, ":scheme");
+        EXPECT_EQ(observed.fields_[7].name_, ":method");
+        EXPECT_EQ(observed.fields_[7].index_, 3u);
+        EXPECT_EQ(observed.begins_, 2u);
+        EXPECT_EQ(observed.ends_, 2u);
+        EXPECT_FALSE(server.connection_error().has_value());
+    }
+}
+
+TEST(Ruvia, http2_header_observer_sees_extended_connect_order_before_semantic_rejection) {
+    for (const bool malformed : {false, true}) {
+        wire_observation_log observed;
+        auto server = ruvia::http2_connection::server({.header_observer_ = &wire_observation_log::header, .observer_context_ = &observed});
+        std::pmr::string block;
+        for (const auto& field : std::array{
+                 std::pair{":protocol", "websocket"}, std::pair{":path", "/chat"},
+                 std::pair{":scheme", "https"}, std::pair{":authority", "example.test:443"},
+                 std::pair{":method", "CONNECT"}}) {
+            ruvia::hpack_encoder::encode_header(block, field.first, field.second);
+        }
+        if (malformed) {
+            ruvia::hpack_encoder::encode_header(block, ":method", "CONNECT");
+        }
+        ruvia::hpack_encoder::encode_header(block, "sec-websocket-version", "13");
+        auto wire = server_preface();
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+        ASSERT_TRUE(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        bool request_received = false;
+        while (auto event = server.next_event()) {
+            if (auto* request = event->request_head()) {
+                request_received = true;
+                const auto order = request->request_view().pseudo_header_order_;
+                ASSERT_EQ(order.size(), 5u);
+                EXPECT_TRUE(order[0] == ruvia::http2_request_pseudo_header::protocol);
+                EXPECT_TRUE(order[4] == ruvia::http2_request_pseudo_header::method);
+            }
+        }
+        EXPECT_EQ(request_received, !malformed);
+        ASSERT_EQ(observed.fields_.size(), 6u);
+        EXPECT_EQ(observed.fields_[0].name_, ":protocol");
+        EXPECT_EQ(observed.fields_[4].name_, ":method");
+        EXPECT_EQ(observed.fields_[5].name_, malformed ? ":method" : "sec-websocket-version");
+        EXPECT_EQ(observed.fields_[0].first_, 1u);
+        EXPECT_EQ(observed.frames_.size(), 0u);
+    }
+}
+
+TEST(Ruvia, http2_frame_observer_includes_unknown_extensions_without_advertisement_semantics) {
+    for (const auto role : {ruvia::http2_role::server, ruvia::http2_role::client}) {
+        wire_observation_log observed;
+        const ruvia::http2_connection_options options{
+            .frame_observer_ = &wire_observation_log::frame, .observer_context_ = &observed};
+        auto connection = role == ruvia::http2_role::server
+                              ? ruvia::http2_connection::server(options)
+                              : ruvia::http2_connection::client(options);
+        std::pmr::string wire = role == ruvia::http2_role::server
+                                    ? std::pmr::string(ruvia::http2_client_preface)
+                                    : std::pmr::string{};
+        append_frame(wire, ruvia::http2_frame_type::settings, 0, 0);
+        append_frame(wire, static_cast<ruvia::http2_frame_type>(0xee), 0, 0, "unknown");
+        // ORIGIN is not enabled, and servers never process ALTSVC. These
+        // malformed opaque payloads must remain ignored with observation on.
+        append_frame(wire, ruvia::http2_frame_type::origin, 0, 0, "not an origin list");
+        if (role == ruvia::http2_role::server) {
+            append_frame(wire, ruvia::http2_frame_type::alternative_service, 0, 0, "x");
+        }
+        append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(19));
+        EXPECT_TRUE(connection.feed(wire) == ruvia::http2_feed_result::accepted);
+        EXPECT_FALSE(connection.connection_error().has_value());
+        while (auto event = connection.next_event()) {
+            EXPECT_EQ(event->origin_advertisement(), nullptr);
+            EXPECT_EQ(event->alternative_service_advertisement(), nullptr);
+        }
+        ASSERT_EQ(observed.frames_.size(), role == ruvia::http2_role::server ? 5u : 4u);
+        EXPECT_EQ(static_cast<unsigned>(observed.frames_[1].type_), 0xeeu);
+        EXPECT_EQ(observed.frames_.back().observation_sequence_, observed.frames_.size() - 1);
+        ASSERT_TRUE(observed.frames_.back().window_increment_);
+        EXPECT_EQ(*observed.frames_.back().window_increment_, 19u);
+    }
+}
+
+TEST(Ruvia, http2_frame_observation_does_not_weaken_mandatory_protocol_rejection) {
+    wire_observation_log observed;
+    auto server = ruvia::http2_connection::server({.frame_observer_ = &wire_observation_log::frame, .observer_context_ = &observed});
+    auto wire = server_preface();
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, window_payload(0));
+    EXPECT_TRUE(server.feed(wire) == ruvia::http2_feed_result::protocol_failure);
+    EXPECT_TRUE(server.connection_error() == ruvia::http2_error_code::protocol_error);
+    ASSERT_EQ(observed.frames_.size(), 2u);
+    ASSERT_TRUE(observed.frames_[1].window_increment_);
+    EXPECT_EQ(*observed.frames_[1].window_increment_, 0u);
+}
+
+TEST(Ruvia, http2_frame_observer_preserves_enabled_origin_and_alternative_service_decoding) {
+    for (const bool observe : {false, true}) {
+        for (const auto fragment : {std::size_t{1}, std::size_t{4096}}) {
+            wire_observation_log observed;
+            auto client = ruvia::http2_connection::client({.receive_origin_advertisements_ = true,
+                .frame_observer_ = observe ? &wire_observation_log::frame : nullptr,
+                .observer_context_ = &observed});
+            const std::array<std::string_view, 1> origins{"https://example.test"};
+            auto origin_frame = ruvia::encode_http2_origin_frame(origins);
+            auto alternative_frame = ruvia::encode_http2_alternative_service_frame(0, origins[0], "h3=\":443\"");
+            ASSERT_TRUE(std::holds_alternative<std::pmr::vector<char>>(origin_frame));
+            ASSERT_TRUE(std::holds_alternative<std::pmr::vector<char>>(alternative_frame));
+            const auto& origin_bytes = std::get<std::pmr::vector<char>>(origin_frame);
+            const auto& alternative_bytes = std::get<std::pmr::vector<char>>(alternative_frame);
+            std::pmr::string wire;
+            append_frame(wire, ruvia::http2_frame_type::settings, 0, 0);
+            wire.append(origin_bytes.data(), origin_bytes.size());
+            append_frame(wire, static_cast<ruvia::http2_frame_type>(0xee), 0, 0, "discard me");
+            wire.append(alternative_bytes.data(), alternative_bytes.size());
+            std::size_t origin_count = 0;
+            std::size_t alternative_count = 0;
+            for (std::size_t cursor = 0; cursor < wire.size(); cursor += fragment) {
+                ASSERT_TRUE(client.feed(std::string_view(wire).substr(cursor, fragment)) ==
+                            ruvia::http2_feed_result::accepted);
+                while (auto event = client.next_event()) {
+                    if (const auto* origin = event->origin_advertisement()) {
+                        ++origin_count;
+                        ASSERT_EQ(origin->origins_.size(), 1u);
+                        EXPECT_TRUE(origin->origins_[0] == origins[0]);
+                    }
+                    if (const auto* alternative = event->alternative_service_advertisement()) {
+                        ++alternative_count;
+                        EXPECT_EQ(alternative->stream_id_, 0u);
+                        EXPECT_TRUE(alternative->origin_ == origins[0]);
+                        EXPECT_TRUE(alternative->field_value_ == "h3=\":443\"");
+                    }
+                }
+            }
+            EXPECT_EQ(origin_count, 1u);
+            EXPECT_EQ(alternative_count, 1u);
+            EXPECT_FALSE(client.connection_error().has_value());
+            ASSERT_EQ(observed.frames_.size(), observe ? 4u : 0u);
+            if (observe) {
+                EXPECT_TRUE(observed.frames_[1].type_ == ruvia::http2_frame_type::origin);
+                EXPECT_EQ(observed.frames_[1].observation_sequence_, 1u);
+                EXPECT_TRUE(observed.frames_[3].type_ == ruvia::http2_frame_type::alternative_service);
+                EXPECT_EQ(observed.frames_[3].observation_sequence_, 3u);
+            }
+        }
+    }
 }

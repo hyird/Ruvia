@@ -42,6 +42,7 @@
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_observation.h"
 #include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client.h"
@@ -813,7 +814,9 @@ struct http2_extension_payload final {
 class http2_connection final {
 public:
     explicit http2_connection(std::pmr::memory_resource* resource, http2_role role = http2_role::server,
-        bool enable_push = false, bool receive_origin_advertisements = false, bool receive_frame_metadata = false);
+        bool enable_push = false, bool receive_origin_advertisements = false, bool receive_frame_metadata = false,
+        http2_frame_observer_type frame_observer = nullptr, http2_header_observer_type header_observer = nullptr,
+        void* observer_context = nullptr);
     ~http2_connection();
     http2_connection(const http2_connection&) = delete;
     http2_connection& operator=(const http2_connection&) = delete;
@@ -1030,6 +1033,10 @@ private:
     void record_callback_failure() noexcept;
 
     int on_begin_frame(const nghttp2_frame_hd& header);
+    nghttp2_ssize receive_observed(std::string_view input);
+    void observe_frame_payload(std::string_view input) noexcept;
+    void observe_header(http2_header_observation_phase phase,
+        std::string_view name = {}, std::string_view value = {}) noexcept;
     int on_begin_headers(const nghttp2_frame& frame);
     int on_header(const nghttp2_frame& frame, std::string_view name, std::string_view value);
     int on_frame_recv(const nghttp2_frame& frame);
@@ -1172,6 +1179,19 @@ private:
     bool enable_push_{false};
     bool receive_origin_advertisements_{false};
     bool receive_frame_metadata_{false};
+    http2_frame_observer_type frame_observer_{nullptr};
+    http2_header_observer_type header_observer_{nullptr};
+    void* observer_context_{nullptr};
+    http2_frame_metadata observed_frame_{};
+    std::uint64_t observed_next_sequence_{0};
+    std::uint64_t observed_header_sequence_{0};
+    std::size_t observed_field_index_{0};
+    std::uint32_t observed_header_stream_{0};
+    std::size_t observed_payload_remaining_{0};
+    std::size_t observed_payload_offset_{0};
+    std::array<unsigned char, 6> observed_scalar_{};
+    std::size_t observed_scalar_size_{0};
+    bool observed_headers_padding_{false};
     bool started_{false};
     bool received_peer_settings_{false};
     bool header_block_in_progress_{false};

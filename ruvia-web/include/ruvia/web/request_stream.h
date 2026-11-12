@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -71,6 +72,18 @@ public:
     // conn_info::id() names the connection, as on routes listeners.
     [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND;
     const conn_info& conn() const&& = delete;
+
+    // Shares the state returned by the connection-open callback.
+    [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept {
+        return context_.connection_state();
+    }
+    // Immediately aborts the entire connection, not only this HTTP/2 or HTTP/3
+    // stream. Other in-flight requests on that connection are cancelled too.
+    // This is a terminal choice; no response is required afterwards. A later
+    // callback exception is still reported rather than treated as success.
+    void abort_connection() noexcept {
+        context_.abort_connection();
+    }
 
     // The streamed request content. Its first read sends a pending
     // 100 Continue. Throws std::logic_error for a tunnel request, whose bytes
@@ -156,10 +169,9 @@ public:
 
     // The streamed response: commit the head draft() describes, then write
     // the content and end it, with trailers where the protocol carries them.
-    // A tunnel request's response is buffered until the callback returns, then
-    // sent without trailers (non-empty ones throw std::logic_error) and, over
-    // HTTP/1.1, followed by closing the connection; a 2xx to CONNECT can only
-    // be sent by accept_tunnel().
+    // A refused tunnel uses the same immediate, backpressured writer as any
+    // response; HTTP/1.1 closes the connection after its framed response.
+    // A successful CONNECT or 101 must instead use an accept operation.
     [[nodiscard]] response_stream_writer& response() & noexcept RUVIA_LIFETIMEBOUND;
     response_stream_writer& response() && = delete;
 
