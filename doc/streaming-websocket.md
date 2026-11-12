@@ -151,7 +151,7 @@ ruvia::task<void> stream_subscription(
 
 | `ruvia::context` / `context_request` 方法 | 适用协议与说明 |
 | --- | --- |
-| `co_await c.inform(const http_interim_response_head& response)` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`） |
+| `co_await c.inform(const http_interim_response_head& response)` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`）；提交后启动（包括先前创建的冷操作）抛 `std::logic_error` |
 | `c.draft().priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置当前响应优先级（HTTP/2 与 HTTP/3 同时更新流调度器优先级）；跨替换策略用 `c.policy().priority(...)`，客户端请求优先级（含 `PRIORITY_UPDATE` 帧动态更新）用 `c.req().priority()` |
 | `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳；`method_`、`scheme_`、`authority_`、`path_` 使用 `borrowed_text`，`headers_` 使用 `borrowed_http_headers`，拒绝临时拥有型字符串与临时首部容器；对端禁用推送，或已打开的推送流（不含仅预留的推送）已达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS`（包括其为 0）时返回 `false`，不发送 `PUSH_PROMISE`；已预留的推送在提交响应头时仍无并发额度则以 `RST_STREAM(CANCEL)` 取消，不视为连接失败 |
 | `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2、HTTP/3，需 TLS）在连接或控制流上排入 RFC 8336 / RFC 9412 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |

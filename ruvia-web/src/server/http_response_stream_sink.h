@@ -367,7 +367,6 @@ private:
     }
 
     void bind_context(context* context_value) {
-        interim_output_ = context_value != nullptr ? context_access::interim_output(*context_value) : nullptr;
         state_.bind_context(context_value);
     }
 
@@ -415,7 +414,9 @@ private:
         }
 
         try {
-            auto response = co_await context_access::commit_streaming_head(state_.bound_context());
+            auto& context_value = state_.bound_context();
+            auto* const interim_output = context_access::interim_output(context_value);
+            auto response = co_await context_access::commit_streaming_head(context_value);
             ensure_peer_writable();
             // The same final-representation order as a buffered response: the
             // application CORS policy first, then content coding.
@@ -439,8 +440,8 @@ private:
             connection_plan_ = stream_head.connection_plan();
             // Mark committed before the write; a partial header flush must never be
             // followed by the normal error-response path on the same socket.
-            if (interim_output_ != nullptr) {
-                interim_output_->commit_final();
+            if (interim_output != nullptr) {
+                interim_output->commit_final();
             }
             state_.mark_committed(stream_head.commit_plan());
         } catch (...) {
@@ -531,11 +532,9 @@ private:
 
         const auto trailer_section = validate_http_response_trailers(trailers);
         const auto trailer_intent = response_trailer_intent(trailer_section);
+        http_clear_pmr_string_retaining_small(trailers_);
         if (!trailer_section.empty()) {
-            http_clear_pmr_string_retaining_small(trailers_);
             append_http1_response_trailers(trailers_, trailer_section);
-        } else {
-            http_clear_pmr_string_retaining_small(trailers_);
         }
 
         co_await commit_head(trailer_intent);
@@ -593,7 +592,6 @@ private:
     http1_request_connection_plan connection_plan_;
     http_streaming_response_compression compression_;
     response_stream_state state_;
-    http_interim_response_output* interim_output_{};
     std::pmr::memory_resource* inbound_resource_;
     stop_source& request_stop_;
     bool request_pipelined_;
