@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -157,7 +158,7 @@ public:
           trailers_(allocator.resource()),
           scanner_entry_(scanner_entry),
           interim_output_(interim_output),
-          finished_(!body_plan_.requires_consumption()) {
+          state_(body_plan_.requires_consumption() ? state_type::active : state_type::finished) {
         const auto expectation_plan =
             body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
         continue_pending_ = expectation_plan == http_server_expectation_plan::send_continue;
@@ -175,8 +176,8 @@ public:
     stream_body_reader& operator=(const stream_body_reader&) = delete;
 
     [[nodiscard]] http1_request_body_consumption consumption() const noexcept {
-        return finished_ && !failed_ ? http1_request_body_consumption::complete
-                                     : http1_request_body_consumption::incomplete;
+        return state_ == state_type::finished ? http1_request_body_consumption::complete
+                                              : http1_request_body_consumption::incomplete;
     }
     [[nodiscard]] const http_request_trailers& trailers() const& noexcept RUVIA_LIFETIMEBOUND {
         return trailers_;
@@ -189,7 +190,7 @@ public:
     void consume_buffered_body() {
         // Reads keep borrowing the initial view only while it still holds unread
         // body bytes; once they moved to buffer_, the rest needs socket input.
-        if (finished_ || failed_ || initial_body_and_pipeline_.empty()) {
+        if (state_ != state_type::active || initial_body_and_pipeline_.empty()) {
             return;
         }
         if (const auto* known_length = body_plan_.known_length()) {
@@ -265,8 +266,7 @@ public:
             }
             co_return co_await read_known_length(known_length->content_length());
         } catch (...) {
-            finished_ = false;
-            failed_ = true;
+            state_ = state_type::failed;
             throw;
         }
     }
@@ -276,7 +276,7 @@ public:
         try {
             if (const auto* known_length = body_plan_.known_length()) {
                 const auto content_length = known_length->content_length();
-                if (finished_) {
+                if (state_ == state_type::finished) {
                     if (body.empty() && delivered_bytes_ == 0 && initial_body_and_pipeline_.size() >= content_length) {
                         co_return initial_body_and_pipeline_.substr(0, content_length);
                     }
@@ -316,20 +316,23 @@ public:
             mark_finished();
             co_return std::string_view(body);
         } catch (...) {
-            finished_ = false;
-            failed_ = true;
+            state_ = state_type::failed;
             throw;
         }
     }
 
 private:
+    enum class state_type : std::uint8_t { active,
+        finished,
+        failed };
+
     task<void> send_continue() {
         co_await interim_output_.send_continue();
         continue_pending_ = false;
     }
 
     void require_not_failed() const {
-        if (failed_) {
+        if (state_ == state_type::failed) {
             throw std::logic_error("request body consumption previously failed");
         }
     }
@@ -496,7 +499,7 @@ private:
     }
 
     task<std::optional<std::span<const std::byte>>> read_known_length(std::size_t content_length) {
-        if (finished_) {
+        if (state_ == state_type::finished) {
             co_return std::nullopt;
         }
         if (exceeds_limit(content_length)) {
@@ -546,7 +549,7 @@ private:
     }
 
     task<std::optional<std::span<const std::byte>>> read_chunked() {
-        if (finished_) {
+        if (state_ == state_type::finished) {
             co_return std::nullopt;
         }
 
@@ -639,7 +642,7 @@ private:
     }
 
     void mark_finished() {
-        finished_ = true;
+        state_ = state_type::finished;
         scanner_entry_.set_phase(connection_scanner::phase::idle);
         if (const auto observer = std::exchange(completion_observer_, nullptr)) {
             observer(completion_target_);
@@ -663,10 +666,8 @@ private:
     // dropped only when read_more() needs room for socket input.
     std::size_t read_cursor_{0};
     std::size_t delivered_bytes_{0};
-    bool finished_{false};
-    // Set once a read fails: the framing position is unknown, so the body can
-    // never be consumed further and must stay incomplete.
-    bool failed_{false};
+    // A failed read remains terminal and incomplete, including observer failures.
+    state_type state_;
     bool continue_pending_{false};
     void* completion_target_{};
     completion_observer_type completion_observer_{};
