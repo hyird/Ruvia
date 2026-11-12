@@ -50,13 +50,13 @@ void initialize_quic_crypto() {
 
 }  // namespace
 
-http3_endpoint::http3_endpoint(
-    const http3_worker_services& services, http_server_session_config& session, asio::ip::udp::endpoint endpoint,
-    std::size_t listener_index)
+http3_endpoint::http3_endpoint(const http3_worker_services& services, http_server_session_config& session,
+    asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks)
     : services_(services),
       session_(session),
       configured_endpoint_(endpoint),
       listener_index_(listener_index),
+      tasks_(tasks),
 #if !defined(_WIN32)
       socket_(services.io_),
       receive_buffer_(process_resource()),
@@ -71,7 +71,7 @@ http3_endpoint::~http3_endpoint() {
     close();
 }
 
-void http3_endpoint::open() {
+void http3_endpoint::open([[maybe_unused]] inherited_listener_sockets* inherited) {
     initialize_quic_crypto();
 #if defined(_WIN32)
     // The acceptor binds exactly the configured endpoint (its port is never 0).
@@ -79,7 +79,7 @@ void http3_endpoint::open() {
 #else
     receive_buffer_.resize(http3_max_udp_payload_bytes);
     services_.placement_.directory_->open_listener_socket(
-        services_.placement_.worker_index_, listener_index_, configured_endpoint_, secret(), socket_);
+        services_.placement_.worker_index_, listener_index_, configured_endpoint_, secret(), inherited, socket_);
     local_endpoint_ = socket_.local_endpoint();
 #endif
     open_ = true;
@@ -88,7 +88,26 @@ void http3_endpoint::open() {
 void http3_endpoint::start() {
     admitting_ = true;
 #if !defined(_WIN32)
-    services_.tasks_.spawn(run_receive_loop());
+    tasks_.spawn(run_receive_loop());
+#endif
+}
+
+void http3_endpoint::retire() noexcept {
+    admitting_ = false;
+    retiring_ = true;
+    if (sessions_ == 0) {
+        release_after_last_connection();
+    }
+}
+
+void http3_endpoint::release_after_last_connection() noexcept {
+#if defined(_WIN32)
+    // The other workers' connections may still need the acceptor's socket.
+    if (std::exchange(open_, false)) {
+        services_.placement_.acceptor_->release_http3_listener(listener_index_);
+    }
+#else
+    close();
 #endif
 }
 
@@ -100,6 +119,15 @@ void http3_endpoint::close() noexcept {
     socket_.close(ignored);
 #endif
 }
+
+#if !defined(_WIN32)
+native_socket http3_endpoint::duplicate_socket() {
+    if (!socket_.is_open()) {
+        throw std::logic_error("the HTTP/3 listener socket is closed");
+    }
+    return duplicate_native_socket(socket_.native_handle());
+}
+#endif
 
 std::error_code http3_endpoint::send(const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes) noexcept {
 #if defined(_WIN32)
@@ -289,7 +317,7 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
         auto session = make_pmr_object<http3_session>(process_resource(), *this,
             connection_slot(services_.connection_count_), header, remote, original_dcid, retry_scid, retry_token);
         session->receive(bytes, remote);
-        services_.tasks_.spawn(serve(std::move(session)));
+        tasks_.spawn(serve(std::move(session)));
     } catch (...) {
         auto failure = std::current_exception();
         std::pmr::string address(process_resource());
@@ -303,12 +331,20 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
 }
 
 task<void> http3_endpoint::serve(session_pointer session) {
+    // Spawning runs this task until its first suspension, so the count
+    // includes every session spawned.
+    ++sessions_;
     try {
         co_await session->run();
     } catch (...) {
         // run() already ended the connection; its reason goes to the
         // connection-failure sink rather than the worker's task scope.
         services_.options_.connection_failure_.invoke(session->remote_address(), std::current_exception());
+    }
+    // The session object itself is destroyed with this frame, which the
+    // listener's scope joins before the endpoint goes away.
+    if (--sessions_ == 0 && retiring_) {
+        release_after_last_connection();
     }
 }
 

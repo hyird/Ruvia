@@ -1,8 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
+#include <utility>
 
 #include <asio/io_context.hpp>
 
@@ -35,9 +38,10 @@ class web_worker_runtime final {
 public:
     // `pool` is the application pool the worker's event loop borrows for
     // every offload and client host lookup; null when the application
-    // disabled it. It must outlive the worker.
+    // disabled it. It must outlive the worker. `worker_index` is this
+    // worker's position among the application's workers.
     web_worker_runtime(const validated_http_server_configuration& configuration, const route_table& routes_value,
-        worker_capability_definitions capabilities, blocking_pool* pool
+        worker_capability_definitions capabilities, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_placement http3_placement
@@ -55,6 +59,44 @@ public:
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] http_server_stats stats() const noexcept;
     [[nodiscard]] web_worker_handle web_worker() const;
+    // Owner thread only, from a control posted to runtime(): listener
+    // `listener_index` -- TLS over TCP and its HTTP/3 service alike --
+    // selects every later handshake's identity from `identities`.
+    void adopt_tls_identities(
+        std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept {
+        connections_.adopt_tls_identities(listener_index, std::move(identities));
+    }
+    // Owner thread only, from controls posted to runtime(): the listener
+    // transactions of application::add_listener() and remove_listener()
+    // (see worker_connections).
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
+        const http_server_listener_definition& definition
+#if defined(RUVIA_ENABLE_HTTP3)
+        ,
+        http3_worker_directory* directory
+#endif
+    ) {
+        connections_.prepare_listener(index, http3_index, definition
+#if defined(RUVIA_ENABLE_HTTP3)
+            ,
+            directory
+#endif
+        );
+    }
+    void open_listener(std::size_t index) noexcept {
+        connections_.open_listener(index);
+    }
+    void discard_listener(std::size_t index) noexcept {
+        connections_.discard_listener(index);
+    }
+    void remove_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept {
+        connections_.remove_listener(index, std::move(receipt));
+    }
+#if !defined(_WIN32)
+    [[nodiscard]] listener_socket_duplicates duplicate_listener(std::size_t index) {
+        return connections_.duplicate_listener(index);
+    }
+#endif
 #if defined(_WIN32)
     // This worker as the Windows acceptor's hand-over target.
     [[nodiscard]] windows_acceptor::business_worker acceptor_target() noexcept {
@@ -65,7 +107,7 @@ public:
 private:
     web_worker_runtime(std::span<const http_server_listener_definition> listeners,
         const route_table& routes_value, worker_capability_definitions capabilities,
-        http_server_options validated_options, blocking_pool* pool
+        http_server_options validated_options, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_placement http3_placement

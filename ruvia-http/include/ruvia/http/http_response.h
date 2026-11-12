@@ -26,6 +26,8 @@
 namespace ruvia {
 
 enum class http_connect_udp_error : std::uint8_t;
+class http1_response_head_plan;
+class http_request;
 class http_response;
 class http_response_headers;
 
@@ -820,6 +822,7 @@ public:
 
 private:
     friend std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response, http_protocol_version);
+    friend http1_response_head_plan prepare_http1_upgrade_response_head(http_response&, const http_request&);
     friend struct detail::http_response_body_access;
 
     void apply_encoded_representation(std::string_view content_encoding, std::pmr::string* body);

@@ -52,6 +52,18 @@ struct route_request_view final {
 class controller_store;
 class router;
 
+// The framework's own answer to a failed request, consulting no application
+// error handler: the status an http_error or protocol failure carries, else a
+// generic 500 that names nothing internal. An inbound transport failure
+// propagates instead.
+struct default_exception_response final {
+    http_response response_;
+    // The failure maps to no HTTP error: a fault for the caller to report.
+    bool unexpected_;
+};
+[[nodiscard]] default_exception_response make_default_exception_response(
+    std::pmr::memory_resource* resource, const std::exception_ptr& exception);
+
 // One worker's binding of the process route plan: the worker's controller
 // instance behind every route and the worker's middleware instance behind
 // every frame, indexed exactly like the plan. Everything else -- lookup,

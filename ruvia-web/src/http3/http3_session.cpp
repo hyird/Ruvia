@@ -326,10 +326,13 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     : endpoint_(endpoint),
       services_(endpoint.services()),
       slot_(std::move(slot)),
+      connection_id_(services_.connection_ids_.next()),
       local_(endpoint.local_endpoint()),
+      tls_local_address_(local_.address()),
       remote_(remote),
       path_remote_(remote),
       remote_address_(process_resource()),
+      local_address_(process_resource()),
       connection_ids_(process_resource()),
       datagram_(process_resource()),
       client_certificate_(process_resource()),
@@ -351,6 +354,19 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
     tls_.reset(SSL_new(quic_context->native_handle()));
     if (!tls_ || ngtcp2_crypto_ossl_configure_server_session(tls_.get()) != 0) {
         throw std::runtime_error("failed to create the QUIC TLS session");
+    }
+    bind_tls_local_address(*tls_, tls_local_address_);
+    if (const auto callback = services_.options_.tls_client_hello_) {
+        assign_peer_address(local_address_, local_.address());
+        client_hello_.emplace(tls_client_hello_observation{.callback_ = callback,
+            .fields_ = {.connection_id_ = connection_id_,
+                .local_address_ = local_address_,
+                .local_port_ = local_.port(),
+                .remote_address_ = remote_address_,
+                .remote_port_ = remote_.port(),
+                .quic_ = true,
+                .message_ = {}}});
+        observe_tls_client_hello(*tls_, *client_hello_);
     }
     connection_reference_.get_conn = native_connection;
     connection_reference_.user_data = this;
@@ -637,8 +653,11 @@ void http3_session::start_application() {
     }
     served_certificate_.emplace(SSL_get_certificate(tls_.get()));
     base_services_.emplace(services_.capabilities_.make_context_services(services_.stop_token_)
-            .with_tls_transport(remote_address_, client_subject, remote_.port(), *served_certificate_)
-            .with_inbound_buffer_pool(inbound_buffers_));
+            .with_tls_transport(connection_id_, remote_address_, client_subject, tls_selected_alpn(*tls_),
+                tls_server_name(*tls_), remote_.port(), *served_certificate_)
+            .with_inbound_buffer_pool(inbound_buffers_)
+            .with_request_stream(endpoint_.session_config().request_stream_ ? services_.options_.request_stream_
+                                                                            : request_stream_callback_ref{}));
     base_services_->bind_routes(services_.routes_);
     set_inactivity_phase();
     if (drain_begun_) {
@@ -708,8 +727,8 @@ void http3_session::on_request_head(http3_headers_event& event) {
         return;
     }
     const auto connect = head->connect();
-    auto [resolution, body_mode] = resolve_multiplexed_stream_route(
-        services_.routes_, head->method(), head->path(), head->authority(), head->protocol());
+    auto [resolution, body_mode] = resolve_multiplexed_stream_route(services_.routes_,
+        endpoint_.session_config().request_stream_, head->method(), head->path(), head->authority(), head->protocol());
     const auto* resolved = resolution.resolved();
     if (connect) {
         body_mode = request_body_mode::stream;
@@ -1144,7 +1163,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                     // worker's stop.
                     http3_response_stream_sink sink_value(*this, *stream, *signal, process_resource(),
                         request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
-                        options.compression_ ? &*options.compression_ : nullptr, options.cors_ ? &*options.cors_ : nullptr);
+                        options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes, request, *resolved,
                         request_memory_value, dispatch_services, [stream]() noexcept { return stream->aborted(); });
                     if (complete_multiplexed_response_stream_dispatch(result_value,

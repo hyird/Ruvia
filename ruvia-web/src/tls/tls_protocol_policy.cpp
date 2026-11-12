@@ -94,7 +94,9 @@ void block_messages(int writing, int, int, const void*, std::size_t, SSL* ssl, v
     }
 }
 
-void count_messages(int writing, int, int content_type, const void*, std::size_t, SSL* ssl, void*) noexcept {
+}  // namespace
+
+void count_tls_records(int writing, int, int content_type, const void*, std::size_t, SSL* ssl, void*) noexcept {
     if (!writing) {
         return;
     }
@@ -134,6 +136,8 @@ void count_messages(int writing, int, int content_type, const void*, std::size_t
     }
 }
 
+namespace {
+
 int accept_verified_chain(int valid, X509_STORE_CTX*) noexcept {
     return valid;
 }
@@ -168,7 +172,7 @@ int verify_native_certificate(X509_STORE_CTX* store, void* opaque) noexcept {
 }
 
 void install_context_callbacks(SSL_CTX& context, tls_context_policy* policy) noexcept {
-    SSL_CTX_set_msg_callback(&context, count_messages);
+    SSL_CTX_set_msg_callback(&context, count_tls_records);
     SSL_CTX_set_msg_callback_arg(&context, nullptr);
     if (!policy->host_.empty()) {
         SSL_CTX_set_cert_verify_callback(&context, verify_native_certificate, policy);

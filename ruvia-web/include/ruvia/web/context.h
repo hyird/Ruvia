@@ -61,6 +61,8 @@ class test_app;
 class session;
 class body_reader;
 class response_stream_writer;
+class tls_client_hello_record;
+class server_connection;
 class sse_writer;
 class multipart_reader;
 class multipart_part;
@@ -105,13 +107,31 @@ public:
         return client_certificate_subject_;
     }
 
+    // The application protocol the handshake selected (RFC 7301); empty when
+    // the client offered no ALPN.
+    [[nodiscard]] constexpr std::string_view alpn() const noexcept {
+        return alpn_;
+    }
+
+    // The host_name the client sent in server_name (RFC 6066 §3); empty when
+    // it sent none.
+    [[nodiscard]] constexpr std::string_view server_name() const noexcept {
+        return server_name_;
+    }
+
 private:
     friend class conn_info;
+    friend class server_connection;
 
-    explicit constexpr tls_connection_transport(std::optional<std::string_view> client_certificate_subject) noexcept
-        : client_certificate_subject_(client_certificate_subject) {}
+    constexpr tls_connection_transport(std::optional<std::string_view> client_certificate_subject,
+        std::string_view alpn, std::string_view server_name) noexcept
+        : client_certificate_subject_(client_certificate_subject),
+          alpn_(alpn),
+          server_name_(server_name) {}
 
     std::optional<std::string_view> client_certificate_subject_;
+    std::string_view alpn_;
+    std::string_view server_name_;
 };
 
 // Runtime connection metadata associated with a Web request. This information
@@ -133,6 +153,8 @@ public:
 
     private:
         friend class conn_info;
+        friend class tls_client_hello_record;
+        friend class server_connection;
 
         explicit constexpr endpoint(std::string_view address, std::uint16_t port = 0) noexcept
             : address_(address),
@@ -141,6 +163,15 @@ public:
         std::string_view address_;
         std::uint16_t port_{0};
     };
+
+    // Names the transport connection within one application::run(): unique
+    // across every worker, listener and protocol, shared by every request the
+    // connection carries, and equal to connection_id() of its
+    // on_tls_client_hello and on_http2_input records. Never zero for a served
+    // connection; zero for a test_app request, which has no connection.
+    [[nodiscard]] constexpr std::uint64_t id() const noexcept {
+        return id_;
+    }
 
     // The peer at the other end of this socket. Behind a reverse proxy that is
     // the proxy, not the caller -- use client() for the caller.
@@ -188,25 +219,28 @@ public:
 private:
     friend class detail::context_services;
 
-    constexpr conn_info(std::string_view remote_address, plain_connection_transport transport) noexcept
-        : remote_(remote_address),
+    constexpr conn_info(std::uint64_t id, std::string_view remote_address, plain_connection_transport transport) noexcept
+        : id_(id),
+          remote_(remote_address),
           client_(remote_address),
           transport_(transport),
           scheme_(http_scheme::http) {}
 
-    constexpr conn_info(std::string_view remote_address, tls_connection_transport transport) noexcept
-        : remote_(remote_address),
+    constexpr conn_info(std::uint64_t id, std::string_view remote_address, tls_connection_transport transport) noexcept
+        : id_(id),
+          remote_(remote_address),
           client_(remote_address),
           transport_(transport),
           scheme_(http_scheme::https) {}
 
-    [[nodiscard]] static constexpr conn_info plain(std::string_view remote_address) noexcept {
-        return conn_info(remote_address, plain_connection_transport{});
+    [[nodiscard]] static constexpr conn_info plain(std::uint64_t id, std::string_view remote_address) noexcept {
+        return conn_info(id, remote_address, plain_connection_transport{});
     }
 
-    [[nodiscard]] static constexpr conn_info tls(
-        std::string_view remote_address, std::optional<std::string_view> client_certificate_subject) noexcept {
-        return conn_info(remote_address, tls_connection_transport(client_certificate_subject));
+    [[nodiscard]] static constexpr conn_info tls(std::uint64_t id, std::string_view remote_address,
+        std::optional<std::string_view> client_certificate_subject, std::string_view alpn,
+        std::string_view server_name) noexcept {
+        return conn_info(id, remote_address, tls_connection_transport(client_certificate_subject, alpn, server_name));
     }
 
     // Applied only after the peer has been matched against the configured
@@ -234,6 +268,7 @@ private:
         }
     }
 
+    std::uint64_t id_;
     endpoint remote_;
     endpoint client_;
     std::variant<plain_connection_transport, tls_connection_transport> transport_;

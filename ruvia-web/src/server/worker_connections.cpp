@@ -30,6 +30,7 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_runtime.h"
+#include "ruvia/web/server_connection.h"
 
 #include "context/context_services.h"
 #include "http2/http2_sans_io_session.h"
@@ -96,7 +97,8 @@ void name_remote_endpoint(
 worker_connections::worker_connections(asio::io_context& io, const worker_handle& worker_value,
     const route_table& routes_value, worker_capabilities& capabilities,
     http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value,
-    task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_runtime& runtime
+    task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_runtime& runtime,
+    std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_placement http3_placement
@@ -111,8 +113,10 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
       state_(state_value),
       tasks_(tasks),
       runtime_(runtime),
+      worker_index_(worker_index),
       listeners_(process_resource()),
-      scanner_(worker_value, make_connection_scanner_options(options))
+      scanner_(worker_value, make_connection_scanner_options(options)),
+      connection_ids_(worker_index, options.server_.worker_count_)
 #if defined(RUVIA_ENABLE_HTTP3)
       ,
       http3_placement_(http3_placement),
@@ -123,7 +127,7 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
           .options_ = options,
           .scanner_ = scanner_,
           .connection_count_ = connection_count_,
-          .tasks_ = tasks,
+          .connection_ids_ = connection_ids_,
           .stop_token_ = stop_token_value,
           .state_ = state_value,
           .refused_ = refused_,
@@ -133,22 +137,33 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
 {
     listeners_.reserve(listeners.size());
     for (const auto& configured : listeners) {
-        listeners_.push_back(make_pmr_object<listener>(process_resource(), io, configured, process_resource()));
+        listeners_.push_back(
+            make_pmr_object<listener>(process_resource(), io, worker_value, configured, process_resource()));
     }
 #if defined(RUVIA_ENABLE_HTTP3)
     // Every worker (and the Windows acceptor) numbers the HTTP/3 listeners
     // alike, so a handed-over datagram names its endpoint by index.
-    for (auto& configured : listeners_) {
-        if (configured->session_.http3_.has_value()) {
-            http3_endpoints_.push_back(make_pmr_object<http3_endpoint>(process_resource(), http3_services_,
-                configured->session_,
-                asio::ip::udp::endpoint(configured->endpoint_.address(), configured->session_.http3_->port_),
-                http3_endpoints_.size()));
+    for (std::size_t index = 0; index < listeners_.size(); ++index) {
+        if (listeners_[index]->session_.http3_.has_value()) {
+            add_http3_endpoint(index, http3_endpoints_.size());
         }
     }
 #endif
     options_.connection_failure_.counter_ = &failures_;
 }
+#if defined(RUVIA_ENABLE_HTTP3)
+void worker_connections::add_http3_endpoint(std::size_t listener_index, std::size_t http3_index) {
+    auto& configured = *listeners_[listener_index];
+    if (http3_endpoints_.size() <= http3_index) {
+        http3_endpoints_.resize(http3_index + 1);
+    }
+    http3_endpoints_[http3_index] = make_pmr_object<http3_endpoint>(process_resource(), http3_services_,
+        configured.session_,
+        asio::ip::udp::endpoint(configured.endpoint_.address(), configured.session_.http3_->port_), http3_index,
+        configured.tasks_);
+    configured.http3_index_ = http3_index;
+}
+#endif
 #if defined(_WIN32)
 windows_acceptor::business_worker worker_connections::acceptor_target() noexcept {
     return {
@@ -163,6 +178,12 @@ windows_acceptor::business_worker worker_connections::acceptor_target() noexcept
 
 void worker_connections::adopt_socket(std::size_t listener_index, windows_accepted_socket accepted) {
     assert(worker_.is_current());
+    // A listener removed since the acceptor took the socket admits nothing:
+    // the socket closes with `accepted`.
+    if (listener_index >= listeners_.size() || listeners_[listener_index] == nullptr ||
+        !listeners_[listener_index]->admitting_) {
+        return;
+    }
     tcp_socket_type socket(io_);
     std::error_code error;
     socket.assign(listeners_[listener_index]->endpoint_.protocol(), accepted.get(), error);
@@ -182,63 +203,226 @@ void worker_connections::adopt_socket(std::size_t listener_index, windows_accept
 #endif
 void worker_connections::prepare() {
     try {
-        for (auto& configured : listeners_) {
-            configure_http_server_tls_contexts(configured->session_);
-#if !defined(_WIN32)
-            auto& socket = configured->socket_;
-            socket.open(configured->endpoint_.protocol());
-            configure_listener_address(socket);
-            socket.bind(configured->endpoint_);
-            socket.listen(asio::socket_base::max_listen_connections);
-#endif
+        for (std::size_t index = 0; index < listeners_.size(); ++index) {
+            prepare_listener_resources(index);
         }
-#if defined(RUVIA_ENABLE_HTTP3)
-        // After configure_http_server_tls_contexts built the QUIC contexts.
-        for (auto& endpoint : http3_endpoints_) {
-            endpoint->open();
-        }
-#endif
         scanner_.start();
     } catch (...) {
-#if !defined(_WIN32)
-        close_listeners();
-#endif
-#if defined(RUVIA_ENABLE_HTTP3)
-        for (auto& endpoint : http3_endpoints_) {
-            endpoint->close();
+        // The listeners already prepared retire with the failed worker's stop.
+        for (auto& configured : listeners_) {
+            close_listener_sockets(*configured);
         }
-#endif
         scanner_.stop();
         retire_tls();
         throw;
     }
 }
-void worker_connections::open_admission() noexcept {
-    try {
-        if (std::ranges::any_of(listeners_, [](const auto& configured) { return configured->session_.ticket_keys_.has_value(); })) {
-            tasks_.spawn(rotate_tls_ticket_keys());
-        }
+void worker_connections::prepare_listener_resources(std::size_t index) {
+    auto& configured = *listeners_[index];
+    configure_http_server_tls_contexts(configured.session_, static_cast<bool>(options_.tls_client_hello_));
 #if !defined(_WIN32)
-        for (std::size_t index = 0; index < listeners_.size(); ++index) {
-            tasks_.spawn(run_accept_loop(index));
+    auto& socket = configured.socket_;
+    const auto inherited =
+        configured.inherited_ != nullptr ? configured.inherited_->claim_tcp(worker_index_) : invalid_native_socket;
+    if (inherited != invalid_native_socket) {
+        // Checked to listen on this endpoint when it was handed over.
+        std::error_code error;
+        socket.assign(configured.endpoint_.protocol(), inherited, error);
+        if (error) {
+            close_native_socket(inherited);
+            throw std::system_error(error, "failed to adopt an inherited TCP listener socket");
         }
+    } else {
+        socket.open(configured.endpoint_.protocol());
+        configure_listener_address(socket);
+        socket.bind(configured.endpoint_);
+        socket.listen(asio::socket_base::max_listen_connections);
+    }
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-        if (!http3_endpoints_.empty()) {
-            http3_placement_.directory_->attach(http3_placement_.worker_index_, this,
-                [](void* target, std::size_t listener_index, http3_handoff_datagram& datagram) noexcept {
-                    static_cast<worker_connections*>(target)->receive_http3_handoff(listener_index, datagram);
-                });
-        }
-        for (auto& endpoint : http3_endpoints_) {
-            endpoint->start();
-        }
+    // After configure_http_server_tls_contexts built the QUIC context.
+    if (configured.http3_index_.has_value()) {
+#if defined(_WIN32)
+        http3_endpoints_[*configured.http3_index_]->open(nullptr);
+#else
+        http3_endpoints_[*configured.http3_index_]->open(configured.inherited_.get());
 #endif
+    }
+#endif
+#if !defined(_WIN32)
+    // What this worker did not claim belongs to the other workers and closes
+    // with the last of them.
+    configured.inherited_.reset();
+#endif
+    tasks_.spawn(retire_listener(index));
+    configured.prepared_ = true;
+}
+void worker_connections::open_admission() noexcept {
+    try {
+        for (std::size_t index = 0; index < listeners_.size(); ++index) {
+            start_listener(index);
+        }
     } catch (...) {
         report_accept_failure(std::current_exception(), true);
     }
 }
+void worker_connections::start_listener(std::size_t index) {
+    auto& configured = *listeners_[index];
+    configured.admitting_ = true;
+    if (configured.session_.ticket_keys_.has_value() && !rotating_ticket_keys_) {
+        tasks_.spawn(rotate_tls_ticket_keys());
+    }
+#if !defined(_WIN32)
+    configured.tasks_.spawn(run_accept_loop(index));
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    if (configured.http3_index_.has_value()) {
+        if (!http3_attached_) {
+            http3_placement_.directory_->attach(http3_placement_.worker_index_, this,
+                [](void* target, std::size_t listener_index, http3_handoff_datagram& datagram) noexcept {
+                    static_cast<worker_connections*>(target)->receive_http3_handoff(listener_index, datagram);
+                });
+            http3_attached_ = true;
+        }
+        http3_endpoints_[*configured.http3_index_]->start();
+    }
+#endif
+}
+void worker_connections::prepare_listener(std::size_t index, [[maybe_unused]] std::optional<std::size_t> http3_index,
+    const http_server_listener_definition& definition
+#if defined(RUVIA_ENABLE_HTTP3)
+    ,
+    http3_worker_directory* directory
+#endif
+) {
+    assert(worker_.is_current());
+    if (!http_server_worker_running(state_)) {
+        throw std::logic_error("the worker is stopping");
+    }
+    if (listeners_.size() <= index) {
+        listeners_.resize(index + 1);
+    }
+    listeners_[index] = make_pmr_object<listener>(process_resource(), io_, worker_, definition, process_resource());
+    try {
+#if defined(RUVIA_ENABLE_HTTP3)
+        if (http3_index.has_value()) {
+            // The application creates the directory with its first HTTP/3 listener.
+            if (http3_placement_.directory_ == nullptr) {
+                http3_placement_.directory_ = directory;
+                http3_services_.placement_.directory_ = directory;
+            }
+            add_http3_endpoint(index, *http3_index);
+        }
+#endif
+        prepare_listener_resources(index);
+    } catch (...) {
+        // Nothing was spawned in its scope.
+#if defined(RUVIA_ENABLE_HTTP3)
+        if (http3_index.has_value() && *http3_index < http3_endpoints_.size()) {
+            http3_endpoints_[*http3_index].reset();
+        }
+#endif
+        listeners_[index].reset();
+        throw;
+    }
+}
+void worker_connections::open_listener(std::size_t index) noexcept {
+    assert(worker_.is_current());
+    // A stopping worker admits nothing; its stop retires the listener.
+    if (!http_server_worker_running(state_) || index >= listeners_.size() || listeners_[index] == nullptr) {
+        return;
+    }
+    try {
+        start_listener(index);
+    } catch (...) {
+        report_accept_failure(std::current_exception(), true);
+    }
+}
+void worker_connections::discard_listener(std::size_t index) noexcept {
+    assert(worker_.is_current());
+    if (index >= listeners_.size() || listeners_[index] == nullptr) {
+        return;
+    }
+    // A listener in a slot was prepared, so a task awaits its retirement.
+    auto& configured = *listeners_[index];
+    close_listener_sockets(configured);
+    configured.retired_.notify();
+}
+void worker_connections::remove_listener(std::size_t index, [[maybe_unused]] std::shared_ptr<void> receipt) noexcept {
+    assert(worker_.is_current());
+    // Not admitting: the worker's stop already retired it.
+    if (index >= listeners_.size() || listeners_[index] == nullptr || !listeners_[index]->admitting_) {
+        return;
+    }
+    auto& configured = *listeners_[index];
+    configured.admitting_ = false;
+#if !defined(_WIN32)
+    // Closing cancels the pending accept; the loop then exits.
+    asio::error_code ignored;
+    configured.socket_.close(ignored);
+    if (configured.accepting_) {
+        configured.removal_receipt_ = std::move(receipt);
+    }
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    if (configured.http3_index_.has_value()) {
+        http3_endpoints_[*configured.http3_index_]->retire();
+    }
+#endif
+    configured.retired_.notify();
+}
+#if !defined(_WIN32)
+listener_socket_duplicates worker_connections::duplicate_listener(std::size_t index) {
+    assert(worker_.is_current());
+    if (index >= listeners_.size() || listeners_[index] == nullptr || !listeners_[index]->admitting_ ||
+        !listeners_[index]->socket_.is_open()) {
+        throw std::logic_error("the listener no longer accepts on this worker");
+    }
+    auto& configured = *listeners_[index];
+    listener_socket_duplicates duplicates;
+    duplicates.tcp_ = duplicate_native_socket(configured.socket_.native_handle());
+#if defined(RUVIA_ENABLE_HTTP3)
+    if (configured.http3_index_.has_value()) {
+        try {
+            duplicates.udp_ = http3_endpoints_[*configured.http3_index_]->duplicate_socket();
+        } catch (...) {
+            close_native_socket(duplicates.tcp_);
+            throw;
+        }
+    }
+#endif
+    return duplicates;
+}
+#endif
+void worker_connections::close_listener_sockets(listener& configured) noexcept {
+    configured.admitting_ = false;
+#if !defined(_WIN32)
+    asio::error_code ignored;
+    configured.socket_.close(ignored);
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    if (configured.http3_index_.has_value()) {
+        http3_endpoints_[*configured.http3_index_]->close();
+    }
+#endif
+}
+task<void> worker_connections::retire_listener(std::size_t index) {
+    auto& configured = *listeners_[index];
+    co_await configured.retired_.wait();
+    co_await configured.tasks_.join();
+#if defined(RUVIA_ENABLE_HTTP3)
+    if (configured.http3_index_.has_value()) {
+        http3_endpoints_[*configured.http3_index_].reset();
+    }
+#endif
+    listeners_[index].reset();
+}
 void worker_connections::stop() noexcept {
+    for (auto& configured : listeners_) {
+        if (configured != nullptr) {
+            configured->admitting_ = false;
+        }
+    }
 #if !defined(_WIN32)
     close_listeners();
 #endif
@@ -246,40 +430,62 @@ void worker_connections::stop() noexcept {
     scanner_.close_all();
 #if defined(RUVIA_ENABLE_HTTP3)
     // After close_all() sent each QUIC connection's CONNECTION_CLOSE.
-    if (!http3_endpoints_.empty()) {
+    if (std::exchange(http3_attached_, false)) {
         http3_placement_.directory_->detach(http3_placement_.worker_index_);
     }
     for (auto& endpoint : http3_endpoints_) {
-        endpoint->close();
+        if (endpoint != nullptr) {
+            endpoint->close();
+        }
     }
 #endif
+    // Each listener retires once the tasks these closes end have unwound.
+    for (auto& configured : listeners_) {
+        if (configured != nullptr && configured->prepared_) {
+            configured->retired_.notify();
+        }
+    }
 }
 #if defined(RUVIA_ENABLE_HTTP3)
 void worker_connections::receive_http3_handoff(std::size_t listener_index, http3_handoff_datagram& datagram) noexcept {
-    if (listener_index < http3_endpoints_.size()) {
+    // A retired endpoint's slot stays empty.
+    if (listener_index < http3_endpoints_.size() && http3_endpoints_[listener_index] != nullptr) {
         http3_endpoints_[listener_index]->receive_handoff(datagram);
     }
 }
 #endif
 void worker_connections::retire_tls() noexcept {
     for (auto& configured : listeners_) {
-        auto& session = configured->session_;
-        session.tls_context_.reset();
-        session.sni_contexts_.clear();
-        session.quic_tls_context_.reset();
-        session.quic_sni_contexts_.clear();
-        session.ticket_keys_.reset();
+        if (configured != nullptr) {
+            auto& session = configured->session_;
+            session.tls_context_.reset();
+            session.quic_tls_context_.reset();
+            session.ticket_keys_.reset();
+        }
+    }
+}
+void worker_connections::adopt_tls_identities(
+    std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept {
+    assert(worker_.is_current());
+    if (listener_index < listeners_.size() && listeners_[listener_index] != nullptr) {
+        listeners_[listener_index]->session_.adopt_tls_identities(std::move(identities));
     }
 }
 // RFC 9325 §3.4: adopts each TLS listener's next ticket key epoch as it begins.
-// It keeps running while the worker serves and ends when its timers stop, so
-// this worker holds no key past its validity by more than the timer latency.
-// The keys change between handshakes on this thread, never during one.
+// It keeps running while the worker serves a TLS listener and ends when its
+// timers stop, so this worker holds no key past its validity by more than the
+// timer latency. The keys change between handshakes on this thread, never
+// during one. Every listener of the run shares one key epoch origin, so a
+// listener added while this waits rotates at the instant it waits for.
 task<void> worker_connections::rotate_tls_ticket_keys() {
+    rotating_ticket_keys_ = true;
     for (;;) {
         const auto now = std::chrono::steady_clock::now();
         auto next = std::chrono::steady_clock::time_point::max();
         for (auto& configured : listeners_) {
+            if (configured == nullptr) {
+                continue;
+            }
             auto& session = configured->session_;
             const auto* tls = session.tls();
             if (tls == nullptr || !session.ticket_keys_.has_value()) {
@@ -301,9 +507,11 @@ task<void> worker_connections::rotate_tls_ticket_keys() {
         }
         if (next == std::chrono::steady_clock::time_point::max() ||
             co_await sleep_until(worker_, next, stop_token_) == timer_sleep_result::stop_requested) {
-            co_return;
+            break;
         }
     }
+    // A TLS listener added later starts the next one.
+    rotating_ticket_keys_ = false;
 }
 http_server_stats worker_connections::stats() const noexcept {
     http_server_stats result;
@@ -317,13 +525,16 @@ http_server_stats worker_connections::stats() const noexcept {
 #if !defined(_WIN32)
 void worker_connections::close_listeners() noexcept {
     for (auto& configured : listeners_) {
-        asio::error_code ignored;
-        configured->socket_.close(ignored);
+        if (configured != nullptr) {
+            asio::error_code ignored;
+            configured->socket_.close(ignored);
+        }
     }
 }
 
 task<void> worker_connections::run_accept_loop(std::size_t index) {
     auto& configured = *listeners_[index];
+    configured.accepting_ = true;
     try {
         while (http_server_worker_running(state_) && configured.socket_.is_open()) {
             // The accepted socket is born on this worker and never changes
@@ -333,7 +544,7 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
                 configured.socket_.async_accept(socket, asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
             });
             if (!http_server_worker_running(state_) || !configured.socket_.is_open()) {
-                co_return;
+                break;
             }
             const auto error = completion.error_code();
             if (!error) {
@@ -354,12 +565,15 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
             }
             if (co_await sleep_for(worker_, std::chrono::milliseconds(25), stop_token_) ==
                 timer_sleep_result::stop_requested) {
-                co_return;
+                break;
             }
         }
     } catch (...) {
         report_accept_failure(std::current_exception(), true);
     }
+    // A removal waits for this loop to exit.
+    configured.accepting_ = false;
+    configured.removal_receipt_.reset();
 }
 #endif
 
@@ -380,14 +594,27 @@ void worker_connections::report_accept_failure(std::exception_ptr failure, bool 
 // the remote address outside their try so the failure report can name the
 // peer; it stays empty if the failure happened before the address was resolved.
 task<void> worker_connections::run_session(http_server_session_config& listener_value,
-    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote) {
+    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id) {
     auto& socket = connection.socket();
     std::pmr::string remote_address(process_resource());
     std::uint16_t remote_port = 0;
     try {
         name_remote_endpoint(remote, remote_address, remote_port);
+        if (listener_value.connection_.has_value()) {
+            co_await serve_connection(socket, socket,
+                server_connection_fields{.id_ = connection_id,
+                    .local_address_ = {},
+                    .local_port_ = 0,
+                    .remote_address_ = remote_address,
+                    .remote_port_ = remote_port,
+                    .tls_ = std::nullopt});
+            ruvia::close_socket(socket);
+            co_return;
+        }
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
-            capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
+            capabilities_.make_context_services(stop_token_)
+                .with_plain_transport(connection_id, remote_address, remote_port)
+                .with_request_stream(listener_value.request_stream_ ? options_.request_stream_ : request_stream_callback_ref{}));
         // Plain TCP has no close alert: only a lingering close differs from an
         // immediate one. A worker stop closes at once; scanner close_all
         // reaches a lingering close that is already running.
@@ -401,7 +628,7 @@ task<void> worker_connections::run_session(http_server_session_config& listener_
 }
 
 task<void> worker_connections::run_tls_session(http_server_session_config& listener_value,
-    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote) {
+    accepted_connection_lease connection, std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id) {
     auto& socket = connection.socket();
     std::pmr::string remote_address(process_resource());
     std::uint16_t remote_port = 0;
@@ -411,7 +638,34 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         if (!http_server_worker_running(state_)) {
             co_return;
         }
+        // Declared before the TLS stream: its SSL borrows them while it lives.
+        // Identity selection matches the local address; the ClientHello
+        // observer names it.
+        std::error_code local_error;
+        const auto local = socket.local_endpoint(local_error);
+        const auto local_address = local.address();
+        std::pmr::string local_address_text(process_resource());
+        std::optional<tls_client_hello_observation> client_hello;
+        if (options_.tls_client_hello_) {
+            if (!local_error) {
+                assign_peer_address(local_address_text, local_address);
+            }
+            client_hello.emplace(tls_client_hello_observation{.callback_ = options_.tls_client_hello_,
+                .fields_ = {.connection_id_ = connection_id,
+                    .local_address_ = local_address_text,
+                    .local_port_ = local_error ? std::uint16_t{0} : local.port(),
+                    .remote_address_ = remote_address,
+                    .remote_port_ = remote_port,
+                    .quic_ = false,
+                    .message_ = {}}});
+        }
         server_tls_stream tls_stream(socket, *listener_value.tls_context_);
+        if (!local_error) {
+            bind_tls_local_address(*tls_stream.native_handle(), local_address);
+        }
+        if (client_hello.has_value()) {
+            observe_tls_client_hello(*tls_stream.native_handle(), *client_hello);
+        }
         {
             // The TLS handshake has its own initial-read deadline. It must be
             // released the moment the handshake resolves and before the
@@ -438,12 +692,31 @@ task<void> worker_connections::run_tls_session(http_server_session_config& liste
         if (listener_value.tls()->client_certificates_.has_value()) {
             client_subject = extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
         }
-        tls_served_certificate served_certificate(SSL_get_certificate(tls_stream.native_handle()));
+        auto& native_tls = *tls_stream.native_handle();
+        const auto alpn = tls_selected_alpn(native_tls);
+        const auto server_name = tls_server_name(native_tls);
+        if (listener_value.connection_.has_value()) {
+            co_await serve_connection(tls_stream, socket,
+                server_connection_fields{.id_ = connection_id,
+                    .local_address_ = {},
+                    .local_port_ = 0,
+                    .remote_address_ = remote_address,
+                    .remote_port_ = remote_port,
+                    .tls_ = server_connection_fields::tls_type{.client_certificate_subject_ = client_subject,
+                        .alpn_ = alpn,
+                        .server_name_ = server_name}});
+            ruvia::close_socket(socket);
+            co_return;
+        }
+        tls_served_certificate served_certificate(SSL_get_certificate(&native_tls));
         const auto services = capabilities_.make_context_services(stop_token_)
-                                  .with_tls_transport(remote_address, client_subject, remote_port, served_certificate)
-                                  .with_alternative_service(listener_value.alternative_service_);
+                                  .with_tls_transport(connection_id, remote_address, client_subject, alpn, server_name,
+                                      remote_port, served_certificate)
+                                  .with_alternative_service(listener_value.alternative_service_)
+                                  .with_request_stream(listener_value.request_stream_ ? options_.request_stream_
+                                                                                      : request_stream_callback_ref{});
 #if defined(RUVIA_ENABLE_HTTP2)
-        const auto close_mode = tls_selected_alpn(*tls_stream.native_handle()) == "h2"
+        const auto close_mode = alpn == "h2"
                                     ? co_await run_http2(tls_stream, socket, services)
                                     : co_await run_stream(listener_value, tls_stream, socket, services);
 #else
@@ -502,9 +775,14 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
     try {
         configure_accepted_socket(socket);
         accepted_connection_lease connection(std::move(socket), connection_count_);
-        auto& listener_value = listeners_[listener_index]->session_;
-        tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection), remote)
-                                                     : run_session(listener_value, std::move(connection), remote));
+        // The session borrows its listener, whose scope joins it before the
+        // listener retires.
+        auto& configured = *listeners_[listener_index];
+        auto& listener_value = configured.session_;
+        const auto connection_id = connection_ids_.next();
+        configured.tasks_.spawn(listener_value.tls() != nullptr
+                                    ? run_tls_session(listener_value, std::move(connection), remote, connection_id)
+                                    : run_session(listener_value, std::move(connection), remote, connection_id));
     } catch (...) {
         auto failure = std::current_exception();
         std::pmr::string remote_address(process_resource());

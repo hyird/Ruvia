@@ -26,6 +26,19 @@ bool throws_invalid(fn_type&& fn) {
 
 }  // namespace
 
+// In-memory PEM serves HTTPS listeners only: every client reads identity
+// files, and is never handed PEM text it would silently ignore.
+TEST(Ruvia, client_tls_rejects_in_memory_pem_identity) {
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().client({.alias_ = "tls-pem-identity",
+            .base_url_ = "https://example.com",
+            .tls_ = {.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = "client.pem",
+                         .private_key_file_ = "client.key",
+                         .certificate_chain_pem_ = "pem",
+                         .private_key_pem_ = "pem"}}});
+    }));
+}
+
 #ifdef RUVIA_ENABLE_REDIS
 TEST(Ruvia, client_tls_rejects_unsafe_outgoing_record_limits) {
     const auto rejects = [](std::uint64_t limit) {

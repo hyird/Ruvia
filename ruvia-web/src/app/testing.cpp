@@ -159,8 +159,9 @@ struct test_app::impl_type final {
 
         const auto& routes_value = *routes_;
         const auto resolution = routes_value.resolve(parsed_value);
+        // A test request has no transport connection, hence connection id zero.
         const auto services = capabilities_->make_context_services(stop_token_)
-                                  .with_plain_transport(request.remote_address_, request.remote_port_);
+                                  .with_plain_transport(0, request.remote_address_, request.remote_port_);
 
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.

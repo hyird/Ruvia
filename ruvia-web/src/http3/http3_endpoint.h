@@ -36,7 +36,8 @@ class route_table;
 class worker_capabilities;
 
 // The worker-owned services every HTTP/3 connection of a worker borrows.
-// Each outlives the worker's connections, which its task scope joins.
+// Each outlives the worker's connections, which their listeners' task scopes
+// join.
 struct http3_worker_services final {
     asio::io_context& io_;
     const worker_handle& worker_;
@@ -45,7 +46,7 @@ struct http3_worker_services final {
     http_server_options& options_;
     connection_scanner& scanner_;
     connection_count& connection_count_;
-    task_scope& tasks_;
+    connection_id_sequence& connection_ids_;
     const stop_token& stop_token_;
     const http_server_worker_state& state_;
     std::atomic<std::size_t>& refused_;
@@ -75,21 +76,32 @@ struct http3_worker_services final {
 class http3_endpoint final {
 public:
     // `listener_index` names this listener's endpoint on every worker (and in
-    // the Windows acceptor), for datagrams handed between them.
+    // the Windows acceptor), for datagrams handed between them. Its receive
+    // loop and connections run in `tasks`, its listener's scope.
     http3_endpoint(const http3_worker_services& services, http_server_session_config& session,
-        asio::ip::udp::endpoint endpoint, std::size_t listener_index);
+        asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks);
     ~http3_endpoint();
     http3_endpoint(const http3_endpoint&) = delete;
     http3_endpoint& operator=(const http3_endpoint&) = delete;
 
-    // POSIX binds the UDP socket (SO_REUSEADDR and SO_REUSEPORT); Windows,
+    // POSIX binds the UDP socket (SO_REUSEADDR and SO_REUSEPORT), or claims
+    // it from `inherited` when that holds the service's sockets; Windows,
     // whose acceptor binds it, only prepares the QUIC backend.
-    void open();
+    void open(inherited_listener_sockets* inherited);
     // Starts admitting connections, and on POSIX receiving.
     void start();
+    // The listener was removed: no connection is admitted any more, while
+    // established ones are served. After the last one ends the POSIX socket
+    // closes; on Windows the acceptor learns that this worker no longer
+    // needs the listener's socket.
+    void retire() noexcept;
     // The worker stops: no connection is admitted any more, and the POSIX
     // socket closes. Its connections were already closed by the scanner.
     void close() noexcept;
+#if !defined(_WIN32)
+    // A dup() of the open socket, for application::duplicate_listener_sockets().
+    [[nodiscard]] native_socket duplicate_socket();
+#endif
 
     // A datagram another thread received for this worker.
     void receive_handoff(http3_handoff_datagram& datagram) noexcept;
@@ -138,12 +150,15 @@ private:
     void send_stateless_reset(std::span<const std::uint8_t> destination_cid, std::size_t trigger_bytes,
         const asio::ip::udp::endpoint& remote) noexcept;
     [[nodiscard]] bool consume_stateless_reset_budget() noexcept;
+    // A retiring endpoint whose last connection ended.
+    void release_after_last_connection() noexcept;
 
     const http3_worker_services& services_;
     http_server_session_config& session_;
     asio::ip::udp::endpoint configured_endpoint_;
     asio::ip::udp::endpoint local_endpoint_;
     std::size_t listener_index_;
+    task_scope& tasks_;
 #if !defined(_WIN32)
     asio::ip::udp::socket socket_;
     // One received datagram at a time; a UDP payload never exceeds it.
@@ -152,9 +167,12 @@ private:
     std::pmr::unordered_map<http3_cid_key, http3_session*, http3_cid_key_hash> connections_;
     std::chrono::steady_clock::time_point stateless_reset_refill_at_{};
     std::size_t stateless_reset_tokens_{32};
+    // Sessions serve() is running.
+    std::size_t sessions_{0};
     // Between open() and close(): datagrams are processed.
     bool open_{false};
     bool admitting_{false};
+    bool retiring_{false};
 };
 
 }  // namespace ruvia::detail

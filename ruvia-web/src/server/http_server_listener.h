@@ -14,13 +14,16 @@
 #include <variant>
 #include <vector>
 
+#include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/server_config.h"
 
+#include "server/inherited_listener_sockets.h"
 #include "tls/tls_credential.h"
+#include "tls/tls_files.h"
 #include "tls/tls_session_ticket_keys.h"
 
 namespace ruvia::detail {
@@ -29,33 +32,69 @@ namespace ruvia::detail {
 // bytes, so packets can be steered to that worker.
 inline constexpr std::size_t http3_max_worker_count = 65536;
 
+// One TLS listener's identities, immutable once loaded: a run's workers and
+// the stored listener definition share one set, and
+// application::replace_tls_identities() publishes a new set instead of
+// changing one.
+struct http_server_tls_identities final {
+    struct named_identity final {
+        named_identity(std::string_view name, tls_certificate certificate, std::pmr::memory_resource* resource)
+            : name_(name, pmr_resource_or_default(resource)),
+              certificate_(std::move(certificate)) {}
+
+        // ASCII lowercase: a host name, or the parent domain a wildcard's
+        // "*" label stands in front of.
+        std::pmr::string name_;
+        tls_certificate certificate_;
+    };
+
+    struct addressed_identity final {
+        // An IPv4-mapped IPv6 address is held in its IPv4 form.
+        asio::ip::address address_;
+        tls_certificate certificate_;
+    };
+
+    http_server_tls_identities(tls_certificate primary, std::pmr::memory_resource* resource)
+        : primary_(std::move(primary)),
+          exact_names_(pmr_resource_or_default(resource)),
+          wildcard_names_(pmr_resource_or_default(resource)),
+          local_addresses_(pmr_resource_or_default(resource)) {}
+
+    // The identity of a handshake whose ClientHello offered `server_name`
+    // (empty without one) and arrived at `local_address` (null when
+    // unknown): an exact name, then a wildcard covering exactly the name's
+    // left-most label (RFC 6125 §6.4.3), then the local address, else the
+    // primary.
+    [[nodiscard]] const tls_certificate& select(
+        std::string_view server_name, const asio::ip::address* local_address) const noexcept;
+
+    tls_certificate primary_;
+    std::pmr::vector<named_identity> exact_names_;
+    std::pmr::vector<named_identity> wildcard_names_;
+    std::pmr::vector<addressed_identity> local_addresses_;
+};
+
 struct http_server_listener_definition final {
-    // Every TLS member is loaded when the listener is configured: no file name
-    // or private-key password survives in a definition or its clones.
+    // Every TLS member is loaded when the listener is configured: no identity
+    // file name, in-memory PEM or private-key password survives in a
+    // definition or its clones.
     struct tls_client_certificate_policy final {
         tls_client_certificate_requirement requirement_{tls_client_certificate_requirement::optional};
         tls_trust_store client_ca_;
+        // The configured bundle's name, only so replace_tls_identities() can
+        // recognize the unchanged policy it requires.
+        tls_file_name ca_file_;
     };
 
     struct tls final {
-        struct sni_identity final {
-            sni_identity(std::string_view host, tls_certificate certificate,
-                std::pmr::memory_resource* resource)
-                : host_(host, pmr_resource_or_default(resource)),
-                  certificate_(std::move(certificate)) {}
+        explicit tls(std::shared_ptr<const http_server_tls_identities> identities) noexcept
+            : identities_(std::move(identities)) {}
 
-            std::pmr::string host_;
-            tls_certificate certificate_;
-        };
-
-        tls(tls_certificate certificate, std::pmr::memory_resource* resource)
-            : certificate_(std::move(certificate)),
-              sni_identities_(pmr_resource_or_default(resource)) {}
-
-        tls_certificate certificate_;
+        // Never null. A worker's copy is the set its handshakes select from
+        // now; only that worker replaces it, between handshakes.
+        std::shared_ptr<const http_server_tls_identities> identities_;
         std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
         std::optional<tls_client_certificate_policy> client_certificates_;
-        std::pmr::vector<sni_identity> sni_identities_;
         // Created once by server configuration validation and shared by every
         // worker, which copies its keys into its own TLS contexts' key set.
         std::shared_ptr<tls_session_ticket_key_ring> session_ticket_keys_;
@@ -80,6 +119,17 @@ struct http_server_listener_definition final {
         std::shared_ptr<const std::array<std::uint8_t, 32>> secret_;
     };
 
+    // listener_dispatch::connection: application::on_connection serves every
+    // connection. A TLS listener offers alpn_ (tls_config::alpn_ or its
+    // default) in server preference, encoded as an RFC 7301 §3.1
+    // ProtocolNameList without its length prefix; empty for a cleartext one.
+    struct connection_dispatch final {
+        connection_dispatch(std::string_view alpn, std::pmr::memory_resource* resource)
+            : alpn_(alpn, pmr_resource_or_default(resource)) {}
+
+        std::pmr::string alpn_;
+    };
+
     using transport_type = std::variant<plain_http, tls, redirect_http_to_https>;
 
     http_server_listener_definition(asio::ip::tcp::endpoint configured_endpoint,
@@ -92,9 +142,18 @@ struct http_server_listener_definition final {
     [[nodiscard]] http_server_listener_definition clone(std::pmr::memory_resource* resource) const;
 
     asio::ip::tcp::endpoint endpoint_;
+    // listen_config::inherited_sockets_ of this listener, shared by its
+    // clones; null when it binds. The run that prepares the listener claims
+    // them; the stored definition drops them once a run took them.
+    std::shared_ptr<inherited_listener_sockets> inherited_sockets_;
     transport_type transport_;
     // Only a TLS listener carries one.
     std::optional<http3_service> http3_;
+    // Absent for listener_dispatch::routes.
+    std::optional<connection_dispatch> connection_;
+    // listener_dispatch::request_stream: application::on_request_stream serves
+    // every request, on this listener and on its HTTP/3 service.
+    bool request_stream_{false};
 };
 
 // Only validated configurations carry a key ring; an unvalidated definition
@@ -106,18 +165,6 @@ struct http_server_listener_definition final {
     }
     return *tls.session_ticket_keys_;
 }
-
-using sni_context_store_type = std::pmr::vector<asio::ssl::context>;
-
-class http_server_session_config;
-
-// The SNI callback argument of one TLS context family: the listener's
-// identities and the per-host contexts built for that family (TLS over TCP,
-// or TLS for QUIC).
-struct http_server_sni_selection final {
-    const http_server_session_config* session_;
-    sni_context_store_type* contexts_;
-};
 
 class http_server_session_config final {
 public:
@@ -140,8 +187,18 @@ public:
     }
     const http_server_listener_definition::redirect_http_to_https* redirect() const&& = delete;
 
+    // Worker thread, between handshakes: every ClientHello this listener (TLS
+    // over TCP and its HTTP/3 service) processes later selects from
+    // `identities`. Handshakes keep only the identity they selected, so the
+    // previous set may be released here.
+    void adopt_tls_identities(std::shared_ptr<const http_server_tls_identities> identities) noexcept;
+
     http_server_listener_definition::transport_type transport_;
     std::optional<http_server_listener_definition::http3_service> http3_;
+    // Stable for the session's lifetime: the TLS contexts' ALPN selection
+    // borrows connection_->alpn_.
+    std::optional<http_server_listener_definition::connection_dispatch> connection_;
+    bool request_stream_{false};
     // The Alt-Svc field value advertising http3_ (RFC 7838 §3), sent on every
     // response of this TLS listener; empty without an HTTP/3 service.
     std::pmr::string alternative_service_;
@@ -149,13 +206,13 @@ public:
     // worker thread once per key epoch. The TLS contexts below point at it, so
     // it is declared before them and outlives them.
     std::optional<tls_session_ticket_key_set> ticket_keys_;
+    // One context per family for the worker's whole run, carrying no
+    // identity: replacing identities keeps its session cache and ticket keys,
+    // and every handshake installs the identity it selects on its own SSL.
+    // TLS over TCP:
     std::optional<asio::ssl::context> tls_context_;
-    sni_context_store_type sni_contexts_;
-    // TLS 1.3 contexts with ALPN h3 for the HTTP/3 service, same identities.
+    // TLS 1.3 with ALPN h3 for the HTTP/3 service:
     std::optional<asio::ssl::context> quic_tls_context_;
-    sni_context_store_type quic_sni_contexts_;
-    http_server_sni_selection tls_sni_{this, &sni_contexts_};
-    http_server_sni_selection quic_sni_{this, &quic_sni_contexts_};
 };
 
 }  // namespace ruvia::detail

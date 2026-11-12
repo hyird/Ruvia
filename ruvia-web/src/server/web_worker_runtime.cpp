@@ -15,13 +15,15 @@
 namespace ruvia::detail {
 
 web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration,
-    const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool
+    const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool,
+    std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_placement http3_placement
 #endif
     )
-    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool
+    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool,
+          worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
           ,
           http3_placement
@@ -31,7 +33,7 @@ web_worker_runtime::web_worker_runtime(const validated_http_server_configuration
 
 web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_definition> listeners,
     const route_table& routes_value, worker_capability_definitions capabilities,
-    http_server_options validated_options, blocking_pool* pool
+    http_server_options validated_options, blocking_pool* pool, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
     ,
     http3_worker_placement http3_placement
@@ -62,7 +64,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .file_io_timeout_ = options_.server_.write_timeout_,
               .connection_failure_ = &options_.connection_failure_,
           }),
-      connections_(io_context_, runtime_.handle(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_
+      connections_(io_context_, runtime_.handle(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_, worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
           ,
           http3_placement

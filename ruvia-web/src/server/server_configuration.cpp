@@ -112,34 +112,63 @@ void http_server_options::set_trusted_proxies(const trusted_proxy_config& config
     trusted_proxies_ = std::move(parsed);
 }
 
+http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener,
+    const http_server_options& options, std::chrono::steady_clock::time_point key_origin,
+    std::pmr::memory_resource* resource) {
+    const auto worker_count = options.server_.worker_count_;
+    if (const auto* redirect = std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener.transport_)) {
+        detail::ensure_non_zero_port(redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
+    }
+    if (listener.connection_.has_value() && !options.connection_) {
+        throw std::invalid_argument("listener_dispatch::connection requires application::on_connection()");
+    }
+    if (listener.request_stream_ && !options.request_stream_) {
+        throw std::invalid_argument("listener_dispatch::request_stream requires application::on_request_stream()");
+    }
+    // A QUIC connection ID names its owning worker in 16 bits.
+    if (listener.http3_.has_value() && worker_count > http3_max_worker_count) {
+        throw std::invalid_argument("HTTP/3 supports at most 65536 workers");
+    }
+#if !defined(_WIN32)
+    // Worker i serves inherited socket i; listen() admitted one per service on Windows.
+    if (const auto& inherited = listener.inherited_sockets_; inherited != nullptr &&
+                                                             ((!inherited->tcp().empty() && inherited->tcp().size() != worker_count) ||
+                                                                 (!inherited->udp().empty() && inherited->udp().size() != worker_count))) {
+        throw std::invalid_argument("inherited listener sockets must number one per worker");
+    }
+#endif
+    auto validated = listener.clone(resource);
+    // One ticket key ring per TLS listener for this run, so TLS resumption
+    // does not depend on which worker accepts the connection. Credentials
+    // were loaded once by listen(); every worker installs them.
+    if (auto* tls = std::get_if<http_server_listener_definition::tls>(&validated.transport_)) {
+        tls->session_ticket_keys_ = std::allocate_shared<tls_session_ticket_key_ring>(
+            std::pmr::polymorphic_allocator<tls_session_ticket_key_ring>(resource), key_origin);
+    }
+    // One QUIC secret per HTTP/3 service, shared by every worker so any
+    // worker can tell which one owns a connection ID.
+    if (validated.http3_.has_value()) {
+        auto secret = std::allocate_shared<std::array<std::uint8_t, 32>>(
+            std::pmr::polymorphic_allocator<std::array<std::uint8_t, 32>>(resource));
+        if (!fill_random_bytes(std::span<unsigned char>(secret->data(), secret->size()))) {
+            throw std::runtime_error("failed to generate the HTTP/3 connection ID secret");
+        }
+        validated.http3_->secret_ = std::move(secret);
+    }
+    return validated;
+}
+
 validated_http_server_configuration::validated_http_server_configuration(
     std::span<const http_server_listener_definition> listeners, http_server_options&& options)
     : listeners_(process_resource()),
-      options_(std::move(options)) {
+      options_(std::move(options)),
+      // Every listener's key epochs start together, so all workers rotate them
+      // at the same instants.
+      tls_key_origin_(std::chrono::steady_clock::now()) {
     listeners_.reserve(listeners.size());
-    // Every listener's key epochs start together, so all workers rotate them
-    // at the same instants.
-    const auto key_origin = std::chrono::steady_clock::now();
     for (const auto& listener : listeners) {
-        auto& validated = listeners_.emplace_back(listener.clone(listeners_.get_allocator().resource()));
-        // One ticket key ring per TLS listener for this configuration, so TLS
-        // resumption does not depend on which worker accepts the connection.
-        // Credentials were loaded once by listen(); every worker installs them.
-        if (auto* tls = std::get_if<http_server_listener_definition::tls>(&validated.transport_)) {
-            tls->session_ticket_keys_ = std::allocate_shared<tls_session_ticket_key_ring>(
-                std::pmr::polymorphic_allocator<tls_session_ticket_key_ring>(listeners_.get_allocator().resource()),
-                key_origin);
-        }
-        // One QUIC secret per HTTP/3 service, shared by every worker so any
-        // worker can tell which one owns a connection ID.
-        if (validated.http3_.has_value()) {
-            auto secret = std::allocate_shared<std::array<std::uint8_t, 32>>(
-                std::pmr::polymorphic_allocator<std::array<std::uint8_t, 32>>(listeners_.get_allocator().resource()));
-            if (!fill_random_bytes(std::span<unsigned char>(secret->data(), secret->size()))) {
-                throw std::runtime_error("failed to generate the HTTP/3 connection ID secret");
-            }
-            validated.http3_->secret_ = std::move(secret);
-        }
+        listeners_.push_back(
+            validate_run_listener(listener, options_, tls_key_origin_, listeners_.get_allocator().resource()));
     }
 }
 
@@ -188,27 +217,8 @@ void validate_server_limits(const server_config& config) {
         "HTTP client in-flight response budget must be greater than zero");
 }
 
-namespace {
-
-void validate_http_server_listener(const http_server_listener_definition& listener_value) {
-    if (const auto* redirect =
-            std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener_value.transport_)) {
-        detail::ensure_non_zero_port(
-            redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
-    }
-}
-
-}  // namespace
-
 [[nodiscard]] validated_http_server_configuration validate_http_server_configuration(
     std::span<const http_server_listener_definition> listeners, http_server_options&& options) {
-    for (const auto& listener : listeners) {
-        validate_http_server_listener(listener);
-        // A QUIC connection ID names its owning worker in 16 bits.
-        if (listener.http3_.has_value() && options.server_.worker_count_ > http3_max_worker_count) {
-            throw std::invalid_argument("HTTP/3 supports at most 65536 workers");
-        }
-    }
     return validated_http_server_configuration(listeners, std::move(options));
 }
 

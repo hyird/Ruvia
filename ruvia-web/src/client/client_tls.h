@@ -53,6 +53,12 @@ inline void validate_client_tls_config(const client_tls_config& config) {
         (config.ca_file_.has_value() || config.identity_.has_value() || config.server_name_.has_value())) {
         throw std::invalid_argument("disabled TLS must not have TLS credentials or a server name");
     }
+    // Database drivers read identity files themselves; every client keeps
+    // the one file-based shape.
+    if (config.identity_.has_value() &&
+        (!config.identity_->certificate_chain_pem_.empty() || !config.identity_->private_key_pem_.empty())) {
+        throw std::invalid_argument("client TLS identities must be PEM files, not in-memory PEM");
+    }
 }
 
 // Whether a client storage parses its TLS files. Owners that build their own

@@ -22,8 +22,8 @@ namespace ruvia::detail {
 // connection pays OpenSSL's certificate scan once per host, not per request.
 class tls_served_certificate final {
 public:
-    // `certificate` is the leaf the handshake selected (SSL_get_certificate
-    // after any SNI context switch), borrowed for the connection's lifetime;
+    // `certificate` is the leaf the handshake selected and installed on its
+    // SSL (SSL_get_certificate), borrowed for the connection's lifetime;
     // null fails every check closed.
     explicit tls_served_certificate(X509* certificate) noexcept
         : certificate_(certificate) {}

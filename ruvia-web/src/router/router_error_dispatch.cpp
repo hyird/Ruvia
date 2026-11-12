@@ -111,11 +111,22 @@ void apply_exception_response_metadata(http_response& response, const classified
 
 }  // namespace
 
+detail::default_exception_response detail::make_default_exception_response(
+    std::pmr::memory_resource* resource, const std::exception_ptr& exception) {
+    const auto error_info = classify_exception(resource, exception);
+    auto response = make_default_error_response(resource, error_info.error_.info());
+    apply_exception_response_metadata(response, error_info);
+    return {.response_ = std::move(response), .unexpected_ = error_info.unexpected_};
+}
+
 task<http_response> detail::route_table::handle_error(const http_request& request,
     request_memory& memory, http_error_info error, const context_services& services) const {
-    const auto error_handler = error_handler_for(request.path());
+    // A request stream request reaches neither the error handler nor the
+    // unmatched middleware: its listener serves no application route.
+    const bool request_stream = static_cast<bool>(services.request_stream());
+    const auto error_handler = request_stream ? nullptr : error_handler_for(request.path());
     // Nothing to wrap and no handler: the original allocation-free path.
-    if (error_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
+    if (error_handler == nullptr && (request_stream || plan_->unmatched_middleware_count_ == 0)) {
         auto response = make_default_error_response(memory.resource(), error);
         co_return response;
     }
@@ -145,19 +156,19 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
     request_memory& memory, std::exception_ptr exception, const context_services& services) const {
-    return handle_exception(
-        request, memory, std::move(exception), services, error_handler_for(request.path()));
+    return handle_exception(request, memory, std::move(exception), services,
+        services.request_stream() ? nullptr : error_handler_for(request.path()));
 }
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
     request_memory& memory, std::exception_ptr exception, const context_services& services,
     http_error_handler_ref error_handler) const {
     if (error_handler == nullptr) {
-        const auto error_info = classify_exception(memory.resource(), exception);
-        report_unexpected_failure(error_info, exception, nullptr);
-        auto response = make_default_error_response(memory.resource(), error_info.error_.info());
-        apply_exception_response_metadata(response, error_info);
-        co_return response;
+        auto answer = make_default_exception_response(memory.resource(), exception);
+        if (answer.unexpected_) {
+            ruvia::report_unhandled_failure("request handler", exception);
+        }
+        co_return std::move(answer.response_);
     }
 
     auto context_value = detail::context_access::make(memory, request, services);

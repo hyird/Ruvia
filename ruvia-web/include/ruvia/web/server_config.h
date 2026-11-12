@@ -155,20 +155,53 @@ struct trusted_proxy_config final {
     bool trust_x_forwarded_proto_{false};
 };
 
+// A socket handle as the platform names it: a file descriptor on POSIX, a
+// SOCKET on Windows.
+#ifdef _WIN32
+using native_socket = std::uintptr_t;
+#else
+using native_socket = int;
+#endif
+
+// Already-bound sockets of one listen_config's services: listening TCP
+// sockets for http_ and https_, bound UDP sockets for http3_. On POSIX a
+// non-empty vector holds one socket per worker in worker order, the members
+// of one SO_REUSEPORT group; on Windows it holds the one socket the acceptor
+// thread owns. See listen_config::inherited_sockets_ and
+// application::duplicate_listener_sockets().
+struct listener_sockets final {
+    std::pmr::vector<native_socket> http_{process_resource()};
+    std::pmr::vector<native_socket> https_{process_resource()};
+    std::pmr::vector<native_socket> http3_{process_resource()};
+};
+
 namespace detail {
 struct access_log_record_access;
 struct connection_failure_record_access;
 }  // namespace detail
 
+// What a listener serves on the connections it accepts.
+enum class listener_dispatch : std::uint8_t {
+    // HTTP: the application's routes, middleware and controllers.
+    routes,
+    // application::on_request_stream receives each HTTP request -- HTTP/1.1,
+    // HTTP/2 and HTTP/3 alike -- as a request_stream, in place of the
+    // routes, middleware and controllers.
+    request_stream,
+    // application::on_connection receives each accepted connection -- on a
+    // TLS listener once its handshake completed -- as a byte stream
+    // (server_connection); the server parses no HTTP on it.
+    connection,
+};
+
 // One bind address with optional HTTP, HTTPS and HTTP/3 service ports,
 // independent of the wire protocol. application validates and expands this
 // value atomically. An omitted port disables that service. auto_https_redirect_
-// targets the HTTPS service port. Each worker independently binds every enabled
-// service. POSIX requires SO_REUSEPORT in addition to SO_REUSEADDR; unsupported
-// platforms fail startup. Windows uses SO_REUSEADDR only: it does not provide
-// SO_REUSEPORT's isolation or distribution semantics, other processes can reuse
-// the port, and connection distribution across workers is not guaranteed to be
-// balanced.
+// targets the HTTPS service port. On POSIX every worker binds each enabled
+// service with SO_REUSEADDR and SO_REUSEPORT (platforms without SO_REUSEPORT
+// fail startup); on Windows the acceptor thread binds it exclusively
+// (SO_EXCLUSIVEADDRUSE, see server_config::worker_count_). inherited_sockets_
+// replaces either binding with sockets bound elsewhere.
 struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
     // this configuration.
@@ -213,6 +246,41 @@ struct listen_config final {
     bool http3_retry_{false};
     tls_config tls_{};
     bool auto_https_redirect_{false};
+    // Applies to the http_, https_ and http3_ services alike; with
+    // auto_https_redirect_ the http_ service only redirects.
+    // listener_dispatch::connection rejects http3_ and auto_https_redirect_
+    // (std::invalid_argument), since neither serves a byte stream.
+    listener_dispatch dispatch_{listener_dispatch::routes};
+    // Sockets that replace binding the services they name, for example ones
+    // another process exported with application::duplicate_listener_sockets()
+    // and passed across exec. Each must already serve its service on address_
+    // and the configured port -- http_ and https_ sockets listening TCP,
+    // http3_ sockets bound UDP; a wildcard address_ matches a wildcard bind --
+    // and a non-empty vector requires its service. listen() and
+    // application::add_listener() own every handle from the call on and mark
+    // it close-on-exec (non-inheritable on Windows); a handle given twice or
+    // failing a check throws std::invalid_argument, and any failure of that
+    // call closes every handle it was given. An empty vector binds as usual.
+    // The next run() consumes them, whatever its outcome, and later runs
+    // bind; handles listen() replaces unconsumed close. On POSIX a vector
+    // holds one socket per worker, else run() (or add_listener()) throws
+    // std::invalid_argument; socket i serves worker i, and for http3_ it must
+    // be the i-th member of its SO_REUSEPORT group, as
+    // duplicate_listener_sockets() returns them, or QUIC packets reach their
+    // connection's worker only through the user-space hand-over. On Windows a
+    // vector holds at most one socket (std::invalid_argument otherwise), which
+    // the acceptor thread uses as it would a socket it bound; a socket another
+    // process associated with an I/O completion port cannot be adopted, which
+    // fails startup.
+    std::optional<listener_sockets> inherited_sockets_{};
+};
+
+// Names one TCP service a listen_config enabled: its address_, normalized
+// the same way, and its http_ or https_ port. A paired HTTP/3 service is
+// reached through its HTTPS endpoint.
+struct listener_endpoint final {
+    borrowed_text address_{"0.0.0.0"};
+    port_number port_{};
 };
 
 // Canonical startup values shared by application configuration and every worker's

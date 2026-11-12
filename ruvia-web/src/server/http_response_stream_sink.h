@@ -642,7 +642,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     const auto request_stop_token = request_stop.token();
     d.base_route_services_.bind_stop_token(request_stop_token);
     response_sink_type response_sink(d.stream_, *d.options_.codecs_, response_head, d.scanner_entry_,
-        d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
+        d.base_route_services_.worker(), d.parsed_.request_, d.cors_,
         stream_plan,
         http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
         body_state.body(), d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,

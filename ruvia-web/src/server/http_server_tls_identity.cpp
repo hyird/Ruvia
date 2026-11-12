@@ -1,11 +1,14 @@
 #include "server/http_server_tls_identity.h"
 
-#include <filesystem>
+#include <cstddef>
+#include <memory>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/ssl/verify_mode.hpp>
@@ -13,6 +16,7 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "tls/dns_host.h"
@@ -23,17 +27,163 @@
 namespace ruvia::detail {
 namespace {
 
+// In-memory PEM text of a tls_identity_config, borrowed while it is parsed.
+struct tls_identity_pem final {
+    std::string_view certificate_chain_;
+    std::string_view private_key_;
+};
+
+// One identity's validated source and the password its key needs.
+struct tls_identity_source final {
+    std::variant<tls_identity_files, tls_identity_pem> location_;
+    std::string_view private_key_password_;
+};
+
+[[nodiscard]] tls_identity_source make_tls_identity_source(
+    const tls_identity_config& identity, std::pmr::memory_resource* resource) {
+    const bool files = !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty();
+    const bool pem = !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty();
+    if (files && pem) {
+        throw std::invalid_argument("TLS identity must come from PEM files or in-memory PEM, not both");
+    }
+    if (!pem) {
+        // Both names are required: an empty one throws.
+        return {.location_ = make_tls_identity_files(identity, resource),
+            .private_key_password_ = identity.private_key_password_};
+    }
+    if (identity.certificate_chain_pem_.empty() || identity.private_key_pem_.empty()) {
+        throw std::invalid_argument("in-memory TLS identity requires both certificate chain and private key PEM");
+    }
+    return {.location_ = tls_identity_pem{.certificate_chain_ = identity.certificate_chain_pem_,
+                .private_key_ = identity.private_key_pem_},
+        .private_key_password_ = identity.private_key_password_};
+}
+
+[[nodiscard]] tls_certificate load_tls_identity(const tls_identity_source& source) {
+    if (const auto* files = std::get_if<tls_identity_files>(&source.location_)) {
+        return load_tls_certificate(*files, source.private_key_password_);
+    }
+    const auto& pem = std::get<tls_identity_pem>(source.location_);
+    return tls_certificate::load_pem(pem.certificate_chain_, pem.private_key_, source.private_key_password_);
+}
+
+// RFC 6066 §3 HostName: an ASCII DNS name, without the trailing dot.
 [[nodiscard]] bool is_valid_sni_host(std::string_view host) noexcept {
     return !host.empty() && !host.ends_with('.') && detail::is_valid_dns_host(host);
 }
 
-void ensure_sni_host(std::string_view host) {
-    if (host.empty()) {
-        throw std::invalid_argument("SNI host must not be empty");
+// A connection reaching an IPv4 address through a dual-stack socket reports
+// its IPv4-mapped IPv6 form; both name the same local address.
+[[nodiscard]] asio::ip::address canonical_local_address(const asio::ip::address& address) noexcept {
+    if (address.is_v6()) {
+        if (const auto v6 = address.to_v6(); v6.is_v4_mapped()) {
+            return asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
+        }
     }
-    if (!is_valid_sni_host(host)) {
-        throw std::invalid_argument("SNI host is invalid");
+    return address;
+}
+
+[[nodiscard]] asio::ip::address make_tls_local_address(std::string_view text) {
+    if (text.empty()) {
+        throw std::invalid_argument("TLS local address must not be empty");
     }
+    const auto parsed = ruvia::parse_ip_address(text);
+    if (!parsed) {
+        throw std::invalid_argument("TLS local address must be a numeric IP address");
+    }
+    const auto address = canonical_local_address(*parsed);
+    // No connection arrives at an unspecified address.
+    if (address.is_unspecified()) {
+        throw std::invalid_argument("TLS local address must not be unspecified");
+    }
+    return address;
+}
+
+// Every identity setting of one tls_config, validated before anything is read.
+class tls_identity_plan final {
+public:
+    tls_identity_plan(const tls_config& config, std::pmr::memory_resource* resource);
+
+    [[nodiscard]] std::shared_ptr<const http_server_tls_identities> load(std::pmr::memory_resource* resource) const;
+
+private:
+    struct named_source final {
+        // ASCII lowercase; a wildcard keeps the parent domain after its "*.".
+        std::pmr::string name_;
+        bool wildcard_;
+        tls_identity_source source_;
+    };
+
+    struct addressed_source final {
+        asio::ip::address address_;
+        tls_identity_source source_;
+    };
+
+    tls_identity_source primary_;
+    std::pmr::vector<named_source> names_;
+    std::pmr::vector<addressed_source> addresses_;
+};
+
+tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_resource* resource)
+    : primary_(make_tls_identity_source(config.identity_, resource)),
+      names_(resource),
+      addresses_(resource) {
+    names_.reserve(config.sni_.size());
+    for (const auto& sni : config.sni_) {
+        if (sni.host_.empty()) {
+            throw std::invalid_argument("SNI host must not be empty");
+        }
+        // RFC 6125 §6.4.3: a wildcard is the whole left-most label.
+        const bool wildcard = sni.host_.starts_with("*.");
+        const auto host = std::string_view(sni.host_).substr(wildcard ? 2 : 0);
+        if (!is_valid_sni_host(host)) {
+            throw std::invalid_argument("SNI host is invalid");
+        }
+        std::pmr::string name(host, resource);
+        for (auto& byte : name) {
+            byte = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(byte)));
+        }
+        for (const auto& existing : names_) {
+            if (existing.wildcard_ == wildcard && existing.name_ == name) {
+                throw std::invalid_argument("SNI hosts must be unique");
+            }
+        }
+        names_.push_back(named_source{
+            .name_ = std::move(name),
+            .wildcard_ = wildcard,
+            .source_ = make_tls_identity_source(sni.identity_, resource),
+        });
+    }
+    addresses_.reserve(config.local_addresses_.size());
+    for (const auto& local : config.local_addresses_) {
+        const auto address = make_tls_local_address(local.address_);
+        for (const auto& existing : addresses_) {
+            if (existing.address_ == address) {
+                throw std::invalid_argument("TLS local addresses must be unique");
+            }
+        }
+        addresses_.push_back(addressed_source{
+            .address_ = address,
+            .source_ = make_tls_identity_source(local.identity_, resource),
+        });
+    }
+}
+
+std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load(std::pmr::memory_resource* resource) const {
+    auto identities = std::allocate_shared<http_server_tls_identities>(
+        std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), load_tls_identity(primary_), resource);
+    for (const auto& named : names_) {
+        auto& target = named.wildcard_ ? identities->wildcard_names_ : identities->exact_names_;
+        target.emplace_back(named.name_, load_tls_identity(named.source_), resource);
+    }
+    identities->local_addresses_.reserve(addresses_.size());
+    for (const auto& addressed : addresses_) {
+        identities->local_addresses_.push_back(http_server_tls_identities::addressed_identity{
+            .address_ = addressed.address_,
+            .certificate_ = load_tls_identity(addressed.source_),
+        });
+    }
+    return identities;
 }
 
 [[nodiscard]] asio::ssl::verify_mode http_server_tls_verify_mode(
@@ -47,12 +197,41 @@ void ensure_sni_host(std::string_view host) {
 
 }  // namespace
 
+const tls_certificate& http_server_tls_identities::select(
+    std::string_view server_name, const asio::ip::address* local_address) const noexcept {
+    if (!server_name.empty()) {
+        for (const auto& named : exact_names_) {
+            if (http_ascii_equals_ignore_case(named.name_, server_name)) {
+                return named.certificate_;
+            }
+        }
+        // RFC 6125 §6.4.3: "*" stands for exactly one non-empty label.
+        if (const auto dot = server_name.find('.'); dot != std::string_view::npos && dot != 0) {
+            const auto parent = server_name.substr(dot + 1);
+            for (const auto& named : wildcard_names_) {
+                if (http_ascii_equals_ignore_case(named.name_, parent)) {
+                    return named.certificate_;
+                }
+            }
+        }
+    }
+    if (local_address != nullptr && !local_addresses_.empty()) {
+        const auto address = canonical_local_address(*local_address);
+        for (const auto& addressed : local_addresses_) {
+            if (addressed.address_ == address) {
+                return addressed.certificate_;
+            }
+        }
+    }
+    return primary_;
+}
+
 http_server_listener_definition::tls load_http_server_tls(
     const tls_config& config, std::pmr::memory_resource* resource) {
     auto* const target_resource = pmr_resource_or_default(resource);
     validate_tls_record_limit(config.max_outgoing_records_);
-    // Every setting is validated before any file is read.
-    const auto primary = make_tls_identity_files(config.identity_, target_resource);
+    // Every setting is validated before any credential is read.
+    const tls_identity_plan identities(config, target_resource);
     const auto& client = config.client_certificates_;
     std::optional<tls_file_name> client_ca;
     if (client.ca_file_.has_value() || client.requirement_ != tls_client_certificate_requirement::optional) {
@@ -68,58 +247,56 @@ http_server_listener_definition::tls load_http_server_tls(
         }
         client_ca.emplace(make_tls_file_name(*client.ca_file_, target_resource));
     }
-    std::pmr::vector<tls_identity_files> sni_files(target_resource);
-    sni_files.reserve(config.sni_.size());
-    for (std::size_t i = 0; i < config.sni_.size(); ++i) {
-        const auto& sni = config.sni_[i];
-        ensure_sni_host(sni.host_);
-        sni_files.push_back(make_tls_identity_files(sni.identity_, target_resource));
-        for (std::size_t j = 0; j < i; ++j) {
-            if (http_ascii_equals_ignore_case(config.sni_[j].host_, sni.host_)) {
-                throw std::invalid_argument("SNI hosts must be unique");
-            }
-        }
-    }
 
-    http_server_listener_definition::tls tls(
-        load_tls_certificate(primary, config.identity_.private_key_password_), target_resource);
+    http_server_listener_definition::tls tls(identities.load(target_resource));
     tls.max_outgoing_records_ = config.max_outgoing_records_;
     if (client_ca.has_value()) {
+        auto trust_store = load_tls_trust_store(*client_ca);
         tls.client_certificates_.emplace(http_server_listener_definition::tls_client_certificate_policy{
             .requirement_ = client.requirement_,
-            .client_ca_ = load_tls_trust_store(*client_ca),
+            .client_ca_ = std::move(trust_store),
+            .ca_file_ = std::move(*client_ca),
         });
-    }
-    tls.sni_identities_.reserve(config.sni_.size());
-    for (std::size_t i = 0; i < config.sni_.size(); ++i) {
-        const auto& sni = config.sni_[i];
-        tls.sni_identities_.emplace_back(
-            sni.host_, load_tls_certificate(sni_files[i], sni.identity_.private_key_password_), target_resource);
     }
     return tls;
 }
 
-void configure_http_server_tls_identity(SSL_CTX* context_value, const tls_certificate& certificate,
-    const std::optional<http_server_listener_definition::tls_client_certificate_policy>&
-        client_certificates) {
-    if (context_value == nullptr) {
-        throw std::invalid_argument("TLS context must not be null");
-    }
-    certificate.install(*context_value);
+std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(
+    const tls_config& config, std::pmr::memory_resource* resource) {
+    auto* const target_resource = pmr_resource_or_default(resource);
+    return tls_identity_plan(config, target_resource).load(target_resource);
+}
 
+void ensure_same_http_server_tls_policy(const http_server_listener_definition::tls& current, const tls_config& config) {
+    if (config.max_outgoing_records_ != current.max_outgoing_records_) {
+        throw std::invalid_argument("replacing TLS identities must keep the listener's outgoing record limit");
+    }
+    const auto& client = config.client_certificates_;
+    const auto& policy = current.client_certificates_;
+    const bool same = policy.has_value()
+                          ? client.requirement_ == policy->requirement_ && client.ca_file_.has_value() &&
+                                make_tls_file_name(*client.ca_file_, process_resource()) == policy->ca_file_
+                          : client.requirement_ == tls_client_certificate_requirement::optional &&
+                                !client.ca_file_.has_value();
+    if (!same) {
+        throw std::invalid_argument("replacing TLS identities must keep the listener's client certificate policy");
+    }
+}
+
+void configure_http_server_client_certificates(SSL_CTX& context_value,
+    const std::optional<http_server_listener_definition::tls_client_certificate_policy>& client_certificates) {
     if (!client_certificates.has_value()) {
         return;
     }
-    client_certificates->client_ca_.install(*context_value);
+    client_certificates->client_ca_.install(context_value);
     // A server that verifies peers without a session ID context turns every
     // resumption attempt into a fatal handshake error (SSL_CTX_set_session_id_context(3)).
     static constexpr unsigned char session_id_context[] = {'r', 'u', 'v', 'i', 'a'};
     ::ERR_clear_error();
-    if (::SSL_CTX_set_session_id_context(
-            context_value, session_id_context, sizeof(session_id_context)) != 1) {
+    if (::SSL_CTX_set_session_id_context(&context_value, session_id_context, sizeof(session_id_context)) != 1) {
         throw_tls_credential_error("set_session_id_context");
     }
-    SSL_CTX_set_verify(context_value,
+    SSL_CTX_set_verify(&context_value,
         static_cast<int>(http_server_tls_verify_mode(client_certificates->requirement_)), nullptr);
 }
 

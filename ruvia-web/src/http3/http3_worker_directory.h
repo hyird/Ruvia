@@ -16,6 +16,7 @@
 #include "ruvia/core/worker_handle.h"
 
 #include "http3/http3_connection_id.h"
+#include "server/inherited_listener_sockets.h"
 
 namespace ruvia::detail {
 
@@ -91,19 +92,25 @@ public:
         return slots_.size();
     }
 
-    // Construction thread, before any worker serves.
+    // Construction thread, before any worker serves -- for a directory
+    // application::add_listener() creates, before any worker uses it.
     void bind_worker(std::size_t index, const worker_handle& worker_value);
     // The owning worker's thread: opens and closes its receiving side.
     void attach(std::size_t index, void* target, receive_type receive) noexcept;
     void detach(std::size_t index) noexcept;
 
 #if !defined(_WIN32)
-    // Binds every worker's SO_REUSEPORT socket for `listener_index` in worker
-    // index order 0..N-1 (attaching SO_ATTACH_REUSEPORT_CBPF on Linux) and
-    // assigns `worker_index`'s socket to `socket`.
+    // The first call for `listener_index` binds every worker's SO_REUSEPORT
+    // socket in worker index order 0..N-1 -- or takes `inherited`'s UDP
+    // sockets, in that order already, when it holds them -- and attaches
+    // SO_ATTACH_REUSEPORT_CBPF on Linux; each call assigns `worker_index`'s
+    // socket to `socket`.
     void open_listener_socket(std::size_t worker_index, std::size_t listener_index,
         const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
-        asio::ip::udp::socket& socket);
+        inherited_listener_sockets* inherited, asio::ip::udp::socket& socket);
+    // Closes the sockets of `listener_index` no worker claimed, for a listener
+    // whose addition was rolled back.
+    void close_unclaimed_listener_sockets(std::size_t listener_index) noexcept;
 #endif
     // Any thread. False when the datagram was dropped.
     [[nodiscard]] bool hand_off(std::size_t owner, std::size_t listener_index,

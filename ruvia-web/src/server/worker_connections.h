@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -17,6 +18,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_signal.h"
 
 #include "server/connection_count.h"
 #include "server/connection_scanner.h"
@@ -45,6 +47,7 @@ class context_services;
 template <typename stream_type>
 struct http1_connection_session;
 class route_table;
+struct server_connection_fields;
 class worker_capabilities;
 
 // What serve_requests hands back to run_stream when the connection stays open:
@@ -56,6 +59,15 @@ enum class http1_serve_handoff : std::uint8_t {
     cleartext_http2,
 };
 
+#if !defined(_WIN32)
+// One worker's dup()s of a listener's sockets; udp_ is invalid without an
+// HTTP/3 service.
+struct listener_socket_duplicates final {
+    native_socket tcp_{invalid_native_socket};
+    native_socket udp_{invalid_native_socket};
+};
+#endif
+
 // Worker-local listeners, connection resources and session assembly. The
 // surrounding runtime owns lifecycle phases and the scope joining every task.
 // Admission runs open -> stop, and stopping closes every connection at once:
@@ -64,13 +76,20 @@ enum class http1_serve_handoff : std::uint8_t {
 // application's acceptor accepts and hands each socket over (adopt_socket).
 // A TLS listener with an HTTP/3 service also gets a QUIC endpoint
 // (http3_endpoint), which admits and stops the same way.
+//
+// Listener slots are numbered alike on every worker (and in the Windows
+// acceptor) and never reused within a run, so a hand-over queued for a
+// removed listener cannot reach another. A listener added while running is
+// prepared (bound, not admitting) on every worker before any opens it; a
+// removed one stops admitting at once and retires -- slot emptied, its
+// session configuration destroyed -- once every task it owns has ended.
 class worker_connections final {
 public:
     worker_connections(asio::io_context& io, const worker_handle& worker_value,
         const route_table& routes_value, worker_capabilities& capabilities,
         http_server_options& options, const stop_token& stop_token_value,
         http_server_worker_state& state_value, task_scope& tasks,
-        std::span<const http_server_listener_definition> listeners, worker_runtime& runtime
+        std::span<const http_server_listener_definition> listeners, worker_runtime& runtime, std::size_t worker_index
 #if defined(RUVIA_ENABLE_HTTP3)
         ,
         http3_worker_placement http3_placement
@@ -84,6 +103,38 @@ public:
     // closes every connection at once.
     void stop() noexcept;
     void retire_tls() noexcept;
+    // Worker thread: listener `listener_index` -- TLS over TCP and its
+    // HTTP/3 service alike -- selects every later handshake's identity from
+    // `identities`.
+    void adopt_tls_identities(
+        std::size_t listener_index, std::shared_ptr<const http_server_tls_identities> identities) noexcept;
+    // Worker thread, the controls of application::add_listener(): prepares
+    // `definition` in slot `index` as prepare() would -- TLS contexts, bound
+    // or adopted sockets, the HTTP/3 endpoint in slot `http3_index` -- without
+    // admitting, or throws with the slot left empty.
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index,
+        const http_server_listener_definition& definition
+#if defined(RUVIA_ENABLE_HTTP3)
+        ,
+        http3_worker_directory* directory
+#endif
+    );
+    // Starts admitting a prepared listener. A failure to start fails the worker.
+    void open_listener(std::size_t index) noexcept;
+    // Closes the sockets of a listener prepared but never opened and retires
+    // it; an empty slot is left alone.
+    void discard_listener(std::size_t index) noexcept;
+    // application::remove_listener(): stops admitting listener `index` and
+    // closes its TCP socket at once, holding `receipt` until its accept loop
+    // exited. Its connections are served on; its HTTP/3 endpoint stops
+    // admitting and closes its socket after its last connection.
+    void remove_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept;
+#if !defined(_WIN32)
+    // application::duplicate_listener_sockets(): this worker's sockets of
+    // listener `index`, duplicated. Throws std::logic_error when it no longer
+    // admits.
+    [[nodiscard]] listener_socket_duplicates duplicate_listener(std::size_t index);
+#endif
     [[nodiscard]] http_server_stats stats() const noexcept;
 #if defined(_WIN32)
     // This worker as the acceptor's hand-over target.
@@ -92,13 +143,16 @@ public:
 
 private:
     struct listener final {
-        listener(asio::io_context& io, const http_server_listener_definition& definition,
-            std::pmr::memory_resource* resource)
+        listener(asio::io_context& io, const worker_handle& worker_value,
+            const http_server_listener_definition& definition, std::pmr::memory_resource* resource)
             : session_(definition, resource),
-              endpoint_(definition.endpoint_)
+              endpoint_(definition.endpoint_),
+              tasks_(worker_value, {.resource_ = resource}),
+              retired_(worker_value)
 #if !defined(_WIN32)
               ,
-              socket_(io)
+              socket_(io),
+              inherited_(definition.inherited_sockets_)
 #endif
         {
 #if defined(_WIN32)
@@ -108,13 +162,38 @@ private:
 
         http_server_session_config session_;
         asio::ip::tcp::endpoint endpoint_;
+        // Its accept loop, sessions and HTTP/3 endpoint tasks, all joined
+        // before the listener is destroyed: they borrow session_.
+        task_scope tasks_;
+        // Notified once removal or the worker's stop ended admission.
+        worker_signal retired_;
+#if defined(RUVIA_ENABLE_HTTP3)
+        std::optional<std::size_t> http3_index_;
+#endif
 #if !defined(_WIN32)
         asio::ip::tcp::acceptor socket_;
+        // Until preparation claimed this worker's sockets.
+        std::shared_ptr<inherited_listener_sockets> inherited_;
+        // A removal's, until the accept loop exited.
+        std::shared_ptr<void> removal_receipt_;
+        bool accepting_{false};
 #endif
+        // From preparation on, a task awaits retired_ to retire the listener.
+        bool prepared_{false};
+        // From opening until removal or the worker's stop.
+        bool admitting_{false};
     };
 #if defined(RUVIA_ENABLE_HTTP3)
+    void add_http3_endpoint(std::size_t listener_index, std::size_t http3_index);
     void receive_http3_handoff(std::size_t listener_index, http3_handoff_datagram& datagram) noexcept;
 #endif
+    // Builds the listener's TLS contexts, binds or adopts its sockets and
+    // starts the task that retires it.
+    void prepare_listener_resources(std::size_t index);
+    void start_listener(std::size_t index);
+    void close_listener_sockets(listener& configured) noexcept;
+    // Awaits the listener's retired_, joins its tasks, then empties its slot.
+    task<void> retire_listener(std::size_t index);
 #if defined(_WIN32)
     // The worker thread: binds a socket the acceptor accepted to this
     // worker's io_context (its first IOCP association) and serves it.
@@ -129,9 +208,9 @@ private:
     // `remote` is the peer accept_socket() read before the socket moved into
     // the lease; absent when the socket no longer knew its peer.
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote);
+        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id);
     task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote);
+        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id);
     void report_session_failure(
         tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
     template <typename stream_type>
@@ -140,6 +219,11 @@ private:
     template <typename stream_type>
     task<http_connection_close> run_http2(stream_type& stream, tcp_socket_type& socket, context_services services);
 #endif
+    // A listener_dispatch::connection listener's connection: application::on_connection
+    // owns it until its task completes. `fields` names everything but the
+    // local endpoint, which this reads from `socket`.
+    template <typename stream_type>
+    task<void> serve_connection(stream_type& stream, tcp_socket_type& socket, server_connection_fields fields);
     template <typename stream_type>
     task<std::variant<http1_serve_handoff, http_connection_close>> serve_requests(
         http1_connection_session<stream_type>& session, connection_work_set& work_set);
@@ -152,17 +236,26 @@ private:
     http_server_worker_state& state_;
     task_scope& tasks_;
     worker_runtime& runtime_;
+    // This worker's position among the application's workers: the inherited
+    // socket of each listener it claims.
+    std::size_t worker_index_;
+    // Indexed by listener slot; empty once a listener retired or failed to
+    // prepare.
     std::pmr::vector<std::unique_ptr<listener, pmr_object_deleter<listener>>> listeners_;
     connection_scanner scanner_;
     // Caller-thread statistics and the Windows acceptor's balancing read it.
     connection_count connection_count_;
+    connection_id_sequence connection_ids_;
     std::atomic<std::size_t> refused_{};
     std::atomic<std::size_t> failures_{};
     std::atomic<std::size_t> accept_failures_{};
+    bool rotating_ticket_keys_{false};
 #if defined(RUVIA_ENABLE_HTTP3)
     http3_worker_placement http3_placement_;
     http3_worker_services http3_services_;
-    // Declared last: destroyed before every service its connections borrow.
+    bool http3_attached_{false};
+    // Indexed by HTTP/3 slot, like listeners_. Declared last: destroyed
+    // before every service its connections borrow.
     std::pmr::vector<std::unique_ptr<http3_endpoint, pmr_object_deleter<http3_endpoint>>> http3_endpoints_;
 #endif
 };

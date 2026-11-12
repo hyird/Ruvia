@@ -1,12 +1,15 @@
 #include "server/http_server_tls_contexts.h"
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <memory_resource>
+#include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
+#include <asio/ip/address.hpp>
 #include <asio/ssl/context.hpp>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -56,6 +59,48 @@ SSL_TICKET_RETURN decrypt_quic_ticket(SSL* ssl, SSL_SESSION* ticket,
     return status == SSL_TICKET_SUCCESS ? SSL_TICKET_RETURN_USE : SSL_TICKET_RETURN_USE_RENEW;
 }
 
+int client_hello_observation_index() noexcept {
+    static const int index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    return index;
+}
+
+int local_address_index() noexcept {
+    static const int index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    return index;
+}
+
+// OpenSSL reports each inbound handshake message once it is reassembled and
+// before it processes it, so a ClientHello reaches the observer before the
+// client hello, server_name and certificate callbacks run.
+void deliver_client_hello(int writing, int content_type, const void* bytes, std::size_t size, SSL* ssl) noexcept {
+    // msg_type and the 3-byte length (RFC 9846 §4) precede every body.
+    if (writing != 0 || content_type != SSL3_RT_HANDSHAKE || size < 4 ||
+        *static_cast<const unsigned char*>(bytes) != SSL3_MT_CLIENT_HELLO) {
+        return;
+    }
+    const auto* observation = static_cast<const tls_client_hello_observation*>(
+        SSL_get_ex_data(ssl, client_hello_observation_index()));
+    if (observation == nullptr) {
+        return;
+    }
+    auto fields = observation->fields_;
+    fields.message_ = std::span(static_cast<const std::byte*>(bytes), size);
+    observation->callback_(server_observation_access::tls_client_hello(fields));
+}
+
+// TLS over TCP keeps the protocol policy's outgoing record count.
+void observe_tcp_messages(int writing, int version, int content_type, const void* bytes, std::size_t size,
+    SSL* ssl, void* argument) noexcept {
+    count_tls_records(writing, version, content_type, bytes, size, ssl, argument);
+    deliver_client_hello(writing, content_type, bytes, size, ssl);
+}
+
+// QUIC protects its own packets (RFC 9001 §4): there are no TLS records to count.
+void observe_quic_messages(int writing, int, int content_type, const void* bytes, std::size_t size, SSL* ssl,
+    void*) noexcept {
+    deliver_client_hello(writing, content_type, bytes, size, ssl);
+}
+
 // Every HTTP version this server speaks over TLS on TCP, in preference order;
 // RFC 7301 §3.2 reserves the alert for offers naming none of them.
 int select_tcp_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
@@ -76,6 +121,19 @@ int select_quic_alpn_protocol(SSL*, const unsigned char** out, unsigned char* ou
     static constexpr unsigned char protocols[] = {2, 'h', '3'};
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols,
             static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
+        return SSL_TLSEXT_ERR_OK;
+    }
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
+}
+
+// A connection-dispatch listener offers its own protocols (tls_config::alpn_),
+// still in server preference and failing an offer that names none of them.
+int select_connection_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
+    const unsigned char* in, unsigned int in_length, void* argument) noexcept {
+    const auto& protocols = *static_cast<const std::pmr::string*>(argument);
+    if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length,
+            reinterpret_cast<const unsigned char*>(protocols.data()), static_cast<unsigned int>(protocols.size()), in,
+            in_length) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
     return SSL_TLSEXT_ERR_ALERT_FATAL;
@@ -133,36 +191,24 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
     return SSL_CLIENT_HELLO_SUCCESS;
 }
 
-// RFC 6066 SNI: switch the connection to the per-host SSL_CTX of its family
-// when the client's server name matches a configured certificate; otherwise
-// keep the default identity. Answering an unrecognized name with the default
-// certificate, rather than RFC 9325 §3.7's unrecognized_name alert, is a
-// product choice documented on tls_config.
-int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
-    if (ssl == nullptr || arg == nullptr) {
+// RFC 6066 §3: each handshake selects its identity once its server_name is
+// known, from the set its worker holds now, and installs it on its own SSL;
+// the ClientHello after a HelloRetryRequest keeps the identity the first one
+// selected. The name is acknowledged whenever it was offered, since it also
+// binds resumption (bind_session_to_server_name). Serving an unrecognized
+// name the primary identity, rather than RFC 9325 §3.7's unrecognized_name
+// alert, is a product choice documented on tls_config.
+int select_tls_identity(SSL* ssl, int* alert, void* arg) noexcept {
+    if (SSL_get_certificate(ssl) != nullptr) {
         return SSL_TLSEXT_ERR_OK;
     }
+    const auto* tls = static_cast<const http_server_session_config*>(arg)->tls();
     const char* name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
-    if (name == nullptr) {
-        return SSL_TLSEXT_ERR_OK;
-    }
-    const std::string_view server_name(name);
-    const auto& selection = *static_cast<const http_server_sni_selection*>(arg);
-    const auto* tls = selection.session_->tls();
-    if (tls == nullptr) {
-        return SSL_TLSEXT_ERR_OK;
-    }
-    auto& contexts = *selection.contexts_;
-    const auto count = (std::min)(tls->sni_identities_.size(), contexts.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        if (http_ascii_equals_ignore_case(tls->sni_identities_[i].host_, server_name)) {
-            // A name with its own certificate must be served with it: failing
-            // to switch to its context fails the handshake.
-            if (SSL_set_SSL_CTX(ssl, contexts[i].native_handle()) == nullptr) {
-                return SSL_TLSEXT_ERR_ALERT_FATAL;
-            }
-            break;
-        }
+    const auto* local_address = static_cast<const asio::ip::address*>(SSL_get_ex_data(ssl, local_address_index()));
+    const auto& identity = tls->identities_->select(name == nullptr ? std::string_view() : std::string_view(name), local_address);
+    if (!identity.present(*ssl)) {
+        *alert = SSL_AD_INTERNAL_ERROR;
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
     return SSL_TLSEXT_ERR_OK;
 }
@@ -172,62 +218,53 @@ enum class tls_context_family : unsigned char {
     quic,
 };
 
-void configure_family(http_server_session_config& session, tls_context_family family) {
+void configure_family(http_server_session_config& session, tls_context_family family, bool observe_client_hello) {
     const auto* tls = session.tls();
-    auto& ticket_keys = *session.ticket_keys_;
     const bool quic = family == tls_context_family::quic;
     const bool early_data = quic && session.http3_->early_data_;
-    auto& sni_contexts = quic ? session.quic_sni_contexts_ : session.sni_contexts_;
-    auto& primary = quic ? session.quic_tls_context_ : session.tls_context_;
-    auto& selection = quic ? session.quic_sni_ : session.tls_sni_;
-    const bool has_sni = !tls->sni_identities_.empty();
-    const auto configure = [tls, &ticket_keys, &selection, quic, early_data, has_sni](asio::ssl::context& context_value,
-                               const tls_certificate& certificate) {
-        auto* native = context_value.native_handle();
-        if (quic) {
-            // RFC 9001 §4.2: QUIC requires TLS 1.3.
-            if (SSL_CTX_set_min_proto_version(native, TLS1_3_VERSION) != 1 ||
-                SSL_CTX_set_max_proto_version(native, TLS1_3_VERSION) != 1) {
-                throw std::runtime_error("failed to restrict the QUIC TLS context to TLS 1.3");
-            }
-            SSL_CTX_set_alpn_select_cb(native, select_quic_alpn_protocol, nullptr);
-            if (SSL_CTX_set_max_early_data(native, early_data ? UINT32_MAX : 0) != 1 ||
-                SSL_CTX_set_session_ticket_cb(native, generate_quic_ticket, decrypt_quic_ticket, nullptr) != 1) {
-                throw std::runtime_error("failed to configure QUIC session tickets");
-            }
-            if (early_data) {
-                // Ticket keys are shared across workers, not OpenSSL's local
-                // replay cache. RFC 8470 admission rejects unsafe early requests.
-                SSL_CTX_set_options(native, SSL_OP_NO_ANTI_REPLAY);
-            }
+    auto& context_value = (quic ? session.quic_tls_context_ : session.tls_context_).emplace(asio::ssl::context::tls_server);
+    auto* native = context_value.native_handle();
+    if (quic) {
+        // RFC 9001 §4.2: QUIC requires TLS 1.3.
+        if (SSL_CTX_set_min_proto_version(native, TLS1_3_VERSION) != 1 ||
+            SSL_CTX_set_max_proto_version(native, TLS1_3_VERSION) != 1) {
+            throw std::runtime_error("failed to restrict the QUIC TLS context to TLS 1.3");
+        }
+        SSL_CTX_set_alpn_select_cb(native, select_quic_alpn_protocol, nullptr);
+        if (SSL_CTX_set_max_early_data(native, early_data ? UINT32_MAX : 0) != 1 ||
+            SSL_CTX_set_session_ticket_cb(native, generate_quic_ticket, decrypt_quic_ticket, nullptr) != 1) {
+            throw std::runtime_error("failed to configure QUIC session tickets");
+        }
+        if (early_data) {
+            // Ticket keys are shared across workers, not OpenSSL's local
+            // replay cache. RFC 8470 admission rejects unsafe early requests.
+            SSL_CTX_set_options(native, SSL_OP_NO_ANTI_REPLAY);
+        }
+    } else {
+        context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
+                                  asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
+                                  asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
+        apply_tls_protocol_policy(*native, tls->max_outgoing_records_);
+        if (session.connection_.has_value()) {
+            SSL_CTX_set_alpn_select_cb(native, select_connection_alpn_protocol, &session.connection_->alpn_);
         } else {
-            context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
-                                      asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
-                                      asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
-            apply_tls_protocol_policy(*native, tls->max_outgoing_records_);
             SSL_CTX_set_alpn_select_cb(native, select_tcp_alpn_protocol, nullptr);
         }
-        // RFC 9325 §4.2.1: the server's order decides, whatever the client prefers.
-        SSL_CTX_set_options(native, SSL_OP_CIPHER_SERVER_PREFERENCE);
-        configure_http_server_tls_identity(native, certificate, tls->client_certificates_);
-        ticket_keys.install(*native);
-        // The client hello callback runs before OpenSSL looks up the offered
-        // session, which the server_name callback would be too late for.
-        SSL_CTX_set_client_hello_cb(native, &bind_session_to_server_name, nullptr);
-        if (has_sni) {
-            SSL_CTX_set_tlsext_servername_callback(native, &select_sni_context);
-            SSL_CTX_set_tlsext_servername_arg(native, &selection);
-        }
-    };
-
-    // Per-host SNI certificates first, so the lookup can point at stable storage.
-    sni_contexts.reserve(tls->sni_identities_.size());
-    for (const auto& sni : tls->sni_identities_) {
-        auto& context_value = sni_contexts.emplace_back(asio::ssl::context::tls_server);
-        configure(context_value, sni.certificate_);
     }
-    primary.emplace(asio::ssl::context::tls_server);
-    configure(*primary, tls->certificate_);
+    if (observe_client_hello) {
+        SSL_CTX_set_msg_callback(native, quic ? observe_quic_messages : observe_tcp_messages);
+    }
+    // RFC 9325 §4.2.1: the server's order decides, whatever the client prefers.
+    SSL_CTX_set_options(native, SSL_OP_CIPHER_SERVER_PREFERENCE);
+    configure_http_server_client_certificates(*native, tls->client_certificates_);
+    session.ticket_keys_->install(*native);
+    // The client hello callback runs before OpenSSL looks up the offered
+    // session, which the server_name callback would be too late for.
+    SSL_CTX_set_client_hello_cb(native, &bind_session_to_server_name, nullptr);
+    // The session outlives every SSL of its contexts, which its worker joins
+    // before retiring them.
+    SSL_CTX_set_tlsext_servername_callback(native, &select_tls_identity);
+    SSL_CTX_set_tlsext_servername_arg(native, &session);
 }
 
 }  // namespace
@@ -277,11 +314,9 @@ void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& c
 }
 #endif
 
-void configure_http_server_tls_contexts(http_server_session_config& session) {
+void configure_http_server_tls_contexts(http_server_session_config& session, bool observe_client_hello) {
     session.tls_context_.reset();
-    session.sni_contexts_.clear();
     session.quic_tls_context_.reset();
-    session.quic_sni_contexts_.clear();
     session.ticket_keys_.reset();
     const auto* tls = session.tls();
     if (tls == nullptr) {
@@ -291,9 +326,25 @@ void configure_http_server_tls_contexts(http_server_session_config& session) {
     if (!tls_session_ticket_keys(*tls).copy_to(std::chrono::steady_clock::now(), ticket_keys)) {
         throw std::runtime_error("failed to generate TLS session ticket keys");
     }
-    configure_family(session, tls_context_family::tcp);
+    configure_family(session, tls_context_family::tcp, observe_client_hello);
     if (session.http3_.has_value()) {
-        configure_family(session, tls_context_family::quic);
+        configure_family(session, tls_context_family::quic, observe_client_hello);
+    }
+}
+
+void bind_tls_local_address(SSL& tls, const asio::ip::address& local_address) {
+    const auto index = local_address_index();
+    // OpenSSL's ex_data stores a mutable pointer; selection only reads it.
+    if (index < 0 || SSL_set_ex_data(&tls, index, const_cast<asio::ip::address*>(&local_address)) != 1) {
+        throw std::runtime_error("failed to attach the TLS connection's local address");
+    }
+}
+
+void observe_tls_client_hello(SSL& tls, const tls_client_hello_observation& observation) {
+    const auto index = client_hello_observation_index();
+    // OpenSSL's ex_data stores a mutable pointer; the observer only reads it.
+    if (index < 0 || SSL_set_ex_data(&tls, index, const_cast<tls_client_hello_observation*>(&observation)) != 1) {
+        throw std::runtime_error("failed to attach the TLS ClientHello observer");
     }
 }
 

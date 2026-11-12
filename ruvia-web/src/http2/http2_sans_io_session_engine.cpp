@@ -341,11 +341,11 @@ struct push_target final {
 };
 
 [[nodiscard]] http2_sans_io_stream_runtime* http2_select_stream_route(const route_table& routes_value,
-    const http2_server_request_view& request, http2_sans_io_stream_runtime_table& stream_runtimes,
+    bool request_stream, const http2_server_request_view& request, http2_sans_io_stream_runtime_table& stream_runtimes,
     std::uint32_t stream_id) {
     auto& runtime = stream_runtimes.ensure_accepted(stream_id);
     auto [resolution, body_mode] = resolve_multiplexed_stream_route(
-        routes_value, request.method_, request.path_, request.authority_, request.protocol_);
+        routes_value, request_stream, request.method_, request.path_, request.authority_, request.protocol_);
     return runtime.select_route(std::move(resolution), body_mode) ? &runtime : nullptr;
 }
 
@@ -643,7 +643,8 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
     const auto id = promised_event.stream_id();
     http2_sans_io_stream_runtime* runtime = nullptr;
     try {
-        runtime = http2_select_stream_route(routes_, promised_event.request_view(), stream_runtimes_, id);
+        runtime = http2_select_stream_route(
+            routes_, static_cast<bool>(base_services_.request_stream()), promised_event.request_view(), stream_runtimes_, id);
         if (runtime == nullptr || !runtime->hold_request_head(std::move(promised_event))) {
             throw std::logic_error("HTTP/2 push dispatch admission failed");
         }
@@ -885,7 +886,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
                         *stream_runtime, write_signal_, *stream_signal, output_budget_,
                         process_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
-                        options.compression_ ? &*options.compression_ : nullptr, options.cors_ ? &*options.cors_ : nullptr);
+                        options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
                     auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
                         request_memory_value, stream_services,
                         [this, stream_id]() noexcept { return connection_.stream_aborted(stream_id); });
@@ -976,7 +977,8 @@ http2_sans_io_stream_runtime* http2_sans_io_session_engine::resolve_stream_route
     if (request_view.method_.empty()) {
         return nullptr;
     }
-    return http2_select_stream_route(routes_, request_view, stream_runtimes_, message_head.stream_id());
+    return http2_select_stream_route(routes_, static_cast<bool>(base_services_.request_stream()), request_view,
+        stream_runtimes_, message_head.stream_id());
 }
 
 void http2_sans_io_session_engine::on_message_head(http2_request_head_event& message_head) {
@@ -1241,6 +1243,11 @@ void http2_sans_io_session_engine::drain_events() {
 }
 
 http2_feed_result http2_sans_io_session_engine::feed_and_drain(std::string_view bytes_value) {
+    // Once per read, outside the retry loop below, which feeds the same bytes again.
+    if (const auto observer = session_.options().http2_input_) {
+        observer(server_observation_access::http2_input(base_services_.get_conn_info().id(),
+            std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
+    }
     for (;;) {
         const auto result_value = connection_.feed(bytes_value);
         drain_events();

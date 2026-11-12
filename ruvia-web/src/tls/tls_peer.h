@@ -13,7 +13,7 @@
 #include <openssl/x509.h>
 
 // What a finished TLS handshake negotiated with the peer: the selected ALPN
-// protocol and the verified peer certificate identity.
+// protocol, the offered server_name and the verified peer certificate identity.
 
 namespace ruvia::detail {
 
@@ -23,6 +23,13 @@ namespace ruvia::detail {
     unsigned int size = 0;
     SSL_get0_alpn_selected(&ssl, &selected, &size);
     return {reinterpret_cast<const char*>(selected), size};
+}
+
+// The host_name the client offered in server_name (RFC 6066 §3); empty when
+// it offered none. The view lives as long as the SSL.
+[[nodiscard]] inline std::string_view tls_server_name(SSL& ssl) noexcept {
+    const char* name = SSL_get_servername(&ssl, TLSEXT_NAMETYPE_host_name);
+    return name == nullptr ? std::string_view{} : std::string_view(name);
 }
 
 // Surface certificate presence independently of its Subject: RFC 5280 section

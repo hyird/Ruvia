@@ -277,7 +277,7 @@ void http3_worker_directory::detach(std::size_t index) noexcept {
 #if !defined(_WIN32)
 void http3_worker_directory::open_listener_socket(std::size_t worker_index, std::size_t listener_index,
     const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
-    asio::ip::udp::socket& socket) {
+    inherited_listener_sockets* inherited, asio::ip::udp::socket& socket) {
     if (worker_index >= slots_.size()) {
         throw std::invalid_argument("invalid HTTP/3 worker index");
     }
@@ -291,23 +291,32 @@ void http3_worker_directory::open_listener_socket(std::size_t worker_index, std:
         if (group.empty()) {
             std::pmr::vector<unique_udp_fd> opened(process_resource());
             opened.reserve(slots_.size());
-            asio::ip::udp::endpoint bound_endpoint = configured_endpoint;
-            for (std::size_t index = 0; index < slots_.size(); ++index) {
-                auto fd = open_reuseport_udp_fd(configured_endpoint.protocol(), bound_endpoint.data(),
-                    static_cast<socklen_t>(bound_endpoint.size()));
-                if (index == 0) {
-                    auto length = static_cast<socklen_t>(bound_endpoint.capacity());
-                    if (::getsockname(fd.get(), bound_endpoint.data(), &length) != 0) {
-                        throw std::system_error(errno, asio::system_category(), "failed to query HTTP/3 UDP listener endpoint");
-                    }
-                    bound_endpoint.resize(length);
+            if (inherited != nullptr && !inherited->udp().empty()) {
+                // Validated as bound to this endpoint, one per worker in
+                // worker order: the group's members as the kernel numbers them.
+                for (const auto fd : inherited->claim_udp()) {
+                    opened.emplace_back(fd);
                 }
-                opened.push_back(std::move(fd));
+            } else {
+                asio::ip::udp::endpoint bound_endpoint = configured_endpoint;
+                for (std::size_t index = 0; index < slots_.size(); ++index) {
+                    auto fd = open_reuseport_udp_fd(configured_endpoint.protocol(), bound_endpoint.data(),
+                        static_cast<socklen_t>(bound_endpoint.size()));
+                    if (index == 0) {
+                        auto length = static_cast<socklen_t>(bound_endpoint.capacity());
+                        if (::getsockname(fd.get(), bound_endpoint.data(), &length) != 0) {
+                            throw std::system_error(errno, asio::system_category(), "failed to query HTTP/3 UDP listener endpoint");
+                        }
+                        bound_endpoint.resize(length);
+                    }
+                    opened.push_back(std::move(fd));
+                }
+            }
+            if (opened.size() != slots_.size()) {
+                throw std::invalid_argument("HTTP/3 listener sockets must number one per worker");
             }
 #if defined(__linux__) && defined(SO_ATTACH_REUSEPORT_CBPF)
-            if (!opened.empty()) {
-                attach_reuseport_cbpf(opened.front().get(), secret, slots_.size());
-            }
+            attach_reuseport_cbpf(opened.front().get(), secret, slots_.size());
 #else
             (void)secret;
 #endif
@@ -324,6 +333,17 @@ void http3_worker_directory::open_listener_socket(std::size_t worker_index, std:
     socket.assign(configured_endpoint.protocol(), assigned.get());
     (void)assigned.release();
     socket.non_blocking(true);
+}
+
+void http3_worker_directory::close_unclaimed_listener_sockets(std::size_t listener_index) noexcept {
+    const std::lock_guard<std::mutex> lock(bind_mutex_);
+    if (listener_index < listener_sockets_.size()) {
+        for (int& fd : listener_sockets_[listener_index]) {
+            if (fd >= 0) {
+                (void)::close(std::exchange(fd, -1));
+            }
+        }
+    }
 }
 #endif
 

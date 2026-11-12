@@ -21,6 +21,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/http/http1_server_request_parser.h"
+#include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_number_format.h"
@@ -52,6 +53,7 @@
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"
 #include "server/inbound_transport_error.h"
+#include "server/request_stream_dispatch.h"
 #include "server/response_file_source.h"
 #include "server/worker_codecs.h"
 
@@ -202,10 +204,13 @@ struct http1_tunnel_upgrade_commit final {
     bool udp_;
     std::optional<tls_tunnel_output>& tls_output_;
 
-    [[nodiscard]] task<transport_type> operator()(
-        context& context_value, const http_response& head_response) const {
-        const auto plan = prepare_http1_tunnel_response_head_plan(
-            head_response, dispatch_.parsed_.request_.protocol_version(), udp_);
+    // An HTTP/1.1 Upgrade (a request stream's accept_tunnel()) becomes the
+    // 101 head; CONNECT and CONNECT-UDP keep their own heads.
+    [[nodiscard]] task<transport_type> operator()(context& context_value, http_response& head_response) const {
+        const auto& request = dispatch_.parsed_.request_;
+        const auto plan = !udp_ && request.known_method() != http_known_method::connect
+                              ? prepare_http1_upgrade_response_head(head_response, request)
+                              : prepare_http1_tunnel_response_head_plan(head_response, request.protocol_version(), udp_);
         http_response_head_buffer head(std::pmr::polymorphic_allocator<char>{process_resource()});
         append_http1_response_head(head_response, head, plan);
         context_access::commit_upgrade(context_value);
@@ -690,7 +695,10 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             parsed_value.parse_head(buffer_view, header_search_offset, request_memory_value.resource());
             const auto* const ready_head = parsed_value.head_ready();
             if (ready_head != nullptr) {
-                route_resolution_value = routes_value.resolve(parsed_value.request_);
+                route_resolution_value = base_route_services.request_stream()
+                                             ? resolve_request_stream_route(http1_request_stream_tunnel(
+                                                   parsed_value.request_, parsed_value.body_plan_.requires_consumption()))
+                                             : routes_value.resolve(parsed_value.request_);
             }
             // Held-back pipelined responses leave before anything that could
             // make the peer wait for them or reach the stream ahead of them:
@@ -778,6 +786,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     .scanner_entry_ = scanner_entry,
                     .parsed_ = parsed_value,
                     .response_coding_ = *admission->tail().coding_policy().selection(),
+                    .cors_ = admission->tail().cors(options_),
                     .routes_ = routes_value,
                     .request_memory_ = request_memory_value,
                     .base_route_services_ = admission->services(),

@@ -1,9 +1,14 @@
 #pragma once
 
+#include <chrono>
+#include <cstddef>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <utility>
 #include <vector>
+
+#include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
@@ -54,7 +59,8 @@ struct app_runtime_graph final {
           acceptor_(nullptr, pmr_object_deleter<windows_acceptor>{process_resource()}),
 #endif
           workers_(process_resource()),
-          group_(process_resource()) {
+          group_(process_resource()),
+          listener_slots_(process_resource()) {
     }
 
     // Declared before workers so it is destroyed after suspended worker tasks.
@@ -83,6 +89,16 @@ struct app_runtime_graph final {
     // Guarded by the application mutex. Worker handles are published only
     // once every worker is ready, so a posted job never meets a starting worker.
     bool workers_ready_{false};
+    // Guarded by the application mutex. The TCP endpoint each listener slot
+    // serves: slot i is listener i on every worker (and in the Windows
+    // acceptor), nullopt once removed or while being added. Slots are never
+    // reused, so a queued hand-over cannot reach another listener.
+    std::pmr::vector<std::optional<asio::ip::tcp::endpoint>> listener_slots_;
+    // HTTP/3 services are numbered alike, apart from the TCP listeners.
+    std::size_t http3_slot_count_{0};
+    // Where every TLS listener's ticket key epochs start, so a listener
+    // added while the run serves rotates with the others.
+    std::chrono::steady_clock::time_point tls_key_origin_{};
 };
 
 }  // namespace ruvia::detail

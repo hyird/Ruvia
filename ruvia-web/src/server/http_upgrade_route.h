@@ -41,6 +41,7 @@
 #include "router/route_table.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
+#include "server/request_stream_dispatch.h"
 #include "server/worker_codecs.h"
 namespace ruvia::detail {
 
@@ -209,8 +210,10 @@ struct tunnel_upgrade_session_operation final {
     commit_upgrade_type& commit_upgrade_;
     std::optional<session_type>& session_;
 
-    [[nodiscard]] task<void> operator()(context& context_value) {
-        const auto head_response = prepare_tunnel_upgrade_response_head(
+    // Commits the upgrade head the context's draft describes and opens the
+    // session over the transport that head hands over.
+    [[nodiscard]] task<void> establish(context& context_value) {
+        auto head_response = prepare_tunnel_upgrade_response_head(
             context_value, request_.protocol_version(), udp_, endpoint_.config().datagrams_);
         std::optional<transport_type> transport;
         if constexpr (requires { commit_upgrade_(context_value, head_response).operator co_await(); }) {
@@ -225,6 +228,26 @@ struct tunnel_upgrade_session_operation final {
             transport->abort();
             throw;
         }
+    }
+
+    [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value) {
+        co_await establish(context_value);
+        scanner_entry_.enter_long_lived();
+        co_return &session_->tunnel();
+    }
+
+    [[nodiscard]] task<void> operator()(context& context_value) {
+        if (is_request_stream_tunnel_route(resolved_.route())) {
+            // The request stream callback commits the tunnel itself, through
+            // request_stream::accept_tunnel(), or answers without one.
+            auto accept = [this, &context_value](http_status_code) {
+                return accept_request_stream_tunnel(context_value);
+            };
+            const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code)>(accept);
+            co_await serve_request_stream_tunnel(context_value, accept_ref);
+            co_return;
+        }
+        co_await establish(context_value);
         co_await invoke_tunnel_handler(
             *session_, scanner_entry_, resolved_.stream_handler(), context_value);
     }

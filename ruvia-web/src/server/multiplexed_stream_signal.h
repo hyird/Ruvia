@@ -41,6 +41,7 @@
 #include "server/http_response_stream_state.h"
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
+#include "server/request_stream_dispatch.h"
 #include "server/response_file_source.h"
 
 namespace ruvia {
@@ -662,10 +663,15 @@ private:
     }
 };
 
+// `request_stream`: the connection's listener is a request stream one, whose
+// every request streams its body (a CONNECT is a tunnel request).
 [[nodiscard]] inline std::pair<route_resolution, request_body_mode> resolve_multiplexed_stream_route(
-    const route_table& routes, std::string_view method_token, std::string_view target_path,
+    const route_table& routes, bool request_stream, std::string_view method_token, std::string_view target_path,
     std::string_view authority, std::string_view protocol) noexcept {
     const auto method = classify_http_method(method_token);
+    if (request_stream) {
+        return {resolve_request_stream_route(method == http_known_method::connect), request_body_mode::stream};
+    }
     const auto path = target_path.substr(0, target_path.find('?'));
     const auto extended_protocol = http_ascii_equals_ignore_case(protocol, "websocket")
                                        ? std::string_view("websocket")

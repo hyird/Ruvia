@@ -31,6 +31,8 @@ struct http1_route_dispatch final {
     connection_scanner::entry& scanner_entry_;
     const http1_server_request_parse_state& parsed_;
     http_response_coding_selection response_coding_;
+    // Admission's CORS policy for this request; null when none applies.
+    const cors_options* cors_;
     const route_table& routes_;
     request_memory& request_memory_;
     context_services base_route_services_;

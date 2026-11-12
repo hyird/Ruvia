@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <utility>
 
@@ -62,6 +63,28 @@ public:
 
 private:
     connection_count* count_;
+};
+
+// conn_info::id() numbering of one worker for one run, worker thread only:
+// its n-th connection (n from 0, TCP and QUIC alike) is
+// n * worker_count + worker_index + 1, so ids are unique across workers
+// without shared state and never zero.
+class connection_id_sequence final {
+public:
+    connection_id_sequence(std::size_t worker_index, std::size_t worker_count) noexcept
+        : next_(std::uint64_t{worker_index} + 1),
+          stride_(worker_count) {}
+
+    connection_id_sequence(const connection_id_sequence&) = delete;
+    connection_id_sequence& operator=(const connection_id_sequence&) = delete;
+
+    [[nodiscard]] std::uint64_t next() noexcept {
+        return std::exchange(next_, next_ + stride_);
+    }
+
+private:
+    std::uint64_t next_;
+    std::uint64_t stride_;
 };
 
 }  // namespace ruvia::detail

@@ -4,11 +4,13 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 #include <asio/error.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/system_error.hpp>
+#include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
@@ -27,6 +29,77 @@ struct x509_store_deleter final {
         X509_STORE_free(store);
     }
 };
+
+struct bio_deleter final {
+    void operator()(BIO* bio) const noexcept {
+        BIO_free(bio);
+    }
+};
+
+struct x509_deleter final {
+    void operator()(X509* certificate) const noexcept {
+        X509_free(certificate);
+    }
+};
+
+struct private_key_deleter final {
+    void operator()(EVP_PKEY* private_key) const noexcept {
+        EVP_PKEY_free(private_key);
+    }
+};
+
+// A read-only BIO over caller-owned PEM text, which it never copies.
+[[nodiscard]] std::unique_ptr<BIO, bio_deleter> open_pem_text(std::string_view text) {
+    if (!std::in_range<int>(text.size())) {
+        throw std::invalid_argument("TLS PEM text is too large");
+    }
+    ::ERR_clear_error();
+    std::unique_ptr<BIO, bio_deleter> input(BIO_new_mem_buf(text.data(), static_cast<int>(text.size())));
+    if (input == nullptr) {
+        throw_tls_credential_error("BIO_new_mem_buf");
+    }
+    return input;
+}
+
+// SSL_CTX_use_certificate_chain_file() over memory: the first certificate is
+// the leaf, every later one joins its chain, and only the end of the text
+// ends the chain.
+void use_certificate_chain_pem(SSL_CTX& context, std::string_view text) {
+    const auto input = open_pem_text(text);
+    auto* const password_callback = SSL_CTX_get_default_passwd_cb(&context);
+    auto* const password_userdata = SSL_CTX_get_default_passwd_cb_userdata(&context);
+    const std::unique_ptr<X509, x509_deleter> leaf(
+        PEM_read_bio_X509_AUX(input.get(), nullptr, password_callback, password_userdata));
+    if (leaf == nullptr || SSL_CTX_use_certificate(&context, leaf.get()) != 1) {
+        throw_tls_credential_error("use_certificate_chain_pem");
+    }
+    for (;;) {
+        std::unique_ptr<X509, x509_deleter> issuer(
+            PEM_read_bio_X509(input.get(), nullptr, password_callback, password_userdata));
+        if (issuer == nullptr) {
+            break;
+        }
+        if (SSL_CTX_add0_chain_cert(&context, issuer.get()) != 1) {
+            throw_tls_credential_error("use_certificate_chain_pem");
+        }
+        // The context owns it now.
+        (void)issuer.release();
+    }
+    const auto error = ::ERR_peek_last_error();
+    if (ERR_GET_LIB(error) != ERR_LIB_PEM || ERR_GET_REASON(error) != PEM_R_NO_START_LINE) {
+        throw_tls_credential_error("use_certificate_chain_pem");
+    }
+    ::ERR_clear_error();
+}
+
+void use_private_key_pem(SSL_CTX& context, std::string_view text) {
+    const auto input = open_pem_text(text);
+    const std::unique_ptr<EVP_PKEY, private_key_deleter> private_key(PEM_read_bio_PrivateKey(input.get(), nullptr,
+        SSL_CTX_get_default_passwd_cb(&context), SSL_CTX_get_default_passwd_cb_userdata(&context)));
+    if (private_key == nullptr || SSL_CTX_use_PrivateKey(&context, private_key.get()) != 1) {
+        throw_tls_credential_error("use_private_key_pem");
+    }
+}
 
 // Borrow the configured password only during synchronous credential loading.
 // An absent password uses a caller provider, or an empty noninteractive default.
@@ -77,6 +150,17 @@ private:
     void* previous_userdata_;
 };
 
+// OpenSSL's PEM loaders resolve the full chain and the (possibly encrypted)
+// key into a scratch context, which keeps that one authoritative parser.
+[[nodiscard]] std::unique_ptr<SSL_CTX, ssl_context_deleter> make_scratch_context() {
+    ::ERR_clear_error();
+    std::unique_ptr<SSL_CTX, ssl_context_deleter> scratch(SSL_CTX_new(TLS_method()));
+    if (scratch == nullptr) {
+        throw_tls_credential_error("SSL_CTX_new");
+    }
+    return scratch;
+}
+
 }  // namespace
 
 void throw_tls_credential_error(const char* operation) {
@@ -89,13 +173,7 @@ void throw_tls_credential_error(const char* operation) {
 
 tls_certificate tls_certificate::load(const char* certificate_chain_file, const char* private_key_file,
     std::string_view private_key_password) {
-    // OpenSSL's PEM loaders resolve the full chain and the (possibly
-    // encrypted) key; a scratch context keeps that one authoritative parser.
-    ::ERR_clear_error();
-    const std::unique_ptr<SSL_CTX, ssl_context_deleter> scratch(SSL_CTX_new(TLS_method()));
-    if (scratch == nullptr) {
-        throw_tls_credential_error("SSL_CTX_new");
-    }
+    const auto scratch = make_scratch_context();
     {
         const tls_password_scope password_scope(*scratch, private_key_password);
         ::ERR_clear_error();
@@ -107,15 +185,30 @@ tls_certificate tls_certificate::load(const char* certificate_chain_file, const 
             throw_tls_credential_error("use_private_key_file");
         }
     }
+    return adopt_loaded(*scratch);
+}
+
+tls_certificate tls_certificate::load_pem(std::string_view certificate_chain, std::string_view private_key,
+    std::string_view private_key_password) {
+    const auto scratch = make_scratch_context();
+    {
+        const tls_password_scope password_scope(*scratch, private_key_password);
+        use_certificate_chain_pem(*scratch, certificate_chain);
+        use_private_key_pem(*scratch, private_key);
+    }
+    return adopt_loaded(*scratch);
+}
+
+tls_certificate tls_certificate::adopt_loaded(SSL_CTX& scratch) {
     ::ERR_clear_error();
-    if (::SSL_CTX_check_private_key(scratch.get()) != 1) {
+    if (::SSL_CTX_check_private_key(&scratch) != 1) {
         throw_tls_credential_error("check_private_key");
     }
     STACK_OF(X509)* chain = nullptr;
-    if (SSL_CTX_get0_chain_certs(scratch.get(), &chain) != 1) {
+    if (SSL_CTX_get0_chain_certs(&scratch, &chain) != 1) {
         throw_tls_credential_error("get0_chain_certs");
     }
-    return tls_certificate(SSL_CTX_get0_certificate(scratch.get()), chain, SSL_CTX_get0_privatekey(scratch.get()));
+    return tls_certificate(SSL_CTX_get0_certificate(&scratch), chain, SSL_CTX_get0_privatekey(&scratch));
 }
 
 tls_certificate::tls_certificate(X509* certificate, STACK_OF(X509) * chain, EVP_PKEY* private_key) {
@@ -192,6 +285,11 @@ void tls_certificate::install(SSL_CTX& context) const {
     if (::SSL_CTX_check_private_key(&context) != 1) {
         throw_tls_credential_error("check_private_key");
     }
+}
+
+bool tls_certificate::present(SSL& connection) const noexcept {
+    // Override the whole slot: an absent chain_ clears any earlier chain.
+    return ::SSL_use_cert_and_key(&connection, certificate_, private_key_, chain_, 1) == 1;
 }
 
 tls_trust_store tls_trust_store::load_file(const char* file) {

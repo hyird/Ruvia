@@ -178,6 +178,16 @@ public:
     void bind_alternative_service(std::string_view value) noexcept {
         alternative_service_ = value;
     }
+    // A listener_dispatch::request_stream response belongs to its callback:
+    // the application's CORS policy does not apply to it.
+    void disable_cors() noexcept {
+        cors_ = false;
+    }
+    // The CORS policy the response streams and buffered responses of this
+    // request apply; null when none does.
+    [[nodiscard]] const cors_options* cors(const http_server_options& options) const noexcept {
+        return cors_ && options.cors_.has_value() ? &*options.cors_ : nullptr;
+    }
 
     // All arguments borrow the current request owner through completion. Only
     // an uncommitted response may enter. The common response (no blocking-pool
@@ -225,6 +235,7 @@ private:
     std::chrono::steady_clock::time_point start_;
     std::string_view alternative_service_;
     mutable request_io_metrics io_metrics_{};
+    bool cors_{true};
 };
 
 enum class http_request_endpoint : std::uint8_t {

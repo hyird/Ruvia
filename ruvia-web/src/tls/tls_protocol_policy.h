@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <string_view>
@@ -22,6 +23,12 @@ namespace ruvia::detail {
 // Servers additionally choose by their own preference order.
 void validate_tls_record_limit(std::uint64_t limit);
 void apply_tls_protocol_policy(SSL_CTX& context, std::uint64_t record_limit);
+
+// The policy's SSL_CTX message callback, which enforces the outgoing record
+// limit. A context that installs its own message callback must forward every
+// message to it first.
+void count_tls_records(int writing, int version, int content_type, const void* bytes, std::size_t size,
+    SSL* ssl, void* argument) noexcept;
 
 // 原生数据库驱动自己创建 SSL_CTX。作用域只包围一次同步 start/cont/poll 调用，
 // 不跨协程挂起：构造通知只安装回调和自有元数据，不驱动未初始化的 SSL 对象。

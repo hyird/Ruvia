@@ -18,6 +18,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/request_stream.h"
 
 #include "context/context_capabilities.h"
 #include "http/streaming_access.h"
@@ -73,6 +74,9 @@ struct context_connection_services final {
     // The Alt-Svc field value (RFC 7838 §3) this connection's listener
     // advertises on every response; empty when it advertises none.
     std::string_view alternative_service_{};
+    // Set for a listener_dispatch::request_stream connection: every request
+    // goes to this callback instead of the routes.
+    request_stream_callback_ref request_stream_{};
 };
 
 // Borrowed protocol channels outlive every context for this request.
@@ -346,11 +350,12 @@ public:
     }
 
     // Views borrow connection-owned storage and remain valid for every context
-    // created while that connection is dispatched.
+    // created while that connection is dispatched. `connection_id` is the
+    // worker's conn_info::id() for the connection, zero without one.
     [[nodiscard]] context_services with_plain_transport(
-        std::string_view remote_address, std::uint16_t remote_port) const noexcept {
+        std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) const noexcept {
         auto services = *this;
-        services.connection_services_.info_ = conn_info::plain(remote_address);
+        services.connection_services_.info_ = conn_info::plain(connection_id, remote_address);
         services.connection_services_.info_.set_remote_port(remote_port);
         services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
         services.connection_services_.served_certificate_ = nullptr;
@@ -359,13 +364,15 @@ public:
 
     template <typename traits_type, typename allocator_type>
     context_services with_plain_transport(
-        std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
+        std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
 
-    [[nodiscard]] context_services with_tls_transport(std::string_view remote_address,
-        std::optional<std::string_view> client_certificate_subject, std::uint16_t remote_port,
-        tls_served_certificate& served_certificate) const noexcept {
+    // `alpn` and `server_name` borrow the connection's SSL, which outlives it.
+    [[nodiscard]] context_services with_tls_transport(std::uint64_t connection_id, std::string_view remote_address,
+        std::optional<std::string_view> client_certificate_subject, std::string_view alpn, std::string_view server_name,
+        std::uint16_t remote_port, tls_served_certificate& served_certificate) const noexcept {
         auto services = *this;
-        services.connection_services_.info_ = conn_info::tls(remote_address, client_certificate_subject);
+        services.connection_services_.info_ =
+            conn_info::tls(connection_id, remote_address, client_certificate_subject, alpn, server_name);
         services.connection_services_.info_.set_remote_port(remote_port);
         services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
         services.connection_services_.served_certificate_ = &served_certificate;
@@ -373,15 +380,27 @@ public:
     }
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::basic_string<char, traits_type, allocator_type>&&, std::optional<std::string_view>,
-        std::uint16_t, tls_served_certificate&) const = delete;
+    context_services with_tls_transport(std::uint64_t, std::basic_string<char, traits_type, allocator_type>&&,
+        std::optional<std::string_view>, std::string_view, std::string_view, std::uint16_t,
+        tls_served_certificate&) const = delete;
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::string_view, std::basic_string<char, traits_type, allocator_type>&&,
-        std::uint16_t, tls_served_certificate&) const = delete;
+    context_services with_tls_transport(std::uint64_t, std::string_view, std::basic_string<char, traits_type, allocator_type>&&,
+        std::string_view, std::string_view, std::uint16_t, tls_served_certificate&) const = delete;
 
     [[nodiscard]] constexpr std::string_view alternative_service() const noexcept {
         return connection_services_.alternative_service_;
+    }
+
+    // Empty unless the connection's listener is a listener_dispatch::request_stream one.
+    [[nodiscard]] constexpr request_stream_callback_ref request_stream() const noexcept {
+        return connection_services_.request_stream_;
+    }
+
+    [[nodiscard]] context_services with_request_stream(request_stream_callback_ref callback) const noexcept {
+        auto services = *this;
+        services.connection_services_.request_stream_ = callback;
+        return services;
     }
 
     // `value` borrows listener-owned storage that outlives the connection.
@@ -400,7 +419,7 @@ private:
     }
 
     const context_worker_services* worker_services_;
-    context_connection_services connection_services_{.info_ = conn_info::plain({})};
+    context_connection_services connection_services_{.info_ = conn_info::plain(0, {})};
     context_request_services request_services_;
 };
 

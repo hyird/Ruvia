@@ -56,6 +56,11 @@ public:
         return state_ == app_lifecycle_state::stopping;
     }
 
+    // Serving, with no stop requested yet.
+    [[nodiscard]] bool running() const noexcept {
+        return state_ == app_lifecycle_state::running;
+    }
+
     [[nodiscard]] bool begin_run() noexcept {
         if (state_ != app_lifecycle_state::stopped) {
             return false;
@@ -130,6 +135,10 @@ struct app_state final {
     std::pmr::vector<http_server_listener_definition> listeners_{process_resource()};
     access_log_callback access_log_callback_;
     connection_failure_callback connection_failure_callback_;
+    tls_client_hello_callback tls_client_hello_callback_;
+    http2_input_callback http2_input_callback_;
+    connection_callback connection_callback_;
+    request_stream_callback request_stream_callback_;
     http_server_options options_{};
     std::optional<app_document_root_config> document_root_config_;
     app_configuration configuration_;
@@ -149,6 +158,13 @@ struct app_state final {
     mutable std::mutex mutex_;
     std::condition_variable lifecycle_changed_;
     app_lifecycle lifecycle_;
+    // Serializes the runtime listener controls -- replace_tls_identities(),
+    // add_listener(), remove_listener() and duplicate_listener_sockets() --
+    // each of which posts to every worker and waits. Taken before mutex_,
+    // never while holding it. The run() owner takes it only to unpublish the
+    // runtime once every worker joined, so a control that holds it may keep
+    // using the runtime it found.
+    std::mutex runtime_control_mutex_;
 };
 
 inline void ensure_app_not_running(bool running, const char* message) {

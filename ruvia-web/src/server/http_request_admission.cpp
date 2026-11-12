@@ -112,13 +112,19 @@ void http_response_tail::defer_access(const access_log_sink& access_log, http1_d
 http_request_admission admit_http_request(const http_request_admission_input& input,
     const http_request_admission_policy& policy, const context_services& services) {
     const auto& request = input.request_;
+    // A request stream callback owns its response representation: the server
+    // negotiates no coding for it and applies no CORS policy or rate limit.
+    const bool request_stream = static_cast<bool>(services.request_stream());
+    const auto coding = request_stream ? http_response_coding_selection::select(
+                                             http_response_coding_qualities{}, http_response_coding_candidates::identity_only())
+                                       : input.coding_;
     // Negotiate against every coding. A document root or context::static_file
     // may serve an indexed precompressed sidecar even when this worker has no
     // runtime encoder; the encoder capability travels to representation
     // preparation instead of pruning the client's choices here. A failed
     // negotiation stays in the selection until the response status is known: a
     // buffered 204/205/304 carries no representation and must not become 406.
-    auto coding_policy = http_response_coding_policy::selected(input.coding_);
+    auto coding_policy = http_response_coding_policy::selected(coding);
     // Keyed on the client, not the hop: behind a trusted proxy every request
     // would otherwise share the proxy's single key. Resolved once per request
     // and bound to the services every context of this request is created from.
@@ -133,7 +139,10 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     const auto client_address = connection.client().address();
     admission.tail_.bind_addresses(remote_address, client_address);
     admission.tail_.bind_alternative_service(services.alternative_service());
-    admission.services_.bind_response_coding(input.coding_);
+    admission.services_.bind_response_coding(coding);
+    if (request_stream) {
+        admission.tail_.disable_cors();
+    }
     if (input.pinned_arrival_.has_value()) {
         admission.services_.pin_arrival(*input.pinned_arrival_);
     }
@@ -166,7 +175,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         return reject(http_request_rejection::error(
             copy_http_protocol_error_info(input.resource_, http_unsupported_expectation_error())));
     }
-    if (policy.apply_rate_limit_) {
+    if (policy.apply_rate_limit_ && !request_stream) {
         if (const auto rejection = decide_request_rate_limit(
                 admission.services_.rate_limiter(), client_address, input.pinned_arrival_)) {
             return reject(http_request_rejection::rate_limited(*rejection));

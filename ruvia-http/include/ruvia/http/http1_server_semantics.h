@@ -176,4 +176,20 @@ private:
 [[nodiscard]] http1_response_head_plan prepare_http1_connect_response_head(
     const http_response& response, http_protocol_version version);
 
+// RFC 9110 §7.8: whether an HTTP/1.1 `request` asks to switch protocols -- an
+// Upgrade field offering at least one protocol, sent with the Upgrade
+// connection option. Any other request's Upgrade field is ignored, as is a
+// CONNECT's: its 2xx establishes a tunnel instead.
+[[nodiscard]] bool http1_request_offers_upgrade(const http_request& request) noexcept;
+
+// Makes `response` -- a head without content or framing fields -- the 101
+// (Switching Protocols) head after which an HTTP/1.1 connection carries the
+// protocol it names (RFC 9110 §7.8, §15.2.2): the response's own Upgrade
+// field, else the first protocol `request` offered, with the Upgrade
+// connection option added when missing. A request that offers no upgrade, a
+// protocol it did not offer, content or framing fields throw
+// http1_response_head_error before `response` changes.
+[[nodiscard]] http1_response_head_plan prepare_http1_upgrade_response_head(
+    http_response& response, const http_request& request);
+
 }  // namespace ruvia

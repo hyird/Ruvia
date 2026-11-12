@@ -7,11 +7,13 @@
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
 #include "field/http_connection_fields.h"
 #include "field/http_date_calendar.h"
+#include "request/http_request_access.h"
 #include "response/http_final_response_control_plan.h"
 #include "response/http_framed_response_head_plan.h"
 #include "response/http_response_header_state.h"
@@ -238,6 +240,34 @@ void add_http1_connection_option(http_response& response, std::string_view optio
     }
 }
 
+// Visits each protocol the Upgrade fields of `request` offer, in field order,
+// until `visitor` returns false. Malformed members end the visit.
+template <typename visitor_type>
+void visit_offered_upgrade_protocols(const http_request& request, visitor_type&& visitor) noexcept {
+    const auto headers = request.headers();
+    bool visiting = true;
+    for (std::size_t index = 0; visiting && index < headers.size(); ++index) {
+        if (detail::http_request_access::header_kind(request, index) != detail::http_field_kind::upgrade) {
+            continue;
+        }
+        (void)detail::http_upgrade_protocols{}.parse_field(headers[index].value(), detail::http_field_list_role::recipient,
+            [&visiting, &visitor](const detail::http_upgrade_protocol& protocol) noexcept {
+                visiting = visitor(protocol);
+                return visiting;
+            });
+    }
+}
+
+[[nodiscard]] bool request_offers_upgrade_protocol(
+    const http_request& request, const detail::http_upgrade_protocol& selected) noexcept {
+    bool offered = false;
+    visit_offered_upgrade_protocols(request, [&offered, &selected](const detail::http_upgrade_protocol& protocol) noexcept {
+        offered = detail::http_upgrade_protocol_equals(protocol, selected);
+        return !offered;
+    });
+    return offered;
+}
+
 }  // namespace
 
 http1_request_connection_plan http1_commit_final_response(
@@ -294,6 +324,76 @@ prepared_http1_response_stream prepare_http1_response_stream_head(
             : http1_close_delimited_response_stream_head_plan(
                   head.commit_plan().body_plan(), connection_plan);
     return prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan);
+}
+
+bool http1_request_offers_upgrade(const http_request& request) noexcept {
+    if (request.protocol_version() != http_protocol_version::http11 ||
+        request.known_method() == http_known_method::connect) {
+        return false;
+    }
+    detail::http_connection_options connection_options;
+    detail::http_upgrade_protocols upgrade_protocols;
+    const auto headers = request.headers();
+    for (std::size_t index = 0; index < headers.size(); ++index) {
+        const auto kind = detail::http_request_access::header_kind(request, index);
+        if (kind == detail::http_field_kind::connection) {
+            if (connection_options.parse_field(headers[index].value(),
+                    detail::http_connection_field_role::request_recipient) != detail::http_field_list_parse_status::ok) {
+                return false;
+            }
+        } else if (kind == detail::http_field_kind::upgrade) {
+            if (upgrade_protocols.parse_field(headers[index].value(), detail::http_field_list_role::recipient) !=
+                detail::http_field_list_parse_status::ok) {
+                return false;
+            }
+        }
+    }
+    return connection_options.upgrade() && upgrade_protocols.has_protocol();
+}
+
+http1_response_head_plan prepare_http1_upgrade_response_head(http_response& response, const http_request& request) {
+    if (!http1_request_offers_upgrade(request)) {
+        throw http1_response_head_error("HTTP/1 request offers no protocol upgrade");
+    }
+    if (response.file_body() || response.has_multipart_file_body() || !response.body_bytes().empty() ||
+        detail::response_has_known_header(
+            response, detail::response_header_content_length | detail::response_header_transfer_encoding)) {
+        throw http1_response_head_error("HTTP/1 Switching Protocols response cannot carry content or framing fields");
+    }
+    const auto http1_control = detail::http1_final_response_control_plan(response);
+    // RFC 9110 §7.8: the server switches only to protocols the client offered.
+    if (http1_control.upgrade_protocols().has_field()) {
+        bool offered = http1_control.upgrade_protocols().has_protocol();
+        for (const auto& header : response.headers()) {
+            if (offered && detail::http_response_header_access::known_bit(header) == detail::response_header_upgrade) {
+                (void)detail::http_upgrade_protocols{}.parse_field(header.value(), detail::http_field_list_role::sender,
+                    [&offered, &request](const detail::http_upgrade_protocol& selected) noexcept {
+                        offered = request_offers_upgrade_protocol(request, selected);
+                        return offered;
+                    });
+            }
+        }
+        if (!offered) {
+            throw http1_response_head_error("HTTP/1 Switching Protocols response names a protocol the request did not offer");
+        }
+    } else {
+        std::string_view offered_protocol;
+        visit_offered_upgrade_protocols(request, [&offered_protocol](const detail::http_upgrade_protocol& protocol) noexcept {
+            const auto end = protocol.version_.empty() ? protocol.name_.data() + protocol.name_.size()
+                                                       : protocol.version_.data() + protocol.version_.size();
+            offered_protocol = std::string_view(protocol.name_.data(), static_cast<std::size_t>(end - protocol.name_.data()));
+            return false;
+        });
+        response.header("Upgrade", offered_protocol);
+    }
+    if (!http1_control.connection_options().upgrade()) {
+        add_http1_connection_option(response, detail::http_connection_upgrade_option,
+            http1_control.connection_options().has_field());
+    }
+    response.status_code_ = http_status::switching_protocols;
+    return http1_close_delimited_response_stream_head_plan(
+        plan_http_response_body(http_known_method::get, http_status::switching_protocols),
+        http1_request_connection_plan::http11_close());
 }
 
 }  // namespace ruvia

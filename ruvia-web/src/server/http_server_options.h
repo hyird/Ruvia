@@ -3,12 +3,17 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <span>
 
 #include "ruvia/web/rate_limit.h"
+#include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
+#include "ruvia/web/server_connection.h"
+#include "ruvia/web/server_observation.h"
 
 #include "http/http_cors.h"
 #include "server/document_root_binding.h"
@@ -53,6 +58,21 @@ struct connection_failure_record_access final {
     [[nodiscard]] static connection_failure_record make(
         std::string_view remote_address, std::exception_ptr exception) noexcept {
         return connection_failure_record(remote_address, std::move(exception));
+    }
+};
+
+// The one place server observation records are built.
+struct server_observation_access final {
+    using tls_client_hello_fields = tls_client_hello_record::fields_type;
+
+    [[nodiscard]] static constexpr tls_client_hello_record tls_client_hello(
+        const tls_client_hello_fields& fields) noexcept {
+        return tls_client_hello_record(fields);
+    }
+
+    [[nodiscard]] static constexpr http2_input_record http2_input(
+        std::uint64_t connection_id, std::span<const std::byte> bytes) noexcept {
+        return http2_input_record(connection_id, bytes);
     }
 };
 
@@ -154,6 +174,15 @@ struct http_server_options final {
     const env* env_{nullptr};
     worker_failure_sink failure_{};
     connection_failure_sink connection_failure_{};
+    // Empty observers keep the connection paths free of observation work.
+    tls_client_hello_callback_ref tls_client_hello_{};
+    http2_input_callback_ref http2_input_{};
+    // Serves every listener_dispatch::connection listener; run() requires it
+    // when one exists.
+    connection_callback_ref connection_{};
+    // Serves every listener_dispatch::request_stream listener; run() requires
+    // it when one exists.
+    request_stream_callback_ref request_stream_{};
     std::optional<rate_limit_rule> default_rate_limit_per_worker_{};
     std::size_t rate_limit_capacity_per_worker_{default_rate_limit_capacity_per_worker};
 

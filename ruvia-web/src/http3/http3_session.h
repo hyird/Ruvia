@@ -33,6 +33,7 @@
 #include "server/connection_count.h"
 #include "server/connection_scanner.h"
 #include "server/http_request_admission.h"
+#include "server/http_server_tls_contexts.h"
 #include "server/inbound_buffer_resource.h"
 #include "tls/tls_served_certificate.h"
 
@@ -170,11 +171,20 @@ private:
     http3_endpoint& endpoint_;
     const http3_worker_services& services_;
     connection_slot slot_;
+    // conn_info::id() of this connection.
+    std::uint64_t connection_id_;
     asio::ip::udp::endpoint local_;
+    // The address identity selection matches local-address identities
+    // against: the UDP socket's bound address. tls_ borrows it.
+    asio::ip::address tls_local_address_;
     asio::ip::udp::endpoint remote_;
     // The sender of the datagram being read, for its ngtcp2 path.
     asio::ip::udp::endpoint path_remote_;
     std::pmr::string remote_address_;
+    // Present only with an on_tls_client_hello observer; tls_ borrows it, so
+    // it is declared before tls_.
+    std::pmr::string local_address_;
+    std::optional<tls_client_hello_observation> client_hello_;
     // Keys this connection holds in the endpoint's table.
     std::pmr::vector<http3_cid_key> connection_ids_;
     std::unique_ptr<SSL, free_tls> tls_;

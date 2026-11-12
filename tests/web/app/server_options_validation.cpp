@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -229,6 +230,78 @@ TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
         {.host_ = "Example.com", .identity_ = other},
         {.host_ = "example.COM",
             .identity_ = {.certificate_chain_file_ = "third.pem", .private_key_file_ = "third.key"}},
+    }));
+}
+
+// A wildcard is a whole left-most "*" label in front of a valid host name. A
+// valid wildcard passes validation and fails only when its files are read.
+TEST(Ruvia, tls_config_accepts_only_whole_label_sni_wildcards) {
+    const auto listen_with = [](std::pmr::vector<ruvia::tls_sni_config> sni) {
+        ruvia::app().listen({
+            .address_ = "127.0.0.1",
+            .https_ = 8443,
+            .tls_ =
+                {
+                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+                    .sni_ = std::move(sni),
+                },
+        });
+    };
+    const ruvia::tls_identity_config other{.certificate_chain_file_ = "other.pem", .private_key_file_ = "other.key"};
+    for (const char* host : {"*", "*.", "**.example.com", "*.*.example.com", "a.*.example.com", "*example.com",
+             "w*.example.com", "*.example.com.", "*.127.0.0.1"}) {
+        EXPECT_TRUE(throws_invalid([&] { listen_with({{.host_ = host, .identity_ = other}}); })) << host;
+    }
+    EXPECT_TRUE(throws_invalid([&] {
+        listen_with({{.host_ = "*.Example.com", .identity_ = other}, {.host_ = "*.example.COM", .identity_ = other}});
+    }));
+    // An exact name and the wildcard over its subdomains are distinct hosts.
+    EXPECT_THROW(
+        listen_with({{.host_ = "example.com", .identity_ = other}, {.host_ = "*.example.com", .identity_ = other}}),
+        std::system_error);
+}
+
+// Each identity comes from exactly one complete source, and each local
+// address is a distinct, specific numeric IP address.
+TEST(Ruvia, tls_config_rejects_ambiguous_identity_sources_and_local_addresses) {
+    const auto listen_with = [](ruvia::tls_config tls) {
+        ruvia::app().listen({.address_ = "127.0.0.1", .https_ = 8443, .tls_ = std::move(tls)});
+    };
+    const auto rejects = [&](ruvia::tls_config tls) { return throws_invalid([&] { listen_with(std::move(tls)); }); };
+    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_file_ = "cert.pem",
+                             .private_key_file_ = "key.pem",
+                             .certificate_chain_pem_ = "pem",
+                             .private_key_pem_ = "pem"}}));
+    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_pem_ = "pem"}}));
+    EXPECT_TRUE(rejects({.identity_ = {.certificate_chain_pem_ = "pem"}}));
+    EXPECT_TRUE(rejects({.identity_ = {.private_key_pem_ = "pem"}}));
+    // Complete in-memory PEM passes validation; this text then fails to parse.
+    EXPECT_THROW(listen_with({.identity_ = {.certificate_chain_pem_ = "not PEM", .private_key_pem_ = "not PEM"}}),
+        std::system_error);
+
+    const ruvia::tls_identity_config files{.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"};
+    const auto rejects_local = [&](std::pmr::vector<ruvia::tls_local_address_config> local) {
+        return rejects({.identity_ = files, .local_addresses_ = std::move(local)});
+    };
+    for (const char* address : {"", "localhost", "127.0.0.1:443", "0.0.0.0", "::", "::ffff:0.0.0.0"}) {
+        EXPECT_TRUE(rejects_local({{.address_ = address, .identity_ = files}})) << address;
+    }
+    EXPECT_TRUE(rejects_local({{.address_ = "127.0.0.2"}}));
+    EXPECT_TRUE(rejects_local(
+        {{.address_ = "127.0.0.2", .identity_ = files}, {.address_ = "::ffff:127.0.0.2", .identity_ = files}}));
+    EXPECT_THROW(listen_with({.identity_ = files,
+                     .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files},
+                         {.address_ = "::1", .identity_ = files}}}),
+        std::system_error);
+    // TLS settings require an HTTPS port.
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().listen({.address_ = "127.0.0.1",
+            .http_ = 8080,
+            .tls_ = {.identity_ = {.certificate_chain_pem_ = "pem", .private_key_pem_ = "pem"}}});
+    }));
+    EXPECT_TRUE(throws_invalid([&] {
+        ruvia::app().listen(
+            {.address_ = "127.0.0.1", .http_ = 8080, .tls_ = {.local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files}}}});
     }));
 }
 

@@ -7,6 +7,7 @@
 ## 1. 流式请求体与流式响应 / SSE
 
 头文件：`"ruvia/web/streaming.h"`、`"ruvia/web/multipart_reader.h"`、`"ruvia/http/sse.h"`。
+不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理整条监听器全部请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)。
 
 ### 1.1 流式消费请求体（`body_reader` 与 `multipart_reader`）
 
@@ -250,6 +251,7 @@ private:
 
 头文件：`"ruvia/web/http_tunnel.h"`。
 参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
+不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发ruviawebserver_connectionh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道
 

@@ -239,6 +239,13 @@ private:
 
         const auto validated_configuration =
             detail::validate_http_server_configuration(state_.listeners_, std::move(prepared_options));
+        // Workers number the listeners, and their HTTP/3 services, in this order.
+        runtime->listener_slots_.reserve(validated_configuration.listeners().size());
+        for (const auto& listener : validated_configuration.listeners()) {
+            runtime->listener_slots_.emplace_back(listener.endpoint_);
+            runtime->http3_slot_count_ += listener.http3_.has_value() ? 1 : 0;
+        }
+        runtime->tls_key_origin_ = validated_configuration.tls_key_origin();
 
         // One immutable route plan per run, declared against the first worker's
         // controller instances; every worker only binds its own instances.
@@ -278,7 +285,7 @@ private:
             };
 #if defined(RUVIA_ENABLE_HTTP3)
             auto worker_value = make_pmr_object<detail::web_worker_runtime>(process_resource(),
-                validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(),
+                validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i,
                 detail::http3_worker_placement{
                     .directory_ = runtime->http3_directory_.get(),
                     .worker_index_ = i,
@@ -290,8 +297,8 @@ private:
                 runtime->http3_directory_->bind_worker(i, worker_value->runtime().handle());
             }
 #else
-            auto worker_value = make_pmr_object<detail::web_worker_runtime>(
-                process_resource(), validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get());
+            auto worker_value = make_pmr_object<detail::web_worker_runtime>(process_resource(),
+                validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i);
 #endif
 #if defined(_WIN32)
             runtime->acceptor_->bind_worker(i, worker_value->acceptor_target());
@@ -312,11 +319,22 @@ private:
     }
 
     void complete_unpublished_run() noexcept {
+        release_inherited_listener_sockets();
         std::lock_guard lock(state_.mutex_);
         if (state_.runtime_ != nullptr) {
             std::terminate();
         }
         state_.lifecycle_.complete_run();
+    }
+
+    // The run consumed every inherited listener socket, whatever its outcome,
+    // so later runs bind; unclaimed ones close with their last owner. Only
+    // the run() owner touches the stored listeners while the app is neither
+    // stopped nor running.
+    void release_inherited_listener_sockets() noexcept {
+        for (auto& listener : state_.listeners_) {
+            listener.inherited_sockets_.reset();
+        }
     }
 
     [[nodiscard]] bool stop_requested() const {
@@ -362,10 +380,14 @@ private:
         std::unique_ptr<detail::app_runtime_graph, pmr_object_deleter<detail::app_runtime_graph>>
             retired(nullptr, pmr_object_deleter<detail::app_runtime_graph>{process_resource()});
         {
+            // A runtime listener control in progress finishes first: every
+            // worker joined, so its controls ran or were destroyed.
+            const std::lock_guard serialized(state_.runtime_control_mutex_);
             std::lock_guard lock(state_.mutex_);
             retired = std::move(state_.runtime_);
         }
         retired.reset();
+        release_inherited_listener_sockets();
         {
             std::lock_guard lock(state_.mutex_);
             state_.lifecycle_.complete_run();

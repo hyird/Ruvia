@@ -141,6 +141,20 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
     # Trusts the loopback peer in its second run.
     ruvia_add_web_standalone_test(ruvia_app_misdirected_request 30 web/app/misdirected_request.cpp)
+    # Owns an application with ClientHello and HTTP/2 input observers.
+    ruvia_add_web_standalone_test(ruvia_app_server_observation 60 web/app/server_observation.cpp)
+    # Owns an application whose HTTPS identities it selects and replaces at
+    # runtime, on a wildcard address too.
+    ruvia_add_web_standalone_test(ruvia_app_tls_identities 60 web/app/tls_identities.cpp)
+    # Owns applications whose listeners hand connections to on_connection,
+    # with short idle timeouts and a connection-failure hook.
+    ruvia_add_web_standalone_test(ruvia_app_server_connection 60 web/app/server_connection.cpp)
+    # Owns an application whose listeners it adopts, duplicates, adds and
+    # removes while running, across several runs.
+    ruvia_add_web_standalone_test(ruvia_app_listener_sockets 120 web/app/listener_sockets.cpp)
+    # Owns an application whose request-stream listeners hand every request to
+    # on_request_stream beside an ordinary routes listener with middleware.
+    ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/app/request_stream.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
     # protocol token, makes every application in its executable fail startup, so
     # neither can share the process-wide controller registry.

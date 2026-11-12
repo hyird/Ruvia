@@ -19,7 +19,10 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/rate_limit.h"
+#include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
+#include "ruvia/web/server_connection.h"
+#include "ruvia/web/server_observation.h"
 #include "ruvia/web/web_worker.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -101,10 +104,73 @@ public:
     // Loads every TLS certificate, private key and client CA bundle of
     // config.tls_ once, here: unreadable files or a wrong key password throw
     // from listen(). The application keeps only the parsed credentials; this
-    // call's copy of each private-key password is cleansed before it returns.
+    // call's copy of each private-key password and in-memory PEM text is
+    // cleansed before it returns.
     application& listen(listen_config config);
     application& listen(std::span<const listen_config> configs);
     application& listen(std::initializer_list<listen_config> configs);
+    // Replaces the identities (identity_, sni_ and local_addresses_) of the
+    // running HTTPS listener `endpoint` names, for TLS over TCP and its
+    // HTTP/3 service alike, as listen() would load them; client_certificates_
+    // (the same CA path and requirement) and max_outgoing_records_ must equal
+    // the listener's. Blocking: every credential loads on the caller first,
+    // then each worker adopts the new set on its own thread, and the call
+    // returns once all have. Every handshake whose ClientHello a worker
+    // processes afterwards selects from the new set; established connections
+    // and handshakes past their ClientHello keep their identity. Session
+    // caches and ticket keys stay, so sessions keep resuming. The listener
+    // keeps the new set for later run()s. An unknown endpoint, one without
+    // HTTPS, a changed policy or an invalid setting throws
+    // std::invalid_argument, and unreadable or mismatched credentials throw
+    // as from listen(), all before anything changes. Throws std::logic_error
+    // unless the app is running, or when called on a business worker thread,
+    // which could not adopt while waiting. When the app starts stopping
+    // before every worker accepted the set, std::logic_error reports that
+    // the replacement did not happen: the listener keeps its previous set for
+    // later run()s, and workers that already adopted the new one serve it only
+    // to handshakes racing the stop, which closes them. Concurrent calls take
+    // effect in the order they publish. config's copies of passwords and
+    // in-memory PEM text are cleansed as by listen().
+    void replace_tls_identities(const listener_endpoint& endpoint, tls_config config);
+    // Adds config's listeners to the running app, validated and loaded as
+    // listen() would (an endpoint a listener already serves throws
+    // std::invalid_argument), with any inherited_sockets_. Blocking: every
+    // worker prepares them on its own thread -- binds or adopts its sockets,
+    // builds TLS contexts and the HTTP/3 endpoint -- and only once all did
+    // does each start accepting; the call returns when every worker accepts.
+    // When any worker fails, every worker discards them, closing their
+    // sockets, and the first failure is rethrown while the app serves as
+    // before. The app keeps them for later run()s. Throws std::logic_error
+    // unless the app is running, or when called on a business worker thread,
+    // which could not prepare while waiting; also when the app starts stopping
+    // before every worker accepted, and then they are not kept. config's
+    // secrets are cleansed as by listen().
+    void add_listener(listen_config config);
+    // Removes the running TCP service `endpoint` names (as for
+    // replace_tls_identities()), with its HTTP/3 service. Blocking: returns
+    // once every worker stopped admitting it, closed its TCP sockets and its
+    // accept loop exited. Established connections are served until they end
+    // or the app stops; an HTTP/3 service keeps receiving for its established
+    // QUIC connections, ignoring new ones, and its UDP sockets close with the
+    // last of them. Later run()s no longer serve it. An unknown endpoint throws
+    // std::invalid_argument; the thread and lifecycle rules of add_listener()
+    // apply, and a removal the stop preempted keeps the listener for later
+    // run()s. Concurrent add_listener(), remove_listener(),
+    // replace_tls_identities() and duplicate_listener_sockets() calls take
+    // effect one at a time.
+    void remove_listener(const listener_endpoint& endpoint);
+#ifndef _WIN32
+    // Duplicates (dup()) every worker's socket of the running TCP service
+    // `endpoint` names, and of its HTTP/3 service, into http_ or https_ and
+    // http3_ in worker order -- what a process exec'd to take over the
+    // service passes as listen_config::inherited_sockets_. The duplicates are
+    // not close-on-exec and belong to the caller; the app keeps serving on its
+    // own sockets. QUIC connections do not move with the UDP sockets. An
+    // unknown endpoint throws std::invalid_argument; the thread and lifecycle
+    // rules of add_listener() apply. POSIX only: on Windows the acceptor owns
+    // a single exclusive socket per service.
+    [[nodiscard]] listener_sockets duplicate_listener_sockets(const listener_endpoint& endpoint) const;
+#endif
     // Disabled by default. A config enables response coding and precompressed
     // static variant negotiation; nullptr disables both.
     application& compression(compression_config config);
@@ -184,6 +250,30 @@ public:
     // or close, or I/O this server cancelled (stop, timeouts), is a
     // normal end of connection: it is neither delivered here nor counted.
     application& on_connection_failure(connection_failure_callback callback);
+    // Observes every ClientHello a TLS listener receives, over TCP and for
+    // HTTP/3, before certificate selection; a HelloRetryRequest yields a
+    // second record. Without a callback the server installs no observer and
+    // builds no record. Replacement and clearing follow on_access().
+    application& on_tls_client_hello(tls_client_hello_callback callback);
+    application& on_tls_client_hello(std::nullptr_t);
+    // Observes the decrypted input of every HTTP/2 connection -- TLS with
+    // ALPN h2 and cleartext prior knowledge alike -- once per read, before the
+    // server parses it. Without a callback no record is built. Replacement
+    // and clearing follow on_access().
+    application& on_http2_input(http2_input_callback callback);
+    application& on_http2_input(std::nullptr_t);
+    // Serves every listener_dispatch::connection listener (see
+    // server_connection and connection_callback); run() throws
+    // std::invalid_argument for such a listener without one. Replacement
+    // and clearing follow on_access().
+    application& on_connection(connection_callback callback);
+    application& on_connection(std::nullptr_t);
+    // Serves every listener_dispatch::request_stream listener (see
+    // request_stream and request_stream_callback); run() throws
+    // std::invalid_argument for such a listener without one. Replacement
+    // and clearing follow on_access().
+    application& on_request_stream(request_stream_callback callback);
+    application& on_request_stream(std::nullptr_t);
     // Runs on the run() caller after worker capabilities are ready, before
     // TCP admission. All hooks must succeed before serving; failure or a
     // stop request rolls back startup. Ready workers can execute posted jobs.
