@@ -308,6 +308,9 @@ HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后�
 | `ruvia::http_datagram_stream` | `read()`（返回 `std::optional<http_datagram>`）、`send(payload)`、`finish()`、`abort()` |
 | `ruvia::http_udp_tunnel` | `read()`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload)`、`finish()`、`abort()` |
 
+- **操作生命周期**：Capsule、Datagram 与 UDP 门面共享同一对读写通道租约，同方向拒绝重叠。销毁门面前必须等待已启动操作结束；未启动冷任务随门面销毁失效。
+- **输入与结果所有权**：切换输入或关闭时，先清除借用视图，再释放缓冲并重置输入游标。已交付的 `http_capsule` / `http_datagram` 独立拥有负载，不受后续读取、门面析构或客户端停机影响，但必须在所属 worker 上释放。
+
 Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.2)：读取方不使用的 Capsule 被静默丢弃并跳过，不缓冲、不触发回调，也不受 `http_capsule_config::max_capsule_length_` 约束——`datagrams()` 丢弃 `DATAGRAM` 以外的类型，`udp()` 还会丢弃 Context ID 非 0 的 `DATAGRAM`（RFC 9298 §4，长度上限在读出 Context ID 之后才判断）；`capsules()` 保留全部类型，因此上限作用于每个 Capsule。保留的 Capsule 超过上限、流在 Capsule 中途结束或 `DATAGRAM` 格式错误时按畸形消息处理（RFC 9297 §3.3）：读取抛出异常并中止隧道，HTTP/2 隧道以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流（RFC 9113 §8.1.1），HTTP/1.1 关闭连接。
 
 HTTP/3 的畸形 Capsule 中止对应流并使用 `H3_MESSAGE_ERROR`；原生 HTTP Datagram 的关联前缀与 SETTINGS 错误由协议层按 RFC 9297 处理，不混同于 Capsule 流解析错误。

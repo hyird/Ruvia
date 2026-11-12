@@ -101,11 +101,17 @@ public:
             }
         }
     }
+    void clear_input() noexcept {
+        input_ = {};
+        owned_input_.reset();
+        offset_ = 0;
+        native_input_ = false;
+    }
     void close() noexcept {
         if (!worker_.is_current()) {
             std::terminate();
         }
-        if (running_ != 0) {
+        if (read_active_ || output_active_) {
             std::terminate();
         }
         if (client_) {
@@ -115,9 +121,7 @@ public:
         }
         read_scope_.close();
         output_scope_.close();
-        input_ = {};
-        owned_input_.reset();
-        offset_ = 0;
+        clear_input();
         server_ = nullptr;
     }
     [[nodiscard]] bool poll_capsule(bool fin, http_capsule_retention retention) {
@@ -141,10 +145,7 @@ public:
         return result_value.capsule_complete_;
     }
     [[nodiscard]] task<bool> read_input(bool datagrams = false) {
-        input_ = {};
-        owned_input_.reset();
-        offset_ = 0;
-        native_input_ = false;
+        clear_input();
         if (datagrams && has_native_transport()) {
             std::optional<http_tunnel_input> chunk;
             if (server_) {
@@ -236,7 +237,6 @@ public:
     bool closed_{};
     bool read_active_{};
     bool output_active_{};
-    unsigned running_{};
     std::size_t references_{1};
     ::ruvia::operation_scope read_scope_;
     ::ruvia::operation_scope output_scope_;
@@ -272,14 +272,11 @@ public:
     running_capsule_operation(http_capsule_stream_state& state_value, bool output)
         : state_(state_value),
           exceptions_(std::uncaught_exceptions()),
-          lane_(state_value.claim_lane(output)) {
-        ++state_.running_;
-    }
+          lane_(state_value.claim_lane(output)) {}
     ~running_capsule_operation() {
         if (std::uncaught_exceptions() > exceptions_) {
             state_.abort();
         }
-        --state_.running_;
     }
 
 private:
@@ -675,9 +672,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
         }
         auto result_value = detail::rebind_owned_storage(owned, state_value.resource_);
         if (native) {
-            state_value.input_ = {};
-            state_value.owned_input_.reset();
-            state_value.offset_ = 0;
+            state_value.clear_input();
         } else {
             state_value.payload_ = std::pmr::string(state_value.resource_);
         }
